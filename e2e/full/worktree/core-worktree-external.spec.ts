@@ -62,12 +62,9 @@ test.describe.serial("Core: External Worktree Detection", () => {
     const mainCard = window.locator(SEL.worktree.mainCard);
     await expect(mainCard).toBeVisible({ timeout: T_LONG });
 
-    await expect
-      .poll(() => mainCard.getAttribute("aria-label"), {
-        timeout: T_LONG,
-        message: "Main card should be selected",
-      })
-      .toContain("selected");
+    await expect(window.locator(SEL.worktree.mainRow)).toHaveAttribute("aria-current", "true", {
+      timeout: T_LONG,
+    });
 
     const featureCard = window.locator(SEL.worktree.card(FEATURE_BRANCH));
     await expect(featureCard).toBeVisible({ timeout: T_LONG });
@@ -101,14 +98,10 @@ test.describe.serial("Core: External Worktree Detection", () => {
       })
       .toBe(0);
 
-    // Main card should become selected (auto-switch)
-    const mainCard = window.locator(SEL.worktree.mainCard);
-    await expect
-      .poll(() => mainCard.getAttribute("aria-label"), {
-        timeout: T_LONG,
-        message: "Main card should become selected after active worktree is removed",
-      })
-      .toContain("selected");
+    // Main row should become current (auto-switch)
+    await expect(window.locator(SEL.worktree.mainRow)).toHaveAttribute("aria-current", "true", {
+      timeout: T_LONG,
+    });
   });
 
   test("detects external worktree addition after refresh", async () => {

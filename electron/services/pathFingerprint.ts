@@ -2,6 +2,7 @@ import path from "path";
 import fs from "fs/promises";
 import { createHash } from "crypto";
 import { TimeoutError, withTimeout } from "../utils/withTimeout.js";
+import { FILE_PREVIEW_MAX_BYTES } from "../utils/fileLimits.js";
 import { isPathInside } from "../../shared/utils/path.js";
 
 /**
@@ -22,7 +23,7 @@ import { isPathInside } from "../../shared/utils/path.js";
  * deletion of its own root) simply don't exist here.
  */
 
-/** Bounds a single hung `fs.stat`/`fs.readdir` — see `withTimeout`'s module comment. */
+/** Bounds a single hung filesystem operation — see `withTimeout`'s module comment. */
 const FS_TIMEOUT_MS = 2_000;
 
 /**
@@ -95,6 +96,25 @@ async function fingerprintDirectory(target: string, mtime: bigint): Promise<Path
 }
 
 /**
+ * Digest the complete contents of any file the app can preview.
+ *
+ * Windows can preserve mtime, ctime, size and inode across a rapid same-length
+ * rewrite, even after the write promise resolves. Metadata alone would then
+ * leave an open file pane stale. The preview ceiling bounds both memory and I/O
+ * here; files larger than it cannot be rendered and retain their cheap metadata
+ * fingerprint.
+ */
+async function digestPreviewableFile(target: string, size: bigint): Promise<string> {
+  if (size > BigInt(FILE_PREVIEW_MAX_BYTES)) return "-";
+  const contents = await withTimeout(
+    fs.readFile(target),
+    FS_TIMEOUT_MS,
+    `read timed out: ${target}`
+  );
+  return createHash("sha1").update(contents).digest("hex").slice(0, 16);
+}
+
+/**
  * `onHang` fires when a call under this path timed out, so the caller can put
  * the whole root on cooldown. A dead mount below a live root — a network share
  * inside a browsed folder, or the file a `FilePane` happens to hold — hangs here
@@ -133,8 +153,11 @@ async function fingerprintOne(
     // `ctimeNs` alongside `mtimeNs`: a tool that rewrites a file in place and
     // then restores its timestamps (`touch -r`, some generators) leaves mtime,
     // size and inode all identical, and only the inode-change time still moves.
+    // The content digest closes the remaining Windows timestamp-granularity
+    // gap for every file the app is capable of rendering.
     if (stats.isFile()) {
-      return `f:${stats.mtimeNs}:${stats.ctimeNs}:${stats.size}:${stats.ino}`;
+      const digest = await digestPreviewableFile(realPath, stats.size);
+      return `f:${stats.mtimeNs}:${stats.ctimeNs}:${stats.size}:${stats.ino}:${digest}`;
     }
     // A socket, fifo or device has no content the file surfaces can render.
     return null;

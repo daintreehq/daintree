@@ -141,8 +141,8 @@ test.describe.serial("Core: Dev Preview — Per-Worktree Port Registry", () => {
     const { window } = ctx;
 
     // Confirm we start on the main worktree (default view).
-    const mainCard = window.locator(SEL.worktree.mainCard);
-    await expect(mainCard).toHaveAttribute("aria-label", /selected/, { timeout: T_LONG });
+    const mainRow = window.locator(SEL.worktree.mainRow);
+    await expect(mainRow).toHaveAttribute("aria-current", "true", { timeout: T_LONG });
 
     const countBefore = await getGridPanelCount(window);
     await clickToolbarButton(window, SEL.toolbar.openDevPreview, T_MEDIUM);

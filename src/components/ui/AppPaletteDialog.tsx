@@ -17,9 +17,11 @@ import { AccessibilityAnnouncer } from "@/components/Accessibility/Accessibility
 import { PALETTE_HEADER_ATTR } from "./paletteHeaderAttr";
 import { useOverlayState, useEscapeStack } from "@/hooks";
 import {
+  ESCAPE_BACKSTOP_DIALOG_ATTR,
   registerDialogEscapeBackstop,
   isTopmostDialogBackstop,
   radixLayerWasOpenWhenEscapePressed,
+  escapeWasYieldedToDialog,
   markBackstopConsumedEscape,
 } from "@/lib/dialogEscapeBackstop";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
@@ -72,6 +74,7 @@ export function AppPaletteDialog({
   useEscapeStack(isOpen, onClose);
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const autofocusRafRef = useRef<number | null>(null);
 
   const restoreFocus = useCallback(() => {
     const el = previousFocusRef.current;
@@ -121,11 +124,17 @@ export function AppPaletteDialog({
     clearDialogOverlays();
   }, [isOpen]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (isOpen) {
       const el = document.activeElement;
       if (el instanceof HTMLElement) previousFocusRef.current = el;
-      requestAnimationFrame(() => {
+      // Own keyboard input immediately when the modal commits. The first
+      // tabbable still receives focus on the next animation frame, but leaving
+      // the prior terminal/input focused during that gap lets it stop Escape
+      // before the document-bubble dialog backstop can close the palette.
+      dialogRef.current?.focus();
+      autofocusRafRef.current = requestAnimationFrame(() => {
+        autofocusRafRef.current = null;
         const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(TABBABLE_SELECTOR);
         if (firstFocusable) {
           firstFocusable.focus();
@@ -134,7 +143,13 @@ export function AppPaletteDialog({
         }
       });
     }
-  }, [isOpen]);
+    return () => {
+      if (autofocusRafRef.current !== null) {
+        cancelAnimationFrame(autofocusRafRef.current);
+        autofocusRafRef.current = null;
+      }
+    };
+  }, [isOpen, shouldRender]);
 
   // If the host of an open palette unmounts before the exit animation
   // finishes, useAnimatedPresence's cleanup deliberately does NOT call
@@ -176,7 +191,11 @@ export function AppPaletteDialog({
       // palette underneath stays open. The backstop exists only for the
       // mid-exit case where Radix's stale `preventDefault` would otherwise
       // leave the palette stuck.
-      if (radixLayerWasOpenWhenEscapePressed()) return;
+      // A dock popover can remain open underneath the palette it spawned. Its
+      // Escape guard explicitly yields this event to the focused dialog, so
+      // honor the same handoff contract as AppDialog rather than dead-ending
+      // between the open-layer gate and the palette backstop.
+      if (radixLayerWasOpenWhenEscapePressed() && !escapeWasYieldedToDialog(e)) return;
       // We deliberately do NOT bail on `e.defaultPrevented`: Radix Select /
       // Combobox triggers call `preventDefault` on Escape even when their
       // popup is closed, which would leave the palette stuck. The
@@ -249,6 +268,7 @@ export function AppPaletteDialog({
         role="dialog"
         aria-modal={isOpen ? "true" : "false"}
         aria-label={ariaLabel}
+        {...(isOpen ? { [ESCAPE_BACKSTOP_DIALOG_ATTR]: "" } : {})}
         tabIndex={-1}
         className={cn(
           // `surface-overlay` is the floating-surface material shared with every

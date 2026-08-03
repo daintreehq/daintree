@@ -35,7 +35,7 @@ test.describe.serial("Core: Worktree Lifecycle", () => {
     fixtureCleanup?.();
   });
 
-  test("main worktree card is visible and selected", async () => {
+  test("main worktree card is visible and current", async () => {
     const { window } = ctx;
 
     const cards = window.locator("[data-worktree-branch]");

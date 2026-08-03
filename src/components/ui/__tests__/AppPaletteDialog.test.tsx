@@ -4,8 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppPaletteDialog } from "../AppPaletteDialog";
 import { usePaletteStore } from "@/store/paletteStore";
 import { _resetForTests } from "@/lib/escapeStack";
+import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
 import { TABBABLE_SELECTOR } from "@/lib/accessibility";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
+import { handleDockEscapeKeyDown } from "@/components/Layout/dockPopoverGuard";
 
 vi.mock("@/hooks", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -14,6 +16,8 @@ vi.mock("@/hooks", async (importOriginal) => {
     useOverlayState: () => {},
   };
 });
+
+const animatedPresenceState = vi.hoisted(() => ({ shouldRender: true }));
 
 vi.mock("@/hooks/useAnimatedPresence", () => ({
   useAnimatedPresence: ({
@@ -26,7 +30,7 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
     // Mirror real timing closely enough for focus assertions: the exit
     // path runs onAnimateOut synchronously when isOpen flips to false.
     if (!isOpen && onAnimateOut) onAnimateOut();
-    return { isVisible: isOpen, shouldRender: isOpen };
+    return { isVisible: isOpen, shouldRender: isOpen && animatedPresenceState.shouldRender };
   },
 }));
 
@@ -111,6 +115,52 @@ describe("AppPaletteDialog focus trap", () => {
   });
 });
 
+describe("AppPaletteDialog Escape yielded by the layer underneath", () => {
+  let dockGuard: ((event: KeyboardEvent) => void) | null = null;
+
+  beforeEach(() => {
+    _resetForTests();
+    _resetBackstopForTests();
+  });
+
+  afterEach(() => {
+    if (dockGuard) {
+      document.removeEventListener("keydown", dockGuard, true);
+      dockGuard = null;
+    }
+    document.querySelectorAll("[data-open-radix-layer]").forEach((element) => element.remove());
+    _resetForTests();
+    _resetBackstopForTests();
+  });
+
+  it("closes when a dock popover underneath yields Escape", () => {
+    const onClose = vi.fn();
+    render(
+      <AppPaletteDialog isOpen onClose={onClose} ariaLabel="Yield palette">
+        <input aria-label="Palette input" />
+      </AppPaletteDialog>
+    );
+
+    const layer = document.createElement("div");
+    layer.setAttribute("role", "dialog");
+    layer.setAttribute("data-state", "open");
+    layer.setAttribute("data-open-radix-layer", "");
+    document.body.appendChild(layer);
+
+    screen.getByRole("textbox", { name: "Palette input" }).focus();
+    dockGuard = (event) => handleDockEscapeKeyDown(event, document.createElement("div"));
+    document.addEventListener("keydown", dockGuard, true);
+
+    act(() => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
+      );
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("AppPaletteDialog focus restore", () => {
   beforeEach(() => {
     _resetForTests();
@@ -122,7 +172,44 @@ describe("AppPaletteDialog focus restore", () => {
   afterEach(() => {
     _resetForTests();
     usePaletteStore.setState({ activePaletteId: null });
+    animatedPresenceState.shouldRender = true;
     vi.useRealTimers();
+  });
+
+  it("takes provisional focus when animated presence mounts so Escape reaches the backstop", () => {
+    const trigger = document.createElement("button");
+    trigger.textContent = "Trigger";
+    trigger.addEventListener("keydown", (event) => event.stopPropagation());
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const onClose = vi.fn();
+    animatedPresenceState.shouldRender = false;
+    const { rerender } = render(
+      <AppPaletteDialog isOpen onClose={onClose} ariaLabel="Test palette">
+        <input type="text" placeholder="Palette input" />
+      </AppPaletteDialog>
+    );
+    expect(document.activeElement).toBe(trigger);
+
+    animatedPresenceState.shouldRender = true;
+    rerender(
+      <AppPaletteDialog isOpen onClose={onClose} ariaLabel="Test palette">
+        <input type="text" placeholder="Palette input" />
+      </AppPaletteDialog>
+    );
+
+    const dialog = screen.getByRole("dialog", { name: "Test palette" });
+    expect(document.activeElement).toBe(dialog);
+
+    act(() => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
+      );
+    });
+
+    expect(onClose).toHaveBeenCalledOnce();
+    document.body.removeChild(trigger);
   });
 
   it("falls back to first tabbable in #root when trigger was unmounted", async () => {
@@ -234,6 +321,28 @@ describe("AppPaletteDialog focus restore", () => {
       </>
     );
 
+    expect(document.activeElement).toBe(trigger);
+    document.body.removeChild(trigger);
+  });
+
+  it("cancels delayed autofocus when the palette closes before its animation frame", async () => {
+    const trigger = document.createElement("button");
+    trigger.textContent = "Trigger";
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { rerender } = renderPalette({ isOpen: true });
+    rerender(
+      <>
+        <Dispatcher />
+        <AppPaletteDialog isOpen={false} onClose={() => {}} ariaLabel="Test palette">
+          <input type="text" placeholder="Palette input" />
+        </AppPaletteDialog>
+      </>
+    );
+
+    expect(document.activeElement).toBe(trigger);
+    await act(() => vi.runAllTimersAsync());
     expect(document.activeElement).toBe(trigger);
     document.body.removeChild(trigger);
   });

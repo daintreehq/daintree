@@ -99,7 +99,7 @@ test.describe.serial("Core: Advanced", () => {
   // ── Worktree Lifecycle (5 tests) ──────────────────────────
 
   test.describe.serial("Worktree Lifecycle", () => {
-    test("main worktree card is visible and selected", async () => {
+    test("main worktree card is visible and current", async () => {
       const { window } = ctx;
 
       const cards = window.locator("[data-worktree-branch]");
@@ -108,8 +108,8 @@ test.describe.serial("Core: Advanced", () => {
       mainBranch = (await cards.first().getAttribute("data-worktree-branch")) ?? "";
       expect(mainBranch.length).toBeGreaterThan(0);
 
-      const mainCard = window.locator(SEL.worktree.card(mainBranch));
-      await expect(mainCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+      const mainRow = window.locator(SEL.worktree.row(mainBranch));
+      await expect(mainRow).toHaveAttribute("aria-current", "true", { timeout: T_MEDIUM });
     });
 
     test("create new worktree via UI", async () => {
@@ -154,11 +154,12 @@ test.describe.serial("Core: Advanced", () => {
 
       // If the first click didn't stick (e.g., Radix focus stole the event),
       // try once more before failing.
+      const newRow = window.locator(SEL.worktree.row("e2e/test-worktree"));
       try {
-        await expect(newCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+        await expect(newRow).toHaveAttribute("aria-current", "true", { timeout: T_MEDIUM });
       } catch {
         await newCard.click();
-        await expect(newCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+        await expect(newRow).toHaveAttribute("aria-current", "true", { timeout: T_MEDIUM });
       }
     });
 

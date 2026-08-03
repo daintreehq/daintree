@@ -62,17 +62,15 @@ function prependPathCommand(dir: string): string {
 }
 
 function buildProcessCommand(): string {
-  // Windows PowerShell/npm can obscure npm's long-running Node child from the
-  // PTY process tree, which makes this transition test depend on npm internals
-  // instead of Daintree's runtime promotion path. Use the Node child directly
-  // on Windows; Unix keeps npm coverage for the wrapper path.
-  return process.platform === "win32"
-    ? `node -e ${JSON.stringify(fakeBuildProcess)}`
-    : "npm run build";
+  // Exercise the transition with the long-running process directly. Going
+  // through `npm run build` makes the expected badge timing-dependent: shell
+  // evidence first reports npm, then the process tree correctly promotes its
+  // higher-priority Node child. npm fallback has dedicated badge coverage.
+  return `node -e ${JSON.stringify(fakeBuildProcess)}`;
 }
 
 function expectedBuildProcessId(): string {
-  return process.platform === "win32" ? "node" : "npm";
+  return "node";
 }
 
 async function expectPanelHeaderIcon(panel: Locator, iconId: string): Promise<void> {

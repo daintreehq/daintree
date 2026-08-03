@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
+import { createHash } from "crypto";
 import os from "os";
 import path from "path";
 import { fingerprintPaths } from "../pathFingerprint.js";
@@ -59,6 +60,17 @@ describe("fingerprintPaths", () => {
     const [after] = await fingerprintPaths(root, [file]);
 
     expect(after).not.toBe(before);
+  });
+
+  it("folds previewable file contents into the fingerprint", async () => {
+    const content = "content signal";
+    const file = path.join(root, "content.txt");
+    await fs.writeFile(file, content);
+
+    const [fingerprint] = await fingerprintPaths(root, [file]);
+    const digest = createHash("sha1").update(content).digest("hex").slice(0, 16);
+
+    expect(fingerprint).toMatch(new RegExp(`:${digest}$`));
   });
 
   it("separates two directories that differ only in the names they hold", async () => {

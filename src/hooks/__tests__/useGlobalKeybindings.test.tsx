@@ -2,6 +2,7 @@
 import { render, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetForTests, registerEscape } from "@/lib/escapeStack";
+import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import type { PaletteId } from "@/store/paletteStore";
 
 function parseComboLite(combo: string) {
@@ -470,6 +471,37 @@ describe("useGlobalKeybindings — palette Escape capture", () => {
     }
   });
 
+  it("lets an open palette own Escape while retiring its stale pending chord", () => {
+    vi.mocked(usePaletteStore.getState).mockReturnValue(makePaletteState("theme"));
+    mocks.keybindingService.getPendingChord.mockReturnValue("Cmd+K");
+
+    const escapeHandler = vi.fn();
+    registerEscape(escapeHandler);
+
+    render(<Host />);
+    const event = dispatchEscape();
+
+    expect(mocks.keybindingService.clearPendingChord).toHaveBeenCalledTimes(1);
+    expect(escapeHandler).toHaveBeenCalledTimes(1);
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("only cancels a pending chord when no modal surface has taken ownership", () => {
+    mocks.keybindingService.getPendingChord.mockReturnValue("Cmd+K");
+
+    const escapeHandler = vi.fn();
+    registerEscape(escapeHandler);
+
+    render(<Host />);
+    const event = dispatchEscape();
+
+    expect(mocks.keybindingService.clearPendingChord).toHaveBeenCalledTimes(1);
+    expect(escapeHandler).not.toHaveBeenCalled();
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
   it("routes bare Escape to the escape stack for non-terminal overlays even without palette state", () => {
     vi.mocked(usePaletteStore.getState).mockReturnValue(makePaletteState(null));
     mocks.keybindingService.resolveKeybinding.mockReturnValue({
@@ -549,6 +581,28 @@ describe("useGlobalKeybindings — palette Escape capture", () => {
       expect(escapeHandler).toHaveBeenCalledTimes(1);
       expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
       expect(event.defaultPrevented).toBe(true);
+    } finally {
+      dialog.remove();
+    }
+  });
+
+  it("leaves Escape for a modal's registered dialog backstop", () => {
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute(ESCAPE_BACKSTOP_DIALOG_ATTR, "");
+    document.body.appendChild(dialog);
+
+    try {
+      const escapeHandler = vi.fn();
+      registerEscape(escapeHandler);
+
+      render(<Host />);
+      const event = dispatchEscape(dialog);
+
+      expect(escapeHandler).not.toHaveBeenCalled();
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
     } finally {
       dialog.remove();
     }

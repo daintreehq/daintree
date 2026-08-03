@@ -110,7 +110,10 @@ test.describe.serial("Core: Command Palette Accessibility", () => {
       timeout: T_MEDIUM,
     });
 
-    await window.keyboard.press("Escape");
+    const searchInput = window.locator(SEL.panelPalette.searchInput);
+    await searchInput.focus();
+    await expect(searchInput).toBeFocused({ timeout: T_SHORT });
+    await searchInput.press("Escape");
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
   });
 
@@ -141,7 +144,10 @@ test.describe.serial("Core: Command Palette Accessibility", () => {
     await expect(options.first()).toBeVisible({ timeout: T_MEDIUM });
     await expect(options.first()).toHaveAttribute("aria-selected", "true");
 
-    await window.keyboard.press("Escape");
+    const searchInput = window.locator(SEL.panelPalette.searchInput);
+    await searchInput.focus();
+    await expect(searchInput).toBeFocused({ timeout: T_SHORT });
+    await searchInput.press("Escape");
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
   });
 
@@ -189,6 +195,10 @@ test.describe.serial("Core: Command Palette Accessibility", () => {
     const themeInput = window.locator(SEL.themePalette.searchInput);
     await themeInput.focus();
     await expect(themeInput).toBeFocused({ timeout: T_SHORT });
+    // The palette's Escape-stack entry is registered in an effect. Under a
+    // saturated broad run the input can become focusable one render before
+    // that effect commits, so match the action-palette synchronization above.
+    await window.waitForTimeout(T_SETTLE);
 
     await themeInput.press("Escape");
     await expect(window.locator(SEL.themePalette.dialog)).not.toBeVisible({ timeout: T_MEDIUM });

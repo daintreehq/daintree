@@ -45,17 +45,14 @@ test.describe.serial("Core: Worktree Cards", () => {
       const { window } = ctx;
 
       const mainCard = window.locator(SEL.worktree.mainCard);
-      const featureCard = window.locator(SEL.worktree.card(FEATURE));
 
-      await expect
-        .poll(() => mainCard.getAttribute("aria-label"), {
-          timeout: T_LONG,
-          message: "Main card should be selected by default",
-        })
-        .toContain("selected");
-
-      const featureLabel = await featureCard.getAttribute("aria-label");
-      expect(featureLabel).not.toContain("selected");
+      await expect(window.locator(SEL.worktree.mainRow)).toHaveAttribute("aria-current", "true", {
+        timeout: T_LONG,
+      });
+      await expect(window.locator(SEL.worktree.row(FEATURE))).not.toHaveAttribute(
+        "aria-current",
+        "true"
+      );
     });
 
     test("main worktree shows uncommitted changes, feature does not", async () => {
@@ -84,19 +81,16 @@ test.describe.serial("Core: Worktree Cards", () => {
       // Click the top of the card to avoid hitting interactive child elements
       await featureCard.click({ position: { x: 10, y: 10 } });
 
-      await expect
-        .poll(() => featureCard.getAttribute("aria-label"), {
-          timeout: T_LONG,
-          message: "Feature card should become selected after click",
-        })
-        .toContain("selected");
-
-      await expect
-        .poll(() => mainCard.getAttribute("aria-label"), {
-          timeout: T_MEDIUM,
-          message: "Main card should lose selection after clicking feature",
-        })
-        .not.toContain("selected");
+      await expect(window.locator(SEL.worktree.row(FEATURE))).toHaveAttribute(
+        "aria-current",
+        "true",
+        { timeout: T_LONG }
+      );
+      await expect(window.locator(SEL.worktree.mainRow)).not.toHaveAttribute(
+        "aria-current",
+        "true",
+        { timeout: T_MEDIUM }
+      );
     });
 
     test("clicking main card restores selection", async () => {
@@ -107,19 +101,14 @@ test.describe.serial("Core: Worktree Cards", () => {
 
       await mainCard.click({ position: { x: 10, y: 10 } });
 
-      await expect
-        .poll(() => mainCard.getAttribute("aria-label"), {
-          timeout: T_LONG,
-          message: "Main card should become selected after click",
-        })
-        .toContain("selected");
-
-      await expect
-        .poll(() => featureCard.getAttribute("aria-label"), {
-          timeout: T_LONG,
-          message: "Feature card should lose selection after clicking main",
-        })
-        .not.toContain("selected");
+      await expect(window.locator(SEL.worktree.mainRow)).toHaveAttribute("aria-current", "true", {
+        timeout: T_LONG,
+      });
+      await expect(window.locator(SEL.worktree.row(FEATURE))).not.toHaveAttribute(
+        "aria-current",
+        "true",
+        { timeout: T_LONG }
+      );
     });
   });
 
@@ -133,9 +122,11 @@ test.describe.serial("Core: Worktree Cards", () => {
       await test.step("Select feature card and open its actions menu", async () => {
         // Switch to feature card first — it has the richest menu (Pin, Delete)
         await featureCard.click({ position: { x: 10, y: 10 } });
-        await expect
-          .poll(() => featureCard.getAttribute("aria-label"), { timeout: T_LONG })
-          .toContain("selected");
+        await expect(window.locator(SEL.worktree.row(FEATURE))).toHaveAttribute(
+          "aria-current",
+          "true",
+          { timeout: T_LONG }
+        );
 
         const actionsBtn = featureCard.locator(SEL.worktree.actionsMenu);
         await actionsBtn.click();
@@ -294,9 +285,11 @@ test.describe.serial("Core: Worktree Cards", () => {
       await test.step("Select feature worktree and confirm panels are present", async () => {
         // Feature card should have at least 1 panel from the Open Terminal test
         await featureCard.click({ position: { x: 10, y: 10 } });
-        await expect
-          .poll(() => featureCard.getAttribute("aria-label"), { timeout: T_LONG })
-          .toContain("selected");
+        await expect(window.locator(SEL.worktree.row(FEATURE))).toHaveAttribute(
+          "aria-current",
+          "true",
+          { timeout: T_LONG }
+        );
 
         await expect
           .poll(() => getGridPanelCount(window), { timeout: T_LONG })
@@ -305,18 +298,20 @@ test.describe.serial("Core: Worktree Cards", () => {
 
       await test.step("Switch to main worktree and verify panels are hidden", async () => {
         await mainCard.click({ position: { x: 10, y: 10 } });
-        await expect
-          .poll(() => mainCard.getAttribute("aria-label"), { timeout: T_LONG })
-          .toContain("selected");
+        await expect(window.locator(SEL.worktree.mainRow)).toHaveAttribute("aria-current", "true", {
+          timeout: T_LONG,
+        });
 
         await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(0);
       });
 
       await test.step("Switch back to feature and verify panels reappear", async () => {
         await featureCard.click({ position: { x: 10, y: 10 } });
-        await expect
-          .poll(() => featureCard.getAttribute("aria-label"), { timeout: T_LONG })
-          .toContain("selected");
+        await expect(window.locator(SEL.worktree.row(FEATURE))).toHaveAttribute(
+          "aria-current",
+          "true",
+          { timeout: T_LONG }
+        );
 
         await expect
           .poll(() => getGridPanelCount(window), { timeout: T_LONG })
