@@ -10,6 +10,10 @@
  * hydration, when the startup-restore renderer may still be unbound — there the
  * `?projectId=` query string on its URL is the only sender-local identity.
  *
+ * A refusal is `{ exists: false, conflict: true }`: no metadata, but distinct
+ * from "not found" so restore mints a fresh id instead of respawning onto the
+ * still-live foreign one.
+ *
  * These specs drive the real `defineIpcNamespace` → `typedHandleWithContext`
  * chain so the context is built by production code, not by the fixture.
  */
@@ -60,6 +64,8 @@ import type { HandlerDependencies } from "../../../types.js";
 
 const SENDER_A = 101;
 const SENDER_B = 202;
+/** A webContents id deliberately absent from the registry — an unbound window. */
+const UNBOUND_SENDER = 999;
 
 /** Sender A's view is bound to project A; sender B's to project B. */
 const VIEW_TO_PROJECT = new Map([
@@ -67,7 +73,12 @@ const VIEW_TO_PROJECT = new Map([
   [SENDER_B, "project-b"],
 ]);
 
-type ReconnectResult = { exists: boolean; id?: string; hasPty?: boolean; cwd?: string };
+/** What a refused (live, but foreign) terminal must look like on the wire. */
+const REFUSED = { exists: false, conflict: true };
+/** What a genuinely absent terminal must look like — no conflict flag. */
+const NOT_FOUND = { exists: false };
+
+type ReconnectResult = { exists: boolean; conflict?: boolean; id?: string; cwd?: string };
 
 function makeTerminal(id: string, projectId: string | null = "project-a") {
   return {
@@ -80,11 +91,19 @@ function makeTerminal(id: string, projectId: string | null = "project-a") {
   };
 }
 
-const TERMINALS = new Map([
+/**
+ * `t-absent` omits `projectId` entirely. The production wire shape is
+ * `projectId?: string`, so an unowned terminal reaches this handler as
+ * `undefined`, not `null` — both must normalize to the same identity.
+ */
+const { projectId: _omitted, ...terminalWithNoProjectField } = makeTerminal("t-absent", null);
+
+const TERMINALS = new Map<string, Record<string, unknown>>([
   ["t-a", makeTerminal("t-a", "project-a")],
   ["t-a2", makeTerminal("t-a2", "project-a")],
   ["t-b", makeTerminal("t-b", "project-b")],
   ["t-unowned", makeTerminal("t-unowned", null)],
+  ["t-absent", terminalWithNoProjectField],
   ["t-scratch", makeTerminal("t-scratch", "scratch-1")],
 ]);
 
@@ -98,6 +117,14 @@ function makeEvent(id: number, url?: string) {
     },
   };
   return { event, setUrl: (next: string) => (state.url = next) };
+}
+
+/**
+ * An ordinary post-startup event: a plain URL with no `?projectId=`, so identity
+ * comes from the registry alone.
+ */
+function senderEvent(id: number) {
+  return makeEvent(id, "app://index.html").event;
 }
 
 function defaultPtyClient() {
@@ -130,11 +157,6 @@ function reconnectBulk(
   >;
 }
 
-/** A bound sender, the ordinary post-startup case. */
-function boundEvent(id: number) {
-  return makeEvent(id, "app://index.html").event;
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   _resetIpcGuardForTesting();
@@ -148,7 +170,7 @@ describe("terminal:reconnect — workspace ownership", () => {
   it("reconnects a terminal the sender's own project owns", async () => {
     register();
 
-    await expect(reconnect(boundEvent(SENDER_A), "t-a")).resolves.toMatchObject({
+    await expect(reconnect(senderEvent(SENDER_A), "t-a")).resolves.toMatchObject({
       exists: true,
       id: "t-a",
       hasPty: true,
@@ -158,18 +180,17 @@ describe("terminal:reconnect — workspace ownership", () => {
   it("refuses a terminal owned by another project, leaking no metadata", async () => {
     register();
 
-    const result = await reconnect(boundEvent(SENDER_A), "t-b");
-
-    expect(result).toEqual({ exists: false });
-    expect(result.cwd).toBeUndefined();
+    // toStrictEqual, not toEqual: toEqual ignores own properties whose value is
+    // undefined, so a leak of `cwd: undefined` would slip through.
+    await expect(reconnect(senderEvent(SENDER_A), "t-b")).resolves.toStrictEqual(REFUSED);
   });
 
   it("serves each project its own terminal in the same session", async () => {
     register();
 
     const [a, b] = await Promise.all([
-      reconnect(boundEvent(SENDER_A), "t-a"),
-      reconnect(boundEvent(SENDER_B), "t-b"),
+      reconnect(senderEvent(SENDER_A), "t-a"),
+      reconnect(senderEvent(SENDER_B), "t-b"),
     ]);
 
     expect(a).toMatchObject({ exists: true, id: "t-a" });
@@ -180,51 +201,61 @@ describe("terminal:reconnect — workspace ownership", () => {
   it("serves an unbound sender its own projectless terminal", async () => {
     register();
 
-    await expect(reconnect(boundEvent(999), "t-unowned")).resolves.toMatchObject({
+    await expect(reconnect(senderEvent(UNBOUND_SENDER), "t-unowned")).resolves.toMatchObject({
       exists: true,
       id: "t-unowned",
     });
   });
 
+  it("treats an absent projectId the same as an explicit null", async () => {
+    register();
+
+    await expect(reconnect(senderEvent(UNBOUND_SENDER), "t-absent")).resolves.toMatchObject({
+      exists: true,
+      id: "t-absent",
+    });
+    await expect(reconnect(senderEvent(SENDER_A), "t-absent")).resolves.toStrictEqual(REFUSED);
+  });
+
   it("refuses an unbound sender a project-owned terminal", async () => {
     register();
 
-    await expect(reconnect(boundEvent(999), "t-a")).resolves.toEqual({ exists: false });
+    await expect(reconnect(senderEvent(UNBOUND_SENDER), "t-a")).resolves.toStrictEqual(REFUSED);
   });
 
   it("refuses a project-bound sender an unowned terminal", async () => {
     register();
 
-    await expect(reconnect(boundEvent(SENDER_A), "t-unowned")).resolves.toEqual({ exists: false });
+    await expect(reconnect(senderEvent(SENDER_A), "t-unowned")).resolves.toStrictEqual(REFUSED);
   });
 
   it("reconnects a scratch workspace's own terminal", async () => {
     getProjectForWebContentsMock.mockReturnValue("scratch-1");
     register();
 
-    await expect(reconnect(boundEvent(SENDER_A), "t-scratch")).resolves.toMatchObject({
+    await expect(reconnect(senderEvent(SENDER_A), "t-scratch")).resolves.toMatchObject({
       exists: true,
       id: "t-scratch",
     });
   });
 
-  it("still reports a missing terminal as not found", async () => {
+  it("reports a missing terminal as not found, with no conflict flag", async () => {
     register();
 
-    await expect(reconnect(boundEvent(SENDER_A), "gone")).resolves.toEqual({ exists: false });
+    // The distinction is load-bearing: only a plain not-found lets restore reuse
+    // the saved id.
+    await expect(reconnect(senderEvent(SENDER_A), "gone")).resolves.toStrictEqual(NOT_FOUND);
   });
 
-  it("tolerates a sender with no getURL", async () => {
-    getProjectForWebContentsMock.mockReturnValue(null);
+  it("reports a help terminal as not found, not as a conflict", async () => {
+    mockIsHelpTerminal.mockImplementation((id: string) => id === "t-a");
     register();
 
-    await expect(reconnect({ sender: { id: 1 } }, "t-unowned")).resolves.toMatchObject({
-      exists: true,
-    });
+    await expect(reconnect(senderEvent(SENDER_A), "t-a")).resolves.toStrictEqual(NOT_FOUND);
   });
 });
 
-describe("terminal:reconnect — cold-boot startup URL fallback", () => {
+describe("terminal:reconnect — sender identity resolution", () => {
   // The startup-restore renderer hydrates before `registerInitialView` binds it,
   // so the registry answers null while its URL still names the project. Without
   // the fallback every restored terminal would be refused and respawned.
@@ -243,7 +274,7 @@ describe("terminal:reconnect — cold-boot startup URL fallback", () => {
 
     const { event } = makeEvent(SENDER_A, "app://index.html?projectId=project-a");
 
-    await expect(reconnect(event, "t-b")).resolves.toEqual({ exists: false });
+    await expect(reconnect(event, "t-b")).resolves.toStrictEqual(REFUSED);
   });
 
   it("lets the registry binding win over a stale URL", async () => {
@@ -253,8 +284,44 @@ describe("terminal:reconnect — cold-boot startup URL fallback", () => {
     // authoritative, so project-b's terminal stays refused.
     const { event } = makeEvent(SENDER_A, "app://index.html?projectId=project-b");
 
-    await expect(reconnect(event, "t-b")).resolves.toEqual({ exists: false });
+    await expect(reconnect(event, "t-b")).resolves.toStrictEqual(REFUSED);
     await expect(reconnect(event, "t-a")).resolves.toMatchObject({ exists: true });
+  });
+
+  it("falls back to no identity when the sender has no getURL", async () => {
+    getProjectForWebContentsMock.mockReturnValue(null);
+    register();
+
+    await expect(reconnect({ sender: { id: 1 } }, "t-unowned")).resolves.toMatchObject({
+      exists: true,
+    });
+  });
+
+  it("falls back to no identity when getURL throws", async () => {
+    getProjectForWebContentsMock.mockReturnValue(null);
+    register();
+
+    const event = {
+      sender: {
+        id: SENDER_A,
+        getURL: () => {
+          throw new Error("webContents destroyed");
+        },
+      },
+    };
+
+    await expect(reconnect(event, "t-unowned")).resolves.toMatchObject({ exists: true });
+    await expect(reconnect(event, "t-a")).resolves.toStrictEqual(REFUSED);
+  });
+
+  it("falls back to no identity when the URL is malformed", async () => {
+    getProjectForWebContentsMock.mockReturnValue(null);
+    register();
+
+    const { event } = makeEvent(SENDER_A, "not-a-valid-url");
+
+    await expect(reconnect(event, "t-unowned")).resolves.toMatchObject({ exists: true });
+    await expect(reconnect(event, "t-a")).resolves.toStrictEqual(REFUSED);
   });
 
   it("snapshots the sender's identity before the PTY lookup resolves", async () => {
@@ -276,44 +343,57 @@ describe("terminal:reconnect — cold-boot startup URL fallback", () => {
 });
 
 describe("terminal:reconnect-bulk handler", () => {
-  it("returns a per-id map matching the single reconnect contract", async () => {
+  it("returns per-id results identical to the single reconnect contract", async () => {
     register();
+    const event = senderEvent(SENDER_A);
 
-    const result = await reconnectBulk(boundEvent(SENDER_A), ["t-a", "t-dead"]);
+    const [single, bulk] = await Promise.all([
+      reconnect(event, "t-a"),
+      reconnectBulk(event, ["t-a"]),
+    ]);
 
-    expect(result["t-a"]).toMatchObject({ exists: true, id: "t-a", hasPty: true });
-    expect(result["t-dead"]).toEqual({ exists: false });
+    // Full equality, so bulk can't quietly drop live metadata the single path returns.
+    expect(bulk["t-a"]).toStrictEqual(single);
   });
 
   it("refuses only the foreign ids in a mixed batch", async () => {
     register();
 
-    const result = await reconnectBulk(boundEvent(SENDER_A), ["t-a", "t-b", "t-unowned", "gone"]);
+    const result = await reconnectBulk(senderEvent(SENDER_A), ["t-a", "t-b", "t-unowned", "gone"]);
 
     expect(result["t-a"]).toMatchObject({ exists: true });
-    expect(result["t-b"]).toEqual({ exists: false });
-    expect(result["t-unowned"]).toEqual({ exists: false });
-    expect(result["gone"]).toEqual({ exists: false });
+    expect(result["t-b"]).toStrictEqual(REFUSED);
+    expect(result["t-unowned"]).toStrictEqual(REFUSED);
+    expect(result["gone"]).toStrictEqual(NOT_FOUND);
   });
 
-  it("applies one snapshotted identity to every id in the batch", async () => {
+  it("resolves the sender's identity once for the whole batch", async () => {
     getProjectForWebContentsMock.mockReturnValue(null);
     register();
 
-    const { event, setUrl } = makeEvent(SENDER_A, "app://index.html?projectId=project-a");
-    const inFlight = reconnectBulk(event, ["t-a", "t-a2"]);
-    setUrl("app://index.html?projectId=project-b");
+    // Identity read once → both ids judged as project-a. A per-id resolver would
+    // see project-b on the second read and refuse t-a2.
+    let reads = 0;
+    const event = {
+      sender: {
+        id: SENDER_A,
+        getURL: () =>
+          ++reads === 1
+            ? "app://index.html?projectId=project-a"
+            : "app://index.html?projectId=project-b",
+      },
+    };
 
-    const result = await inFlight;
+    const result = await reconnectBulk(event, ["t-a", "t-a2"]);
 
-    expect(result["t-a"]).toMatchObject({ exists: true });
-    expect(result["t-a2"]).toMatchObject({ exists: true });
+    expect(result["t-a"]).toMatchObject({ exists: true, id: "t-a" });
+    expect(result["t-a2"]).toMatchObject({ exists: true, id: "t-a2" });
   });
 
   it("deduplicates ids before probing", async () => {
     const ptyClient = register();
 
-    const result = await reconnectBulk(boundEvent(SENDER_A), ["t-a", "t-a", "t-a2"]);
+    const result = await reconnectBulk(senderEvent(SENDER_A), ["t-a", "t-a", "t-a2"]);
 
     expect(Object.keys(result).sort()).toEqual(["t-a", "t-a2"]);
     expect(ptyClient.getTerminalAsync).toHaveBeenCalledTimes(2);
@@ -327,25 +407,36 @@ describe("terminal:reconnect-bulk handler", () => {
       }),
     });
 
-    const result = await reconnectBulk(boundEvent(SENDER_A), ["t-a", "t-fail"]);
+    const result = await reconnectBulk(senderEvent(SENDER_A), ["t-a", "t-fail"]);
 
     expect(result["t-a"]).toMatchObject({ exists: true });
-    expect(result["t-fail"]).toEqual({ exists: false });
+    expect(result["t-fail"]).toStrictEqual(NOT_FOUND);
   });
 
   it("reports help terminals as { exists: false }, mirroring single reconnect", async () => {
     mockIsHelpTerminal.mockImplementation((id: string) => id === "t-a2");
     register();
 
-    const result = await reconnectBulk(boundEvent(SENDER_A), ["t-a2", "t-a"]);
+    const result = await reconnectBulk(senderEvent(SENDER_A), ["t-a2", "t-a"]);
 
-    expect(result["t-a2"]).toEqual({ exists: false });
+    expect(result["t-a2"]).toStrictEqual(NOT_FOUND);
     expect(result["t-a"]).toMatchObject({ exists: true });
+  });
+
+  it("accepts a full batch at the 256-id cap and rejects one more", async () => {
+    register();
+    const event = senderEvent(SENDER_A);
+    const ids = Array.from({ length: 256 }, (_, i) => `t-${i}`);
+
+    await expect(reconnectBulk(event, ids)).resolves.toHaveProperty("t-255");
+    await expect(reconnectBulk(event, [...ids, "t-256"])).rejects.toThrow(
+      "Invalid terminal IDs: maximum 256 IDs allowed"
+    );
   });
 
   it("rejects invalid payloads", async () => {
     register();
-    const event = boundEvent(SENDER_A);
+    const event = senderEvent(SENDER_A);
 
     await expect(reconnectBulk(event, null)).rejects.toThrow(
       "Invalid terminal IDs: must be an array"
@@ -353,15 +444,12 @@ describe("terminal:reconnect-bulk handler", () => {
     await expect(reconnectBulk(event, [""])).rejects.toThrow(
       "Invalid terminal ID in batch payload"
     );
-    await expect(reconnectBulk(event, new Array(257).fill("id"))).rejects.toThrow(
-      "Invalid terminal IDs: maximum 256 IDs allowed"
-    );
   });
 
   it("returns an empty map for an empty id list", async () => {
     const ptyClient = register();
 
-    await expect(reconnectBulk(boundEvent(SENDER_A), [])).resolves.toEqual({});
+    await expect(reconnectBulk(senderEvent(SENDER_A), [])).resolves.toEqual({});
     expect(ptyClient.getTerminalAsync).not.toHaveBeenCalled();
   });
 });

@@ -425,8 +425,14 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       // Null is an identity here, not a wildcard: an unbound window (Cmd+N,
       // project picker) still reconnects its own projectless terminal, but it
       // cannot reach a project-owned one, and a project-bound sender cannot
-      // reach an unowned one. Refusing looks exactly like "not found", so
-      // restore falls through to its normal respawn path instead of attaching.
+      // reach an unowned one.
+      //
+      // `conflict` marks this as "live, but not yours" rather than plain "not
+      // found". Both withhold every field, but restore reuses the saved id when
+      // a terminal is merely gone — and that id is still live here, so reusing
+      // it would re-place the owner's PTY in PtyClient.terminalOwners before the
+      // host could reject the duplicate. The flag makes restore mint a fresh id
+      // instead, exactly as it already does for a timed-out reconnect.
       const ownerWorkspaceId = terminal.projectId ?? null;
       if (ownerWorkspaceId !== senderWorkspaceId) {
         logWarn(`terminal:reconnect: refusing ${terminalId} — owned by another workspace`, {
@@ -434,7 +440,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           ownerWorkspaceId,
           senderWorkspaceId,
         });
-        return { exists: false };
+        return { exists: false, conflict: true };
       }
 
       if (getAgentAvailabilityStore().isHelpTerminal(terminal.id)) {

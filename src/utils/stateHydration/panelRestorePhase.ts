@@ -685,7 +685,12 @@ export async function restorePanelsPhase(
                 logHydrationInfo,
                 prefetchedReconnectResults?.[saved.id]
               );
-              const reconnectTimedOut = reconnectOutcome.status === "timeout";
+              // Both statuses mean "do not respawn under the saved id". A timeout
+              // may have left the original alive; a conflict definitely did, and
+              // it belongs to another workspace (#11652) — reusing the id would
+              // re-place that terminal's PTY under this project.
+              const mintFreshTerminalId =
+                reconnectOutcome.status === "timeout" || reconnectOutcome.status === "conflict";
               const reconnectedTerminal =
                 reconnectOutcome.status === "found" ? reconnectOutcome.terminal : null;
 
@@ -752,7 +757,7 @@ export async function restorePanelsPhase(
                   kind,
                   projectRoot || "",
                   agentSettings,
-                  reconnectTimedOut,
+                  mintFreshTerminalId,
                   clipboardDirectory,
                   projectPresetsByAgent,
                   {

@@ -234,6 +234,14 @@ export interface BackendTerminalInfo {
 /** Result from terminal reconnect operation */
 export interface TerminalReconnectResult {
   exists: boolean;
+  /**
+   * Set when the terminal is alive but owned by another workspace (#11652).
+   * `exists` is false either way — the caller gets no metadata — but restore
+   * must not respawn under this id: it is still live, so reusing it would
+   * re-place the owner's PTY in `PtyClient.terminalOwners` before the host
+   * rejects the duplicate, stranding a terminal that belongs to someone else.
+   */
+  conflict?: boolean;
   id?: string;
   projectId?: string;
   kind?: PanelKind;
