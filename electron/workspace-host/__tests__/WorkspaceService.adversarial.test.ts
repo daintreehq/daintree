@@ -195,6 +195,22 @@ describe("WorkspaceService adversarial", () => {
       expect(mockSimpleGit.raw).not.toHaveBeenCalled();
     });
 
+    // #11650. The empty state list this folder produces is indistinguishable
+    // from the one a host that has not finished registering produces, so the
+    // verdict has to ride along with it — otherwise the renderer has to guess,
+    // and guessing "no repository" would strip a real repo's worktree state
+    // during the boot race, while guessing "unknown" is what let a folder with
+    // no repository adopt another project's worktree in the first place.
+    it("reports the folder as not git-backed alongside its empty state list", async () => {
+      await service.loadProject("req-plain", "/downloads", "ws-plain");
+      sentEvents.length = 0;
+
+      service.getAllStates("states-plain");
+
+      const event = sentEvents.find((e) => e.type === "all-states");
+      expect(event).toMatchObject({ states: [], gitBacked: false });
+    });
+
     it("stays inert when the workspace is foregrounded again", async () => {
       await service.loadProject("req-plain", "/downloads", "ws-plain");
       const startWatcher = vi.spyOn(

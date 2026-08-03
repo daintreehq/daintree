@@ -393,3 +393,26 @@ export interface WorktreeState extends Worktree {
   /** Override to ensure the canonical dirty-file-or-commit activity timestamp is always present */
   lastActivityTimestamp: number | null;
 }
+
+/**
+ * A worktree list paired with the workspace host's own answer to "is there a
+ * repository here at all".
+ *
+ * The list on its own cannot be read as that answer. An empty array means "no
+ * repository", "the host has not registered yet" and "the readiness gate timed
+ * out" all at once, and the renderer has no way to tell them apart — so it has
+ * to treat every empty list as unknown and keep whatever worktree state it
+ * already had (#11234). That is correct for a slow host and wrong for a folder
+ * with no `.git`, which is how a workspace ends up adopting the app-global
+ * active worktree left behind by a different project (#11650).
+ *
+ * `gitBacked` closes that gap with the host's live probe rather than the
+ * project row's persisted `gitBacked` column, whose NULL means both "real
+ * repository" and "never classified" and so cannot gate anything. `null` here
+ * is the honest "not classified yet" — callers must treat it as unknown and
+ * stay permissive, never as `false`.
+ */
+export interface WorktreeListResult {
+  worktrees: WorktreeState[];
+  gitBacked: boolean | null;
+}

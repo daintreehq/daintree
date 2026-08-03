@@ -642,6 +642,38 @@ describe("WorkspaceClient multi-process manager", () => {
             .filter((r: any) => r.type === "get-all-states")
         ).toHaveLength(0);
       });
+
+      // #11650's guard reads the verdict, so the gate has to give up into
+      // "unknown" here rather than "no repository". A `false` would tell
+      // hydration a real repository has no worktrees every time its host was
+      // merely slow — exactly the #11234 regression the empty list above is
+      // shaped to avoid, but arriving through the new field instead.
+      it("gives up into the unknown verdict, never a false one, when the host never posts ready", async () => {
+        const load = client.loadProject("/project-a", 1);
+        void load.catch(() => {});
+        expect(mockHosts).toHaveLength(1);
+
+        const resultPromise = client.getAllStatesWithGitBackedForProjectAsync(
+          "/project-a",
+          idFor("/project-a")
+        );
+        let resolved: any = undefined;
+        void resultPromise.then((r) => {
+          resolved = r;
+        });
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(resolved).toBeUndefined();
+
+        await vi.advanceTimersByTimeAsync(GATE_OBSERVATION_WINDOW_MS);
+
+        expect(await resultPromise).toEqual({ states: [], gitBacked: null });
+        expect(
+          h(0)
+            .getAllRequests()
+            .filter((r: any) => r.type === "get-all-states")
+        ).toHaveLength(0);
+      });
     });
 
     it("normalizes the path before keying — equivalent spellings share one request", async () => {
@@ -718,6 +750,88 @@ describe("WorkspaceClient multi-process manager", () => {
 
       expect(await p1).toEqual([{ id: "wt-a" }]);
       expect(await p3).toEqual([{ id: "wt-b" }]);
+    });
+  });
+
+  // #11650. Hydration cannot read an empty list as "this folder has no
+  // repository" — the same `[]` also means "no host yet" and "readiness gate
+  // timed out". These cases pin which of those the envelope distinguishes.
+  describe("getAllStatesWithGitBackedForProjectAsync", () => {
+    const idFor = (p: string) => `id-for-${path.resolve(p)}`;
+
+    it("passes the host's verdict through beside the states", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const resultPromise = client.getAllStatesWithGitBackedForProjectAsync(
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+      const req = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      h(0).resolveRequest(req.requestId, { states: [], gitBacked: false });
+
+      expect(await resultPromise).toEqual({ states: [], gitBacked: false });
+    });
+
+    // The distinction the whole fix rests on: same empty list, opposite verdict.
+    it("reports unknown, not false, when no host has classified the path", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const callsBefore = h(0).sendWithResponse.mock.calls.length;
+      const result = await client.getAllStatesWithGitBackedForProjectAsync(
+        "/no-such-project",
+        idFor("/no-such-project")
+      );
+      expect(result).toEqual({ states: [], gitBacked: null });
+      expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    // A host predating the field omits it. Degrading to `null` keeps the
+    // permissive #11234 path; a `false` here would strip a real repo's state.
+    it("reports unknown when the host omits the field", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const resultPromise = client.getAllStatesWithGitBackedForProjectAsync(
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+      const req = h(0)
+        .getAllRequests()
+        .find((r: any) => r.type === "get-all-states")!;
+      h(0).resolveRequest(req.requestId, { states: [{ id: "wt-a" }] });
+
+      expect(await resultPromise).toEqual({ states: [{ id: "wt-a" }], gitBacked: null });
+    });
+
+    // The array-shaped method hands the same promise back to concurrent callers
+    // and several tests above assert that identity. Deriving one method from the
+    // other with `.then()` would quietly break it, so the two coalesce apart.
+    it("does not disturb the array-shaped method's promise identity", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      void client.getAllStatesWithGitBackedForProjectAsync("/project-a", idFor("/project-a"));
+      const p1 = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
+      const p2 = client.getAllStatesForProjectAsync("/project-a", idFor("/project-a"));
+      expect(p2).toBe(p1);
+
+      await tick();
+      for (const req of h(0)
+        .getAllRequests()
+        .filter((r: any) => r.type === "get-all-states")) {
+        h(0).resolveRequest(req.requestId, { states: [{ id: "wt-a" }], gitBacked: true });
+      }
+      expect(await p1).toEqual([{ id: "wt-a" }]);
     });
   });
 

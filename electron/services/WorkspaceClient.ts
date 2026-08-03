@@ -79,6 +79,16 @@ function dedupeSnapshotsById(states: WorktreeSnapshot[]): WorktreeSnapshot[] {
   return deduped;
 }
 
+/**
+ * A host's worktree snapshot read plus its own "is there a repository here"
+ * verdict. `gitBacked: null` is "not classified" — never read it as `false`
+ * (#11650). Main-process shape; the renderer sees `WorktreeListResult`.
+ */
+export interface HostWorktreeStates {
+  states: WorktreeSnapshot[];
+  gitBacked: boolean | null;
+}
+
 export class WorkspaceClient extends EventEmitter {
   private isDisposed = false;
   private pool: WorkspaceHostPool;
@@ -86,6 +96,7 @@ export class WorkspaceClient extends EventEmitter {
   private copyTree: WorkspaceCopyTreeClient;
 
   private readonly _statesInflight = new Map<string, Promise<WorktreeSnapshot[]>>();
+  private readonly _statesWithGitBackedInflight = new Map<string, Promise<HostWorktreeStates>>();
 
   constructor(config: WorkspaceClientConfig = {}) {
     super();
@@ -482,6 +493,55 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   /**
+   * The project-scoped read of {@link getAllStatesForProjectAsync}, but keeping
+   * the host's `gitBacked` verdict alongside the states instead of discarding
+   * it (#11650).
+   *
+   * Coalesced through its own map rather than sharing `_statesInflight`:
+   * callers of the array-shaped method rely on getting the *same promise
+   * object* back for concurrent equivalent calls, which deriving one from the
+   * other with `.then()` would break. The extra `get-all-states` round trip in
+   * the rare overlap is a snapshot read off an already-ready host's in-memory
+   * monitor map, not a git spawn.
+   */
+  getAllStatesWithGitBackedForProjectAsync(
+    projectPath: string,
+    expectedProjectId: string
+  ): Promise<HostWorktreeStates> {
+    const normalized = this.pool.normalizeProjectPath(projectPath);
+    const key = `p:${expectedProjectId}:${normalized}`;
+    const existing = this._statesWithGitBackedInflight.get(key);
+    if (existing) return existing;
+
+    const entry = this.pool.entries.get(normalized);
+    const matchedEntry =
+      entry !== undefined && entry.projectId === expectedProjectId ? entry : undefined;
+    const promise = (
+      matchedEntry === undefined
+        ? // No host for this project yet. `gitBacked: null` rather than `false`
+          // — nothing has probed the folder, so this is "unknown", and a caller
+          // that read it as "not a repository" would strip a real repo's saved
+          // worktree state during the boot race this sentinel exists for.
+          Promise.resolve({ states: [], gitBacked: null } satisfies HostWorktreeStates)
+        : this._readStatesWithGitBackedWhenReady(matchedEntry)
+    ).then(
+      (result) => {
+        setTimeout(
+          () => this._statesWithGitBackedInflight.delete(key),
+          STATES_INFLIGHT_COALESCE_WINDOW_MS
+        );
+        return result;
+      },
+      (error) => {
+        this._statesWithGitBackedInflight.delete(key);
+        throw error;
+      }
+    );
+    this._statesWithGitBackedInflight.set(key, promise);
+    return promise;
+  }
+
+  /**
    * States for one project's host, keyed by project path rather than window.
    * `windowToProject` is repointed to the incoming project the moment a switch
    * starts, so window-scoped lookups from a backgrounded view resolve against
@@ -555,15 +615,31 @@ export class WorkspaceClient extends EventEmitter {
    * steady-state reads are unaffected.
    */
   private async _readStatesWhenReady(entry: ProcessEntry): Promise<WorktreeSnapshot[]> {
-    if (!(await this._awaitHostReady(entry))) return [];
+    return (await this._readStatesWithGitBackedWhenReady(entry)).states;
+  }
+
+  /**
+   * The same readiness-gated read, keeping the host's `gitBacked` verdict.
+   *
+   * A host that never became ready answers `gitBacked: null`, matching the `[]`
+   * states sentinel: both mean "unknown", and a caller must not read either as
+   * "this folder has no repository" (#11650). A host that predates the field
+   * also answers `null` via the `?? null`, so an older host degrades to today's
+   * permissive behavior rather than to a wrong `false`.
+   */
+  private async _readStatesWithGitBackedWhenReady(
+    entry: ProcessEntry
+  ): Promise<HostWorktreeStates> {
+    if (!(await this._awaitHostReady(entry))) return { states: [], gitBacked: null };
     const requestId = entry.host.generateRequestId();
     const result = await entry.host.sendWithResponse<{
       states: WorktreeSnapshot[];
+      gitBacked?: boolean | null;
     }>({
       type: "get-all-states",
       requestId,
     });
-    return result.states;
+    return { states: result.states, gitBacked: result.gitBacked ?? null };
   }
 
   /**
@@ -911,6 +987,7 @@ export class WorkspaceClient extends EventEmitter {
     this.copyTree.dispose();
     this.pool.dispose();
     this._statesInflight.clear();
+    this._statesWithGitBackedInflight.clear();
     this.removeAllListeners();
   }
 }

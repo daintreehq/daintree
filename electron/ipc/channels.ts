@@ -1,5 +1,6 @@
 export const CHANNELS = {
   WORKTREE_GET_ALL: "worktree:get-all",
+  WORKTREE_GET_ALL_WITH_STATUS: "worktree:get-all-with-status",
   WORKTREE_REFRESH: "worktree:refresh",
   WORKTREE_SET_ACTIVE: "worktree:set-active",
   WORKTREE_REMOVE: "worktree:remove",

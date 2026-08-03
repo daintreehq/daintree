@@ -16,6 +16,7 @@ const terminalClientMock = {
 
 const worktreeClientMock = {
   getAll: vi.fn(),
+  getAllWithStatus: vi.fn(),
 };
 
 const projectClientMock = {
@@ -106,11 +107,16 @@ const gitProject = {
   lastOpened: 0,
 };
 
+/** The host's answer for a workspace it has classified as having a repository. */
+function hostReports(worktrees: unknown[], gitBacked: boolean | null = null) {
+  return { worktrees, gitBacked };
+}
+
 async function hydrateWith(payload: {
   project: unknown;
   workspaceId?: string;
   activeWorktreeId?: string;
-}): Promise<ReturnType<typeof vi.fn>> {
+}): Promise<{ setActiveWorktree: ReturnType<typeof vi.fn> }> {
   appClientMock.hydrate.mockResolvedValue({
     appState: { terminals: [], activeWorktreeId: payload.activeWorktreeId },
     terminalConfig,
@@ -126,7 +132,7 @@ async function hydrateWith(payload: {
     loadRecipes: vi.fn().mockResolvedValue(undefined),
     openDiagnosticsDock: vi.fn(),
   });
-  return setActiveWorktree;
+  return { setActiveWorktree };
 }
 
 describe("hydrateAppState active-worktree selection", () => {
@@ -136,7 +142,7 @@ describe("hydrateAppState active-worktree selection", () => {
     terminalClientMock.reconnect.mockResolvedValue({ exists: false });
     terminalClientMock.reconnectBulk.mockResolvedValue({});
     terminalClientMock.getSerializedStates.mockRejectedValue(new Error("unavailable"));
-    worktreeClientMock.getAll.mockResolvedValue([]);
+    worktreeClientMock.getAllWithStatus.mockResolvedValue(hostReports([]));
     projectClientMock.getTabGroups.mockResolvedValue([]);
     projectClientMock.getTerminalSizes.mockResolvedValue({});
     projectClientMock.getDraftInputs.mockResolvedValue({});
@@ -148,7 +154,7 @@ describe("hydrateAppState active-worktree selection", () => {
   // the grid rendering a bucket nothing can land in, and every worktree-resolving
   // action refusing with "Worktree not found".
   it("leaves the selection unset in a scratch workspace", async () => {
-    const setActiveWorktree = await hydrateWith({
+    const { setActiveWorktree } = await hydrateWith({
       project: null,
       workspaceId: "scratch-uuid",
       activeWorktreeId: "/other/project/worktree",
@@ -160,10 +166,10 @@ describe("hydrateAppState active-worktree selection", () => {
   // workspace that cannot have worktrees must ignore one even when it arrives
   // populated (a stale or cross-workspace answer).
   it("leaves the selection unset in a scratch workspace even when a worktree list arrives", async () => {
-    worktreeClientMock.getAll.mockResolvedValue([
-      { id: "wt-foreign", name: "main", isMainWorktree: true },
-    ]);
-    const setActiveWorktree = await hydrateWith({
+    worktreeClientMock.getAllWithStatus.mockResolvedValue(
+      hostReports([{ id: "wt-foreign", name: "main", isMainWorktree: true }], true)
+    );
+    const { setActiveWorktree } = await hydrateWith({
       project: null,
       workspaceId: "scratch-uuid",
       activeWorktreeId: "wt-foreign",
@@ -172,7 +178,7 @@ describe("hydrateAppState active-worktree selection", () => {
   });
 
   it("leaves the selection unset in a project opened without git", async () => {
-    const setActiveWorktree = await hydrateWith({
+    const { setActiveWorktree } = await hydrateWith({
       project: { ...gitProject, gitBacked: false },
       workspaceId: gitProject.id,
       activeWorktreeId: "/other/project/worktree",
@@ -183,7 +189,7 @@ describe("hydrateAppState active-worktree selection", () => {
   // #11234: for a git-backed project an empty list means "the host hasn't
   // reported yet", so the saved selection is kept rather than dropped.
   it("keeps the saved selection in a git-backed project whose worktree list is still unknown", async () => {
-    const setActiveWorktree = await hydrateWith({
+    const { setActiveWorktree } = await hydrateWith({
       project: gitProject,
       workspaceId: gitProject.id,
       activeWorktreeId: "wt-saved",
@@ -191,11 +197,12 @@ describe("hydrateAppState active-worktree selection", () => {
     expect(setActiveWorktree).toHaveBeenCalledExactlyOnceWith("wt-saved");
   });
 
-  // A rejected `worktree:get-all` resolves to the `null` sentinel, which is the
-  // other spelling of "unknown" — same outcome as the empty list above.
+  // A rejected `worktree:get-all-with-status` resolves to the `null` sentinel,
+  // which is the other spelling of "unknown" — same outcome as the empty list
+  // above. The host never answered, so it never said "no repository" either.
   it("keeps the saved selection when the worktree fetch fails outright", async () => {
-    worktreeClientMock.getAll.mockRejectedValue(new Error("host unavailable"));
-    const setActiveWorktree = await hydrateWith({
+    worktreeClientMock.getAllWithStatus.mockRejectedValue(new Error("host unavailable"));
+    const { setActiveWorktree } = await hydrateWith({
       project: gitProject,
       workspaceId: gitProject.id,
       activeWorktreeId: "wt-saved",
@@ -204,11 +211,16 @@ describe("hydrateAppState active-worktree selection", () => {
   });
 
   it("restores the saved selection when it is present in a known worktree list", async () => {
-    worktreeClientMock.getAll.mockResolvedValue([
-      { id: "wt-main", name: "main", isMainWorktree: true },
-      { id: "wt-feature", name: "feature", isMainWorktree: false },
-    ]);
-    const setActiveWorktree = await hydrateWith({
+    worktreeClientMock.getAllWithStatus.mockResolvedValue(
+      hostReports(
+        [
+          { id: "wt-main", name: "main", isMainWorktree: true },
+          { id: "wt-feature", name: "feature", isMainWorktree: false },
+        ],
+        true
+      )
+    );
+    const { setActiveWorktree } = await hydrateWith({
       project: gitProject,
       workspaceId: gitProject.id,
       activeWorktreeId: "wt-feature",
@@ -217,15 +229,47 @@ describe("hydrateAppState active-worktree selection", () => {
   });
 
   it("falls back to the main worktree when the saved selection is gone", async () => {
-    worktreeClientMock.getAll.mockResolvedValue([
-      { id: "wt-feature", name: "feature", isMainWorktree: false },
-      { id: "wt-main", name: "main", isMainWorktree: true },
-    ]);
-    const setActiveWorktree = await hydrateWith({
+    worktreeClientMock.getAllWithStatus.mockResolvedValue(
+      hostReports(
+        [
+          { id: "wt-feature", name: "feature", isMainWorktree: false },
+          { id: "wt-main", name: "main", isMainWorktree: true },
+        ],
+        true
+      )
+    );
+    const { setActiveWorktree } = await hydrateWith({
       project: gitProject,
       workspaceId: gitProject.id,
       activeWorktreeId: "wt-deleted",
     });
     expect(setActiveWorktree).toHaveBeenCalledExactlyOnceWith("wt-main");
+  });
+
+  // #11650. The row's discriminator cannot tell these two apart — both carry no
+  // `gitBacked` field, which `isGitBackedProject` reads as git-backed — so the
+  // pair only diverges on what the host reports. Asserting them together is the
+  // point: the fix must split them, and must not do it by making the unknown
+  // case conservative (that would resurrect #11234).
+  describe("a project row with no gitBacked discriminator", () => {
+    it("keeps the saved selection while the host has not classified the folder", async () => {
+      worktreeClientMock.getAllWithStatus.mockResolvedValue(hostReports([], null));
+      const { setActiveWorktree } = await hydrateWith({
+        project: gitProject,
+        workspaceId: gitProject.id,
+        activeWorktreeId: "wt-foreign",
+      });
+      expect(setActiveWorktree).toHaveBeenCalledExactlyOnceWith("wt-foreign");
+    });
+
+    it("ignores the saved selection once the host reports no repository", async () => {
+      worktreeClientMock.getAllWithStatus.mockResolvedValue(hostReports([], false));
+      const { setActiveWorktree } = await hydrateWith({
+        project: gitProject,
+        workspaceId: gitProject.id,
+        activeWorktreeId: "wt-foreign",
+      });
+      expect(setActiveWorktree).not.toHaveBeenCalled();
+    });
   });
 });
