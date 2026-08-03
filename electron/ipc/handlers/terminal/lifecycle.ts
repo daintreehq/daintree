@@ -238,12 +238,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // worktrees, defaultWorkingDirectory, scratch, the home-dir fallback), so
     // containment is not evidence of anything here.
     //
-    // Gated on a RESOLVED Project, not merely on the id being present: an
-    // explicit workspace id is often a scratch id that resolves to no Project
-    // (#11079), and scratch workspaces have no worktrees to check against.
-    // Requires the explicit id too — falling back to the current project would
-    // audit a claim the caller never made. A worktreeId sent with no projectId
-    // asserts no relationship and stays untouched (#5182).
     // Truthiness, not `!== undefined`: a blank id is already treated as absent
     // when resolving the project above (and again by PtyClient, which swaps in
     // the active project), so it must not be taken as an assertion here either
