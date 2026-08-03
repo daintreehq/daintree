@@ -1,5 +1,115 @@
 # Changelog
 
+## [0.30.0] - 2026-08-03
+
+The MCP control surface gets a full overhaul — the external tool surface drops from 100 tools to 23 so real clients stop silently truncating it, results are bounded and versioned, and forge actions grow enough reach for an agent to run a whole work loop without leaving Daintree. Alongside that: Pilot, a cross-project view of every agent run at once; a file browser that feeds files straight into an agent; and a relaunch that brings back all your project windows instead of one.
+
+### Features
+
+**Pilot**
+
+- New cross-project fleet overview on Cmd+Alt+O: every agent run across every project and scratch in one searchable palette, grouped by project and ordered by what needs you most (#11610)
+- Rows read as a single line, with colour reserved for the three states that actually demand you, plus a filter bar to isolate them (#11631)
+
+**MCP & agent control**
+
+- The external tool surface is cut from 100 tools to 23 — clients like Cursor and Copilot were silently dropping or hard-erroring on the overflow and choosing for you (#11592)
+- `mcp.surface` publishes the session's tool surface as versioned data with a stable hash, so a client can detect drift without diffing it (#11617)
+- Per-client MCP connect config — Claude Code JSON, Codex TOML, or raw Streamable HTTP details — with the displayed URL and the copied snippet derived from one computation (#11554)
+- The server sends workflow instructions at initialize (#11601)
+- `project.runCheck` runs one of a project's detected runners and returns its real exit code instead of a best-effort scrollback parse (#11571)
+- Every action result is parsed through its declared schema before it's returned, so the published shape is the delivered one (#11583)
+- Payload budgets on tool results, session history, bookmark reads, the action manifest, and agent-facing git and worktree reads (#11559, #11560, #11561, #11570)
+- CopyTree returns a file handle rather than the whole bundle (#11584)
+
+**Forge over MCP**
+
+- Read a PR's CI status (#11567) and an issue's comment thread (#11566)
+- Issue and PR lists take `perPage`, `sort`, `direction` and a summary/full view, and reject an unknown filter instead of dropping it (#11558)
+- The twelve forge write actions return the state they changed instead of void (#11569)
+
+**File browser**
+
+- Send a file to an agent as an `@file` reference by dragging a row (#11581) or with Cmd+I (#11580)
+- Git status on tree rows, and a changed-files summary in the idle pane (#11618)
+- File-type icons on tree rows (#11604)
+- Selecting a folder renders its contents, with a toolbar sort menu that orders both the tree and the listing (#11622)
+- Reachable from Cmd+Alt+F, a terminal right-click, the file viewer toolbar, and an opt-in toolbar button (#11486, #11504)
+- Opens scratch and worktree-less project folders, not just git worktrees (#11488)
+- The viewer collapses like the tree, and Enter or double-click opens a file as its own panel (#11502)
+
+**Windows & palettes**
+
+- A relaunch restores every open project window on the project it was showing, not just one (#11494)
+- The palette family — switcher, command palette, theme, new terminal, quick create, Pilot — moves onto one surface, one width, and one grouped keyboard model (#11624, #11616, #11623)
+- The dock's + launcher is complete and searchable: every spawnable panel kind, with agents and recipes ranked in one list, on a proper popover palette (#11523, #11609)
+- Scratch rows in the switcher carry the same agent-activity status line project rows get (#11520)
+
+**Terminal & plugins**
+
+- Terminal process detection collapses into one registry, so a package manager stops masking the tool it wraps and `node vite.js` reads as Vite (#11619)
+- Plugins can contribute terminal process detections through `contributes.processTools` (#11621)
+- `/goal` is shared across Claude Code and Codex (#11491)
+- The sidebar's worktree refresh button is a true full refresh — titles, pull requests and CI badges all re-resolve (#11634)
+
+### Bug Fixes
+
+**Terminal**
+
+- A hidden pane's PTY no longer resizes without its grid, which corrupted cursor-addressed output in a way reflow could never undo (#11632)
+- Scrollback snapshots carry the geometry they were captured at, so a replay aligns to the grid its payload was written on (#11573)
+- Dropping a file on a terminal is agent-aware — an agent gets an `@file` token, a shell gets an escaped path — and a drag over a terminal shows feedback (#11579)
+- Drop and paste emit the same cwd-relative `@file` form autocomplete already produces (#11578)
+- A dismissed session-lost banner stays dismissed across worktree switches (#11603)
+- Terminal limit errors only surface on an actual depletion (#11514)
+
+**Durability & state**
+
+- Scratch workspaces persist and restore their panel grid, so an eviction or restart no longer strands running PTYs (#11487)
+- A non-project workspace never inherits legacy global state (#11501)
+- Cancelling bulk worktree creation stops the in-flight items (#11519)
+- Deleting a scratch confirms first and reports progress (#11551)
+- Every workspace kind gets a sidebar row, so the toggle stops lying (#11503)
+- Launching an unknown agent id is rejected instead of degrading to a plain terminal (#11500)
+
+**Files**
+
+- Files outside every worktree — scratch folders, worktree-less projects, unregistered repos — get a live change signal instead of showing whatever was on disk when they opened (#11605)
+- File panels and the file browser re-read when a project view is revealed (#11615)
+- Local images in markdown are re-requested when they change on disk (#11599)
+- Media previews refresh, and Refresh is reachable with the tree collapsed (#11600)
+- Clicking a folder in the tree expands it without hijacking the viewer (#11629)
+- A promoted workspace-rooted browser keeps its own folder (#11493)
+
+**MCP**
+
+- `project.getSettings` no longer returns decrypted secrets over MCP (#11555)
+- Introspection results are scoped to the calling session's tier (#11563)
+- An unpinned tool call routes by focus order and reports the workspace it resolved to (#11564)
+- Terminal dispatch from an agent or MCP requires an explicit terminal id (#11568)
+- Agent-dispatched push and pull-rebase complete instead of stalling (#11565)
+- `agent.launch` has a usable identity, and `startWorkOnIssue` publishes its schema (#11557)
+- `worktree.resource` failures are reported rather than resolved (#11562)
+- The idempotency dedup allowlist is rebuilt around its stated criterion (#11556)
+
+**Dialogs & overlays**
+
+- A shortcut hint no longer strands over the dialog it opened (#11508)
+- Panels that open behind a maximized cell are revealed (#11509)
+- A dialog opened from a docked panel lifts above its popover (#11511)
+- Menu shortcut hints stay off the item label (#11607)
+
+**Elsewhere**
+
+- A failed macOS update install surfaces instead of vanishing (#11485)
+- Recipe pickers show which scope each recipe comes from, and stop hiding shadowed ones (#11516)
+- A PR whose CI reached a terminal state is re-polled — failure is exactly the state you re-run (#11515)
+- Pilot's fleet search gates on match quality rather than bare subsequence (#11630)
+
+### Other Changes
+
+- Voice dictation moves from the retired Realtime Whisper to gpt-live-transcribe, and keyterm biasing from your branch, project name and custom dictionary finally reaches OpenAI (#11611)
+
 ## [0.29.0] - 2026-07-28
 
 Daintree stops requiring a git repository — any folder opens as a lightweight workspace, with git init as an explicit upgrade — and a project's folder can now be moved or renamed without losing panels, terminals, or agent conversations. Alongside those: a new file browser panel, a file viewer that plays video and audio and previews PDFs, and a large durability wave protecting agent sessions, drafts, recipes, and uncommitted work.
