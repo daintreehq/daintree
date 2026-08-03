@@ -1605,7 +1605,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // and via the header fleet picker's broad "arm all".
   const filterArmEligibleCount = filterArmEligibleIds.length;
   const canArmMatching = filterArmUnarmedCount > 0;
-  const armNoun = filterArmUnarmedCount === 1 ? "terminal" : "terminals";
+  // Agent-scoped nouns: this affordance no longer addresses plain shells, so
+  // "terminals" would overstate what a click arms and the exhausted states
+  // would read as false whenever an unarmed shell is in scope (#11637).
+  const armNoun = filterArmUnarmedCount === 1 ? "agent" : "agents";
   const armMatchingLabel = canArmMatching
     ? hasFilters
       ? armedSize > 0
@@ -1616,11 +1619,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         : `Arm all ${filterArmUnarmedCount} ${armNoun}`
     : filterArmEligibleCount === 0
       ? hasFilters
-        ? "No arm-eligible terminals match the filter"
-        : "No arm-eligible terminals"
+        ? "No agents match the filter"
+        : "No agents to arm"
       : hasFilters
-        ? "All matching terminals are armed"
-        : "All terminals are armed";
+        ? "All matching agents are armed"
+        : "All agents are armed";
   const armMatchingButton = (
     <Tooltip>
       <TooltipTrigger asChild>

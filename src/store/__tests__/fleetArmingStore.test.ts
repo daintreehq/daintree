@@ -556,21 +556,70 @@ describe("fleetArmingStore", () => {
       expect(useFleetArmingStore.getState().armOrder).toEqual(["a1", "a2"]);
     });
 
-    it("excludes ex-agent terminals — filter-scoped arming needs live agent capability", () => {
-      // `armAll` still takes ex-agents and plain shells (broadcast membership is
-      // PTY-based). The sidebar's filter-scoped arm is agent-scoped instead, so
-      // it matches the state-filter presets it sits beside (#11637).
+    it("excludes demoted ex-agent terminals — filter-scoped arming needs a live agent", () => {
+      // A real demoted record: launch affinity survives but detection, runtime
+      // identity, and agentState are all gone, so `isDemotedExAgent` fires.
+      // `armAll` still takes these (broadcast membership is PTY-based); the
+      // sidebar's filter-scoped arm is agent-scoped instead (#11637).
       seedPanels([
         makeAgentTerminal("a1", { worktreeId: "wt-1" }),
         makeAgentTerminal("p1", {
           worktreeId: "wt-1",
           kind: "terminal",
           detectedAgentId: undefined,
+          runtimeIdentity: undefined,
+          launchAgentId: "claude",
+          agentState: undefined,
           everDetectedAgent: true,
         }),
       ]);
       useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
       expect([...useFleetArmingStore.getState().armedIds]).toEqual(["a1"]);
+    });
+
+    it("arms plugin-contributed agents whose id is not a built-in", () => {
+      // Arming only adds a terminal to the broadcast set, so it must not gate on
+      // built-in agent capability the way accept/interrupt/restart do — plugin
+      // and user agent ids are non-built-in by construction (#11637).
+      seedPanels([
+        makeAgentTerminal("plugin", {
+          worktreeId: "wt-1",
+          detectedAgentId: undefined,
+          launchAgentId: "acme-plugin-agent",
+          everDetectedAgent: false,
+        }),
+      ]);
+      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
+      expect([...useFleetArmingStore.getState().armedIds]).toEqual(["plugin"]);
+    });
+
+    it("preserves the prior fleet when the matched worktree holds only shells", () => {
+      // Newly reachable after #11637: the worktree matches the filter and has
+      // live terminals, but none are agents, so the collector returns empty and
+      // the early return must leave the user's existing selection intact.
+      seedPanels([
+        makeAgentTerminal("agent-elsewhere", { worktreeId: "wt-2" }),
+        makeAgentTerminal("shell", {
+          worktreeId: "wt-1",
+          kind: "terminal",
+          detectedAgentId: undefined,
+          launchAgentId: undefined,
+          runtimeIdentity: undefined,
+          agentState: undefined,
+          everDetectedAgent: false,
+        }),
+      ]);
+      useFleetArmingStore.getState().armIds(["agent-elsewhere"]);
+      const before = useFleetArmingStore.getState();
+      const beforeOrder = [...before.armOrder];
+      const beforeLast = before.lastArmedId;
+
+      useFleetArmingStore.getState().armMatchingFilter(["wt-1"]);
+
+      const after = useFleetArmingStore.getState();
+      expect([...after.armedIds]).toEqual(["agent-elsewhere"]);
+      expect(after.armOrder).toEqual(beforeOrder);
+      expect(after.lastArmedId).toBe(beforeLast);
     });
 
     it("excludes plain shells but still arms agents in the same worktree", () => {

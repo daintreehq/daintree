@@ -6,7 +6,7 @@ import {
   type PtyPanelData,
 } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
-import { getBuiltInRuntimeAgentId } from "@/utils/terminalType";
+import { getBuiltInRuntimeAgentId, isAgentTerminal } from "@/utils/terminalType";
 
 // Carrier element from the legacy `panelsById` shape, sourced through
 // `getNarrowPanel`'s parameter so this file doesn't import the deprecated
@@ -69,6 +69,23 @@ export function isAgentFleetActionEligible(
   t: PanelInstance | CarrierPanel | undefined
 ): t is PtyPanelData {
   return isTerminalFleetEligible(t) && resolveFleetAgentCapabilityId(t) !== undefined;
+}
+
+/**
+ * Bulk-arming predicate for surfaces that address agents rather than terminals.
+ *
+ * Deliberately NOT `isAgentFleetActionEligible`: that one resolves a *built-in*
+ * capability id because accept/reject/interrupt/restart drive built-in agent
+ * protocols. Arming just adds a terminal to the broadcast set, so any agent
+ * qualifies — gating on built-ins would silently drop plugin- and
+ * user-contributed agents, whose ids are non-built-in by construction (#11637).
+ * Matches `isAgentTerminal`, which the sidebar already uses for the agent-state
+ * rollups behind the quick state filters this sits beside.
+ */
+export function isAgentTerminalFleetEligible(
+  t: PanelInstance | CarrierPanel | undefined
+): t is PtyPanelData {
+  return isTerminalFleetEligible(t) && isAgentTerminal(t);
 }
 
 export function isFleetWaitingAgentEligible(

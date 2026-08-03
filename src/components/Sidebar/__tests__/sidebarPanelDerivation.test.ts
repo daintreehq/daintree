@@ -130,13 +130,15 @@ describe("sidebarPanelDerivation selectors", () => {
     expect(eligible.shell).toBeUndefined();
   });
 
-  it("fleet eligibility excludes ex-agent shells whose live detection was cleared", () => {
+  it("fleet eligibility excludes demoted ex-agent shells", () => {
+    // Launch affinity survives but detection, runtime identity, and agentState
+    // are gone — the demotion branch, distinct from the plain shell above.
     const state = makeState({
       exAgent: agentPanel({
         id: "exAgent",
         worktreeId: "wt-1",
         runtimeStatus: "running",
-        launchAgentId: undefined,
+        launchAgentId: "claude",
         detectedAgentId: undefined,
         runtimeIdentity: undefined,
         agentState: undefined,
@@ -145,6 +147,23 @@ describe("sidebarPanelDerivation selectors", () => {
     });
 
     expect(selectSidebarFleetEligibleWorktreeById(state).exAgent).toBeUndefined();
+  });
+
+  it("fleet eligibility counts plugin-contributed agents, not just built-in ids", () => {
+    // The arm count must not gate on built-in agent capability — plugin and user
+    // agent ids are non-built-in by construction, and arming only adds the
+    // terminal to the broadcast set (#11637).
+    const state = makeState({
+      plugin: agentPanel({
+        id: "plugin",
+        worktreeId: "wt-1",
+        runtimeStatus: "running",
+        launchAgentId: "acme-plugin-agent",
+        detectedAgentId: undefined,
+      }),
+    });
+
+    expect(selectSidebarFleetEligibleWorktreeById(state).plugin).toBe("wt-1");
   });
 });
 

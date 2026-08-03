@@ -354,7 +354,14 @@ describe("fleet.armMatchingFilter", () => {
       makeAgent("a1", { worktreeId: "wt-1" }),
       makeAgent("a2", { worktreeId: "wt-2" }),
       makeAgent("a3", { worktreeId: "wt-3" }),
-      makeAgent("p1", { worktreeId: "wt-3", detectedAgentId: undefined, everDetectedAgent: false }),
+      makeAgent("p1", {
+        worktreeId: "wt-3",
+        detectedAgentId: undefined,
+        launchAgentId: undefined,
+        runtimeIdentity: undefined,
+        agentState: undefined,
+        everDetectedAgent: false,
+      }),
     ]);
     const registry = await buildRegistry();
     await run(registry, "fleet.armMatchingFilter", { worktreeIds: ["wt-1", "wt-3"] });
