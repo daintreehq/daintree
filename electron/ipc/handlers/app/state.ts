@@ -77,31 +77,53 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
 
   const handleAppHydrate = async (ctx?: IpcContext) => {
     const { project: currentProject, workspaceId } = resolveWorkspaceForHydration(ctx);
-    const panelFilter = getCrashRecoveryService().consumePanelFilter();
+
+    // Until the legacy global record has an owner, the prefetch cache cannot
+    // stand in for this handler: `buildSwitchHydrateResult` performs no writes,
+    // so it neither claims the record nor runs the terminal migration. Serving
+    // its payload here would let the rightful heir boot without ever claiming,
+    // and the next brand-new project would claim and inherit instead (#11651).
+    // Read before the fast path so the check is available to it; this asks for
+    // one scalar rather than the whole `appState` object, though electron-store
+    // may still reparse `config.json` if an intervening write invalidated its
+    // snapshot.
+    const storedOwnerId = store.get("legacyWorkspaceStateOwnerId");
+    const persistedLegacyOwnerId =
+      typeof storedOwnerId === "string" && storedOwnerId ? storedOwnerId : undefined;
+
+    // The crash panel filter is a one-shot whose ids come from the snapshot's
+    // global panel list, so only the workspace that owns that record can act on
+    // it. Consuming it from a workspace that will discard it anyway would leave
+    // the owner's next hydrate with nothing and silently restore the panels the
+    // user just deselected — so peek first and only take it when usable.
+    // "Is, or is about to become, the owner" — an unclaimed record counts,
+    // because a real project reaching this point claims it a few lines below,
+    // and that first post-upgrade boot is exactly when a crash filter is most
+    // likely to be waiting.
+    const crashService = getCrashRecoveryService();
+    const canUseCrashPanelFilter =
+      !workspaceId ||
+      (currentProject !== null &&
+        (persistedLegacyOwnerId === undefined || persistedLegacyOwnerId === workspaceId));
+    const panelFilter = canUseCrashPanelFilter ? crashService.consumePanelFilter() : null;
+    const crashPanelFilterWithheld =
+      !canUseCrashPanelFilter && crashService.hasPendingPanelFilter();
 
     // Hover-prefetch fast path: when a project switcher hover (or any other
     // pre-populated path) has primed the cache for this project, short-circuit
     // the disk read. Only safe when there's no in-flight crash recovery filter
     // and we aren't booting in safe mode — those scenarios layer constraints
-    // (`panelFilter`, dropped terminals) that the prefetch built without.
+    // (`panelFilter`, dropped terminals) that the prefetch built without. A
+    // filter withheld for another workspace counts too: this boot is still part
+    // of a crash recovery, so the cached payload is just as unusable.
     // consumePrefetchedHydrateResult is destructive (return-and-delete), so the
     // cache is only probed when the result is actually usable.
     const cacheGuard = getCrashLoopGuard();
     const cacheInSafeMode = cacheGuard.isSafeMode();
-    // Until the legacy global record has an owner, the cache cannot stand in
-    // for this handler: `buildSwitchHydrateResult` performs no writes, so it
-    // neither claims the record nor runs the terminal migration. Serving its
-    // payload here would let the rightful heir boot without ever claiming, and
-    // the next brand-new project would claim and inherit instead (#11651).
-    // Reading one scalar key ahead of the fast path is cheap next to the
-    // `appState` parse the fast path exists to avoid, and it only ever bites
-    // before the first claim.
-    const storedOwnerId = store.get("legacyWorkspaceStateOwnerId");
-    const persistedLegacyOwnerId =
-      typeof storedOwnerId === "string" && storedOwnerId ? storedOwnerId : undefined;
     const cacheEligible =
       Boolean(workspaceId) &&
       panelFilter === null &&
+      !crashPanelFilterWithheld &&
       !cacheInSafeMode &&
       persistedLegacyOwnerId !== undefined;
     const cached = cacheEligible ? consumePrefetchedHydrateResult(workspaceId!) : undefined;
@@ -114,7 +136,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           ? "no-project"
           : cacheInSafeMode
             ? "safe-mode"
-            : panelFilter !== null
+            : panelFilter !== null || crashPanelFilterWithheld
               ? "panel-filter"
               : persistedLegacyOwnerId === undefined
                 ? "legacy-state-unclaimed"
@@ -205,21 +227,28 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     let terminalsToUse: StoreSchema["appState"]["terminals"] = [];
     let terminalsSource = "none";
 
-    // Focus mode and the active worktree still ride the global record in normal
-    // use: the renderer persists both through `app:set-state`, which writes them
-    // app-globally (`worktreeStore.persistActiveWorktree`), and readers outside
-    // hydration — `AgentNotificationService.isFocusedOnWorktree`, the cold-paint
-    // skeleton — depend on that. So their seed stays on the #11497 gate. Denying
-    // them to a non-owner would not be narrowing a legacy leak, it would drop a
-    // project's own live selection on every boot. What ownership does gate is
-    // the persisted half below: no workspace writes another's values to disk.
-    let focusModeToUse = hasProjectRow ? (globalAppState.focusMode ?? false) : false;
-    let focusPanelStateToUse = hasProjectRow ? globalAppState.focusPanelState : undefined;
+    // Focus mode and the quick-switcher MRU are genuinely legacy here: both
+    // have had a per-workspace write path for a while (`project:set-focus-mode`
+    // from `AppLayout`'s persist effect, #9922 for the MRU), and the global copy
+    // is only written on the no-workspace fallback. So only their heir may read
+    // them — handing project B the global `focusMode: true` would collapse B's
+    // sidebar on open and then persist A's focus state into B's own record.
+    //
+    // `activeWorktreeId` is the exception and stays on the #11497 row gate:
+    // `worktreeStore.persistActiveWorktree` still writes it app-globally for
+    // every workspace, and readers outside hydration
+    // (`AgentNotificationService.isFocusedOnWorktree`) depend on that. Until it
+    // has a per-workspace write path, denying it to a non-owner would not narrow
+    // a legacy leak — it would drop that project's own live selection on every
+    // boot. Ownership still gates the persisted half below, so no workspace
+    // writes another's worktree into its record.
+    let focusModeToUse = canInheritLegacyWorkspaceState
+      ? (globalAppState.focusMode ?? false)
+      : false;
+    let focusPanelStateToUse = canInheritLegacyWorkspaceState
+      ? globalAppState.focusPanelState
+      : undefined;
     let activeWorktreeIdToUse = hasProjectRow ? globalAppState.activeWorktreeId : undefined;
-    // Quick-switcher MRU: prefer per-project, fall back to the legacy global
-    // list so existing users keep their MRU on first open after upgrade. Unlike
-    // the two above, this one already has a per-workspace write path (#9922), so
-    // the global copy is genuinely legacy and only its heir may read it.
     let mruListToUse = canInheritLegacyWorkspaceState ? globalAppState.mruList : undefined;
     let projectStateQuarantinedPath: string | undefined;
     // Per-project layout state folded into the payload so the renderer skips

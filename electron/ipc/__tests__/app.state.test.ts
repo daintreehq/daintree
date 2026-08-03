@@ -81,6 +81,7 @@ vi.mock("../../store.js", () => ({
 const crashService = {
   scheduleBackup: vi.fn(),
   consumePanelFilter: vi.fn(() => null),
+  hasPendingPanelFilter: vi.fn(() => false),
   startBackupTimer: vi.fn(),
   resetToFresh: vi.fn(),
   restoreBackup: vi.fn(() => false),
@@ -726,10 +727,15 @@ describe("app:boot handler", () => {
       name: "P",
       path: "/p",
     } as unknown as ReturnType<typeof projectStoreModule.projectStore.getCurrentProject>);
+    // The cache is only eligible once the legacy record has an owner — without
+    // this the hydrate silently takes the slow path and stops testing the
+    // cache-hit path this case is named for (#11651).
+    legacyOwnerRef.current = "p1";
 
     const result = (await invokeBoot()) as Record<string, unknown>;
 
     expect(result.databaseRecovery).toEqual(recovery);
+    expect(consumePrefetchedHydrateResult).toHaveBeenCalledWith("p1");
   });
 
   it("hydrates the project bound to the sending project view instead of the stale global current project", async () => {
@@ -1184,8 +1190,42 @@ describe("app:boot handler", () => {
       } as unknown as HandlerDependencies;
 
       await invokeBoot({ deps: scratchDeps, senderId: 42 });
-
       expect(legacyOwnerRef.current).toBeUndefined();
+
+      // The record must still be there for the first real project — asserting
+      // only "the scratch wrote nothing" would also hold for an implementation
+      // that never wrote an owner at all.
+      const result = await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
+      expect(legacyOwnerRef.current).toBe(REAL_PROJECT.id);
+      expect(
+        (
+          (result.appState as Record<string, unknown>).terminals as Array<Record<string, unknown>>
+        ).map((t) => t.id)
+      ).toEqual(["legacy-panel"]);
+    });
+
+    it("holds the crash panel filter for its owner instead of eating it", async () => {
+      // The filter is a one-shot keyed to the owner's panels. A non-owner that
+      // consumed it would leave the owner's next hydrate with nothing to filter
+      // by, silently restoring the panels the user had just deselected.
+      legacyOwnerRef.current = "proj-first-heir";
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        terminals: [{ id: "legacy-panel", title: "Legacy", location: "grid", cwd: "/old/project" }],
+      };
+      crashService.consumePanelFilter.mockReturnValue(["legacy-panel"] as unknown as null);
+      crashService.hasPendingPanelFilter.mockReturnValue(true);
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: {
+          projectId: REAL_PROJECT.id,
+          sidebarWidth: 350,
+          terminals: [{ id: "own-panel", title: "Own", location: "grid", cwd: REAL_PROJECT.path }],
+        },
+      } as unknown as Awaited<ReturnType<typeof projectStore.getProjectStateWithRecovery>>);
+
+      await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
+
+      expect(crashService.consumePanelFilter).not.toHaveBeenCalled();
     });
 
     it("keeps a cached payload out of play until the record has an owner", async () => {

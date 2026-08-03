@@ -44,19 +44,21 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   // with no row — this keeps the leak from reappearing in that window (#11497).
   const hasProjectRow = currentProject !== null;
 
-  // Focus mode and the active worktree are still live app-global state that the
-  // renderer rewrites through `app:set-state`, so they stay on the row gate —
-  // see the matching note in `handleAppHydrate`. The MRU is different: it has
-  // had a per-workspace write path since #9922, so the global copy is genuinely
-  // legacy and only the workspace that left it behind may read it (#11651).
+  // Focus mode and the MRU both have per-workspace write paths, so their global
+  // copies are genuinely legacy and only the workspace that left them behind may
+  // read them; `activeWorktreeId` is still written app-globally for every
+  // workspace and stays on the row gate. The matching note in `handleAppHydrate`
+  // carries the full reasoning — the two paths must agree (#11651).
   // This path never claims — it performs no writes by design — so an unclaimed
   // record has no heir here, and `handleAppHydrate` settles ownership instead.
   const legacyWorkspaceStateOwnerId = store.get("legacyWorkspaceStateOwnerId");
   const canInheritLegacyWorkspaceState = hasProjectRow && legacyWorkspaceStateOwnerId === projectId;
 
   let terminalsToUse: typeof globalAppState.terminals = [];
-  let focusModeToUse = hasProjectRow ? (globalAppState.focusMode ?? false) : false;
-  let focusPanelStateToUse = hasProjectRow ? globalAppState.focusPanelState : undefined;
+  let focusModeToUse = canInheritLegacyWorkspaceState ? (globalAppState.focusMode ?? false) : false;
+  let focusPanelStateToUse = canInheritLegacyWorkspaceState
+    ? globalAppState.focusPanelState
+    : undefined;
   let activeWorktreeIdToUse = hasProjectRow ? globalAppState.activeWorktreeId : undefined;
   // Quick-switcher MRU: prefer per-project, fall back to the legacy global list
   // so a switch can't serve the previous project's order (#9922).

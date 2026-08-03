@@ -316,7 +316,7 @@ describe("AppHydrationService adversarial", () => {
     expect(result.projectStateRecovery).toBeNull();
   });
 
-  it("NO_PROJECT_STATE_DENIES_THE_LEGACY_MRU_TO_A_NON_OWNER", async () => {
+  it("NO_PROJECT_STATE_DENIES_THE_LEGACY_RECORD_TO_A_NON_OWNER", async () => {
     // Same shape as the test above — a real Project row with nothing saved yet
     // — but another workspace owns the legacy record. Serving it the legacy MRU
     // would seed this project's quick-switcher with another project's panels
@@ -328,11 +328,15 @@ describe("AppHydrationService adversarial", () => {
     const result = await buildSwitchHydrateResult("project-1");
 
     expect(result.appState.mruList).toBeUndefined();
-    // Focus and worktree are NOT denied: they are still live app-global state
-    // the renderer rewrites, so withholding them would drop this project's own
+    // Focus state is denied too — it has a per-workspace write path, so the
+    // global copy is legacy. Serving it would collapse this project's sidebar
+    // on open and then persist another project's focus into its own record.
+    expect(result.appState.focusMode).toBe(false);
+    expect(result.appState.focusPanelState).toBeUndefined();
+    // `activeWorktreeId` is NOT denied: it is still written app-globally for
+    // every workspace, so withholding it would drop this project's own live
     // selection rather than narrow a legacy leak.
     expect(result.appState.activeWorktreeId).toBe("wt-global");
-    expect(result.appState.focusMode).toBe(true);
     // The row itself still resolves — this is an ownership denial, not a
     // failure to find the project.
     expect(result.project).toEqual(mockState.project);
