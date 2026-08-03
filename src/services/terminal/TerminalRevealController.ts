@@ -168,9 +168,16 @@ export class TerminalRevealController {
     }
   }
 
-  wake(id: string): void {
+  /**
+   * @returns `true` only when the repaint actually landed. Callers that own a
+   * durable obligation (the worktree-switch policy, #11640) treat `false` as
+   * "not paintable yet — retry once the host is mounted" rather than discarding
+   * it. The unopened branch reports `false` because its restore is
+   * fire-and-forget: it can defer on an unmeasurable host without telling us.
+   */
+  wake(id: string): boolean {
     const managed = this.deps.getInstance(id);
-    if (!managed) return;
+    if (!managed) return false;
     // A click/focus/reveal of a live pane is a PLAIN REPAINT. The pane stayed
     // fully live in the background (no suspend/resync anymore), so
     // repaintForReveal (WebGL reacquire + atlas/refresh + geometry re-fit) is
@@ -178,9 +185,9 @@ export class TerminalRevealController {
     // reveal) takes the visibility-restore path, which opens it then repaints.
     if (!managed.isOpened) {
       void this.fullWakeForVisibilityRestore(id);
-      return;
+      return false;
     }
-    this.repaintForReveal(id);
+    return this.repaintForReveal(id);
   }
 
   /**

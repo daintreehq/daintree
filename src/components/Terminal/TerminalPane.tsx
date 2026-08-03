@@ -64,6 +64,7 @@ import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { notifyWorktreeTerminalAttached } from "@/services/terminal/worktreeRevealCoordinator";
 import { actionService } from "@/services/ActionService";
 import { useReviewDialogOpenForWorktree } from "./useReviewDialogOpenForWorktree";
 import { InputTracker } from "@/services/clearCommandDetection";
@@ -677,6 +678,18 @@ function TerminalPaneComponent({
   // (#11445). `useReducer`'s dispatch identity is stable, so handing it
   // straight to XtermAdapter can't churn its attach effect.
   const [attachEpoch, bumpAttachEpoch] = useReducer((epoch: number) => epoch + 1, 0);
+
+  // This mount is also what discharges the worktree-switch reveal obligation
+  // (#11640): the switch's policy pass ran before React re-rendered, so its wake
+  // could not paint a host that was still parked offscreen. The coordinator
+  // waits for attach to settle before repainting — `onAttached` fires while
+  // `isAttaching` can still be true, so it is a re-arm signal, not a paint
+  // trigger. `bumpAttachEpoch` has a stable identity, so this callback's
+  // identity is stable too and can't churn XtermAdapter's attach effect.
+  const handleAttached = useCallback(() => {
+    bumpAttachEpoch();
+    notifyWorktreeTerminalAttached(id);
+  }, [id]);
 
   useTerminalVisibilityObserver({
     id,
@@ -1429,7 +1442,7 @@ function TerminalPaneComponent({
                     onReady={handleReady}
                     onExit={handleExit}
                     onInput={handleInput}
-                    onAttached={bumpAttachEpoch}
+                    onAttached={handleAttached}
                     className="absolute inset-0"
                     getRefreshTier={getRefreshTierCallback}
                     cwd={cwd}

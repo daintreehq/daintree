@@ -118,6 +118,7 @@ type FullWakeTestService = {
   fullWakeForVisibilityRestore: (id: string) => Promise<void>;
   repaintForReveal: (id: string, opts?: { trustDomVisibility?: boolean }) => boolean;
   revealTerminal: (id: string) => Promise<boolean>;
+  wake: (id: string) => boolean;
   revealController: {
     fullWakeForVisibilityRestore: (id: string) => Promise<void>;
     repaintForReveal: (id: string, opts?: { trustDomVisibility?: boolean }) => boolean;
@@ -780,6 +781,66 @@ describe("TerminalInstanceService.revealTerminal (foreground reveal routing)", (
 
     expect(fullWake).not.toHaveBeenCalled();
     expect(repaint).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalInstanceService.wake verdict (#11640)", () => {
+  let service: FullWakeTestService;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const imported = await import("../TerminalInstanceService");
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    service = imported.terminalInstanceService as unknown as FullWakeTestService;
+    service.instances.clear();
+  });
+
+  afterEach(() => {
+    if (service) service.instances.clear();
+  });
+
+  it("reports the repaint verdict for an opened terminal", () => {
+    const id = "wake-1";
+    service.instances.set(id, makeInstance({ isOpened: true }));
+    const repaint = vi
+      .spyOn(service.revealController, "repaintForReveal")
+      .mockImplementation(() => true);
+
+    expect(service.wake(id)).toBe(true);
+    expect(repaint).toHaveBeenCalledWith(id);
+  });
+
+  it("propagates a repaint that could not paint", () => {
+    const id = "wake-2";
+    service.instances.set(id, makeInstance({ isOpened: true }));
+    // The worktree-switch case: the host is still parked under
+    // content-visibility:hidden, so there is nothing paintable yet. The caller
+    // turns this false into a retry obligation instead of discarding it.
+    vi.spyOn(service.revealController, "repaintForReveal").mockImplementation(() => false);
+
+    expect(service.wake(id)).toBe(false);
+  });
+
+  it("reports false for a missing instance without repainting", () => {
+    const repaint = vi
+      .spyOn(service.revealController, "repaintForReveal")
+      .mockImplementation(() => true);
+
+    expect(service.wake("missing")).toBe(false);
+    expect(repaint).not.toHaveBeenCalled();
+  });
+
+  it("reports false for an unopened terminal and takes the restore path", () => {
+    const id = "wake-3";
+    service.instances.set(id, makeInstance({ isOpened: false }));
+    const fullWake = vi
+      .spyOn(service.revealController, "fullWakeForVisibilityRestore")
+      .mockResolvedValue(undefined);
+
+    // The restore is fire-and-forget and can defer on an unmeasurable host
+    // without reporting back, so the verdict is conservatively false.
+    expect(service.wake(id)).toBe(false);
+    expect(fullWake).toHaveBeenCalledWith(id);
   });
 });
 

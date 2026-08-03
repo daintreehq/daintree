@@ -749,8 +749,8 @@ class TerminalInstanceService {
     this.resizeController.lockResize(id, false);
   }
 
-  wake(id: string): void {
-    this.revealController.wake(id);
+  wake(id: string): boolean {
+    return this.revealController.wake(id);
   }
 
   wakeForFocus(id: string): void {
