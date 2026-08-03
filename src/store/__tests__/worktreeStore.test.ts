@@ -53,10 +53,16 @@ const {
   clearSidebarGestureMock,
   subscribeMock,
   panelSetStateMock,
+  replaceWorktreeRevealObligationsMock,
+  clearWorktreeRevealObligationsMock,
 } = vi.hoisted(() => ({
   appSetStateMock: vi.fn().mockResolvedValue(undefined),
   applyRendererPolicyMock: vi.fn(),
-  wakeMock: vi.fn(),
+  // Typed so a bare `vi.fn()` can't silently reintroduce the `undefined` return
+  // that the policy's strict `=== false` obligation check exists to reject.
+  wakeMock: vi.fn<(id: string) => boolean>(),
+  replaceWorktreeRevealObligationsMock: vi.fn<(generation: number, ids: string[]) => void>(),
+  clearWorktreeRevealObligationsMock: vi.fn<() => void>(),
   recordMruMock: vi.fn(),
   setFocusedMock: vi.fn(),
   logErrorWithContextMock: vi.fn(),
@@ -128,6 +134,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
+vi.mock("@/services/terminal/worktreeRevealCoordinator", () => ({
+  replaceWorktreeRevealObligations: replaceWorktreeRevealObligationsMock,
+  clearWorktreeRevealObligations: clearWorktreeRevealObligationsMock,
+}));
+
 vi.mock("@/utils/errorContext", () => ({
   logErrorWithContext: logErrorWithContextMock,
 }));
@@ -157,6 +168,10 @@ setFleetLastArmedIdAccessor(() => lastArmedIdForFleet);
 describe("worktreeStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default to a wake that actually painted (an already-mounted terminal), so
+    // only tests that opt in exercise the reveal-obligation path. clearAllMocks
+    // drops calls but keeps implementations, hence the reinstall here.
+    wakeMock.mockReturnValue(true);
     useWorktreeSelectionStore.getState().reset();
     terminalStoreState.panelsById = {};
     terminalStoreState.panelIds = [];
@@ -398,6 +413,154 @@ describe("worktreeStore", () => {
     expect(applyRendererPolicyMock).toHaveBeenCalledTimes(5);
 
     expect(wakeMock.mock.calls).toEqual([["agent-a"], ["plain-a"]]);
+  });
+
+  describe("reveal obligations (#11640)", () => {
+    it("arms an obligation for every wake that could not paint", () => {
+      setMockTerminals([
+        { id: "term-a", worktreeId: "wt-a", location: "grid", kind: "terminal" },
+        { id: "term-b", worktreeId: "wt-a", location: "grid", kind: "terminal" },
+      ]);
+      // The switch runs before React re-renders, so both hosts are still parked
+      // offscreen and neither wake can paint.
+      wakeMock.mockReturnValue(false);
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+
+      const generation = useWorktreeSelectionStore.getState()._policyGeneration;
+      expect(replaceWorktreeRevealObligationsMock).toHaveBeenCalledTimes(1);
+      expect(replaceWorktreeRevealObligationsMock).toHaveBeenCalledWith(generation, [
+        "term-a",
+        "term-b",
+      ]);
+    });
+
+    it("does not arm an obligation for a wake that painted", () => {
+      setMockTerminals([{ id: "term-a", worktreeId: "wt-a", location: "grid", kind: "terminal" }]);
+      wakeMock.mockReturnValue(true);
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+
+      expect(replaceWorktreeRevealObligationsMock).toHaveBeenCalledWith(expect.any(Number), []);
+    });
+
+    it("treats only an explicit false as a failed wake", () => {
+      setMockTerminals([{ id: "term-a", worktreeId: "wt-a", location: "grid", kind: "terminal" }]);
+      // A bare `vi.fn()` service mock returns undefined. Arming on that would
+      // start coordinator work across every suite that stubs the service.
+      wakeMock.mockReturnValue(undefined as unknown as boolean);
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+
+      expect(replaceWorktreeRevealObligationsMock).toHaveBeenCalledWith(expect.any(Number), []);
+    });
+
+    it("arms an obligation when the wake throws", () => {
+      setMockTerminals([{ id: "term-a", worktreeId: "wt-a", location: "grid", kind: "terminal" }]);
+      wakeMock.mockImplementation(() => {
+        throw new Error("wake boom");
+      });
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+
+      expect(logErrorWithContextMock).toHaveBeenCalled();
+      expect(replaceWorktreeRevealObligationsMock).toHaveBeenCalledWith(expect.any(Number), [
+        "term-a",
+      ]);
+    });
+
+    it("never arms non-grid surfaces, which have their own reveal owners", () => {
+      setMockTerminals([
+        { id: "grid-a", worktreeId: "wt-a", location: "grid", kind: "terminal" },
+        // The Assistant is overlay-hosted and owned by its own reveal
+        // coordinator; dock/trash manage their own visibility. None of them
+        // route through TerminalPane's onAttached, so an obligation for one
+        // could never be discharged.
+        { id: "assistant", worktreeId: "wt-a", location: "overlay", kind: "terminal" },
+        { id: "docked", worktreeId: "wt-a", location: "dock", kind: "terminal" },
+        { id: "trashed", worktreeId: "wt-a", location: "trash", kind: "terminal" },
+      ]);
+      wakeMock.mockReturnValue(false);
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+
+      expect(replaceWorktreeRevealObligationsMock).toHaveBeenCalledWith(expect.any(Number), [
+        "grid-a",
+      ]);
+    });
+
+    it("replaces the tracked set on every policy pass so stale generations drop", () => {
+      setMockTerminals([
+        { id: "term-a", worktreeId: "wt-a", location: "grid", kind: "terminal" },
+        { id: "term-b", worktreeId: "wt-b", location: "grid", kind: "terminal" },
+      ]);
+      wakeMock.mockReturnValue(false);
+
+      useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+      useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+
+      // wt-a's obligation is not carried forward — the second pass replaces it.
+      expect(replaceWorktreeRevealObligationsMock.mock.calls.map(([, ids]) => ids)).toEqual([
+        ["term-a"],
+        ["term-b"],
+      ]);
+    });
+
+    it("does not touch obligations when the policy generation guard bails", () => {
+      setMockTerminals([{ id: "term-a", worktreeId: "wt-a", location: "grid", kind: "terminal" }]);
+      useWorktreeSelectionStore.setState({
+        activeWorktreeId: "wt-b",
+        pendingWorktreeId: "wt-a",
+      });
+
+      useWorktreeSelectionStore.getState().applyPendingWorktreeSelection("wt-a");
+
+      expect(replaceWorktreeRevealObligationsMock).not.toHaveBeenCalled();
+    });
+
+    it("replays the CURRENT generation for a pending selection", () => {
+      setMockTerminals([{ id: "term-a", worktreeId: "wt-a", location: "grid", kind: "terminal" }]);
+      wakeMock.mockReturnValue(false);
+      useWorktreeSelectionStore.setState({
+        activeWorktreeId: "wt-a",
+        pendingWorktreeId: "wt-a",
+        _policyGeneration: 7,
+      });
+
+      useWorktreeSelectionStore.getState().applyPendingWorktreeSelection("wt-a");
+
+      // Not a bump — the coordinator relies on this to carry a live obligation
+      // across the replay rather than superseding it.
+      expect(replaceWorktreeRevealObligationsMock).toHaveBeenCalledWith(7, ["term-a"]);
+    });
+
+    it("arms fleet-scope armed terminals from other worktrees", () => {
+      setMockTerminals([
+        { id: "term-a", worktreeId: "wt-a", location: "grid", kind: "terminal" },
+        { id: "term-b", worktreeId: "wt-b", location: "grid", kind: "terminal" },
+      ]);
+      wakeMock.mockReturnValue(false);
+      armedIdsForFleet = new Set(["term-b"]);
+      useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-a" });
+
+      useWorktreeSelectionStore.getState().enterFleetScope();
+
+      // term-b mounts fresh into the fleet grid, so it needs the same treatment
+      // as the active worktree's own panes.
+      expect(replaceWorktreeRevealObligationsMock).toHaveBeenCalledWith(expect.any(Number), [
+        "term-a",
+        "term-b",
+      ]);
+      armedIdsForFleet = new Set<string>();
+    });
+
+    it("clears obligations on reset — the generation bump can't reach them", () => {
+      const before = clearWorktreeRevealObligationsMock.mock.calls.length;
+
+      useWorktreeSelectionStore.getState().reset();
+
+      expect(clearWorktreeRevealObligationsMock.mock.calls.length).toBe(before + 1);
+    });
   });
 
   it("setActiveWorktree syncs focusedWorktreeId to clear stale focus", () => {

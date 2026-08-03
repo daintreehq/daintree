@@ -661,8 +661,8 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.plane(id).clearResizeSuppression(id);
   }
 
-  wake(id: string): void {
-    this.plane(id).wake(id);
+  wake(id: string): boolean {
+    return this.plane(id).wake(id);
   }
 
   wakeForFocus(id: string): void {

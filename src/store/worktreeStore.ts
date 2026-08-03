@@ -1,5 +1,9 @@
 import { create, type StateCreator } from "zustand";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  clearWorktreeRevealObligations,
+  replaceWorktreeRevealObligations,
+} from "@/services/terminal/worktreeRevealCoordinator";
 import { TerminalRefreshTier, isGridPanelLocation, isPtyPanel } from "@shared/types/panel";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { Issue, PR } from "@shared/types/forge";
@@ -1281,7 +1285,10 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     applyWorktreeTerminalPolicy(get, set, restoreId, generation);
   },
 
-  reset: () =>
+  reset: () => {
+    // Reveal obligations are keyed by policy generation but held outside the
+    // store, so the generation bump below cannot invalidate them on its own.
+    clearWorktreeRevealObligations();
     set({
       activeWorktreeId: null,
       restoreWorktreeId: null,
@@ -1321,7 +1328,8 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       // post-reset token is null and the exit-side guard compares against
       // null.
       _policyGeneration: get()._policyGeneration + 1,
-    }),
+    });
+  },
 });
 
 export const useWorktreeSelectionStore = create<WorktreeSelectionState>()(
@@ -1358,6 +1366,12 @@ function applyWorktreeTerminalPolicy(
   const fleetActive = get().isFleetScopeActive;
   const armedIds = fleetActive ? getFleetArmedIds() : null;
 
+  // Terminals whose wake could not paint because this runs BEFORE React
+  // re-renders — their hosts are still parked in the offscreen container under
+  // `content-visibility: hidden`. Handed to the reveal coordinator, which
+  // discharges each one from its XtermAdapter mount (#11640).
+  const revealObligations: string[] = [];
+
   for (const id of panelIds) {
     const terminal = panelsById[id];
     if (!terminal) continue;
@@ -1391,9 +1405,19 @@ function applyWorktreeTerminalPolicy(
       (!isPtyPanel(terminal) || terminal.hasPty !== false) &&
       panelKindHasPty(terminal.kind ?? "terminal")
     ) {
+      // The wake still runs first: for a terminal that IS already mounted and
+      // paintable (fleet-scope re-entry, a re-selected worktree) it is the
+      // cheapest correct correction and settles in-tick.
+      //
+      // Only an EXPLICIT false (or a throw) becomes an obligation. `wake` is
+      // typed boolean, so in production this is identical to `!wake(...)` — but
+      // a bare `vi.fn()` service mock returns `undefined`, and the loose test
+      // would arm the coordinator across every suite that stubs the service.
+      let wakeVerdict: boolean | undefined;
       try {
-        terminalInstanceService.wake(terminal.id);
+        wakeVerdict = terminalInstanceService.wake(terminal.id);
       } catch (error) {
+        wakeVerdict = false;
         logErrorWithContext(error, {
           operation: "wake_visible_worktree_terminal",
           component: "worktreeStore",
@@ -1401,8 +1425,21 @@ function applyWorktreeTerminalPolicy(
           details: { terminalId: terminal.id, targetWorktreeId, generation },
         });
       }
+      // Only grid-owned panels are tracked. Dock/trash manage their own
+      // visibility, and the overlay-hosted Assistant already has a dedicated
+      // reveal owner (createAssistantRevealCoordinator) that must not be
+      // double-driven — neither surface routes through TerminalPane's
+      // `onAttached`, so an obligation for one could never be discharged.
+      if (wakeVerdict === false && isGridPanelLocation(location)) {
+        revealObligations.push(terminal.id);
+      }
     }
   }
+
+  // Replace wholesale, even when empty: this is what drops a previous
+  // generation's obligations for terminals that never mounted, so the tracked
+  // set can never outgrow the last policy pass's targets.
+  replaceWorktreeRevealObligations(generation, revealObligations);
 
   onComplete?.();
 }

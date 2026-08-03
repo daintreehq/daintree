@@ -664,7 +664,7 @@ describe("TerminalInstanceService - Activity Tier", () => {
 type InputWakeService = {
   instances: Map<string, Record<string, unknown>>;
   onUserInput: (id: string, data: string) => void;
-  wake: (id: string) => void;
+  wake: (id: string) => boolean;
 };
 
 type PanelStoreModule = {
