@@ -6,7 +6,6 @@ import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
-  getPanelKindDefinition,
   getPanelKindDefinitionsSnapshot,
   subscribeToPanelKindDefinitions,
   type PanelComponentProps,
@@ -118,7 +117,14 @@ export const GridPanel = React.memo(function GridPanel({
 
   // Subscribe to definition registry mutations so a plugin re-registering its
   // panel kind hot-swaps the PluginMissingPanel placeholder without a reload.
-  useSyncExternalStore(subscribeToPanelKindDefinitions, getPanelKindDefinitionsSnapshot);
+  // The lookup MUST read this snapshot rather than calling
+  // `getPanelKindDefinition(kind)` separately: React Compiler caches that call
+  // keyed only on `kind`, so a definition registered after this fiber first
+  // rendered would never be picked up (#11636).
+  const definitions = useSyncExternalStore(
+    subscribeToPanelKindDefinitions,
+    getPanelKindDefinitionsSnapshot
+  );
 
   // Compose the effective add-tab handler. Fleet scope disables it (would
   // create a cross-worktree tab group). For single-panel and two-pane callers
@@ -138,7 +144,7 @@ export const GridPanel = React.memo(function GridPanel({
   }, [isFleetScope, onAddTab, onAddTabForPanel, terminal]);
 
   const kind = terminal?.kind ?? "terminal";
-  const definition = getPanelKindDefinition(kind);
+  const definition = definitions[kind];
 
   const panelProps: PanelComponentProps | null = useMemo(() => {
     if (!terminal) return null;

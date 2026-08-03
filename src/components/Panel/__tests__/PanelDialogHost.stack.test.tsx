@@ -37,8 +37,28 @@ function StatefulPane({ id, isFocused }: { id: string; isFocused?: boolean }) {
   );
 }
 
+// `useSyncExternalStore` throws on a getSnapshot returning a fresh reference
+// each call, so the snapshot and each definition it hands back are stable. The
+// Proxy keeps the previous stub's "every kind resolves to StatefulPane"
+// behaviour without enumerating kinds. Hoisted so the mock factory — which
+// vitest lifts above the module body — cannot observe it in its TDZ.
+const definitionsSnapshot = vi.hoisted(() => {
+  const cache = new Map<string, { component: unknown }>();
+  return new Proxy({} as Record<string, { component: unknown }>, {
+    get: (_target, kind: string) => {
+      let entry = cache.get(kind);
+      if (!entry) {
+        entry = { component: StatefulPane };
+        cache.set(kind, entry);
+      }
+      return entry;
+    },
+  });
+});
+
 vi.mock("@/panels/registry", () => ({
-  getPanelKindDefinition: () => ({ component: StatefulPane }),
+  subscribeToPanelKindDefinitions: () => () => {},
+  getPanelKindDefinitionsSnapshot: () => definitionsSnapshot,
 }));
 
 // The real ErrorBoundary on purpose: every frame's boundary is keyed on the

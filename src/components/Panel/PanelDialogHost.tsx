@@ -1,8 +1,11 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { PanelTop } from "lucide-react";
 import { usePanelStore } from "@/store/panelStore";
 import { usePanelDialogStore } from "@/store/panelDialogStore";
-import { getPanelKindDefinition } from "@/panels/registry";
+import {
+  getPanelKindDefinitionsSnapshot,
+  subscribeToPanelKindDefinitions,
+} from "@/panels/registry";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -83,9 +86,19 @@ function PanelDialogFrame({
     if (!panel) reconcileRemovedPanel(panelId);
   }, [panelId, panel, reconcileRemovedPanel]);
 
+  // Above the early returns below — hooks cannot be conditional. Subscribing
+  // here is what lets a dialog whose plugin kind registers late resolve to its
+  // real component instead of staying blank forever (#11636); the lookup reads
+  // this snapshot rather than calling `getPanelKindDefinition` separately,
+  // which React Compiler would cache keyed only on the kind.
+  const definitions = useSyncExternalStore(
+    subscribeToPanelKindDefinitions,
+    getPanelKindDefinitionsSnapshot
+  );
+
   if (!panel) return null;
 
-  const definition = getPanelKindDefinition(panel.kind ?? "terminal");
+  const definition = definitions[panel.kind ?? "terminal"];
   if (!definition) return null;
 
   const PanelComponent = definition.component;

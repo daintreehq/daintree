@@ -260,9 +260,15 @@ const PANEL_KIND_DEFINITION_REGISTRY: Record<string, PanelKindDefinition> = {
 /**
  * Reactive snapshot for `useSyncExternalStore`. Replaced (not mutated) on
  * every registry change so React's `Object.is` identity check schedules a
- * rerender — components observing this snapshot then re-evaluate
- * `getPanelKindDefinition(kind)` and pick up newly-registered plugin panels
- * without needing a window reload.
+ * rerender — components observing this snapshot then index into it and pick up
+ * newly-registered plugin panels without needing a window reload.
+ *
+ * Render paths MUST resolve a definition as `definitions[kind]` off the value
+ * this hook returns. Subscribing and then calling `getPanelKindDefinition(kind)`
+ * separately looks equivalent but is not: React Compiler cannot see that the
+ * getter closes over mutable module state, so it caches the call keyed only on
+ * `kind` and the panel stays on its placeholder forever (#11636). The getter is
+ * for imperative, non-render callers only.
  */
 let definitionsSnapshot: Readonly<Record<string, PanelKindDefinition>> = {
   ...PANEL_KIND_DEFINITION_REGISTRY,

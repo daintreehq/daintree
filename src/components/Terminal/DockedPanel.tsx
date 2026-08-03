@@ -3,7 +3,6 @@ import { usePanelStore } from "@/store";
 import type { PanelInstance } from "@shared/types/panel";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
-  getPanelKindDefinition,
   getPanelKindDefinitionsSnapshot,
   subscribeToPanelKindDefinitions,
   type PanelComponentProps,
@@ -56,8 +55,15 @@ export function DockedPanel({
   const kind = terminal.kind ?? "terminal";
   // Subscribe to definition registry mutations so a plugin re-registering its
   // panel kind hot-swaps the PluginMissingPanel placeholder without a reload.
-  useSyncExternalStore(subscribeToPanelKindDefinitions, getPanelKindDefinitionsSnapshot);
-  const definition = getPanelKindDefinition(kind);
+  // The lookup MUST read this snapshot rather than calling
+  // `getPanelKindDefinition(kind)` separately: React Compiler caches that call
+  // keyed only on `kind`, so a definition registered after this fiber first
+  // rendered would never be picked up (#11636).
+  const definitions = useSyncExternalStore(
+    subscribeToPanelKindDefinitions,
+    getPanelKindDefinitionsSnapshot
+  );
+  const definition = definitions[kind];
 
   const panelProps: PanelComponentProps = useMemo(
     () =>
