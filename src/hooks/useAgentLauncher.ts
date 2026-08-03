@@ -62,6 +62,10 @@ const CLIPBOARD_DIR_NAME = "daintree-clipboard";
  * loops (#10812). The thrown message lists the available IDs so a model client
  * can self-correct. Before the map is initialized we cannot assert "not found",
  * so we fall through and let the caller use its cwd fallbacks.
+ *
+ * Only ever reached with an id the caller asked for by name — an inherited
+ * ambient selection goes through `resolveLaunchTarget` instead, which must not
+ * throw. See that function for why the two are treated differently.
  */
 export function resolveLaunchWorktree<T>(
   targetWorktreeId: string | null | undefined,
@@ -77,6 +81,47 @@ export function resolveLaunchWorktree<T>(
     );
   }
   return targetWorktree ?? null;
+}
+
+/**
+ * Pick the worktree a launch actually targets, and the id that describes it.
+ *
+ * The two sources of a target are not equivalent. An explicit
+ * `launchOptions.worktreeId` is the caller naming a destination, so an id that
+ * does not resolve is their error and must surface as one (#10812) — it goes
+ * straight to `resolveLaunchWorktree` and keeps the throw. An inherited id is
+ * whatever the workspace happened to have selected; the user never chose it for
+ * this launch. A worktree-less workspace can hold one left behind by a previous
+ * project, and failing every launch over it is the bug in #11654 — so once the
+ * map is authoritative and the id is absent, the launch simply proceeds without
+ * a worktree.
+ *
+ * Before the map initializes, absent is unknowable rather than false, so an
+ * inherited id survives with a null worktree — the panel is still created with
+ * it, which is what `buildLaunchIdentity` reports.
+ *
+ * The id and the worktree are returned together because they must agree: a
+ * caller holding the raw inherited id alongside a normalized worktree would tag
+ * panels and scope presets to a worktree that does not exist.
+ */
+export function resolveLaunchTarget<T>(
+  explicitWorktreeId: string | undefined,
+  inheritedWorktreeId: string | null,
+  worktreeMap: Map<string, T>,
+  isInitialized: boolean
+): { worktreeId: string | null; worktree: T | null } {
+  if (explicitWorktreeId !== undefined) {
+    return {
+      worktreeId: explicitWorktreeId || null,
+      worktree: resolveLaunchWorktree(explicitWorktreeId, worktreeMap, isInitialized),
+    };
+  }
+
+  const worktree = inheritedWorktreeId ? (worktreeMap.get(inheritedWorktreeId) ?? null) : null;
+  if (inheritedWorktreeId && !worktree && isInitialized) {
+    return { worktreeId: null, worktree: null };
+  }
+  return { worktreeId: inheritedWorktreeId, worktree };
 }
 
 export interface LaunchAgentOptions {
@@ -297,8 +342,12 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         // Inside the try: a throw between the add above and the `finally` would
         // strand the entry and leave this agentId unlaunchable for the session.
         markRendererPerformance("agentlaunch.begin", { agentId });
-        const targetWorktreeId = launchOptions?.worktreeId ?? activeWorktreeId;
-        const targetWorktree = resolveLaunchWorktree(targetWorktreeId, worktreeMap, isInitialized);
+        const { worktreeId: effectiveWorktreeId, worktree: targetWorktree } = resolveLaunchTarget(
+          launchOptions?.worktreeId,
+          activeWorktreeId,
+          worktreeMap,
+          isInitialized
+        );
 
         const cwd =
           launchOptions?.cwd ??
@@ -311,7 +360,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
         // Resolved once, spread into every success return so a caller learns
         // where the launch landed without re-deriving it.
-        const launchIdentity = buildLaunchIdentity(targetWorktreeId, targetWorktree, cwd);
+        const launchIdentity = buildLaunchIdentity(effectiveWorktreeId, targetWorktree, cwd);
 
         // Handle browser pane specially
         if (agentId === "browser") {
@@ -319,7 +368,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             const terminalId = await addPanel({
               kind: "browser",
               cwd,
-              worktreeId: targetWorktreeId || undefined,
+              worktreeId: effectiveWorktreeId || undefined,
               location: launchOptions?.location,
               activateDockOnCreate: launchOptions?.activateDockOnCreate,
               spawnedBy: launchOptions?.spawnedBy,
@@ -341,7 +390,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               kind: "dev-preview",
               title: "Dev Server",
               cwd,
-              worktreeId: targetWorktreeId || undefined,
+              worktreeId: effectiveWorktreeId || undefined,
               location: launchOptions?.location,
               activateDockOnCreate: launchOptions?.activateDockOnCreate,
               spawnedBy: launchOptions?.spawnedBy,
@@ -388,7 +437,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           //   agent-level `presetId` so switching worktrees doesn't silently
           //   surface another worktree's pick.
           const explicitDefault = launchOptions?.presetId === null;
-          const savedPresetId = resolveEffectivePresetId(entry, targetWorktreeId);
+          const savedPresetId = resolveEffectivePresetId(entry, effectiveWorktreeId);
           const resolvedPresetId = explicitDefault
             ? undefined
             : (launchOptions?.presetId ?? savedPresetId);
@@ -412,8 +461,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           // when a valid global fallback exists. The stale scoped slot is still
           // cleared below so the next launch resolves directly against global.
           const scopedId =
-            targetWorktreeId && entry.worktreePresets
-              ? entry.worktreePresets[targetWorktreeId]
+            effectiveWorktreeId && entry.worktreePresets
+              ? entry.worktreePresets[effectiveWorktreeId]
               : undefined;
           if (
             !primaryPreset &&
@@ -440,10 +489,10 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           if (resolvedPresetId && !primaryPreset) {
             const { useAgentSettingsStore: settingsStore } =
               await import("@/store/agentSettingsStore");
-            if (scopedId && scopedId === resolvedPresetId && targetWorktreeId) {
+            if (scopedId && scopedId === resolvedPresetId && effectiveWorktreeId) {
               void settingsStore
                 .getState()
-                .updateWorktreePreset(agentId, targetWorktreeId, undefined);
+                .updateWorktreePreset(agentId, effectiveWorktreeId, undefined);
             } else if (entry.presetId && entry.presetId === resolvedPresetId) {
               void settingsStore.getState().updateAgent(agentId, { presetId: undefined });
             }
@@ -572,7 +621,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               title: trimmedName || presetTitle,
               ...customTitle,
               cwd,
-              worktreeId: targetWorktreeId || undefined,
+              worktreeId: effectiveWorktreeId || undefined,
               location: launchOptions?.location,
               agentLaunchFlags: launchFlags,
               agentModelId: launchOptions?.modelId,
@@ -591,7 +640,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               title: trimmedName || title,
               ...customTitle,
               cwd,
-              worktreeId: targetWorktreeId || undefined,
+              worktreeId: effectiveWorktreeId || undefined,
               command,
               location: launchOptions?.location,
               activateDockOnCreate: launchOptions?.activateDockOnCreate,
@@ -620,7 +669,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               launchAgentId: agentId,
               title: trimmedName || presetTitle,
               ...customTitle,
-              worktreeId: targetWorktreeId || undefined,
+              worktreeId: effectiveWorktreeId || undefined,
               cwd,
               cols: 80,
               rows: 24,
