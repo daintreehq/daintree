@@ -142,8 +142,44 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // HydrateResult already carries appState, so reading it earlier would pay
     // a redundant full config.json parse on every cache hit.
     const globalAppState = store.get("appState");
+
+    // The legacy global terminals/focus/worktree/MRU fields predate
+    // per-workspace state and belong to whichever real project was open when
+    // they were written. A scratch (workspaceId set, no Project row) or an
+    // unresolvable sender must never adopt them (#11497) — but "has a Project
+    // row" was never ownership either. Nothing consumed the global record, so
+    // every project row that had not saved terminals yet re-inherited the same
+    // list, handing a brand-new project another project's panels and `cwd`s
+    // (#11651). The record now names its heir: the first real project to
+    // hydrate claims it, and only that workspace may read it afterwards.
+    //
+    // The claim is written synchronously here, between the `store.get` above
+    // and the first `await` below, so two project views hydrating in the same
+    // tick cannot both observe an unclaimed record — the event loop cannot
+    // interleave them. It is a stamp, not a destructive consume: the heir goes
+    // on inheriting on every later hydrate, which is what keeps the migration
+    // intact when `app:boot`'s payload is discarded behind a pending crash and
+    // the renderer hydrates again.
+    const storedOwnerId = store.get("legacyWorkspaceStateOwnerId");
+    let legacyWorkspaceStateOwnerId =
+      typeof storedOwnerId === "string" && storedOwnerId ? storedOwnerId : undefined;
+    if (currentProject !== null && workspaceId && legacyWorkspaceStateOwnerId === undefined) {
+      legacyWorkspaceStateOwnerId = workspaceId;
+      store.set("legacyWorkspaceStateOwnerId", workspaceId);
+      console.log(
+        `[AppHydrate] Claimed the legacy global workspace state for ${currentProject.name}`
+      );
+    }
+    const canInheritLegacyWorkspaceState =
+      currentProject !== null && legacyWorkspaceStateOwnerId === workspaceId;
+
+    // Crash recovery hands the restored panel set over on the global record, so
+    // it outranks saved per-project terminals — but only for the heir. Without
+    // the ownership half, a crash restore would overwrite an unrelated
+    // project's own saved panels with the heir's list (#11651).
     const hasCrashRestoreTerminals =
       panelFilter !== null &&
+      canInheritLegacyWorkspaceState &&
       Array.isArray(globalAppState.terminals) &&
       globalAppState.terminals.length > 0;
 
@@ -151,14 +187,6 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // Fall back to global appState.terminals for migration
     let terminalsToUse: StoreSchema["appState"]["terminals"] = [];
     let terminalsSource = "none";
-
-    // The legacy global focus/worktree/MRU fields predate per-workspace state
-    // and belong to whichever real project was open when they were written.
-    // Only a project with a real row may inherit them as migration input — a
-    // scratch (workspaceId set, no Project row) or an unresolvable sender must
-    // never adopt another workspace's worktree, focus, or MRU (#11497). The
-    // rest of `globalAppState` stays intentionally app-global.
-    const canInheritLegacyWorkspaceState = currentProject !== null;
 
     // Focus mode state to include in response
     let focusModeToUse = canInheritLegacyWorkspaceState
@@ -242,11 +270,15 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           );
         }
       } else if (
-        currentProject &&
+        canInheritLegacyWorkspaceState &&
         globalAppState.terminals &&
         globalAppState.terminals.length > 0
       ) {
-        // Migration: use global terminals and migrate them to per-project
+        // Migration: use global terminals and migrate them to per-project.
+        // Gated on ownership, not merely on having a Project row: the copied
+        // snapshots keep their original `cwd` and `worktreeId`, so a row that
+        // never left this record behind would be seeded with another project's
+        // panels pointing at a foreign directory (#11651).
         terminalsToUse = filterValidTerminalEntries(
           globalAppState.terminals,
           AppStateTerminalEntrySchema,
@@ -334,17 +366,25 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             }
           : undefined;
 
-        // No per-project state and no global terminals - create fresh state with focus mode migration
+        // No per-project state and no global terminals to migrate — create
+        // fresh state. Only the heir folds the legacy workspace fields in;
+        // every other row starts clean, or the record it never owned would be
+        // written straight onto its first save (#11651). `sidebarWidth` is a
+        // genuinely app-global preference and rides along either way.
         await projectStore.enqueueProjectStateUpdate(
           workspaceId,
           (existing) =>
             existing ?? {
               projectId: workspaceId,
-              activeWorktreeId: globalAppState.activeWorktreeId,
+              activeWorktreeId: canInheritLegacyWorkspaceState
+                ? globalAppState.activeWorktreeId
+                : undefined,
               sidebarWidth: globalAppState.sidebarWidth ?? 350,
               terminals: [],
-              focusMode: globalAppState.focusMode,
-              focusPanelState: normalizedFocusPanelState,
+              focusMode: canInheritLegacyWorkspaceState ? globalAppState.focusMode : undefined,
+              focusPanelState: canInheritLegacyWorkspaceState
+                ? normalizedFocusPanelState
+                : undefined,
             }
         );
       }

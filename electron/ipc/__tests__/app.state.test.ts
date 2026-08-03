@@ -20,21 +20,25 @@ vi.mock("electron", () => ({
 
 // Mutable so a test can vary the legacy global app state without replacing the
 // `store.get` implementation, which `clearAllMocks` would not restore.
-const { globalAppStateRef, defaultStoreGet } = vi.hoisted(() => {
+const { globalAppStateRef, legacyOwnerRef, defaultStoreGet } = vi.hoisted(() => {
   const globalAppStateRef = {
     current: { terminals: [], sidebarWidth: 350 } as Record<string, unknown>,
   };
+  // Which workspace, if any, has already claimed the legacy global record.
+  // `undefined` is the unclaimed state a fresh store reads back (#11651).
+  const legacyOwnerRef = { current: undefined as string | undefined };
   // Named so `beforeEach` can reinstate it. Several tests below still swap in
   // their own `store.get` implementation; without a reset every test declared
   // after them would silently read that hard-coded state instead of the ref,
   // which is exactly the trap the comment above warns about.
   const defaultStoreGet = (key: string): unknown => {
     if (key === "appState") return globalAppStateRef.current;
+    if (key === "legacyWorkspaceStateOwnerId") return legacyOwnerRef.current;
     if (key === "terminalConfig") return { resourceMonitoringEnabled: false };
     if (key === "agentSettings") return {};
     return undefined;
   };
-  return { globalAppStateRef, defaultStoreGet };
+  return { globalAppStateRef, legacyOwnerRef, defaultStoreGet };
 });
 
 const DEFAULT_GLOBAL_APP_STATE = { terminals: [], sidebarWidth: 350 };
@@ -359,6 +363,7 @@ describe("app:boot handler", () => {
     // swapped-in implementation in place, so without this every test after the
     // first swap reads that test's hard-coded app state instead of the ref.
     globalAppStateRef.current = { ...DEFAULT_GLOBAL_APP_STATE };
+    legacyOwnerRef.current = undefined;
     const storeModule = await import("../../store.js");
     vi.mocked(storeModule.store.get).mockImplementation(
       defaultStoreGet as typeof storeModule.store.get
@@ -886,10 +891,12 @@ describe("app:boot handler", () => {
     // Both unmigrated branches persist the legacy focus/worktree values to
     // per-project state but never assign the payload locals, so the payload
     // depends entirely on the initial seed. Gating that seed on anything
-    // broader than "has a Project row" would silently drop the user's worktree
-    // on the very boot that was supposed to carry it forward. (The MRU is not
-    // part of these updaters — it stays on the legacy global until the renderer
-    // next writes it — so only the payload half is asserted for `mruList`.)
+    // narrower than "the workspace that owns the legacy record" would silently
+    // drop the user's worktree on the very boot that was supposed to carry it
+    // forward. (The MRU is not part of these updaters — it stays on the legacy
+    // global until the renderer next writes it — so only the payload half is
+    // asserted for `mruList`.) The record starts unclaimed here, so this is
+    // also the case that proves the first real project becomes its heir.
     it.each([
       [
         "with legacy terminals to migrate",
@@ -907,6 +914,7 @@ describe("app:boot handler", () => {
         quarantinedPath: undefined,
       });
 
+      const storeModule = await import("../../store.js");
       const result = await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
       const appState = result.appState as Record<string, unknown>;
 
@@ -915,6 +923,13 @@ describe("app:boot handler", () => {
       expect(appState.focusPanelState).toEqual(LEGACY_WORKSPACE_STATE.focusPanelState);
       expect(appState.activeWorktreeId).toBe(LEGACY_WORKSPACE_STATE.activeWorktreeId);
       expect(appState.mruList).toEqual(LEGACY_WORKSPACE_STATE.mruList);
+      // Claiming the record is what locks every later project row out of it.
+      // Without this write the next brand-new project reads the same unclaimed
+      // record and inherits the same panels all over again (#11651).
+      expect(storeModule.store.set).toHaveBeenCalledWith(
+        "legacyWorkspaceStateOwnerId",
+        REAL_PROJECT.id
+      );
       // The same values must land in the per-project record, or the next boot
       // reads an empty one and the migration is lost.
       const migrated = (await runEnqueuedUpdate())!;
@@ -979,6 +994,123 @@ describe("app:boot handler", () => {
       const result = await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
 
       expect((result.appState as Record<string, unknown>).mruList).toEqual([]);
+    });
+
+    // The legacy record has exactly one heir. Nothing used to consume it, so
+    // every project row that had not saved terminals yet re-read the same list
+    // and was seeded with another project's panels — `cwd` and `worktreeId`
+    // included — before the renderer finished restoring (#11651).
+    describe("a project row that never owned the legacy record (#11651)", () => {
+      const OTHER_OWNER = "proj-first-heir";
+      const LEGACY_TERMINALS = [
+        { id: "legacy-panel", title: "Legacy", location: "grid", cwd: "/projects/first-heir" },
+      ];
+
+      beforeEach(() => {
+        legacyOwnerRef.current = OTHER_OWNER;
+        globalAppStateRef.current = {
+          ...DEFAULT_GLOBAL_APP_STATE,
+          ...LEGACY_WORKSPACE_STATE,
+          panelGridConfig: GLOBAL_PANEL_GRID_CONFIG,
+          terminals: LEGACY_TERMINALS,
+        };
+      });
+
+      it("inherits none of it and writes a clean per-project record", async () => {
+        vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+          state: null,
+          quarantinedPath: undefined,
+        });
+
+        const result = await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
+        const appState = result.appState as Record<string, unknown>;
+
+        // Not one of the four workspace-owned fields, and above all not the
+        // foreign panel — its `cwd` points at the heir's directory.
+        expect(appState.terminals).toEqual([]);
+        expect(appState.activeWorktreeId).toBeUndefined();
+        expect(appState.focusMode).toBe(false);
+        expect(appState.focusPanelState).toBeUndefined();
+        expect(appState.mruList).toBeUndefined();
+        // Genuinely app-global settings are untouched by the ownership gate.
+        expect(appState.panelGridConfig).toEqual(GLOBAL_PANEL_GRID_CONFIG);
+
+        // The disk write is the half that outlives the boot: a payload-only fix
+        // would still leave the foreign worktree persisted for the next launch.
+        const written = (await runEnqueuedUpdate())!;
+        expect(written.projectId).toBe(REAL_PROJECT.id);
+        expect(written.terminals).toEqual([]);
+        expect(written.activeWorktreeId).toBeUndefined();
+        expect(written.focusMode).toBeUndefined();
+        expect(written.focusPanelState).toBeUndefined();
+      });
+
+      it("leaves the existing claim alone instead of stealing the record", async () => {
+        vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+          state: null,
+          quarantinedPath: undefined,
+        });
+        const storeModule = await import("../../store.js");
+
+        await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
+
+        // Re-stamping would hand the record to whichever project booted last,
+        // which is the same "no owner identity" hole in a different shape.
+        expect(storeModule.store.set).not.toHaveBeenCalledWith(
+          "legacyWorkspaceStateOwnerId",
+          expect.anything()
+        );
+      });
+
+      it("keeps its own saved panels when crash recovery restores the heir's list", async () => {
+        // A pending panel filter makes the global list outrank saved per-project
+        // terminals. Ungated, that path overwrote an unrelated project's panels
+        // with the heir's — the same leak, reached through crash recovery.
+        crashService.consumePanelFilter.mockReturnValue(["own-panel"] as unknown as null);
+        vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+          state: {
+            projectId: REAL_PROJECT.id,
+            sidebarWidth: 350,
+            terminals: [
+              { id: "own-panel", title: "Own", location: "grid", cwd: REAL_PROJECT.path },
+            ],
+          },
+        } as unknown as Awaited<ReturnType<typeof projectStore.getProjectStateWithRecovery>>);
+
+        const result = await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
+        const terminals = (result.appState as Record<string, unknown>).terminals as Array<
+          Record<string, unknown>
+        >;
+
+        expect(terminals.map((t) => t.id)).toEqual(["own-panel"]);
+        expect(terminals.map((t) => t.cwd)).toEqual([REAL_PROJECT.path]);
+      });
+    });
+
+    it("still migrates for the heir on a later boot, so a discarded crash boot loses nothing", async () => {
+      // `app:boot` runs the migration, but the renderer drops that payload when
+      // a crash is pending and hydrates again. Claiming is a stamp, not a
+      // destructive consume, so the heir re-reads the record it already owns.
+      legacyOwnerRef.current = REAL_PROJECT.id;
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        ...LEGACY_WORKSPACE_STATE,
+        terminals: [{ id: "legacy-panel", title: "Legacy", location: "grid", cwd: "/old/project" }],
+      };
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: null,
+        quarantinedPath: undefined,
+      });
+
+      const result = await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
+      const appState = result.appState as Record<string, unknown>;
+
+      expect((appState.terminals as Array<Record<string, unknown>>).map((t) => t.id)).toEqual([
+        "legacy-panel",
+      ]);
+      expect(appState.activeWorktreeId).toBe(LEGACY_WORKSPACE_STATE.activeWorktreeId);
+      const migrated = (await runEnqueuedUpdate())!;
+      expect(migrated.terminals.map((t) => t.id)).toEqual(["legacy-panel"]);
     });
   });
 

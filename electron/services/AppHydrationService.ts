@@ -42,7 +42,15 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   // cache prime) normally resolve the id to a row first, but none holds that
   // guarantee across its later awaits, so a row deleted mid-build lands here
   // with no row — this keeps the leak from reappearing in that window (#11497).
-  const canInheritLegacyWorkspaceState = currentProject !== null;
+  //
+  // Having a row is necessary but not sufficient: the record names the one
+  // workspace that left it behind, and only that heir may read it (#11651).
+  // This path never claims — it performs no writes by design — so a record no
+  // hydrate has claimed yet reads as owned by nobody, and this switch serves
+  // clean defaults until `handleAppHydrate` settles the ownership.
+  const legacyWorkspaceStateOwnerId = store.get("legacyWorkspaceStateOwnerId");
+  const canInheritLegacyWorkspaceState =
+    currentProject !== null && legacyWorkspaceStateOwnerId === projectId;
 
   let terminalsToUse: typeof globalAppState.terminals = [];
   let focusModeToUse = canInheritLegacyWorkspaceState ? (globalAppState.focusMode ?? false) : false;
