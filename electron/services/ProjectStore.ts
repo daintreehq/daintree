@@ -382,27 +382,30 @@ export class ProjectStore {
   }
 
   /**
-   * `options.identity` is the name/emoji chosen in a creation dialog. It is
-   * consulted only where a brand-new row is minted below — every earlier return
-   * (already-registered path, adopted move, lost insert race) keeps the
-   * identity it already has, so re-adding a folder can never rename it.
-   * In-repo `.daintree/project.json` still wins field-wise.
+   * Decide whether a folder is backed by a repository, or throw the classified
+   * reason we couldn't tell.
    *
-   * `options.gitBacked === false` adopts a folder that has no repository at
-   * all; anything else keeps the strict git-root requirement. The two options
-   * are read independently — a lightweight open carries no identity, and an
-   * identity never implies a mode.
+   * The only trustworthy answer to that question in the codebase. `gitBacked:
+   * false` is returned exclusively for a folder git positively reports as "not a
+   * git repository" *and* which still validates as a readable directory —
+   * everything ambiguous (missing binary, dubious ownership, dead mount,
+   * permissions, anything unrecognized) throws its own code instead, because
+   * callers use a negative answer to withdraw a project's git identity and must
+   * never do that off a transient failure. `WorkspaceService.isGitRepository`
+   * deliberately makes the opposite trade (any failure means "no repository")
+   * and is correct for withholding features, but must not drive a stored
+   * classification.
    */
-  async addProject(projectPath: string, options?: ProjectAddOptions): Promise<Project> {
+  async classifyGitBacking(
+    projectPath: string
+  ): Promise<{ gitBacked: true; gitRoot: string } | { gitBacked: false }> {
     // Classify the path before git ever sees it. simple-git's own synchronous
     // baseDir check throws first otherwise, and its error can't distinguish a
     // missing folder from a file — the root cause of #11409.
     await assertProjectDirectory(projectPath);
 
-    const creationIdentity = options?.identity;
-    let gitRoot: string;
     try {
-      gitRoot = await this.getGitRoot(projectPath);
+      return { gitBacked: true, gitRoot: await this.getGitRoot(projectPath) };
     } catch (error) {
       const message = formatErrorMessage(error, "Failed to add project");
 
@@ -436,42 +439,16 @@ export class ProjectStore {
         });
       }
 
-      // Re-check the directory before the guided-init branch: several awaits
+      // Re-check the directory before reporting no-repository: several awaits
       // have passed since the pre-flight, and a folder deleted or swapped for a
       // file in that window reports as "not a git repository" too. Offering to
-      // run `git init` in a folder that no longer exists would be worse than
-      // useless, so a path that stopped validating is reclassified here.
+      // run `git init` in a folder that no longer exists — or demoting a row on
+      // the strength of it — would be worse than useless, so a path that stopped
+      // validating is reclassified here.
       await assertProjectDirectory(projectPath);
 
       if (lower.includes("not a git repository")) {
-        // The folder has no repository. Adopt it as a lightweight workspace when
-        // the caller asked for that explicitly, or when it is already registered
-        // as one — the latter is what lets Recents, Dock drops, Open With and the
-        // CLI reopen it without re-prompting (#11405). Anything else keeps
-        // today's behavior and drives the choice dialog.
-        //
-        // A registered *git-backed* row is deliberately not demoted on its own:
-        // git failing to see a repository at a path we recorded as one is an
-        // anomaly (an unmounted volume, a permissions blip, a `.git` deleted out
-        // from under us), and silently rewriting the row would lose that project's
-        // git identity for good. It falls through to the choice dialog, where
-        // demotion becomes the user's explicit decision.
-        const lightweight = await this.resolveLightweightPath(projectPath);
-        if (lightweight) {
-          const existing = await this.getProjectByPath(lightweight);
-          if (existing) {
-            if (existing.gitBacked === false || options?.gitBacked === false) {
-              return this.touchExistingProject(existing, { gitBacked: false });
-            }
-          } else if (options?.gitBacked === false) {
-            return this.insertLightweightProject(lightweight);
-          }
-        }
-
-        throw new AppError({
-          code: "NOT_A_GIT_REPO",
-          message: `Not a git repository: ${projectPath}`,
-        });
+        return { gitBacked: false };
       }
 
       // Everything unrecognized becomes one opaque code, and the raw text is
@@ -488,12 +465,62 @@ export class ProjectStore {
         cause: error instanceof Error ? error : undefined,
       });
     }
+  }
+
+  /**
+   * `options.identity` is the name/emoji chosen in a creation dialog. It is
+   * consulted only where a brand-new row is minted below — every earlier return
+   * (already-registered path, adopted move, lost insert race) keeps the
+   * identity it already has, so re-adding a folder can never rename it.
+   * In-repo `.daintree/project.json` still wins field-wise.
+   *
+   * `options.gitBacked === false` adopts a folder that has no repository at
+   * all; anything else keeps the strict git-root requirement. The two options
+   * are read independently — a lightweight open carries no identity, and an
+   * identity never implies a mode.
+   */
+  async addProject(projectPath: string, options?: ProjectAddOptions): Promise<Project> {
+    const creationIdentity = options?.identity;
+    const classification = await this.classifyGitBacking(projectPath);
+
+    if (!classification.gitBacked) {
+      // The folder has no repository. Adopt it as a lightweight workspace when
+      // the caller asked for that explicitly, or when it is already registered
+      // as one — the latter is what lets Recents, Dock drops, Open With and the
+      // CLI reopen it without re-prompting (#11405). Anything else keeps
+      // today's behavior and drives the choice dialog.
+      //
+      // A registered *git-backed* row is deliberately not demoted on its own:
+      // git failing to see a repository at a path we recorded as one is an
+      // anomaly (an unmounted volume, a permissions blip, a `.git` deleted out
+      // from under us), and silently rewriting the row would lose that project's
+      // git identity for good. It falls through to the choice dialog, where
+      // demotion becomes the user's explicit decision — which is also how the
+      // switch/reopen handlers reach that dialog, since they surface this same
+      // code rather than activating a row whose repository is gone (#11649).
+      const lightweight = await this.resolveLightweightPath(projectPath);
+      if (lightweight) {
+        const existing = await this.getProjectByPath(lightweight);
+        if (existing) {
+          if (existing.gitBacked === false || options?.gitBacked === false) {
+            return this.touchExistingProject(existing, { gitBacked: false });
+          }
+        } else if (options?.gitBacked === false) {
+          return this.insertLightweightProject(lightweight);
+        }
+      }
+
+      throw new AppError({
+        code: "NOT_A_GIT_REPO",
+        message: `Not a git repository: ${projectPath}`,
+      });
+    }
 
     // NFC-normalize for dedup so a Finder-dragged NFD path and a typed NFC
     // path map to the same project row on macOS. `path.normalize` only
     // handles separator/segment normalization; Unicode normalization is
     // independent.
-    const normalizedPath = path.normalize(gitRoot).normalize("NFC");
+    const normalizedPath = path.normalize(classification.gitRoot).normalize("NFC");
 
     // The registered project is the git ROOT, which is not always the path the
     // caller handed us: creating `/repo/child` inside an existing repository

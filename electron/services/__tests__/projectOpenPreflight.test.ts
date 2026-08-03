@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { constants as fsConstants, type Stats } from "fs";
+import path from "path";
 
 const statMock = vi.hoisted(() => vi.fn<(path: string) => Promise<Stats>>());
 const accessMock = vi.hoisted(() => vi.fn<(path: string, mode?: number) => Promise<void>>());
@@ -10,8 +11,13 @@ vi.mock("fs/promises", () => ({
   access: accessMock,
 }));
 
-const { assertProjectDirectory, isMissingExecutableError, PROJECT_DIRECTORY_STAT_TIMEOUT_MS } =
-  await import("../projectOpenPreflight.js");
+const {
+  assertProjectDirectory,
+  isMissingExecutableError,
+  probeGitMarker,
+  PROJECT_DIRECTORY_STAT_TIMEOUT_MS,
+  GIT_MARKER_STAT_TIMEOUT_MS,
+} = await import("../projectOpenPreflight.js");
 
 const FOLDER = "/repos/alpha";
 
@@ -121,6 +127,107 @@ describe("assertProjectDirectory", () => {
     const mode = accessMock.mock.calls[0]?.[1] ?? 0;
     expect(mode & fsConstants.R_OK).toBe(fsConstants.R_OK);
     expect(mode & fsConstants.X_OK).toBe(fsConstants.X_OK);
+  });
+});
+
+describe("probeGitMarker", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("reads the .git entry inside the project root", async () => {
+    statMock.mockResolvedValue(statsFor(true));
+
+    await probeGitMarker(FOLDER);
+
+    expect(statMock).toHaveBeenCalledWith(path.join(FOLDER, ".git"));
+  });
+
+  it("accepts a .git file as readily as a .git directory", async () => {
+    // A linked worktree and a submodule both carry `.git` as a file. Requiring a
+    // directory would report every one of them as having lost its repository.
+    statMock.mockResolvedValue(statsFor(false));
+
+    await expect(probeGitMarker(FOLDER)).resolves.toBe("present");
+  });
+
+  it.each([
+    // The only two errnos that prove the entry cannot exist.
+    ["ENOENT", "missing"],
+    ["ENOTDIR", "missing"],
+    // Each proves only that we couldn't look, which must never cost a project
+    // its git identity.
+    ["EACCES", "unknown"],
+    ["EPERM", "unknown"],
+    ["EIO", "unknown"],
+    ["ESTALE", "unknown"],
+    ["ELOOP", "unknown"],
+  ])("answers %s with %s", async (errno, expected) => {
+    statMock.mockRejectedValue(errnoError(errno));
+
+    await expect(probeGitMarker(FOLDER)).resolves.toBe(expected);
+  });
+
+  it("treats an errno-less failure as inconclusive rather than absent", async () => {
+    statMock.mockRejectedValue(new Error("something opaque"));
+
+    await expect(probeGitMarker(FOLDER)).resolves.toBe("unknown");
+  });
+});
+
+describe("probeGitMarker under a hung filesystem", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("gives up on a stat that never settles without claiming the marker is gone", async () => {
+    // A dead mount blocks stat in the kernel. Reporting "missing" here would
+    // route an unplugged drive straight into the demotion prompt.
+    statMock.mockReturnValue(new Promise<Stats>(() => {}));
+
+    const pending = probeGitMarker(FOLDER);
+    const assertion = expect(pending).resolves.toBe("unknown");
+
+    await vi.advanceTimersByTimeAsync(GIT_MARKER_STAT_TIMEOUT_MS + 1);
+    await assertion;
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds the probe far tighter than a user-initiated open", () => {
+    // This one runs on every project switch rather than on an explicit open, so
+    // it has to fail open long before the open flow would.
+    expect(GIT_MARKER_STAT_TIMEOUT_MS).toBeLessThan(PROJECT_DIRECTORY_STAT_TIMEOUT_MS);
+  });
+
+  it("shares one syscall across concurrent probes of the same root", async () => {
+    statMock.mockReturnValue(new Promise<Stats>(() => {}));
+
+    const both = Promise.all([probeGitMarker(FOLDER), probeGitMarker(FOLDER)]);
+
+    await vi.advanceTimersByTimeAsync(GIT_MARKER_STAT_TIMEOUT_MS + 1);
+
+    expect(await both).toEqual(["unknown", "unknown"]);
+    expect(statMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a remounted drive be probed again after a timeout", async () => {
+    // Holding the timed-out probe would pin every later switch to the same
+    // doomed promise, so remounting the volume would never take effect.
+    statMock.mockReturnValue(new Promise<Stats>(() => {}));
+    const first = probeGitMarker(FOLDER);
+    await vi.advanceTimersByTimeAsync(GIT_MARKER_STAT_TIMEOUT_MS + 1);
+    expect(await first).toBe("unknown");
+
+    statMock.mockResolvedValue(statsFor(true));
+
+    await expect(probeGitMarker(FOLDER)).resolves.toBe("present");
+    expect(statMock).toHaveBeenCalledTimes(2);
   });
 });
 

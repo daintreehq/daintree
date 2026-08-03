@@ -8,6 +8,8 @@ import {
 import { getProjectIdFromSenderUrl } from "../../projectContext.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
 import { projectStore } from "../../../services/ProjectStore.js";
+import { probeGitMarker } from "../../../services/projectOpenPreflight.js";
+import { AppError } from "../../../utils/errorTypes.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { ProjectSwitchService } from "../../../services/ProjectSwitchService.js";
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
@@ -51,6 +53,10 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
     if (!project) {
       throw new Error(`Project not found: ${projectId}`);
     }
+
+    // Ahead of the capture: everything from here on has side effects the sender
+    // can't undo if the target turns out to have lost its repository.
+    await assertProjectRepositoryIntact(project);
 
     const operation = captureSwitchOperation(deps, ctx, projectId, "project:switch");
     const { outgoingProjectId, projectViewManager: pvm } = operation;
@@ -134,6 +140,8 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       );
     }
 
+    await assertProjectRepositoryIntact(project);
+
     const operation = captureSwitchOperation(deps, ctx, projectId, "project:reopen");
     const { outgoingProjectId, projectViewManager: pvm } = operation;
 
@@ -197,6 +205,45 @@ function trackOutgoingPersist(projectId: string | null, persist: Promise<void>):
     }
   };
   persist.then(cleanup, cleanup);
+}
+
+/**
+ * Refuse to activate a row that claims a repository whose `.git` is provably
+ * gone, surfacing the same `NOT_A_GIT_REPO` the path-based entry points already
+ * raise (#11649).
+ *
+ * Recents, Dock drops, Open With and the CLI all re-run `addProject`, so they
+ * hit that code and land in the choice dialog where demotion is the user's
+ * explicit decision. Switch and reopen address a project by id and never
+ * re-classify, so a row whose repository disappeared stayed stuck claiming
+ * worktree capability forever — which is what let a repository-less folder adopt
+ * the app-global `activeWorktreeId` belonging to some other project. Raising the
+ * same code here routes both to the same dialog instead of inventing a second
+ * consent surface, and it happens before anything is persisted, swapped or
+ * marked active so a declined dialog leaves the sender exactly where it was.
+ *
+ * Deliberately cheap and deliberately timid:
+ * - lightweight rows are skipped — they have nothing left to demote;
+ * - one bounded `.git` stat gates the healthy path, so a normal switch pays no
+ *   git subprocess;
+ * - only a proven-absent marker escalates to the real classifier, and only that
+ *   classifier's "not a repository" verdict throws. A dead mount, a permissions
+ *   blip or a missing git binary answers `"unknown"` or throws its own code, and
+ *   activation proceeds exactly as before rather than prompting to give up a
+ *   project's git identity on the strength of a transient failure.
+ */
+async function assertProjectRepositoryIntact(project: Project): Promise<void> {
+  if (project.gitBacked === false) return;
+  if ((await probeGitMarker(project.path)) !== "missing") return;
+
+  const classification = await projectStore.classifyGitBacking(project.path);
+  if (classification.gitBacked) return;
+
+  throw new AppError({
+    code: "NOT_A_GIT_REPO",
+    message: `Not a git repository: ${project.path}`,
+    context: { projectPath: project.path },
+  });
 }
 
 async function awaitPendingOutgoingPersist(projectId: string): Promise<void> {
