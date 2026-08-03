@@ -236,6 +236,10 @@ describe("ProjectViewManager — pending focus intent", () => {
       // focus-intent delivery on reactivation, not the warm gate timing (#9679).
       warmPaintGateTimeoutMs: 0,
       warmPaintGateHardTimeoutMs: 0,
+      // Compressed onto the same scale as the paint bounds: the focus-intent
+      // (`painted`) channel stretches its hard bound to this value, and the
+      // hard-timeout test below is written against the 150 ms bound.
+      viewLoadTimeoutMs: 100,
       cachedProjectViews: 3,
     });
 

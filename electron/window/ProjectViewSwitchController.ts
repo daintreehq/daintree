@@ -279,7 +279,7 @@ export async function performSwitch(
   // value actually used by the in-flight gate even if the setters fire
   // a profile push between gate creation and log emission.
   const softMs = host.paintGateTimeoutMs;
-  const hardMs = Math.max(host.paintGateHardTimeoutMs, softMs);
+  const paintHardMs = Math.max(host.paintGateHardTimeoutMs, softMs);
 
   // Reveal the incoming view as soon as its themed first-paint skeleton
   // (`#startup-skeleton`, injected in createView) is parsed into the DOM —
@@ -312,6 +312,24 @@ export async function performSwitch(
     });
   }
 
+  // The `"painted"` channel holds for the whole React cold boot — ~1.5–4s per
+  // the note above, which the paint-gate hard bound (4s balanced) does not
+  // bracket, and the bound is spent from before `loadView` so it also pays for
+  // renderer spawn, preload eval and navigation. Exhausting it there means
+  // "slow", not "wrong document", and abandoning would turn a cold
+  // focus-next-waiting into an error toast. Stretch it to the view-load soft
+  // bound — the same family's profile-scaled "something is genuinely wrong"
+  // threshold. `"skeleton-painted"` keeps the tight bound: its signal is a
+  // parse-time script tag that lands during the load, so a skeleton gate still
+  // open when the load settles really has seen a document that cannot render.
+  //
+  // Deliberate consequence of pre-arming: on a cold switch this bound, not
+  // `viewLoadHardTimeoutMs`, is the effective ceiling — a load slower than it
+  // expires the gate mid-flight and the switch is abandoned once the load
+  // settles. `viewLoadHardTimeoutMs` still bounds a load that never settles.
+  const hardMs =
+    coldReleaseChannel === "painted" ? Math.max(paintHardMs, host.viewLoadTimeoutMs) : paintHardMs;
+
   const paintGatePromise = host.waitForPaint(
     view.webContents.id,
     outgoingView,
@@ -325,7 +343,7 @@ export async function performSwitch(
         releaseChannel: coldReleaseChannel,
       });
     },
-    { releaseChannel: coldReleaseChannel }
+    { releaseChannel: coldReleaseChannel, softMs, hardMs }
   );
 
   let visibleAt: number;
@@ -436,9 +454,10 @@ export async function performSwitch(
     // drop it (#4670), and consuming-without-delivering would lose it
     // entirely. Leaving it pending lets the queued/next same-project switch
     // deliver it once React is mounted (intents are project-keyed, so an
-    // unrelated switch can't pick it up). On the painted path the intent is
-    // still consumed on every outcome (incl. hard timeout) so a stale focus
-    // can't leak forward.
+    // unrelated switch can't pick it up). A painted-path hard timeout never
+    // reaches here — it throws above — but its intent is still consumed, by the
+    // `consumePendingFocusIntent` call in the catch below, so a stale focus
+    // can't leak forward on that outcome either.
     if (coldReleaseChannel === "painted") {
       const coldIntent = consumePendingFocusIntent(host, projectId);
       if (coldIntent && gateResult === "signal") {

@@ -290,6 +290,10 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       dirname: "/test",
       paintGateTimeoutMs: 50,
       paintGateHardTimeoutMs: 150,
+      // Compressed onto the same scale: the focus-intent (`painted`) channel
+      // stretches its hard bound to this value, and the hard-timeout tests
+      // below are written against the 150 ms bound.
+      viewLoadTimeoutMs: 100,
       cachedProjectViews: 3,
     });
 
@@ -456,6 +460,53 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       await rejection;
 
       expect(slowWc.send).not.toHaveBeenCalledWith("project:focus-on-activate", expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds the focus-intent gate past the skeleton bound for a slow-but-correct cold boot", async () => {
+    // The `"painted"` channel waits for the full React cold boot, not the
+    // parse-time skeleton, so its budget must outlast a boot that would blow
+    // the skeleton channel's bound — otherwise a cold focus-next-waiting
+    // (agentActions) or focus-panel (projectActions) rejects the whole switch
+    // and shows an error toast. Slow is not the same failure as wrong document;
+    // the abandon tests above still hold for the skeleton channel, whose signal
+    // lands during the load rather than after it.
+    vi.useFakeTimers();
+    try {
+      const slowWc = createMockWebContents();
+      wcQueue.push(slowWc);
+
+      manager.setViewLoadTimeoutMs(1_000);
+      manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
+
+      const switchPromise = manager.switchTo("proj-b", "/path/b");
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Well past the skeleton channel's hard bound: this gate is still open
+      // and the outgoing view is still bridging.
+      await vi.advanceTimersByTimeAsync(400);
+      expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+      // React finally commits — the switch lands and the intent is delivered.
+      manager.signalViewPainted(slowWc.id);
+      await switchPromise;
+
+      expect(manager.getActiveProjectId()).toBe("proj-b");
+      expect(slowWc.send).toHaveBeenCalledWith(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, {
+        intent: "focus-next-waiting",
+      });
+      expect(
+        vi
+          .mocked(logWarn)
+          .mock.calls.filter(([event]) => event === "projectview.paintgate.hardtimeout")
+      ).toHaveLength(0);
+      expect(
+        vi
+          .mocked(logInfo)
+          .mock.calls.filter(([event]) => event === "projectview.coldstart.rejected")
+      ).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
