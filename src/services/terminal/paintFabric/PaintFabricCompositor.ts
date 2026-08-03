@@ -5,6 +5,7 @@ import type {
   RefreshTierProvider,
   AgentStateCallback,
   PostCompleteHook,
+  TerminalResyncOptions,
 } from "../types";
 import { GRID_RESIZE_COALESCE_MS } from "../types";
 import type { UnseenOutputSnapshot } from "../TerminalUnseenOutputTracker";
@@ -1014,8 +1015,8 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.plane(id).focus(id);
   }
 
-  resetRenderer(id: string): boolean {
-    return this.plane(id).resetRenderer(id);
+  resetRenderer(id: string, options: TerminalResyncOptions = {}): boolean {
+    return this.plane(id).resetRenderer(id, options);
   }
 
   handleBackendRecovery(): void {

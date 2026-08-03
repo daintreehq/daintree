@@ -468,3 +468,55 @@ describe("worktree.sessions confirmed flag survives arg validation (schema regre
     }
   );
 });
+
+describe("worktree.sessions.resetRenderers", () => {
+  // Enough panes to span several chunks of the frame-spread loop, so a bug that
+  // dropped everything past the first chunk would show up as a short call list.
+  const PANES: Panel[] = [
+    { id: "a1", location: "grid", worktreeId: "wt-1" },
+    { id: "b1", location: "grid", worktreeId: "wt-2" },
+    { id: "a2", location: "grid", worktreeId: "wt-1" },
+    { id: "a3", location: "dock", worktreeId: "wt-1" },
+    { id: "a4", location: "grid", worktreeId: "wt-1" },
+    { id: "a5", location: "grid", worktreeId: "wt-1" },
+  ];
+
+  it("forces every pane in the target worktree and no others", async () => {
+    setPanelState(PANES);
+    const run = setupActions();
+
+    await run("worktree.sessions.resetRenderers", { worktreeId: "wt-1" });
+
+    const expected = PANES.filter((p) => p.worktreeId === "wt-1").map((p) => p.id);
+    const called = terminalInstanceServiceMock.resetRenderer.mock.calls.map(([id]) => id);
+    // Order-insensitive set equality: the chunking is an implementation detail,
+    // but the COVERAGE is the contract — awaiting the action must leave no pane
+    // of the worktree un-redrawn.
+    expect([...called].sort()).toEqual([...expected].sort());
+    // Bulk Redraw is the same explicit user intent as the per-pane one, so it
+    // takes the same bypass (#11638). Without this it stays broken for exactly
+    // the busy panes it is pressed on.
+    for (const call of terminalInstanceServiceMock.resetRenderer.mock.calls) {
+      expect(call[1]).toEqual({ force: true });
+    }
+  });
+
+  it("falls back to the ambient worktree when the caller names none", async () => {
+    setPanelState(PANES);
+    const run = setupActions();
+
+    await run("worktree.sessions.resetRenderers", {}, { activeWorktreeId: "wt-2" });
+
+    const called = terminalInstanceServiceMock.resetRenderer.mock.calls.map(([id]) => id);
+    expect(called).toEqual(["b1"]);
+  });
+
+  it("is a no-op when no worktree can be resolved", async () => {
+    setPanelState(PANES);
+    const run = setupActions();
+
+    await run("worktree.sessions.resetRenderers", {});
+
+    expect(terminalInstanceServiceMock.resetRenderer).not.toHaveBeenCalled();
+  });
+});

@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import { nextFrame } from "@/services/terminal/revealUntilStable";
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
@@ -12,6 +13,11 @@ const clearHistoryArgsSchema = z.object({
   worktreeId: z.string().optional(),
   confirmed: z.boolean().optional(),
 });
+
+// Forced renderer resets applied per animation frame by
+// `worktree.sessions.resetRenderers`. Each one can reflow a pane's full
+// scrollback synchronously, so they are chunked rather than run in one task.
+const RESET_RENDERERS_PER_FRAME = 2;
 
 export function registerWorktreeSessionActions(
   actions: ActionRegistry,
@@ -120,10 +126,21 @@ export function registerWorktreeSessionActions(
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
       const { panelsById, panelIds } = usePanelStore.getState();
-      for (const id of panelIds) {
-        const t = panelsById[id];
-        if (t && t.worktreeId === targetWorktreeId) {
-          terminalInstanceService.resetRenderer(t.id);
+      const targets = panelIds.filter(
+        (id) => panelsById[id]?.worktreeId === targetWorktreeId
+      );
+
+      // Same explicit-repair intent as the per-pane Redraw, so the same force
+      // (#11638) — but spread across frames. Forcing turns each pane's geometry
+      // step into a synchronous xterm reflow of its whole scrollback, and this
+      // action is pressed precisely when a whole worktree looks garbled, so an
+      // unchunked loop would pile every reflow into one long task. Two per
+      // frame mirrors the watchdog's heavy-repair budget. The id list is
+      // snapshotted above; a pane closed mid-sweep just no-ops in the service.
+      for (let index = 0; index < targets.length; index += RESET_RENDERERS_PER_FRAME) {
+        if (index > 0) await nextFrame();
+        for (const id of targets.slice(index, index + RESET_RENDERERS_PER_FRAME)) {
+          terminalInstanceService.resetRenderer(id, { force: true });
         }
       }
     },

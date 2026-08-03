@@ -35,6 +35,19 @@ describe("PaintFabricCompositor", () => {
     expect(a.focus).not.toHaveBeenCalled();
   });
 
+  it("carries the resync options through to the owning plane and returns its verdict", async () => {
+    const { compositor, a, b } = makeCompositor();
+    await compositor.getOrCreate("t1-b", undefined, {});
+    b.resetRenderer.mockReturnValue(true);
+
+    // The delegation seam forwards only what it names. Dropping the options
+    // here would silently downgrade an explicit Redraw back to the deferring
+    // path with nothing failing to notice (#11638).
+    expect(compositor.resetRenderer("t1-b", { force: true })).toBe(true);
+    expect(b.resetRenderer).toHaveBeenCalledWith("t1-b", { force: true });
+    expect(a.resetRenderer).not.toHaveBeenCalled();
+  });
+
   it("routes unplaced terminals to the default surface", () => {
     const { compositor, a, b } = makeCompositor();
     compositor.focus("never-created");

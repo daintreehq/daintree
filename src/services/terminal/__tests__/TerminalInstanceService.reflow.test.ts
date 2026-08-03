@@ -52,12 +52,65 @@ vi.mock("../TerminalAddonManager", () => ({
 type ReflowTestService = {
   instances: Map<string, ManagedTerminal>;
   maybeReflowTerminal: (managed: ManagedTerminal) => void;
-  resetRenderer: (id: string) => void;
+  resetRenderer: (id: string, options?: { force?: boolean }) => boolean;
   handleBackendRecovery: () => void;
-  resizeController: { fit: (id: string) => unknown };
+  resizeController: {
+    fit: (id: string) => unknown;
+    reconcileGeometryFresh: (id: string, options?: { force?: boolean }) => boolean;
+  };
   getSynchronizedOutputMode: (id: string) => boolean | null;
   webGLManager: { repairAtlasForReactivation: (id: string) => boolean };
 };
+
+/**
+ * Upgrades a {@link makeManaged} fixture into one the REAL
+ * `resizeController.reconcileGeometryFresh` can drive end to end: a measurable
+ * host box, a live grid, and a fit proposal that diverges from it. Used by the
+ * #11638 regression, which has to observe an actual grid change rather than a
+ * spy call.
+ */
+function makeDivergedPane(
+  managed: ManagedTerminal,
+  proposal: { cols: number; rows: number }
+): { resize: ReturnType<typeof vi.fn>; scrollToBottom: ReturnType<typeof vi.fn> } {
+  for (const [prop, value] of [
+    ["clientWidth", 800],
+    ["clientHeight", 600],
+  ] as const) {
+    Object.defineProperty(managed.hostElement, prop, { value, configurable: true });
+  }
+  managed.hostElement.checkVisibility = vi.fn(() => true);
+  managed.hostElement.getBoundingClientRect = vi.fn(() => ({
+    left: 0,
+    width: 800,
+    height: 600,
+  })) as unknown as HTMLElement["getBoundingClientRect"];
+
+  const resize = vi.fn((cols: number, rows: number) => {
+    term.cols = cols;
+    term.rows = rows;
+  });
+  const scrollToBottom = vi.fn();
+  const term = managed.terminal as unknown as {
+    cols: number;
+    rows: number;
+    resize: typeof resize;
+    refresh: ReturnType<typeof vi.fn>;
+    scrollToBottom: typeof scrollToBottom;
+  };
+  term.cols = 80;
+  term.rows = 24;
+  term.resize = resize;
+  term.refresh = vi.fn();
+  term.scrollToBottom = scrollToBottom;
+
+  managed.fitAddon = {
+    fit: vi.fn(),
+    proposeDimensions: vi.fn(() => proposal),
+  } as unknown as ManagedTerminal["fitAddon"];
+
+  return { resize, scrollToBottom };
+}
 
 function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
   const hostElement = document.createElement("div");
@@ -157,6 +210,7 @@ function clearSyncModes(managed: ManagedTerminal): void {
 
 describe("TerminalInstanceService maybeReflowTerminal", () => {
   let service: ReflowTestService;
+  let terminalClient: { resize: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     vi.resetModules();
@@ -164,6 +218,13 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
       (await import("../TerminalInstanceService")) as unknown as {
         terminalInstanceService: ReflowTestService;
       });
+    // Read the client out of the SAME post-reset module registry the service
+    // just bound to — a static top-level import would hold the pre-reset
+    // instance and never observe these calls.
+    ({ terminalClient } = (await import("@/clients")) as unknown as {
+      terminalClient: { resize: ReturnType<typeof vi.fn> };
+    });
+    terminalClient.resize.mockClear();
     service.instances.clear();
   });
 
@@ -382,6 +443,91 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(managed.lastReflowAt).toBe(0);
     // Even on the error path, Redraw never flushes the shared atlas.
     expect(term.clearTextureAtlas).not.toHaveBeenCalled();
+  });
+
+  it("forced resetRenderer converges a streaming, diverged pane that the default path defers (#11638)", () => {
+    const managed = makeManaged();
+    const { resize } = makeDivergedPane(managed, { cols: 120, rows: 40 });
+    // A working agent's steady state: a batch is always in flight, so the
+    // 300ms write-quiescence window the guard waits for never opens.
+    managed.pendingWrites = 2;
+    service.instances.set("t1", managed);
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+    const fit = vi.spyOn(service.resizeController, "fit");
+
+    const term = managed.terminal as unknown as { cols: number; rows: number };
+    const staleGrid = { cols: term.cols, rows: term.rows };
+    const proposal = managed.fitAddon.proposeDimensions();
+
+    // The bug: the default path defers its one grid-correcting step and hands
+    // the repair to the watchdog, which tests the same predicate and so never
+    // runs it either. Nothing about the pane changes.
+    expect(service.resetRenderer("t1")).toBe(true);
+    expect(term.cols).toBe(staleGrid.cols);
+    expect(term.rows).toBe(staleGrid.rows);
+    expect(managed.revealPendingRepair).toBe(true);
+
+    // Same pane, same instant, no timer advance — only the explicit intent
+    // differs. This is the assertion the issue asked for.
+    expect(service.resetRenderer("t1", { force: true })).toBe(true);
+
+    expect(term.cols).toBe(proposal?.cols);
+    expect(term.rows).toBe(proposal?.rows);
+    expect(resize).toHaveBeenCalledWith(proposal?.cols, proposal?.rows);
+    // The PTY moved with xterm in the same step; a settled-strategy agent must
+    // never see the two grids disagree across a 500ms debounce.
+    expect(terminalClient.resize).toHaveBeenCalledWith("t1", proposal?.cols, proposal?.rows);
+    // Routed through the lock-exempt atomic reconcile, NOT the lock-aware fit()
+    // that the default branch uses.
+    expect(fit).not.toHaveBeenCalled();
+    // The explicit repair discharged the obligation the deferral armed, so the
+    // next watchdog tick doesn't spend a heavy-budget slot on a no-op.
+    expect(managed.revealPendingRepair).toBe(false);
+    expect(managed.revealPendingGeneration).toBeUndefined();
+  });
+
+  it("forced resetRenderer re-arms the geometry circuit breaker once the grid converges", () => {
+    const managed = makeManaged();
+    makeDivergedPane(managed, { cols: 120, rows: 40 });
+    managed.pendingWrites = 2;
+    // A pane the watchdog gave up on (#10909): its automatic geometry repairs
+    // are latched off, and only genuine convergence or a re-attach re-arms it.
+    // An explicit Redraw that DOES converge is exactly that kind of boundary —
+    // leaving it barred would strand the pane's future automatic repairs.
+    managed.geometryRepairAttempts = 5;
+    managed.geometryRepairGaveUp = true;
+    managed.attachGeneration = 7;
+    service.instances.set("t1", managed);
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+
+    service.resetRenderer("t1", { force: true });
+
+    expect(managed.geometryRepairGaveUp).toBe(false);
+    expect(managed.geometryRepairAttempts).toBe(0);
+    // Re-armed under the CURRENT incarnation, so a later re-attach still
+    // supersedes it rather than inheriting this counter.
+    expect(managed.geometryRepairGeneration).toBe(managed.attachGeneration);
+  });
+
+  it("forced resetRenderer keeps the breaker latched when the grid could not converge", () => {
+    const managed = makeManaged();
+    makeDivergedPane(managed, { cols: 120, rows: 40 });
+    managed.pendingWrites = 2;
+    managed.geometryRepairAttempts = 5;
+    managed.geometryRepairGaveUp = true;
+    // A serialized restore parks the xterm resize (#11552) — reconcile reports
+    // a successful measurement, but the live grid never moved. Trusting that
+    // boolean would re-arm the breaker on no evidence at all.
+    managed.isSerializedRestoreInProgress = true;
+    service.instances.set("t1", managed);
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+
+    service.resetRenderer("t1", { force: true });
+
+    const term = managed.terminal as unknown as { cols: number; rows: number };
+    expect(term.cols).toBe(80);
+    expect(managed.geometryRepairGaveUp).toBe(true);
+    expect(managed.geometryRepairAttempts).toBe(5);
   });
 
   it("resetRenderer leaves sibling panes untouched (#9701 isolation)", () => {

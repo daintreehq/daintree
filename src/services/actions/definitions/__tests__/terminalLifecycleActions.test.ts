@@ -680,7 +680,10 @@ describe("agent dispatch target binding (#11532)", () => {
       id: "terminal.redraw",
       noTarget: OPTIONAL_SCHEMA,
       blocked: (s) => s.resetRenderer,
-      hitFocused: (s) => expect(s.resetRenderer).toHaveBeenCalledWith("focused-panel"),
+      // #11638: the explicit user path forces past the streaming-write
+      // deferral. An unforced call here would be the bug this action shipped.
+      hitFocused: (s) =>
+        expect(s.resetRenderer).toHaveBeenCalledWith("focused-panel", { force: true }),
     },
     {
       id: "terminal.rename",
@@ -764,8 +767,13 @@ describe("agent dispatch target binding (#11532)", () => {
 
     await run("terminal.redraw", { terminalId: "explicit-panel" }, { dispatchSource: "agent" });
 
-    expect(spies.resetRenderer).toHaveBeenCalledWith("explicit-panel");
-    expect(spies.resetRenderer).not.toHaveBeenCalledWith("focused-panel");
+    expect(spies.resetRenderer).toHaveBeenCalledWith("explicit-panel", { force: true });
+    // The old `not.toHaveBeenCalledWith("focused-panel")` would now pass even if
+    // the focused pane WERE redrawn, since the real call carries a second
+    // argument and never matches that shape. Pin the call count and the target
+    // instead, so the negative can't rot into a false positive (#11638).
+    expect(spies.resetRenderer).toHaveBeenCalledTimes(1);
+    expect(spies.resetRenderer.mock.calls[0]?.[0]).toBe("explicit-panel");
   });
 
   it("treats an empty terminalId as naming nothing", async () => {

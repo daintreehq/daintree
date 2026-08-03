@@ -229,7 +229,12 @@ export function registerTerminalLifecycleActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        terminalInstanceService.resetRenderer(targetId);
+        // force: the user is looking at a broken pane and has asked for it to
+        // be fixed. #10863's write-quiescence deferral is for AUTOMATIC
+        // geometry writers, and a busy agent never opens the 300ms gap it waits
+        // for — leaving Redraw a no-op on exactly the terminals it exists for
+        // (#11638).
+        terminalInstanceService.resetRenderer(targetId, { force: true });
       }
     },
   }));

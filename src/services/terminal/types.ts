@@ -29,6 +29,26 @@ export type AgentStateCallback = (state: AgentState) => void;
 
 export type PostCompleteHook = (output: string) => void | Promise<void>;
 
+/**
+ * Intent marker for a renderer/geometry resync (#11638). `force` means the user
+ * explicitly asked for this repair — the Redraw action or its bulk per-worktree
+ * variant — and it bypasses EXACTLY ONE guard: #10863's write-quiescence
+ * deferral ({@link https://github.com/daintreehq/daintree/issues/10863}), which
+ * exists to stop an AUTOMATIC out-of-band re-wrap from landing under a live
+ * cursor-relative repaint. A user staring at a garbled pane has already made
+ * that call, and a busy agent never opens the 300ms gap the guard waits for, so
+ * without the bypass the one load-bearing step of Redraw is dead on exactly the
+ * terminals it exists for.
+ *
+ * It bypasses NOTHING else: the alt-screen exclusion (#10805), host visibility,
+ * the >=50px box floor, cell-metric availability, and the serialized-restore
+ * parking all still apply. Deliberately absent from `TerminalRevealController`
+ * and the watchdog's dep signatures so no automatic path can even ask for it.
+ */
+export interface TerminalResyncOptions {
+  force?: boolean;
+}
+
 export interface ManagedTerminal {
   /** Stable terminal id — the key this instance is registered under. */
   id: string;
