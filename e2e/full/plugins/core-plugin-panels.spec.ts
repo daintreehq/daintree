@@ -3,6 +3,19 @@ import { closeApp, type AppContext } from "../../helpers/launch";
 import { launchWithSamplePlugin, waitForRichPluginReady } from "../../helpers/plugins";
 import { T_LONG } from "../../helpers/timeouts";
 
+/** Toggle a loaded plugin's enabled state; re-enabling re-registers its contributions. */
+async function setPluginEnabled(page: Page, pluginId: string, enabled: boolean): Promise<void> {
+  await page.evaluate(
+    async (payload) =>
+      (
+        window as unknown as {
+          electron: { plugin: { setEnabled: (id: string, on: boolean) => Promise<unknown> } };
+        }
+      ).electron.plugin.setEnabled(payload.pluginId, payload.enabled),
+    { pluginId, enabled }
+  );
+}
+
 /** Dispatch a renderer action through the E2E-only bridge. */
 async function dispatchAction(page: Page, actionId: string, args?: unknown): Promise<unknown> {
   return page.evaluate(
@@ -236,5 +249,54 @@ test.describe.serial("Core: Plugin panels contribution", () => {
     await expect(ctx.window.getByText("Hook panel view ready")).toBeVisible({
       timeout: T_LONG,
     });
+  });
+
+  // Regression for #11636. `GridPanel` subscribed to the definition registry but
+  // then called `getPanelKindDefinition(kind)` separately, so React Compiler —
+  // which cannot see that the getter reads mutable module state — cached the
+  // result keyed only on `kind`. The subscription still rerendered the panel,
+  // but the cache kept serving the definition resolved on that fiber's FIRST
+  // render, and `ContentGridDefault` keys the wrapper on a stable `group.id` so
+  // the fiber never remounted. A panel restored before its plugin registered its
+  // kind therefore sat on "Plugin unavailable" until closed and reopened.
+  //
+  // Only the compiled bundle can show this: vitest runs uncompiled TSX where the
+  // getter re-runs every render, so a unit test passes with or without the bug.
+  //
+  // Disable/re-enable is the lever because panel contributions register on
+  // plugin LOAD (PluginService.loadPlugin), not on activation — so toggling is
+  // what actually removes and re-registers the definition. Both directions are
+  // asserted on the SAME `data-panel-id`: the panel record is never recreated,
+  // which is what preserves its `extensionState`. Kept last in this serial suite
+  // because it briefly disables the plugin the earlier tests depend on.
+  test("hot-swaps a live panel when its plugin kind is unregistered and registered again", async () => {
+    // Default `reuseExisting` returns the panel opened by the earlier test
+    // rather than spawning a second one.
+    const opened = (await dispatchAction(ctx.window, "panel.openPluginPanel", {
+      kind: "daintree.rich.rich-panel",
+    })) as { panelId: string };
+
+    const panel = ctx.window.locator(`[data-panel-id="${opened.panelId}"]`);
+    const unavailable = panel.getByRole("region", { name: "Plugin unavailable" });
+
+    await expect(panel.getByText("Rich panel view mounted")).toBeVisible({ timeout: T_LONG });
+
+    try {
+      // Unregistering must reach the mounted panel. Pre-fix the stale cache kept
+      // the real view rendered here and this assertion failed.
+      await setPluginEnabled(ctx.window, "daintree.rich", false);
+      await expect(unavailable).toBeVisible({ timeout: T_LONG });
+    } finally {
+      // Leave the plugin enabled even if the assertion above fails, so a
+      // failure here can't strand the shared context mid-toggle.
+      await setPluginEnabled(ctx.window, "daintree.rich", true);
+    }
+
+    // The #11636 direction: the kind returns while the panel is already mounted
+    // and showing the placeholder, and the same panel resolves to the real view.
+    await waitForRichPluginReady(ctx.app, ctx.window);
+
+    await expect(panel.getByText("Rich panel view mounted")).toBeVisible({ timeout: T_LONG });
+    await expect(unavailable).toHaveCount(0);
   });
 });

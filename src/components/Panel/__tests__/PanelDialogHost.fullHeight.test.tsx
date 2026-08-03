@@ -22,10 +22,19 @@ const StubPane = vi.hoisted(() => () => null);
 // and the test would pass even without the fix.
 vi.mock("@/panels/registry", async () => {
   const shared = await import("@shared/config/panelKindRegistry");
+  // Built once and reused: `useSyncExternalStore` throws on a getSnapshot that
+  // returns a fresh reference each call.
+  let snapshot: Record<string, unknown> | undefined;
   return {
-    getPanelKindDefinition: (kind: string) => {
-      const config = shared.getPanelKindConfig(kind);
-      return config ? { ...config, component: StubPane } : undefined;
+    subscribeToPanelKindDefinitions: () => () => {},
+    getPanelKindDefinitionsSnapshot: () => {
+      snapshot ??= Object.fromEntries(
+        shared.getPanelKindIds().flatMap((id) => {
+          const config = shared.getPanelKindConfig(id);
+          return config ? [[id, { ...config, component: StubPane }] as const] : [];
+        })
+      );
+      return snapshot;
     },
   };
 });

@@ -37,9 +37,22 @@ function StatefulPane({ id, isFocused }: { id: string; isFocused?: boolean }) {
   );
 }
 
-vi.mock("@/panels/registry", () => ({
-  getPanelKindDefinition: () => ({ component: StatefulPane }),
-}));
+// A real object over the shared registry's kinds rather than a Proxy, so `in`
+// and `Object.hasOwn` behave. Built once and reused: `useSyncExternalStore`
+// throws on a getSnapshot that returns a fresh reference each call.
+vi.mock("@/panels/registry", async () => {
+  const shared = await import("@shared/config/panelKindRegistry");
+  let snapshot: Record<string, { component: unknown }> | undefined;
+  return {
+    subscribeToPanelKindDefinitions: () => () => {},
+    getPanelKindDefinitionsSnapshot: () => {
+      snapshot ??= Object.fromEntries(
+        shared.getPanelKindIds().map((id) => [id, { component: StatefulPane }])
+      );
+      return snapshot;
+    },
+  };
+});
 
 // The real ErrorBoundary on purpose: every frame's boundary is keyed on the
 // shared `requestSeq`, which bumps on every push. It only re-keys its children
