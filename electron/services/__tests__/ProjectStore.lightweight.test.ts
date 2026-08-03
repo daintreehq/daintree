@@ -221,6 +221,47 @@ describe("opening a folder without git (#11405)", () => {
     expect(store.getProjectById(project.id)?.gitBacked).toBeUndefined();
   });
 
+  it("classifies a repository and a repository-less folder without touching the registry", async () => {
+    const repo = await makeDir("repo");
+    repoPaths.add(repo);
+    const plain = await makeDir("downloads");
+
+    await expect(store.classifyGitBacking(repo)).resolves.toEqual({
+      gitBacked: true,
+      gitRoot: repo,
+    });
+    await expect(store.classifyGitBacking(plain)).resolves.toEqual({ gitBacked: false });
+
+    // Classification answers a question; only addProject may act on the answer.
+    expect(store.getAllProjects()).toHaveLength(0);
+  });
+
+  it("reports a registered repository whose git metadata went missing as not git-backed", async () => {
+    const folder = await makeDir("repo");
+    repoPaths.add(folder);
+    const project = await store.addProject(folder);
+
+    repoPaths.delete(folder);
+
+    // What the switch/reopen guard consults (#11649). It reports the folder's
+    // real state without demoting the row — the demotion stays the user's call.
+    await expect(store.classifyGitBacking(folder)).resolves.toEqual({ gitBacked: false });
+    expect(store.getProjectById(project.id)?.gitBacked).toBeUndefined();
+  });
+
+  it("refuses to call a vanished folder repository-less", async () => {
+    const folder = await makeDir("repo");
+    repoPaths.add(folder);
+    await store.addProject(folder);
+
+    // The row's repository is unreachable rather than proven absent. Answering
+    // `gitBacked: false` here is what would let a yanked volume demote a project.
+    repoPaths.delete(folder);
+    await fs.promises.rm(folder, { recursive: true, force: true });
+
+    await expect(store.classifyGitBacking(folder)).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
   it("demotes a registered repository only when the user explicitly asks", async () => {
     const folder = await makeDir("repo");
     repoPaths.add(folder);

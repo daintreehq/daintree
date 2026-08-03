@@ -22,10 +22,28 @@ vi.mock("electron", () => ({
   },
 }));
 
+/**
+ * The `.git` marker probe the switch/reopen guard runs before activating a
+ * git-backed row (#11649). Defaulted to `"present"` so every fixture below —
+ * whose paths don't exist on disk — takes the healthy path it was written for.
+ */
+const probeGitMarkerMock = vi.hoisted(() =>
+  vi.fn<(root: string) => Promise<"present" | "missing" | "unknown">>()
+);
+vi.mock("../../../services/projectOpenPreflight.js", () => ({
+  probeGitMarker: (root: string) => probeGitMarkerMock(root),
+  assertProjectDirectory: vi.fn(),
+  isMissingExecutableError: vi.fn(() => false),
+  PROJECT_DIRECTORY_STAT_TIMEOUT_MS: 5_000,
+  GIT_MARKER_STAT_TIMEOUT_MS: 1_000,
+}));
+
 const projectStoreMock = vi.hoisted(() => {
   const getProjectState = vi.fn<(id: string) => Promise<Record<string, unknown> | null>>();
   const saveProjectState = vi.fn<(id: string, state: unknown) => Promise<void>>();
   return {
+    classifyGitBacking:
+      vi.fn<(path: string) => Promise<{ gitBacked: boolean; gitRoot?: string }>>(),
     getCurrentProjectId: vi.fn<() => string | null>(),
     getProjectById:
       vi.fn<(id: string) => { id: string; name: string; path: string; status?: string } | null>(),
@@ -87,6 +105,11 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
 // binding. Each test declares the project its sender view is displaying.
 beforeEach(() => {
   mockGetProjectForWebContents.mockReturnValue(null);
+  // Same reason as the binding above: `clearAllMocks` drops call history but not
+  // return values, so the repository-intact guard is re-armed per test rather
+  // than inheriting whichever answer the previous one installed.
+  probeGitMarkerMock.mockResolvedValue("present");
+  projectStoreMock.classifyGitBacking.mockResolvedValue({ gitBacked: true });
 });
 
 vi.mock("../../../window/portDistribution.js", () => ({
@@ -271,6 +294,203 @@ describe("project switch/reopen refreshes the File-menu project gates (#11136)",
     // Once the swap has run, the PVM binding has moved or been rolled back — the
     // gates must reflect where we actually landed, not stay stale.
     expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+  });
+});
+
+// #11649: a row recorded as git-backed whose `.git` is gone used to be
+// unreachable for demotion — every path-based open (Recents, Dock, Cmd+O, CLI)
+// re-runs addProject and lands in the choice dialog, but switch and reopen
+// address a project by id and never re-classified, so the row stayed stuck
+// claiming worktree capability. These handlers now raise the same
+// NOT_A_GIT_REPO the dialog already answers to.
+describe("project switch/reopen refuses a row whose repository is gone (#11649)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetWindowForWebContents.mockReturnValue({ id: 1, isDestroyed: () => false });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+  });
+
+  function makePvm() {
+    return {
+      switchTo: vi.fn().mockResolvedValue({
+        view: { webContents: { id: 200, isDestroyed: () => false, send: vi.fn() } },
+        isNew: false,
+      }),
+      getProjectIdForWebContents: vi.fn(),
+      setPendingFocusIntent: vi.fn(),
+    };
+  }
+
+  function handlerFor(channel: string, pvm: unknown) {
+    const ctx = makeWindowContext(1, 10, { projectViewManager: pvm as never });
+    registerProjectCrudHandlers({
+      mainWindow: { id: 1 } as unknown,
+      windowRegistry: makeWindowRegistry([ctx]),
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies);
+    const call = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) => c[0] === channel
+    );
+    expect(call).toBeDefined();
+    return call![1] as (...args: unknown[]) => Promise<unknown>;
+  }
+
+  /** `gitBacked` absent is a git-backed row: NULL predates the column. */
+  function registerProject(overrides: Record<string, unknown> = {}) {
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-gone",
+      name: "Gone",
+      path: "/projects/gone",
+      status: "background",
+      ...overrides,
+    } as never);
+  }
+
+  const CHANNEL_CASES = [
+    [CHANNELS.PROJECT_SWITCH, "switch"],
+    [CHANNELS.PROJECT_REOPEN, "reopen"],
+  ] as const;
+
+  describe.each(CHANNEL_CASES)("%s", (channel) => {
+    it("rejects with NOT_A_GIT_REPO before anything is swapped or marked active", async () => {
+      registerProject();
+      probeGitMarkerMock.mockResolvedValue("missing");
+      projectStoreMock.classifyGitBacking.mockResolvedValue({ gitBacked: false });
+      // A sender with a real outgoing project and a layout to save, so the
+      // persist is genuinely reachable and its absence means something.
+      mockGetProjectForWebContents.mockReturnValue("proj-outgoing");
+      const pvm = makePvm();
+      const outgoingState = { terminals: [], draftInputs: { "term-1": "half typed" } };
+
+      await expect(
+        handlerFor(channel, pvm)({ sender: { id: 10 } }, "proj-gone", outgoingState)
+      ).rejects.toThrow(expect.objectContaining({ code: "NOT_A_GIT_REPO" }));
+
+      // The whole point of rejecting this early: the sender keeps its current
+      // project, so declining the dialog is a no-op rather than a half-switch.
+      expect(pvm.switchTo).not.toHaveBeenCalled();
+      expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+      expect(projectStoreMock.saveProjectState).not.toHaveBeenCalled();
+      expect(mockBroadcastProjectSwitchUpdates).not.toHaveBeenCalled();
+      expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
+    });
+
+    it("activates without consulting git when the marker is there", async () => {
+      registerProject();
+      probeGitMarkerMock.mockResolvedValue("present");
+      const pvm = makePvm();
+
+      await handlerFor(channel, pvm)({ sender: { id: 10 } }, "proj-gone");
+
+      expect(pvm.switchTo).toHaveBeenCalled();
+      // A healthy switch must not pay for a git subprocess.
+      expect(projectStoreMock.classifyGitBacking).not.toHaveBeenCalled();
+    });
+
+    it("activates unchanged when the marker can't be read", async () => {
+      // A dead mount or a permissions blip. Demoting on this would be exactly
+      // the anomaly the refusal-to-auto-demote rule exists to prevent.
+      registerProject();
+      probeGitMarkerMock.mockResolvedValue("unknown");
+      const pvm = makePvm();
+
+      await handlerFor(channel, pvm)({ sender: { id: 10 } }, "proj-gone");
+
+      expect(pvm.switchTo).toHaveBeenCalled();
+      expect(projectStoreMock.classifyGitBacking).not.toHaveBeenCalled();
+    });
+
+    it("never probes a row already opened without git", async () => {
+      // It has no git identity left to lose, so there is nothing to reconcile.
+      registerProject({ gitBacked: false });
+      const pvm = makePvm();
+
+      await handlerFor(channel, pvm)({ sender: { id: 10 } }, "proj-gone");
+
+      expect(pvm.switchTo).toHaveBeenCalled();
+      expect(probeGitMarkerMock).not.toHaveBeenCalled();
+    });
+
+    it("activates when git finds a repository despite the missing marker", async () => {
+      registerProject();
+      probeGitMarkerMock.mockResolvedValue("missing");
+      projectStoreMock.classifyGitBacking.mockResolvedValue({
+        gitBacked: true,
+        gitRoot: "/projects/gone",
+      });
+      const pvm = makePvm();
+
+      await handlerFor(channel, pvm)({ sender: { id: 10 } }, "proj-gone");
+
+      // Asserting the classifier actually ran is what separates this from an
+      // implementation that ignores "missing" and activates regardless.
+      expect(projectStoreMock.classifyGitBacking).toHaveBeenCalledWith("/projects/gone");
+      expect(pvm.switchTo).toHaveBeenCalled();
+    });
+
+    it("surfaces an ambiguous classification under its own code", async () => {
+      // Only a positive "not a repository" verdict may reach the demotion
+      // dialog; anything else has to keep its own meaning so the user is told
+      // what actually went wrong.
+      registerProject();
+      probeGitMarkerMock.mockResolvedValue("missing");
+      projectStoreMock.classifyGitBacking.mockRejectedValue(
+        Object.assign(new Error("Permission denied"), { code: "PERMISSION" })
+      );
+      const pvm = makePvm();
+
+      await expect(handlerFor(channel, pvm)({ sender: { id: 10 } }, "proj-gone")).rejects.toThrow(
+        expect.objectContaining({ code: "PERMISSION" })
+      );
+      expect(pvm.switchTo).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(CHANNEL_CASES)("guards the legacy non-PVM path too (%s)", async (channel) => {
+    // The legacy branch resumes the workspace host and delegates to
+    // ProjectSwitchService instead of swapping a view, so a guard that only
+    // covered the PVM path would leave it activating a repository-less row.
+    registerProject();
+    probeGitMarkerMock.mockResolvedValue("missing");
+    projectStoreMock.classifyGitBacking.mockResolvedValue({ gitBacked: false });
+    const resumeProject = vi.fn();
+    const ctx = makeWindowContext(1, 10, {});
+    registerProjectCrudHandlers({
+      mainWindow: { id: 1 } as unknown,
+      windowRegistry: makeWindowRegistry([ctx]),
+      worktreeService: { resumeProject, pauseProject: vi.fn() },
+    } as unknown as HandlerDependencies);
+    const call = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) => c[0] === channel
+    );
+    const handler = call![1] as (...args: unknown[]) => Promise<unknown>;
+
+    await expect(handler({ sender: { id: 10 } }, "proj-gone")).rejects.toThrow(
+      expect.objectContaining({ code: "NOT_A_GIT_REPO" })
+    );
+    expect(resumeProject).not.toHaveBeenCalled();
+  });
+
+  it("probes the project's own root", async () => {
+    registerProject({ path: "/projects/specific" });
+    probeGitMarkerMock.mockResolvedValue("present");
+
+    await handlerFor(CHANNELS.PROJECT_SWITCH, makePvm())({ sender: { id: 10 } }, "proj-gone");
+
+    expect(probeGitMarkerMock).toHaveBeenCalledWith("/projects/specific");
+  });
+
+  it("checks reopen's status precondition before touching the filesystem", async () => {
+    // A closed project can't be reopened at all, so the guard must not spend a
+    // syscall — or blame the repository — for what is a state error.
+    registerProject({ status: "closed" });
+
+    await expect(
+      handlerFor(CHANNELS.PROJECT_REOPEN, makePvm())({ sender: { id: 10 } }, "proj-gone")
+    ).rejects.toThrow(/status/);
+    expect(probeGitMarkerMock).not.toHaveBeenCalled();
   });
 });
 

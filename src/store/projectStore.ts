@@ -448,6 +448,43 @@ function getProjectOpenErrorMessage(error: unknown, directoryPath?: string): str
   return message || "Couldn't open project.";
 }
 
+/**
+ * Route a switch/reopen that failed because the target lost its repository into
+ * the same choice dialog a path-based open would have shown (#11649).
+ *
+ * Main refuses to activate a git-backed row whose `.git` is provably gone, so
+ * the folder can finally be adopted without git — or have a repository
+ * initialized — instead of the row staying stuck claiming worktree capability.
+ * Returns whether it handled the error; `false` falls through to the caller's
+ * generic toast.
+ *
+ * The path comes from the store's own row, never the error: `context` is
+ * stripped and every message is scrubbed of absolute paths before crossing IPC
+ * in a packaged build, so an error-derived path works in dev and silently fails
+ * in the builds users run. Without a row there is nothing to name in the dialog,
+ * so that case falls through too.
+ *
+ * Main rejects before it persists, swaps or marks anything active, so clearing
+ * the transition flags leaves the sender exactly where it was — cancelling the
+ * dialog is a no-op rather than a half-finished switch, and `error` stays null
+ * because the dialog IS the surface for this one.
+ */
+function openNonGitFolderDialogForTransition(
+  set: (partial: Partial<ProjectState>) => void,
+  get: () => ProjectState,
+  projectId: string,
+  error: unknown
+): boolean {
+  if (!isClientAppError(error) || error.code !== "NOT_A_GIT_REPO") return false;
+
+  const targetPath = get().projects.find((project) => project.id === projectId)?.path;
+  if (!targetPath) return false;
+
+  set({ error: null, isLoading: false, isSwitching: false, switchingToProjectId: null });
+  get().openGitInitDialog(targetPath);
+  return true;
+}
+
 function isPersistedProject(value: unknown): value is Project {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<Project>;
@@ -736,6 +773,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       if (requestId !== projectTransitionRequestId) {
         return;
       }
+      if (openNonGitFolderDialogForTransition(set, get, projectId, error)) {
+        return;
+      }
       logErrorWithContext(error, {
         operation: "switch_project",
         component: "projectStore",
@@ -964,6 +1004,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     const outgoingState = currentProjectId ? buildOutgoingState(currentProjectId) : undefined;
     projectClient.reopen(projectId, outgoingState).catch((error) => {
       if (requestId !== projectTransitionRequestId) {
+        return;
+      }
+      if (openNonGitFolderDialogForTransition(set, get, projectId, error)) {
         return;
       }
       logErrorWithContext(error, {

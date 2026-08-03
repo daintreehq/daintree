@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import path from "path";
 import { constants as fsConstants } from "fs";
 import { AppError } from "../utils/errorTypes.js";
 import { TimeoutError, withTimeout } from "../utils/withTimeout.js";
@@ -114,6 +115,78 @@ export async function assertProjectDirectory(directoryPath: string): Promise<voi
       message: `Not a directory: ${directoryPath}`,
       context: { directoryPath },
     });
+  }
+}
+
+/**
+ * Whether a project root still carries a `.git` marker.
+ *
+ * Tri-state on purpose. `"unknown"` is not a soft `"missing"`: only a proven
+ * absence may lead anywhere near demoting a row that claims a repository, so a
+ * dead mount, a permissions blip or a slow first touch all have to be
+ * distinguishable from a folder whose `.git` is genuinely gone.
+ */
+export type GitMarkerProbe = "present" | "missing" | "unknown";
+
+/**
+ * Bounded far tighter than {@link PROJECT_DIRECTORY_STAT_TIMEOUT_MS}: this runs
+ * on every project switch, not on a user-initiated open, so it has to fail open
+ * fast rather than hold a switch behind a dying mount. Overshooting merely
+ * yields `"unknown"`, which preserves today's behavior.
+ */
+export const GIT_MARKER_STAT_TIMEOUT_MS = 1_000;
+
+const inFlightMarkerProbes = new Map<string, Promise<boolean>>();
+
+/**
+ * Report whether `projectRoot` still has a `.git` entry, without ever blocking
+ * a switch on a hung filesystem.
+ *
+ * Existence only — `.git` is a directory in a normal clone and a *file* in a
+ * linked worktree or submodule, and both mean "git still owns this folder".
+ * ENOENT/ENOTDIR are the only proofs of absence; every other errno, and the
+ * timeout, answer `"unknown"` so the caller leaves the row alone.
+ *
+ * `lstat`, not `stat`: the question is whether the entry is there, not whether
+ * it resolves. `stat` follows symlinks, so a `.git` symlinked onto a detached
+ * volume would report ENOENT — "missing" for a marker plainly sitting in the
+ * folder, which is precisely the false positive this tri-state exists to avoid.
+ *
+ * This is a cheap pre-gate, not a classifier: `"missing"` only earns the caller
+ * the right to run the real classification, never a decision on its own.
+ */
+export async function probeGitMarker(projectRoot: string): Promise<GitMarkerProbe> {
+  const markerPath = path.join(projectRoot, ".git");
+
+  // Shared for the same reason as `probeOnce`: two windows restoring the same
+  // dead share must not each pin a libuv worker to it.
+  let pending = inFlightMarkerProbes.get(markerPath);
+  if (!pending) {
+    const started = fs
+      .lstat(markerPath)
+      .then(() => true)
+      .finally(() => {
+        if (inFlightMarkerProbes.get(markerPath) === started) {
+          inFlightMarkerProbes.delete(markerPath);
+        }
+      });
+    inFlightMarkerProbes.set(markerPath, started);
+    pending = started;
+  }
+
+  try {
+    await withTimeout(pending, GIT_MARKER_STAT_TIMEOUT_MS, `Timed out reading ${markerPath}`);
+    return "present";
+  } catch (error) {
+    if (error instanceof TimeoutError) {
+      // Never settles, so nothing else will clear it.
+      if (inFlightMarkerProbes.get(markerPath) === pending) {
+        inFlightMarkerProbes.delete(markerPath);
+      }
+      return "unknown";
+    }
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "missing" : "unknown";
   }
 }
 
