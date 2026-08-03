@@ -137,8 +137,7 @@ export function registerWorktreeSessionActions(
       const targets = panelIds.filter((id) => {
         const panel = panelsById[id];
         return (
-          panel?.worktreeId === targetWorktreeId &&
-          (!panel.kind || panelKindHasPty(panel.kind))
+          panel?.worktreeId === targetWorktreeId && (!panel.kind || panelKindHasPty(panel.kind))
         );
       });
       // Same explicit-repair intent as the per-pane Redraw, so the same
