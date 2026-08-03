@@ -42,24 +42,22 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   // cache prime) normally resolve the id to a row first, but none holds that
   // guarantee across its later awaits, so a row deleted mid-build lands here
   // with no row — this keeps the leak from reappearing in that window (#11497).
-  //
-  // Having a row is necessary but not sufficient: the record names the one
-  // workspace that left it behind, and only that heir may read it (#11651).
-  // This path never claims — it performs no writes by design — so a record no
-  // hydrate has claimed yet reads as owned by nobody, and this switch serves
-  // clean defaults until `handleAppHydrate` settles the ownership.
+  const hasProjectRow = currentProject !== null;
+
+  // Focus mode and the active worktree are still live app-global state that the
+  // renderer rewrites through `app:set-state`, so they stay on the row gate —
+  // see the matching note in `handleAppHydrate`. The MRU is different: it has
+  // had a per-workspace write path since #9922, so the global copy is genuinely
+  // legacy and only the workspace that left it behind may read it (#11651).
+  // This path never claims — it performs no writes by design — so an unclaimed
+  // record has no heir here, and `handleAppHydrate` settles ownership instead.
   const legacyWorkspaceStateOwnerId = store.get("legacyWorkspaceStateOwnerId");
-  const canInheritLegacyWorkspaceState =
-    currentProject !== null && legacyWorkspaceStateOwnerId === projectId;
+  const canInheritLegacyWorkspaceState = hasProjectRow && legacyWorkspaceStateOwnerId === projectId;
 
   let terminalsToUse: typeof globalAppState.terminals = [];
-  let focusModeToUse = canInheritLegacyWorkspaceState ? (globalAppState.focusMode ?? false) : false;
-  let focusPanelStateToUse = canInheritLegacyWorkspaceState
-    ? globalAppState.focusPanelState
-    : undefined;
-  let activeWorktreeIdToUse = canInheritLegacyWorkspaceState
-    ? globalAppState.activeWorktreeId
-    : undefined;
+  let focusModeToUse = hasProjectRow ? (globalAppState.focusMode ?? false) : false;
+  let focusPanelStateToUse = hasProjectRow ? globalAppState.focusPanelState : undefined;
+  let activeWorktreeIdToUse = hasProjectRow ? globalAppState.activeWorktreeId : undefined;
   // Quick-switcher MRU: prefer per-project, fall back to the legacy global list
   // so a switch can't serve the previous project's order (#9922).
   let mruListToUse = canInheritLegacyWorkspaceState ? globalAppState.mruList : undefined;

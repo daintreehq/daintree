@@ -88,7 +88,22 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // cache is only probed when the result is actually usable.
     const cacheGuard = getCrashLoopGuard();
     const cacheInSafeMode = cacheGuard.isSafeMode();
-    const cacheEligible = Boolean(workspaceId) && panelFilter === null && !cacheInSafeMode;
+    // Until the legacy global record has an owner, the cache cannot stand in
+    // for this handler: `buildSwitchHydrateResult` performs no writes, so it
+    // neither claims the record nor runs the terminal migration. Serving its
+    // payload here would let the rightful heir boot without ever claiming, and
+    // the next brand-new project would claim and inherit instead (#11651).
+    // Reading one scalar key ahead of the fast path is cheap next to the
+    // `appState` parse the fast path exists to avoid, and it only ever bites
+    // before the first claim.
+    const storedOwnerId = store.get("legacyWorkspaceStateOwnerId");
+    const persistedLegacyOwnerId =
+      typeof storedOwnerId === "string" && storedOwnerId ? storedOwnerId : undefined;
+    const cacheEligible =
+      Boolean(workspaceId) &&
+      panelFilter === null &&
+      !cacheInSafeMode &&
+      persistedLegacyOwnerId !== undefined;
     const cached = cacheEligible ? consumePrefetchedHydrateResult(workspaceId!) : undefined;
     markPerformance(PERF_MARKS.APP_HYDRATE_PREFETCH, {
       hit: Boolean(cached),
@@ -101,7 +116,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             ? "safe-mode"
             : panelFilter !== null
               ? "panel-filter"
-              : "miss",
+              : persistedLegacyOwnerId === undefined
+                ? "legacy-state-unclaimed"
+                : "miss",
     });
     if (cached) {
       return {
@@ -143,15 +160,17 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // a redundant full config.json parse on every cache hit.
     const globalAppState = store.get("appState");
 
-    // The legacy global terminals/focus/worktree/MRU fields predate
-    // per-workspace state and belong to whichever real project was open when
-    // they were written. A scratch (workspaceId set, no Project row) or an
-    // unresolvable sender must never adopt them (#11497) — but "has a Project
-    // row" was never ownership either. Nothing consumed the global record, so
-    // every project row that had not saved terminals yet re-inherited the same
-    // list, handing a brand-new project another project's panels and `cwd`s
-    // (#11651). The record now names its heir: the first real project to
-    // hydrate claims it, and only that workspace may read it afterwards.
+    // A scratch (workspaceId set, no Project row) or an unresolvable sender
+    // must never adopt another workspace's worktree, focus, or MRU (#11497).
+    const hasProjectRow = currentProject !== null;
+
+    // Having a Project row was never ownership, though. The legacy terminal
+    // list predates per-workspace state and belongs to whichever project was
+    // open when it was written, but nothing ever consumed it — so every project
+    // row that had not saved terminals yet re-inherited the same list, handing
+    // a brand-new project another project's panels, `cwd` and `worktreeId`
+    // included (#11651). The record now names its heir: the first real project
+    // to hydrate claims it, and only that workspace may read it afterwards.
     //
     // The claim is written synchronously here, between the `store.get` above
     // and the first `await` below, so two project views hydrating in the same
@@ -160,10 +179,8 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // on inheriting on every later hydrate, which is what keeps the migration
     // intact when `app:boot`'s payload is discarded behind a pending crash and
     // the renderer hydrates again.
-    const storedOwnerId = store.get("legacyWorkspaceStateOwnerId");
-    let legacyWorkspaceStateOwnerId =
-      typeof storedOwnerId === "string" && storedOwnerId ? storedOwnerId : undefined;
-    if (currentProject !== null && workspaceId && legacyWorkspaceStateOwnerId === undefined) {
+    let legacyWorkspaceStateOwnerId = persistedLegacyOwnerId;
+    if (hasProjectRow && workspaceId && legacyWorkspaceStateOwnerId === undefined) {
       legacyWorkspaceStateOwnerId = workspaceId;
       store.set("legacyWorkspaceStateOwnerId", workspaceId);
       console.log(
@@ -171,7 +188,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       );
     }
     const canInheritLegacyWorkspaceState =
-      currentProject !== null && legacyWorkspaceStateOwnerId === workspaceId;
+      hasProjectRow && legacyWorkspaceStateOwnerId === workspaceId;
 
     // Crash recovery hands the restored panel set over on the global record, so
     // it outranks saved per-project terminals — but only for the heir. Without
@@ -188,19 +205,21 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     let terminalsToUse: StoreSchema["appState"]["terminals"] = [];
     let terminalsSource = "none";
 
-    // Focus mode state to include in response
-    let focusModeToUse = canInheritLegacyWorkspaceState
-      ? (globalAppState.focusMode ?? false)
-      : false;
-    let focusPanelStateToUse = canInheritLegacyWorkspaceState
-      ? globalAppState.focusPanelState
-      : undefined;
-    // Active worktree state to include in response
-    let activeWorktreeIdToUse = canInheritLegacyWorkspaceState
-      ? globalAppState.activeWorktreeId
-      : undefined;
+    // Focus mode and the active worktree still ride the global record in normal
+    // use: the renderer persists both through `app:set-state`, which writes them
+    // app-globally (`worktreeStore.persistActiveWorktree`), and readers outside
+    // hydration — `AgentNotificationService.isFocusedOnWorktree`, the cold-paint
+    // skeleton — depend on that. So their seed stays on the #11497 gate. Denying
+    // them to a non-owner would not be narrowing a legacy leak, it would drop a
+    // project's own live selection on every boot. What ownership does gate is
+    // the persisted half below: no workspace writes another's values to disk.
+    let focusModeToUse = hasProjectRow ? (globalAppState.focusMode ?? false) : false;
+    let focusPanelStateToUse = hasProjectRow ? globalAppState.focusPanelState : undefined;
+    let activeWorktreeIdToUse = hasProjectRow ? globalAppState.activeWorktreeId : undefined;
     // Quick-switcher MRU: prefer per-project, fall back to the legacy global
-    // list so existing users keep their MRU on first open after upgrade.
+    // list so existing users keep their MRU on first open after upgrade. Unlike
+    // the two above, this one already has a per-workspace write path (#9922), so
+    // the global copy is genuinely legacy and only its heir may read it.
     let mruListToUse = canInheritLegacyWorkspaceState ? globalAppState.mruList : undefined;
     let projectStateQuarantinedPath: string | undefined;
     // Per-project layout state folded into the payload so the renderer skips
@@ -467,9 +486,21 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       quarantinedPanels = ledger.getQuarantinedPanels();
     }
 
-    // Apply one-shot crash recovery panel filter if set
-    // Empty array means "no specific selection" (legacy/no-panels case) — skip filtering
-    if (panelFilter !== null && panelFilter.length > 0) {
+    // Apply one-shot crash recovery panel filter if set.
+    // Empty array means "no specific selection" (legacy/no-panels case) — skip filtering.
+    // The ids come from the crash snapshot, which captures only the global
+    // `appState` (`CrashRecoveryService.extractPanelSummaries`), so they name
+    // the panels of whichever workspace owns that record. Applying them to a
+    // list this workspace loaded from its own per-project state would filter
+    // out every panel and hand back an empty workspace (#11651). Only filter
+    // the list the ids actually describe. For a modern install the global list
+    // is empty, no summaries are offered, and the filter arrives empty — so
+    // this narrowing changes nothing there.
+    // Derived from the branch inputs rather than `terminalsSource`, which the
+    // safe-mode block above rewrites: `!workspaceId` is the no-project fallback,
+    // the other branch that reads the global list.
+    const terminalsCameFromCrashSnapshot = hasCrashRestoreTerminals || !workspaceId;
+    if (terminalsCameFromCrashSnapshot && panelFilter !== null && panelFilter.length > 0) {
       const filterSet = new Set(panelFilter);
       terminalsToUse = terminalsToUse.filter((t) => filterSet.has(t.id));
       console.log(

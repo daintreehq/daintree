@@ -20,7 +20,7 @@ vi.mock("electron", () => ({
 
 // Mutable so a test can vary the legacy global app state without replacing the
 // `store.get` implementation, which `clearAllMocks` would not restore.
-const { globalAppStateRef, legacyOwnerRef, defaultStoreGet } = vi.hoisted(() => {
+const { globalAppStateRef, legacyOwnerRef, defaultStoreGet, defaultStoreSet } = vi.hoisted(() => {
   const globalAppStateRef = {
     current: { terminals: [], sidebarWidth: 350 } as Record<string, unknown>,
   };
@@ -38,7 +38,16 @@ const { globalAppStateRef, legacyOwnerRef, defaultStoreGet } = vi.hoisted(() => 
     if (key === "agentSettings") return {};
     return undefined;
   };
-  return { globalAppStateRef, legacyOwnerRef, defaultStoreGet };
+  // Stateful on purpose: the whole concurrency argument is that a claim written
+  // during one hydrate is visible to the next read with no await in between. A
+  // `set` that only records the call would let a two-hydrate test pass while
+  // the claim never actually took.
+  const defaultStoreSet = (key: string, value: unknown): void => {
+    if (key === "legacyWorkspaceStateOwnerId") {
+      legacyOwnerRef.current = typeof value === "string" ? value : undefined;
+    }
+  };
+  return { globalAppStateRef, legacyOwnerRef, defaultStoreGet, defaultStoreSet };
 });
 
 const DEFAULT_GLOBAL_APP_STATE = { terminals: [], sidebarWidth: 350 };
@@ -62,7 +71,7 @@ const GLOBAL_PANEL_GRID_CONFIG = { strategy: "fixed-columns", value: 2 };
 vi.mock("../../store.js", () => ({
   store: {
     get: vi.fn(defaultStoreGet),
-    set: vi.fn(),
+    set: vi.fn(defaultStoreSet),
     delete: vi.fn(),
   },
   consumePendingSettingsRecovery: vi.fn(() => null),
@@ -368,6 +377,9 @@ describe("app:boot handler", () => {
     vi.mocked(storeModule.store.get).mockImplementation(
       defaultStoreGet as typeof storeModule.store.get
     );
+    vi.mocked(storeModule.store.set).mockImplementation(
+      defaultStoreSet as typeof storeModule.store.set
+    );
     // Same reason: these two are swapped in by individual tests below and would
     // otherwise stay swapped for every test declared after them.
     panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set());
@@ -652,13 +664,16 @@ describe("app:boot handler", () => {
     vi.mocked(consumePrefetchedHydrateResult).mockReturnValue(
       cachedResult as ReturnType<typeof consumePrefetchedHydrateResult>
     );
-    // Force the cache path by giving handleAppHydrate a current project.
+    // Force the cache path by giving handleAppHydrate a current project and an
+    // already-claimed legacy record — the cache is only eligible once the
+    // record has an owner, since the read-only builder can't claim one (#11651).
     const projectStoreModule = await import("../../services/ProjectStore.js");
     vi.mocked(projectStoreModule.projectStore.getCurrentProject).mockReturnValue({
       id: "p1",
       name: "P",
       path: "/p",
     } as unknown as ReturnType<typeof projectStoreModule.projectStore.getCurrentProject>);
+    legacyOwnerRef.current = "p1";
 
     const result = (await invokeBoot()) as Record<string, unknown>;
     expect(result.terminalConfig).toEqual(cachedResult.terminalConfig);
@@ -1025,18 +1040,17 @@ describe("app:boot handler", () => {
         const result = await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
         const appState = result.appState as Record<string, unknown>;
 
-        // Not one of the four workspace-owned fields, and above all not the
-        // foreign panel — its `cwd` points at the heir's directory.
+        // Above all not the foreign panel — its `cwd` points at the heir's
+        // directory — and not the heir's quick-switcher history either.
         expect(appState.terminals).toEqual([]);
-        expect(appState.activeWorktreeId).toBeUndefined();
-        expect(appState.focusMode).toBe(false);
-        expect(appState.focusPanelState).toBeUndefined();
         expect(appState.mruList).toBeUndefined();
         // Genuinely app-global settings are untouched by the ownership gate.
         expect(appState.panelGridConfig).toEqual(GLOBAL_PANEL_GRID_CONFIG);
 
         // The disk write is the half that outlives the boot: a payload-only fix
         // would still leave the foreign worktree persisted for the next launch.
+        // The payload keeps serving the live globals (see the note in the
+        // handler), but nothing this workspace never owned reaches its record.
         const written = (await runEnqueuedUpdate())!;
         expect(written.projectId).toBe(REAL_PROJECT.id);
         expect(written.terminals).toEqual([]);
@@ -1056,17 +1070,26 @@ describe("app:boot handler", () => {
 
         // Re-stamping would hand the record to whichever project booted last,
         // which is the same "no owner identity" hole in a different shape.
-        expect(storeModule.store.set).not.toHaveBeenCalledWith(
-          "legacyWorkspaceStateOwnerId",
-          expect.anything()
-        );
+        // Filter by key rather than using `expect.anything()`, which does not
+        // match a `set(key, undefined)` — the exact shape a botched claim takes.
+        // Read through an untyped view for the same reason as the app:set-state
+        // tests below: vi.mocked resolves the single-argument set(object)
+        // overload, so `call[0]` types as the whole schema.
+        const setCalls = vi.mocked(storeModule.store.set).mock.calls as unknown as unknown[][];
+        expect(setCalls.filter((call) => call[0] === "legacyWorkspaceStateOwnerId")).toEqual([]);
+        // The record must still be read — an implementation that ignored the
+        // owner entirely would also write nothing and pass the assertion above.
+        expect(storeModule.store.get).toHaveBeenCalledWith("legacyWorkspaceStateOwnerId");
+        expect(legacyOwnerRef.current).toBe(OTHER_OWNER);
       });
 
       it("keeps its own saved panels when crash recovery restores the heir's list", async () => {
-        // A pending panel filter makes the global list outrank saved per-project
-        // terminals. Ungated, that path overwrote an unrelated project's panels
-        // with the heir's — the same leak, reached through crash recovery.
-        crashService.consumePanelFilter.mockReturnValue(["own-panel"] as unknown as null);
+        // The filter ids come from the crash snapshot, which captures only the
+        // global record — so they name the OWNER's panels, never this project's.
+        // Ungated, the global list outranked the saved per-project one and this
+        // project booted holding the owner's panel; scoping the filter to the
+        // list it actually describes leaves this project's own panels alone.
+        crashService.consumePanelFilter.mockReturnValue(["legacy-panel"] as unknown as null);
         vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
           state: {
             projectId: REAL_PROJECT.id,
@@ -1087,11 +1110,89 @@ describe("app:boot handler", () => {
       });
     });
 
-    it("still migrates for the heir on a later boot, so a discarded crash boot loses nothing", async () => {
+    it("claims once and keeps migrating for the heir across repeated hydrates", async () => {
       // `app:boot` runs the migration, but the renderer drops that payload when
       // a crash is pending and hydrates again. Claiming is a stamp, not a
-      // destructive consume, so the heir re-reads the record it already owns.
-      legacyOwnerRef.current = REAL_PROJECT.id;
+      // destructive consume, so the second pass must find the record it already
+      // owns and migrate again — without re-stamping.
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        ...LEGACY_WORKSPACE_STATE,
+        terminals: [{ id: "legacy-panel", title: "Legacy", location: "grid", cwd: "/old/project" }],
+      };
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: null,
+        quarantinedPath: undefined,
+      });
+      const storeModule = await import("../../store.js");
+      // Untyped view: vi.mocked resolves the single-argument set(object)
+      // overload, so the (key, value) form needs reading through `unknown[][]`.
+      const ownerWriteCount = () =>
+        (vi.mocked(storeModule.store.set).mock.calls as unknown as unknown[][]).filter(
+          (call) => call[0] === "legacyWorkspaceStateOwnerId"
+        ).length;
+
+      // First hydrate: the record is unclaimed, so this project becomes the heir.
+      await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
+      expect(legacyOwnerRef.current).toBe(REAL_PROJECT.id);
+      expect(ownerWriteCount()).toBe(1);
+
+      // Second hydrate reads back the claim the first one persisted.
+      vi.mocked(projectStore.enqueueProjectStateUpdate).mockClear();
+      const result = await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
+      const appState = result.appState as Record<string, unknown>;
+
+      expect((appState.terminals as Array<Record<string, unknown>>).map((t) => t.id)).toEqual([
+        "legacy-panel",
+      ]);
+      const migrated = (await runEnqueuedUpdate())!;
+      expect(migrated.terminals.map((t) => t.id)).toEqual(["legacy-panel"]);
+      // Still exactly one claim — the second pass recognised itself as the heir
+      // instead of stamping the record again.
+      expect(ownerWriteCount()).toBe(1);
+    });
+
+    it("does not let a scratch claim the record out from under the first real project", async () => {
+      // A scratch has a workspaceId but no Project row. Stamping the scratch's
+      // id would lock every real project out of a record none of them ever had
+      // a chance to inherit.
+      const SCRATCH_WORKSPACE_ID = "b3d1f2a4-5c6e-4a8b-9d0f-1e2a3b4c5d6e";
+      globalAppStateRef.current = {
+        ...DEFAULT_GLOBAL_APP_STATE,
+        ...LEGACY_WORKSPACE_STATE,
+        terminals: [{ id: "legacy-panel", title: "Legacy", location: "grid", cwd: "/old/project" }],
+      };
+      vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+        state: null,
+        quarantinedPath: undefined,
+      });
+      vi.mocked(getWindowForWebContents).mockReturnValue({
+        id: 7,
+        isDestroyed: () => false,
+      } as unknown as Electron.BrowserWindow);
+      vi.mocked(projectStore.getProjectById).mockReturnValue(null);
+      const scratchPvm = {
+        getProjectIdForWebContents: vi.fn().mockReturnValue(SCRATCH_WORKSPACE_ID),
+      };
+      const scratchDeps = {
+        windowRegistry: {
+          getByWindowId: vi.fn().mockReturnValue({
+            services: { projectViewManager: scratchPvm },
+          }),
+        },
+        projectViewManager: scratchPvm,
+      } as unknown as HandlerDependencies;
+
+      await invokeBoot({ deps: scratchDeps, senderId: 42 });
+
+      expect(legacyOwnerRef.current).toBeUndefined();
+    });
+
+    it("keeps a cached payload out of play until the record has an owner", async () => {
+      // `buildSwitchHydrateResult` writes nothing, so it can neither claim the
+      // record nor migrate. Serving its cached payload before the first claim
+      // would let the rightful heir boot without claiming, leaving the record
+      // for the next brand-new project to take instead.
       globalAppStateRef.current = {
         ...DEFAULT_GLOBAL_APP_STATE,
         ...LEGACY_WORKSPACE_STATE,
@@ -1102,15 +1203,12 @@ describe("app:boot handler", () => {
         quarantinedPath: undefined,
       });
 
-      const result = await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
-      const appState = result.appState as Record<string, unknown>;
+      await invokeBoot({ deps: realProjectDeps(), senderId: 42 });
 
-      expect((appState.terminals as Array<Record<string, unknown>>).map((t) => t.id)).toEqual([
-        "legacy-panel",
-      ]);
-      expect(appState.activeWorktreeId).toBe(LEGACY_WORKSPACE_STATE.activeWorktreeId);
-      const migrated = (await runEnqueuedUpdate())!;
-      expect(migrated.terminals.map((t) => t.id)).toEqual(["legacy-panel"]);
+      // The cache is return-and-delete, so probing it at all would consume an
+      // entry the migration path still needs.
+      expect(consumePrefetchedHydrateResult).not.toHaveBeenCalled();
+      expect(legacyOwnerRef.current).toBe(REAL_PROJECT.id);
     });
   });
 
@@ -1427,6 +1525,10 @@ describe("app:boot handler", () => {
         name: "P",
         path: "/p",
       } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+      // Steady state for every install past its first boot: the legacy record
+      // has an owner, so the cache is eligible. An unclaimed record makes it
+      // ineligible on purpose — covered separately (#11651).
+      legacyOwnerRef.current = "p1";
     };
 
     it("emits exactly one hit mark when the prefetch cache services the hydrate", async () => {
