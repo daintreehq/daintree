@@ -51,6 +51,21 @@ const CELL = { width: 10, height: 20 };
 const colsFor = (widthPx: number): number =>
   Math.max(2, Math.floor((widthPx - SCROLLBAR_PX) / CELL.width));
 
+/**
+ * The widest and tallest pixel box that still resolves to the same grid as
+ * `widthPx`/`heightPx` — a box the pixel dedup treats as new while the column
+ * and row math lands exactly where it did before.
+ *
+ * Derived from the gutter and cell size rather than hardcoded: now that the
+ * scrollbar is reserved before the division (#11095), a fixed "+4px" would
+ * cross a cell boundary and silently stop testing the collision it was written
+ * for.
+ */
+const sameGridBox = (widthPx: number, heightPx: number): [number, number] => [
+  widthPx + (CELL.width - 1 - ((widthPx - SCROLLBAR_PX) % CELL.width)),
+  heightPx + (CELL.height - 1 - (heightPx % CELL.height)),
+];
+
 function createManagedTerminal() {
   const terminal = {
     cols: 80,
@@ -481,6 +496,211 @@ describe("TerminalResizeController", () => {
     expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1700), 40);
     expect(resizeMock).toHaveBeenCalledTimes(1);
     expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1700), 40);
+  });
+
+  it("background-tier resize applies a box whose grid equals a stranded target", () => {
+    // The #11639 split. `latestCols`/`latestRows` are written ahead of the
+    // commit, so a target can outlive the work that was going to apply it —
+    // here a settled timer `lockResize` drops. Deduping the next box against
+    // that cache calls the resize resolved while xterm is still on the old
+    // grid, and the pixel stamp that goes with it makes the box redundant for
+    // good. Only the grid xterm actually holds can answer "is there work?".
+    const managed = createManagedTerminal();
+    managed.launchAgentId = "codex";
+    managed.runtimeAgentId = "codex";
+    Object.assign(managed.terminal, {
+      _core: { _renderService: { dimensions: { css: { cell: CELL } } } },
+    });
+    getEffectiveAgentConfigMock.mockReturnValue({
+      capabilities: { resizeStrategy: "settled" },
+    });
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      } as any,
+    });
+
+    // Arm the write-ahead, then strand it: the lock cancels the settled timer,
+    // so the target survives with nothing left to commit it.
+    controller.resize("term-1", 1600, 800);
+    expect(controller.hasPendingResize("term-1")).toBe(true);
+    controller.lockResize("term-1", true);
+    controller.lockResize("term-1", false);
+    expect(controller.hasPendingResize("term-1")).toBe(false);
+    expect(managed.terminal.resize).not.toHaveBeenCalled();
+    expect(managed.terminal.cols).toBe(80);
+
+    managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+    managed.isFocused = false;
+    managed.isVisible = false;
+
+    // A different pixel box — so the pixel gate lets it through — that lands on
+    // the same grid the stranded target already names. Grown to the widest and
+    // tallest pixel still inside the same cell rather than hardcoded, so a
+    // change to the gutter or cell size cannot quietly move it onto a different
+    // grid and stop testing the collision it was written for.
+    const [retryWidth, retryHeight] = sameGridBox(1600, 800);
+    expect(colsFor(retryWidth)).toBe(colsFor(1600));
+    expect(controller.resize("term-1", retryWidth, retryHeight)).toEqual({
+      cols: colsFor(1600),
+      rows: 40,
+    });
+
+    vi.advanceTimersByTime(500);
+    expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1600), 40);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+  });
+
+  it("background-tier convergence supersedes a queued target instead of letting it fire", () => {
+    // Deduping on the live grid returns before `applyResize`, and `applyResize`
+    // is what used to cancel older queued work on the way past. Without an
+    // explicit supersede the dropped job still fires and drags both grids to a
+    // box that is no longer the container (#11095).
+    const managed = createManagedTerminal();
+    managed.launchAgentId = "codex";
+    managed.runtimeAgentId = "codex";
+    Object.assign(managed.terminal, {
+      _core: { _renderService: { dimensions: { css: { cell: CELL } } } },
+    });
+    getEffectiveAgentConfigMock.mockReturnValue({
+      capabilities: { resizeStrategy: "settled" },
+    });
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      } as any,
+    });
+
+    // xterm is settled on the 1600px grid; a later 1700px box queued behind it.
+    managed.terminal.cols = colsFor(1600);
+    managed.terminal.rows = 40;
+    managed.latestCols = colsFor(1600);
+    managed.latestRows = 40;
+    managed.lastWidth = 1600;
+    managed.lastHeight = 800;
+    controller.resize("term-1", 1700, 800);
+    expect(controller.hasPendingResize("term-1")).toBe(true);
+
+    managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+    managed.isFocused = false;
+    managed.isVisible = false;
+
+    // Back to a box on the grid xterm already holds — no reflow to do.
+    expect(controller.resize("term-1", 1604, 819)).toBeNull();
+    expect(managed.latestCols).toBe(colsFor(1604));
+    expect(managed.latestRows).toBe(40);
+
+    vi.advanceTimersByTime(500);
+    expect(managed.terminal.resize).not.toHaveBeenCalledWith(colsFor(1700), 40);
+    expect(resizeMock).not.toHaveBeenCalledWith("term-1", colsFor(1700), 40);
+    expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1604), 40);
+  });
+
+  it("background-tier resize records a restore target when the replay grid already matches", () => {
+    // While a snapshot replays, xterm is parked at the CAPTURE grid, so
+    // `terminal.cols` describes the payload rather than the pane. A box that
+    // happens to match it has not converged on anything: it still has to reach
+    // resizeTerminal to be recorded as the geometry the replay normalizes to
+    // when it closes (#11552).
+    const managed = createManagedTerminal();
+    managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+    managed.isFocused = false;
+    managed.isVisible = false;
+    managed.isSerializedRestoreInProgress = true;
+    managed.pendingRestoreGeometry = { cols: 100, rows: 30 };
+    managed.latestCols = 100;
+    managed.latestRows = 30;
+    Object.assign(managed.terminal, {
+      _core: { _renderService: { dimensions: { css: { cell: CELL } } } },
+    });
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      } as any,
+    });
+
+    // A box landing on exactly the replay grid, derived from that grid on BOTH
+    // axes — a hardcoded pair would keep passing against a naive live-grid
+    // guard if the fixture's rows ever stopped matching by accident.
+    const parkedCols = managed.terminal.cols;
+    const parkedRows = managed.terminal.rows;
+    const parkedWidth = SCROLLBAR_PX + parkedCols * CELL.width;
+    const parkedHeight = parkedRows * CELL.height;
+
+    expect(controller.resize("term-1", parkedWidth, parkedHeight)).toEqual({
+      cols: parkedCols,
+      rows: parkedRows,
+    });
+
+    expect(managed.terminal.resize).not.toHaveBeenCalled();
+    expect(managed.pendingRestoreGeometry).toEqual({ cols: parkedCols, rows: parkedRows });
+    expect(resizeMock).toHaveBeenCalledWith("term-1", parkedCols, parkedRows);
+    expect(managed.lastWidth).toBe(parkedWidth);
+    expect(managed.lastHeight).toBe(parkedHeight);
+  });
+
+  it("background-tier convergence re-asserts a PTY the cache left ahead of the grid", () => {
+    // Isolates the cache half of the supersede gate: panel spawn sizes the PTY
+    // directly and stamps the target, leaving NO queued work behind it, so
+    // `hasPendingResize` cannot carry this case. Finding xterm already correct
+    // is not the same as the two halves agreeing.
+    const managed = createManagedTerminal();
+    managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+    managed.isFocused = false;
+    managed.isVisible = false;
+    Object.assign(managed.terminal, {
+      _core: { _renderService: { dimensions: { css: { cell: CELL } } } },
+    });
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      } as any,
+    });
+
+    controller.sendPtyResize("term-1", 100, 30);
+    expect(controller.hasPendingResize("term-1")).toBe(false);
+    resizeMock.mockClear();
+
+    // A sentinel the converged branch must leave alone: no grid moves, so the
+    // auto-follow intent recorded with the last real change still stands. The
+    // fixture's buffer reads as at-bottom, so an unconditional assignment here
+    // would flip this to true.
+    managed.latestWasAtBottom = false;
+
+    const liveCols = managed.terminal.cols;
+    const liveRows = managed.terminal.rows;
+    const result = controller.resize(
+      "term-1",
+      SCROLLBAR_PX + liveCols * CELL.width,
+      liveRows * CELL.height
+    );
+
+    expect(result).toBeNull();
+    expect(managed.terminal.resize).not.toHaveBeenCalled();
+    expect(resizeMock).toHaveBeenCalledWith("term-1", liveCols, liveRows);
+    expect(managed.latestCols).toBe(liveCols);
+    expect(managed.latestRows).toBe(liveRows);
+    expect(managed.latestWasAtBottom).toBe(false);
   });
 
   it("a stale background tier does not divert a visible terminal off the measured path", () => {
@@ -2209,6 +2429,142 @@ describe("TerminalResizeController", () => {
       vi.advanceTimersByTime(500);
       expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
       expect(resizeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("applies a box whose grid equals a stranded settled target", () => {
+      // The #11639 split through the direct-commit caller. The settled request
+      // stamped `latestCols`/`latestRows` before anything committed, and
+      // `lockResize` then dropped the timer — so the target names a grid xterm
+      // never adopted. Deduping the next box against it returns null and stamps
+      // the pixel box processed, which `isRedundantResize` honours from then on:
+      // the pane stays on the old grid permanently.
+      const managed = createManagedTerminal();
+      managed.launchAgentId = "codex";
+      managed.runtimeAgentId = "codex";
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: CELL } } } },
+      });
+      getEffectiveAgentConfigMock.mockReturnValue({
+        capabilities: { resizeStrategy: "settled" },
+      });
+      const controller = makeController(managed);
+
+      controller.resize("term-1", 1600, 800);
+      expect(controller.hasPendingResize("term-1")).toBe(true);
+      controller.lockResize("term-1", true);
+      controller.lockResize("term-1", false);
+
+      expect(controller.hasPendingResize("term-1")).toBe(false);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(managed.terminal.cols).toBe(80);
+      expect(managed.latestCols).toBe(colsFor(1600));
+
+      // A new pixel box — past the pixel gate — landing on the grid the
+      // stranded target already names.
+      const [retryWidth, retryHeight] = sameGridBox(1600, 800);
+      expect(colsFor(retryWidth)).toBe(colsFor(1600));
+      const order: string[] = [];
+      managed.terminal.resize.mockImplementationOnce(function (
+        this: { cols: number; rows: number },
+        cols: number,
+        rows: number
+      ) {
+        order.push("xterm");
+        this.cols = cols;
+        this.rows = rows;
+      });
+      resizeMock.mockImplementationOnce(() => {
+        order.push("pty");
+      });
+
+      expect(controller.applyBackgroundResize("term-1", retryWidth, retryHeight)).toEqual({
+        cols: colsFor(1600),
+        rows: 40,
+      });
+
+      expect(order).toEqual(["xterm", "pty"]);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1600), 40);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+      expect(managed.lastWidth).toBe(retryWidth);
+      expect(managed.lastHeight).toBe(retryHeight);
+
+      vi.advanceTimersByTime(500);
+      expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-asserts the PTY when the grid already converged but the cache ran ahead", () => {
+      // Panel spawn sizes the PTY directly, before xterm has ever been fit, so
+      // `latestCols`/`latestRows` can name a grid only the PTY is on. Finding
+      // xterm already correct means there is no reflow to run — it does NOT
+      // mean the two halves agree, and the pixel box is stamped processed on
+      // the way out, so nothing revisits it. The PTY half gets re-asserted
+      // alone; sending it through the settled timer would reflow a hidden
+      // renderer, which is what this path exists to avoid.
+      const managed = createManagedTerminal();
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: CELL } } } },
+      });
+      const controller = makeController(managed);
+
+      controller.sendPtyResize("term-1", 100, 30);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+      expect(managed.terminal.cols).toBe(80);
+      expect(managed.terminal.rows).toBe(24);
+      resizeMock.mockClear();
+
+      // 820x480 computes to 80x24 — the grid xterm holds, not the 100x30 the
+      // PTY was told.
+      expect(colsFor(820)).toBe(80);
+      expect(controller.applyBackgroundResize("term-1", 820, 480)).toBeNull();
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 80, 24);
+      expect(managed.latestCols).toBe(80);
+      expect(managed.latestRows).toBe(24);
+
+      // Now that both halves agree, a fresh box on the same grid converges with
+      // nothing to re-assert — neither half is touched. Widened past the pixel
+      // gate deliberately: an identical box would exit at `isRedundantResize`
+      // and prove only that pixel dedup works.
+      const [sameGridWidth, sameGridHeight] = sameGridBox(820, 480);
+      expect(colsFor(sameGridWidth)).toBe(colsFor(820));
+      resizeMock.mockClear();
+
+      expect(controller.applyBackgroundResize("term-1", sameGridWidth, sameGridHeight)).toBeNull();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+    });
+
+    it("records a restore target rather than converging on the replay grid", () => {
+      // The direct-commit twin of the measured path's restore case: xterm is
+      // parked at the capture grid, so matching it is not convergence — the box
+      // still has to reach resizeTerminal to become the geometry the replay
+      // normalizes to (#11552).
+      const managed = createManagedTerminal();
+      managed.isSerializedRestoreInProgress = true;
+      managed.pendingRestoreGeometry = { cols: 100, rows: 30 };
+      managed.latestCols = 100;
+      managed.latestRows = 30;
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: CELL } } } },
+      });
+      const controller = makeController(managed);
+
+      // Derived from the parked grid on both axes, so neither the column nor
+      // the row half can drift into a coincidence if the fixture changes.
+      const parkedCols = managed.terminal.cols;
+      const parkedRows = managed.terminal.rows;
+      const parkedWidth = SCROLLBAR_PX + parkedCols * CELL.width;
+      const parkedHeight = parkedRows * CELL.height;
+
+      expect(controller.applyBackgroundResize("term-1", parkedWidth, parkedHeight)).toEqual({
+        cols: parkedCols,
+        rows: parkedRows,
+      });
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(managed.pendingRestoreGeometry).toEqual({ cols: parkedCols, rows: parkedRows });
+      expect(resizeMock).toHaveBeenCalledWith("term-1", parkedCols, parkedRows);
     });
 
     it("supersedes a pending settled timer scheduled before backgrounding", () => {
