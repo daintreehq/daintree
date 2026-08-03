@@ -477,12 +477,18 @@ export class PtyManager extends EventEmitter {
       // very first grid came from the buffer — and if that geometry disagrees
       // with xterm, the divergence goes unseen until some later resize happens
       // to occur (#11641).
+      //
+      // Read back rather than echoing the request: claiming `applied` for
+      // dimensions nobody confirmed is the exact failure this echo exists to
+      // expose, and ConPTY can still be queueing the boot geometry here.
+      const applied = terminalProcess.readPtyGeometry();
+      const confirmed = applied.cols === options.cols && applied.rows === options.rows;
       this.emitResizeResult(id, {
         requestedCols: options.cols,
         requestedRows: options.rows,
-        appliedCols: options.cols,
-        appliedRows: options.rows,
-        outcome: "applied",
+        appliedCols: confirmed ? applied.cols : null,
+        appliedRows: confirmed ? applied.rows : null,
+        outcome: confirmed ? "applied" : "deferred",
       });
     }
   }

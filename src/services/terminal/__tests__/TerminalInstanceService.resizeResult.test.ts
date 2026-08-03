@@ -12,11 +12,17 @@ const onResizeResult = vi.fn((cb: (id: string, result: TerminalResizeResult) => 
   return vi.fn();
 });
 
+// Per-terminal exit listeners, in registration order.
+const capturedExitCbs: Array<(id: string, exitCode: number) => void> = [];
+
 vi.mock("@/clients", () => ({
   terminalClient: {
     onResizeResult,
     onData: vi.fn(() => vi.fn()),
-    onExit: vi.fn(() => vi.fn()),
+    onExit: vi.fn((cb: (id: string, exitCode: number) => void) => {
+      capturedExitCbs.push(cb);
+      return vi.fn();
+    }),
     onTierChanged: vi.fn(() => vi.fn()),
     resize: vi.fn(),
     write: vi.fn(),
@@ -64,6 +70,7 @@ type ResizeResultTestService = {
     type: string,
     options: Record<string, unknown>
   ) => Record<string, unknown>;
+  handleBackendCrash: () => void;
 };
 
 function makeResult(overrides: Partial<TerminalResizeResult> = {}): TerminalResizeResult {
@@ -94,6 +101,7 @@ describe("TerminalInstanceService — PTY resize-result intake (#11641)", () => 
     vi.resetModules();
     vi.clearAllMocks();
     capturedResizeResultCb = null;
+    capturedExitCbs.length = 0;
 
     ({ terminalInstanceService: service } =
       (await import("../TerminalInstanceService")) as unknown as {
@@ -160,5 +168,54 @@ describe("TerminalInstanceService — PTY resize-result intake (#11641)", () => 
     capturedResizeResultCb?.("t1", makeResult({ appliedCols: 130 }));
 
     expect(managed.ptyGeometryDivergenceCount).toBe(4);
+  });
+
+  it("drops the echo when the PTY behind it exits", async () => {
+    await service.prewarmTerminal("t1", "terminal", {});
+    const managed = service.instances.get("t1")!;
+
+    capturedResizeResultCb?.("t1", makeResult());
+    managed.ptyGeometryDivergenceSignature = "1:120x40:80x40";
+
+    // The pane outlives its process and keeps being resized, but no echo can
+    // arrive to correct the record — comparing a dead PTY's grid against a live
+    // xterm blames a process that no longer exists.
+    capturedExitCbs.forEach((cb) => cb("t1", 0));
+
+    expect(managed.lastPtyResizeResult).toBeUndefined();
+    expect(managed.ptyGeometryDivergenceSignature).toBeUndefined();
+  });
+
+  it("leaves other terminals' echoes alone when one PTY exits", async () => {
+    await service.prewarmTerminal("t1", "terminal", {});
+    await service.prewarmTerminal("t2", "terminal", {});
+
+    capturedResizeResultCb?.("t1", makeResult());
+    capturedResizeResultCb?.("t2", makeResult());
+
+    capturedExitCbs.forEach((cb) => cb("t1", 0));
+
+    expect(service.instances.get("t1")?.lastPtyResizeResult).toBeUndefined();
+    expect(service.instances.get("t2")?.lastPtyResizeResult).toMatchObject({ appliedCols: 120 });
+  });
+
+  it("drops every echo when the pty-host crashes", async () => {
+    await service.prewarmTerminal("warm", "terminal", {});
+    const a = makeManaged();
+    const b = makeManaged();
+    service.instances.set("t1", a);
+    service.instances.set("t2", b);
+
+    capturedResizeResultCb?.("t1", makeResult());
+    capturedResizeResultCb?.("t2", makeResult());
+    a.ptyGeometryDivergenceSignature = "1:120x40:80x40";
+
+    // No PTY survives the host, and the renderer keeps resizing panes for the
+    // whole outage.
+    service.handleBackendCrash();
+
+    expect(a.lastPtyResizeResult).toBeUndefined();
+    expect(a.ptyGeometryDivergenceSignature).toBeUndefined();
+    expect(b.lastPtyResizeResult).toBeUndefined();
   });
 });

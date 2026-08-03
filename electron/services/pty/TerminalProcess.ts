@@ -1116,6 +1116,22 @@ export class TerminalProcess {
   }
 
   /**
+   * Geometry node-pty holds right now, without touching it. Lets a caller that
+   * sized the PTY outside {@link resize} — spawn adopting a buffered resize as
+   * its boot geometry — report the same read-back rather than echoing back the
+   * dimensions it asked for (#11641). A dimension reads `null` when the getter
+   * throws or reports nonsense.
+   */
+  readPtyGeometry(): { cols: number | null; rows: number | null } {
+    const terminal = this.terminalInfo;
+    if (terminal.isExited) return { cols: null, rows: null };
+    return {
+      cols: readPtyDimension(() => terminal.ptyProcess.cols, null),
+      rows: readPtyDimension(() => terminal.ptyProcess.rows, null),
+    };
+  }
+
+  /**
    * Apply a resize and report what the PTY ended up holding. Every path returns
    * a result — including the no-op shortcut and the throwing path — because the
    * caller cannot otherwise distinguish "the PTY is at the geometry you asked

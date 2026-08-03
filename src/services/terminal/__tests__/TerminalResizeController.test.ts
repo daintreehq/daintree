@@ -28,6 +28,7 @@ import {
   type ResizeControllerDeps,
 } from "../TerminalResizeController";
 import { TERMINAL_SCROLLBAR_WIDTH } from "@/config/xtermConfig";
+import { MAX_TERMINAL_GRID_DIMENSION } from "@shared/types/terminal";
 
 /**
  * The scrollbar gutter the controller reserves before dividing a container width
@@ -2626,6 +2627,33 @@ describe("TerminalResizeController", () => {
       // The reveal-path reflow re-pins a bottom-following pane — the missing
       // pin that left docked terminals parked above the bottom (#11316).
       expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
+    });
+
+    it("clamps the measurement itself so the target cache stays reachable", () => {
+      const managed = createManagedTerminal();
+      // An absurd box (hostile serialized geometry, a compositor reporting a
+      // nonsense rect). Clamping only where the number is APPLIED would leave
+      // latestCols at the raw measurement while xterm and the PTY both landed
+      // on the ceiling — and every `terminal.cols === latestCols` convergence
+      // check (forceGeometryResync's circuit-breaker re-arm, the reveal
+      // controller's drift probe) would then be unsatisfiable forever (#11641).
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({
+        cols: MAX_TERMINAL_GRID_DIMENSION + 500,
+        rows: MAX_TERMINAL_GRID_DIMENSION + 500,
+      }));
+
+      const controller = makeController(managed);
+      expect(controller.reconcileGeometryFresh("term-1")).toBe(true);
+
+      expect(managed.terminal.cols).toBeLessThanOrEqual(MAX_TERMINAL_GRID_DIMENSION);
+      expect(managed.terminal.rows).toBeLessThanOrEqual(MAX_TERMINAL_GRID_DIMENSION);
+      expect(managed.latestCols).toBe(managed.terminal.cols);
+      expect(managed.latestRows).toBe(managed.terminal.rows);
+      expect(resizeMock).toHaveBeenCalledWith(
+        "term-1",
+        managed.terminal.cols,
+        managed.terminal.rows
+      );
     });
 
     it("preserves a deliberately user-scrolled viewport across a fresh reflow", () => {

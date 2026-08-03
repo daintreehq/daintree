@@ -5,6 +5,10 @@ import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 const shared = vi.hoisted(() => ({
   terminals: new Map<string, MockTerminalProcess>(),
   created: [] as MockTerminalProcess[],
+  // Geometry the fake node-pty reports back, when it must differ from the dims
+  // it was asked for (ConPTY queues a pre-ready resize and keeps reporting the
+  // old grid). `null` = the PTY holds exactly what it was spawned with.
+  ptyGeometryOverride: null as { cols: number | null; rows: number | null } | null,
   trashCallbacks: new Map<string, (id: string) => void>(),
   eventsEmit: vi.fn(),
   computeSpawnContext: vi.fn(),
@@ -65,6 +69,10 @@ class MockTerminalProcess {
       outcome: unchanged ? ("unchanged" as const) : ("applied" as const),
     };
   });
+  readPtyGeometry = vi.fn(
+    (): { cols: number | null; rows: number | null } =>
+      shared.ptyGeometryOverride ?? { cols: this.info.cols, rows: this.info.rows }
+  );
   setSabModeEnabled = vi.fn();
   dispose = vi.fn();
   getActivityTier = vi.fn(() => "active" as const);
@@ -226,6 +234,7 @@ describe("PtyManager lifecycle ledger", () => {
     shared.terminals.clear();
     shared.created.length = 0;
     shared.trashCallbacks.clear();
+    shared.ptyGeometryOverride = null;
     shared.computeSpawnContext.mockReturnValue({
       env: {},
       shell: "/bin/zsh",
@@ -298,6 +307,29 @@ describe("PtyManager lifecycle ledger", () => {
     // buffer, so a divergence at boot would go unseen.
     manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
     expect(results).toEqual([{ launchGeneration: 1, appliedCols: 132 }]);
+  });
+
+  it("reads the boot geometry back instead of echoing the request (#11641)", () => {
+    const manager = new PtyManager();
+    const results: unknown[] = [];
+    manager.on("resize-result", (_id: string, result: unknown) => results.push(result));
+
+    // The backend queued the boot geometry and still reports the old grid.
+    // Claiming `applied` here would manufacture agreement with xterm and hide
+    // the very split the echo exists to expose.
+    shared.ptyGeometryOverride = { cols: 80, rows: 24 };
+    manager.resize("t1", 132, 43);
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        outcome: "deferred",
+        requestedCols: 132,
+        requestedRows: 43,
+        appliedCols: null,
+        appliedRows: null,
+      }),
+    ]);
   });
 
   it("emits no echo for a spawn that did not consume a buffered resize (#11641)", () => {

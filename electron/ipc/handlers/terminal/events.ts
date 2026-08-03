@@ -71,9 +71,12 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // Geometry the PTY actually holds after a resize. The renderer compares it
   // against its own xterm grid to detect a split the two sides cannot otherwise
-  // see (#11641). Already generation-filtered by the router.
+  // see (#11641). Already generation-filtered by the router. Project-scoped for
+  // the same reason as `terminal:status` below — only views of the owning
+  // project host panels for the terminal, and every other view drops the echo
+  // in `recordPtyResizeResult` after paying for the clone.
   const handleResizeResult = (id: string, result: TerminalResizeResult) => {
-    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+    broadcastToProjectRenderers(ptyClient.getTerminalProjectId(id), CHANNELS.EVENTS_PUSH, {
       name: "terminal:resize-result",
       payload: [id, result],
     });

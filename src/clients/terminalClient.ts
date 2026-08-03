@@ -403,11 +403,9 @@ export const terminalClient = {
   },
 
   /**
-   * Geometry the PTY actually holds after each resize. Guarded because older
-   * preload surfaces (and partial test doubles) predate the channel.
+   * Geometry the PTY actually holds after each resize.
    */
   onResizeResult: (callback: (id: string, result: TerminalResizeResult) => void): (() => void) => {
-    if (typeof window.electron?.terminal?.onResizeResult !== "function") return () => {};
     return window.electron.terminal.onResizeResult(callback);
   },
 

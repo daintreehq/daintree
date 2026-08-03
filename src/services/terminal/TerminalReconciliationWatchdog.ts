@@ -692,6 +692,15 @@ export class TerminalReconciliationWatchdog {
       isAttaching: managed.isAttaching === true,
       isDetached: managed.isDetached === true,
       isResizeSuppressed: managed.isResizeSuppressed === true,
+      // The backend half of the chain (#11641): a pane wrapping at the wrong
+      // width is a broken layer like any other, and the click is the only
+      // moment the two grids are captured side by side.
+      xtermCols: managed.terminal.cols,
+      xtermRows: managed.terminal.rows,
+      ptyResizeOutcome: managed.lastPtyResizeResult?.outcome,
+      ptyAppliedCols: managed.lastPtyResizeResult?.appliedCols,
+      ptyAppliedRows: managed.lastPtyResizeResult?.appliedRows,
+      ptyGeometryDivergenceCount: managed.ptyGeometryDivergenceCount,
     });
   }
 

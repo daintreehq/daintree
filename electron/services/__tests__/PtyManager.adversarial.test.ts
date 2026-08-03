@@ -77,6 +77,7 @@ class MockTerminalProcess {
       outcome: unchanged ? ("unchanged" as const) : ("applied" as const),
     };
   });
+  readPtyGeometry = vi.fn(() => ({ cols: this.info.cols, rows: this.info.rows }));
   setSabModeEnabled = vi.fn();
   setActivityMonitorTier = vi.fn();
   startProcessDetector = vi.fn();

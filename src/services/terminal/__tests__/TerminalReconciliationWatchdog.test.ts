@@ -1130,6 +1130,41 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.resumeFlush).not.toHaveBeenCalled();
     });
 
+    it("records the PTY half of the chain alongside xterm's grid (#11641)", () => {
+      const managed = makeManaged();
+      setGrid(managed, { cols: 80, rows: 24 }, { cols: 80, rows: 24 });
+      managed.lastPtyResizeResult = {
+        launchGeneration: 2,
+        requestedCols: 120,
+        requestedRows: 40,
+        appliedCols: 120,
+        appliedRows: 40,
+        outcome: "applied",
+      };
+      managed.ptyGeometryDivergenceCount = 3;
+      instances.set("t1", managed);
+      watchdog = new TerminalReconciliationWatchdog(makeDeps(instances));
+
+      (managed.terminal.element as HTMLElement).dispatchEvent(
+        new Event("pointerdown", { bubbles: true })
+      );
+
+      // A pane wrapping at the wrong width is a broken layer like any other,
+      // and the click is the only moment both grids are captured together —
+      // `setFocused`'s wake destroys the evidence right after.
+      expect(logDebug).toHaveBeenCalledWith(
+        expect.stringContaining("pointerdown chain snapshot"),
+        expect.objectContaining({
+          xtermCols: 80,
+          xtermRows: 24,
+          ptyResizeOutcome: "applied",
+          ptyAppliedCols: 120,
+          ptyAppliedRows: 40,
+          ptyGeometryDivergenceCount: 3,
+        })
+      );
+    });
+
     it("ignores pointerdowns outside any terminal host element", () => {
       instances.set("t1", makeManaged());
       const deps = makeDeps(instances);
