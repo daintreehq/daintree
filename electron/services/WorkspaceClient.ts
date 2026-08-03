@@ -66,6 +66,19 @@ const REFRESH_PRS_TIMEOUT_MS = 45_000;
 // job in every non-pathological case.
 const STATES_READY_GATE_TIMEOUT_MS = 5_000;
 
+// Total budget for one worktree-ownership check — readiness gate AND the
+// monitor round trip share it, they do not each get their own.
+//
+// Sized against terminal spawn, the only caller: the check is a coherence
+// assertion on metadata the request already supplied, never something the
+// spawn needs in order to proceed, so it must not become a latency floor.
+// Matches resolveBranchForMain's bound (terminal/lifecycle.ts), the other
+// best-effort WorkspaceClient lookup on a terminal's critical path. Exceeding
+// it reports "unknown" (null), which forwards the caller's worktreeId
+// untouched — the pre-existing behaviour — so a slow host costs nothing but
+// the check itself.
+const WORKTREE_OWNERSHIP_CHECK_TIMEOUT_MS = 200;
+
 export type CopyTreeProgressCallback = (progress: CopyTreeProgress) => void;
 
 function dedupeSnapshotsById(states: WorktreeSnapshot[]): WorktreeSnapshot[] {
@@ -644,14 +657,19 @@ export class WorkspaceClient extends EventEmitter {
 
   /**
    * Resolves `true` when the host's monitor populate completed, `false` if it
-   * failed or did not settle within {@link STATES_READY_GATE_TIMEOUT_MS}.
-   * Callers must treat `false` as "unknown" and return `[]` rather than reading
-   * a possibly-partial map. Never rejects.
+   * failed or did not settle within `timeoutMs` (default
+   * {@link STATES_READY_GATE_TIMEOUT_MS}). Callers must treat `false` as
+   * "unknown" — state reads return `[]` rather than a possibly-partial map;
+   * the ownership check returns `null` rather than a false accusation. Never
+   * rejects.
    */
-  private _awaitHostReady(entry: ProcessEntry): Promise<boolean> {
+  private _awaitHostReady(
+    entry: ProcessEntry,
+    timeoutMs: number = STATES_READY_GATE_TIMEOUT_MS
+  ): Promise<boolean> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), STATES_READY_GATE_TIMEOUT_MS);
+      timer = setTimeout(() => resolve(false), timeoutMs);
     });
     const settled = entry.currentReadyPromise.then(
       () => true,
@@ -678,6 +696,80 @@ export class WorkspaceClient extends EventEmitter {
         .filter((r): r is PromiseFulfilledResult<WorktreeSnapshot[]> => r.status === "fulfilled")
         .flatMap((r) => r.value)
     );
+  }
+
+  /**
+   * Does `worktreeId` belong to the project identified by
+   * `projectPath` + `expectedProjectId`? Tri-state, and the third state is the
+   * whole point:
+   *
+   * - `true`  — that project's host is ready and returned the monitor.
+   * - `false` — that project's host is ready and completed the lookup with
+   *             `state: null`. A PROVEN disowning.
+   * - `null`  — UNKNOWN. No pool entry for the path, the entry's immutable
+   *             projectId doesn't match, readiness never settled, the request
+   *             timed out, the host errored, or the reply was malformed.
+   *
+   * Callers must never treat `null` as a mismatch. Only `false` is evidence,
+   * and only ever about the project that was asked about — this deliberately
+   * does not scan other hosts to discover the real owner. A caller holding a
+   * disowned id has nothing to reconcile it to (#4881): the id is dropped, not
+   * repointed, so naming the true owner would buy nothing and cost a serial
+   * fan-out across every loaded host on a latency-sensitive path.
+   *
+   * Why a ready host's `state: null` is proof rather than a race: every
+   * worktree id in circulation is minted BY the owning host — `createWorktree`
+   * returns the id the host itself assigned, and every other id reaches a
+   * renderer through that host's snapshots. So there is no window in which a
+   * caller legitimately holds an id for a worktree its own host hasn't
+   * registered. Combined with the readiness gate (which excludes the
+   * mid-`syncMonitors` partial map, #11387), a completed "not mine" is
+   * authoritative.
+   *
+   * `expectedProjectId` must equal the entry's immutable projectId for the same
+   * reason {@link getAllStatesForProjectAsync} requires it: the project row's
+   * path is mutable, so a path alone is not an authorization identity.
+   *
+   * Never rejects. Bounded by {@link WORKTREE_OWNERSHIP_CHECK_TIMEOUT_MS} end
+   * to end, shared between the readiness gate and the round trip so the two
+   * cannot compound. The remaining budget is handed to `sendWithResponse`
+   * itself rather than raced against it — a race would resolve on time while
+   * leaving the host's 30s default request pending behind it.
+   */
+  async isWorktreeOwnedByProject(
+    worktreeId: string,
+    projectPath: string,
+    expectedProjectId: string
+  ): Promise<boolean | null> {
+    const normalized = this.pool.normalizeProjectPath(projectPath);
+    const entry = this.pool.entries.get(normalized);
+    if (entry === undefined || entry.projectId !== expectedProjectId) return null;
+
+    const deadline = Date.now() + WORKTREE_OWNERSHIP_CHECK_TIMEOUT_MS;
+    if (!(await this._awaitHostReady(entry, WORKTREE_OWNERSHIP_CHECK_TIMEOUT_MS))) return null;
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return null;
+
+    try {
+      const requestId = entry.host.generateRequestId();
+      const result = await entry.host.sendWithResponse<{
+        state: WorktreeSnapshot | null;
+      }>(
+        {
+          type: "get-monitor",
+          requestId,
+          worktreeId,
+        },
+        remainingMs
+      );
+      if (result.state === null) return false;
+      // A snapshot for some *other* worktree answers a question we didn't ask;
+      // treat it as unknown rather than as either verdict.
+      return result.state?.id === worktreeId ? true : null;
+    } catch {
+      return null;
+    }
   }
 
   async getMonitorAsync(worktreeId: string): Promise<WorktreeSnapshot | null> {

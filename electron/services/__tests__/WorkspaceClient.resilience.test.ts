@@ -835,6 +835,228 @@ describe("WorkspaceClient multi-process manager", () => {
     });
   });
 
+  // Terminal spawn asks this before trusting a request that claims a worktree
+  // belongs to a project (#11653). The tri-state is the contract: only `false`
+  // is evidence of a mismatch, `null` means the question could not be answered
+  // and the caller must not treat it as an accusation.
+  describe("isWorktreeOwnedByProject", () => {
+    const idFor = (p: string) => `id-for-${path.resolve(p)}`;
+
+    const monitorReqs = (hostIndex: number) =>
+      h(hostIndex)
+        .getAllRequests()
+        .filter((r: any) => r.type === "get-monitor");
+
+    it("returns true when the project's own host answers with the requested monitor", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const ownedPromise = client.isWorktreeOwnedByProject(
+        "wt-a",
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+      const req = monitorReqs(0)[0];
+      expect(req.worktreeId).toBe("wt-a");
+      h(0).resolveRequest(req.requestId, { state: { id: "wt-a", name: "A" } });
+
+      expect(await ownedPromise).toBe(true);
+    });
+
+    // The disowning that makes the whole check worth doing.
+    it("returns false when a ready host completes the lookup with no such monitor", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const ownedPromise = client.isWorktreeOwnedByProject(
+        "wt-belonging-to-b",
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+      h(0).resolveRequest(monitorReqs(0)[0].requestId, { state: null });
+
+      expect(await ownedPromise).toBe(false);
+    });
+
+    it("asks only the named project's host, never the others", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const loadB = client.loadProject("/project-b", 2);
+      await readyAndResolveLoad(1);
+      await loadB;
+
+      const ownedPromise = client.isWorktreeOwnedByProject(
+        "wt-b",
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+
+      expect(monitorReqs(1)).toHaveLength(0);
+      h(0).resolveRequest(monitorReqs(0)[0].requestId, { state: null });
+      expect(await ownedPromise).toBe(false);
+    });
+
+    it("returns unknown for a path no host is loaded for, without contacting any host", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const callsBefore = h(0).sendWithResponse.mock.calls.length;
+      const owned = await client.isWorktreeOwnedByProject(
+        "wt-a",
+        "/no-such-project",
+        idFor("/no-such-project")
+      );
+
+      expect(owned).toBeNull();
+      expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    // Same immutable-identity rule getAllStatesForProjectAsync enforces: a
+    // project row's path is mutable, so a path alone is not an identity.
+    it("returns unknown when the entry's immutable projectId does not match", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const callsBefore = h(0).sendWithResponse.mock.calls.length;
+      const owned = await client.isWorktreeOwnedByProject(
+        "wt-a",
+        "/project-a",
+        idFor("/project-b")
+      );
+
+      expect(owned).toBeNull();
+      expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    it("returns unknown when the host errors", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const ownedPromise = client.isWorktreeOwnedByProject(
+        "wt-a",
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+      h(0).rejectRequest(monitorReqs(0)[0].requestId, new Error("host crashed"));
+
+      expect(await ownedPromise).toBeNull();
+    });
+
+    // A reply about a different worktree answers a question we didn't ask —
+    // neither a confirmation nor an accusation.
+    it("returns unknown when the host answers about a different worktree", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const ownedPromise = client.isWorktreeOwnedByProject(
+        "wt-a",
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+      h(0).resolveRequest(monitorReqs(0)[0].requestId, { state: { id: "wt-something-else" } });
+
+      expect(await ownedPromise).toBeNull();
+    });
+
+    // The check rides terminal spawn, so it must give up far sooner than the
+    // host's 30s per-request budget rather than becoming a latency floor.
+    it("bounds the round trip well inside the host's per-request budget", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const ownedPromise = client.isWorktreeOwnedByProject(
+        "wt-a",
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+
+      const monitorCall = h(0).sendWithResponse.mock.calls.find(
+        ([req]: any) => req.type === "get-monitor"
+      )!;
+      const timeoutMs = monitorCall[1];
+      expect(timeoutMs).toBeGreaterThan(0);
+      expect(timeoutMs).toBeLessThan(1_000);
+
+      h(0).resolveRequest(monitorCall[0].requestId, { state: { id: "wt-a" } });
+      await ownedPromise;
+    });
+
+    describe("readiness gate", () => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      // Long enough that any spawn-facing deadline has elapsed, short enough to
+      // prove the gate is not riding the 5s hydration bound. Asserts behavior,
+      // not the constant.
+      const SPAWN_OBSERVATION_WINDOW_MS = 2_000;
+
+      it("gives up as unknown when the host never becomes ready, and never reads its partial map", async () => {
+        const load = client.loadProject("/project-a", 1);
+        void load.catch(() => {});
+        expect(mockHosts).toHaveLength(1);
+
+        let settled: any = "pending";
+        void client
+          .isWorktreeOwnedByProject("wt-a", "/project-a", idFor("/project-a"))
+          .then((r) => {
+            settled = r;
+          });
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toBe("pending");
+
+        await vi.advanceTimersByTimeAsync(SPAWN_OBSERVATION_WINDOW_MS);
+
+        // Unknown, not a mismatch — a spawn must not lose its worktree stamp
+        // just because the host was still warming up (#11131, #11235).
+        expect(settled).toBeNull();
+        expect(monitorReqs(0)).toHaveLength(0);
+      });
+
+      it("leaves no readiness timer behind once it settles", async () => {
+        // `readyAndResolveLoad` awaits a real setTimeout, which never fires
+        // under fake timers — drive the load through the fake clock instead.
+        const loadA = client.loadProject("/project-a", 1);
+        h(0).simulateReady();
+        await vi.advanceTimersByTimeAsync(0);
+        h(0).resolveRequest(h(0).getLastRequest()!.requestId);
+        await loadA;
+
+        const ownedPromise = client.isWorktreeOwnedByProject(
+          "wt-a",
+          "/project-a",
+          idFor("/project-a")
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        h(0).resolveRequest(monitorReqs(0)[0].requestId, { state: { id: "wt-a" } });
+        expect(await ownedPromise).toBe(true);
+
+        // The gate's timeout must be cleared on the success path, not left to
+        // fire against an already-settled race.
+        expect(vi.getTimerCount()).toBe(0);
+      });
+    });
+  });
+
   describe("singleflight cache", () => {
     beforeEach(() => {
       vi.useFakeTimers();
