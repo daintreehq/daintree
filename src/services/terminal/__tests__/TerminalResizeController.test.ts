@@ -2726,6 +2726,133 @@ describe("TerminalResizeController", () => {
       expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
     });
 
+    it("converges a still-streaming diverged grid when the caller forces it (#11638)", () => {
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      // Both streaming signals live at once — a busy agent's steady state. The
+      // point of the force flag is that no amount of waiting would clear this.
+      (managed as { lastWriteAt?: number }).lastWriteAt = Date.now();
+      (managed as { pendingWrites?: number }).pendingWrites = 3;
+
+      const controller = makeController(managed);
+
+      // Same pane, same instant: the unforced call is the deferral this issue
+      // is about, and the forced call is the fix. Asserting both against one
+      // fixture is what proves force is doing the work, not the clock.
+      expect(controller.reconcileGeometryFresh("term-1")).toBe(false);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+
+      const ok = controller.reconcileGeometryFresh("term-1", { force: true });
+
+      expect(ok).toBe(true);
+      // xterm and the PTY land on the SAME freshly proposed geometry — the
+      // atomicity that makes this safe for a settled-strategy agent.
+      const proposal = managed.fitAddon.proposeDimensions();
+      expect(managed.terminal.resize).toHaveBeenCalledWith(proposal.cols, proposal.rows);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", proposal.cols, proposal.rows);
+      expect(managed.latestCols).toBe(proposal.cols);
+      expect(managed.latestRows).toBe(proposal.rows);
+      // Never via fitAddon.fit() — that resizes xterm ahead of the PTY.
+      expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+    });
+
+    it("drains held ingest bytes at the OUTGOING grid before a forced re-wrap", () => {
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      (managed as { pendingWrites?: number }).pendingWrites = 3;
+
+      const order: string[] = [];
+      const dataBuffer = {
+        flushForTerminal: vi.fn(() => order.push("flush")),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 1024),
+        resumeFlush: vi.fn(() => order.push("resume")),
+      };
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: dataBuffer as any,
+      });
+      (managed.terminal.resize as ReturnType<typeof vi.fn>).mockImplementation(() =>
+        order.push("resize")
+      );
+
+      expect(controller.reconcileGeometryFresh("term-1", { force: true })).toBe(true);
+
+      // Bytes held by backpressure were emitted for the OLD grid. Parsing them
+      // after xterm adopts the new one puts their cursor moves and erases on
+      // the wrong rows, and no later reflow undoes that.
+      expect(order).toEqual(["flush", "resize"]);
+    });
+
+    it("resumes an over-budget backlog only AFTER the forced resize", () => {
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      (managed as { pendingWrites?: number }).pendingWrites = 3;
+
+      const order: string[] = [];
+      const dataBuffer = {
+        flushForTerminal: vi.fn(() => order.push("flush")),
+        resetForTerminal: vi.fn(),
+        // Past the sync-flush budget: the backlog stays queued rather than
+        // being drained inline.
+        getQueuedBytes: vi.fn(() => 64 * 1024 * 1024),
+        resumeFlush: vi.fn(() => order.push("resume")),
+      };
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: dataBuffer as any,
+      });
+      (managed.terminal.resize as ReturnType<typeof vi.fn>).mockImplementation(() =>
+        order.push("resize")
+      );
+
+      expect(controller.reconcileGeometryFresh("term-1", { force: true })).toBe(true);
+
+      // Never flushed inline (that is what the budget is for), and resumed only
+      // after the resize. Resuming first would drain the backlog into xterm and
+      // then let resize()'s synchronous flushSync keep consuming what
+      // notifyWriteComplete appends behind it — one unyielding task.
+      expect(dataBuffer.flushForTerminal).not.toHaveBeenCalled();
+      expect(order).toEqual(["resize", "resume"]);
+    });
+
+    it("force does not reflow a live alt-screen TUI (#10805 survives the bypass)", () => {
+      const managed = createManagedTerminal();
+      managed.isAltBuffer = true;
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      (managed as { pendingWrites?: number }).pendingWrites = 3;
+
+      const controller = makeController(managed);
+      const ok = controller.reconcileGeometryFresh("term-1", { force: true });
+
+      // force buys past write-quiescence and nothing else: the alt-buffer early
+      // return sits ABOVE the streaming gate, so a full-screen TUI's frame is
+      // still never mangled out from under its own SIGWINCH redraw.
+      expect(ok).toBe(true);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
+    });
+
+    it("force still reports failure on an unmeasurable host box", () => {
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      (managed as { pendingWrites?: number }).pendingWrites = 3;
+      // Transitional/occluded layout: below the >=50px floor the fresh
+      // measurement is meaningless, and forcing must not fabricate one.
+      managed.hostElement.getBoundingClientRect = vi.fn(() => ({
+        left: 0,
+        width: 10,
+        height: 10,
+      })) as any;
+
+      const controller = makeController(managed);
+
+      expect(controller.reconcileGeometryFresh("term-1", { force: true })).toBe(false);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+    });
+
     it("still re-asserts the PTY during streaming when the grid has not drifted", () => {
       const managed = createManagedTerminal();
       managed.terminal.cols = 100;

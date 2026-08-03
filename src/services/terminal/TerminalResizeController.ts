@@ -4,7 +4,7 @@ import { TerminalRefreshTier } from "@/types";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { getEffectiveScrollbarWidth } from "@/config/xtermConfig";
 import { logError, logWarn } from "@/utils/logger";
-import type { ManagedTerminal } from "./types";
+import type { ManagedTerminal, TerminalResyncOptions } from "./types";
 import type { TerminalOutputIngestService } from "./TerminalOutputIngestService";
 
 const START_DEBOUNCING_THRESHOLD = 200;
@@ -706,14 +706,18 @@ export class TerminalResizeController {
    * cached dims can equal the now-stale xterm grid), which applyDeferredResize's
    * cache==current early-return would miss.
    *
+   * @param options `force: true` skips ONLY the streaming-quiescence gate below
+   * (#11638) — the explicit user Redraw path. Every other guard here still
+   * applies. Automatic callers must omit it.
+   *
    * @returns true once a fresh measurement landed (whether or not a resize was
    * needed); false when the box is not measurable yet (zero/occluded/transitional
    * layout) so the reveal sweep retries on a later frame. The boolean is
    * measurability, NOT convergence — an alt-buffer pane reports true without
-   * touching geometry at all, so no caller may treat it as proof the grid now
-   * matches the container.
+   * touching geometry at all, and a serialized restore parks the xterm resize,
+   * so no caller may treat it as proof the grid now matches the container.
    */
-  reconcileGeometryFresh(id: string): boolean {
+  reconcileGeometryFresh(id: string, options: TerminalResyncOptions = {}): boolean {
     const managed = this.deps.getInstance(id);
     if (!managed) return false;
     if (!managed.hostElement.checkVisibility()) return false;
@@ -760,7 +764,17 @@ export class TerminalResizeController {
     // watchdog picks up a pane that outlasts the sweep at its first quiet
     // tick. A no-drift pass falls through: the PTY re-assert below is
     // dedupe-safe and never re-wraps.
+    //
+    // `force` (#11638) is the one exemption: an explicit user Redraw. A busy
+    // agent repaints its status line several times a second and never opens the
+    // 300ms window this gate waits for, so deferring an explicitly-requested
+    // repair defers it forever — and the watchdog backstop tests the same
+    // predicate, so nothing converges the pane either. The re-wrap hazard the
+    // gate protects against is real but it is the AUTOMATIC case; a user who
+    // pressed Redraw has already judged the pane broken and accepts a frame of
+    // churn to fix it.
     if (
+      !options.force &&
       (managed.terminal.cols !== cols || managed.terminal.rows !== rows) &&
       hasStreamingWrites(managed, Date.now())
     ) {
@@ -776,10 +790,28 @@ export class TerminalResizeController {
     // apply atomically: resize xterm only when its grid actually drifted, and
     // always (re)assert the PTY size so the two agree.
     this.cancelPendingResize(id);
+    // Drain held ingest bytes at the OUTGOING grid before re-wrapping, the same
+    // invariant commitResize enforces at the other choke point. Bytes held by
+    // ingest backpressure were emitted for the current grid; parsing them after
+    // xterm adopts a new one lands their cursor moves and erases on the wrong
+    // rows, which no later reflow can undo. The automatic callers never met
+    // this hazard because the streaming gate above already turned them away —
+    // a forced resync (#11638) runs precisely when a backlog is most likely,
+    // so the flush has to be explicit here.
+    let heldBytesFlushed = true;
     if (managed.terminal.cols !== cols || managed.terminal.rows !== rows) {
+      heldBytesFlushed = this.flushHeldBytesBeforeResize(id);
       this.resizeTerminal(managed, cols, rows);
     }
     terminalClient.resize(id, cols, rows);
+    // An over-budget backlog resumes only AFTER the resize, exactly as
+    // commitResize orders it. Resuming first would drain it inline into xterm
+    // and then let resize()'s synchronous flushSync keep consuming whatever
+    // notifyWriteComplete appends behind it — one unyielding task that defeats
+    // the sync-flush budget the over-budget branch exists to enforce.
+    if (!heldBytesFlushed) {
+      this.deps.dataBuffer.resumeFlush(id);
+    }
     this.pinToBottomAfterResize(managed);
     return true;
   }

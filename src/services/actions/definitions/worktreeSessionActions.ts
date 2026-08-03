@@ -2,9 +2,12 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
+import { nextFrame } from "@/services/terminal/revealUntilStable";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
+import { isForegroundDispatch } from "./dispatchSource";
 
 // Shared by argsSchema + run() so the worktree id is extracted via a validated
 // parse rather than an unchecked `as` cast (keeps the lint ratchet green).
@@ -12,6 +15,14 @@ const clearHistoryArgsSchema = z.object({
   worktreeId: z.string().optional(),
   confirmed: z.boolean().optional(),
 });
+
+// Serializes renderer sweeps across dispatches. Each sweep paces itself at one
+// synchronous reflow per frame, but two overlapping dispatches — a double press,
+// or two worktrees — would interleave their loops and put several back in the
+// same frame, which is the pile-up the pacing exists to prevent. Queue instead
+// of superseding: a sweep of another worktree must still finish, not be
+// abandoned half-repaired.
+let rendererSweepChain: Promise<void> = Promise.resolve();
 
 export function registerWorktreeSessionActions(
   actions: ActionRegistry,
@@ -120,12 +131,33 @@ export function registerWorktreeSessionActions(
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
       const { panelsById, panelIds } = usePanelStore.getState();
-      for (const id of panelIds) {
-        const t = panelsById[id];
-        if (t && t.worktreeId === targetWorktreeId) {
-          terminalInstanceService.resetRenderer(t.id);
+      // PTY panels only: a browser/review/preview panel in the worktree has no
+      // renderer to reset, and letting one occupy a frame slot would delay a
+      // genuinely garbled terminal behind it.
+      const targets = panelIds.filter((id) => {
+        const panel = panelsById[id];
+        return (
+          panel?.worktreeId === targetWorktreeId && (!panel.kind || panelKindHasPty(panel.kind))
+        );
+      });
+      // Same explicit-repair intent as the per-pane Redraw, so the same
+      // foreground-only force (#11638).
+      const force = isForegroundDispatch(ctx.dispatchSource);
+
+      // One pane per frame. Forcing turns each pane's geometry step into a
+      // synchronous xterm reflow of its whole scrollback — the resize-pass
+      // scheduler budgets 15-40ms for exactly that — and this action is pressed
+      // precisely when a whole worktree looks garbled, so an unchunked loop
+      // would pile every reflow into one long task. The id list is snapshotted
+      // above; a pane closed mid-sweep just no-ops in the service.
+      const sweep = rendererSweepChain.then(async () => {
+        for (const [index, id] of targets.entries()) {
+          if (index > 0) await nextFrame();
+          terminalInstanceService.resetRenderer(id, { force });
         }
-      }
+      });
+      rendererSweepChain = sweep.catch(() => undefined);
+      await sweep;
     },
   }));
 

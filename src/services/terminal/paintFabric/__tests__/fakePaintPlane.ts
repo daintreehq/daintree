@@ -64,6 +64,7 @@ export function makeFakePlane() {
     detach: vi.fn(),
     fit: vi.fn((): { cols: number; rows: number } | null => null),
     resize: vi.fn((): { cols: number; rows: number } | null => null),
+    resetRenderer: vi.fn((): boolean => false),
   };
 }
 
