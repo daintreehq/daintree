@@ -20,6 +20,13 @@ const mockState = vi.hoisted(() => ({
     activeWorktreeId: "wt-global",
     mruList: ["terminal:global-terminal"] as string[],
   },
+  /**
+   * The workspace that claimed the legacy global record. Defaults to the
+   * fixture's own project so the inheritance tests below read as "the heir
+   * gets its record back" rather than "any row with a Project row does"
+   * (#11651).
+   */
+  legacyWorkspaceStateOwnerId: "project-1" as string | undefined,
   terminalConfig: { scrollback: 5000 },
   agentSettings: { defaultAgent: "codex" },
   project: { id: "project-1", name: "Project One", path: "/project/one" },
@@ -57,6 +64,7 @@ const getProjectStateWithRecoveryMock = vi.hoisted(() =>
 const storeGetMock = vi.hoisted(() =>
   vi.fn((key: string) => {
     if (key === "appState") return mockState.appState;
+    if (key === "legacyWorkspaceStateOwnerId") return mockState.legacyWorkspaceStateOwnerId;
     if (key === "terminalConfig") return mockState.terminalConfig;
     if (key === "agentSettings") return mockState.agentSettings;
     return undefined;
@@ -130,6 +138,7 @@ describe("AppHydrationService adversarial", () => {
       activeWorktreeId: "wt-global",
       mruList: ["terminal:global-terminal"],
     };
+    mockState.legacyWorkspaceStateOwnerId = "project-1";
     mockState.terminalConfig = { scrollback: 5000 };
     mockState.agentSettings = { defaultAgent: "codex" };
     mockState.project = { id: "project-1", name: "Project One", path: "/project/one" };
@@ -294,14 +303,57 @@ describe("AppHydrationService adversarial", () => {
     const result = await buildSwitchHydrateResult("project-1");
 
     expect(result.appState.terminals).toEqual([]);
-    // A real project row is the legitimate heir of the legacy global record, so
-    // all four workspace fields still migrate through on this path (#11497).
+    // A real project row still inherits the two fields the renderer keeps
+    // rewriting app-globally (#11497) — see the ownership note in
+    // `buildSwitchHydrateResult`.
     expect(result.appState.activeWorktreeId).toBe("wt-global");
     expect(result.appState.focusMode).toBe(true);
     expect(result.appState.focusPanelState).toEqual(mockState.appState.focusPanelState);
+    // The MRU is the one legacy field here, so it takes the owner gate: this
+    // project claimed the record, so it gets the list back.
     expect(result.appState.mruList).toEqual(mockState.appState.mruList);
     expect(result.settingsRecovery).toBeNull();
     expect(result.projectStateRecovery).toBeNull();
+  });
+
+  it("NO_PROJECT_STATE_DENIES_THE_LEGACY_RECORD_TO_A_NON_OWNER", async () => {
+    // Same shape as the test above — a real Project row with nothing saved yet
+    // — but another workspace owns the legacy record. Serving it the legacy MRU
+    // would seed this project's quick-switcher with another project's panels
+    // and worktrees (#11651).
+    mockState.projectState = undefined;
+    mockState.legacyWorkspaceStateOwnerId = "project-somebody-else";
+
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const result = await buildSwitchHydrateResult("project-1");
+
+    expect(result.appState.mruList).toBeUndefined();
+    // Focus state is denied too — it has a per-workspace write path, so the
+    // global copy is legacy. Serving it would collapse this project's sidebar
+    // on open and then persist another project's focus into its own record.
+    expect(result.appState.focusMode).toBe(false);
+    expect(result.appState.focusPanelState).toBeUndefined();
+    // `activeWorktreeId` is NOT denied: it is still written app-globally for
+    // every workspace, so withholding it would drop this project's own live
+    // selection rather than narrow a legacy leak.
+    expect(result.appState.activeWorktreeId).toBe("wt-global");
+    // The row itself still resolves — this is an ownership denial, not a
+    // failure to find the project.
+    expect(result.project).toEqual(mockState.project);
+  });
+
+  it("denies the legacy mruList while the record is still unclaimed", async () => {
+    // This path performs no writes, so it can never claim the record itself.
+    // Until `handleAppHydrate` settles ownership, an unclaimed record has no
+    // heir, and serving it to whoever switches first is the guess the owner id
+    // exists to remove (#11651).
+    mockState.projectState = undefined;
+    mockState.legacyWorkspaceStateOwnerId = undefined;
+
+    const { buildSwitchHydrateResult } = await import("../AppHydrationService.js");
+    const result = await buildSwitchHydrateResult("project-1");
+
+    expect(result.appState.mruList).toBeUndefined();
   });
 
   it("folds the system temp dir into the payload so the renderer can skip the IPC call", async () => {

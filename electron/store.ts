@@ -170,6 +170,23 @@ export interface StoreSchema {
     actionHiddenIds?: string[];
     fleetScopeMode?: "legacy" | "scoped";
   };
+  /**
+   * Workspace that owns the legacy pre-multi-project fields of `appState`
+   * (`terminals`, `activeWorktreeId`, `focusMode`, `focusPanelState`,
+   * `mruList`). Those fields belong to whichever project was open before
+   * per-workspace state existed, but carry no owner identity of their own, so
+   * every project row without saved terminals used to re-inherit them —
+   * handing a brand-new project another project's panels and `cwd`s (#11651).
+   * The first real project to hydrate stamps its id here and becomes the sole
+   * heir; every later row reads its own state or clean defaults.
+   *
+   * Deliberately top-level rather than a field of `appState`:
+   * `CrashRecoveryService.applySessionSnapshot` replaces `appState` wholesale
+   * from a captured snapshot, which would roll an inner marker back to
+   * unclaimed. Also keeps the marker out of the hydrate IPC payload — it is
+   * main-process migration bookkeeping, not renderer state.
+   */
+  legacyWorkspaceStateOwnerId?: string;
   userConfig: {
     githubToken?: string;
   };
