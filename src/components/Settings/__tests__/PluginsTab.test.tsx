@@ -40,6 +40,7 @@ function makePlugin(name: string): LoadedPluginInfo {
         forgeProviders: [],
         fileDecorationProviders: [],
         agents: [],
+        processTools: [],
       },
     },
     dir: `/plugins/${name}`,

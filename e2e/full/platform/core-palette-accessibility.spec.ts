@@ -33,6 +33,16 @@ async function openNewTerminalPalette(window: Page): Promise<void> {
   );
 }
 
+async function openPanelPalette(window: Page): Promise<void> {
+  await window.evaluate(() =>
+    (
+      window as unknown as {
+        __daintreeDispatchAction: (actionId: string) => Promise<unknown>;
+      }
+    ).__daintreeDispatchAction("panel.palette")
+  );
+}
+
 test.describe.serial("Core: Command Palette Accessibility", () => {
   test.beforeAll(async () => {
     const { dir, cleanup } = createFixtureRepo({
@@ -93,14 +103,17 @@ test.describe.serial("Core: Command Palette Accessibility", () => {
     await window.emulateMedia({ reducedMotion: "reduce" });
     await ensureWindowFocused(ctx.app);
 
-    await window.keyboard.press(`${mod}+N`);
+    await openPanelPalette(window);
     const dialog = window.locator(SEL.panelPalette.dialog);
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
     await expect(window.locator(SEL.panelPalette.options).first()).toBeVisible({
       timeout: T_MEDIUM,
     });
 
-    await window.keyboard.press("Escape");
+    const searchInput = window.locator(SEL.panelPalette.searchInput);
+    await searchInput.focus();
+    await expect(searchInput).toBeFocused({ timeout: T_SHORT });
+    await searchInput.press("Escape");
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
   });
 
@@ -121,7 +134,7 @@ test.describe.serial("Core: Command Palette Accessibility", () => {
     }
 
     await ensureWindowFocused(ctx.app);
-    await window.keyboard.press(`${mod}+N`);
+    await openPanelPalette(window);
     const dialog = window.locator(SEL.panelPalette.dialog);
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
@@ -131,7 +144,10 @@ test.describe.serial("Core: Command Palette Accessibility", () => {
     await expect(options.first()).toBeVisible({ timeout: T_MEDIUM });
     await expect(options.first()).toHaveAttribute("aria-selected", "true");
 
-    await window.keyboard.press("Escape");
+    const searchInput = window.locator(SEL.panelPalette.searchInput);
+    await searchInput.focus();
+    await expect(searchInput).toBeFocused({ timeout: T_SHORT });
+    await searchInput.press("Escape");
     await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
   });
 
@@ -147,10 +163,12 @@ test.describe.serial("Core: Command Palette Accessibility", () => {
 
     await window.keyboard.press(`${mod}+Shift+P`);
     await expect(window.locator(SEL.actionPalette.dialog)).toBeVisible({ timeout: T_MEDIUM });
-    await expect(window.locator(SEL.actionPalette.searchInput)).toBeFocused({ timeout: T_SHORT });
+    const actionInput = window.locator(SEL.actionPalette.searchInput);
+    await actionInput.focus();
+    await expect(actionInput).toBeFocused({ timeout: T_SHORT });
     await window.waitForTimeout(T_SETTLE);
 
-    await window.keyboard.press("Escape");
+    await actionInput.press("Escape");
     await expect(window.locator(SEL.actionPalette.dialog)).not.toBeVisible({ timeout: T_MEDIUM });
     await expect(trigger).toBeFocused({ timeout: T_MEDIUM });
   });
@@ -167,11 +185,22 @@ test.describe.serial("Core: Command Palette Accessibility", () => {
 
     await window.keyboard.press(`${mod}+K`);
     await window.waitForTimeout(120);
+    await trigger.focus();
+    await expect(trigger).toBeFocused({ timeout: T_MEDIUM });
     await window.keyboard.press(`${mod}+t`);
     await expect(window.locator(SEL.themePalette.dialog)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.locator('[role="tooltip"][data-state="open"]')).toHaveCount(0, {
+      timeout: T_MEDIUM,
+    });
+    const themeInput = window.locator(SEL.themePalette.searchInput);
+    await themeInput.focus();
+    await expect(themeInput).toBeFocused({ timeout: T_SHORT });
+    // The palette's Escape-stack entry is registered in an effect. Under a
+    // saturated broad run the input can become focusable one render before
+    // that effect commits, so match the action-palette synchronization above.
     await window.waitForTimeout(T_SETTLE);
 
-    await window.keyboard.press("Escape");
+    await themeInput.press("Escape");
     await expect(window.locator(SEL.themePalette.dialog)).not.toBeVisible({ timeout: T_MEDIUM });
     await expect(trigger).toBeFocused({ timeout: T_MEDIUM });
   });

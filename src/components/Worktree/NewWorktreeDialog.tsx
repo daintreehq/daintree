@@ -28,7 +28,11 @@ import { useBranchInput } from "./hooks/useBranchInput";
 import { useBranchValidation } from "./hooks/useBranchValidation";
 import { useBranchPicker } from "./hooks/useBranchPicker";
 import { usePrefixPicker } from "./hooks/usePrefixPicker";
-import { useRecipePicker, CLONE_LAYOUT_ID } from "./hooks/useRecipePicker";
+import {
+  useRecipePicker,
+  resolveEligibleDefaultRecipeId,
+  CLONE_LAYOUT_ID,
+} from "./hooks/useRecipePicker";
 import { useWorktreeFormErrors } from "./hooks/useWorktreeFormErrors";
 import { useWorktreeFormValidation } from "./hooks/useWorktreeFormValidation";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -153,10 +157,13 @@ export function NewWorktreeDialog({
   const resourceEnvironments = projectSettings?.resourceEnvironments;
   const hasAnyEnvironments = Object.keys(resourceEnvironments ?? {}).length > 0;
 
-  const defaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
-  const globalRecipes = useMemo(
-    () => recipes.filter((r) => !r.worktreeId && !r.shadowedBy),
-    [recipes]
+  const persistedDefaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
+  // Shadowed recipes stay listed (dimmed, marked "Overridden") instead of being
+  // hidden — hiding an executable target is the silent failure #11510 is about.
+  const startingLayoutRecipes = useMemo(() => recipes.filter((r) => !r.worktreeId), [recipes]);
+  const defaultRecipeId = useMemo(
+    () => resolveEligibleDefaultRecipeId(startingLayoutRecipes, persistedDefaultRecipeId),
+    [startingLayoutRecipes, persistedDefaultRecipeId]
   );
 
   const {
@@ -304,7 +311,7 @@ export function NewWorktreeDialog({
   } = useRecipePicker({
     isOpen,
     defaultRecipeId,
-    globalRecipes,
+    startingLayoutRecipes,
     lastSelectedWorktreeRecipeId,
     projectId,
     initialRecipeId,
@@ -1022,7 +1029,7 @@ export function NewWorktreeDialog({
                     baseBranchTouchedRef.current = true;
                     setFromRemote(e.target.checked);
                   }}
-                  className="rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent"
+                  className="rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent/30"
                 />
                 <label htmlFor="from-remote" className="text-sm text-daintree-text select-none">
                   Create from remote branch
@@ -1037,9 +1044,9 @@ export function NewWorktreeDialog({
               hasAnyEnvironments={hasAnyEnvironments}
             />
 
-            {globalRecipes.length > 0 && (
+            {startingLayoutRecipes.length > 0 && (
               <RecipePickerPopover
-                recipes={globalRecipes}
+                recipes={startingLayoutRecipes}
                 selectedRecipeId={selectedRecipeId}
                 selectedRecipe={selectedRecipe}
                 defaultRecipeId={defaultRecipeId}

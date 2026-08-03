@@ -18,7 +18,7 @@ function makeRecipe(id: string, name = id): TerminalRecipe {
 const defaultArgs = {
   isOpen: true,
   defaultRecipeId: undefined as string | undefined,
-  globalRecipes: [] as TerminalRecipe[],
+  startingLayoutRecipes: [] as TerminalRecipe[],
   lastSelectedWorktreeRecipeId: undefined as string | null | undefined,
   projectId: "test-project",
   initialRecipeId: undefined as string | null | undefined,
@@ -48,12 +48,16 @@ describe("useRecipePicker", () => {
   it("selects defaultRecipeId when available and no lastSelected", () => {
     const recipes = [makeRecipe("recipe-1")];
     const { result } = renderHook(() =>
-      useRecipePicker({ ...defaultArgs, globalRecipes: recipes, defaultRecipeId: "recipe-1" })
+      useRecipePicker({
+        ...defaultArgs,
+        startingLayoutRecipes: recipes,
+        defaultRecipeId: "recipe-1",
+      })
     );
     expect(result.current.selectedRecipeId).toBe("recipe-1");
   });
 
-  it("falls back to CLONE_LAYOUT_ID when defaultRecipeId is not in globalRecipes", () => {
+  it("falls back to CLONE_LAYOUT_ID when defaultRecipeId is not in startingLayoutRecipes", () => {
     const { result } = renderHook(() =>
       useRecipePicker({ ...defaultArgs, defaultRecipeId: "nonexistent" })
     );
@@ -65,7 +69,7 @@ describe("useRecipePicker", () => {
     const { result } = renderHook(() =>
       useRecipePicker({
         ...defaultArgs,
-        globalRecipes: recipes,
+        startingLayoutRecipes: recipes,
         defaultRecipeId: "recipe-1",
         initialRecipeId: "recipe-2",
       })
@@ -85,7 +89,7 @@ describe("useRecipePicker", () => {
     rerender({
       ...defaultArgs,
       setLastSelectedWorktreeRecipeIdByProject: setter,
-      globalRecipes: [makeRecipe("new-recipe")],
+      startingLayoutRecipes: [makeRecipe("new-recipe")],
     });
     expect(result.current.selectedRecipeId).toBe(CLONE_LAYOUT_ID);
     expect(setter).not.toHaveBeenCalled();
@@ -124,7 +128,7 @@ describe("useRecipePicker", () => {
   it("selectedRecipe is undefined for sentinel IDs", () => {
     const recipes = [makeRecipe("recipe-1")];
     const { result } = renderHook(() =>
-      useRecipePicker({ ...defaultArgs, globalRecipes: recipes })
+      useRecipePicker({ ...defaultArgs, startingLayoutRecipes: recipes })
     );
     expect(result.current.selectedRecipeId).toBe(CLONE_LAYOUT_ID);
     expect(result.current.selectedRecipe).toBeUndefined();

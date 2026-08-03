@@ -110,6 +110,10 @@ concurrency:
 
 env:
   NODE_VERSION: "22"
+  # Without this the pinned CLI self-updates on first launch and the online
+  # release gate silently runs whatever version npm published today — see
+  # scripts/ci/install-opencode.mjs.
+  OPENCODE_DISABLE_AUTOUPDATE: "1"
 
 jobs:
   # Determine which platforms to run on, and fan each one out into N shards.
@@ -426,7 +430,7 @@ jobs:
 
       - name: Install OpenCode
         if: inputs.suite == 'online'
-        run: node scripts/ci/npm-install-retry.mjs -g opencode-ai
+        run: node scripts/ci/install-opencode.mjs
 
       - name: Configure Claude Code (macOS/Linux)
         if: runner.os != 'Windows'

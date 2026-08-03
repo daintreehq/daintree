@@ -45,6 +45,7 @@ import {
 import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
 import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { isPtyPanel } from "@shared/types/panel";
+import type { TerminalGeometry } from "@shared/types/terminal";
 import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
@@ -422,6 +423,17 @@ class TerminalInstanceService {
   getHoveredFilePath(id: string): string | null {
     const link = this.instances.get(id)?.hoveredLink;
     return link?.kind === "file" || link?.kind === "directory" ? (link.absolutePath ?? null) : null;
+  }
+
+  /**
+   * Which of the two on-disk kinds {@link getHoveredFilePath} matched, or null
+   * when no path is hovered. Reveal treats them identically, but the file
+   * browser doesn't: a directory is expanded as well as selected, so the menu
+   * has to pass the kind through rather than guessing (#11483).
+   */
+  getHoveredFileKind(id: string): "file" | "directory" | null {
+    const link = this.instances.get(id)?.hoveredLink;
+    return link?.kind === "file" || link?.kind === "directory" ? link.kind : null;
   }
 
   /**
@@ -1014,6 +1026,7 @@ class TerminalInstanceService {
       writeChain: Promise.resolve(),
       restoreGeneration: 0,
       isSerializedRestoreInProgress: false,
+      restoreWindowToken: 0,
       deferredOutput: [],
       scrollbackRestoreState: "none",
       attachGeneration: 0,
@@ -1340,9 +1353,13 @@ class TerminalInstanceService {
   private ensureOpened(id: string, managed: ManagedTerminal): void {
     if (managed.isOpened) return;
     // Seed xterm's grid before open() so cold-start restore paints at the
-    // saved size instead of flashing 80x24 then snapping (#6983).
+    // saved size instead of flashing 80x24 then snapping (#6983). Routed
+    // through the resize controller rather than xterm directly so it honours
+    // the serialized-restore gate: a cross-surface rebuild can have a replay
+    // already in flight here, and resizing out from under it would both undo
+    // the capture-width alignment and make the parked width look live (#11552).
     if (managed.targetCols && managed.targetRows) {
-      managed.terminal.resize(managed.targetCols, managed.targetRows);
+      this.resizeController.resizeTerminal(managed, managed.targetCols, managed.targetRows);
     }
     // terminalOpenStartedAt anchors the first-write delta (#9809).
     managed.terminalOpenStartedAt =
@@ -2639,20 +2656,36 @@ class TerminalInstanceService {
     this.restoreController.dispose();
   }
 
-  async restoreFetchedState(id: string, serializedState: string | null): Promise<boolean> {
-    return this.restoreController.restoreFetchedState(id, serializedState);
+  async restoreFetchedState(
+    id: string,
+    serializedState: string | null,
+    captureGeometry?: TerminalGeometry
+  ): Promise<boolean> {
+    return this.restoreController.restoreFetchedState(id, serializedState, captureGeometry);
   }
 
   async fetchAndRestore(id: string): Promise<boolean> {
     return this.restoreController.fetchAndRestore(id);
   }
 
-  restoreFromSerialized(id: string, serializedState: string): boolean {
-    return this.restoreController.restoreFromSerialized(id, serializedState);
+  restoreFromSerialized(
+    id: string,
+    serializedState: string,
+    captureGeometry?: TerminalGeometry
+  ): boolean {
+    return this.restoreController.restoreFromSerialized(id, serializedState, captureGeometry);
   }
 
-  restoreFromSerializedIncremental(id: string, serializedState: string): Promise<boolean> {
-    return this.restoreController.restoreFromSerializedIncremental(id, serializedState);
+  restoreFromSerializedIncremental(
+    id: string,
+    serializedState: string,
+    captureGeometry?: TerminalGeometry
+  ): Promise<boolean> {
+    return this.restoreController.restoreFromSerializedIncremental(
+      id,
+      serializedState,
+      captureGeometry
+    );
   }
 
   setInputLocked(id: string, locked: boolean): void {

@@ -445,7 +445,7 @@ export function WorktreeFilterPopover({
                 type="checkbox"
                 checked={groupByType}
                 onChange={(e) => setGroupByType(e.target.checked)}
-                className="w-3.5 h-3.5 rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent focus:ring-offset-0 bg-daintree-bg"
+                className="w-3.5 h-3.5 rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent/30 focus:ring-offset-0 bg-daintree-bg"
               />
               <span className="text-xs text-daintree-text/70">Group by type</span>
             </label>

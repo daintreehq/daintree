@@ -107,10 +107,12 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
   Dialog.Input = Input;
   Dialog.Body = Body;
   Dialog.Footer = Footer;
+  Dialog.Divider = (props: React.HTMLAttributes<HTMLDivElement>) => <div {...props} />;
 
   return {
     AppPaletteDialog: Dialog,
     KBD_CLASS: "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60",
+    PALETTE_SURFACE_WIDTH: "w-[484px]",
   };
 });
 
@@ -363,6 +365,27 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     expect(footer.textContent).not.toContain("⌥↵");
     expect(footer.textContent).toContain("Switch");
   });
+
+  it("closes on Escape in modal mode, where the input owns the key", () => {
+    const onClose = vi.fn();
+    render(<ProjectSwitcherPalette {...defaultProps} onClose={onClose} />);
+
+    fireEvent.keyDown(screen.getByTestId("palette-input"), { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves Escape to the anchored shell in dropdown mode", () => {
+    // The shell spends the first press clearing the query and vetoes Radix's
+    // capture-phase dismissal. This handler runs on bubble, afterwards — closing
+    // here would shut the palette on a press meant to filter it.
+    const onClose = vi.fn();
+    render(<ProjectSwitcherPalette {...defaultProps} mode="dropdown" onClose={onClose} />);
+
+    fireEvent.keyDown(screen.getByTestId("palette-input"), { key: "Escape" });
+
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
 
 // #11071: the palette used to render a narrower list than the one selectedIndex
@@ -455,6 +478,12 @@ describe("ProjectSwitcherPalette keyboard on a scratch row", () => {
     createdAt: 0,
     lastOpened: 0,
     isActive: false,
+    activeAgentCount: 0,
+    waitingAgentCount: 0,
+    blockedAgentCount: 0,
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
+    processCount: 0,
   };
 
   const scratchProps = {

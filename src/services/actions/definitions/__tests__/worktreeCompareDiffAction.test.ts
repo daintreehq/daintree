@@ -68,7 +68,14 @@ describe("worktree.compareDiff run() (#10684)", () => {
       { worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never,
       {} as ActionContext
     );
-    expect(result).toEqual(SAMPLE_RESULT);
+    expect(result).toEqual({
+      ...SAMPLE_RESULT,
+      total: 1,
+      hasMore: false,
+      offset: 0,
+      limit: 100,
+      nextOffset: null,
+    });
     expect(mockCompareWorktrees).toHaveBeenCalledWith(
       "/repo/left",
       "feature/a",
@@ -213,5 +220,76 @@ describe("worktree.compareDiff run() (#10684)", () => {
     await expect(
       run({ worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never, {} as ActionContext)
     ).rejects.toThrow(/branch not found/);
+  });
+
+  describe("bounded file list (#11531)", () => {
+    const manyFiles = (count: number) => ({
+      branch1: "feature/a",
+      branch2: "feature/b",
+      files: Array.from({ length: count }, (_, i) => ({
+        path: `src/file-${i}.ts`,
+        status: "M",
+        insertions: 1,
+        deletions: 0,
+      })),
+    });
+
+    it("caps the file list at the default page size rather than returning all of them", async () => {
+      mockCompareWorktrees.mockResolvedValue(manyFiles(5000));
+      const run = getRun();
+      const result = (await run(
+        { worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never,
+        {} as ActionContext
+      )) as { files: unknown[]; total: number; hasMore: boolean; nextOffset: number | null };
+
+      expect(result.files).toHaveLength(100);
+      expect(result.total).toBe(5000);
+      expect(result.hasMore).toBe(true);
+      expect(result.nextOffset).toBe(100);
+    });
+
+    it("serves a later page from offset and closes out at the end", async () => {
+      mockCompareWorktrees.mockResolvedValue(manyFiles(120));
+      const run = getRun();
+      const result = (await run(
+        { worktreeId: "wt-left", compareToWorktreeId: "wt-right", offset: 100 } as never,
+        {} as ActionContext
+      )) as { files: { path: string }[]; hasMore: boolean; nextOffset: number | null };
+
+      expect(result.files).toHaveLength(20);
+      expect(result.files[0]?.path).toBe("src/file-100.ts");
+      expect(result.hasMore).toBe(false);
+      expect(result.nextOffset).toBeNull();
+    });
+
+    it("clamps an over-ceiling limit reaching run() unvalidated", async () => {
+      mockCompareWorktrees.mockResolvedValue(manyFiles(5000));
+      const run = getRun();
+      const result = (await run(
+        { worktreeId: "wt-left", compareToWorktreeId: "wt-right", limit: 99999 } as never,
+        {} as ActionContext
+      )) as { files: unknown[]; limit: number };
+
+      expect(result.files).toHaveLength(200);
+      expect(result.limit).toBe(200);
+    });
+
+    it("drops per-file fields the schema does not advertise", async () => {
+      mockCompareWorktrees.mockResolvedValue({
+        branch1: "a",
+        branch2: "b",
+        files: [
+          { path: "x.ts", status: "M", insertions: 1, deletions: 0, patch: "z".repeat(10_000) },
+        ],
+      });
+      const run = getRun();
+      const result = (await run(
+        { worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never,
+        {} as ActionContext
+      )) as { files: Record<string, unknown>[] };
+
+      expect(result.files[0]).not.toHaveProperty("patch");
+      expect(result.files[0]?.path).toBe("x.ts");
+    });
   });
 });

@@ -24,7 +24,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TerminalRecipe, Worktree } from "@/types";
 import { logError } from "@/utils/logger";
-import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { getRecipeScope, worktreeDisplayName } from "@/utils/recipeScope";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface RecipesTabProps {
@@ -182,19 +182,10 @@ export function RecipesTab({
     }
   };
 
-  const getRecipeScope = (recipe: TerminalRecipe): { label: string; isGlobal: boolean } => {
-    if (isInRepoRecipeId(recipe)) return { label: "Team", isGlobal: false };
-    if (recipe.projectId === undefined) return { label: "Global", isGlobal: true };
-    if (!recipe.worktreeId) return { label: "Project-wide", isGlobal: false };
-    const worktree = worktreeMap.get(recipe.worktreeId);
-    if (worktree) {
-      return {
-        label: `Worktree: ${worktree.isMainWorktree ? worktree.name : worktree.branch || worktree.name}`,
-        isGlobal: false,
-      };
-    }
-    return { label: `Worktree: ${recipe.worktreeId}`, isGlobal: false };
-  };
+  // Falls back to the raw id so an orphaned worktree's recipe stays
+  // identifiable here, where the row has the width for it.
+  const resolveWorktreeName = (worktreeId: string): string =>
+    worktreeDisplayName(worktreeMap.get(worktreeId)) ?? worktreeId;
 
   return (
     <>
@@ -282,7 +273,7 @@ export function RecipesTab({
                             <TooltipContent side="bottom">{recipe.name}</TooltipContent>
                           </Tooltip>
                           {(() => {
-                            const scopeInfo = getRecipeScope(recipe);
+                            const scopeInfo = getRecipeScope(recipe, resolveWorktreeName);
                             return (
                               <span
                                 className={`text-[11px] px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1 ${
@@ -489,7 +480,7 @@ export function RecipesTab({
             value={importJson}
             onChange={(e) => setImportJson(e.target.value)}
             placeholder='{"name": "My Recipe", "terminals": [...]}'
-            className="w-full h-64 px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent resize-none"
+            className="w-full h-64 px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 resize-none"
             spellCheck={false}
           />
           {importError && (

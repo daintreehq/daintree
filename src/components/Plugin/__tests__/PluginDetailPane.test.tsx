@@ -70,6 +70,7 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
         forgeProviders: [],
         fileDecorationProviders: [],
         agents: [],
+        processTools: [],
       },
     },
     dir: "/plugins/acme.demo",

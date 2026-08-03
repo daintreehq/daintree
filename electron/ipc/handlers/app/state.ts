@@ -49,24 +49,34 @@ import { notifyAppViewPainted } from "../../../setup/deepLinkInstall.js";
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import { getValidatedOverrides } from "../keybinding.js";
 import { loadSanitizedUserAgentRegistry } from "../../../services/UserAgentRegistryService.js";
+import type { Project } from "../../../types/index.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
+
+interface HydrationWorkspace {
+  project: Project | null;
+  /**
+   * Owner of the per-workspace state directory. Equals `project.id` for a real
+   * project, and is the scratch's own id in a scratch view, where `project` is
+   * null because scratches deliberately have no Project row (#11484).
+   */
+  workspaceId: string | null;
+}
 
 export function registerAppStateHandlers(deps?: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const resolveProjectForHydration = (ctx?: IpcContext) => {
-    if (!ctx) {
-      return projectStore.getCurrentProject();
+  const resolveWorkspaceForHydration = (ctx?: IpcContext): HydrationWorkspace => {
+    if (ctx) {
+      const scoped = resolveScopedProjectForIpcContext(ctx, deps);
+      if (scoped) return { project: scoped.project, workspaceId: scoped.workspaceId };
     }
 
-    const scopedProject = resolveScopedProjectForIpcContext(ctx, deps);
-    if (scopedProject) return scopedProject.project;
-    return projectStore.getCurrentProject();
+    const project = projectStore.getCurrentProject();
+    return { project, workspaceId: project?.id ?? null };
   };
 
   const handleAppHydrate = async (ctx?: IpcContext) => {
-    const currentProject = resolveProjectForHydration(ctx);
-    const projectId = currentProject?.id;
+    const { project: currentProject, workspaceId } = resolveWorkspaceForHydration(ctx);
     const panelFilter = getCrashRecoveryService().consumePanelFilter();
 
     // Hover-prefetch fast path: when a project switcher hover (or any other
@@ -78,14 +88,14 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // cache is only probed when the result is actually usable.
     const cacheGuard = getCrashLoopGuard();
     const cacheInSafeMode = cacheGuard.isSafeMode();
-    const cacheEligible = Boolean(projectId) && panelFilter === null && !cacheInSafeMode;
-    const cached = cacheEligible ? consumePrefetchedHydrateResult(projectId!) : undefined;
+    const cacheEligible = Boolean(workspaceId) && panelFilter === null && !cacheInSafeMode;
+    const cached = cacheEligible ? consumePrefetchedHydrateResult(workspaceId!) : undefined;
     markPerformance(PERF_MARKS.APP_HYDRATE_PREFETCH, {
       hit: Boolean(cached),
-      projectId: projectId ?? null,
+      projectId: workspaceId ?? null,
       reason: cached
         ? "hit"
-        : !projectId
+        : !workspaceId
           ? "no-project"
           : cacheInSafeMode
             ? "safe-mode"
@@ -96,6 +106,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     if (cached) {
       return {
         ...cached,
+        // The live sender's identity always wins over whatever the prefetch
+        // stamped — only ever a project today, but never assume that.
+        workspaceId,
         skippedPanelCount: 0,
         crashCount: cacheGuard.getCrashCount(),
         lastCrashAt: cacheGuard.getLastCrashTimestamp(),
@@ -139,14 +152,28 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     let terminalsToUse: StoreSchema["appState"]["terminals"] = [];
     let terminalsSource = "none";
 
+    // The legacy global focus/worktree/MRU fields predate per-workspace state
+    // and belong to whichever real project was open when they were written.
+    // Only a project with a real row may inherit them as migration input — a
+    // scratch (workspaceId set, no Project row) or an unresolvable sender must
+    // never adopt another workspace's worktree, focus, or MRU (#11497). The
+    // rest of `globalAppState` stays intentionally app-global.
+    const canInheritLegacyWorkspaceState = currentProject !== null;
+
     // Focus mode state to include in response
-    let focusModeToUse = globalAppState.focusMode ?? false;
-    let focusPanelStateToUse = globalAppState.focusPanelState;
+    let focusModeToUse = canInheritLegacyWorkspaceState
+      ? (globalAppState.focusMode ?? false)
+      : false;
+    let focusPanelStateToUse = canInheritLegacyWorkspaceState
+      ? globalAppState.focusPanelState
+      : undefined;
     // Active worktree state to include in response
-    let activeWorktreeIdToUse = globalAppState.activeWorktreeId;
+    let activeWorktreeIdToUse = canInheritLegacyWorkspaceState
+      ? globalAppState.activeWorktreeId
+      : undefined;
     // Quick-switcher MRU: prefer per-project, fall back to the legacy global
     // list so existing users keep their MRU on first open after upgrade.
-    let mruListToUse = globalAppState.mruList;
+    let mruListToUse = canInheritLegacyWorkspaceState ? globalAppState.mruList : undefined;
     let projectStateQuarantinedPath: string | undefined;
     // Per-project layout state folded into the payload so the renderer skips
     // the standalone getTabGroups/getTerminalSizes/getDraftInputs round-trips
@@ -156,9 +183,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     let terminalSizesToUse: Record<string, { cols: number; rows: number }> | undefined;
     let draftInputsToUse: Record<string, string> | undefined;
 
-    if (projectId) {
+    if (workspaceId) {
       const { state: projectState, quarantinedPath } =
-        await projectStore.getProjectStateWithRecovery(projectId);
+        await projectStore.getProjectStateWithRecovery(workspaceId);
       projectStateQuarantinedPath = quarantinedPath;
       // Defaults match the standalone handlers' null-state returns.
       tabGroupsToUse = projectState?.tabGroups ?? [];
@@ -174,7 +201,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         const validatedTerminals = filterValidTerminalEntries(
           projectState.terminals,
           TerminalSnapshotSchema,
-          `app:hydrate(project:${projectId})`
+          `app:hydrate(project:${workspaceId})`
         );
         // Filter out trashed terminals, infer missing kind, and normalize location
         terminalsToUse = validatedTerminals
@@ -195,13 +222,16 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         if (projectState.focusMode !== undefined) {
           focusModeToUse = projectState.focusMode;
           focusPanelStateToUse = projectState.focusPanelState;
-        } else if (globalAppState.focusMode !== undefined) {
-          // Migration: per-project state exists but no focusMode - migrate from global
+        } else if (canInheritLegacyWorkspaceState && globalAppState.focusMode !== undefined) {
+          // Migration: per-project state exists but no focusMode - migrate from
+          // global. Gated on a real project row: a scratch reaches this branch
+          // once it has saved panels but no focus state, and without the gate it
+          // would both adopt and persist another workspace's focus mode (#11497).
           focusModeToUse = globalAppState.focusMode;
           focusPanelStateToUse = globalAppState.focusPanelState;
 
           // Save the migrated focus mode to per-project state
-          await projectStore.enqueueProjectStateUpdate(projectId, (existing) => ({
+          await projectStore.enqueueProjectStateUpdate(workspaceId, (existing) => ({
             ...(existing ?? projectState),
             focusMode: focusModeToUse,
             focusPanelState: focusPanelStateToUse,
@@ -211,7 +241,11 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             `[AppHydrate] Migrated focusMode (${focusModeToUse}) to per-project state for ${currentProject?.name}`
           );
         }
-      } else if (globalAppState.terminals && globalAppState.terminals.length > 0) {
+      } else if (
+        currentProject &&
+        globalAppState.terminals &&
+        globalAppState.terminals.length > 0
+      ) {
         // Migration: use global terminals and migrate them to per-project
         terminalsToUse = filterValidTerminalEntries(
           globalAppState.terminals,
@@ -246,9 +280,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             : undefined;
 
           // Include focus mode in migration
-          await projectStore.enqueueProjectStateUpdate(projectId, (existing) => ({
+          await projectStore.enqueueProjectStateUpdate(workspaceId, (existing) => ({
             ...(existing ?? {}),
-            projectId,
+            projectId: workspaceId,
             activeWorktreeId: globalAppState.activeWorktreeId,
             sidebarWidth: globalAppState.sidebarWidth ?? 350,
             terminals: migratedTerminals,
@@ -275,9 +309,9 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             : undefined;
 
           // No terminals to migrate but still save empty state to mark migration complete
-          await projectStore.enqueueProjectStateUpdate(projectId, (existing) => ({
+          await projectStore.enqueueProjectStateUpdate(workspaceId, (existing) => ({
             ...(existing ?? {}),
-            projectId,
+            projectId: workspaceId,
             activeWorktreeId: globalAppState.activeWorktreeId,
             sidebarWidth: globalAppState.sidebarWidth ?? 350,
             terminals: existing?.terminals ?? [],
@@ -285,7 +319,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             focusPanelState: normalizedFocusPanelState,
           }));
         }
-      } else {
+      } else if (currentProject) {
         // Normalize legacy focusPanelState
         const normalizedFocusPanelState = globalAppState.focusPanelState
           ? {
@@ -302,10 +336,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
 
         // No per-project state and no global terminals - create fresh state with focus mode migration
         await projectStore.enqueueProjectStateUpdate(
-          projectId,
+          workspaceId,
           (existing) =>
             existing ?? {
-              projectId,
+              projectId: workspaceId,
               activeWorktreeId: globalAppState.activeWorktreeId,
               sidebarWidth: globalAppState.sidebarWidth ?? 350,
               terminals: [],
@@ -314,6 +348,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             }
         );
       }
+      // A scratch with no state yet falls through deliberately: the legacy
+      // global terminals and focus mode predate per-workspace state and belong
+      // to whichever project was open then, never to this scratch. Its first
+      // panel save creates the file, so there is nothing to seed here.
     } else {
       // No project - use global terminals (legacy/fallback)
       terminalsToUse = filterValidTerminalEntries(
@@ -414,7 +452,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     };
 
     console.log(
-      `[AppHydrate] Project: ${currentProject?.name ?? "none"} - terminals from ${terminalsSource} (${terminalsToUse.length} valid), focusMode: ${focusModeToUse}`
+      `[AppHydrate] Project: ${currentProject?.name ?? (workspaceId ? "scratch" : "none")} - terminals from ${terminalsSource} (${terminalsToUse.length} valid), focusMode: ${focusModeToUse}`
     );
 
     const gpuStatus = getGpuFeatureStatus();
@@ -429,6 +467,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       appState: appState as import("../../../../shared/types/ipc/app.js").AppState,
       terminalConfig: store.get("terminalConfig"),
       project: currentProject,
+      workspaceId,
       agentSettings: store.get("agentSettings"),
       gpuWebGLHardware,
       gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
@@ -685,12 +724,12 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             sanitized.push(id);
           }
         }
-        // Persist per-project so opening another project's view can't gut this
-        // list via the quick-switcher prune pass (#9922). Fall back to the
-        // legacy global write only when there's no resolvable project.
-        const mruProject = resolveProjectForHydration(ctx);
-        if (mruProject?.id) {
-          await projectStore.enqueueProjectStateUpdate(mruProject.id, (existing) =>
+        // Persist per-workspace so opening another view can't gut this list via
+        // the quick-switcher prune pass (#9922). Fall back to the legacy global
+        // write only when there's no resolvable workspace.
+        const { workspaceId: mruWorkspaceId } = resolveWorkspaceForHydration(ctx);
+        if (mruWorkspaceId) {
+          await projectStore.enqueueProjectStateUpdate(mruWorkspaceId, (existing) =>
             existing ? { ...existing, mruList: sanitized } : null
           );
         } else {

@@ -272,7 +272,7 @@ export function registerWorktreeSessionActions(
     id: "worktree.sessions.clearHistory",
     title: "Clear Session History",
     description:
-      "Permanently delete this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents. Open sessions are unaffected, and bookmarked sessions are exempt — `session.bookmark.delete` is the only way to remove one.",
+      "Permanently delete this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents. Open sessions are unaffected, and bookmarked sessions are exempt, and deleting a bookmark is the only way to remove one.",
     category: "worktree",
     kind: "command",
     danger: "confirm",

@@ -292,6 +292,16 @@ export interface PanelRestoreContext {
   prefetchedReconnectResults?: Record<string, TerminalReconnectResult>;
   terminalSizes: Record<string, { cols: number; rows: number }>;
   activeWorktreeId: string | null;
+  /**
+   * Whether the workspace being restored can have git worktrees at all. `false`
+   * for a scratch and for a folder opened without git (#11405): no panel there
+   * may carry a `worktreeId`, so every restore path normalizes it away rather
+   * than re-homing onto — or preserving — an id that belongs to some other
+   * workspace. Without this the app-global saved `activeWorktreeId` (and any
+   * id a previous run persisted onto a panel) restores panels into a worktree
+   * bucket the grid never renders: a live PTY with no visible panel.
+   */
+  workspaceHasWorktrees: boolean;
   projectRoot: string;
   agentSettings: AgentSettings | undefined;
   clipboardDirectory: string | undefined;
@@ -357,6 +367,7 @@ export async function restorePanelsPhase(
     prefetchedReconnectResults,
     terminalSizes,
     activeWorktreeId,
+    workspaceHasWorktrees,
     projectRoot,
     agentSettings,
     clipboardDirectory,
@@ -410,6 +421,12 @@ export async function restorePanelsPhase(
   const resolveRestoredWorktreeId = async (
     worktreeId: string | undefined
   ): Promise<string | undefined> => {
+    // A workspace with no worktrees has no valid id to hold, so both halves of
+    // the resolution below are wrong there: the re-home target would be another
+    // workspace's worktree, and a saved id could only be one a buggy earlier run
+    // stamped on. Normalize to none — the worktree-less bucket the grid renders
+    // when nothing is selected.
+    if (!workspaceHasWorktrees) return undefined;
     const known = await getKnownWorktreeIds();
     // Only re-home onto the active worktree when it is itself live. With a
     // complete, authoritative list (#11387) an activeWorktreeId absent from
@@ -768,9 +785,17 @@ export async function restorePanelsPhase(
                 return;
               }
               logHydrationInfo(`Recreating ${kind} panel: ${saved.id}`);
-              const nonPtyId = await addPanel(
-                buildArgsForNonPtyRecreation(saved, kind, projectRoot || "", activeWorktreeId)
+              const nonPtyArgs = buildArgsForNonPtyRecreation(
+                saved,
+                kind,
+                projectRoot || "",
+                activeWorktreeId
               );
+              // Same normalization the PTY paths get from
+              // `resolveRestoredWorktreeId`: this builder keeps `saved.worktreeId`
+              // untouched, so a worktree-less workspace needs it cleared here too.
+              if (!workspaceHasWorktrees) nonPtyArgs.worktreeId = undefined;
+              const nonPtyId = await addPanel(nonPtyArgs);
               restoredIdsByIndex.set(capturedIndex, nonPtyId);
             }
           }
@@ -924,11 +949,16 @@ export async function restorePanelsPhase(
         // Both are inferred attribution: the lifecycle ledger records the
         // provenance so cwd inference can never overwrite a worktree the
         // user explicitly chose later in this panel's life.
-        const inferred = inferWorktreeIdFromCwd(terminal.cwd, worktreesForInfer ?? undefined);
+        // Neither attribution applies in a worktree-less workspace: there is no
+        // worktree for the cwd to match, and the active id would belong to
+        // another workspace (see `workspaceHasWorktrees`).
+        const inferred = workspaceHasWorktrees
+          ? inferWorktreeIdFromCwd(terminal.cwd, worktreesForInfer ?? undefined)
+          : undefined;
         if (inferred) {
           orphanArgs.worktreeId = inferred;
           orphanArgs.worktreeIdSource = "inferred";
-        } else if (activeWorktreeId) {
+        } else if (workspaceHasWorktrees && activeWorktreeId) {
           orphanArgs.worktreeId = activeWorktreeId;
           orphanArgs.worktreeIdSource = "inferred";
         }

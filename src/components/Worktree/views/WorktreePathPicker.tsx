@@ -61,7 +61,7 @@ export function WorktreePathPicker({
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder="/path/to/worktree"
-            className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
+            className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
             disabled={isPending}
             aria-invalid={errorField === "worktree-path" ? true : undefined}
             aria-describedby={errorField === "worktree-path" ? "validation-error" : undefined}

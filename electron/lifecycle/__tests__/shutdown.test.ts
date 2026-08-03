@@ -82,6 +82,12 @@ vi.mock("../../services/WorkspaceClient.js", () => ({
   disposeWorkspaceClient: vi.fn(),
 }));
 
+const projectCheckServiceMock = vi.hoisted(() => ({ dispose: vi.fn() }));
+
+vi.mock("../../services/ProjectCheckService.js", () => ({
+  projectCheckService: projectCheckServiceMock,
+}));
+
 const mcpServerMock = vi.hoisted(() => ({
   stop: vi.fn(() => Promise.resolve()),
 }));
@@ -252,6 +258,12 @@ const deferredInitQueueMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../window/deferredInitQueue.js", () => deferredInitQueueMock);
+
+const openWindowsTrackerMock = vi.hoisted(() => ({
+  freezeAndSnapshotOpenWindows: vi.fn(),
+}));
+
+vi.mock("../../window/openWindowsTracker.js", () => openWindowsTrackerMock);
 
 // Runs in the post-cleanup tail, outside the hard-timeout race. Mocked so a test
 // can wedge it and prove the run still settles (issue #11104).
@@ -425,6 +437,44 @@ describe("registerShutdownHandler", () => {
     await vi.waitFor(() => {
       expect(appMock.exit).toHaveBeenCalledWith(0);
     });
+  });
+
+  it("snapshots the open-window manifest before the database closes", async () => {
+    // Continuous persistence covers force-quit, but a debounce still owing an
+    // unsaved project switch is only captured here — and the capture has to
+    // beat closeSharedDb, which would otherwise silently reopen the DB (#11492).
+    const { beforeQuitCb } = await setup();
+    await beforeQuitCb(makeEvent());
+
+    expect(openWindowsTrackerMock.freezeAndSnapshotOpenWindows).toHaveBeenCalledTimes(1);
+
+    await vi.waitFor(() => {
+      expect(closeSharedDbMock.closeSharedDb).toHaveBeenCalled();
+    });
+    const snapshotOrder =
+      openWindowsTrackerMock.freezeAndSnapshotOpenWindows.mock.invocationCallOrder[0];
+    const closeOrder = closeSharedDbMock.closeSharedDb.mock.invocationCallOrder[0];
+    expect(snapshotOrder).toBeLessThan(closeOrder);
+
+    await vi.waitFor(() => {
+      expect(appMock.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  it("does not snapshot the open-window manifest when the quit is cancelled", async () => {
+    // A cancelled quit must leave the manifest live — freezing is permanent.
+    quitWarningMock.getActiveAgentCount.mockReturnValue(2);
+    quitWarningMock.showQuitWarning.mockResolvedValue(false);
+
+    const mainWindow = {} as Electron.BrowserWindow;
+    const { beforeQuitCb } = await setup({
+      windowRegistry: {
+        getPrimary: () => ({ browserWindow: mainWindow }),
+      } as unknown as ShutdownDeps["windowRegistry"],
+    });
+    await beforeQuitCb(makeEvent());
+
+    expect(openWindowsTrackerMock.freezeAndSnapshotOpenWindows).not.toHaveBeenCalled();
   });
 
   it("halts the deferred init queue after the user confirms quit", async () => {
@@ -842,6 +892,18 @@ describe("registerShutdownHandler", () => {
       expect(serviceRefsMock.setAgentNotificationServiceRef).toHaveBeenCalledWith(null);
       expect(serviceRefsMock.setAutoUpdaterServiceRef).toHaveBeenCalledWith(null);
       expect(serviceRefsMock.setWindowsStoreNotifierServiceRef).toHaveBeenCalledWith(null);
+    });
+
+    it("kills in-flight project checks so detached runners don't outlive the app", async () => {
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      // POSIX checks spawn detached, so nothing else reaps them on quit.
+      expect(projectCheckServiceMock.dispose).toHaveBeenCalledTimes(1);
     });
 
     it("clears PluginService's WorkspaceClient reference during shutdown", async () => {

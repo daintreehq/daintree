@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
@@ -141,10 +142,9 @@ export function PluginQuickPickDialog() {
             else if (promptId) resolveOnce(promptId, item);
           }}
           className={cn(
-            "relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
-            isSelected
-              ? "bg-overlay-raised border-overlay text-daintree-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:bg-daintree-accent before:content-['']"
-              : "border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
+            PALETTE_ROW_CLASS,
+            "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
+            "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
           )}
         >
           {canSelectMany && (

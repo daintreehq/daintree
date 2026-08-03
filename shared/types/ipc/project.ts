@@ -34,6 +34,21 @@ export interface ProjectSwitchOutgoingState {
   draftDelta?: IdArrayDelta;
 }
 
+/**
+ * What the incoming project view should focus once it is activated.
+ *
+ * A one-shot instruction handed to main at switch time and delivered to the
+ * new view when its paint gate resolves. It exists because the caller lives in
+ * the OUTGOING view's V8 context: by the time the switch completes that context
+ * is no longer the active one, so it cannot focus anything itself.
+ *
+ * `focus-panel` carries the target explicitly rather than re-deriving it, so
+ * clicking a specific run lands on that run — "next waiting" would rank the
+ * destination again and could pick a different one.
+ */
+export type ProjectFocusOnActivateIntent =
+  { intent: "focus-next-waiting" } | { intent: "focus-panel"; panelId: string };
+
 /** Payload for project:on-switch event with cancellation token */
 export interface ProjectSwitchPayload {
   /** The project being switched to */
@@ -201,5 +216,9 @@ export interface ProjectHistoryTarget {
   projectId: string;
 }
 
-/** Project status map pushed from main process, keyed by project ID */
+/**
+ * Workspace status map pushed from the main process, keyed by workspace ID —
+ * project ids and scratch ids alike (#11518). The two formats are disjoint
+ * (64-char hex vs UUID), so one map can carry both without collision.
+ */
 export type ProjectStatusMap = Record<string, ProjectStatusEntry>;

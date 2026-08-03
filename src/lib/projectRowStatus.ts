@@ -1,8 +1,41 @@
-import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
+import type {
+  SearchableProject,
+  SearchableScratch,
+  WorkspaceRowStatusFields,
+} from "@/hooks/useProjectSwitcherPalette";
 import { formatTimeAgo } from "@/utils/timeAgo";
 
 /** Visual weight of a row's status line. Maps to status tokens, never the accent. */
 export type ProjectRowTone = "blocked" | "waiting" | "review" | "working" | "running" | "muted";
+
+/**
+ * Text colour for a status line, by tone.
+ *
+ * Lives here rather than in the switcher that first used it because the fleet
+ * overview renders the same sentences about the same states. Two surfaces
+ * colouring "blocked" differently would be a worse bug than either colour being
+ * individually wrong.
+ */
+export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
+  blocked: "text-status-danger/80",
+  waiting: "text-activity-waiting",
+  // Finished-awaiting-review: the completed-state hue, distinct from both the
+  // warning of a wait and the success-green of a healthy process. Never danger
+  // — completion is the desired outcome, not a fault.
+  review: "text-activity-completed",
+  working: "text-activity-working",
+  running: "text-daintree-text/50",
+  muted: "text-daintree-text/50",
+};
+
+export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
+  blocked: "bg-status-danger",
+  waiting: "bg-status-warning",
+  review: "bg-activity-completed",
+  working: "bg-activity-active animate-activity-pulse",
+  running: "bg-status-success",
+  muted: "border border-daintree-text/20",
+};
 
 /**
  * Wording boundary between "just finished" and plain "finished" on a
@@ -50,7 +83,7 @@ function formatRangeAge(sinceMs: number, nowMs: number): string {
 }
 
 /** "3m" → "3m ago", "just now" stays bare — "just now ago" is not a phrase. */
-function agoPhrase(age: string): string {
+export function agoPhrase(age: string): string {
   return age === "just now" ? age : `${age} ago`;
 }
 
@@ -58,8 +91,11 @@ function pluralAgents(count: number, singular: string, plural: string): string {
   return count === 1 ? singular : `${count} ${plural}`;
 }
 
+type WorkspaceActivityStatus = Omit<ProjectRowStatus, "pathHint">;
+
 /**
- * The one status line a switcher row shows.
+ * The activity half of a row's status line — everything derived purely from
+ * agent counts, and so identical for a project and a scratch.
  *
  * Ordered by what would make someone act: a blocked agent first (it has stopped
  * and input may not restart it), then agents waiting on the user, then finished
@@ -68,21 +104,15 @@ function pluralAgents(count: number, singular: string, plural: string): string {
  * waiting agent and eight are different situations, and a wait that started
  * forty minutes ago is a different situation from one that started forty
  * seconds ago.
+ *
+ * Returns null when nothing is running, leaving the caller to supply the
+ * dormant line its own kind understands (a project can be auto-parked; a
+ * scratch only ever has an opened time).
  */
-export function getProjectRowStatus(
-  project: SearchableProject,
-  nowMs: number = Date.now()
-): ProjectRowStatus {
-  // Only surface the fragment when it actually disambiguates — a plain basename
-  // is already the folder name shown beside it, so repeating it is noise.
-  const pathHint = project.displayPath.includes("/") ? project.displayPath : undefined;
-  const withHint = (status: Omit<ProjectRowStatus, "pathHint">): ProjectRowStatus =>
-    pathHint ? { ...status, pathHint } : status;
-
-  if (project.isMissing) {
-    return withHint({ text: "Directory not found", tone: "blocked" });
-  }
-
+function getWorkspaceActivityStatus(
+  project: WorkspaceRowStatusFields,
+  nowMs: number
+): WorkspaceActivityStatus | null {
   const age =
     project.oldestWaitingSince !== undefined
       ? formatWaitAge(project.oldestWaitingSince, nowMs)
@@ -120,19 +150,19 @@ export function getProjectRowStatus(
       if (age) parts.push(blocked > 1 ? `oldest ${age}` : age);
     }
 
-    return withHint({
+    return {
       text: parts.join(" · "),
       tone: blocked > 0 ? "blocked" : "waiting",
-    });
+    };
   }
 
   // Counts arrive from a single producer that keeps blocked a subset of
   // waiting, but a malformed payload must not silently render as idle.
   if (project.blockedAgentCount > 0) {
-    return withHint({
+    return {
       text: pluralAgents(project.blockedAgentCount, "Agent blocked", "agents blocked"),
       tone: "blocked",
-    });
+    };
   }
 
   // Finished work the user hasn't seen — the hand-back the attention band
@@ -147,7 +177,7 @@ export function getProjectRowStatus(
     if (count === 1) {
       const at = latest ?? oldest;
       if (at === undefined) {
-        return withHint({ text: "Ready for review", tone: "review" });
+        return { text: "Ready for review", tone: "review" };
       }
       const finishedAge = formatWaitAge(at, nowMs);
       const text =
@@ -156,12 +186,12 @@ export function getProjectRowStatus(
             ? "Ready for review · just finished"
             : `Ready for review · just finished ${agoPhrase(finishedAge)}`
           : `Ready for review · finished ${agoPhrase(finishedAge)}`;
-      return withHint({ text, tone: "review" });
+      return { text, tone: "review" };
     }
 
     const lead = `${count} agents ready for review`;
     if (latest === undefined || oldest === undefined) {
-      return withHint({ text: lead, tone: "review" });
+      return { text: lead, tone: "review" };
     }
     // Newest-to-oldest range; collapses when both round to the same value.
     // The producer keeps latest >= oldest, but this formatter is defensive
@@ -172,14 +202,14 @@ export function getProjectRowStatus(
       newestAge === oldestAge
         ? `${lead} · ${oldestAge} ago`
         : `${lead} · ${newestAge}–${oldestAge} ago`;
-    return withHint({ text, tone: "review" });
+    return { text, tone: "review" };
   }
 
   if (project.activeAgentCount > 0) {
-    return withHint({
+    return {
       text: pluralAgents(project.activeAgentCount, "Agent running", "agents running"),
       tone: "working",
-    });
+    };
   }
 
   // Everything completed has been seen: drop the action phrase and mute. The
@@ -197,15 +227,50 @@ export function getProjectRowStatus(
         : age
           ? `${project.completedAgentCount} agents finished · latest ${age}`
           : `${project.completedAgentCount} agents finished`;
-    return withHint({ text, tone: "muted" });
+    return { text, tone: "muted" };
   }
 
   if (project.processCount > 0) {
-    return withHint({
+    return {
       text: pluralAgents(project.processCount, "Process running", "processes running"),
       tone: "running",
-    });
+    };
   }
+
+  return null;
+}
+
+/**
+ * Dormant fallback shared by both kinds.
+ *
+ * "Opened", explicitly: the browse band is frecency-ordered, so a bare "13h ago"
+ * read as a sort key it isn't. The verb turns it back into what it is — one
+ * useful fact about the row.
+ */
+function getOpenedStatus(lastOpened: number): WorkspaceActivityStatus {
+  if (lastOpened > 0) {
+    return { text: `Opened ${formatTimeAgo(lastOpened)}`, tone: "muted" };
+  }
+  return { text: "Not opened yet", tone: "muted" };
+}
+
+/** The one status line a project row shows. */
+export function getProjectRowStatus(
+  project: SearchableProject,
+  nowMs: number = Date.now()
+): ProjectRowStatus {
+  // Only surface the fragment when it actually disambiguates — a plain basename
+  // is already the folder name shown beside it, so repeating it is noise.
+  const pathHint = project.displayPath.includes("/") ? project.displayPath : undefined;
+  const withHint = (status: WorkspaceActivityStatus): ProjectRowStatus =>
+    pathHint ? { ...status, pathHint } : status;
+
+  if (project.isMissing) {
+    return withHint({ text: "Directory not found", tone: "blocked" });
+  }
+
+  const activity = getWorkspaceActivityStatus(project, nowMs);
+  if (activity) return withHint(activity);
 
   // Auto-closed by the background-idle sweep (#10830) — name the reason rather
   // than showing a bare time-ago that makes the project look merely stale.
@@ -213,12 +278,21 @@ export function getProjectRowStatus(
     return withHint({ text: "Suspended to free memory", tone: "muted" });
   }
 
-  // "Opened", explicitly: the browse band is frecency-ordered, so a bare
-  // "13h ago" read as a sort key it isn't. The verb turns it back into what it
-  // is — one useful fact about the row.
-  if (project.lastOpened > 0) {
-    return withHint({ text: `Opened ${formatTimeAgo(project.lastOpened)}`, tone: "muted" });
-  }
+  return withHint(getOpenedStatus(project.lastOpened));
+}
 
-  return withHint({ text: "Not opened yet", tone: "muted" });
+/**
+ * The one status line a scratch row shows (#11518).
+ *
+ * Same activity sentences and tones a project gets — the point of the shared
+ * core — minus the states a scratch has no concept of. There is no `isMissing`
+ * (the folder is app-managed), no auto-parking (scratches are never swept into
+ * a closed status), and no `pathHint`: scratch paths are UUIDs under the app's
+ * own directory, so a fragment of one disambiguates nothing.
+ */
+export function getScratchRowStatus(
+  scratch: SearchableScratch,
+  nowMs: number = Date.now()
+): ProjectRowStatus {
+  return getWorkspaceActivityStatus(scratch, nowMs) ?? getOpenedStatus(scratch.lastOpened);
 }

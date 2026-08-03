@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { errorsClient, eventInspectorClient, logsClient, telemetryPreviewClient } from "@/clients";
+import { withPagination, PaginatedResultSchema, decodeIndexCursor } from "./schemas";
 import { useErrorStore } from "@/store/errorStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { useEventStore } from "@/store/eventStore";
@@ -90,7 +91,11 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     resultSchema: z.object({ success: z.boolean() }),
     run: async (args: unknown) => {
       const { enabled } = args as { enabled: boolean };
-      return await logsClient.setVerbose(enabled);
+      // `logsClient.setVerbose` resolves void, so returning it directly gave
+      // `undefined` where the declared shape promises `{ success }`. Reaching
+      // this line means the call resolved; a rejection throws past it.
+      await logsClient.setVerbose(enabled);
+      return { success: true };
     },
   }));
 
@@ -211,7 +216,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "errors.recent",
     title: "Recent Errors",
     description:
-      "List recent errors from the diagnostics-dock error store (IPC and normalized runtime failures), newest first. Args (all optional): `limit` (1-50, default 20); `includesDismissed` (default false — active only). Returns { errors } — each with id, type, message, details, source, timestamp, retryability, dismissed, worktreeId/terminalId, recoveryHint, occurrenceCount. Never errors. This is a different store from `notifications.recent` (the user inbox) — query both if you need the full picture.",
+      "List recent entries from the diagnostics error log, covering runtime and inter-process failures, newest first. This is a separate store from the user's notification inbox, so a full picture usually means reading both. Dismissed entries are left out by default, so an empty list means nothing was recorded or everything recorded has been dismissed.",
     category: "errors",
     kind: "query",
     danger: "safe",
@@ -266,7 +271,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "notifications.recent",
     title: "Recent Notifications",
     description:
-      "List recent entries from the durable notification inbox (completion/waiting/info toasts the user saw), newest first. Args (all optional): `limit` (1-50, default 20); `type` ('success'|'error'|'info'|'warning'); `unreadOnly` (default false). Returns { notifications } — each with id, type, title, message, timestamp, seenAsToast. Never errors. This is a different store from `errors.recent` (the diagnostics-dock errors) — query both if you need the full picture.",
+      "List recent entries from the notification inbox — the completion, waiting and informational messages raised for the user, including quiet ones that never surfaced as a toast — newest first. This is a separate store from the diagnostics error log, so a full picture of what went wrong usually means reading both. It never fails; an empty list means nothing was notified.",
     category: "diagnostics",
     kind: "query",
     danger: "safe",
@@ -327,43 +332,29 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("eventInspector.getEvents", () => ({
     id: "eventInspector.getEvents",
     title: "Get Events",
-    description: "Get captured events from the event inspector. Use limit/offset for pagination.",
+    description:
+      "Get captured events from the event inspector. Args (all optional): `limit` (default 50, max 500); `offset` (default 0, `skip` is accepted as a legacy alias); `cursor` — pass the previous response's `nextCursor`. Returns { items, hasMore, nextCursor, total }.",
     category: "diagnostics",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z
-      .object({
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(500)
-          .default(50)
-          .describe("Max events to return (default: 50, max: 500)"),
-        offset: z
-          .number()
-          .int()
-          .min(0)
-          .default(0)
-          .describe("Number of events to skip (default: 0)"),
-      })
-      .optional(),
-    resultSchema: z.object({
-      events: z.array(z.unknown()),
-      total: z.number(),
-      limit: z.number(),
-      offset: z.number(),
-      hasMore: z.boolean(),
-    }),
+    argsSchema: withPagination({}, { legacy: ["skip"], cursor: true, maxLimit: 500 }).optional(),
+    resultSchema: PaginatedResultSchema(z.unknown()),
     run: async (args: unknown) => {
-      const { limit = 50, offset = 0 } =
-        (args as { limit?: number; offset?: number } | undefined) ?? {};
+      const {
+        limit = 50,
+        offset,
+        cursor,
+      } = (args as { limit?: number; offset?: number; cursor?: string } | undefined) ?? {};
+      // This source pages by index over an in-memory array, so its cursor IS
+      // the next offset; an explicit `offset`/`skip` still wins.
+      const start = offset ?? decodeIndexCursor(cursor) ?? 0;
       const allEvents = await eventInspectorClient.getEvents();
       const events = Array.isArray(allEvents) ? allEvents : [];
       const total = events.length;
-      const sliced = events.slice(offset, offset + limit);
-      return { events: sliced, total, limit, offset, hasMore: offset + limit < total };
+      const items = events.slice(start, start + limit);
+      const hasMore = start + limit < total;
+      return { items, hasMore, nextCursor: hasMore ? String(start + items.length) : null, total };
     },
   }));
 

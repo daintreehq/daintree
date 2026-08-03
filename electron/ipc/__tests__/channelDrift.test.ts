@@ -559,4 +559,36 @@ describe("IPC channel drift guardrails", () => {
         "the single source of truth lives in electron/ipc/channels.ts."
     ).toBe(false);
   });
+
+  it("the agent-session list binding forwards both scope filters (#11530)", async () => {
+    // This namespace is hand-wired inline in preload.cts, so there is no
+    // builder module to unit-test. The main-side handler tests invoke the
+    // handler directly and would stay green if preload silently dropped
+    // `projectId` here — which would turn every project-scoped agent read back
+    // into the unscoped cross-project read #11530 removed.
+    const source = await readFile(PRELOAD_CTS, "utf8");
+    const binding =
+      /list:\s*\(([^)]*)\)\s*=>\s*_unwrappingInvoke\(\s*CHANNELS\.AGENT_SESSION_LIST\s*,\s*\{([^}]*)\}/.exec(
+        source
+      );
+
+    expect(
+      binding,
+      "electron/preload.cts must bind agentSessionHistory.list to " +
+        "CHANNELS.AGENT_SESSION_LIST with an object payload."
+    ).not.toBeNull();
+
+    const [, params = "", payload = ""] = binding ?? [];
+    for (const field of ["worktreeId", "projectId"]) {
+      expect(
+        params.includes(field),
+        `agentSessionHistory.list must accept a ${field} parameter in electron/preload.cts.`
+      ).toBe(true);
+      expect(
+        payload.includes(field),
+        `agentSessionHistory.list must forward ${field} in the AGENT_SESSION_LIST payload — ` +
+          "dropping it silently widens a scoped read to every project (#11530)."
+      ).toBe(true);
+    }
+  });
 });

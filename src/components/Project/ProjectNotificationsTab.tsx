@@ -330,7 +330,7 @@ function OverrideRow({
           type="checkbox"
           checked={isOverridden}
           onChange={(e) => onToggleOverride(e.target.checked)}
-          className="rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent"
+          className="rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent/30"
         />
         <span className="text-sm font-medium text-daintree-text">{label}</span>
         {!isOverridden && (

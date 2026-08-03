@@ -10,6 +10,7 @@ import { triggerPopStash, triggerStashInput } from "@/store/terminalInputStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isPtyPanel } from "@shared/types/panel";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
+import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 export function registerTerminalInputActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -18,12 +19,22 @@ export function registerTerminalInputActions(
     id: "terminal.inject",
     title: "Inject Context",
     description:
-      "Inject the active worktree's prepared context into a terminal. Args: `terminalId` — panel UUID from `terminal.list` (the `id` field). REQUIRED for agent/MCP dispatch: an external caller must name its target explicitly, because focus can drift between the call and its execution and would otherwise route a multi-KB context dump into whatever terminal happens to be focused (#11346). Interactive (keybinding) dispatch may omit it and falls back to the focused terminal.",
+      "Write the active worktree's prepared context into a terminal, which is how an agent is handed a large codebase context. Name the target terminal explicitly — focus can drift between the call and its execution, and a mistarget types a multi-kilobyte dump into whatever pane happened to be focused. Target an idle terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ terminalId: z.string().min(1).optional() }).optional(),
+    argsSchema: z
+      .object({
+        terminalId: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Identifies the terminal to inject into, using a panel id from the terminal-listing capability. An automated caller must name it: focus can drift between the call and its execution, so relying on the focused terminal can land a large context dump in the wrong pane."
+          ),
+      })
+      .optional(),
     run: async (args: { terminalId?: string } | undefined, ctx) => {
       const terminalId = args?.terminalId;
       // Agent/MCP callers must bind an explicit target. Unpinned external
@@ -32,11 +43,7 @@ export function registerTerminalInputActions(
       // focus drifts across the MCP→IPC round trip (#11346). Fail closed
       // *before* the active-worktree no-op so a missing target is never
       // silently swallowed.
-      if (ctx.dispatchSource === "agent" && !terminalId) {
-        throw new Error(
-          "terminal.inject requires an explicit `terminalId` when dispatched by an agent or MCP client — pass the panel UUID from `terminal.list` (the `id` field)."
-        );
-      }
+      requireExplicitTerminalIdForAgentDispatch("terminal.inject", terminalId, ctx);
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       if (activeWorktreeId) {
         // `terminalId` is undefined for interactive dispatch → the hook falls
@@ -55,8 +62,9 @@ export function registerTerminalInputActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      requireExplicitTerminalIdForAgentDispatch("terminal.copy", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
@@ -83,8 +91,9 @@ export function registerTerminalInputActions(
     denyPluginDispatch: true,
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      requireExplicitTerminalIdForAgentDispatch("terminal.paste", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
@@ -135,8 +144,9 @@ export function registerTerminalInputActions(
     nonRepeatable: true,
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args ?? {}) as { terminalId?: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.contextMenu", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
@@ -200,8 +210,9 @@ export function registerTerminalInputActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args ?? {}) as { terminalId?: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.sendToAgent", terminalId, ctx);
       const state = usePanelStore.getState();
       const sourceId = terminalId ?? state.focusedId;
       if (!sourceId) return;
@@ -218,7 +229,7 @@ export function registerTerminalInputActions(
     id: "terminal.arm",
     title: "Arm Terminal",
     description:
-      "Add a terminal to the fleet arming set so the next broadcast input is also routed to it. Args: `terminalId` (required) — panel UUID from `terminal.list` (the `id` field); ignored when the terminal is not arm-eligible. Returns { armed } — the resulting armed terminal IDs in broadcast (arm) order.",
+      "Add a terminal to the set that receives the user's fleet broadcasts, so the next broadcast reaches it too. Read back the resulting set to confirm — a terminal that cannot be armed is ignored rather than reported as an error. This changes where the user's subsequent broadcast input lands.",
     category: "terminal",
     kind: "command",
     // Arming reroutes the human's *next* keystrokes to every armed terminal, so
@@ -254,7 +265,7 @@ export function registerTerminalInputActions(
     id: "terminal.disarm",
     title: "Disarm Terminal",
     description:
-      "Remove a terminal from the fleet arming set. Args: `terminalId` (required) — panel UUID from `terminal.list` (the `id` field). No-op when the terminal is not armed. Returns { armed } — the resulting armed terminal IDs in broadcast (arm) order.",
+      "Remove a terminal from the set that receives fleet broadcasts, so subsequent broadcasts skip it. Read back the resulting set to confirm. Disarming a terminal that was not armed does nothing rather than failing, so it is safe to call without checking first.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -273,7 +284,7 @@ export function registerTerminalInputActions(
     id: "terminal.disarmAll",
     title: "Disarm All",
     description:
-      "Clear the entire fleet arming set so no terminal receives broadcast input. Returns { armed } — always an empty array.",
+      "Clear the fleet arming set entirely, so no terminal receives the user's broadcast input until something is armed again. This silently changes where the user's next broadcast lands, so prefer disarming individual terminals unless resetting is genuinely the intent.",
     category: "terminal",
     kind: "command",
     danger: "safe",

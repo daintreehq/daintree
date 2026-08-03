@@ -204,7 +204,7 @@ export function TerminalAppearanceTab({
                     }
                   }}
                   onBlur={handleFontSizeBlur}
-                  className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text w-24 focus:border-daintree-accent focus:outline-hidden transition-colors"
+                  className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text w-24 focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
                   aria-label="Terminal font size"
                   aria-invalid={fontSizeError != null || undefined}
                   aria-describedby={fontSizeError ? fontSizeErrorId : undefined}

@@ -28,7 +28,9 @@ import {
   SYSTEM_TIER_ADDONS as SYSTEM_TIER_ADDONS_LIST,
   WORKBENCH_TIER_TOOLS as WORKBENCH_TIER_TOOLS_LIST,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
+import { MCP_EXTERNAL_TIER_TOOLS } from "../../../shared/config/mcpExternalTierAllowlist.js";
 import { safeSerializeToolResult } from "../../utils/safeSerializeToolResult.js";
+import { buildToolCallTextResult } from "./toolCallResult.js";
 
 // Re-exported for SDK-free consumers that historically imported from here.
 // `readinessProbe.ts` and `pluginMcpHash.ts` import from the standalone homes
@@ -94,7 +96,7 @@ export type AssistantPaneWebContentsResolver = (token: string) => number | null;
 export type AssistantPaneActionContextResolver = (token: string) => ActionContext | null;
 export type { HelpAssistantTier };
 
-export const MCP_SERVER_KEY = "daintree";
+export { MCP_SERVER_KEY } from "../../../shared/config/mcpClientConfigs.js";
 
 export const DEFAULT_PORT = 45454;
 export const MAX_PORT_RETRIES = 10;
@@ -304,9 +306,41 @@ export function buildToolError(input: {
   details?: unknown;
 }): CallToolResult {
   const payload = buildMcpErrorPayload(input);
+  // Budgeted like a success body: `details` is renderer-supplied and unbounded,
+  // so without the cap the same oversized-result bug stays reachable through
+  // failures (#11526). `isError` survives — the call really did fail.
+  return buildToolCallTextResult(JSON.stringify(payload), { isError: true });
+}
+
+/**
+ * `_meta` key carrying the workspace a tool call actually ran against (#11536).
+ * Namespaced per the MCP `_meta` convention so it can't collide with keys from
+ * other servers in an aggregating client. This string is an external contract:
+ * MCP clients read it by name, so changing it is a breaking change.
+ */
+export const RESOLVED_WORKSPACE_META_KEY = "org.daintree/resolved-workspace";
+
+/**
+ * Stamp the resolved workspace onto a tool result (#11536).
+ *
+ * Top-level `_meta` rather than `structuredContent`, so it never has to satisfy
+ * (or violate) an action's declared output schema. Returns the result untouched
+ * when identity couldn't be resolved — the key's absence means "unknown", and
+ * failing to resolve it must never alter the action's own outcome. Other
+ * `_meta` keys are preserved; only Daintree's own key is overwritten, so a
+ * value already sitting there can't spoof the authoritative stamp.
+ */
+export function withResolvedWorkspace<T extends CallToolResult>(
+  result: T,
+  workspace: DispatchedWorkspaceRef | undefined
+): T {
+  if (!workspace) return result;
   return {
-    content: [{ type: "text", text: JSON.stringify(payload) }],
-    isError: true,
+    ...result,
+    _meta: {
+      ...(result._meta ?? {}),
+      [RESOLVED_WORKSPACE_META_KEY]: { ...workspace },
+    },
   };
 }
 
@@ -329,154 +363,11 @@ export function unionSet(...sets: ReadonlySet<string>[]): ReadonlySet<string> {
   return out;
 }
 
-const MCP_TOOL_ALLOWLIST_ENTRIES = [
-  ACTIONS_LIST_TOOL,
-  "actions.getContext",
-  "actions.search",
-  "actions.getSchema",
-
-  "agent.launch",
-  "agent.terminal",
-  "agent.getState",
-  "agent.listToolbar",
-  "agent.listAvailable",
-  "agentSessionHistory.list",
-  // Read-only bookmark metadata (#11288); mutation actions stay off the MCP surface.
-  "session.bookmarks.list",
-
-  "git.getProjectPulse",
-  "git.getFileDiff",
-  "git.listCommits",
-  "git.getStagingStatus",
-  "git.stageFile",
-  "git.unstageFile",
-  "git.stageAll",
-  "git.unstageAll",
-  "git.commit",
-  "git.push",
-
-  "forge.getRepoStats",
-  "forge.listIssues",
-  "forge.listPRs",
-  "forge.getIssue",
-  "forge.getPR",
-  "forge.openIssues",
-  "forge.openPRs",
-  "forge.openCommits",
-  "forge.openIssue",
-  "forge.openPR",
-  "forge.assignIssue",
-  "forge.createPR",
-  "forge.closePR",
-  "forge.reopenPR",
-  "forge.mergePR",
-  "forge.convertPRToDraft",
-  "forge.markPRReadyForReview",
-  "forge.commentOnPR",
-  "forge.editPR",
-  "forge.validateToken",
-
-  "terminal.list",
-  "terminal.getOutput",
-  "terminal.getStatus",
-  "terminal.sendCommand",
-  "terminal.inject",
-  "terminal.new",
-  "terminal.rename",
-  "terminal.waitUntilIdle",
-  "terminal.waitUntilIdleBatch",
-  "terminal.arm",
-  "terminal.disarm",
-  "terminal.disarmAll",
-
-  // Read-only fleet-run supervision snapshot (#10930). The broadcast itself is
-  // deliberately NOT exposed — external orchestrators fan out
-  // `terminal.sendCommand` per terminal (see CLAUDE.tasks.md guidance).
-  "fleet.getRunStatus",
-
-  "worktree.list",
-  "worktree.getCurrent",
-  "worktree.refresh",
-  "worktree.createWithRecipe",
-  "worktree.listBranches",
-  "worktree.getDefaultPath",
-  "worktree.getAvailableBranch",
-  "worktree.delete",
-  "worktree.setActive",
-  "worktree.resource.status",
-  "worktree.resource.provision",
-  "worktree.resource.pause",
-  "worktree.resource.resume",
-  "worktree.resource.teardown",
-
-  "workflow.startWorkOnIssue",
-  "workflow.prepBranchForReview",
-
-  "files.search",
-  "file.view",
-  "file.read",
-  "file.openInEditor",
-  "file.openPanel",
-
-  "copyTree.generate",
-  "copyTree.generateAndCopyFile",
-  "copyTree.injectToTerminal",
-
-  "slashCommands.list",
-
-  "skills.search",
-  "skills.load",
-
-  "project.getAll",
-  "project.getCurrent",
-  "project.getSettings",
-  "project.getStats",
-  "project.detectRunners",
-  "project.update",
-  "project.saveSettings",
-  "project.muteNotifications",
-
-  "recipe.list",
-  "recipe.run",
-
-  "system.checkCommand",
-  "system.checkDirectory",
-  "system.getResourceProfileSnapshot",
-
-  "cliAvailability.get",
-
-  "hibernation.getConfig",
-] as const satisfies readonly BuiltInActionId[];
-
-const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set(MCP_TOOL_ALLOWLIST_ENTRIES);
-
-/**
- * Additional tools exposed ONLY to an `external` session that has opted into
- * `fullToolSurface`, on top of {@link MCP_TOOL_ALLOWLIST}. This is the explicit,
- * fail-closed seam for widening the api-key surface: `fullToolSurface` is a
- * *floor-lifting* opt-in, never a bypass. Previously the flag short-circuited
- * the allowlist entirely and let an external client reach any action that
- * wasn't `danger: "restricted"` / `mcpVisibility: "hidden"` — trusting the
- * author-set `danger` field as a security ceiling. The MCP spec is explicit
- * that tool annotations (and by extension a self-declared danger rating) are
- * untrusted UX hints, not an access-control boundary; the enforceable boundary
- * is this server-side allowlist (#10701). Each future addition must be a
- * deliberate, individually-vetted entry here — empty by default so that newly
- * added safe-classified actions never silently leak to api-key callers.
- */
-const MCP_FULL_TOOL_SURFACE_ADDON_ENTRIES = [] as const satisfies readonly BuiltInActionId[];
-
-/**
- * The complete tool surface reachable by an `external` session with
- * `fullToolSurface` enabled: the curated external allowlist plus the vetted
- * add-on set above. Always a *superset* of {@link MCP_TOOL_ALLOWLIST} — the
- * opt-in can only widen, never narrow, so it can never accidentally make the
- * full surface smaller than the default external surface.
- */
-export const MCP_FULL_TOOL_SURFACE_ALLOWLIST: ReadonlySet<string> = unionSet(
-  MCP_TOOL_ALLOWLIST,
-  new Set<string>(MCP_FULL_TOOL_SURFACE_ADDON_ENTRIES)
-);
+// The external tier surface lives in `shared/config/mcpExternalTierAllowlist.ts`
+// alongside the three help-assistant tier lists, so all four are curated in one
+// place and the renderer can budget-test the surface without an IPC round-trip.
+// See that file for the selection rule and why the size is a hard constraint.
+const MCP_TOOL_ALLOWLIST: ReadonlySet<string> = new Set(MCP_EXTERNAL_TIER_TOOLS);
 
 export const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
   workbench: WORKBENCH_TOOLS,
@@ -488,49 +379,158 @@ export const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
 export const TIER_NOT_PERMITTED_CODE = "TIER_NOT_PERMITTED";
 
 /**
+ * Where the strictest known client cuts `instructions` off. Claude Code
+ * hard-truncates at 2 KiB, and our tail is the authorization paragraph — the
+ * one sentence whose loss would leave a model guessing at why a call was
+ * denied.
+ */
+const MCP_INSTRUCTIONS_CLIENT_TRUNCATION_BYTES = 2_048;
+
+/**
+ * Headroom held back from the client cap so the next paragraph someone adds
+ * does not have to arrive in the same edit as a re-measurement of the whole
+ * string. Slack for a future author, not slack to spend on prose.
+ */
+const MCP_INSTRUCTIONS_RESERVE_BYTES = 512;
+
+/**
+ * Authoring budget for {@link MCP_SERVER_INSTRUCTIONS}, enforced by test rather
+ * than by runtime truncation (#11541) — silently cutting controlled static text
+ * is strictly worse than failing an author's edit, so this is a ceiling the
+ * suite asserts, not a bound `truncateText` applies.
+ *
+ * Derived rather than written as a literal so the reserve cannot be quietly
+ * spent by editing one number: raising this means raising the client cap or
+ * lowering the reserve, both of which read as the decisions they are.
+ */
+export const MCP_SERVER_INSTRUCTIONS_MAX_BYTES =
+  MCP_INSTRUCTIONS_CLIENT_TRUNCATION_BYTES - MCP_INSTRUCTIONS_RESERVE_BYTES;
+
+/**
+ * The `instructions` string sent once in the MCP `initialize` result (#11541).
+ * Clients fold it into the model's system prompt at session start, so this is
+ * the only place to establish cross-cutting workflow rules before the model has
+ * picked a tool. Per the MCP spec, it deliberately does not restate tool
+ * descriptions — every line here is guidance no single tool's description
+ * carries.
+ *
+ * Deliberately static and tier-agnostic even though the tier is knowable at
+ * construction (`httpLifecycle.ts` resolves it before `createSessionServer`).
+ * `instructions` is sent once and has no update notification, while in-app tiers
+ * elevate and decay mid-session and grants widen the surface transiently — a
+ * tier-specific sentence would silently rot, whereas the generic tier-model
+ * sentence stays true for the life of the session.
+ *
+ * Tool ids appear as literal prose rather than interpolated constants on
+ * purpose: the suite extracts every dotted id from this text and asserts it is
+ * a real action, so renaming a tool fails a test naming this text as newly
+ * lying instead of silently rewriting what the model is told.
+ *
+ * On the discovery paragraph: it must not imply a deferred catalog. #11582
+ * tried withholding tools from `tools/list` while keeping them dispatchable and
+ * it does not work — no shipped client sends `tools/call` for a name it never
+ * received — so #11585 made the listing and the callable set the same boundary.
+ * Telling a model otherwise would send it probing for names that cannot exist.
+ *
+ * The shell sentence is scoped to external clients deliberately. In-app tiers
+ * withhold writes on purpose (git/file mutations arrive only at `system`), so
+ * an unscoped "use your shell when a tool is missing" would read to an
+ * `action`-tier model as licence to route around its own authorization floor.
+ */
+export const MCP_SERVER_INSTRUCTIONS = [
+  "Daintree orchestrates IDE-owned worktrees, recipes, and agent terminals — use it for that coordination. External clients should use their own shell and tooling for repository, file, git, and forge work omitted from `tools/list`; that is not licence to route around an in-app tier.",
+
+  "`tools/list` is the advertised baseline; do not invent tool names. When its schemas are too large to reason over, use `actions.search` for a compact ranked shortlist of what this session is already authorized to call, then `actions.getSchema` for one action's manifest entry and whatever schemas it publishes. This narrows attention; it does not reveal a deferred catalog or widen access.",
+
+  'Resolve the target worktree and terminal ids before scoped actions. `terminal.sendCommand` returns once the text is submitted, not when the work finishes — prefer `terminal.waitUntilIdle` or `terminal.waitUntilIdleBatch` over tight polling, then read `idleReason`, `waitingReason`, and `exitCode` before your next turn or any irreversible step. Those waits track agent panes: a terminal with no tracked agent returns `idleReason: "unknown"` at once, which is not proof a shell command finished.',
+
+  "Authorization is tiered: in-app `workbench`, `action`, and `system` progressively widen access, while `external` is an independently curated allowlist; a call outside the current authorized surface returns `TIER_NOT_PERMITTED`. Honor `retriable` on errors — retry a `false` only once arguments, context, or authorization have changed.",
+].join("\n\n");
+
+/**
  * Creation-tool allowlist for per-session idempotency dedup. LLMs replay
  * tool calls during multi-step planning, especially across reconnects.
  * Inside the TTL window a duplicate call returns the original result
  * instead of redispatching, with an args-hash guard rejecting same-key
  * different-args replays as a collision (#8429).
  *
- * Inclusion criterion: a mutation tool belongs here when (a) an LLM
- * retrying after a transient error or reconnect is realistic, and (b) a
- * duplicate dispatch has an immediately user-visible side effect — an
- * orphaned terminal, a redundant agent, a duplicate commit/push, or a
- * duplicate issue/PR. The seed cohort (`terminal.new`,
- * `worktree.createWithRecipe`, `agent.launch`, `recipe.run`) is widened
- * to the git/forge mutations (`git.commit`, `git.push`, `forge.openIssue`,
- * `forge.openPR`) now that the args-hash collision guard (#8429) is in
- * place to make the widening safe. Widened further (#9156) to the remaining
- * destructive mutations — `worktree.delete`, `forge.assignIssue` — so every
- * side-effecting tool that an LLM might retry is covered.
+ * A tool belongs here only when all three hold: (a) an LLM retrying after a
+ * transient error or reconnect is realistic, (b) the repeat leaves a durable
+ * or immediately user-visible artifact — an orphaned terminal, a redundant
+ * agent, a duplicate issue/PR/comment/review — and (c) an intentional
+ * same-argument repeat inside the TTL is not a normal use case.
  *
- * Deliberately bounded: blanket-applying dedup to all mutations would mask
- * legitimate "do it again" cases (re-running the same git command, etc.).
+ * (c) is what bounds the list. Navigation (`forge.open*`, portal/browser
+ * opens) is out: reopening a URL the user closed must dispatch again, and a
+ * silent 120s no-op reads as a broken tool. Repeatable commands
+ * (`terminal.sendCommand`, `git.stage*`) are out for the same reason. So are
+ * idempotent state-sets (close/reopen/draft/edit, label and assignee
+ * add/remove, resource pause/resume/teardown): they create no duplicate to
+ * suppress, so caching buys nothing and costs correctness — in a set → unset
+ * → set sequence the third call matches the first, the cached success
+ * returns, and the state stays unset (#11534 dropped `forge.assignIssue` for
+ * exactly this).
+ *
+ * An entry that *does* have an inverse is kept only when the replay it
+ * absorbs outweighs the suppression it risks, on one of two grounds.
+ * `forge.approvePR`/`forge.requestChanges` POST a genuinely new record each
+ * call, so a replay leaves a visible second artifact — unlike assignment,
+ * which leaves none, so that trade lands the other way. `worktree.delete`,
+ * `forge.createPR` and `forge.mergePR` create nothing on a replay; they are
+ * here to return the original success instead of the error a redundant
+ * redispatch would raise, which is a different justification from the
+ * duplicate-artifact one and should not be confused with it.
+ *
+ * `git.commit` and `git.push` are the tempting case that still fails (c), so
+ * #11534 dropped them. Neither takes an argument a legitimate repeat varies:
+ * `git.push` gets only `{cwd, setUpstream}`, and `git.commit` commits
+ * whatever the index holds, so a second push after a new commit — or a
+ * repeated `wip` message — is same-argument and would be swallowed as a
+ * cached success for work that never happened. The replay they would absorb
+ * is cheap by comparison: a redundant push prints "Everything up-to-date"
+ * and a redundant commit errors visibly on an empty index. The trade only
+ * flips with state-aware keying (HEAD for push, index identity for commit).
+ *
+ * History: seeded by #7554, made safe to widen by the args-hash collision
+ * guard (#8429), widened again in #9156, then corrected against the criterion
+ * above in #11534 — which added the creation tools that were missing and
+ * dropped the navigation, idempotent and git-write entries that never met it.
  */
-export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set([
+const MCP_DEDUP_ALLOWLIST_ENTRIES = [
+  // Panel/agent spawns — a replay leaves an orphaned terminal or a second
+  // agent. `agent.terminal` spawns exactly like `terminal.new` (#11534).
   "terminal.new",
-  "worktree.createWithRecipe",
+  "agent.terminal",
   "agent.launch",
   "recipe.run",
-  "git.commit",
-  "git.push",
-  "forge.openIssue",
-  "forge.openPR",
-  "worktree.delete",
-  // Provisioning spins up a remote/cloud resource — an LLM retry after a
-  // transient failure could spawn a second one. Pause/resume/teardown are
-  // idempotent enough (or intentionally re-runnable) to stay out.
+
+  // Worktree/workflow creation. `workflow.startWorkOnIssue` is a creation
+  // superset of the two below it — a replay duplicates the entire work setup
+  // (worktree + branch + agent + injected context) (#11534). Provisioning
+  // spins up a remote/cloud resource a retry could double.
+  "worktree.createWithRecipe",
+  "workflow.startWorkOnIssue",
   "worktree.resource.provision",
-  "forge.assignIssue",
-  // PR writes where an LLM retry within the dispatch window leaves a visible
-  // duplicate: a second open PR, a re-merge attempt, or a duplicate comment
-  // (lesson #7554). Idempotent state-sets (close/reopen/draft/edit) are omitted.
+  "worktree.delete",
+
+  // Forge writes worth absorbing a replay for. `createIssue`,
+  // `addIssueComment`, `commentOnPR`, `approvePR` and `requestChanges` each
+  // POST a new record every call — a duplicate issue, a duplicate comment
+  // (lesson #7554), or a second review entry, since both verdicts POST to
+  // `/pulls/{n}/reviews` (#11534). `createPR` and `mergePR` create nothing on
+  // a replay (GitHub 422s a duplicate PR; merge is a PUT) — they are here to
+  // replay the original success rather than surface that error to a caller
+  // that is only retrying.
   "forge.createPR",
   "forge.mergePR",
   "forge.commentOnPR",
-]);
+  "forge.createIssue",
+  "forge.addIssueComment",
+  "forge.approvePR",
+  "forge.requestChanges",
+] as const satisfies readonly BuiltInActionId[];
+
+export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set(MCP_DEDUP_ALLOWLIST_ENTRIES);
 
 /**
  * Dedup window for the creation-tool allowlist. Sized to cover the MCP
@@ -700,7 +700,13 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
 
       lines.push("");
       lines.push("Please:");
-      lines.push("1. Read the current git status (`git.getStagingStatus`) to see what changed.");
+      // Tier-agnostic on purpose: `git.getStagingStatus` is a workbench/system
+      // tool, so naming it unconditionally would tell an external session to
+      // call something it will be refused for (#11585). Same shape as the
+      // `start_issue` prompt's "GitHub tools or `gh`" phrasing.
+      lines.push(
+        "1. Read the current git status (`git.getStagingStatus` if available, otherwise `git status`) to see what changed."
+      );
       lines.push(
         "2. Identify the root cause (error message, missing prerequisite, infinite loop, etc.)."
       );
@@ -809,9 +815,37 @@ export interface PendingRequest<T> {
   destroyedCleanup?: () => void;
 }
 
+/**
+ * The workspace a dispatch actually landed on, resolved from the responding
+ * renderer at response time (#11536). Unpinned external sessions follow window
+ * focus on every call, so a long-running agent's calls can retarget mid-session
+ * when the user switches workspace. Reporting the resolved workspace makes that
+ * drift observable to the caller instead of silent.
+ *
+ * "Workspace" because a renderer view can be backed by a project or by a
+ * scratch, which has no Project row; `kind` tells the caller which, so it never
+ * has to guess whether the id is resolvable through project APIs. Structurally
+ * mirrors `WorkspaceRef` in `electron/window/ProjectViewManager.ts` — the wire
+ * contract is declared here so this module stays free of window-layer imports,
+ * and rendererBridge assigning one to the other keeps the two in lockstep.
+ */
+export interface DispatchedWorkspaceRef {
+  kind: "project" | "scratch";
+  workspaceId: string;
+  workspacePath: string;
+}
+
 export interface DispatchEnvelope {
   result: ActionDispatchResult;
   confirmationDecision?: McpConfirmationDecision;
+  /**
+   * Absent when identity could not be resolved (view torn down between
+   * dispatch and response, or a webContents with no registered workspace).
+   * Deliberately optional rather than nullable: "unknown" must not be
+   * confusable with "no workspace", and a failed lookup never downgrades an
+   * otherwise successful action result.
+   */
+  dispatchedWorkspace?: DispatchedWorkspaceRef;
 }
 
 export interface McpSseSession {

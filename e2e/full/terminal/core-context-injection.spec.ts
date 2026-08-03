@@ -88,13 +88,16 @@ test.describe.serial("Core: Context Injection", () => {
 
     const wtId = await getActiveWorktreeId(window);
 
-    // Generate content via the preload API
+    // Generate via the preload API, opting in to the inline head — the default
+    // now writes the bundle to a file and returns only its path (#11528).
     const result: any = await window.evaluate(
-      async (id: string) => (window as any).electron.copyTree.generate(id),
+      async (id: string) => (window as any).electron.copyTree.generate(id, undefined, true),
       wtId
     );
 
     expect(result?.error).toBeFalsy();
+    expect(result?.filePath).toBeTruthy();
+    expect(result?.outputBytes).toBeGreaterThan(100);
     expect(result?.content?.length).toBeGreaterThan(100);
     expect(result?.fileCount).toBeGreaterThanOrEqual(4);
 

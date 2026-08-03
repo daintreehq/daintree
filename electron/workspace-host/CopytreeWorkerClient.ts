@@ -89,13 +89,14 @@ export class CopytreeWorkerClient {
     rootPath: string,
     options: CopyTreeOptions = {},
     onProgress?: ProgressCallback,
-    operationId?: string
+    operationId?: string,
+    outputPath?: string
   ): Promise<CopyTreeResult> {
     const id = operationId || crypto.randomUUID();
     this.lastActivityAt = Date.now();
     const worker = this.getWorker();
     if (!worker) {
-      return copyTreeService.generate(rootPath, options, onProgress, id);
+      return copyTreeService.generate(rootPath, options, onProgress, id, outputPath);
     }
     const pending = new Promise<CopyTreeResult>((resolve, reject) => {
       this.pendingGenerate.set(id, {
@@ -111,13 +112,14 @@ export class CopytreeWorkerClient {
         id,
         rootPath,
         options,
+        outputPath,
       } satisfies CopytreeWorkerRequest);
     } catch (error) {
       this.takePendingGenerate(id);
       logWarn("copytree worker postMessage failed; running in-process", {
         error: formatErrorMessage(error, "postMessage failed"),
       });
-      return copyTreeService.generate(rootPath, options, onProgress, id);
+      return copyTreeService.generate(rootPath, options, onProgress, id, outputPath);
     }
     return pending;
   }

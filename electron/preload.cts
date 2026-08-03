@@ -60,6 +60,7 @@ import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.
 import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
+import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.js";
 import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
@@ -74,6 +75,7 @@ import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
+import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
 import { buildProjectHistoryPreloadBindings } from "./ipc/handlers/projectHistory.preload.js";
 import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRelocation.preload.js";
 import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabricSurface.preload.js";
@@ -1364,6 +1366,9 @@ function buildElectronApi(): ElectronAPI {
     // File browser API — lazy directory listings for the read-only browser panel
     fileBrowser: buildFileBrowserPreloadBindings(_unwrappingInvoke),
 
+    // File watch API — the change signal for paths no git watcher covers
+    fileWatch: buildFileWatchPreloadBindings(_unwrappingInvoke),
+
     // Watchdog API — surfaces the main-process deadlock detector's disabled
     // state to the renderer and exposes a manual restart path.
     watchdog: {
@@ -1398,8 +1403,8 @@ function buildElectronApi(): ElectronAPI {
 
     // CopyTree API
     copyTree: {
-      generate: (worktreeId: string, options?: CopyTreeOptions) =>
-        _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE, { worktreeId, options }),
+      generate: (worktreeId: string, options?: CopyTreeOptions, includeContent?: boolean) =>
+        _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE, { worktreeId, options, includeContent }),
 
       generateAndCopyFile: (worktreeId: string, options?: CopyTreeOptions) =>
         _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, { worktreeId, options }),
@@ -1732,7 +1737,9 @@ function buildElectronApi(): ElectronAPI {
       switch: (
         projectId: string,
         outgoingState?: import("../shared/types/ipc/project.js").ProjectSwitchOutgoingState,
-        options?: { focusIntent?: "focus-next-waiting" }
+        options?: {
+          focusIntent?: import("../shared/types/ipc/project.js").ProjectFocusOnActivateIntent;
+        }
       ) => _unwrappingInvoke(CHANNELS.PROJECT_SWITCH, projectId, outgoingState, options),
 
       prefetchHydrate: (projectId: string) =>
@@ -1756,8 +1763,11 @@ function buildElectronApi(): ElectronAPI {
       onOpenGitInitDialog: (callback: (payload: { directoryPath: string }) => void) =>
         _typedOn(CHANNELS.PROJECT_OPEN_GIT_INIT_DIALOG, callback),
 
-      onFocusOnActivate: (callback: (payload: { intent: "focus-next-waiting" }) => void) =>
-        _typedOn(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, callback),
+      onFocusOnActivate: (
+        callback: (
+          payload: import("../shared/types/ipc/project.js").ProjectFocusOnActivateIntent
+        ) => void
+      ) => _typedOn(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, callback),
 
       onBackgroundResize: (callback: (payload: { width: number; height: number }) => void) =>
         _typedOn(CHANNELS.PROJECT_BACKGROUND_RESIZE, callback),
@@ -1904,6 +1914,17 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.PROJECT_LOCATE, projectId),
     },
 
+    // Fleet-wide run snapshot — every agent run across every workspace, pushed
+    // from main. Read-only and broadcast-only: main is the only process that
+    // can see past a project view's own V8 context.
+    fleet: {
+      ...buildFleetPreloadBindings(_unwrappingInvoke),
+
+      onSnapshotUpdated: (
+        callback: (snapshot: import("../shared/types/ipc/fleet.js").FleetSnapshot) => void
+      ) => _typedOn(CHANNELS.FLEET_SNAPSHOT_UPDATED, callback),
+    },
+
     // Scratch (one-off agent workspace) API
     scratch: {
       ...buildScratchPreloadBindings(_unwrappingInvoke),
@@ -1981,8 +2002,21 @@ function buildElectronApi(): ElectronAPI {
 
     // Git API
     git: {
-      getFileDiff: (cwd: string, filePath: string, status: GitStatus, ignoreWhitespace?: boolean) =>
-        _unwrappingInvoke(CHANNELS.GIT_GET_FILE_DIFF, { cwd, filePath, status, ignoreWhitespace }),
+      getFileDiff: (
+        cwd: string,
+        filePath: string,
+        status: GitStatus,
+        ignoreWhitespace?: boolean,
+        window?: { offset?: number; maxBytes?: number }
+      ) =>
+        _unwrappingInvoke(CHANNELS.GIT_GET_FILE_DIFF, {
+          cwd,
+          filePath,
+          status,
+          ignoreWhitespace,
+          offset: window?.offset,
+          maxBytes: window?.maxBytes,
+        }),
 
       getProjectPulse: (options: {
         worktreeId: string;
@@ -2527,7 +2561,8 @@ function buildElectronApi(): ElectronAPI {
 
     // Agent Session History API
     agentSessionHistory: {
-      list: (worktreeId?: string) => _unwrappingInvoke(CHANNELS.AGENT_SESSION_LIST, { worktreeId }),
+      list: (worktreeId?: string, projectId?: string) =>
+        _unwrappingInvoke(CHANNELS.AGENT_SESSION_LIST, { worktreeId, projectId }),
       clear: (worktreeId?: string) =>
         _unwrappingInvoke(CHANNELS.AGENT_SESSION_CLEAR, { worktreeId }),
       getRetentionDays: () => _unwrappingInvoke(CHANNELS.AGENT_SESSION_GET_RETENTION),
@@ -2724,6 +2759,8 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUE, payload),
       getPR: (payload: { cwd: string; prNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_PR, payload),
+      getCIStatus: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_CI_STATUS, payload),
       getRepoMetadata: (payload: { cwd: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_METADATA, payload),
       getCurrentUser: (payload: { cwd: string }) =>
@@ -2758,6 +2795,8 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, payload),
       getPRReviewThreads: (payload: { cwd: string; prNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_PR_REVIEW_THREADS, payload),
+      listIssueComments: (payload: { cwd: string; issueNumber: number; opts?: unknown }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_LIST_ISSUE_COMMENTS, payload),
       resolveAuthorAvatar: (payload: { cwd: string; email: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, payload),
       getTokenHealth: (payload: { providerId: string }) =>
@@ -2828,7 +2867,7 @@ function buildElectronApi(): ElectronAPI {
           language: string;
           customDictionary: string[];
           transcriptionProvider: "openai" | "deepgram";
-          transcriptionModel: "gpt-realtime-whisper";
+          transcriptionModel: "gpt-live-transcribe";
           correctionEnabled: boolean;
           correctionModel: "gpt-5.6-luna";
           correctionCustomInstructions: string;

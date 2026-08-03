@@ -121,7 +121,7 @@ export function CodeForgeTab({
           <select
             value={forgeRemote || ""}
             onChange={(e) => onForgeRemoteChange(e.target.value || undefined)}
-            className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
+            className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
           >
             <option value="">Auto-detect</option>
             {remotes.map((r) => (
@@ -153,7 +153,7 @@ export function CodeForgeTab({
             onChange={(e) =>
               onForgeProviderOverrideChange(e.target.value === "" ? null : e.target.value)
             }
-            className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
+            className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
           >
             <option value="">Auto-detect</option>
             {providers.map((p) => {

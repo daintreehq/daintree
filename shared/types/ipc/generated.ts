@@ -45,7 +45,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./agentSessionHistory.js").AgentSessionRetentionDays;
   };
   "agent-session:list": {
-    args: [payload: { worktreeId?: string | undefined }];
+    args: [payload: { worktreeId?: string | undefined; projectId?: string | undefined }];
     result: import("./agentSessionHistory.js").AgentSessionRecord[];
   };
   "agent-session:list-bookmarks": {
@@ -361,6 +361,14 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./fileBrowser.js").FileBrowserStatPathsPayload];
     result: import("./fileBrowser.js").FileBrowserStatPathsResult;
   };
+  "file-watch:fingerprint": {
+    args: [payload: import("./fileWatch.js").FileWatchFingerprintPayload];
+    result: import("./fileWatch.js").FileWatchFingerprintResult;
+  };
+  "fleet:get-snapshot": {
+    args: [];
+    result: import("./fleet.js").FleetSnapshot | null;
+  };
   "forge-audit:clear-log": {
     args: [];
     result: void;
@@ -403,7 +411,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:approve-pr": {
     args: [payload: { cwd: string; prNumber: number; body?: string | undefined }];
-    result: void;
+    result: import("../forge.js").PullRequestReview;
   };
   "forge:close-issue": {
     args: [
@@ -417,15 +425,15 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:close-pr": {
     args: [payload: { cwd: string; prNumber: number }];
-    result: void;
+    result: import("../forge.js").PR;
   };
   "forge:comment-on-pr": {
     args: [payload: { cwd: string; prNumber: number; body: string }];
-    result: void;
+    result: import("../forge.js").IssueComment;
   };
   "forge:convert-pr-to-draft": {
     args: [payload: { cwd: string; prNumber: number }];
-    result: void;
+    result: import("../forge.js").PRDraftStateResult;
   };
   "forge:create-issue": {
     args: [payload: { cwd: string; input: import("../forge.js").CreateIssueInput }];
@@ -446,7 +454,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:dismiss-review": {
     args: [payload: { cwd: string; prNumber: number; reviewId: number; message: string }];
-    result: void;
+    result: import("../forge.js").PullRequestReview;
   };
   "forge:edit-issue": {
     args: [
@@ -464,6 +472,10 @@ export interface GeneratedIpcInvokeMap {
       },
     ];
     result: import("../forge.js").PR;
+  };
+  "forge:get-ci-status": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: import("./forge.js").ForgeCIStatusSummary | null;
   };
   "forge:get-first-page-cache": {
     args: [payload: { cwd: string }];
@@ -505,9 +517,19 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { providerId: string }];
     result: import("../forge.js").ForgeTokenHealthState | null;
   };
+  "forge:list-issue-comments": {
+    args: [
+      payload: {
+        cwd: string;
+        issueNumber: number;
+        opts?: import("../forge.js").ListOptions | undefined;
+      },
+    ];
+    result: import("../forge.js").Page<import("../forge.js").IssueComment>;
+  };
   "forge:mark-pr-ready-for-review": {
     args: [payload: { cwd: string; prNumber: number }];
-    result: void;
+    result: import("../forge.js").PRDraftStateResult;
   };
   "forge:merge-pr": {
     args: [
@@ -519,7 +541,7 @@ export interface GeneratedIpcInvokeMap {
         commitMessage?: string | undefined;
       },
     ];
-    result: void;
+    result: import("../forge.js").MergePRResult;
   };
   "forge:open-pr": {
     args: [payload: { cwd: string; prNumber: number }];
@@ -535,11 +557,11 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:reopen-pr": {
     args: [payload: { cwd: string; prNumber: number }];
-    result: void;
+    result: import("../forge.js").PR;
   };
   "forge:request-changes": {
     args: [payload: { cwd: string; prNumber: number; body: string }];
-    result: void;
+    result: import("../forge.js").PullRequestReview;
   };
   "forge:request-reviewers": {
     args: [
@@ -550,7 +572,7 @@ export interface GeneratedIpcInvokeMap {
         teams?: string[] | undefined;
       },
     ];
-    result: void;
+    result: import("../forge.js").RequestReviewersResult;
   };
   "forge:resolve-author-avatar": {
     args: [payload: { cwd: string; email: string }];
@@ -558,7 +580,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "forge:unassign-issue": {
     args: [payload: { cwd: string; issueNumber: number; username: string }];
-    result: void;
+    result: import("../forge.js").ForgeUser[];
   };
   "gemini:enable-alternate-buffer": {
     args: [];
@@ -656,13 +678,17 @@ export interface GeneratedIpcInvokeMap {
     args: [projectId: string, isOpen: boolean];
     result: void;
   };
+  "help:restore-pending-hibernation": {
+    args: [projectId: string, claimId: string];
+    result: boolean;
+  };
   "help:revoke-session": {
     args: [sessionId: string];
     result: void;
   };
   "help:take-pending-hibernation": {
     args: [projectId: string];
-    result: { agentId: string; agentSessionId: string; cwd: string } | null;
+    result: { agentId: string; agentSessionId: string; cwd: string; claimId: string } | null;
   };
   "help:unmark-terminal": {
     args: [terminalId: string];
@@ -1340,7 +1366,12 @@ export interface GeneratedIpcInvokeMap {
     result: import("./scratch.js").ScratchSaveAsProjectResult;
   };
   "scratch:switch": {
-    args: [scratchId: string];
+    args: [
+      scratchId: string,
+      options?:
+        | { focusIntent?: import("./project.js").ProjectFocusOnActivateIntent | undefined }
+        | undefined,
+    ];
     result: import("../scratch.js").Scratch;
   };
   "scratch:update": {
@@ -1539,11 +1570,11 @@ export interface GeneratedIpcInvokeMap {
   };
   "terminal:get-serialized-state": {
     args: [terminalId: string];
-    result: string | null;
+    result: import("../terminal.js").SerializedTerminalSnapshot | null;
   };
   "terminal:get-serialized-states": {
     args: [terminalIds: string[]];
-    result: Record<string, string | null>;
+    result: Record<string, import("../terminal.js").SerializedTerminalSnapshot | null>;
   };
   "terminal:get-shared-buffers": {
     args: [];
@@ -1630,6 +1661,9 @@ export interface GeneratedIpcInvokeMap {
               focusedTerminalType?: string | undefined;
               focusedTerminalTitle?: string | undefined;
               isSettingsOpen?: boolean | undefined;
+              scratchId?: string | undefined;
+              scratchName?: string | undefined;
+              scratchPath?: string | undefined;
               dispatchSource?:
                 "user" | "menu" | "keybinding" | "agent" | "context-menu" | "plugin" | undefined;
             }

@@ -1,5 +1,10 @@
 import type { BuiltInPanelKind, PanelKind, ViewportPresetId } from "@/types";
-import type { FileViewMode, DiffSource, FileBrowserTreeSnapshot } from "@shared/types/panel";
+import type {
+  FileViewMode,
+  DiffSource,
+  FileBrowserSortKey,
+  FileBrowserTreeSnapshot,
+} from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import type { AddTerminalArgs, SavedTerminalData } from "@/utils/stateHydration/statePatcher";
 import { VIEWPORT_PRESETS } from "@/panels/dev-preview/viewportPresets";
@@ -96,6 +101,12 @@ function canonicalRelativePath(value: unknown): string | undefined {
  * nothing expanded" is a real state, distinct from "this panel predates the
  * field".
  */
+function sanitizeSortKey(value: unknown): FileBrowserSortKey | undefined {
+  // "name" is the default, so restoring it as an explicit value would only make
+  // the record less sparse than the serializer left it.
+  return value === "modified" || value === "size" || value === "type" ? value : undefined;
+}
+
 function sanitizeExpandedPaths(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const seen = new Set<string>();
@@ -146,14 +157,29 @@ function isSnapshotNodeName(value: unknown): value is string {
  */
 function sanitizeTreeSnapshot(value: unknown): FileBrowserTreeSnapshot | undefined {
   if (!isRecord(value)) return undefined;
-  const { worktreeId, rootPath, listings } = value;
+  const { worktreeId, basePath, rootPath, listings } = value;
+  // Both identity tags are optional — a workspace-rooted browser has no
+  // worktree id (#11482) — but a present one must still be well-formed, since
+  // a malformed tag would compare unequal and silently cold-start forever.
   if (
-    typeof worktreeId !== "string" ||
-    worktreeId.length === 0 ||
-    worktreeId.length > MAX_RESTORED_PATH_LENGTH
+    worktreeId !== undefined &&
+    (typeof worktreeId !== "string" ||
+      worktreeId.length === 0 ||
+      worktreeId.length > MAX_RESTORED_PATH_LENGTH)
   ) {
     return undefined;
   }
+  if (
+    basePath !== undefined &&
+    (typeof basePath !== "string" ||
+      basePath.length === 0 ||
+      basePath.length > MAX_RESTORED_PATH_LENGTH)
+  ) {
+    return undefined;
+  }
+  // At least one identity tag is mandatory. A snapshot carrying neither would
+  // compare equal to every workspace source and seed its rows there.
+  if (worktreeId === undefined && basePath === undefined) return undefined;
   if (!isSnapshotDirPath(rootPath)) return undefined;
   if (!Array.isArray(listings) || listings.length > MAX_SNAPSHOT_LISTINGS) return undefined;
 
@@ -194,7 +220,12 @@ function sanitizeTreeSnapshot(value: unknown): FileBrowserTreeSnapshot | undefin
   // A snapshot without its own root listing has nothing to paint from —
   // seeding it would show an empty tree where a skeleton belongs.
   if (!seenDirs.has(rootPath)) return undefined;
-  return { worktreeId, rootPath, listings: sanitizedListings };
+  return {
+    ...(worktreeId !== undefined && { worktreeId }),
+    ...(basePath !== undefined && { basePath }),
+    rootPath,
+    listings: sanitizedListings,
+  };
 }
 
 /**
@@ -250,11 +281,25 @@ const BUILT_IN_DESERIALIZERS = {
     // Only a literal `true` restores collapsed: a hand-edited or corrupted
     // snapshot holding a string or object must fall back to the open default.
     browserSidebarCollapsed: saved.browserSidebarCollapsed === true ? true : undefined,
+    // Same literal-`true` rule for the viewer column (#11496). Sanitized
+    // independently: the pane resolves a record holding both flags at read
+    // time, so neither deserializer branch has to know about the other.
+    browserViewerCollapsed: saved.browserViewerCollapsed === true ? true : undefined,
     browserTreeSnapshot: sanitizeTreeSnapshot(saved.browserTreeSnapshot),
     // A finite number is clamped into range; a string/NaN/Infinity from a
     // hand-edited snapshot falls back to the default rather than becoming a
     // broken inline `style.width` (#11331).
     browserSidebarWidth: normalizeFileBrowserSidebarWidth(saved.browserSidebarWidth),
+    // Literal `true` only: anything else leaves the field absent so the create
+    // path re-derives rooting from `worktreeId` instead of trusting a corrupted
+    // value to redirect the browse root (#11489).
+    browserWorkspaceRooted: saved.browserWorkspaceRooted === true ? true : undefined,
+    // Membership-tested against the known keys rather than cast: an unknown
+    // string would reach the comparator and order by nothing, silently leaving
+    // the tree in the service's order while the menu claimed otherwise
+    // (#11620). Anything unrecognized falls back to the absent default.
+    browserSortKey: sanitizeSortKey(saved.browserSortKey),
+    browserSortDirection: saved.browserSortDirection === "desc" ? "desc" : undefined,
   }),
   diff: (saved) => ({
     filePath: saved.filePath,

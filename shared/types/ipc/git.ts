@@ -10,6 +10,32 @@ export interface GitGetFileDiffPayload {
   status: GitStatus;
   /** When true, passes --ignore-all-space so whitespace-only changes are omitted */
   ignoreWhitespace?: boolean;
+  /** Byte offset to start the diff window at (default 0) */
+  offset?: number;
+  /** Maximum bytes to return in this window (capped at GIT_FILE_DIFF_MAX_BYTES) */
+  maxBytes?: number;
+}
+
+/**
+ * A byte-bounded window over a file's diff (#11531).
+ *
+ * An oversized diff is readable by walking `nextOffset` rather than being refused
+ * outright. `FILE_TOO_LARGE` survives only as a source-size backstop, for a file
+ * past `GIT_FILE_DIFF_MAX_SOURCE_BYTES` whose diff cannot be materialized at all;
+ * it, `BINARY_FILE`, and `NO_CHANGES` arrive verbatim in `content`, each marked by
+ * `totalBytes: 0`.
+ */
+export interface GitFileDiffResult {
+  /** Diff text for this window, or a `BINARY_FILE` / `NO_CHANGES` / `FILE_TOO_LARGE` sentinel. */
+  content: string;
+  /** Byte offset this window starts at. */
+  offset: number;
+  /** Total byte length of the full diff; 0 for sentinel results. */
+  totalBytes: number;
+  /** True when diff content remains beyond this window. */
+  truncated: boolean;
+  /** Offset to request next, or null when this window reached the end. */
+  nextOffset: number | null;
 }
 
 /** Single file entry in a cross-worktree comparison */

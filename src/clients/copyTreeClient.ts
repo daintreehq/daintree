@@ -8,8 +8,12 @@ import type {
 } from "@shared/types";
 
 export const copyTreeClient = {
-  generate: (worktreeId: string, options?: CopyTreeOptions): Promise<CopyTreeResult> => {
-    return window.electron.copyTree.generate(worktreeId, options);
+  generate: (
+    worktreeId: string,
+    options?: CopyTreeOptions,
+    includeContent?: boolean
+  ): Promise<CopyTreeResult> => {
+    return window.electron.copyTree.generate(worktreeId, options, includeContent);
   },
 
   generateAndCopyFile: (worktreeId: string, options?: CopyTreeOptions): Promise<CopyTreeResult> => {

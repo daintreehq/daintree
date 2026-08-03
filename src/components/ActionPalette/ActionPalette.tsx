@@ -62,19 +62,17 @@ function looksLikePath(query: string): boolean {
 function PrefixDiscoverabilityRow() {
   return (
     <div
-      className="@max-[420px]/palette-footer:hidden flex items-center gap-2 flex-wrap text-[11px] text-daintree-text/45"
+      // Spacing does the separating, not interpuncts. The row wraps at the
+      // palette's width, and a per-item separator ends a wrapped line with a
+      // dangling dot pointing at nothing.
+      className="@max-[420px]/palette-footer:hidden flex items-center gap-x-3 gap-y-1 flex-wrap text-[11px] text-daintree-text/45"
       aria-label="Prefix shortcuts"
     >
       <span className="text-daintree-text/40">Type</span>
-      {Object.entries(PREFIX_MAP).map(([prefix, route], i) => (
+      {Object.entries(PREFIX_MAP).map(([prefix, route]) => (
         <span key={prefix} className="inline-flex items-baseline">
           <kbd className={KBD_CLASS}>{prefix}</kbd>
           <span className="ml-1.5">{route.label.toLowerCase()}</span>
-          {i < Object.entries(PREFIX_MAP).length - 1 && (
-            <span aria-hidden="true" className="ml-2 text-daintree-text/25">
-              ·
-            </span>
-          )}
         </span>
       ))}
     </div>

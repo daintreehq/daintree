@@ -4,6 +4,16 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/project";
 import { getTerminalText } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
+import {
+  STABILIZATION_POLL_MS,
+  areOpenCodeOutputsEquivalent,
+  classifyOpenCodeOutput,
+  formatOpenCodeCrashError,
+  formatOpenCodeTimeoutError,
+  initialStabilizationState,
+  observeOpenCodeOutput,
+  type OpenCodeOutputKind,
+} from "../helpers/opencodeReady";
 
 let ctx: AppContext;
 let fixtureDir: string;
@@ -58,6 +68,11 @@ async function launchOpenCodeAgent(): Promise<Locator> {
   return agentPanel;
 }
 
+const IDLE_POLL_MS = 1_000;
+// Re-reads allowed after focus before we answer a prompt whose text keeps
+// moving. Bounded so the settle → focus → mismatch cycle always terminates.
+const MAX_STALE_AUTHORIZATIONS = 2;
+
 async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "needs-restart"> {
   const { window } = ctx;
 
@@ -71,37 +86,103 @@ async function waitForOpenCodeReady(agentPanel: Locator): Promise<"ready" | "nee
   const deadline =
     Date.now() + (process.platform === "win32" ? 360_000 : process.env.CI ? 180_000 : 120_000);
 
+  let stabilization = initialStabilizationState();
+  let staleAuthorizations = 0;
+  let lastText = "";
+  let lastKind: OpenCodeOutputKind = "pending";
+
   while (Date.now() < deadline) {
     await dismissTelemetryConsent(window);
 
-    const text = await getTerminalText(agentPanel);
-    const lower = text.toLowerCase();
+    lastText = await getTerminalText(agentPanel);
+    const classification = classifyOpenCodeOutput(lastText);
+    lastKind = classification.kind;
 
-    if (lower.includes("update complete") && lower.includes("restart the application")) {
-      return "needs-restart";
+    // Fail in one poll interval rather than burning the whole deadline on a CLI
+    // that is already dead — the generic timeout that used to surface here read
+    // as a Daintree ready-state bug and cost a release investigation.
+    //
+    // Throwing on first sight is deliberate. Confirming first (re-read, look
+    // for ready markers) was tried and is worse: the CLI runs --mini, so a
+    // ready marker from before the crash is still sitting in scrollback, and a
+    // real crash would be reported as "ready" — destroying the diagnostic this
+    // exists to give. The signature is only printed on the CLI's unwrapped
+    // key-decode throw, and if that ever stops being true the failure is a
+    // clearly labelled upstream-crash message, which still triages faster than
+    // the timeout it replaced.
+    if (classification.kind === "crashed") {
+      throw new Error(formatOpenCodeCrashError(classification.signature, lastText));
+    }
+    if (classification.kind === "needs-restart") return "needs-restart";
+    if (classification.kind === "ready") return "ready";
+
+    const observed = observeOpenCodeOutput(stabilization, {
+      kind: classification.kind,
+      text: lastText,
+      now: Date.now(),
+    });
+    stabilization = observed.state;
+
+    if (observed.decision !== "act") {
+      await window.waitForTimeout(
+        observed.decision === "wait" ? STABILIZATION_POLL_MS : IDLE_POLL_MS
+      );
+      continue;
     }
 
+    const authorizedText = lastText;
+    await focusHybridEditor(window, agentPanel);
+
+    // Focus retries can take seconds, during which the TUI may have moved on
+    // (or died). Re-read before committing a keystroke: sending the previous
+    // screen's answer is what feeds the CLI's keymap parser input it cannot
+    // decode. Compare the text, not just the kind — two different provider
+    // prompts share a kind, and answering the wrong one is exactly the stale
+    // input this guard exists to stop.
+    lastText = await getTerminalText(agentPanel);
+    const settled = classifyOpenCodeOutput(lastText);
+    lastKind = settled.kind;
+
+    if (settled.kind === "crashed") {
+      throw new Error(formatOpenCodeCrashError(settled.signature, lastText));
+    }
+    if (settled.kind !== classification.kind) {
+      stabilization = initialStabilizationState();
+      staleAuthorizations = 0;
+      continue;
+    }
+
+    // Re-authorize a bounded number of times, then send anyway. Requiring the
+    // text to match forever would livelock on a prompt that repaints in a way
+    // normalization does not fold: it would cycle settle → focus → mismatch →
+    // reset until the deadline and never answer a prompt that is genuinely
+    // waiting. The kind staying put across all of it is the property worth
+    // holding out for; the exact frame is not.
     if (
-      lower.includes("ask anything") ||
-      /build\s+opencode/i.test(text) ||
-      /\d+\.\d+\.\d+$/.test(text.trim())
+      !areOpenCodeOutputsEquivalent(authorizedText, lastText) &&
+      staleAuthorizations < MAX_STALE_AUTHORIZATIONS
     ) {
-      return "ready";
-    } else if (lower.includes("provider") || lower.includes("/connect")) {
-      await focusHybridEditor(window, agentPanel);
-      await window.keyboard.press("Enter");
-      await window.waitForTimeout(2_000);
-    } else if (lower.includes("api key")) {
-      await focusHybridEditor(window, agentPanel);
-      await window.keyboard.press("ArrowUp");
-      await window.keyboard.press("Enter");
-      await window.waitForTimeout(2_000);
-    } else {
-      await window.waitForTimeout(1_000);
+      staleAuthorizations++;
+      stabilization = initialStabilizationState();
+      continue;
     }
+    staleAuthorizations = 0;
+
+    // Focus can burn a large slice of the budget; do not send input we no
+    // longer have time to observe the result of.
+    if (Date.now() >= deadline) break;
+
+    if (settled.kind === "awaiting-api-key") {
+      await window.keyboard.press("ArrowUp");
+    }
+    await window.keyboard.press("Enter");
+    await window.waitForTimeout(2_000);
+
+    // Make a prompt that survives our input settle again before we retry it.
+    stabilization = initialStabilizationState();
   }
 
-  throw new Error("OpenCode did not reach ready state before timeout");
+  throw new Error(formatOpenCodeTimeoutError(lastKind, lastText));
 }
 
 async function launchOpenCodeReady(): Promise<Locator> {
@@ -109,9 +190,13 @@ async function launchOpenCodeReady(): Promise<Locator> {
     const agentPanel = await launchOpenCodeAgent();
     const state = await waitForOpenCodeReady(agentPanel);
     if (state === "ready") return agentPanel;
+    // Out of attempts — relaunching here would only risk a launch failure
+    // masking the real diagnostic below.
+    if (attempt === 1) break;
 
     // OpenCode can self-update on first launch and require the embedding app
-    // to restart before the new CLI process will accept input.
+    // to restart before the new CLI process will accept input. CI pins the CLI
+    // and sets OPENCODE_DISABLE_AUTOUPDATE, so this path is for local runs.
     await closeApp(ctx.app);
     ctx = await launchApp();
     await openFixtureProject();

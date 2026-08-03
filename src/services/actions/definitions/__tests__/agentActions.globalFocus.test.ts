@@ -140,7 +140,7 @@ describe("agent.focusNextWaitingGlobal", () => {
 
     expect(state.switchProject).toHaveBeenCalledTimes(1);
     expect(state.switchProject).toHaveBeenCalledWith("c", {
-      focusIntent: "focus-next-waiting",
+      focusIntent: { intent: "focus-next-waiting" },
     });
     expect(focusNextWaiting).not.toHaveBeenCalled();
   });
@@ -162,7 +162,7 @@ describe("agent.focusNextWaitingGlobal", () => {
     // Search starts after "b" → first hit is "c", not "a" or "b".
     expect(state.switchProject).toHaveBeenCalledTimes(1);
     expect(state.switchProject).toHaveBeenCalledWith("c", {
-      focusIntent: "focus-next-waiting",
+      focusIntent: { intent: "focus-next-waiting" },
     });
     // Must not also dispatch the local action — cross-project path skips it.
     expect(focusNextWaiting).not.toHaveBeenCalled();
@@ -180,7 +180,7 @@ describe("agent.focusNextWaitingGlobal", () => {
     await callAction(actions, "agent.focusNextWaitingGlobal");
 
     expect(state.switchProject).toHaveBeenCalledWith("a", {
-      focusIntent: "focus-next-waiting",
+      focusIntent: { intent: "focus-next-waiting" },
     });
   });
 
@@ -224,7 +224,7 @@ describe("agent.focusNextWaitingGlobal", () => {
     // Falls through to head-of-list search; "b" is the first project with
     // waiting agents.
     expect(state.switchProject).toHaveBeenCalledWith("b", {
-      focusIntent: "focus-next-waiting",
+      focusIntent: { intent: "focus-next-waiting" },
     });
   });
 });

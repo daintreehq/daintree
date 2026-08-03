@@ -36,12 +36,26 @@ export async function expectPaletteFocused(
 }
 
 export async function ensureWindowFocused(app: ElectronApplication): Promise<void> {
-  await app.evaluate(({ BrowserWindow }) => {
-    const win = BrowserWindow.getAllWindows()[0];
-    if (!win) throw new Error("No BrowserWindow found");
-    if (win.isMinimized()) win.restore();
-    win.show();
-    win.focus();
-    win.webContents.focus();
-  });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await app.evaluate(({ BrowserWindow }) => {
+        const win = BrowserWindow.getAllWindows()[0];
+        if (!win) throw new Error("No BrowserWindow found");
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+        win.webContents.focus();
+      });
+      return;
+    } catch (error) {
+      // Under the combined 800+ test run, Playwright can briefly replace its
+      // Electron inspector context between serial cases. Focusing is idempotent,
+      // so retry only that transport turnover; missing windows and every other
+      // application error still fail on the first attempt.
+      const contextTurnedOver =
+        error instanceof Error && error.message.includes("Execution context was destroyed");
+      if (!contextTurnedOver || attempt === 1) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
 }

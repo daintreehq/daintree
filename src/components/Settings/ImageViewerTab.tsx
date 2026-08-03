@@ -167,7 +167,7 @@ export function ImageViewerTab() {
                 onChange={(e) => handleCommandChange(e.target.value)}
                 disabled={isLoading || Boolean(loadError)}
                 placeholder="e.g. open -a Photoshop, gimp"
-                className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent transition-colors font-mono disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent/40 transition-colors font-mono disabled:opacity-50 disabled:cursor-not-allowed"
               />
               <p className="text-xs text-daintree-text/40">
                 The file path will be appended as the last argument.

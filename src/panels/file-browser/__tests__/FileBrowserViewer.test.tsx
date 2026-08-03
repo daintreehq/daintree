@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
-import { render, act, screen, waitFor } from "@testing-library/react";
+import { createContext, forwardRef, useContext, type ReactNode } from "react";
+import { fireEvent, render, act, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Type-only: erased before the vi.mock factory runs, so it cannot pull the real
+// module in ahead of its own mock.
+import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
 
 // FileBrowserViewer is the read-only preview beside the tree. #11319 adds a
 // Source/Rendered toggle for markdown, mirroring FilePane. Mock the heavy leaf
@@ -18,12 +22,17 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
 
-// A real MarkdownViewer lazy-loads its renderer, hiding the prop under test.
+// A real MarkdownViewer lazy-loads its renderer, hiding the props under test.
 // The mock surfaces viewMode as a data attribute so the toggle wiring is
 // observable — without it the mode plumbing could be deleted and stay green.
+// cacheBust rides along for the same reason (#11587).
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
-  MarkdownViewer: (props: { viewMode: string }) => (
-    <div data-testid="markdown-viewer-mock" data-view-mode={props.viewMode} />
+  MarkdownViewer: (props: Pick<MarkdownViewerProps, "viewMode" | "cacheBust">) => (
+    <div
+      data-testid="markdown-viewer-mock"
+      data-view-mode={props.viewMode}
+      data-cache-bust={props.cacheBust ?? ""}
+    />
   ),
 }));
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
@@ -33,15 +42,128 @@ vi.mock("@/components/Html/HtmlViewer", () => ({
   HtmlViewer: () => <div data-testid="html-viewer-mock" />,
 }));
 
+// Surfaces the `active` prop instead of letting the real component apply its
+// spin class. What this suite owns is the wiring — `isRefreshing` reaching the
+// icon — while how a spin is rendered belongs to SpinningIcon's own suite; an
+// assertion on its class name here would break on a harmless refactor there.
+vi.mock("@/components/ui/SpinningIcon", () => ({
+  SpinningIcon: ({ active }: { active: boolean }) => (
+    <svg data-testid="spinning-icon-mock" data-active={String(active)} />
+  ),
+}));
+
+// Radix's dropdown opens on a pointer sequence and portals its content, neither
+// of which jsdom drives faithfully. Render the menu inline and let the radio
+// items fire their own onValueChange — what this suite owns is the sort
+// contract (which keys, and how re-picking flips direction), not Radix's
+// open/close choreography. Mirrors the ReviewHub sort-menu suite.
+vi.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
+  DropdownMenuTrigger: ({ children, asChild }: { children: ReactNode; asChild?: boolean }) =>
+    asChild ? <>{children}</> : <button type="button">{children}</button>,
+  DropdownMenuContent: ({ children }: { children: ReactNode }) => <div role="menu">{children}</div>,
+  DropdownMenuLabel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DropdownMenuSeparator: () => <hr />,
+  DropdownMenuRadioGroup: ({
+    children,
+    value,
+    onValueChange,
+  }: {
+    children: ReactNode;
+    value: string;
+    onValueChange: (v: string) => void;
+  }) => (
+    <RadioGroupContext.Provider value={onValueChange}>
+      <div data-value={value}>{children}</div>
+    </RadioGroupContext.Provider>
+  ),
+  DropdownMenuRadioItem: ({ children, value }: { children: ReactNode; value: string }) => {
+    const onValueChange = useContext(RadioGroupContext);
+    return (
+      <div role="menuitemradio" onClick={() => onValueChange?.(value)}>
+        {children}
+      </div>
+    );
+  },
+}));
+
+// Context, not a module-level stash: there are two radio groups now (key and
+// direction), and a single shared handler would route every click to whichever
+// group rendered last — passing the tests for the wrong reason.
+const RadioGroupContext = createContext<((value: string) => void) | null>(null);
+
+// The folder listing (#11620) virtualizes its rows, and a real Virtuoso renders
+// none of them in jsdom, where every element measures zero. Render them all —
+// what this suite owns is which body the viewer picks, not how it windows.
+vi.mock("react-virtuoso", () => ({
+  Virtuoso: forwardRef(function VirtuosoStub<Row>(
+    props: {
+      data: Row[];
+      context: unknown;
+      itemContent: (index: number, row: Row, context: unknown) => ReactNode;
+    },
+    _ref: unknown
+  ) {
+    return (
+      <div>
+        {props.data.map((row, index) => (
+          <div key={index}>{props.itemContent(index, row, props.context)}</div>
+        ))}
+      </div>
+    );
+  }),
+}));
+
 import { FileBrowserViewer } from "../FileBrowserViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { GitStatus } from "@shared/types/git";
+import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
+import type { FileBrowserSortOrder, FileEntryLike, FolderListingRow } from "../fileBrowserTree";
+import type { FolderListingStatus } from "../useFileBrowserTree";
 
-function renderViewer(
-  filePath: string | null,
-  opts: { sidebarCollapsed?: boolean; onToggleSidebar?: () => void; revision?: string } = {}
-) {
+interface ViewerOpts {
+  sidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
+  revision?: string;
+  surfaceRefreshNonce?: number;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
+  /**
+   * Defaults to `null` — "no git status available" — because that is what a
+   * workspace-rooted browser passes, and it keeps every pre-existing case in
+   * this suite on the generic placeholder it was written against.
+   */
+  changedFiles?: readonly WorkingTreeFileChange[] | null;
+  onSelectChangedFile?: (relativePath: string) => void;
+  // Folder-selected state (#11620). Defaulted to "no folder" so every existing
+  // file-preview case keeps exercising the file branch untouched.
+  folderPath?: string | null;
+  folderRows?: FolderListingRow[] | null;
+  folderStatus?: FolderListingStatus;
+  folderHasHiddenDotfiles?: boolean;
+  onShowDotfiles?: () => void;
+  onSelectEntry?: (path: string) => void;
+  rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
+  sort?: FileBrowserSortOrder;
+  onSortChange?: (sort: FileBrowserSortOrder) => void;
+}
+
+function change(relativePath: string, status: GitStatus = "modified"): WorkingTreeFileChange {
+  return {
+    path: `/repo/${relativePath}`,
+    relativePath,
+    status,
+    insertions: null,
+    deletions: null,
+  };
+}
+
+// Defaults live here, never on the component: the props are required there so a
+// pane that forgets to wire one fails typecheck rather than silently losing
+// media refresh (#11586).
+function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
   const fileName = filePath ? (filePath.split("/").pop() ?? filePath) : "";
-  return render(
+  return (
     <TooltipProvider>
       <FileBrowserViewer
         filePath={filePath}
@@ -49,12 +171,31 @@ function renderViewer(
         fileName={fileName}
         relativePath={filePath ? fileName : null}
         revision={opts.revision ?? "r1"}
+        surfaceRefreshNonce={opts.surfaceRefreshNonce ?? 0}
+        onRefresh={opts.onRefresh ?? vi.fn()}
+        isRefreshing={opts.isRefreshing ?? false}
         sidebarCollapsed={opts.sidebarCollapsed ?? false}
         onToggleSidebar={opts.onToggleSidebar ?? vi.fn()}
         treeSidebarId="file-tree-column"
+        changedFiles={opts.changedFiles ?? null}
+        onSelectChangedFile={opts.onSelectChangedFile ?? vi.fn()}
+        folderPath={opts.folderPath ?? null}
+        folderRows={opts.folderRows ?? null}
+        folderStatus={opts.folderStatus ?? "ready"}
+        folderHasHiddenDotfiles={opts.folderHasHiddenDotfiles ?? false}
+        onShowDotfiles={opts.onShowDotfiles ?? vi.fn()}
+        onSelectEntry={opts.onSelectEntry ?? vi.fn()}
+        {...(opts.rowContextMenu ? { rowContextMenu: opts.rowContextMenu } : {})}
+        basePath="/repo"
+        sort={opts.sort ?? { key: "name", direction: "asc" }}
+        onSortChange={opts.onSortChange ?? vi.fn()}
       />
     </TooltipProvider>
   );
+}
+
+function renderViewer(filePath: string | null, opts: ViewerOpts = {}) {
+  return render(viewerJsx(filePath, opts));
 }
 
 // SegmentedToggle renders literal-text buttons; its accessible name is the
@@ -68,6 +209,10 @@ async function clickMode(label: "Source" | "Rendered") {
 
 function currentViewMode(): string | null {
   return screen.getByTestId("markdown-viewer-mock").getAttribute("data-view-mode");
+}
+
+function currentCacheBust(): string | null {
+  return screen.getByTestId("markdown-viewer-mock").getAttribute("data-cache-bust");
 }
 
 beforeEach(() => {
@@ -123,20 +268,7 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
 
     // Selecting another markdown file in the tree must not silently revert the
     // reader's choice back to rendered — the mode is sticky, mirroring FilePane.
-    rerender(
-      <TooltipProvider>
-        <FileBrowserViewer
-          filePath="/repo/docs/b.md"
-          rootPath="/repo"
-          fileName="b.md"
-          relativePath="b.md"
-          revision="r1"
-          sidebarCollapsed={false}
-          onToggleSidebar={vi.fn()}
-          treeSidebarId="file-tree-column"
-        />
-      </TooltipProvider>
-    );
+    rerender(viewerJsx("/repo/docs/b.md"));
     await waitFor(() => expect(currentViewMode()).toBe("source"));
   });
 
@@ -149,24 +281,25 @@ describe("FileBrowserViewer markdown Source/Rendered toggle (#11319)", () => {
     await clickMode("Source");
     await waitFor(() => expect(currentViewMode()).toBe("source"));
 
-    rerender(
-      <TooltipProvider>
-        <FileBrowserViewer
-          filePath="/repo/src/notes.txt"
-          rootPath="/repo"
-          fileName="notes.txt"
-          relativePath="notes.txt"
-          revision="r1"
-          sidebarCollapsed={false}
-          onToggleSidebar={vi.fn()}
-          treeSidebarId="file-tree-column"
-        />
-      </TooltipProvider>
-    );
+    rerender(viewerJsx("/repo/src/notes.txt"));
     await screen.findByTestId("code-viewer-mock");
     expect(screen.queryByRole("button", { name: "Source" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Rendered" })).toBeNull();
     expect(screen.queryByTestId("markdown-viewer-mock")).toBeNull();
+  });
+});
+
+describe("FileBrowserViewer rendered-markdown image freshness (#11587)", () => {
+  it("hands the refresh revision to the rendered document as its cache token", async () => {
+    // Embedded images resolve to daintree-file:// URLs built from path + root, so
+    // a rewritten image is invisible unless something in the URL moves. This is
+    // the same freshness choice the image branch already makes with ZoomableImage.
+    const { rerender } = renderViewer("/repo/docs/spec.md", { revision: "r1" });
+    await waitFor(() => expect(currentViewMode()).toBe("rendered"));
+    expect(currentCacheBust()).toBe("r1");
+
+    rerender(viewerJsx("/repo/docs/spec.md", { revision: "r2" }));
+    await waitFor(() => expect(currentCacheBust()).toBe("r2"));
   });
 });
 
@@ -186,20 +319,7 @@ describe("FileBrowserViewer tree-sidebar toggle (#11328)", () => {
     const firstEmpty = screen.getAllByRole("button")[0];
     expect(firstEmpty?.getAttribute("data-testid")).toBe("file-browser-sidebar-toggle");
 
-    rerender(
-      <TooltipProvider>
-        <FileBrowserViewer
-          filePath="/repo/src/notes.txt"
-          rootPath="/repo"
-          fileName="notes.txt"
-          relativePath="notes.txt"
-          revision="r1"
-          sidebarCollapsed={false}
-          onToggleSidebar={vi.fn()}
-          treeSidebarId="file-tree-column"
-        />
-      </TooltipProvider>
-    );
+    rerender(viewerJsx("/repo/src/notes.txt"));
     await screen.findByTestId("code-viewer-mock");
     // Still first, ahead of the reveal/open-in-editor actions — the toggle
     // stays flush at the far left of the header per the issue.
@@ -215,20 +335,7 @@ describe("FileBrowserViewer tree-sidebar toggle (#11328)", () => {
     expect(expanded.getAttribute("aria-pressed")).toBeNull();
     expect(expanded.getAttribute("aria-controls")).toBe("file-tree-column");
 
-    rerender(
-      <TooltipProvider>
-        <FileBrowserViewer
-          filePath={null}
-          rootPath="/repo"
-          fileName=""
-          relativePath={null}
-          revision="r1"
-          sidebarCollapsed={true}
-          onToggleSidebar={vi.fn()}
-          treeSidebarId="file-tree-column"
-        />
-      </TooltipProvider>
-    );
+    rerender(viewerJsx(null, { sidebarCollapsed: true }));
     const collapsed = screen.getByTestId("file-browser-sidebar-toggle");
     expect(collapsed.getAttribute("aria-expanded")).toBe("false");
     // The tree column is unmounted while collapsed, so aria-controls must not
@@ -287,6 +394,46 @@ describe("FileBrowserViewer video preview (#11382)", () => {
     expect(readMock).not.toHaveBeenCalled();
     expect(screen.getByText(/Can't play this video format/)).toBeTruthy();
   });
+
+  it("refetches on an explicit refresh but rides out an ambient revision tick (#11586)", async () => {
+    // Both directions in one test: the ambient half must not disturb playback,
+    // and the explicit half must not be swallowed along with it. Unique object
+    // URLs so a silent remount can't pass as continuity.
+    let objectUrlSequence = 0;
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/video-${objectUrlSequence++}`);
+
+    const { container, rerender } = renderViewer("/repo/media/demo.webm", {
+      revision: "r1",
+      surfaceRefreshNonce: 0,
+    });
+    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+    const firstNode = container.querySelector("video");
+    const firstSrc = firstNode?.getAttribute("src");
+    expect(videoFetchMock).toHaveBeenCalledTimes(1);
+
+    // A worktree write elsewhere: the player must be left completely alone.
+    rerender(viewerJsx("/repo/media/demo.webm", { revision: "r2", surfaceRefreshNonce: 0 }));
+    await act(async () => {});
+    expect(container.querySelector("video")).toBe(firstNode);
+    expect(container.querySelector("video")?.getAttribute("src")).toBe(firstSrc);
+    expect(videoFetchMock).toHaveBeenCalledTimes(1);
+
+    // Refresh pressed: exactly one more request, aimed at a different URL —
+    // proof the nonce reached it, without pinning the leaf's `v=` spelling.
+    rerender(viewerJsx("/repo/media/demo.webm", { revision: "r2", surfaceRefreshNonce: 1 }));
+    await waitFor(() => expect(videoFetchMock).toHaveBeenCalledTimes(2));
+    expect(String(videoFetchMock.mock.calls[1]?.[0])).not.toBe(
+      String(videoFetchMock.mock.calls[0]?.[0])
+    );
+    // Both halves in ONE waitFor: the hook nulls its object URL while refetching,
+    // so a bare `.not.toBe(firstSrc)` would go green on the empty gap and never
+    // prove the replacement player arrived.
+    await waitFor(() => {
+      const refreshed = container.querySelector("video");
+      expect(refreshed).not.toBeNull();
+      expect(refreshed?.getAttribute("src")).not.toBe(firstSrc);
+    });
+  });
 });
 
 describe("FileBrowserViewer audio preview (#11425)", () => {
@@ -339,20 +486,7 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
     const firstSrc = firstNode?.getAttribute("src");
     expect(audioFetchMock).toHaveBeenCalledTimes(1);
 
-    rerender(
-      <TooltipProvider>
-        <FileBrowserViewer
-          filePath="/repo/media/track.mp3"
-          rootPath="/repo"
-          fileName="track.mp3"
-          relativePath="track.mp3"
-          revision="r2"
-          sidebarCollapsed={false}
-          onToggleSidebar={vi.fn()}
-          treeSidebarId="file-tree-column"
-        />
-      </TooltipProvider>
-    );
+    rerender(viewerJsx("/repo/media/track.mp3", { revision: "r2" }));
     await act(async () => {});
 
     // The very same element, still on its original blob — not a fresh one that
@@ -360,6 +494,65 @@ describe("FileBrowserViewer audio preview (#11425)", () => {
     expect(container.querySelector("audio")).toBe(firstNode);
     expect(container.querySelector("audio")?.getAttribute("src")).toBe(firstSrc);
     expect(audioFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refetches the track when an explicit refresh moves the nonce (#11586)", async () => {
+    // The other half of the test above: the ambient tick is ignored, but
+    // pressing Refresh is the one gesture that must pull rewritten bytes.
+    let objectUrlSequence = 0;
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/audio-${objectUrlSequence++}`);
+
+    const { container, rerender } = renderViewer("/repo/media/track.mp3", {
+      surfaceRefreshNonce: 0,
+    });
+    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+    const firstNode = container.querySelector("audio");
+    const firstSrc = firstNode?.getAttribute("src");
+    expect(audioFetchMock).toHaveBeenCalledTimes(1);
+
+    rerender(viewerJsx("/repo/media/track.mp3", { surfaceRefreshNonce: 1 }));
+    await waitFor(() => expect(audioFetchMock).toHaveBeenCalledTimes(2));
+
+    // A different URL, so the nonce genuinely reached the request rather than
+    // the blob being re-rendered from cache.
+    expect(String(audioFetchMock.mock.calls[1]?.[0])).not.toBe(
+      String(audioFetchMock.mock.calls[0]?.[0])
+    );
+    // One waitFor for the whole claim: the hook nulls its object URL while
+    // refetching, so asserting the src alone would pass on the empty gap
+    // between the two players.
+    await waitFor(() => {
+      const refreshed = container.querySelector("audio");
+      expect(refreshed).not.toBeNull();
+      expect(refreshed?.getAttribute("src")).not.toBe(firstSrc);
+      // Keyed by object URL, so fresh bytes mean a fresh element.
+      expect(refreshed).not.toBe(firstNode);
+    });
+  });
+
+  it("recovers a failed track on refresh, which takes both halves of the signal", async () => {
+    // A failed fetch unmounts the preview entirely (`status: "error"`), so
+    // `reloadKey` alone can't bring it back — nothing is mounted to receive it.
+    // Recovery rides `revision`, whose re-run reclassifies the file and
+    // remounts the player. That is why the nonce must stay folded into
+    // `revision` as well as being passed separately.
+    let objectUrlSequence = 0;
+    URL.createObjectURL = vi.fn(() => `blob:app://daintree/audio-retry-${objectUrlSequence++}`);
+    audioFetchMock.mockRejectedValueOnce(new Error("protocol unavailable"));
+
+    const { container, rerender } = renderViewer("/repo/media/track.mp3", {
+      revision: "0:0",
+      surfaceRefreshNonce: 0,
+    });
+    await screen.findByText("This audio file couldn't be played");
+    expect(container.querySelector("audio")).toBeNull();
+
+    // Exactly what the pane emits for one Refresh press: both values move.
+    rerender(viewerJsx("/repo/media/track.mp3", { revision: "0:1", surfaceRefreshNonce: 1 }));
+
+    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+    expect(screen.queryByText("This audio file couldn't be played")).toBeNull();
+    expect(audioFetchMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -385,5 +578,310 @@ describe("FileBrowserViewer PDF preview (#11427)", () => {
     // attribute PDFium refuses to install its viewer frame.
     expect(frame?.hasAttribute("credentialless")).toBe(true);
     expect(frame?.hasAttribute("sandbox")).toBe(false);
+  });
+
+  it("re-navigates only on an explicit refresh, never on a revision tick (#11586)", async () => {
+    const { container, rerender } = renderViewer("/repo/docs/spec.pdf", {
+      revision: "r1",
+      surfaceRefreshNonce: 0,
+    });
+    await act(async () => {});
+    const firstFrame = container.querySelector("iframe");
+    const firstSrc = firstFrame?.getAttribute("src");
+
+    // An ambient write must not throw away the reader's page and zoom. Both a
+    // changed src AND a remounted frame would do that, so pin the node too —
+    // a remount carrying an identical src resets the reader just the same.
+    rerender(viewerJsx("/repo/docs/spec.pdf", { revision: "r2", surfaceRefreshNonce: 0 }));
+    await act(async () => {});
+    expect(container.querySelector("iframe")).toBe(firstFrame);
+    expect(container.querySelector("iframe")?.getAttribute("src")).toBe(firstSrc);
+
+    rerender(viewerJsx("/repo/docs/spec.pdf", { revision: "r2", surfaceRefreshNonce: 1 }));
+    await act(async () => {});
+    const refreshed = container.querySelector("iframe");
+    // Re-navigated in place rather than remounted: the same element takes a new
+    // src, which is what makes the reload deliberate instead of incidental.
+    expect(refreshed).toBe(firstFrame);
+    expect(refreshed?.getAttribute("src")).not.toBe(firstSrc);
+    // The reload rides the same frame, so the COEP contract must survive it.
+    expect(refreshed?.hasAttribute("credentialless")).toBe(true);
+    expect(refreshed?.hasAttribute("sandbox")).toBe(false);
+  });
+});
+
+describe("FileBrowserViewer Refresh control (#11586)", () => {
+  it("leaves Refresh to the tree header while the tree column is mounted and nothing is open", () => {
+    renderViewer(null, { sidebarCollapsed: false });
+    // Two identical Refresh buttons in one panel would read as two different
+    // actions; with no file on screen the tree header owns the only one.
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+  });
+
+  it("offers Refresh beside the open file's actions even with the tree column mounted", async () => {
+    // With a file open this is the file's own re-read, sitting among the file's
+    // controls. The tree header hands it over for this layout (asserted from
+    // the pane, which is the only place both headers exist at once).
+    const onRefresh = vi.fn();
+    renderViewer("/repo/src/notes.txt", { sidebarCollapsed: false, onRefresh });
+    await screen.findByTestId("code-viewer-mock");
+
+    await act(async () => {
+      screen
+        .getByRole("button", { name: "Refresh" })
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Refresh once the tree column is collapsed away, even with nothing selected", async () => {
+    const onRefresh = vi.fn();
+    renderViewer(null, { sidebarCollapsed: true, onRefresh });
+
+    // Nothing selected still needs it: Refresh re-reads the tree too, and a
+    // workspace-rooted browser has no change tick to fall back on (#11482).
+    expect(screen.getByText("Nothing selected")).toBeTruthy();
+    const button = screen.getByRole("button", { name: "Refresh" });
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the in-flight refresh state to the icon", () => {
+    const { rerender } = renderViewer(null, { sidebarCollapsed: true, isRefreshing: false });
+    expect(screen.getByTestId("spinning-icon-mock").getAttribute("data-active")).toBe("false");
+
+    rerender(viewerJsx(null, { sidebarCollapsed: true, isRefreshing: true }));
+    expect(screen.getByTestId("spinning-icon-mock").getAttribute("data-active")).toBe("true");
+  });
+
+  it("keeps re-reading text on an ambient revision tick", async () => {
+    // The half that already worked: `revision` must keep its job, or fixing the
+    // media path would quietly cost text its live updates.
+    const { rerender } = renderViewer("/repo/src/notes.txt", { revision: "r1" });
+    await screen.findByTestId("code-viewer-mock");
+    expect(readMock).toHaveBeenCalledTimes(1);
+
+    rerender(viewerJsx("/repo/src/notes.txt", { revision: "r2" }));
+    await waitFor(() => expect(readMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("re-reads text on an explicit refresh too, not just an ambient tick", async () => {
+    // Guards the other direction of the pane's dual handoff: the nonce is fed
+    // to the media previews directly AND folded into `revision`. Drop the
+    // second and text, html and svg go stale on Refresh with nothing to catch
+    // it — the media tests above would all still pass.
+    const { rerender } = renderViewer("/repo/src/notes.txt", {
+      revision: "0:0",
+      surfaceRefreshNonce: 0,
+    });
+    await screen.findByTestId("code-viewer-mock");
+    expect(readMock).toHaveBeenCalledTimes(1);
+
+    // What the pane produces for a Refresh press on a worktree with no tick.
+    rerender(viewerJsx("/repo/src/notes.txt", { revision: "0:1", surfaceRefreshNonce: 1 }));
+    await waitFor(() => expect(readMock).toHaveBeenCalledTimes(2));
+  });
+});
+
+// With nothing selected the pane answers "what did the agent just change in
+// here" (#11614). The three states are distinct on purpose: no git status at
+// all, a snapshot saying clean, and a snapshot with changes.
+describe("FileBrowserViewer idle body", () => {
+  it("summarises the changed files instead of a placeholder", () => {
+    renderViewer(null, {
+      changedFiles: [change("src/app.ts"), change("docs/notes.md", "added")],
+    });
+
+    expect(screen.getByRole("button", { name: /Read src\/app\.ts/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Read docs\/notes\.md/ })).toBeTruthy();
+    expect(screen.queryByText("Nothing selected")).toBeNull();
+  });
+
+  it("opens a summarised file through the pane's selection callback", () => {
+    const onSelectChangedFile = vi.fn();
+    renderViewer(null, { changedFiles: [change("src/app.ts")], onSelectChangedFile });
+
+    screen.getByRole("button", { name: /Read src\/app\.ts/ }).click();
+
+    expect(onSelectChangedFile).toHaveBeenCalledWith("src/app.ts");
+  });
+
+  it("says the worktree is clean when the snapshot reports no changes", () => {
+    renderViewer(null, { changedFiles: [] });
+
+    expect(screen.getByText("Worktree is clean")).toBeTruthy();
+    expect(screen.queryByText("Nothing selected")).toBeNull();
+  });
+
+  it("keeps the generic placeholder when no git status is available", () => {
+    // A workspace-rooted browser has no worktree behind it, and a worktree whose
+    // snapshot hasn't arrived is equally unknown. Neither may claim "clean".
+    renderViewer(null, { changedFiles: null });
+
+    expect(screen.getByText("Nothing selected")).toBeTruthy();
+    expect(screen.queryByText("Worktree is clean")).toBeNull();
+  });
+
+  it("shows the selected file rather than the summary once one is picked", async () => {
+    readMock.mockResolvedValue({ content: "hello" });
+    renderViewer("/repo/src/app.ts", { changedFiles: [change("src/app.ts")] });
+
+    await screen.findByTestId("code-viewer-mock");
+
+    expect(screen.queryByRole("button", { name: /Read src\/app\.ts/ })).toBeNull();
+  });
+});
+
+describe("folder-selected state (#11620)", () => {
+  const FOLDER_ROWS: FolderListingRow[] = [
+    { path: "src/pkg", name: "pkg", isDirectory: true, itemCount: 2 },
+    { path: "src/a.ts", name: "a.ts", isDirectory: false, size: 100, mtimeMs: 1_700_000_000_000 },
+  ];
+
+  it("lists a selected folder's contents instead of the nothing-selected state", () => {
+    renderViewer(null, { folderPath: "src", folderRows: FOLDER_ROWS });
+    expect(screen.queryByText("Nothing selected")).toBeNull();
+    expect(screen.getByLabelText("pkg")).toBeTruthy();
+    expect(screen.getByLabelText("a.ts")).toBeTruthy();
+  });
+
+  it("still shows the nothing-selected state when neither a file nor a folder is selected", () => {
+    renderViewer(null);
+    expect(screen.getByText("Nothing selected")).toBeTruthy();
+  });
+
+  it("prefers the file preview when a file is selected", () => {
+    // The two are mutually exclusive by construction; if both ever arrived, the
+    // file must win rather than the viewer rendering two bodies.
+    renderViewer("/repo/a.ts", { folderPath: "src", folderRows: FOLDER_ROWS });
+    expect(screen.queryByLabelText("pkg")).toBeNull();
+  });
+
+  it("does not render the empty state while the listing is still pending", () => {
+    // The #10083 trap: branching on a Doherty-gated flag would paint "This
+    // folder is empty" for the first 400ms of every folder load.
+    renderViewer(null, { folderPath: "src", folderRows: null, folderStatus: "pending" });
+    expect(screen.queryByText("Nothing in this folder yet")).toBeNull();
+    expect(screen.queryByText("Nothing selected")).toBeNull();
+  });
+
+  it("shows the empty state for a folder that really holds nothing", () => {
+    renderViewer(null, { folderPath: "src", folderRows: [], folderStatus: "ready" });
+    expect(screen.getByText("Nothing in this folder yet")).toBeTruthy();
+  });
+
+  it("offers Show dotfiles only when unhiding them would reveal something", () => {
+    renderViewer(null, {
+      folderPath: "src",
+      folderRows: [],
+      folderStatus: "ready",
+      folderHasHiddenDotfiles: true,
+    });
+    expect(screen.getByText("Dotfiles are hidden here")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show dotfiles" })).toBeTruthy();
+  });
+
+  it("does not offer Show dotfiles when the folder is genuinely empty", () => {
+    renderViewer(null, {
+      folderPath: "src",
+      folderRows: [],
+      folderStatus: "ready",
+      folderHasHiddenDotfiles: false,
+    });
+    expect(screen.queryByRole("button", { name: "Show dotfiles" })).toBeNull();
+  });
+
+  it("runs the dotfile recovery from the filtered-empty state", async () => {
+    const onShowDotfiles = vi.fn();
+    renderViewer(null, {
+      folderPath: "src",
+      folderRows: [],
+      folderStatus: "ready",
+      folderHasHiddenDotfiles: true,
+      onShowDotfiles,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Show dotfiles" }));
+    expect(onShowDotfiles).toHaveBeenCalled();
+  });
+
+  it("surfaces a readable error with a retry when the folder can't be read", () => {
+    renderViewer(null, { folderPath: "src", folderRows: null, folderStatus: "error" });
+    expect(screen.getByText("Can't show this folder")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("retries through the pane's refresh", async () => {
+    const onRefresh = vi.fn();
+    renderViewer(null, {
+      folderPath: "src",
+      folderRows: null,
+      folderStatus: "error",
+      onRefresh,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRefresh).toHaveBeenCalled();
+  });
+});
+
+describe("sort menu (#11620)", () => {
+  it("stays available with no selection, since it also orders the tree", () => {
+    renderViewer(null);
+    expect(screen.getByTestId("file-browser-sort-menu")).toBeTruthy();
+  });
+
+  it("stays available for a selected folder, whose listing it orders", () => {
+    renderViewer(null, { folderPath: "src", folderRows: [], folderStatus: "ready" });
+    expect(screen.getByRole("button", { name: /^Sort files \(/ })).toBeTruthy();
+    // The other half of the swap: no Refresh crowding it while the tree header
+    // still owns that one.
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+  });
+
+  it("gives its slot up once a file is open, having nothing left to order", async () => {
+    // A single document has no order, so the control that describes one would
+    // be describing the tree it can no longer be reached from — Refresh, the
+    // gesture a reader of an agent-rewritten file actually wants, takes it.
+    renderViewer("/repo/src/notes.txt");
+    await screen.findByTestId("code-viewer-mock");
+    expect(screen.queryByRole("button", { name: /^Sort files \(/ })).toBeNull();
+  });
+
+  it("names the current key and direction so the arrow icon isn't the only cue", () => {
+    // The arrow is aria-hidden, so the accessible name is the only place a
+    // screen reader can learn which way the list runs.
+    renderViewer(null, { sort: { key: "size", direction: "desc" } });
+    expect(screen.getByRole("button", { name: "Sort files (Size, descending)" })).toBeTruthy();
+  });
+
+  it("changes the key without disturbing the direction", () => {
+    const onSortChange = vi.fn();
+    renderViewer(null, { sort: { key: "name", direction: "desc" }, onSortChange });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Size" }));
+    expect(onSortChange).toHaveBeenCalledWith({ key: "size", direction: "desc" });
+  });
+
+  it("changes the direction without disturbing the key", () => {
+    const onSortChange = vi.fn();
+    renderViewer(null, { sort: { key: "modified", direction: "asc" }, onSortChange });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Descending" }));
+    expect(onSortChange).toHaveBeenCalledWith({ key: "modified", direction: "desc" });
+  });
+
+  it("can set a direction outright rather than only reversing the current one", () => {
+    // The reason this is a radio group and not a re-pick-to-flip gesture:
+    // choosing the direction already in effect is a no-op the user can rely on,
+    // not a silent reversal.
+    const onSortChange = vi.fn();
+    renderViewer(null, { sort: { key: "name", direction: "asc" }, onSortChange });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Ascending" }));
+    expect(onSortChange).toHaveBeenCalledWith({ key: "name", direction: "asc" });
+  });
+
+  it("offers the four documented keys and both directions", () => {
+    renderViewer(null);
+    const names = screen.getAllByRole("menuitemradio").map((i) => i.textContent?.trim());
+    expect(names).toEqual(["Name", "Modified", "Size", "Type", "Ascending", "Descending"]);
   });
 });

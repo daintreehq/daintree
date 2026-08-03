@@ -8,7 +8,11 @@ import type {
   CreateIssueInput,
   EditIssueInput,
   IssueCloseReason,
+  MergePRResult,
   PR,
+  PRDraftStateResult,
+  PullRequestReview,
+  RequestReviewersResult,
   Page,
   RepoMetadata,
   ListOptions,
@@ -19,6 +23,7 @@ import type {
   RateLimitDetails,
 } from "@shared/types/forge";
 import type {
+  ForgeCIStatusSummary,
   ForgeRepositoryStats,
   ForgeRepoStatsAndPagePayload,
   ForgeRepoCountsUpdatedPayload,
@@ -53,19 +58,19 @@ export const forgeClient = {
     return window.electron.forge.getIssueUrl({ cwd, issueNumber });
   },
 
-  assignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> => {
+  assignIssue: (cwd: string, issueNumber: number, username: string): Promise<ForgeUser[]> => {
     return window.electron.forge.assignIssue({ cwd, issueNumber, username });
   },
 
-  unassignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> => {
+  unassignIssue: (cwd: string, issueNumber: number, username: string): Promise<ForgeUser[]> => {
     return window.electron.forge.unassignIssue({ cwd, issueNumber, username });
   },
 
-  approvePR: (cwd: string, prNumber: number, body?: string): Promise<void> => {
+  approvePR: (cwd: string, prNumber: number, body?: string): Promise<PullRequestReview> => {
     return window.electron.forge.approvePR({ cwd, prNumber, body });
   },
 
-  requestChanges: (cwd: string, prNumber: number, body: string): Promise<void> => {
+  requestChanges: (cwd: string, prNumber: number, body: string): Promise<PullRequestReview> => {
     return window.electron.forge.requestChanges({ cwd, prNumber, body });
   },
 
@@ -74,7 +79,7 @@ export const forgeClient = {
     prNumber: number,
     reviewId: number,
     message: string
-  ): Promise<void> => {
+  ): Promise<PullRequestReview> => {
     return window.electron.forge.dismissReview({ cwd, prNumber, reviewId, message });
   },
 
@@ -82,7 +87,7 @@ export const forgeClient = {
     cwd: string,
     prNumber: number,
     reviewers: { users?: string[]; teams?: string[] }
-  ): Promise<void> => {
+  ): Promise<RequestReviewersResult> => {
     return window.electron.forge.requestReviewers({ cwd, prNumber, ...reviewers });
   },
 
@@ -138,6 +143,10 @@ export const forgeClient = {
     return window.electron.forge.getPR({ cwd, prNumber });
   },
 
+  getCIStatus: (cwd: string, prNumber: number): Promise<ForgeCIStatusSummary | null> => {
+    return window.electron.forge.getCIStatus({ cwd, prNumber });
+  },
+
   getRepoMetadata: (cwd: string): Promise<RepoMetadata> => {
     return window.electron.forge.getRepoMetadata({ cwd });
   },
@@ -185,6 +194,14 @@ export const forgeClient = {
     return window.electron.forge.getPRReviewThreads({ cwd, prNumber });
   },
 
+  listIssueComments: (
+    cwd: string,
+    issueNumber: number,
+    opts?: ListOptions
+  ): Promise<Page<IssueComment>> => {
+    return window.electron.forge.listIssueComments({ cwd, issueNumber, opts });
+  },
+
   resolveAuthorAvatar: (cwd: string, email: string): Promise<string | null> => {
     return window.electron.forge.resolveAuthorAvatar({ cwd, email });
   },
@@ -208,11 +225,11 @@ export const forgeClient = {
     return window.electron.forge.createPR({ cwd, ...input });
   },
 
-  closePR: (cwd: string, prNumber: number): Promise<void> => {
+  closePR: (cwd: string, prNumber: number): Promise<PR> => {
     return window.electron.forge.closePR({ cwd, prNumber });
   },
 
-  reopenPR: (cwd: string, prNumber: number): Promise<void> => {
+  reopenPR: (cwd: string, prNumber: number): Promise<PR> => {
     return window.electron.forge.reopenPR({ cwd, prNumber });
   },
 
@@ -224,19 +241,19 @@ export const forgeClient = {
       commitTitle?: string;
       commitMessage?: string;
     }
-  ): Promise<void> => {
+  ): Promise<MergePRResult> => {
     return window.electron.forge.mergePR({ cwd, prNumber, ...input });
   },
 
-  convertPRToDraft: (cwd: string, prNumber: number): Promise<void> => {
+  convertPRToDraft: (cwd: string, prNumber: number): Promise<PRDraftStateResult> => {
     return window.electron.forge.convertPRToDraft({ cwd, prNumber });
   },
 
-  markPRReadyForReview: (cwd: string, prNumber: number): Promise<void> => {
+  markPRReadyForReview: (cwd: string, prNumber: number): Promise<PRDraftStateResult> => {
     return window.electron.forge.markPRReadyForReview({ cwd, prNumber });
   },
 
-  commentOnPR: (cwd: string, prNumber: number, body: string): Promise<void> => {
+  commentOnPR: (cwd: string, prNumber: number, body: string): Promise<IssueComment> => {
     return window.electron.forge.commentOnPR({ cwd, prNumber, body });
   },
 

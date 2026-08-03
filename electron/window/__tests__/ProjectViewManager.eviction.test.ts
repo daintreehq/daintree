@@ -842,11 +842,13 @@ describe("ProjectViewManager — eviction safety", () => {
       expect(wcA.close).toHaveBeenCalled();
     });
 
-    it("reclaims assistant-backed views under memory pressure, but only after ordinary ones", async () => {
-      // The floor yields to a real OOM risk: losing the assistant beats losing
-      // the app, and the revoke path still captures the conversation for
-      // resume. Ordering is the guarantee — every ordinary renderer is
-      // reclaimed first, even though the assistant's view is the LRU.
+    it("keeps an assistant-backed view through the forced tier-2 reclaim and reports the overflow (#11477)", async () => {
+      // The floor no longer yields to pressure at any level. It used to, on the
+      // theory that losing the assistant beats an OOM — but that trade never
+      // existed: the reclaim is the renderer teardown, and the assistant's PTY
+      // lives in the pty-host where no pass here can measure or free it. The
+      // forced reclaim strips every ordinary view and stops, over its cap by
+      // exactly the protected views, which it must say out loud.
       const managerWithLimit = makeManager(3);
 
       const wcA = createMockWebContents();
@@ -867,17 +869,60 @@ describe("ProjectViewManager — eviction safety", () => {
 
       managerWithLimit.reclaimCachedViewsUnderPressure();
 
-      expect(managerWithLimit.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
-      // LRU alone would have taken proj-a first; the floor pushes it last.
-      expect(evictedProjectIds()).toEqual(["proj-b", "proj-a"]);
-      expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
+      // proj-a is the LRU view AND the assistant's — pure LRU would take it
+      // first, the old critical escape valve would take it last. Neither now.
+      expect(
+        managerWithLimit
+          .getAllViews()
+          .map((v) => v.projectId)
+          .sort()
+      ).toEqual(["proj-a", "proj-c"]);
+      expect(evictedProjectIds()).toEqual(["proj-b"]);
+      expect(vi.mocked(logInfo)).not.toHaveBeenCalledWith(
         "projectview.eviction",
+        expect.objectContaining({ projectId: "proj-a" })
+      );
+      // Without this the two surviving renderers read as a leak in the logs.
+      expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
+        "projectview.eviction-skipped",
         expect.objectContaining({
-          projectId: "proj-a",
           reason: "pressure",
-          liveAssistantBackend: true,
+          forced: true,
+          effectiveMax: 1,
+          viewCount: 2,
+          overflow: 1,
+          // What is holding the overflow: a pinned assistant this pass will
+          // never take, and no transient paint-gate/cold-switch bridge.
+          protectedCount: 1,
+          transientlyExcludedCount: 0,
+          protectedProjectIds: ["proj-a"],
         })
       );
+    });
+
+    it("still reclaims an assistant-backed view in another window, which kills nothing (#11477)", async () => {
+      // The floor is keyed to the exact WebContents the session pinned, so it
+      // cannot become a blanket per-project pin: a second window's view of the
+      // same project has no session bound to it, `revokeByWebContentsId` finds
+      // nothing there, and destroying it costs the assistant nothing.
+      const managerWithLimit = makeManager(3);
+
+      const wcA = createMockWebContents();
+      const viewA = { webContents: wcA, setBounds: vi.fn() };
+      managerWithLimit.registerInitialView(viewA as never, "proj-a", "/path/a");
+
+      await managerWithLimit.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+
+      // Bind the assistant to a DIFFERENT WebContents id than this manager's
+      // proj-a view — i.e. the session lives in the other window.
+      assistantBackends.set("proj-a", { terminalId: "t-help-a", webContentsId: wcA.id + 1000 });
+      liveTerminals.add("t-help-a");
+
+      managerWithLimit.reclaimCachedViewsUnderPressure();
+
+      expect(managerWithLimit.getAllViews().map((v) => v.projectId)).toEqual(["proj-b"]);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
     });
 
     it("still evicts a crashed cached view that has a live assistant backend", async () => {
@@ -2366,6 +2411,12 @@ describe("ProjectViewManager — low-memory eviction", () => {
   let manager: ProjectViewManager;
   let win: ReturnType<typeof createMockWindow>;
 
+  // The periodic sampler is the only path that contracts the cache on a memory
+  // reading — switch/LRU/limit-change passes no longer inherit pressure
+  // (#11477), so these tests drive it explicitly.
+  const tickPressureCheck = (mgr: ProjectViewManager) =>
+    (mgr as unknown as { maybeEvictUnderPressure(): void }).maybeEvictUnderPressure();
+
   // Helper for mocking process.getSystemMemoryInfo. Chromium-extended API not in
   // the default Node typings, so spy via a cast and restore in afterEach.
   type MemInfo = { free: number; purgeable?: number; total: number };
@@ -2476,7 +2527,12 @@ describe("ProjectViewManager — low-memory eviction", () => {
     await manager.switchTo("proj-c", "/path/c");
     await flushImmediates();
 
-    // Override clamped effectiveMax to 1 — only the active proj-c remains.
+    // The switches themselves hold the user's cap of 3 — an LRU pass no longer
+    // inherits pressure (#11477). The sampler is what converges on 1.
+    expect(manager.getAllViews().length).toBe(3);
+    tickPressureCheck(manager);
+    tickPressureCheck(manager);
+
     const remaining = manager.getAllViews().map((v) => v.projectId);
     expect(remaining).toEqual(["proj-c"]);
     expect(wcA.close).toHaveBeenCalled();
@@ -2533,12 +2589,15 @@ describe("ProjectViewManager — low-memory eviction", () => {
     expect(manager.getAllViews().length).toBe(3);
 
     // Free RAM drifts below the floor while the session idles. The sampler
-    // tick's pressure check must reclaim without waiting for a switch.
+    // tick's pressure check must reclaim without waiting for a switch — one
+    // view per tick, converging on the active view (#11477).
     freeKb = 128 * 1024;
-    (manager as unknown as { maybeEvictUnderPressure(): void }).maybeEvictUnderPressure();
-
-    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
     expect(wcA.close).toHaveBeenCalled();
+
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
   });
 
   it("periodic pressure check is a no-op above the floor or with a null threshold", async () => {
@@ -2598,6 +2657,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
     await flushImmediates();
+    // Sampler ticks converge on 1 (the switches hold the user's cap, #11477).
+    tickPressureCheck(manager);
+    tickPressureCheck(manager);
     expect(manager.getAllViews().length).toBe(1);
 
     // Pressure subsides
@@ -2625,6 +2687,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
     await flushImmediates();
     await manager.switchTo("proj-c", "/path/c");
     await flushImmediates();
+    tickPressureCheck(manager);
 
     expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
       "projectview.pressure-override",
@@ -2633,6 +2696,10 @@ describe("ProjectViewManager — low-memory eviction", () => {
         thresholdMb: 768,
         configuredMax: 3,
         effectiveMax: 1,
+        // The sampled band and the pass's aggressiveness are now reported
+        // separately: a sampler tick reads "critical" but never forces.
+        pressureLevel: "critical",
+        forced: false,
       })
     );
     expect(vi.mocked(logInfo)).toHaveBeenCalledWith(
@@ -2743,7 +2810,10 @@ describe("ProjectViewManager — low-memory eviction", () => {
     await manager.switchTo("proj-c", "/path/c");
     await flushImmediates();
 
-    expect(manager.getAllViews().length).toBe(1);
+    // The reading is what's under test, so drive the sampler — the switches
+    // above no longer inherit pressure themselves (#11477).
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().length).toBe(2);
     expect(wcA.close).toHaveBeenCalled();
   });
 
@@ -2760,7 +2830,12 @@ describe("ProjectViewManager — low-memory eviction", () => {
     await manager.switchTo("proj-c", "/path/c");
     await flushImmediates();
 
-    // Active view (proj-c) survives even under severe pressure.
+    // Driven to its settled target one view per tick, and then some — however
+    // long pressure lasts, the active view is never a candidate.
+    tickPressureCheck(manager);
+    tickPressureCheck(manager);
+    tickPressureCheck(manager);
+
     const remaining = manager.getAllViews().map((v) => v.projectId);
     expect(remaining).toEqual(["proj-c"]);
     expect(manager.getActiveProjectId()).toBe("proj-c");
@@ -2791,7 +2866,11 @@ describe("ProjectViewManager — low-memory eviction", () => {
     await pressureManager.switchTo("proj-d", "/path/d");
     await flushImmediates();
 
-    // 4 views, override clamps to 1 → 3 evictions, callback fires for each.
+    // 4 views, override targets 1 → 3 evictions, callback fires for each. One
+    // per sampler tick since #11477, so drive it to the settled target.
+    tickPressureCheck(pressureManager);
+    tickPressureCheck(pressureManager);
+    tickPressureCheck(pressureManager);
     expect(pressureManager.getAllViews().length).toBe(1);
     expect(onViewEvicted).toHaveBeenCalledTimes(3);
   });
@@ -2945,15 +3024,32 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     expect(manager.getAllViews().length).toBe(2);
   });
 
-  it("still collapses to the active view in one pass below the critical edge", async () => {
+  it("walks to the active view below the critical edge, but only the forced pass gets there in one (#11477)", async () => {
     setAvailableMb(2500);
     await seedThreeViews(manager);
 
+    // A critical reading targets the active view alone — but the sampler is
+    // per-window and ungated, so it walks there a view at a time rather than
+    // pre-empting ProcessMemoryMonitor's cooldown-gated ladder in one pass.
     setAvailableMb(BAND.criticalMb - 1);
     tickPressureCheck(manager);
-
+    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
+    tickPressureCheck(manager);
     expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
     expect(evictedProjectIds()).toEqual(["proj-a", "proj-b"]);
+  });
+
+  it("the forced tier-2 reclaim still collapses the cache in one pass (#11477)", async () => {
+    // The escalation the sampler no longer performs has to still exist, or the
+    // graduated ladder's last rung reclaims nothing.
+    const mgr = makeManager(3);
+    mgr.setMemoryPressurePolicy(BAND);
+    setAvailableMb(2500);
+    await seedThreeViews(mgr);
+
+    // Ample memory: `forcePressure` alone drives it, not the sampled band.
+    expect(mgr.reclaimCachedViewsUnderPressure()).toBe(2);
+    expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
   });
 
   it("does not shed extra views on the switch path under soft pressure", async () => {
@@ -3044,9 +3140,10 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c", "proj-d"]);
   });
 
-  it("never takes an assistant-backed view in a soft pass", async () => {
-    // Soft-band trimming must not cost a running assistant its PTY tree
-    // (#11157) — that yield is reserved for genuine OOM risk.
+  it("never takes an assistant-backed view, at any band or on the forced pass (#11477)", async () => {
+    // Trimming must not cost a running assistant its PTY tree (#11157). The
+    // floor used to yield at the critical edge on the theory that it beat an
+    // OOM; #11477 established there was no such trade, so nothing admits them.
     const mgr = makeManager(3);
     mgr.setMemoryPressurePolicy(BAND);
     setAvailableMb(2500);
@@ -3064,10 +3161,15 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     expect(mgr.getAllViews().length).toBe(3);
     expect(evictedProjectIds()).toEqual([]);
 
-    // Critical pressure still yields the floor, ordinary renderers first.
+    // Critical band: still nothing to take but the protected views.
     setAvailableMb(BAND.criticalMb - 1);
     tickPressureCheck(mgr);
-    expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    expect(mgr.getAllViews().length).toBe(3);
+
+    // And the forced tier-2 reclaim — the last rung — leaves them too.
+    expect(mgr.reclaimCachedViewsUnderPressure()).toBe(0);
+    expect(mgr.getAllViews().length).toBe(3);
+    expect(evictedProjectIds()).toEqual([]);
   });
 
   it("arms the periodic sweep at the warning edge, not the critical one", async () => {
@@ -3104,7 +3206,9 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
 
   it("collapses the band to a cliff for the legacy single-floor setter", async () => {
     // The E2E escape hatch and every pre-#11469 caller pass one number; that
-    // must keep meaning "clamp to 1 below this", with no soft band.
+    // must keep meaning "target 1 below this", with no soft band. Since #11477
+    // the sampler walks to that target one view per tick rather than clearing
+    // the cache in a single pass — the target is unchanged, the rate is not.
     manager.setLowMemoryFreeThresholdMb(1500);
     setAvailableMb(2500);
     await seedThreeViews(manager);
@@ -3115,7 +3219,53 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
 
     setAvailableMb(1499);
     tickPressureCheck(manager);
+    expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
+
+    tickPressureCheck(manager);
     expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+  });
+
+  it("never collapses the cache in one sampler tick, however low memory reads (#11477)", async () => {
+    // The regression this issue reports. The per-window sampler fires off an
+    // instantaneous reading with no consecutive-poll count, no cooldown, and no
+    // view of whether ProcessMemoryMonitor is already mitigating — so it beat an
+    // in-flight tier-1 pass by 560ms and destroyed views that pass made
+    // unnecessary 2.4s later. One view per tick is the settling interval: the
+    // next tick re-reads a genuinely changed availability figure.
+    manager.setMemoryPressurePolicy({ criticalMb: 500, warningMb: 2000 });
+    setAvailableMb(2500);
+    await seedThreeViews(manager);
+
+    // Far below the critical edge — the old code took everything here.
+    setAvailableMb(1);
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().length).toBe(2);
+
+    // And the pressure clearing between ticks stops the walk where it stands,
+    // which is the whole point of making the sampler re-read.
+    setAvailableMb(2500);
+    tickPressureCheck(manager);
+    expect(manager.getAllViews().length).toBe(2);
+  });
+
+  it("does not let an LRU or limit-change pass inherit critical pressure (#11477)", async () => {
+    // `evictStaleViews` used to compute `criticalPressure` from live memory on
+    // EVERY path, so an ordinary project switch or a setCachedViewLimit call
+    // landing below the critical edge collapsed the whole cache as a side
+    // effect. Critical escalation belongs to the forced tier-2 caller alone.
+    manager.setMemoryPressurePolicy({ criticalMb: 500, warningMb: 2000 });
+    setAvailableMb(2500);
+    await seedThreeViews(manager);
+
+    setAvailableMb(1);
+    // A switch to a 4th project: the LRU pass runs at the user's cap of 3.
+    await manager.switchTo("proj-d", "/path/d");
+    await flushImmediates();
+    expect(manager.getAllViews().length).toBe(3);
+
+    // Re-asserting the same cap must not shed anything either.
+    manager.setCachedViewLimit(3);
+    expect(manager.getAllViews().length).toBe(3);
   });
 
   it("disables reclaim entirely when the policy is cleared", async () => {

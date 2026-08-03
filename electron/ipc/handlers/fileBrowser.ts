@@ -9,6 +9,8 @@ import {
 } from "../../schemas/ipc.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { projectStore } from "../../services/ProjectStore.js";
+import { scratchStore } from "../../services/ScratchStore.js";
+import { fileTreeService } from "../../services/FileTreeService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
   FileBrowserListDirectoryPayload,
@@ -63,7 +65,7 @@ function assertRelativeDirPath(dirPath: string | undefined): void {
   if (path.isAbsolute(dirPath) || dirPath.startsWith("/") || dirPath.startsWith("\\")) {
     throw new AppError({
       code: "INVALID_PATH",
-      message: "dirPath must be relative to the worktree root",
+      message: "dirPath must be relative to the browser root",
       context: { dirPath },
     });
   }
@@ -81,38 +83,84 @@ function assertRelativeDirPath(dirPath: string | undefined): void {
   if (segments.includes("..")) {
     throw new AppError({
       code: "INVALID_PATH",
-      message: "dirPath cannot traverse outside the worktree root",
+      message: "dirPath cannot traverse outside the browser root",
       context: { dirPath },
+    });
+  }
+}
+
+/**
+ * Where a file-browser request is rooted, and which engine can read it.
+ *
+ * `worktree` keeps the utility-host route (git-aware, already warm for a
+ * checked-out worktree); `workspace` is a plain folder — a scratch or a
+ * worktree-less project — which has no workspace host at all and must be read
+ * in-process.
+ */
+type BrowserRoot = { kind: "worktree" | "workspace"; path: string };
+
+/**
+ * A root must be an absolute path before anything joins against it.
+ * `FileTreeService` runs `path.resolve`, so an empty or relative root — which
+ * SQLite's NOT NULL columns still permit from corrupt or legacy state — would
+ * silently resolve against the main process's own cwd and list *that*.
+ */
+function assertAbsoluteRoot(rootPath: string, kind: BrowserRoot["kind"]): void {
+  // `path.win32.isAbsolute` also accepts rooted-but-not-qualified paths such as
+  // a bare leading separator, which `resolve` then completes with the process's
+  // *current drive* — the same context-dependent root this guard exists to
+  // reject. So on Windows require a drive root or a full UNC share.
+  const isFullyQualified =
+    process.platform === "win32"
+      ? /^(?:[a-zA-Z]:[\\/]|\\\\[^\\/]+[\\/])/.test(rootPath)
+      : path.isAbsolute(rootPath);
+  if (rootPath === "" || !isFullyQualified) {
+    throw new AppError({
+      code: "INVALID_PATH",
+      message: "Workspace root is not an absolute path",
+      context: { kind },
     });
   }
 }
 
 export function buildFileBrowserNamespace(deps: HandlerDependencies) {
   /**
-   * Resolve a worktree by id, scoped to the *sender view's own project*.
+   * Resolve what a file-browser request is rooted at, scoped to the *sender
+   * view's own workspace*.
    *
-   * `ctx.projectId` is the main-owned webContents→project binding
+   * `ctx.projectId` is the main-owned webContents→workspace binding
    * (`viewToProject`), captured synchronously at dispatch — it survives the
    * view being backgrounded and can't be spoofed or repointed by a project
    * switch, unlike window-scoped lookups: `windowToProject` holds one project
    * per window and is repointed to the incoming project the moment a switch
    * starts, so a cached view's requests would resolve against the *active*
    * project's host for the entire background period (#11366). A sender with
-   * no project binding is refused outright — null is an identity, not a
-   * wildcard, and falling through to an unscoped query is exactly the scope
-   * this gate exists to deny. Scoped by sender rather than `getMonitorAsync`,
-   * which scans every live workspace host and would happily resolve a
-   * worktree belonging to another project — worktree ids are normalized
-   * absolute paths, so a renderer could guess one and enumerate a sibling
-   * project's tree.
+   * no binding is refused outright — null is an identity, not a wildcard, and
+   * falling through to an unscoped query is exactly the scope this gate exists
+   * to deny. Scoped by sender rather than `getMonitorAsync`, which scans every
+   * live workspace host and would happily resolve a worktree belonging to
+   * another project — worktree ids are normalized absolute paths, so a
+   * renderer could guess one and enumerate a sibling project's tree.
+   *
+   * `ProjectViewManager` keys views on an opaque workspace id and seeds either
+   * kind, so that same binding is a scratch's own id for a scratch-bound view.
+   * The stores are therefore tried in sequence against the one id rather than
+   * the renderer declaring which kind it is (#11482) — no new identifier
+   * crosses the boundary, so a request can still only ever reach the workspace
+   * its view was created for.
+   *
+   * An absent `worktreeId` means "this workspace's own root", which is the only
+   * thing a scratch or a worktree-less project (#11417) has. A *supplied* one
+   * still demands a project row and the full project-scoped worktree lookup:
+   * an unknown id fails rather than falling back to the workspace root, so a
+   * stale or guessed worktree can never silently widen to a folder above it.
    */
-  const resolveSenderWorktree = async (ctx: IpcContext, worktreeId: string) => {
-    if (!deps.worktreeService) {
-      throw new Error("Worktree service not available");
-    }
-
-    const senderProjectId = ctx.projectId;
-    if (senderProjectId === null) {
+  const resolveSenderBrowserRoot = async (
+    ctx: IpcContext,
+    worktreeId: string | undefined
+  ): Promise<BrowserRoot> => {
+    const senderWorkspaceId = ctx.projectId;
+    if (senderWorkspaceId === null) {
       throw new AppError({
         code: "INVALID_PATH",
         message: "Unable to resolve the requesting view's project",
@@ -120,25 +168,65 @@ export function buildFileBrowserNamespace(deps: HandlerDependencies) {
       });
     }
 
-    const project = projectStore.getProjectById(senderProjectId);
-    if (!project) {
-      throw new AppError({
-        code: "INVALID_PATH",
-        message: "Unknown project for the requesting view",
-        context: { projectId: senderProjectId },
-      });
+    const project = projectStore.getProjectById(senderWorkspaceId);
+
+    if (worktreeId !== undefined) {
+      if (!project) {
+        throw new AppError({
+          code: "INVALID_PATH",
+          message: "Unknown project for the requesting view",
+          context: { projectId: senderWorkspaceId },
+        });
+      }
+      if (!deps.worktreeService) {
+        throw new Error("Worktree service not available");
+      }
+
+      const states = await deps.worktreeService.getAllStatesForProjectAsync(
+        project.path,
+        senderWorkspaceId
+      );
+      const worktree = states.find((state) => state.id === worktreeId);
+
+      if (!worktree) {
+        throw new Error(`Worktree not found: ${worktreeId}`);
+      }
+      assertAbsoluteRoot(worktree.path, "worktree");
+      return { kind: "worktree", path: worktree.path };
     }
 
-    const states = await deps.worktreeService.getAllStatesForProjectAsync(
-      project.path,
-      senderProjectId
-    );
-    const worktree = states.find((state) => state.id === worktreeId);
-
-    if (!worktree) {
-      throw new Error(`Worktree not found: ${worktreeId}`);
+    if (project) {
+      assertAbsoluteRoot(project.path, "workspace");
+      return { kind: "workspace", path: project.path };
     }
-    return worktree;
+
+    const scratch = scratchStore.getScratchById(senderWorkspaceId);
+    if (scratch) {
+      assertAbsoluteRoot(scratch.path, "workspace");
+      return { kind: "workspace", path: scratch.path };
+    }
+
+    throw new AppError({
+      code: "INVALID_PATH",
+      message: "Unknown project for the requesting view",
+      context: { projectId: senderWorkspaceId },
+    });
+  };
+
+  /**
+   * A worktree keeps the utility-host route; a plain workspace folder is read
+   * in-process. `WorkspaceClient.getFileTree` resolves a host *by path*, and a
+   * scratch has none — its single-host fallback would hand the listing to an
+   * unrelated project's host rather than failing.
+   */
+  const readFileTree = async (root: BrowserRoot, dirPath: string | undefined) => {
+    if (root.kind === "worktree") {
+      if (!deps.worktreeService) {
+        throw new Error("Worktree service not available");
+      }
+      return deps.worktreeService.getFileTree(root.path, dirPath);
+    }
+    return fileTreeService.getFileTree(root.path, dirPath ?? "");
   };
 
   const handleListDirectory = async (
@@ -156,18 +244,14 @@ export function buildFileBrowserNamespace(deps: HandlerDependencies) {
       LIST_DIRECTORY_WINDOW_MS
     );
 
-    if (!deps.worktreeService) {
-      throw new Error("Worktree service not available");
-    }
-
-    const worktree = await resolveSenderWorktree(ctx, payload.worktreeId);
+    const root = await resolveSenderBrowserRoot(ctx, payload.worktreeId);
 
     // The browser shows every entry and does its own hiding (junk list +
     // dotfile toggle) client-side, with no renderer opt-out, so gitignored
     // working folders can never be filtered back out here (#11330). This route
     // is the raw listing; the context picker's ignore-aware one is
     // `copytree:get-file-tree`.
-    return deps.worktreeService.getFileTree(worktree.path, payload.dirPath);
+    return readFileTree(root, payload.dirPath);
   };
 
   const handleStatPaths = async (
@@ -184,7 +268,7 @@ export function buildFileBrowserNamespace(deps: HandlerDependencies) {
       STAT_PATHS_WINDOW_MS
     );
 
-    const worktree = await resolveSenderWorktree(ctx, payload.worktreeId);
+    const root = await resolveSenderBrowserRoot(ctx, payload.worktreeId);
 
     // A per-path failure (missing, permission, dangling symlink) is data, not
     // an error: the caller is asking "which of these tokens are real?", and a
@@ -197,7 +281,7 @@ export function buildFileBrowserNamespace(deps: HandlerDependencies) {
     // Requiring `realpath(root + candidate) === realpath(root) + candidate`
     // rejects any symlink component, which also matches what the tree can
     // actually render (it omits symlink entries).
-    const rootRealPath = await fs.realpath(worktree.path).catch(() => null);
+    const rootRealPath = await fs.realpath(root.path).catch(() => null);
     if (rootRealPath === null) {
       return payload.paths.map(() => null);
     }
@@ -205,7 +289,7 @@ export function buildFileBrowserNamespace(deps: HandlerDependencies) {
     return Promise.all(
       payload.paths.map(async (candidate): Promise<"file" | "directory" | null> => {
         try {
-          const realPath = await fs.realpath(path.join(worktree.path, candidate));
+          const realPath = await fs.realpath(path.join(root.path, candidate));
           if (realPath !== path.join(rootRealPath, candidate)) return null;
           const stats = await fs.stat(realPath);
           if (stats.isDirectory()) return "directory";

@@ -116,3 +116,79 @@ describe("scratchStore — panel teardown on scratch removal", () => {
     expect(useScratchStore.getState().scratches).toHaveLength(0);
   });
 });
+
+/**
+ * Concurrent loads share one request (#11518).
+ *
+ * Boot hydration starts a fire-and-forget `loadScratches()`. The switcher then
+ * awaits its own call before reading ids for the agent-status pull, so a second
+ * caller that resolves early — rather than on the real work — makes the palette
+ * read an empty list and omit every scratch from that pull.
+ */
+describe("scratchStore — concurrent loadScratches", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("makes a concurrent caller await the load already in flight", async () => {
+    await loadStoreForView("scratch-1");
+    const { useScratchStore } = await import("../scratchStore");
+    const { scratchClient } = await import("@/clients/scratchClient");
+
+    let releaseGetAll: (value: Scratch[]) => void = () => {};
+    const loaded: Scratch[] = [
+      { id: "scratch-1", name: "Spike", path: "/tmp/s", createdAt: 0, lastOpened: 0 },
+    ];
+    vi.mocked(scratchClient.getAll).mockReturnValue(
+      new Promise<Scratch[]>((resolve) => {
+        releaseGetAll = resolve;
+      })
+    );
+
+    const first = useScratchStore.getState().loadScratches();
+    let secondSettled = false;
+    const second = useScratchStore
+      .getState()
+      .loadScratches()
+      .then(() => {
+        secondSettled = true;
+      });
+
+    await Promise.resolve();
+    // The whole point: resolving here would hand the caller an empty store.
+    expect(secondSettled).toBe(false);
+    expect(useScratchStore.getState().scratches).toHaveLength(0);
+
+    releaseGetAll(loaded);
+    await Promise.all([first, second]);
+
+    expect(secondSettled).toBe(true);
+    expect(useScratchStore.getState().scratches).toEqual(loaded);
+    // One request served both callers.
+    expect(vi.mocked(scratchClient.getAll)).toHaveBeenCalledTimes(1);
+  });
+
+  it("permits a fresh load once the in-flight one settles", async () => {
+    await loadStoreForView("scratch-1");
+    const { useScratchStore } = await import("../scratchStore");
+    const { scratchClient } = await import("@/clients/scratchClient");
+
+    await useScratchStore.getState().loadScratches();
+    await useScratchStore.getState().loadScratches();
+
+    expect(vi.mocked(scratchClient.getAll)).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears the in-flight slot when the load rejects", async () => {
+    await loadStoreForView("scratch-1");
+    const { useScratchStore } = await import("../scratchStore");
+    const { scratchClient } = await import("@/clients/scratchClient");
+
+    vi.mocked(scratchClient.getAll).mockRejectedValueOnce(new Error("ipc down"));
+    await expect(useScratchStore.getState().loadScratches()).rejects.toThrow("ipc down");
+
+    // A wedged slot would make every later load resolve against a stale store.
+    expect(useScratchStore.getState().isLoading).toBe(false);
+    await expect(useScratchStore.getState().loadScratches()).resolves.toBeUndefined();
+  });
+});

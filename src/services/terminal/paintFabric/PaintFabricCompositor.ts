@@ -8,6 +8,7 @@ import type {
 } from "../types";
 import { GRID_RESIZE_COALESCE_MS } from "../types";
 import type { UnseenOutputSnapshot } from "../TerminalUnseenOutputTracker";
+import type { TerminalGeometry } from "@shared/types/terminal";
 import type { TerminalPaintPlane } from "../TerminalInstanceService";
 import { logWarn } from "@/utils/logger";
 import { PaintSurfaceRegistry, surfaceKind, type PaintSurface } from "./PaintSurfaceRegistry";
@@ -591,6 +592,11 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     return this.plane(id).getHoveredFilePath(id);
   }
 
+  getHoveredFileKind(id: string): "file" | "directory" | null {
+    if (this.isViewOwned(id)) return null;
+    return this.plane(id).getHoveredFileKind(id);
+  }
+
   openHoveredLink(id: string, event?: MouseEvent): Promise<void> {
     return this.plane(id).openHoveredLink(id, event);
   }
@@ -1115,20 +1121,32 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.scrollbackRestoreAggregateListeners.clear();
   }
 
-  restoreFetchedState(id: string, serializedState: string | null): Promise<boolean> {
-    return this.plane(id).restoreFetchedState(id, serializedState);
+  restoreFetchedState(
+    id: string,
+    serializedState: string | null,
+    captureGeometry?: TerminalGeometry
+  ): Promise<boolean> {
+    return this.plane(id).restoreFetchedState(id, serializedState, captureGeometry);
   }
 
   fetchAndRestore(id: string): Promise<boolean> {
     return this.plane(id).fetchAndRestore(id);
   }
 
-  restoreFromSerialized(id: string, serializedState: string): boolean {
-    return this.plane(id).restoreFromSerialized(id, serializedState);
+  restoreFromSerialized(
+    id: string,
+    serializedState: string,
+    captureGeometry?: TerminalGeometry
+  ): boolean {
+    return this.plane(id).restoreFromSerialized(id, serializedState, captureGeometry);
   }
 
-  restoreFromSerializedIncremental(id: string, serializedState: string): Promise<boolean> {
-    return this.plane(id).restoreFromSerializedIncremental(id, serializedState);
+  restoreFromSerializedIncremental(
+    id: string,
+    serializedState: string,
+    captureGeometry?: TerminalGeometry
+  ): Promise<boolean> {
+    return this.plane(id).restoreFromSerializedIncremental(id, serializedState, captureGeometry);
   }
 
   setInputLocked(id: string, locked: boolean): void {

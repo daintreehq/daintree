@@ -267,6 +267,37 @@ export class WindowRegistry {
     return Array.from(this.windows.values());
   }
 
+  /**
+   * Live windows ordered most-recently-focused first.
+   *
+   * `focusHistory` only ever records windows that have actually been focused,
+   * so a window created but never focused (a restored background window, for
+   * instance) is absent from it. Those are appended after the focused ones in
+   * registration order rather than dropped — the open-window manifest (#11492)
+   * has to describe every window, and its cap trims from the tail, so a window
+   * missing from this list would be the first one silently lost.
+   */
+  focusOrder(): WindowContext[] {
+    const ordered: WindowContext[] = [];
+    const seen = new Set<number>();
+
+    for (let i = this.focusHistory.length - 1; i >= 0; i--) {
+      const id = this.focusHistory[i];
+      if (seen.has(id)) continue;
+      const ctx = this.windows.get(id);
+      if (!ctx) continue;
+      seen.add(id);
+      ordered.push(ctx);
+    }
+
+    for (const [id, ctx] of this.windows) {
+      if (seen.has(id)) continue;
+      ordered.push(ctx);
+    }
+
+    return ordered;
+  }
+
   get size(): number {
     return this.windows.size;
   }

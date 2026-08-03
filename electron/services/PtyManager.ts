@@ -38,6 +38,7 @@ import { AgentTerminalLifecycleLedger } from "../../shared/utils/agentLifecycleL
 import { events } from "./events.js";
 import { getGitBranch } from "../utils/gitUtils.js";
 import type { GracefulKillResult } from "../../shared/types/pty-host.js";
+import type { SerializedTerminalSnapshot } from "../../shared/types/terminal.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
 import { shouldTrimAnalysisSession } from "../../shared/utils/workerGovernancePolicy.js";
 
@@ -719,7 +720,7 @@ export class PtyManager extends EventEmitter {
   /**
    * Get serialized terminal state (synchronous).
    */
-  getSerializedState(id: string): string | null {
+  getSerializedState(id: string): SerializedTerminalSnapshot | null {
     const terminal = this.registry.get(id);
     if (!terminal) {
       return null;
@@ -730,7 +731,7 @@ export class PtyManager extends EventEmitter {
   /**
    * Get serialized terminal state (async, uses worker for large terminals).
    */
-  async getSerializedStateAsync(id: string): Promise<string | null> {
+  async getSerializedStateAsync(id: string): Promise<SerializedTerminalSnapshot | null> {
     const terminal = this.registry.get(id);
     if (!terminal) {
       return null;

@@ -2,7 +2,11 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { McpConfirmDialog } from "../McpConfirmDialog";
-import { __resetMcpConfirmStoreForTesting, requestMcpConfirmation } from "@/store/mcpConfirmStore";
+import {
+  __resetMcpConfirmStoreForTesting,
+  requestMcpConfirmation,
+  useMcpConfirmStore,
+} from "@/store/mcpConfirmStore";
 import type { ActionDanger } from "@shared/types/actions";
 import type { McpBearerIdentity } from "@shared/types/ipc/mcpServer";
 
@@ -42,6 +46,9 @@ function enqueue(
     danger?: ActionDanger;
     callerInfo?: McpBearerIdentity;
     dangerRationale?: string;
+    preview?: string[];
+    previewTitle?: string;
+    previewPending?: boolean;
   } = {}
 ) {
   return requestMcpConfirmation({
@@ -53,6 +60,9 @@ function enqueue(
     danger: overrides.danger ?? "confirm",
     callerInfo: overrides.callerInfo,
     ...(overrides.dangerRationale ? { dangerRationale: overrides.dangerRationale } : {}),
+    ...(overrides.preview ? { preview: overrides.preview } : {}),
+    ...(overrides.previewTitle ? { previewTitle: overrides.previewTitle } : {}),
+    ...(overrides.previewPending ? { previewPending: overrides.previewPending } : {}),
   });
 }
 
@@ -92,6 +102,76 @@ describe("McpConfirmDialog", () => {
 
     expect(screen.getByRole("button", { name: "Delete worktree" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^run action$/i })).toBeNull();
+  });
+
+  // #11538: a git.push preview is a commit list, not working-tree changes, so
+  // the heading travels with the lines instead of being hardcoded.
+  it("renders the preview under its own heading when one is supplied", () => {
+    void enqueue({
+      preview: ["Branch: feature/x", "  abcdef1 Fix the thing — Ada"],
+      previewTitle: "Branch and local commits",
+    });
+    render(<McpConfirmDialog />);
+
+    expect(screen.getByText("Branch and local commits")).toBeTruthy();
+    expect(screen.queryByText("Working tree changes")).toBeNull();
+    expect(screen.getByText(/Fix the thing/)).toBeTruthy();
+  });
+
+  it("keeps the original working-tree heading when no preview title is supplied", () => {
+    void enqueue({ preview: ["No uncommitted changes."] });
+    render(<McpConfirmDialog />);
+
+    expect(screen.getByText("Working tree changes")).toBeTruthy();
+  });
+
+  // Must advance PAST the destructive cooldown first: that independently
+  // disables the button, so asserting immediately would pass even with the
+  // previewPending gate removed entirely.
+  it("blocks approval past the cooldown while a preview is still loading", async () => {
+    vi.useFakeTimers();
+    try {
+      void enqueue({ requestId: "req-pending", previewPending: true });
+      render(<McpConfirmDialog />);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1400);
+      });
+
+      const confirm = screen.getByRole("button", { name: "Delete worktree" });
+      expect(confirm.hasAttribute("disabled")).toBe(true);
+      expect(screen.getByText(/Checking current changes/)).toBeTruthy();
+
+      // Only the preview landing unblocks it.
+      act(() => {
+        useMcpConfirmStore.getState().setPreview("req-pending", ["No uncommitted changes."]);
+      });
+      expect(screen.getByRole("button", { name: "Delete worktree" }).hasAttribute("disabled")).toBe(
+        false
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // setPreview patches the item in place; if it dropped previewTitle the loaded
+  // commit list would silently revert to the working-tree heading.
+  it("keeps the preview title across the async setPreview patch", () => {
+    void enqueue({
+      requestId: "req-title",
+      previewPending: true,
+      previewTitle: "Branch and local commits",
+    });
+    render(<McpConfirmDialog />);
+
+    act(() => {
+      useMcpConfirmStore
+        .getState()
+        .setPreview("req-title", ["Branch: main", "  abcdef1 Fix — Ada"]);
+    });
+
+    expect(screen.getByText("Branch and local commits")).toBeTruthy();
+    expect(screen.queryByText("Working tree changes")).toBeNull();
   });
 
   it("shows the requesting-bearer identity for external dispatches (#9157)", () => {

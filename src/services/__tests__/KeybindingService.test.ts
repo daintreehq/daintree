@@ -1599,6 +1599,21 @@ describe("KeybindingService", () => {
       expect(display.toUpperCase()).toContain("N");
     });
 
+    // The two audits below validate a row only while it exists — deleting the
+    // file-browser binding passes both. This resolves a real event instead, so
+    // the shortcut can't be dropped silently (#11483). Not a combo assertion:
+    // it exercises event -> action resolution, including Cmd/Alt folding.
+    it("resolves the file browser shortcut from a keyboard event", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+
+      const result = service.resolveKeybinding(
+        createKeyboardEvent({ key: "f", code: "KeyF", metaKey: true, altKey: true })
+      );
+
+      expect(result.match?.actionId).toBe("worktree.openFileBrowser");
+    });
+
     it("registers every default-binding actionId in KEY_ACTION_VALUES", async () => {
       // KEY_ACTION_VALUES is hand-maintained alongside the BuiltInKeyAction
       // open union (BuiltInKeyAction | (string & {})), so the compiler can't

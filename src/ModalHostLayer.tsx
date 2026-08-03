@@ -19,6 +19,7 @@ import type { NonGitFolderStep } from "./components/Project/NonGitFolderDialog";
 import type { BuiltInPanelKind } from "./types";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
+import { usePilotStore } from "@/store/pilotStore";
 import { Toaster } from "./components/ui/toaster";
 import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
@@ -40,6 +41,7 @@ import {
   LazyLogLevelPalette,
   LazyActionPalette,
   LazyWorktreeOverviewModal,
+  LazyPilotView,
   LazyCrossWorktreeDiff,
   LazySettingsDialog,
   LazyShortcutReferenceDialog,
@@ -247,6 +249,11 @@ export function ModalHostLayer({
   reEntrySummary,
   gettingStarted,
 }: ModalHostLayerProps) {
+  // Read from the store rather than props: Pilot is opened from the action
+  // registry, a keybinding and the project switcher, none of which has a prop
+  // path into this layer.
+  const isPilotOpen = usePilotStore((s) => s.isOpen);
+
   return (
     <>
       <ErrorBoundary
@@ -473,9 +480,11 @@ export function ModalHostLayer({
               scratchResults={projectSwitcherPalette.scratchResults}
               onCreateScratch={(name) => void projectSwitcherPalette.createScratch(name)}
               onSelectScratch={(scratch) => void projectSwitcherPalette.selectScratch(scratch)}
-              onRemoveScratch={(scratchId) =>
-                void projectSwitcherPalette.removeScratchAction(scratchId)
-              }
+              onRequestDeleteScratch={projectSwitcherPalette.requestDeleteScratch}
+              deleteScratchConfirm={projectSwitcherPalette.deleteScratchConfirm}
+              onDismissDeleteScratchConfirm={projectSwitcherPalette.dismissDeleteScratchConfirm}
+              onConfirmDeleteScratch={() => void projectSwitcherPalette.confirmDeleteScratch()}
+              isDeletingScratch={projectSwitcherPalette.isDeletingScratch}
               onRequestDeleteAllScratches={projectSwitcherPalette.requestDeleteAllScratches}
               deleteAllScratchesConfirm={projectSwitcherPalette.deleteAllScratchesConfirm}
               onDismissDeleteAllScratchesConfirm={
@@ -915,6 +924,17 @@ export function ModalHostLayer({
           </Suspense>
         </ErrorBoundary>
       )}
+      <ErrorBoundary
+        variant="component"
+        componentName="PilotView"
+        resetKeys={[Number(isPilotOpen)]}
+      >
+        {isPilotOpen && (
+          <Suspense fallback={null}>
+            <LazyPilotView />
+          </Suspense>
+        )}
+      </ErrorBoundary>
       <ErrorBoundary
         variant="component"
         componentName="CelebrationConfetti"

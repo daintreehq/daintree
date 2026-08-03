@@ -22,6 +22,9 @@ export function serializeFileBrowser(t: FileBrowserPanelData): Partial<PanelSnap
     // Truthiness, not `!= null`: `false` is the default open state, the same as
     // the field being absent, so only a collapsed sidebar earns a persisted bit.
     ...(t.browserSidebarCollapsed ? { browserSidebarCollapsed: true } : {}),
+    // Same rule for the viewer column (#11496): only a collapsed viewer earns a
+    // bit, so the common two-column panel persists neither flag.
+    ...(t.browserViewerCollapsed ? { browserViewerCollapsed: true } : {}),
     ...(t.browserTreeSnapshot != null && { browserTreeSnapshot: t.browserTreeSnapshot }),
     // Only a non-default width earns a persisted number: 288 is the default, the
     // same as absent, so an unresized or reset-to-default panel stays sparse.
@@ -29,5 +32,20 @@ export function serializeFileBrowser(t: FileBrowserPanelData): Partial<PanelSnap
     t.browserSidebarWidth !== FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH
       ? { browserSidebarWidth: t.browserSidebarWidth }
       : {}),
+    // Literal `true`, matching the deserializer and the pane: a worktree-rooted
+    // panel simply omits the field, and a truthiness test here would launder a
+    // corrupt in-memory value into a valid one, making the redirection durable.
+    // It must persist even though creation derives it from an absent
+    // `worktreeId`, because a promoted panel carries an adopted placement
+    // `worktreeId` by the time it is saved (#11489).
+    ...(t.browserWorkspaceRooted === true ? { browserWorkspaceRooted: true } : {}),
+    // Same non-default rule as the sidebar width: "name" ascending is the order
+    // the listing service already returns, so a panel left on the default sort
+    // persists neither field (#11620). The two are written independently — a
+    // descending name sort is a real choice even though its key is the default.
+    ...(t.browserSortKey != null && t.browserSortKey !== "name"
+      ? { browserSortKey: t.browserSortKey }
+      : {}),
+    ...(t.browserSortDirection === "desc" ? { browserSortDirection: "desc" } : {}),
   };
 }

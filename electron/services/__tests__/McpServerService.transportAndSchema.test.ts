@@ -77,7 +77,6 @@ const storeState = vi.hoisted(() => ({
     enabled: true,
     port: 0,
     apiKey: "",
-    fullToolSurface: false,
     auditEnabled: true,
     auditMaxRecords: 500,
   },
@@ -338,6 +337,8 @@ function createMockWindow(options?: {
 
   const projectViewManager = {
     getActiveView: vi.fn((): { webContents: typeof webContents } | null => ({ webContents })),
+
+    getWorkspaceRefForWebContents: vi.fn(() => null),
   };
 
   const windowContext = {
@@ -352,6 +353,7 @@ function createMockWindow(options?: {
 
   const registry = {
     all: () => [windowContext],
+    focusOrder: () => [windowContext],
     getPrimary: () => windowContext,
     getByWindowId: () => windowContext,
     getByWebContentsId: () => windowContext,
@@ -482,7 +484,6 @@ describe("McpServerService", () => {
       enabled: true,
       port: 0,
       apiKey: "",
-      fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: 500,
     };
@@ -531,9 +532,9 @@ describe("McpServerService", () => {
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
-          id: "actions.list" as ActionId,
-          title: "List Actions",
-          description: "Read the action registry",
+          id: "terminal.list" as ActionId,
+          title: "List Terminals",
+          description: "Read the terminal list",
         }),
       ],
       dispatchAction: () => ({
@@ -548,13 +549,13 @@ describe("McpServerService", () => {
 
     const result = getTextResult(
       await client.callTool({
-        name: "actions.list",
+        name: "terminal.list",
         arguments: {},
       })
     );
 
     expect(result.isError).not.toBe(true);
-    expect(result.content[0].text).toContain('"self": "[Circular]"');
+    expect(JSON.parse(result.content[0].text)).toEqual({ ok: true, self: "[Circular]" });
   });
 
   it("routes IPC bounce to the active project view, not the host shell", async () => {
@@ -923,7 +924,7 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "git.getProjectPulse" as ActionId,
+            id: "terminal.getStatus" as ActionId,
             title: "Get Log Entries",
             description: "Returns log entries",
             kind: "query",
@@ -950,7 +951,7 @@ describe("McpServerService", () => {
       transports.push(transport);
 
       const result = await client.listTools();
-      const objectTool = result.tools.find((t) => t.name === "git.getProjectPulse");
+      const objectTool = result.tools.find((t) => t.name === "terminal.getStatus");
       const primitiveTool = result.tools.find((t) => t.name === "worktree.createWithRecipe");
       const noSchemaTool = result.tools.find((t) => t.name === "actions.list");
 
@@ -967,7 +968,7 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "git.getProjectPulse" as ActionId,
+            id: "terminal.getStatus" as ActionId,
             title: "Get Log Entries",
             description: "Returns log entries",
             kind: "query",
@@ -983,7 +984,7 @@ describe("McpServerService", () => {
 
       await client.listTools();
       const result = (await client.callTool({
-        name: "git.getProjectPulse",
+        name: "terminal.getStatus",
         arguments: {},
       })) as {
         content: Array<{ type: string; text: string }>;
@@ -1030,9 +1031,9 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "actions.list" as ActionId,
-            title: "List Actions",
-            description: "Read the action registry",
+            id: "terminal.list" as ActionId,
+            title: "List Terminals",
+            description: "Read the terminal list",
             kind: "query",
           }),
         ],
@@ -1045,7 +1046,7 @@ describe("McpServerService", () => {
 
       await client.listTools();
       const result = (await client.callTool({
-        name: "actions.list",
+        name: "terminal.list",
         arguments: {},
       })) as {
         content: Array<{ type: string; text: string }>;
@@ -1053,16 +1054,16 @@ describe("McpServerService", () => {
       };
 
       expect(result.structuredContent).toBeUndefined();
-      expect(result.content[0]?.text).toContain('"foo": "bar"');
+      expect(JSON.parse(result.content[0]!.text)).toMatchObject({ foo: "bar" });
     });
 
     it("warms the manifest cache and emits structuredContent on a cold callTool (no prior listTools)", async () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "actions.list" as ActionId,
-            title: "List Actions",
-            description: "Read the action registry",
+            id: "terminal.list" as ActionId,
+            title: "List Terminals",
+            description: "Read the terminal list",
             kind: "query",
             outputSchema: objectSchema,
           }),
@@ -1079,7 +1080,7 @@ describe("McpServerService", () => {
       // structured output schema is also resolved without requiring the
       // client to call `tools/list` beforehand.
       const result = (await client.callTool({
-        name: "actions.list",
+        name: "terminal.list",
         arguments: {},
       })) as {
         content: Array<{ type: string; text: string }>;
@@ -1087,14 +1088,14 @@ describe("McpServerService", () => {
       };
 
       expect(result.structuredContent).toEqual({ count: 1, label: "cold" });
-      expect(result.content[0]?.text).toContain('"label": "cold"');
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ count: 1, label: "cold" });
     });
 
     it("does not emit structuredContent on failed tool calls", async () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "git.getProjectPulse" as ActionId,
+            id: "terminal.getStatus" as ActionId,
             title: "Get Log Entries",
             description: "Returns log entries",
             kind: "query",
@@ -1113,7 +1114,7 @@ describe("McpServerService", () => {
 
       await client.listTools();
       const result = (await client.callTool({
-        name: "git.getProjectPulse",
+        name: "terminal.getStatus",
         arguments: {},
       })) as {
         content: Array<{ type: string; text: string }>;

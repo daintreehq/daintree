@@ -1,5 +1,39 @@
 import type { FileTreeNode } from "@shared/types";
-import type { FileBrowserTreeSnapshot } from "@shared/types/panel";
+import type {
+  FileBrowserSortDirection,
+  FileBrowserSortKey,
+  FileBrowserTreeSnapshot,
+} from "@shared/types/panel";
+
+/**
+ * What a browser panel is rooted at.
+ *
+ * `worktree` is the original mode: listings route through the worktree's
+ * workspace host and the tree gets git/filesystem change ticks. `workspace` is
+ * the view's own project or scratch folder (#11482) — reachable without a
+ * worktree, but with no host and no tick source, so it refreshes on demand
+ * only.
+ *
+ * `basePath` is resolved fresh from the store on every render rather than
+ * persisted, so a rename, move or relocation is reflected without restarting
+ * the panel — and, for `workspace`, so it can never drift from the root main
+ * independently derives from the same sender binding.
+ */
+export type FileBrowserSource =
+  | { kind: "worktree"; worktreeId: string; basePath: string }
+  | { kind: "workspace"; basePath: string };
+
+/**
+ * Identity of a source for generation resets — changing it invalidates every
+ * in-flight listing. The kind is part of the key so a worktree and a workspace
+ * that happen to share a path are still distinct identities.
+ */
+export function sourceIdentityKey(source: FileBrowserSource | null): string | null {
+  if (!source) return null;
+  return source.kind === "worktree"
+    ? `worktree:${source.worktreeId}`
+    : `workspace:${source.basePath}`;
+}
 
 /**
  * One rendered line of the tree. The tree is rendered as a flat array rather
@@ -20,6 +54,164 @@ export interface FlatTreeRow {
   isLoading: boolean;
   /** Byte size for files; undefined for directories */
   size?: number;
+}
+
+/**
+ * The part of a row every entry-level action actually needs: which path, what
+ * it's called, and whether it's a directory. Both `FlatTreeRow` and
+ * `FolderListingRow` satisfy it structurally, which is what lets the tree and
+ * the folder listing share one context-menu builder instead of maintaining two
+ * copies of the same menu (#11620).
+ */
+export interface FileEntryLike {
+  path: string;
+  name: string;
+  isDirectory: boolean;
+}
+
+/**
+ * One rendered line of a folder's contents listing (#11620) — the flat,
+ * depth-less counterpart to `FlatTreeRow`. Built from one already-cached
+ * directory listing, never its own fetch.
+ */
+export interface FolderListingRow {
+  /** Worktree-relative path; unique within the folder, so it doubles as the React key */
+  path: string;
+  name: string;
+  isDirectory: boolean;
+  /** Byte size for files; undefined for directories and for snapshot-restored nodes */
+  size?: number;
+  /** Epoch ms; undefined for snapshot-restored nodes, which carry structure only */
+  mtimeMs?: number;
+  /**
+   * Visible entries directly inside this directory — never recursive, and only
+   * when that directory's own listing already happens to be cached. Undefined
+   * means "not known", which the row renders as unknown rather than as zero: a
+   * folder the user has never opened is not an empty folder.
+   */
+  itemCount?: number;
+}
+
+export type { FileBrowserSortDirection, FileBrowserSortKey };
+
+/** The sort menu's full state: what to order by, and which way. */
+export interface FileBrowserSortOrder {
+  key: FileBrowserSortKey;
+  direction: FileBrowserSortDirection;
+}
+
+/**
+ * The order the service already returns: folders first, then natural-numeric
+ * name (see `FileTreeService`). Sorting by it is a no-op, which is what lets
+ * `sortFileNodes` hand back the original array untouched on the default path.
+ */
+export const DEFAULT_FILE_SORT: FileBrowserSortOrder = { key: "name", direction: "asc" };
+
+export function isDefaultFileSort(sort: FileBrowserSortOrder): boolean {
+  return sort.key === DEFAULT_FILE_SORT.key && sort.direction === DEFAULT_FILE_SORT.direction;
+}
+
+/**
+ * Same collation the service sorts with (`FileTreeService`'s `NAME_COLLATOR`):
+ * natural-numeric so `version_10` follows `version_9`, host locale, default
+ * sensitivity. Constructed once at module scope — a re-sort touches every node
+ * in a directory, and per-call collator construction is costly.
+ */
+const NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true });
+
+/**
+ * Total, deterministic name order. Numeric collation alone is not a total
+ * order — `file1`, `file01` and `file001` all compare equal — so ties fall
+ * through to codepoint comparison rather than to the array's incoming order,
+ * which mirrors the service and keeps a client re-sort stable across platforms.
+ */
+function compareNames(a: string, b: string): number {
+  const collated = NAME_COLLATOR.compare(a, b);
+  if (collated !== 0) return collated;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * Everything after the last dot, lowercased; "" for a dotfile or a name with no
+ * dot. `.gitignore` is a name, not an extension — treating its suffix as a type
+ * would file every dotfile under a different heading.
+ */
+function fileExtension(name: string): string {
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) return "";
+  return name.slice(dot + 1).toLowerCase();
+}
+
+/**
+ * Compare two nodes for one sort key, with unknowns pushed last.
+ *
+ * A node restored from a persisted snapshot carries neither `size` nor
+ * `mtimeMs` (the snapshot is structure-only by design, #11367), so those keys
+ * have to answer for "unknown". Unknowns sort last in *both* directions rather
+ * than flipping to the top on descending: they are absent data, not a low
+ * value, and a column of em-dashes above the real rows would read as the sort
+ * being broken.
+ */
+function compareByKey(a: FileTreeNode, b: FileTreeNode, key: FileBrowserSortKey): number {
+  switch (key) {
+    case "modified":
+      return compareOptionalNumbers(a.mtimeMs, b.mtimeMs);
+    case "size":
+      return compareOptionalNumbers(a.size, b.size);
+    case "type":
+      return compareNames(fileExtension(a.name), fileExtension(b.name));
+    case "name":
+      return 0;
+  }
+}
+
+/**
+ * Ascending, with unknown values always last regardless of the caller's
+ * direction. Anything non-finite counts as unknown: `NaN` compares false
+ * against everything including itself, which would make this comparator
+ * non-antisymmetric and hand V8 an inconsistent ordering to act on.
+ */
+function compareOptionalNumbers(a: number | undefined, b: number | undefined): number {
+  const knownA = a !== undefined && Number.isFinite(a);
+  const knownB = b !== undefined && Number.isFinite(b);
+  if (!knownA && !knownB) return 0;
+  // Signalled to the caller as a fixed order by `sortFileNodes`, which skips
+  // the direction flip whenever this returns a non-finite result.
+  if (!knownA) return Number.POSITIVE_INFINITY;
+  if (!knownB) return Number.NEGATIVE_INFINITY;
+  return a === b ? 0 : (a as number) < (b as number) ? -1 : 1;
+}
+
+/**
+ * Order one directory's entries for display.
+ *
+ * Folders always lead, in every key and both directions — the grouping is
+ * structural (it is what makes a listing scannable), not part of what the user
+ * chose to sort by, and it matches what every file manager does. Direction
+ * flips only *within* each group.
+ *
+ * Returns the input array by reference when the order asked for is the one the
+ * service already produced, so the default path costs nothing and the tree's
+ * memoized rows keep their identity.
+ */
+export function sortFileNodes(
+  nodes: readonly FileTreeNode[],
+  sort: FileBrowserSortOrder
+): readonly FileTreeNode[] {
+  if (isDefaultFileSort(sort)) return nodes;
+  const flip = sort.direction === "desc" ? -1 : 1;
+  return [...nodes].sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    const primary = compareByKey(a, b, sort.key);
+    // An infinite result marks a missing value, which holds its place at the
+    // bottom instead of being flipped to the top by a descending sort.
+    if (!Number.isFinite(primary)) return primary > 0 ? 1 : -1;
+    if (primary !== 0) return primary * flip;
+    // Name is the tie-break for every other key, and it flips with the
+    // direction too — otherwise a descending size sort would list equal-sized
+    // files ascending, which reads as the sort half-applying.
+    return compareNames(a.name, b.name) * flip;
+  });
 }
 
 /**
@@ -122,7 +314,8 @@ export function flattenTree(
   expandedPaths: ReadonlySet<string>,
   loadingPaths: ReadonlySet<string>,
   rootPath = "",
-  isVisible?: (name: string) => boolean
+  isVisible?: (name: string) => boolean,
+  sort: FileBrowserSortOrder = DEFAULT_FILE_SORT
 ): FlatTreeRow[] {
   const rows: FlatTreeRow[] = [];
 
@@ -131,8 +324,14 @@ export function flattenTree(
     // the caller) would otherwise recurse until the stack blows. The service
     // skips symlinks, so this is a backstop, not the primary defense.
     if (depth > MAX_TREE_DEPTH) return;
-    const children = listings.get(dirPath);
-    if (!children) return;
+    const listed = listings.get(dirPath);
+    if (!listed) return;
+    // Per level, not across the whole tree: each directory's entries are
+    // ordered among themselves, which is the only ordering a tree can express.
+    // Never in place — the listings map is what `snapshotFromListings` persists
+    // and what an unsorted consumer reads, so it must stay as the service sent
+    // it.
+    const children = sortFileNodes(listed, sort);
 
     for (const node of children) {
       // A hidden entry contributes no row and, for a directory, no subtree —
@@ -157,6 +356,75 @@ export function flattenTree(
 }
 
 export const MAX_TREE_DEPTH = 64;
+
+/**
+ * Build the rows for one folder's contents listing (#11620) from the listing
+ * that folder already has cached — never a fetch, and never recursive.
+ *
+ * Returns null when that folder has not been listed yet, which is the caller's
+ * raw "still pending" signal: it is deliberately distinguishable from an empty
+ * array (a folder that really holds nothing) so the two never collapse into one
+ * indistinguishable state.
+ *
+ * A directory row's `itemCount` is filled in only when that child's own listing
+ * happens to already be cached — expanding it in the tree is what puts it
+ * there. Counting means counting *visible* entries, so the number always agrees
+ * with what opening the folder would show.
+ */
+export function buildFolderListingRows(
+  listings: DirectoryListings,
+  dirPath: string,
+  isVisible?: (name: string) => boolean,
+  sort: FileBrowserSortOrder = DEFAULT_FILE_SORT
+): FolderListingRow[] | null {
+  const listed = listings.get(dirPath);
+  if (!listed) return null;
+  const visible = isVisible ? listed.filter((node) => isVisible(node.name)) : listed;
+  return sortFileNodes(visible, sort).map((node) => {
+    const childListing = node.isDirectory ? listings.get(node.path) : undefined;
+    const itemCount =
+      childListing === undefined
+        ? undefined
+        : isVisible
+          ? childListing.filter((child) => isVisible(child.name)).length
+          : childListing.length;
+    return {
+      path: node.path,
+      name: node.name,
+      isDirectory: node.isDirectory,
+      ...(node.size != null && { size: node.size }),
+      ...(node.mtimeMs != null && { mtimeMs: node.mtimeMs }),
+      ...(itemCount != null && { itemCount }),
+    };
+  });
+}
+
+/**
+ * Look one worktree-relative path up in the loaded listings by asking its
+ * parent directory, or undefined when that parent has not been listed.
+ *
+ * This is how the panel learns whether a selection is a file or a folder.
+ * Deriving it from the rendered tree rows instead would make the answer depend
+ * on what is expanded — and the folder listing can select an entry whose parent
+ * is collapsed in the tree, which has no row at all.
+ */
+export function findNodeInListings(
+  listings: DirectoryListings,
+  relativePath: string
+): FileTreeNode | undefined {
+  const parent = parentDirectoryOf(relativePath);
+  return listings.get(parent)?.find((node) => node.path === relativePath);
+}
+
+/**
+ * The directory a worktree-relative path lives in; "" for a root-level entry.
+ * This is the listing that answers what the path is, which is why the prune
+ * has to keep it alive for as long as something is asking.
+ */
+export function parentDirectoryOf(relativePath: string): string {
+  const slash = relativePath.lastIndexOf("/");
+  return slash === -1 ? "" : relativePath.slice(0, slash);
+}
 
 /**
  * Canonical forward-slash form of a worktree-relative browse root: collapses
@@ -207,16 +475,16 @@ export type TreeKeyIntent =
 export function resolveTreeKey(
   key: string,
   rows: readonly FlatTreeRow[],
-  selectedPath: string | null
+  cursorPath: string | null
 ): TreeKeyIntent | null {
   if (rows.length === 0) return null;
 
-  const index = selectedPath === null ? -1 : rows.findIndex((row) => row.path === selectedPath);
+  const index = cursorPath === null ? -1 : rows.findIndex((row) => row.path === cursorPath);
   const current = index >= 0 ? rows[index] : undefined;
 
   switch (key) {
     case "ArrowDown": {
-      // No selection yet starts at the top rather than doing nothing, so the
+      // No cursor yet starts at the top rather than doing nothing, so the
       // first arrow press after focusing the tree is never a no-op.
       const next = rows[Math.min(index + 1, rows.length - 1)];
       return next ? { type: "select", path: next.path } : null;
@@ -288,15 +556,26 @@ function findParentRow(rows: readonly FlatTreeRow[], index: number): FlatTreeRow
  * a worktree an agent is actively writing to, that is the wrong answer often
  * enough to matter. The root listing is always retained — it is what the tree
  * renders from.
+ *
+ * `keepPaths` retains directories the viewer still depends on even when they
+ * are collapsed (#11620): the folder whose contents are being listed, and the
+ * parent that answers what the current selection *is*. Neither is the stale,
+ * unused listing this prune exists to drop — and both matter because selection
+ * and expansion are independent. Without the first, collapsing any *other*
+ * folder evicts the listing being read; without the second, picking a file out
+ * of that listing drops the very listing that knows it is a file, and the
+ * viewer blanks the instant it is clicked.
  */
 export function pruneListings(
   listings: DirectoryListings,
   expandedPaths: ReadonlySet<string>,
-  rootPath = ""
+  rootPath = "",
+  keepPaths: readonly string[] = []
 ): Map<string, readonly FileTreeNode[]> {
   const next = new Map<string, readonly FileTreeNode[]>();
   for (const [dirPath, nodes] of listings) {
-    if (dirPath === rootPath || expandedPaths.has(dirPath)) next.set(dirPath, nodes);
+    if (dirPath === rootPath || keepPaths.includes(dirPath) || expandedPaths.has(dirPath))
+      next.set(dirPath, nodes);
   }
   return next;
 }
@@ -328,7 +607,7 @@ export const MAX_SNAPSHOT_TEXT_CHARS = 512_000;
  */
 export function snapshotFromListings(
   listings: DirectoryListings,
-  worktreeId: string,
+  source: FileBrowserSource,
   rootPath: string
 ): FileBrowserTreeSnapshot | null {
   if (!listings.has(rootPath)) return null;
@@ -356,7 +635,39 @@ export function snapshotFromListings(
     });
   }
   entries.sort((a, b) => (a.dirPath < b.dirPath ? -1 : a.dirPath > b.dirPath ? 1 : 0));
-  return { worktreeId, rootPath, listings: entries };
+  return {
+    ...(source.kind === "worktree" && { worktreeId: source.worktreeId }),
+    basePath: source.basePath,
+    rootPath,
+    listings: entries,
+  };
+}
+
+/**
+ * Whether a persisted snapshot was captured under the identity now being
+ * rendered. Both tags must agree: the worktree id (absent on both sides for a
+ * workspace-rooted browser) and the absolute base, which catches a relocated
+ * project that kept its id. A mismatch just cold-starts.
+ */
+export function snapshotMatchesSource(
+  snapshot: FileBrowserTreeSnapshot,
+  source: FileBrowserSource,
+  rootPath: string
+): boolean {
+  const snapshotWorktreeId = snapshot.worktreeId;
+  const sourceWorktreeId = source.kind === "worktree" ? source.worktreeId : undefined;
+  if (snapshotWorktreeId !== sourceWorktreeId) return false;
+  if (snapshotWorktreeId === undefined) {
+    // A workspace snapshot has no worktree id, so the base is its only
+    // identity — an absent one would match every workspace and let a corrupt
+    // record paint fabricated rows in any of them.
+    if (snapshot.basePath !== source.basePath) return false;
+  } else if (snapshot.basePath !== undefined && snapshot.basePath !== source.basePath) {
+    // Absent is tolerated here alone: snapshots written before the base tag
+    // existed are worktree-rooted, and their worktree id already pins identity.
+    return false;
+  }
+  return snapshot.rootPath === rootPath;
 }
 
 /**
@@ -387,9 +698,17 @@ export function refreshTargets(
   listings: DirectoryListings,
   expandedPaths: ReadonlySet<string>,
   rootPath = "",
-  isVisible?: (name: string) => boolean
+  isVisible?: (name: string) => boolean,
+  keepPath: string | null = null
 ): string[] {
   const targets = [rootPath];
+  // The folder the viewer is listing is re-read like an expanded one even when
+  // it is collapsed in the tree (#11620) — it is on screen, so leaving it out
+  // would let it go stale while the tree beside it updates. Added up front and
+  // guarded below so the walk can't list it twice.
+  if (keepPath !== null && keepPath !== rootPath && !expandedPaths.has(keepPath)) {
+    targets.push(keepPath);
+  }
   const walk = (dirPath: string, depth: number): void => {
     if (depth > MAX_TREE_DEPTH) return;
     const children = listings.get(dirPath);

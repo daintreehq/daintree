@@ -63,6 +63,7 @@ import { migration002 } from "../migrations/002-add-terminal-location.js";
 import { migration003 } from "../migrations/003-migrate-recipes-to-project.js";
 import { migration004 } from "../migrations/004-upgrade-correction-model.js";
 import { migration025 } from "../migrations/025-upgrade-voice-correction-model.js";
+import { migration027 } from "../migrations/027-upgrade-voice-transcription-model.js";
 import { migration005 } from "../migrations/005-add-getting-started-checklist.js";
 import { migration007 } from "../migrations/007-reduce-default-terminal-scrollback.js";
 import { migration008 } from "../migrations/008-split-notification-sounds.js";
@@ -70,6 +71,7 @@ import { migration010 } from "../migrations/010-add-working-pulse-setting.js";
 import { migration011 } from "../migrations/011-minimal-soundscape-defaults.js";
 import { migration018 } from "../migrations/018-archive-notes.js";
 import { migration019 } from "../migrations/019-remove-fleet-deck-open.js";
+import { migration026 } from "../migrations/026-remove-full-tool-surface.js";
 
 type MockStoreData = Record<string, unknown>;
 
@@ -724,6 +726,88 @@ describe("MigrationRunner", () => {
     });
   });
 
+  describe("migration 027 — upgrade voice transcription model to gpt-live-transcribe", () => {
+    it("upgrades the retired gpt-realtime-whisper and preserves sibling fields", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: {
+          transcriptionModel: "gpt-realtime-whisper",
+          enabled: true,
+          language: "es",
+          customDictionary: ["Daintree"],
+        },
+      });
+      migration027.up(store as never);
+      const voiceInput = store.data.voiceInput as Record<string, unknown>;
+      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+      expect(voiceInput.enabled).toBe(true);
+      expect(voiceInput.language).toBe("es");
+      expect(voiceInput.customDictionary).toEqual(["Daintree"]);
+    });
+
+    it("moves a Deepgram user forward without touching their provider choice", () => {
+      // The provider — not the model — selects the backend, so normalizing the
+      // single-valued model must never revert a real user choice.
+      const store = createMockStore(storePath, {
+        voiceInput: {
+          transcriptionModel: "gpt-realtime-whisper",
+          transcriptionProvider: "deepgram",
+          deepgramApiKey: "dg-key",
+        },
+      });
+      migration027.up(store as never);
+      const voiceInput = store.data.voiceInput as Record<string, unknown>;
+      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+      expect(voiceInput.transcriptionProvider).toBe("deepgram");
+      expect(voiceInput.deepgramApiKey).toBe("dg-key");
+    });
+
+    it("upgrades a legacy Deepgram model string to gpt-live-transcribe", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { transcriptionModel: "nova-3", enabled: true },
+      });
+      migration027.up(store as never);
+      const voiceInput = store.data.voiceInput as { transcriptionModel: string };
+      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+    });
+
+    it("upgrades missing transcriptionModel to gpt-live-transcribe", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { enabled: true },
+      });
+      migration027.up(store as never);
+      const voiceInput = store.data.voiceInput as { transcriptionModel: string };
+      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+    });
+
+    it("upgrades a malformed/unknown transcriptionModel value to gpt-live-transcribe", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { transcriptionModel: "some-old-junk", enabled: true },
+      });
+      migration027.up(store as never);
+      const voiceInput = store.data.voiceInput as { transcriptionModel: string };
+      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+    });
+
+    it("leaves gpt-live-transcribe unchanged without rewriting the store", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { transcriptionModel: "gpt-live-transcribe", enabled: true },
+      });
+      const before = store.data.voiceInput;
+      migration027.up(store as never);
+      const voiceInput = store.data.voiceInput as { transcriptionModel: string };
+      expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+      // No write on the already-current path: store.set would replace the object
+      // (via spread), so an untouched reference proves the migration no-oped.
+      expect(store.data.voiceInput).toBe(before);
+    });
+
+    it("skips when no voiceInput settings exist", () => {
+      const store = createMockStore(storePath, {});
+      migration027.up(store as never);
+      expect(store.data.voiceInput).toBeUndefined();
+    });
+  });
+
   describe("migration 007 — reduce default terminal scrollback", () => {
     it("migrates scrollbackLines from 2500 to 1000 and preserves sibling fields", () => {
       const store = createMockStore(storePath, {
@@ -952,6 +1036,76 @@ describe("MigrationRunner", () => {
     });
   });
 
+  describe("migration 026 — remove orphaned mcpServer.fullToolSurface", () => {
+    it.each([true, false, "false", null])(
+      "deletes the key when its value is %p and preserves siblings",
+      (fullToolSurface) => {
+        const store = createMockStore(storePath, {
+          mcpServer: {
+            enabled: true,
+            port: 45454,
+            fullToolSurface,
+            auditEnabled: true,
+            unknownFutureKey: "keep-me",
+          },
+        });
+        migration026.up(store as never);
+        const after = store.data.mcpServer as Record<string, unknown>;
+        expect("fullToolSurface" in after).toBe(false);
+        expect(after.enabled).toBe(true);
+        expect(after.port).toBe(45454);
+        expect(after.auditEnabled).toBe(true);
+        expect(after.unknownFutureKey).toBe("keep-me");
+      }
+    );
+
+    it("writes nothing when mcpServer has no fullToolSurface key", () => {
+      const store = createMockStore(storePath, {
+        mcpServer: { enabled: false, port: 45454 },
+      });
+      const setSpy = vi.spyOn(store, "set");
+      migration026.up(store as never);
+      expect(setSpy).not.toHaveBeenCalled();
+      expect(store.data.mcpServer).toEqual({ enabled: false, port: 45454 });
+    });
+
+    it("skips when mcpServer is absent or not an object", () => {
+      const missing = createMockStore(storePath, {});
+      migration026.up(missing as never);
+      expect(missing.data.mcpServer).toBeUndefined();
+
+      const malformed = createMockStore(storePath, { mcpServer: "nonsense" });
+      migration026.up(malformed as never);
+      expect(malformed.data.mcpServer).toBe("nonsense");
+    });
+
+    it("is idempotent", () => {
+      const store = createMockStore(storePath, {
+        mcpServer: { enabled: true, fullToolSurface: true },
+      });
+      migration026.up(store as never);
+      const after1 = store.data.mcpServer;
+      migration026.up(store as never);
+      expect(store.data.mcpServer).toEqual(after1);
+    });
+
+    it("runs end-to-end through the full barrel from v25", async () => {
+      const store = createMockStore(storePath, {
+        _schemaVersion: 25,
+        mcpServer: { enabled: true, port: 45454, fullToolSurface: true, auditEnabled: true },
+      });
+      const runner = new MigrationRunner(store as never);
+
+      await runner.runMigrations(migrations);
+
+      expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+      const after = store.data.mcpServer as Record<string, unknown>;
+      expect("fullToolSurface" in after).toBe(false);
+      expect(after.enabled).toBe(true);
+      expect(after.auditEnabled).toBe(true);
+    });
+  });
+
   it("LATEST_SCHEMA_VERSION matches the highest version in the migrations barrel", () => {
     const highest = Math.max(...migrations.map((m) => m.version));
     expect(LATEST_SCHEMA_VERSION).toBe(highest);
@@ -971,6 +1125,34 @@ describe("MigrationRunner", () => {
     expect(voiceInput.correctionModel).toBe("gpt-5.6-luna");
     expect(voiceInput.enabled).toBe(true);
     expect(voiceInput.language).toBe("en");
+  });
+
+  it("runs migration027 from v26 under the full barrel, upgrading the transcription model (#11597)", async () => {
+    // The read-time net in `getVoiceSettings` would also repair this value, so
+    // only a store-level run like this one proves the migration body actually
+    // works — nothing here can mask a no-op.
+    const store = createMockStore(storePath, {
+      _schemaVersion: 26,
+      voiceInput: {
+        transcriptionModel: "gpt-realtime-whisper",
+        transcriptionProvider: "deepgram",
+        deepgramApiKey: "dg-key",
+        enabled: true,
+        language: "es",
+      },
+    });
+    const runner = new MigrationRunner(store as never);
+
+    await runner.runMigrations(migrations);
+
+    expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+    const voiceInput = store.data.voiceInput as Record<string, unknown>;
+    expect(voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+    // A Deepgram user's provider choice must survive the model upgrade (#9175).
+    expect(voiceInput.transcriptionProvider).toBe("deepgram");
+    expect(voiceInput.deepgramApiKey).toBe("dg-key");
+    expect(voiceInput.enabled).toBe(true);
+    expect(voiceInput.language).toBe("es");
   });
 
   it("runs migration021 from v20 under the full barrel, merging disabledBuiltins (#9284)", async () => {

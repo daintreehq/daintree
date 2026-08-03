@@ -2,6 +2,13 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { defineAction } from "../defineAction";
 import { CopyTreeOptionsSchema, FileSearchPayloadSchema, BuiltInAgentIdSchema } from "./schemas";
+import {
+  withWorktreeLocation,
+  withProjectLocation,
+  requireWorktreePath,
+  requireWorktreeId,
+  resolveProjectLocation,
+} from "./locationArgs";
 import { z } from "zod";
 import {
   artifactClient,
@@ -12,6 +19,100 @@ import {
   systemClient,
 } from "@/clients";
 import { cancelContextInjection } from "@/hooks/useContextInjection";
+import type { CopyTreeResult } from "@shared/types";
+
+/**
+ * The generation numbers every CopyTree action reports.
+ *
+ * Narrower than CopyTree's own `stats`: the per-reason exclusion breakdown stays
+ * off, because #11528's whole point is that these tools return metadata rather
+ * than bulk. The budget flags below are on for the opposite reason — they are
+ * scalars, and they are the only way a caller learns its bundle is INCOMPLETE
+ * now that the bundle itself sits in a file rather than in the result. Dispatch
+ * parses results against this schema (#11539), so an undeclared flag is a flag
+ * the caller never sees.
+ */
+const CopyTreeStatsSchema = z
+  .object({
+    totalSize: z.number(),
+    duration: z.number(),
+    estimatedTokens: z.number().optional().describe("Rough token count, accurate to about ±20%"),
+    noFilesMatched: z.boolean().optional().describe("Nothing matched — a valid outcome, not error"),
+    truncated: z.boolean().optional().describe("A budget dropped or cut short some files"),
+    truncatedCount: z.number().optional(),
+    truncatedBy: z
+      .string()
+      .optional()
+      .describe("Which budget bit first: maxFileCount, maxTotalSize or charLimit"),
+    budgetExceeded: z
+      .boolean()
+      .optional()
+      .describe("The retained set is larger than maxTotalSize — can be true without truncation"),
+  })
+  .optional();
+
+const CopyTreeGenerateResultSchema = z.object({
+  filePath: z
+    .string()
+    .describe("Absolute path of the written bundle. Temporary — read it promptly."),
+  fileCount: z.number(),
+  outputBytes: z.number().describe("UTF-8 size of the bundle on disk."),
+  outputFormatVersion: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("Version of the emitted format, e.g. `copytree-xml@1`."),
+  content: z
+    .string()
+    .optional()
+    .describe("Head of the bundle, only when `includeContent` was set."),
+  contentTruncated: z.boolean().optional(),
+  stats: CopyTreeStatsSchema,
+});
+
+function projectCopyTreeStats(stats: NonNullable<CopyTreeResult["stats"]>) {
+  return {
+    totalSize: stats.totalSize,
+    duration: stats.duration,
+    ...(stats.estimatedTokens !== undefined && { estimatedTokens: stats.estimatedTokens }),
+    ...(stats.noFilesMatched !== undefined && { noFilesMatched: stats.noFilesMatched }),
+    ...(stats.truncated !== undefined && { truncated: stats.truncated }),
+    ...(stats.truncatedCount !== undefined && { truncatedCount: stats.truncatedCount }),
+    ...(stats.truncatedBy !== undefined && { truncatedBy: stats.truncatedBy }),
+    ...(stats.budgetExceeded !== undefined && { budgetExceeded: stats.budgetExceeded }),
+  };
+}
+
+/**
+ * Turn an error-shaped CopyTree result into a thrown error.
+ *
+ * A returned value is serialized by the MCP bridge as a SUCCESSFUL tool result,
+ * so a failure reported in an `error` field beside an empty dump is invisible to
+ * an agent checking `isError` (#11543). Throwing routes it through
+ * EXECUTION_ERROR, which the bridge reports as a tool error. `generate` already
+ * did this; the other two returned their failures as success data.
+ */
+function throwOnCopyTreeFailure(result: CopyTreeResult): void {
+  const failure =
+    result && typeof result === "object" ? (result as { error?: string }).error : undefined;
+  if (failure) throw new Error(failure);
+}
+
+/**
+ * Narrow a file-backed result to the pair the schema declares as required.
+ *
+ * `filePath` and `outputBytes` are optional on `CopyTreeResult` — the inline
+ * paths never set them — and only the handler's own check ties them to a
+ * successful generation. Now that dispatch parses results (#11539) an unset one
+ * would surface as RESULT_VALIDATION_ERROR, which tells a caller nothing. Assert
+ * the invariant where it is used so the same condition reads as a plain failure.
+ */
+function requireGeneratedFile(result: CopyTreeResult): { filePath: string; outputBytes: number } {
+  if (typeof result.filePath !== "string" || typeof result.outputBytes !== "number") {
+    throw new Error("Failed to generate context");
+  }
+  return { filePath: result.filePath, outputBytes: result.outputBytes };
+}
 
 export function registerSystemActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("system.openExternal", () =>
@@ -51,7 +152,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "system.checkCommand",
       title: "Check Command Availability",
       description:
-        "Check whether an executable is available on the user's PATH. Args: `command` (required) — the executable name to look for (e.g. 'node', 'gh'). Returns { available: boolean }. Never errors for a missing command — absence is reported as available:false, not an exception.",
+        "Check whether an executable is present on the user's PATH, to confirm a tool exists before depending on it. Absence is reported as a negative result rather than an error, so this never fails for a missing command. It only establishes presence — it neither runs the command nor reports its version.",
       category: "system",
       kind: "query",
       danger: "safe",
@@ -82,7 +183,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "system.checkDirectory",
       title: "Check Directory",
       description:
-        "Check whether a filesystem directory exists. Args: `path` (required) — an absolute directory path. Returns { exists: boolean }. Never errors for a missing path — absence is reported as exists:false, not an exception.",
+        "Check whether a filesystem directory exists at an absolute path. Absence is reported as a negative result rather than an error, so this never fails for a missing path. It reports existence only, not readability, contents or whether the path is a file.",
       category: "system",
       kind: "query",
       danger: "safe",
@@ -124,12 +225,11 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "system.getResourceProfileSnapshot",
       title: "Get Resource Profile Snapshot",
       description:
-        "Read a snapshot of the host machine's resource pressure and the active resource profile. Use this to gauge whether the machine has headroom before launching more agents or heavy work. No arguments. Returns { profile, thermalState, isOnBattery, speedLimit, lagPressureActive }: `profile` is 'performance' | 'balanced' | 'efficiency' (the adaptive mode currently in effect); `thermalState` is the OS thermal reading ('unknown' off macOS); `isOnBattery` is true when running unplugged; `speedLimit` is the OS CPU speed-limit percentage (0–100, 100 = unthrottled); `lagPressureActive` is true when sustained event-loop-lag mitigation is latched. Never errors — falls back to the balanced/unknown baseline when the service is still initializing.",
+        "Read how much pressure the host machine is under and which adaptive performance mode is in effect. Use this to judge whether there is headroom before launching more agents or heavy work. Some readings are platform-specific and report as unknown elsewhere. It never fails — while the service is still starting it returns a neutral baseline, so treat an unremarkable reading early in a session with some caution.",
       category: "system",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      mcpVisibility: "discoverable",
       mcpOutputSchema: true,
       resultSchema: z.object({
         profile: z.enum(["performance", "balanced", "efficiency"]),
@@ -148,12 +248,11 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     id: "cliAvailability.get",
     title: "Get CLI Availability",
     description:
-      "Get the cached availability of agent CLIs (e.g. claude, codex, gemini) on the host. Use this to confirm an agent's CLI is installed before launching it. No arguments. Returns a map of agent id to a status string. Reads a cache populated at startup; call `cliAvailability.refresh` to force a re-check.",
+      "Read which agent CLIs are installed on this machine, to confirm one exists before launching it. It answers from cache when one is warm and probes on demand when it is not, so a cached answer can miss a CLI installed since. Refresh explicitly when a stale answer would be misleading.",
     category: "system",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    mcpVisibility: "discoverable",
     resultSchema: z.record(z.string(), z.string()),
     run: async () => {
       return await cliAvailabilityClient.get();
@@ -178,7 +277,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "files.search",
       title: "Search Files",
       description:
-        "Search for files by name/glob within a directory tree. Args: `query` (required) — filename or glob; `cwd` (optional) — directory to search, defaults to the active worktree path; `limit` (optional) caps results. Returns { files } — an array of matching paths. Errors when `cwd` is omitted and no worktree is active.",
+        "Find files whose name or path contains the query, within a worktree. Matching is plain substring, not glob, and never looks at file contents — use a source-reading capability to search inside files. Results are capped and truncated silently rather than paged, so a full-looking result may not be exhaustive when the query is broad.",
       category: "files",
       kind: "query",
       danger: "safe",
@@ -186,7 +285,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       argsSchema: FileSearchPayloadSchema,
       examples: [
         {
-          args: { query: "*.test.ts" },
+          args: { query: ".test.ts" },
           description: "Search for test files from the active worktree root",
         },
         {
@@ -208,19 +307,16 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "slashCommands.list",
       title: "List Slash Commands",
       description:
-        "List the slash commands available for an agent CLI. Args (all optional): `agentId` — built-in agent id (e.g. 'claude', 'codex'), defaults to 'claude'; `projectPath` — project to scope project-local commands. Returns { commands } — each with id, label, description, scope, agentId, and optional sourcePath/kind. Never errors; returns an empty list when the agent has none.",
+        "List the slash commands an agent CLI offers, including any the project defines locally. Use this to discover what a given agent can be driven with before sending it a command. An empty list means the agent exposes none, whereas naming a project that is not open fails.",
       category: "agent",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z
-        .object({
-          agentId: BuiltInAgentIdSchema.optional().describe(
-            "Agent ID. Defaults to 'claude' when omitted."
-          ),
-          projectPath: z.string().optional(),
-        })
-        .optional(),
+      argsSchema: withProjectLocation({
+        agentId: BuiltInAgentIdSchema.optional().describe(
+          "Agent ID. Defaults to 'claude' when omitted."
+        ),
+      }).optional(),
       resultSchema: z.object({
         commands: z.array(
           z.object({
@@ -234,11 +330,11 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           })
         ),
       }),
-      run: async (payload) => {
+      run: async (payload, ctx) => {
         const agentId = payload?.agentId ?? "claude";
         const result = await slashCommandsClient.list({
           agentId,
-          projectPath: payload?.projectPath,
+          projectPath: resolveProjectLocation(payload, ctx).projectPath,
         });
         return { commands: result };
       },
@@ -269,19 +365,23 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "artifact.applyPatch",
       title: "Apply Patch",
-      description: "Apply a unified diff patch to the filesystem",
+      description:
+        "Apply a unified diff patch to the filesystem. Args: `patchContent` (required); `worktreeId` or `worktreePath` (required) — the worktree to apply into (`cwd` is accepted as a legacy alias for `worktreePath`). Errors when either argument is missing. There is deliberately no active-worktree default: a destructive write must name its target rather than fall back to whatever happens to be active.",
       category: "artifacts",
       kind: "command",
       danger: "confirm",
       dangerRationale:
         "Writes patch content directly into worktree files via git apply — a shared-state mutation with no automatic inverse; recovery is a manual git checkout of the touched files.",
       scope: "renderer",
-      argsSchema: z.object({
-        patchContent: z.string(),
-        cwd: z.string(),
-      }),
-      run: async (args) => {
-        return await artifactClient.applyPatch(args);
+      argsSchema: withWorktreeLocation(
+        { patchContent: z.string() },
+        { legacy: ["cwd"], requireSelector: true }
+      ),
+      run: async ({ patchContent, ...location }, ctx) => {
+        return await artifactClient.applyPatch({
+          patchContent,
+          cwd: requireWorktreePath(location, ctx),
+        });
       },
     })
   );
@@ -306,36 +406,57 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generate",
       title: "Generate CopyTree Context",
       description:
-        "Generate a CopyTree context dump (file tree plus selected file contents) for a worktree and return it as a string. Args (all optional): `worktreeId` — a worktree id from `worktree.list`, defaults to the active worktree; `options` — CopyTree include/exclude options. Returns { content, fileCount, optional stats:{ totalSize, duration }, optional error }. A generation failure is reported in the `error` field; throws only when no worktree is active. Do NOT use this to inject context into a terminal — use `copyTree.injectToTerminal`.",
+        "Bundle a worktree's file tree and selected file contents into a context dump written to a temporary file, and return its path. Use this to hand a large codebase context to something that can read a file; inject directly into a terminal instead when the target is an agent. The bundle routinely runs to tens of megabytes and is never returned inline. Check the budget flags before trusting it as complete, and read the file promptly — it is pruned by age.",
       category: "copyTree",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       keywords: ["context", "dump", "snapshot", "tree"],
-      argsSchema: z
-        .object({
-          worktreeId: z
-            .string()
-            .optional()
-            .describe("Worktree ID. Defaults to the active worktree."),
-          options: CopyTreeOptionsSchema.optional(),
-        })
-        .optional(),
-      resultSchema: z.object({
-        content: z.string(),
-        fileCount: z.number(),
-        error: z.string().optional(),
-        stats: z
-          .object({
-            totalSize: z.number(),
-            duration: z.number(),
-          })
-          .optional(),
-      }),
+      // Kind stays `query` — this reads a worktree and the palette treats it as
+      // one — but the annotations it would imply are now false: every call
+      // writes a new temp file, so the result is neither read-only nor the same
+      // twice (#11528).
+      mcpAnnotations: { readOnlyHint: false, idempotentHint: false },
+      argsSchema: withWorktreeLocation({
+        options: CopyTreeOptionsSchema.optional(),
+        includeContent: z
+          .boolean()
+          .optional()
+          .describe(
+            "Also return a bounded head of the bundle in `content`. Capped well under the tool-result limit; `contentTruncated` reports when it was cut. The file at `filePath` always holds the whole bundle."
+          ),
+      }).optional(),
+      resultSchema: CopyTreeGenerateResultSchema,
+      // A `resultSchema` alone advertises nothing — the manifest only publishes
+      // an MCP outputSchema when this flag is set too.
+      mcpOutputSchema: true,
       run: async (args, ctx: ActionContext) => {
-        const worktreeId = args?.worktreeId ?? ctx.activeWorktreeId;
-        if (!worktreeId) throw new Error("No active worktree");
-        return await copyTreeClient.generate(worktreeId, args?.options);
+        const result = await copyTreeClient.generate(
+          requireWorktreeId(args, ctx),
+          args?.options,
+          args?.includeContent
+        );
+        throwOnCopyTreeFailure(result);
+        const { filePath, outputBytes } = requireGeneratedFile(result);
+        // Projected explicitly rather than passed through. Dispatch does parse
+        // results against `resultSchema` now (#11539), but building the result
+        // here is still what keeps the bundle off the wire: a parse would reject
+        // an oversized `content`, not drop it.
+        return {
+          filePath,
+          fileCount: result.fileCount,
+          outputBytes,
+          ...(result.outputFormatVersion !== undefined
+            ? { outputFormatVersion: result.outputFormatVersion }
+            : {}),
+          // Gated on what was ASKED for, not on what came back: keying off the
+          // response would forward a bundle to a caller who never opted in if
+          // the layer below ever returned one.
+          ...(args?.includeContent
+            ? { content: result.content, contentTruncated: result.contentTruncated === true }
+            : {}),
+          ...(result.stats ? { stats: projectCopyTreeStats(result.stats) } : {}),
+        };
       },
     })
   );
@@ -344,7 +465,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "copyTree.generateAndCopyFile",
       title: "Generate And Copy Context",
-      description: "Generate worktree context and copy to clipboard",
+      description:
+        "Bundle a worktree's context to a file and put it on the system clipboard, replacing whatever the user currently has copied. What lands there is platform-dependent: macOS and Linux copy the file itself, Windows copies its path as text. The bundle is never returned inline — check the budget flags to tell whether it was complete.",
       category: "copyTree",
       kind: "command",
       danger: "safe",
@@ -366,10 +488,25 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           options: CopyTreeOptionsSchema.optional(),
         })
         .optional(),
+      resultSchema: z.object({
+        filePath: z.string(),
+        fileCount: z.number(),
+        outputBytes: z.number(),
+        stats: CopyTreeStatsSchema,
+      }),
+      mcpOutputSchema: true,
       run: async (args, ctx: ActionContext) => {
         const worktreeId = args?.worktreeId ?? ctx.activeWorktreeId;
         if (!worktreeId) throw new Error("No active worktree");
-        return await copyTreeClient.generateAndCopyFile(worktreeId, args?.options);
+        const result = await copyTreeClient.generateAndCopyFile(worktreeId, args?.options);
+        throwOnCopyTreeFailure(result);
+        const { filePath, outputBytes } = requireGeneratedFile(result);
+        return {
+          filePath,
+          fileCount: result.fileCount,
+          outputBytes,
+          ...(result.stats ? { stats: projectCopyTreeStats(result.stats) } : {}),
+        };
       },
     })
   );
@@ -378,7 +515,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "copyTree.injectToTerminal",
       title: "Inject Context To Terminal",
-      description: "Inject worktree context into a terminal",
+      description:
+        "Bundle a worktree's context and write it straight into a terminal, which is how an agent is given a large codebase context. The context goes to the terminal and never comes back in the result, so read the budget flags to tell whether the bundle was complete. This types a potentially enormous payload into a live pane, so target an idle terminal.",
       category: "copyTree",
       kind: "command",
       danger: "safe",
@@ -389,10 +527,25 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         worktreeId: z.string().optional().describe("Worktree ID. Defaults to the active worktree."),
         options: CopyTreeOptionsSchema.optional(),
       }),
+      // No path: this bundle is streamed into the PTY and never written to disk.
+      resultSchema: z.object({
+        fileCount: z.number(),
+        stats: CopyTreeStatsSchema,
+      }),
+      mcpOutputSchema: true,
       run: async ({ terminalId, worktreeId, options }, ctx: ActionContext) => {
         const resolvedWorktreeId = worktreeId ?? ctx.activeWorktreeId;
         if (!resolvedWorktreeId) throw new Error("No active worktree");
-        return await copyTreeClient.injectToTerminal(terminalId, resolvedWorktreeId, options);
+        const result = await copyTreeClient.injectToTerminal(
+          terminalId,
+          resolvedWorktreeId,
+          options
+        );
+        throwOnCopyTreeFailure(result);
+        return {
+          fileCount: result.fileCount,
+          ...(result.stats ? { stats: projectCopyTreeStats(result.stats) } : {}),
+        };
       },
     })
   );

@@ -1,6 +1,6 @@
 import type { Terminal, ILinkProvider, ILink, IBufferRange } from "@xterm/xterm";
 import { systemClient } from "@/clients";
-import { basename } from "@shared/utils/path";
+import { basename, resolveWorktreePathScope } from "@shared/utils/path";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
@@ -574,9 +574,17 @@ export class FileLinksAddon implements ILinkProvider {
     const toStat: ScopedDirCandidate[] = [];
 
     for (const candidate of candidates) {
-      const scope = resolveWorktreeScope(candidate.absolutePath, worktrees);
+      // Resolved against the live worktree list, deepest root winning, so a
+      // nested worktree beats the repo hosting it. The relative path comes back
+      // forward-slashed: `ancestorDirectories` and the stat-paths op both speak
+      // "/", and a Windows cwd would otherwise expand nothing.
+      const scope = resolveWorktreePathScope(candidate.absolutePath, worktrees.values());
       if (!scope) continue;
-      const scoped: ScopedDirCandidate = { ...candidate, ...scope };
+      const scoped: ScopedDirCandidate = {
+        ...candidate,
+        worktreeId: scope.worktreeId,
+        relativePath: scope.relativePath,
+      };
 
       // The worktree root itself is a known directory — no stat needed, and
       // the batch op requires non-empty relative paths anyway.
@@ -627,52 +635,6 @@ export class FileLinksAddon implements ILinkProvider {
 
 function cacheKey(candidate: ScopedDirCandidate): string {
   return `${candidate.worktreeId}\n${candidate.relativePath}`;
-}
-
-/**
- * Map an absolute path to the worktree that contains it, longest path first so
- * a nested worktree wins over the repo that hosts it. Returns null for paths
- * outside every known worktree — the file browser is worktree-scoped, so
- * there is nothing to open them in.
- */
-function resolveWorktreeScope(
-  absolutePath: string,
-  worktrees: ReadonlyMap<string, { id: string; path: string }>
-): { worktreeId: string; relativePath: string } | null {
-  // Separators are normalized to "/" on BOTH sides before comparing, and the
-  // relative path is emitted with "/" only: `ancestorDirectories` and the
-  // stat-paths op both speak forward slashes, and a Windows cwd would
-  // otherwise produce a backslashed rel path that expands nothing.
-  const target = absolutePath.replace(/\\/g, "/");
-  let best: { worktreeId: string; relativePath: string } | null = null;
-  let bestLength = -1;
-  for (const worktree of worktrees.values()) {
-    const root = worktree.path.replace(/\\/g, "/").replace(/\/+$/, "");
-    if (target !== root && !target.startsWith(`${root}/`)) continue;
-    if (root.length <= bestLength) continue;
-
-    // Canonicalized segment-by-segment: `/repo/src/./docs` and `/repo//src`
-    // stat fine but as raw strings they never match the tree's `src/docs`
-    // keys, and a lingering `..` (which `resolve` should have collapsed, but
-    // Windows-joined paths bypass resolve) would make the stat op reject the
-    // whole batch. `..` here means the token escapes the root — skip it.
-    const segments = target.slice(root.length).split("/").filter(Boolean);
-    const canonical: string[] = [];
-    let escapes = false;
-    for (const segment of segments) {
-      if (segment === ".") continue;
-      if (segment === "..") {
-        escapes = true;
-        break;
-      }
-      canonical.push(segment);
-    }
-    if (escapes) continue;
-
-    bestLength = root.length;
-    best = { worktreeId: worktree.id, relativePath: canonical.join("/") };
-  }
-  return best;
 }
 
 class FileLink implements ILink {

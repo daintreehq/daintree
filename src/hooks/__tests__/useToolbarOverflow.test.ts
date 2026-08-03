@@ -92,6 +92,22 @@ describe("computeOverflow", () => {
     expect(result.visibleIds).toEqual(["terminal"]);
   });
 
+  it("collapses dev-server before a newly enabled file browser (#11495)", () => {
+    // Why file-browser sits before dev-server in the default left order rather
+    // than at the end: the four launchers share priority 3, so the tie is broken
+    // by position and the last one goes first. Placed last, the button a user had
+    // just switched on would be the first thing to vanish — an opt-in that looks
+    // broken. This asserts the resulting order, not the constant itself.
+    const ordered: ToolbarButtonId[] = ["terminal", "browser", "file-browser", "dev-server"];
+    const widths = makeWidths(ordered, 40);
+    // Total 160 in a 130 container. The removal loop stops only once the running
+    // width is *strictly* under target, so the container needs real slack past
+    // the three survivors (120) — at exactly 120 it evicts a second button.
+    const result = computeOverflow(130, widths, ordered, TOOLBAR_BUTTON_PRIORITIES);
+    expect(result.overflowIds).toEqual(["dev-server"]);
+    expect(result.visibleIds).toContain("file-browser");
+  });
+
   describe("pinnedIds — issue #8158", () => {
     it("keeps a pinned item visible even when the container is too narrow", () => {
       const ordered: ToolbarButtonId[] = ["voice-recording", "settings", "copy-tree"];

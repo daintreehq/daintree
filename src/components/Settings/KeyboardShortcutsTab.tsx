@@ -352,7 +352,7 @@ export function KeyboardShortcutsTab() {
           className={cn(
             "flex items-center gap-1.5 px-2 py-1.5 flex-1 min-w-0 rounded-[var(--radius-md)]",
             "bg-daintree-bg border border-border-strong",
-            "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
+            "focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20"
           )}
         >
           <Search

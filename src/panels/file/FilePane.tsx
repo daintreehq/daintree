@@ -12,12 +12,12 @@ import {
 import type { FileViewMode } from "@shared/types/panel";
 import { isFilePanel } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
-import { isPathInside, normalize, toWorktreeRelative } from "@shared/utils/path";
+import { normalize, resolveWorktreePathScope, toWorktreeRelative } from "@shared/utils/path";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
-import { FolderOpen } from "@/components/icons";
+import { FolderOpen, FolderTree } from "@/components/icons";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
@@ -60,11 +60,13 @@ import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { NO_WATCHED_PATHS, useExternalChangeTick } from "@/hooks/useExternalChangeTick";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { isClientAppError } from "@/utils/clientAppError";
 import { logError } from "@/utils/logger";
 import { useHeightHold } from "./useHeightHold";
+import { useProjectViewRevealed } from "@/hooks/useProjectViewRevealed";
 
 export interface FilePaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -126,14 +128,27 @@ function isUnderRoot(filePath: string, rootPath: string): boolean {
 type LoadState =
   "idle" | "loading" | "loaded" | "error" | "image" | "svg" | "video" | "audio" | "pdf";
 
-// Which external surface a toolbar action aims the current file at. `reveal` is
-// always offered; `browser`/`editor` is the mode-dependent open button.
-type ExternalTarget = "reveal" | "browser" | "editor";
+// Why a read is happening, which decides two things a single boolean used to
+// conflate. `explicit` is a gesture aimed at this pane (open, toolbar Refresh,
+// Retry): it earns the loading skeleton and re-requests every rendered surface.
+// `ambient` is the filesystem talking (change tick, focus regain): it must not
+// flash the skeleton, and must not move a reload key an unrelated write would
+// otherwise use to reset playback. `revealed` is returning to this project:
+// silent like ambient, because nobody asked for a skeleton, but forcing the
+// reload key like explicit, because everything that happened while the view sat
+// cached is precisely what this pane cannot otherwise see.
+type FileLoadIntent = "explicit" | "ambient" | "revealed";
+
+// Which surface a toolbar action aims the current file at. `reveal` is always
+// offered; `browser`/`editor` is the mode-dependent open button; `file-browser`
+// is Daintree's own tree, offered only for a file inside a known worktree.
+type ExternalTarget = "reveal" | "browser" | "editor" | "file-browser";
 
 const EXTERNAL_ACTIONS = {
   reveal: "file.showItemInFolder",
   browser: "file.openInBrowser",
   editor: "file.openInEditor",
+  "file-browser": "worktree.openFileBrowser",
 } as const satisfies Record<ExternalTarget, BuiltInRuntimeActionId>;
 
 // Button label comes from `revealCopy()` (platform-named); the failure banner's
@@ -161,6 +176,12 @@ function externalTargetCopy(
         errorTitle: "Couldn't open in editor",
         retryAriaLabel: "Retry opening in editor",
         dismissAriaLabel: "Dismiss editor error",
+      };
+    case "file-browser":
+      return {
+        errorTitle: "Couldn't open file browser",
+        retryAriaLabel: "Retry opening file browser",
+        dismissAriaLabel: "Dismiss file browser error",
       };
   }
 }
@@ -274,19 +295,24 @@ export function FilePane({
   // file is in no known worktree, so there's nothing to diff it against.
   const diffWorktreePath = useWorktreeStore(
     useCallback(
-      (state): string => {
-        if (!filePath) return "";
-        let best = "";
-        let bestLength = -1;
-        for (const worktree of state.worktrees.values()) {
-          if (!isPathInside(filePath, worktree.path)) continue;
-          const length = normalize(worktree.path).length;
-          if (length <= bestLength) continue;
-          best = worktree.path;
-          bestLength = length;
-        }
-        return best;
-      },
+      (state): string =>
+        filePath
+          ? (resolveWorktreePathScope(filePath, state.worktrees.values())?.worktreePath ?? "")
+          : "",
+      [filePath]
+    )
+  );
+
+  // The same containment answer, as an id — what `worktree.openFileBrowser`
+  // needs to scope the tree it opens. A second scalar selector rather than one
+  // object-returning selector: an object is a fresh reference on every store
+  // write, which would re-render this pane on every git-status poll.
+  const revealWorktreeId = useWorktreeStore(
+    useCallback(
+      (state): string =>
+        filePath
+          ? (resolveWorktreePathScope(filePath, state.worktrees.values())?.worktreeId ?? "")
+          : "",
       [filePath]
     )
   );
@@ -303,9 +329,9 @@ export function FilePane({
   // filesystem tick misses nothing but says nothing about git. Whichever moved
   // most recently wins, matching FileBrowserPane (#11330). Scalar for the same
   // reason as `localChangeStatus` — an object would re-render on every poll.
-  // `undefined` when the file is in no known worktree: no watcher covers it, so
-  // there is simply no live signal to give.
-  const changeTick = useWorktreeStore(
+  // `undefined` when the file is in no known worktree — `externalChangeTick`
+  // below is what covers that case.
+  const worktreeChangeTick = useWorktreeStore(
     useCallback(
       (state): number | undefined => {
         if (!diffWorktreePath) return undefined;
@@ -432,6 +458,25 @@ export function FilePane({
     );
   }, [filePath, worktreePath, projectPath]);
 
+  // The live signal for a file no worktree contains: a scratch folder, a
+  // worktree-less project, a path picked from anywhere else on disk. Polled
+  // from main rather than watched, and only while this view is visible, so the
+  // cost is one stat every couple of seconds per visible pane (#11590). Rooted
+  // at the same path the pane reads through, which for a file outside every
+  // project is its own parent directory.
+  const watchedPaths = useMemo(() => (filePath ? [filePath] : NO_WATCHED_PATHS), [filePath]);
+  const externalChangeTick = useExternalChangeTick(
+    effectiveRootPath,
+    watchedPaths,
+    Boolean(filePath) && !diffWorktreePath
+  );
+
+  // One tick contract for the effect below, whichever side supplied it. The
+  // worktree store stays authoritative wherever it has an answer — its tick
+  // rides the host's recursive watcher, which is finer and cheaper than a poll,
+  // so the external signal only ever fills the gap where there is no worktree.
+  const changeTick = worktreeChangeTick ?? externalChangeTick;
+
   const [content, setContent] = useState<string | null>(null);
   const [sanitizedSvg, setSanitizedSvg] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("idle");
@@ -490,7 +535,15 @@ export function FilePane({
   }, []);
 
   const loadFile = useCallback(
-    (silent: boolean) => {
+    (intent: FileLoadIntent) => {
+      // Two independent questions, and reveal answers them differently from
+      // either of the other intents. Whether to show the skeleton: only an
+      // explicit gesture earns one, because only then is someone waiting on a
+      // surface they just asked for. Whether to re-request the rendered
+      // surface: everything but an ambient pass, so returning to a project
+      // moves the reload key that a background tick deliberately leaves alone.
+      const silent = intent !== "explicit";
+      const forceSurfaceReload = intent !== "ambient";
       if (!filePath) {
         requestRef.current++;
         setContent(null);
@@ -526,10 +579,10 @@ export function FilePane({
       if (isVideoFilePath(filePath)) {
         setContent(null);
         setSanitizedSvg(null);
-        // Only an explicit load (open, toolbar Refresh) re-requests the media —
-        // a silent background pass must not remount the player and reset
-        // playback while someone is watching.
-        if (!silent) setReloadNonce((nonce) => nonce + 1);
+        // Only a foreground load (open, toolbar Refresh, returning to this
+        // project) re-requests the media — an ambient background pass must not
+        // remount the player and reset playback while someone is watching.
+        if (forceSurfaceReload) setReloadNonce((nonce) => nonce + 1);
         setLoadState("video");
         setErrorCode(null);
         setErrorMessage(null);
@@ -541,10 +594,10 @@ export function FilePane({
       if (isAudioFilePath(filePath)) {
         setContent(null);
         setSanitizedSvg(null);
-        // Only an explicit load (open, toolbar Refresh) re-requests the media —
-        // a silent background pass must not remount the player and reset
-        // playback while someone is listening.
-        if (!silent) setReloadNonce((nonce) => nonce + 1);
+        // Only a foreground load (open, toolbar Refresh, returning to this
+        // project) re-requests the media — an ambient background pass must not
+        // remount the player and reset playback while someone is listening.
+        if (forceSurfaceReload) setReloadNonce((nonce) => nonce + 1);
         setLoadState("audio");
         setErrorCode(null);
         setErrorMessage(null);
@@ -556,10 +609,10 @@ export function FilePane({
       if (isPdfFilePath(filePath)) {
         setContent(null);
         setSanitizedSvg(null);
-        // Only an explicit load (open, toolbar Refresh) re-requests the
-        // document — a silent background pass must not remount the frame and
-        // throw away the reader's page and zoom.
-        if (!silent) setReloadNonce((nonce) => nonce + 1);
+        // Only a foreground load (open, toolbar Refresh, returning to this
+        // project) re-requests the document — an ambient background pass must
+        // not remount the frame and throw away the reader's page and zoom.
+        if (forceSurfaceReload) setReloadNonce((nonce) => nonce + 1);
         setLoadState("pdf");
         setErrorCode(null);
         setErrorMessage(null);
@@ -623,14 +676,28 @@ export function FilePane({
           setHtmlPreviewUrl(previewUrl ?? null);
           // Re-navigate the preview frame so a rewritten report — or an unchanged
           // entry file whose relative asset changed — reflects the latest bytes.
-          // The nonce is the sandboxed frame's only src input, so a silent pass
-          // only bumps it when the bytes actually moved: otherwise every worktree
-          // tick, most of them writes to unrelated files, would throw away the
-          // rendered page's scroll and in-page JS state. Explicit loads (open,
-          // toolbar Refresh) stay unconditional, keeping a manual path for an
-          // asset-only change. reloadNonce isn't a loadFile dep, so neither can
-          // re-trigger the load.
-          if (!silent || bytesChanged) setReloadNonce((nonce) => nonce + 1);
+          // The nonce is the sandboxed frame's only src input, so an ambient
+          // pass only bumps it when the bytes actually moved: otherwise every
+          // worktree tick, most of them writes to unrelated files, would throw
+          // away the rendered page's scroll and in-page JS state. Foreground
+          // loads (open, toolbar Refresh, returning to this project) stay
+          // unconditional — an entry file whose relative asset was rewritten
+          // while the project sat cached reads as unchanged bytes, so the
+          // bytes-changed gate is exactly what would leave it stale.
+          // reloadNonce isn't a loadFile dep, so neither can re-trigger the
+          // load.
+          //
+          // Markdown opts out of the bytes-changed gate: an image embedded in the
+          // document is precisely the "unchanged file whose asset changed" case,
+          // and bytesChanged only ever sees the markdown text (#11587). Bumping
+          // freely is safe here because for a markdown file the nonce reaches
+          // nothing but MarkdownViewer's cacheBust — the frame this rule protects
+          // needs isHtml, and the media previews need their own loadStates — and
+          // a changed image src reloads in place rather than remounting, so there
+          // is no scroll or playback position to lose.
+          if (forceSurfaceReload || bytesChanged || isMarkdownFilePath(filePath)) {
+            setReloadNonce((nonce) => nonce + 1);
+          }
           setLoadState("loaded");
           setErrorCode(null);
           setErrorMessage(null);
@@ -661,7 +728,7 @@ export function FilePane({
   );
 
   useEffect(() => {
-    loadFile(false);
+    loadFile("explicit");
   }, [loadFile]);
 
   // Toolbar Refresh: spin the icon until the refreshed surface settles. Capture
@@ -672,7 +739,7 @@ export function FilePane({
   const handleToolbarRefresh = useCallback(() => {
     setRefreshingMode(viewMode);
     if (viewMode === "diff") retryDiff();
-    else loadFile(false);
+    else loadFile("explicit");
   }, [viewMode, retryDiff, loadFile]);
 
   useEffect(() => {
@@ -694,7 +761,7 @@ export function FilePane({
   // silently, so a file deleted mid-view can't keep reading as present.
   const wasDiffModeRef = useRef(viewMode === "diff");
   useEffect(() => {
-    if (wasDiffModeRef.current && viewMode !== "diff") loadFile(true);
+    if (wasDiffModeRef.current && viewMode !== "diff") loadFile("ambient");
     wasDiffModeRef.current = viewMode === "diff";
   }, [viewMode, loadFile]);
 
@@ -725,7 +792,10 @@ export function FilePane({
     // and raises a stale banner — and leaving Diff already re-reads source, so a
     // tick on either side of that transition would only duplicate the work.
     if (viewMode === "diff" || previous.viewMode === "diff") return;
-    if (!filePath || !diffWorktreePath || changeTick === undefined) return;
+    // No `diffWorktreePath` requirement: a file outside every worktree now has
+    // a tick of its own, and demanding a containing worktree here is exactly
+    // what left those files frozen at whatever they read when opened (#11590).
+    if (!filePath || changeTick === undefined) return;
     // What the pane reads, versus what it watches. Only a change to the former
     // implies an explicit load already happened — `loadFile` is keyed on those
     // two alone, so acquiring a watcher moves `watchRoot` while leaving the read
@@ -735,7 +805,7 @@ export function FilePane({
     // happened to the file before anything was watching it is exactly what the
     // pane cannot otherwise know about.
     if (previous.watchRoot === diffWorktreePath && previous.tick === changeTick) return;
-    loadFile(true);
+    loadFile("ambient");
   }, [filePath, effectiveRootPath, diffWorktreePath, changeTick, viewMode, loadFile]);
 
   // Which surfaces a background re-read may replace. Images and inlined SVG join
@@ -758,17 +828,46 @@ export function FilePane({
   const wasFocusedRef = useRef(isFocused);
   useEffect(() => {
     if (isFocused && !wasFocusedRef.current && refetchesOnFocus) {
-      loadFile(true);
+      loadFile("ambient");
     }
     wasFocusedRef.current = isFocused;
   }, [isFocused, refetchesOnFocus, loadFile]);
 
   useEffect(() => {
     if (!refetchesOnFocus) return;
-    const handleWindowFocus = () => loadFile(true);
+    const handleWindowFocus = () => loadFile("ambient");
     window.addEventListener("focus", handleWindowFocus);
     return () => window.removeEventListener("focus", handleWindowFocus);
   }, [refetchesOnFocus, loadFile]);
+
+  // Coming back to a project the user left is the one moment nothing else
+  // covers. A view swap is not a page load and produces no window focus event,
+  // and `document.visibilityState` never moved — a cached child WebContentsView
+  // reports "visible" the whole time it is away (`viewCacheState`). So the
+  // worktree tick is the only live signal, and it deliberately cannot reach
+  // video, audio or PDF: their reload key stays put on an ambient pass so an
+  // unrelated write can't reset playback or a reader's page. Those are exactly
+  // the surfaces that come back stale.
+  //
+  // Deliberately its own trigger rather than a branch of the change-tick effect
+  // above: that one is gated on read-versus-watch root identity, which a reveal
+  // has no opinion about, and folding this in would let a watch-root quirk
+  // swallow it.
+  //
+  // No `reloadsSilently` gate either — that predicate exists to skip surfaces a
+  // background re-read would be inert for, which is the opposite of what this
+  // needs. Diff is skipped though: it owns its own freshness (`useDiffContent`
+  // raises a stale banner) and leaving it already re-reads source, so re-reading
+  // here would only replace review content nobody asked to move.
+  const isDockParked = usePanelStore(
+    useCallback((state) => location === "dock" && state.activeDockTerminalId !== id, [location, id])
+  );
+  useProjectViewRevealed(
+    () => {
+      if (viewMode !== "diff") loadFile("revealed");
+    },
+    { enabled: !isDockParked }
+  );
 
   // Route Cmd+F to the source view's find bar while this pane is focused
   // (no-op in rendered markdown, matching the dialog).
@@ -817,7 +916,10 @@ export function FilePane({
   const externalInFlightRef = useRef<Set<ExternalTarget>>(new Set());
 
   // A result that lands after the pane switched files (or panels) belongs to the
-  // old file: drop it, and clear any banner the old file left behind.
+  // old file: drop it, and clear any banner the old file left behind. Keyed on
+  // the file alone, never the resolved worktree: this resets *every* target at
+  // once, so folding topology churn in here would let a new nested worktree
+  // erase a pending editor launch and its failure banner.
   useEffect(() => {
     externalGenerationRef.current += 1;
     externalInFlightRef.current.clear();
@@ -828,16 +930,33 @@ export function FilePane({
   const handleOpenExternal = useCallback(
     async (target: ExternalTarget) => {
       if (!filePath) return;
+      // Only the file-browser target carries structured args; the rest are
+      // path-only. Built before the pending flip so a missing scope can't leave
+      // the button spinning on a dispatch that was never going to happen.
+      let args: unknown;
+      if (target === "file-browser") {
+        if (!revealWorktreeId) return;
+        args = {
+          worktreeId: revealWorktreeId,
+          // `toWorktreeRelative` hands back its input unchanged for a path that
+          // *is* the root (the only such case here — containment is already
+          // proven by revealWorktreeId), and the action would then trim
+          // "/repo" down to a bogus "repo" child. Undefined opens the root.
+          revealPath:
+            relativeFilePath && relativeFilePath !== filePath ? relativeFilePath : undefined,
+          revealKind: "file",
+        };
+      } else {
+        args = { path: filePath };
+      }
       if (externalInFlightRef.current.has(target)) return;
       externalInFlightRef.current.add(target);
       const generation = externalGenerationRef.current;
       setPendingTargets((current) => (current.includes(target) ? current : [...current, target]));
       try {
-        const result = await actionService.dispatch(
-          EXTERNAL_ACTIONS[target],
-          { path: filePath },
-          { source: "user" }
-        );
+        const result = await actionService.dispatch(EXTERNAL_ACTIONS[target], args, {
+          source: "user",
+        });
         // The file (or panel) changed while this was in flight: the result
         // describes a file the pane no longer shows.
         if (externalGenerationRef.current !== generation) return;
@@ -858,7 +977,7 @@ export function FilePane({
         }
       }
     },
-    [filePath]
+    [filePath, relativeFilePath, revealWorktreeId]
   );
 
   const isErrorTargetPending =
@@ -910,6 +1029,18 @@ export function FilePane({
           {/* Reveal is always offered, even for a file the viewer can't render
               (oversized, unsupported video) — the OS file manager is then the
               only way forward. */}
+          {/* The route back to the tree this file was opened from. Offered only
+              when a live worktree contains the file — the browser is
+              worktree-scoped, so there is nothing to open for a file outside
+              every worktree. */}
+          {revealWorktreeId && (
+            <FileViewerToolbar.IconButton
+              label="Show in file browser"
+              onClick={() => void handleOpenExternal("file-browser")}
+            >
+              <FolderTree className="w-4 h-4" />
+            </FileViewerToolbar.IconButton>
+          )}
           <FileViewerToolbar.IconButton
             label={reveal.label}
             onClick={() => void handleOpenExternal("reveal")}
@@ -1029,7 +1160,7 @@ export function FilePane({
             />
             {pickerRoot && (
               <div className="w-full max-w-md flex flex-col gap-1 min-h-0">
-                <div className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-daintree-border bg-daintree-sidebar focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20">
+                <div className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-daintree-border bg-daintree-sidebar focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20">
                   <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                   <input
                     value={pickerQuery}
@@ -1079,7 +1210,7 @@ export function FilePane({
             {!isUnsupportedVideoFilePath(filePath) && !isUnsupportedAudioFilePath(filePath) && (
               <button
                 type="button"
-                onClick={() => loadFile(false)}
+                onClick={() => loadFile("explicit")}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
@@ -1158,6 +1289,7 @@ export function FilePane({
               rootPath={effectiveRootPath}
               viewMode="rendered"
               wrapLines={markdownWrapLines}
+              cacheBust={String(reloadNonce)}
               onRendered={heightHold.handleRendered}
             />
           ) : viewMode === "rendered" && isHtml ? (

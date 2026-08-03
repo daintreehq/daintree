@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { ActionService } from "@/services/ActionService";
 import { _resetForTests as resetEscapeStack, registerEscape } from "@/lib/escapeStack";
 import type { ActionId } from "@shared/types/actions";
@@ -319,6 +320,8 @@ describe("project action hardening", () => {
 
     expectRegistryToMatchIds(actions, [
       "project.switcherPalette",
+      "pilot.toggle",
+      "pilot.openRun",
       "project.mruCycleOlder",
       "project.add",
       "project.openDialog",
@@ -454,26 +457,90 @@ describe("project action hardening", () => {
   });
 
   it("passes through project client queries and dispatches settings events", async () => {
-    mocks.projectClient.getSettings.mockResolvedValueOnce({ theme: "dark" });
     mocks.projectClient.detectRunners.mockResolvedValueOnce(["dev"]);
-    mocks.projectClient.getStats.mockResolvedValueOnce({ files: 12 });
+    // A realistic ProjectStats — `processIds` carries live host pids, which
+    // #11539's result parsing must drop. Before it, the catchall result schema
+    // kept every key and shipped them to any agent that called this.
+    mocks.projectClient.getStats.mockResolvedValueOnce({
+      processCount: 3,
+      terminalCount: 2,
+      estimatedMemoryMB: 256,
+      terminalTypes: { agent: 1, shell: 1 },
+      processIds: [4711, 4712],
+    });
     const dispatchEvent = vi.spyOn(window, "dispatchEvent");
     const { service } = buildService(registerProjectActions);
 
     await expect(
-      service.dispatch("project.getSettings", { projectId: "project-1" })
-    ).resolves.toEqual({ ok: true, result: { theme: "dark" } });
-    await expect(
       service.dispatch("project.detectRunners", { projectId: "project-1" })
     ).resolves.toEqual({ ok: true, result: { runners: ["dev"] } });
     await expect(service.dispatch("project.getStats", { projectId: "project-1" })).resolves.toEqual(
-      { ok: true, result: { files: 12 } }
+      {
+        ok: true,
+        result: {
+          processCount: 3,
+          terminalCount: 2,
+          estimatedMemoryMB: 256,
+          terminalTypes: { agent: 1, shell: 1 },
+        },
+      }
     );
 
     const openSettings = await service.dispatch("project.settings.open");
     expect(openSettings).toEqual({ ok: true, result: undefined });
     expect(dispatchEvent).toHaveBeenCalledWith(expect.any(CustomEvent));
     expect(dispatchEvent.mock.calls.at(-1)?.[0].type).toBe("daintree:open-settings-tab");
+  });
+
+  // #11524: project.getSettings is not a passthrough — it projects to an
+  // agent-safe field set. Dispatching through the real ActionService is the
+  // point: nothing between run() and the MCP wire filters the result.
+  it("project.getSettings does not dispatch decrypted secrets or the icon blob", async () => {
+    mocks.projectClient.getSettings.mockResolvedValueOnce({
+      runCommands: [{ id: "r1", name: "dev", command: "npm run dev" }],
+      devServerCommand: "npm run dev",
+      environmentVariables: { STRIPE_SECRET_KEY: "sk-live-secret" },
+      secureEnvironmentVariables: ["STRIPE_SECRET_KEY"],
+      projectIconSvg: "<svg />",
+    });
+    const { service } = buildService(registerProjectActions);
+
+    const result = await service.dispatch("project.getSettings", { projectId: "project-1" });
+
+    expect(result.ok).toBe(true);
+    expect(result).toEqual({
+      ok: true,
+      result: {
+        runCommands: [{ id: "r1", name: "dev", command: "npm run dev" }],
+        devServerCommand: "npm run dev",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("sk-live-secret");
+  });
+
+  it("advertises an MCP output schema that omits the sensitive fields", async () => {
+    const { service } = buildService(registerProjectActions);
+
+    const entry = service.get("project.getSettings");
+
+    // The schema is documentation, not enforcement — but a schema that still
+    // advertised these fields would mean the exposure table had drifted.
+    expect(entry?.outputSchema).toBeDefined();
+    for (const exposed of ["runCommands", "worktreePathPattern", "notificationOverrides"]) {
+      expect(entry?.outputSchema).toHaveProperty(["properties", exposed]);
+    }
+    for (const hidden of [
+      "environmentVariables",
+      "secureEnvironmentVariables",
+      "insecureEnvironmentVariables",
+      "unresolvedSecureEnvironmentVariables",
+      "projectIconSvg",
+      "resourceEnvironments",
+      "daintreeMcpTier",
+      "browserAllowedHosts",
+    ]) {
+      expect(entry?.outputSchema).not.toHaveProperty(["properties", hidden]);
+    }
   });
 
   it("project.saveSettings merges partial input over current settings", async () => {
@@ -596,16 +663,61 @@ describe("system action hardening", () => {
     ]);
 
     const filesSearch = actions.get("files.search")!();
-    expect(filesSearch.description).toContain("active worktree");
+    // The active-worktree fallback is a property of the `cwd` ARGUMENT, so it
+    // is asserted where it is actually advertised (#11542). It used to live in
+    // the action description, restated on every worktree-scoped tool; asserting
+    // it there again would pull the boilerplate straight back in. What matters
+    // is that the semantics still reach the wire, so this reads the emitted
+    // JSON Schema rather than the prose.
+    const emitted = z
+      .object({
+        properties: z.record(z.string(), z.object({ description: z.string().optional() })),
+      })
+      .parse(
+        z.toJSONSchema(filesSearch.argsSchema!, {
+          io: "input",
+          unrepresentable: "any",
+          reused: "inline",
+          cycles: "ref",
+          target: "draft-2020-12",
+        })
+      );
+    const cwd = emitted.properties.cwd;
+
+    expect(cwd?.description).toMatch(/active worktree/i);
+    // Both halves: what omitting it does, and that omitting it is not always safe.
+    expect(cwd?.description).toMatch(/fails|error/i);
     expect(filesSearch.description).not.toContain("project_getCurrent");
   });
 
   it("passes through system and copyTree client arguments/results", async () => {
     mocks.systemClient.checkCommand.mockResolvedValueOnce(true);
-    mocks.filesClient.search.mockResolvedValueOnce(["src/main.ts"]);
-    mocks.slashCommandsClient.list.mockResolvedValueOnce(["/review"]);
-    mocks.copyTreeClient.generate.mockResolvedValueOnce("tree");
-    mocks.copyTreeClient.injectToTerminal.mockResolvedValueOnce({ injected: true });
+    // `FileSearchResult` is `{ files: string[] }` — the bare array this used to
+    // return never matched the client contract, and nothing caught it until
+    // dispatch started parsing results (#11539).
+    mocks.filesClient.search.mockResolvedValueOnce({ files: ["src/main.ts"] });
+    // A realistic SlashCommand. `insertText` and `aliases` are real fields the
+    // action's resultSchema does not declare; parsing is what stops them
+    // reaching agents.
+    mocks.slashCommandsClient.list.mockResolvedValueOnce([
+      {
+        id: "review",
+        label: "/review",
+        description: "Review the diff",
+        scope: "project",
+        agentId: "codex",
+        insertText: "/review",
+        aliases: ["r"],
+        trigger: "/",
+      },
+    ]);
+    mocks.copyTreeClient.generate.mockResolvedValueOnce({
+      content: "",
+      fileCount: 2,
+      filePath: "/tmp/daintree-context/repo-main-x.xml",
+      outputBytes: 512,
+    });
+    mocks.copyTreeClient.injectToTerminal.mockResolvedValueOnce({ content: "", fileCount: 2 });
     mocks.copyTreeClient.getFileTree.mockResolvedValueOnce([{ path: "src", type: "directory" }]);
     const { service } = buildService(registerSystemActions);
 
@@ -615,30 +727,57 @@ describe("system action hardening", () => {
     });
     await expect(
       service.dispatch("files.search", { cwd: "/repo", query: "main", limit: 5 })
-    ).resolves.toEqual({ ok: true, result: ["src/main.ts"] });
+    ).resolves.toEqual({ ok: true, result: { files: ["src/main.ts"] } });
+    // insertText/aliases/trigger are stripped: the schema never declared them,
+    // and dispatch now makes that declaration binding.
     await expect(
       service.dispatch("slashCommands.list", { agentId: "codex", projectPath: "/repo" })
-    ).resolves.toEqual({ ok: true, result: { commands: ["/review"] } });
+    ).resolves.toEqual({
+      ok: true,
+      result: {
+        commands: [
+          {
+            id: "review",
+            label: "/review",
+            description: "Review the diff",
+            scope: "project",
+            agentId: "codex",
+          },
+        ],
+      },
+    });
     await expect(
       service.dispatch("copyTree.generate", {
         worktreeId: "wt-1",
         options: { includeGitStatus: true },
       })
-    ).resolves.toEqual({ ok: true, result: "tree" });
+    ).resolves.toEqual({
+      ok: true,
+      result: {
+        filePath: "/tmp/daintree-context/repo-main-x.xml",
+        fileCount: 2,
+        outputBytes: 512,
+      },
+    });
     await expect(
       service.dispatch("copyTree.injectToTerminal", {
         terminalId: "term-1",
         worktreeId: "wt-1",
         options: { includeGitStatus: true },
       })
-    ).resolves.toEqual({ ok: true, result: { injected: true } });
+    ).resolves.toEqual({ ok: true, result: { fileCount: 2 } });
     await expect(
       service.dispatch("copyTree.getFileTree", { worktreeId: "wt-1", dirPath: "src" })
     ).resolves.toEqual({ ok: true, result: { nodes: [{ path: "src", type: "directory" }] } });
   });
 
   it("keeps scoped folder paths in copyTree options instead of validating them away", async () => {
-    mocks.copyTreeClient.generate.mockResolvedValueOnce("tree");
+    mocks.copyTreeClient.generate.mockResolvedValueOnce({
+      content: "",
+      fileCount: 1,
+      filePath: "/tmp/daintree-context/repo-main-x.xml",
+      outputBytes: 128,
+    });
     const { service } = buildService(registerSystemActions);
 
     await service.dispatch("copyTree.generate", {
@@ -650,6 +789,26 @@ describe("system action hardening", () => {
     // These actions validate against their own copy of the options schema, so a
     // field added only to the IPC schema is stripped before it ever leaves here.
     expect(options.scopePaths).toEqual(["src/panels"]);
+  });
+
+  it("refuses an artifact patch that names no worktree instead of falling back to the active one", async () => {
+    const { service } = buildService(registerSystemActions);
+
+    // A destructive submit must never silently substitute a default target
+    // (CLAUDE.md destructive tiers, rule 1 — the #7880 root cause). Both
+    // dispatch sites in useArtifacts.ts already refuse to dispatch without a
+    // cwd, so requiring it here costs no caller anything.
+    const result = await service.dispatch(
+      "artifact.applyPatch",
+      { patchContent: "--- a\n+++ b" },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("VALIDATION_ERROR");
+    }
+    expect(mocks.artifactClient.applyPatch).not.toHaveBeenCalled();
   });
 
   it("blocks unconfirmed agent-driven artifact patches (danger:confirm — worktree mutation, #10020)", async () => {

@@ -125,6 +125,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Toggle worktrees overview | `⌘+⇧+O` | `Ctrl+Shift+O` |
 | Copy tree context for active worktree | `⌘+⇧+C` | `Ctrl+Shift+C` |
 | Open changes for focused worktree | `⌘+⇧+D` | `Ctrl+Shift+D` |
+| Open file browser for focused worktree | `⌘+⌥+F` | `Ctrl+Alt+F` |
 
 ## Worktree Sessions
 
@@ -167,6 +168,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
+| View all agents | `⌘+⌥+O` | `Ctrl+Alt+O` |
 | Open project switcher | `⌘+⌥+P` | `Ctrl+Alt+P` |
 | Switch to last project | `⌘+⌥+=` | `Ctrl+Alt+=` |
 

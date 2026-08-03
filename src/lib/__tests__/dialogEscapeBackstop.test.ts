@@ -6,6 +6,8 @@ import {
   radixLayerWasOpenWhenEscapePressed,
   markBackstopConsumedEscape,
   backstopAlreadyConsumedEscape,
+  markEscapeYieldedToDialog,
+  escapeWasYieldedToDialog,
   _resetForTests,
 } from "../dialogEscapeBackstop";
 
@@ -134,6 +136,102 @@ describe("dialogEscapeBackstop — gating real vs spurious Radix preventDefault"
 
     expect(backstopFire).toHaveBeenCalledOnce();
     expect(backstopAlreadyConsumedEscape()).toBe(true);
+  });
+});
+
+/**
+ * A dock popover deliberately stays open behind the dialog it spawned, so it is
+ * always "the open Radix layer" the capture probe sees — and the gate above
+ * would hand it every Escape, dismissing the panel underneath instead of the
+ * dialog the user is looking at (#11505). The popover's own guard declines the
+ * keypress and marks it, which releases the gate for that event alone.
+ */
+describe("dialogEscapeBackstop — a layer yielding Escape to the dialog above it", () => {
+  // Tracked rather than removed inline: a failing assertion between add and
+  // remove would otherwise leak the listener into the rest of the file.
+  const listeners: Array<(e: KeyboardEvent) => void> = [];
+
+  function addListener(handler: (e: KeyboardEvent) => void) {
+    listeners.push(handler);
+    document.addEventListener("keydown", handler);
+    return handler;
+  }
+
+  function removeListener(handler: (e: KeyboardEvent) => void) {
+    document.removeEventListener("keydown", handler);
+    const idx = listeners.indexOf(handler);
+    if (idx !== -1) listeners.splice(idx, 1);
+  }
+
+  afterEach(() => {
+    for (const handler of listeners.splice(0)) {
+      document.removeEventListener("keydown", handler);
+    }
+  });
+
+  function armBackstop(onFire: () => void) {
+    addListener((e) => {
+      if (e.key !== "Escape") return;
+      if (radixLayerWasOpenWhenEscapePressed() && !escapeWasYieldedToDialog(e)) return;
+      onFire();
+      markBackstopConsumedEscape();
+    });
+  }
+
+  it("fires the backstop for an Escape the open layer yielded", () => {
+    addRadixLayer("dialog");
+    const backstopFire = vi.fn();
+
+    // Stand in for the dock guard, which runs between the capture probe and
+    // the bubble backstop.
+    addListener((e) => {
+      if (e.key === "Escape") markEscapeYieldedToDialog(e);
+    });
+    armBackstop(backstopFire);
+
+    fireEscape();
+
+    expect(backstopFire).toHaveBeenCalledOnce();
+  });
+
+  it("still stands down for an open layer that did not yield", () => {
+    addRadixLayer("dialog");
+    const backstopFire = vi.fn();
+    armBackstop(backstopFire);
+
+    fireEscape();
+
+    expect(backstopFire).not.toHaveBeenCalled();
+  });
+
+  it("does not let the mark leak into the next Escape press", () => {
+    addRadixLayer("dialog");
+    const backstopFire = vi.fn();
+
+    const yieldOnce = addListener((e) => {
+      if (e.key === "Escape") markEscapeYieldedToDialog(e);
+    });
+    armBackstop(backstopFire);
+
+    fireEscape();
+    expect(backstopFire).toHaveBeenCalledOnce();
+
+    // Second press with no yield — e.g. a Select legitimately open inside the
+    // dialog. A sticky flag here would close the dialog underneath it.
+    removeListener(yieldOnce);
+    fireEscape();
+
+    expect(backstopFire).toHaveBeenCalledOnce();
+  });
+
+  it("reports a yield only for the exact event object that was marked", () => {
+    const first = new KeyboardEvent("keydown", { key: "Escape" });
+    const second = new KeyboardEvent("keydown", { key: "Escape" });
+
+    markEscapeYieldedToDialog(first);
+
+    expect(escapeWasYieldedToDialog(first)).toBe(true);
+    expect(escapeWasYieldedToDialog(second)).toBe(false);
   });
 });
 

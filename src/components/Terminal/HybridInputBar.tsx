@@ -273,9 +273,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     } = compartments;
 
     const { handleDragEnter, handleDragOver, handleDragLeave, handleDrop, isDragOverFiles } =
-      useDragDrop(editorViewRef);
+      useDragDrop(editorViewRef, cwd);
 
-    const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions();
+    const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(cwd);
 
     useEffect(() => {
       setInitializationState("initializing");

@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArrowDownNarrowWide,
+  ArrowUpNarrowWide,
   ExternalLink,
   FileText,
+  FolderTree,
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
   XCircle,
 } from "lucide-react";
-import { FolderOpen } from "@/components/icons";
+import { CircleCheck, FolderOpen } from "@/components/icons";
 import { actionService } from "@/services/ActionService";
 import { CodeViewer } from "@/components/FileViewer/CodeViewer";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
@@ -38,14 +41,35 @@ import {
   toFileReadErrorCode,
 } from "@/components/FileViewer/fileReadErrors";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { FolderListingView } from "./FolderListingView";
+import type {
+  FileBrowserSortKey,
+  FileBrowserSortOrder,
+  FileEntryLike,
+  FolderListingRow,
+} from "./fileBrowserTree";
+import type { FolderListingStatus } from "./useFileBrowserTree";
 import { filesClient } from "@/clients/filesClient";
 import { isClientAppError } from "@/utils/clientAppError";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
 import type { FileRenderMode } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
+import type { WorkingTreeFileChange } from "@/lib/workingTreeDiff";
+import { FileBrowserChangeSummary } from "./FileBrowserChangeSummary";
 
 export interface FileBrowserViewerProps {
   /** Absolute path of the selected file; null when nothing is selected. */
@@ -62,6 +86,19 @@ export interface FileBrowserViewerProps {
    * reflected instead of leaving stale bytes on screen.
    */
   revision: string;
+  /**
+   * Changes on a foreground refresh — pressing Refresh, or returning to this
+   * project after it sat cached — never on an ambient worktree tick. The half
+   * of `revision` the media branches can safely honour. Typed `number` rather
+   * than `string | number` so handing it the merged `revision` (which also
+   * carries the change tick) is a compile error, not a silent regression to
+   * restarting playback on every background write.
+   */
+  surfaceRefreshNonce: number;
+  /** Runs the pane's manual refresh — re-reads the tree and the open file. */
+  onRefresh: () => void;
+  /** Whether that refresh is still draining; spins the Refresh icon. */
+  isRefreshing: boolean;
   /** Whether the tree sidebar is collapsed; drives the disclosure toggle's icon and state. */
   sidebarCollapsed: boolean;
   /** Opens/closes the tree sidebar. Owned by the pane, which persists the state. */
@@ -71,6 +108,70 @@ export interface FileBrowserViewerProps {
    * only while the column is mounted (open); the pane unmounts it when collapsed.
    */
   treeSidebarId: string;
+  /**
+   * The worktree's changed files, churn-sorted, with worktree-relative paths.
+   * Drives what fills the pane when nothing is selected.
+   *
+   * Three states, and the empty array is not the same as null: `null` means no
+   * git status is available (a workspace root has no worktree behind it, and a
+   * snapshot may not have arrived yet), while `[]` is a positive statement that
+   * the worktree is clean. Collapsing them would report an unknown worktree as
+   * clean, which is the one thing this pane must not do.
+   */
+  changedFiles: readonly WorkingTreeFileChange[] | null;
+  /** Opens a file picked from the changed-files summary in this viewer. */
+  onSelectChangedFile: (relativePath: string) => void;
+  /**
+   * Worktree-relative path of the selected *folder*, or null when the selection
+   * is a file or nothing (#11620). Mutually exclusive with `filePath` — the
+   * pane resolves the selection's kind once and hands over exactly one.
+   */
+  folderPath: string | null;
+  /** Rows for `folderPath`'s contents; null when no folder is selected. */
+  folderRows: FolderListingRow[] | null;
+  /** Raw fetch state for `folderPath` — never anti-flicker gated (#10083). */
+  folderStatus: FolderListingStatus;
+  /** Whether the dotfile toggle is what's hiding this folder's entries. */
+  folderHasHiddenDotfiles: boolean;
+  /** Turns the dotfile filter off; offered from the filtered-empty state. */
+  onShowDotfiles: () => void;
+  /**
+   * Selecting an entry in the listing — a folder steps in, a file opens. The
+   * listing's only click gesture; re-rooting and opening in a panel live in the
+   * row's context menu and in the tree, which is why no activate/root callback
+   * is threaded through here (see `FolderListingView`).
+   */
+  onSelectEntry: (path: string) => void;
+  /** Menu items for a listing row's right-click menu — the tree's own callback. */
+  rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
+  /** Absolute base the listing's relative paths hang off, for drags (#11576). */
+  basePath: string;
+  /** Current order for the tree and the listing; driven by the toolbar menu. */
+  sort: FileBrowserSortOrder;
+  onSortChange: (sort: FileBrowserSortOrder) => void;
+}
+
+/** Toolbar sort menu entries, in menu order. */
+const SORT_OPTIONS: Array<{ value: FileBrowserSortKey; label: string }> = [
+  { value: "name", label: "Name" },
+  { value: "modified", label: "Modified" },
+  { value: "size", label: "Size" },
+  { value: "type", label: "Type" },
+];
+
+/** Narrow a menu value back to a known key, falling back to the current one. */
+function toSortKey(value: string, fallback: FileBrowserSortKey): FileBrowserSortKey {
+  return SORT_OPTIONS.find((option) => option.value === value)?.value ?? fallback;
+}
+
+/**
+ * The sort control's accessible name. Spells out both halves because the arrow
+ * icon that shows the direction is decorative — the name is the only place a
+ * screen reader can learn which way the list runs.
+ */
+function sortLabel(sort: FileBrowserSortOrder): string {
+  const key = SORT_OPTIONS.find((option) => option.value === sort.key)?.label ?? "Name";
+  return `Sort files (${key}, ${sort.direction === "asc" ? "ascending" : "descending"})`;
 }
 
 /** Which external surface a toolbar action aims the current file at. */
@@ -111,9 +212,24 @@ export function FileBrowserViewer({
   fileName,
   relativePath,
   revision,
+  surfaceRefreshNonce,
+  onRefresh,
+  isRefreshing,
   sidebarCollapsed,
   onToggleSidebar,
   treeSidebarId,
+  changedFiles,
+  onSelectChangedFile,
+  folderPath,
+  folderRows,
+  folderStatus,
+  folderHasHiddenDotfiles,
+  onShowDotfiles,
+  onSelectEntry,
+  rowContextMenu,
+  basePath,
+  sort,
+  onSortChange,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
   // Sticky Source/Rendered choice for markdown, defaulting to the rendered view
@@ -363,7 +479,103 @@ export function FileBrowserViewer({
               copied={pathCopied}
               onCopy={handleCopyPath}
             />
-            <FileViewerToolbar.Actions>
+          </>
+        )}
+        {/* One slot, two occupants, following whatever the viewer is showing:
+            a list is sorted, a file is refreshed. Both are outside the
+            `filePath` gate that wraps the actions above — each has a job in the
+            no-selection layouts too. */}
+        <FileViewerToolbar.Actions>
+          {/* The single home for sort (#11620). Deliberately not duplicated as
+              clickable column headers in the listing below: two controls for
+              one setting is the same trap the Refresh comment above avoids, and
+              a header that looks sortable in one column but has no counterpart
+              in the tree would misdescribe what the setting governs. Hidden
+              while a file is open: this cluster describes what the viewer is
+              showing, and a single document has no order — the slot goes to
+              Refresh instead. */}
+          {!filePath && (
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      // Carries the current order, not just the verb: the arrow
+                      // below is decorative, so without this a screen reader
+                      // could never tell which way the list is sorted.
+                      aria-label={sortLabel(sort)}
+                      data-testid="file-browser-sort-menu"
+                      className="toolbar-icon-button rounded p-1.5 text-daintree-text/60"
+                    >
+                      {sort.direction === "asc" ? (
+                        <ArrowUpNarrowWide className="h-4 w-4" aria-hidden="true" />
+                      ) : (
+                        <ArrowDownNarrowWide className="h-4 w-4" aria-hidden="true" />
+                      )}
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{sortLabel(sort)}</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" className="min-w-[180px]">
+                {/* Key and direction are two labelled radio groups rather than one
+                  group that reverses when its active item is re-picked. The
+                  compact version hides the direction behind a gesture nothing
+                  announces — the checked item stays checked, so a screen reader
+                  reports no change at all — and leaves no way to set a
+                  direction outright. Two groups cost one extra label and make
+                  both halves readable and directly settable. */}
+                {/* Each group carries its own `aria-label`: Radix renders these as
+                  `role="group"`, and the visible label above is a sibling
+                  element, not an association — without it both groups announce
+                  as unnamed containers and the two halves become
+                  indistinguishable. */}
+                <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  aria-label="Sort by"
+                  value={sort.key}
+                  onValueChange={(value) =>
+                    onSortChange({ ...sort, key: toSortKey(value, sort.key) })
+                  }
+                >
+                  {SORT_OPTIONS.map((option) => (
+                    <DropdownMenuRadioItem key={option.value} value={option.value}>
+                      {option.label}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Order</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  aria-label="Order"
+                  value={sort.direction}
+                  onValueChange={(value) =>
+                    onSortChange({ ...sort, direction: value === "desc" ? "desc" : "asc" })
+                  }
+                >
+                  <DropdownMenuRadioItem value="asc">Ascending</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="desc">Descending</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          {/* With a file open this is the file's own Refresh — it re-reads the
+              bytes on screen, which is the one freshness gesture a reader wants
+              and the sort menu can't be. The tree header yields its copy for
+              exactly these layouts (see `FileBrowserPane`), so there is still
+              only ever one Refresh in the panel (#11496). With nothing open the
+              older rule stands: the tree header owns it, and this one appears
+              only once that header is collapsed away (#11586) — a
+              workspace-rooted browser has no change tick at all (#11482), so
+              that layout would otherwise offer no refresh. */}
+          {(filePath || sidebarCollapsed) && (
+            <FileViewerToolbar.IconButton label="Refresh" onClick={onRefresh}>
+              <SpinningIcon icon={RefreshCw} active={isRefreshing} className="h-4 w-4" />
+            </FileViewerToolbar.IconButton>
+          )}
+          {filePath && (
+            <>
               <FileViewerToolbar.IconButton
                 label={reveal.label}
                 onClick={() => void handleExternalAction("reveal")}
@@ -376,9 +588,9 @@ export function FileBrowserViewer({
               >
                 <ExternalLink className="h-4 w-4" />
               </FileViewerToolbar.IconButton>
-            </FileViewerToolbar.Actions>
-          </>
-        )}
+            </>
+          )}
+        </FileViewerToolbar.Actions>
       </FileViewerToolbar.Root>
       {filePath && externalError && (
         <InlineStatusBanner
@@ -406,25 +618,150 @@ export function FileBrowserViewer({
         />
       )}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {filePath ? (
-          renderBody()
-        ) : (
-          // flex-1 + min-h-0, not h-full: below the now-persistent toolbar a
-          // 100%-height body would overflow the viewer column.
-          <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-            <EmptyState
-              variant="zero-data"
-              scale="canvas"
-              icon={<FileText className="h-6 w-6" />}
-              title="Nothing selected"
-              description="Pick a file in the tree to read it here."
-              className="w-full"
-            />
-          </div>
-        )}
+        {/* A selected folder outranks the idle body: the changed-files summary
+            answers "nothing is selected", and a folder selection is a
+            selection (#11620). */}
+        {filePath ? renderBody() : folderPath !== null ? renderFolderBody() : renderIdleBody()}
       </div>
     </>
   );
+
+  /**
+   * What fills the pane with nothing selected. The browser is opened to answer
+   * "what did the agent just change in here", so on a dirty worktree that answer
+   * is the body — not a placeholder apologising for the absence of one.
+   */
+  function renderIdleBody() {
+    if (changedFiles !== null && changedFiles.length > 0) {
+      return <FileBrowserChangeSummary changes={changedFiles} onSelect={onSelectChangedFile} />;
+    }
+
+    // flex-1 + min-h-0, not h-full: below the now-persistent toolbar a
+    // 100%-height body would overflow the viewer column.
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+        {changedFiles === null ? (
+          <EmptyState
+            variant="zero-data"
+            scale="canvas"
+            icon={<FileText className="h-6 w-6" />}
+            title="Nothing selected"
+            description="Pick a file in the tree to read it here."
+            className="w-full"
+          />
+        ) : (
+          // A clean worktree is a finished state, not an empty one: the
+          // `user-cleared` variant stays quiet and takes no action, since there
+          // is nothing here the user failed to do.
+          <EmptyState
+            variant="user-cleared"
+            scale="canvas"
+            icon={<CircleCheck className="h-6 w-6" />}
+            title="Worktree is clean"
+            className="w-full"
+          />
+        )}
+      </div>
+    );
+  }
+
+  /**
+   * The folder-selected state (#11620) — what a selected folder shows instead
+   * of the same "Nothing selected" a bare panel shows.
+   *
+   * Branches on `folderStatus`, the raw fetch state, never on a Doherty-gated
+   * flag: a gated boolean is false both before the gate opens and after the
+   * data arrives, so branching on it renders "this folder is empty" for the
+   * first 400ms of every load. The gate below decides only whether the skeleton
+   * paints during a pending window — under 400ms this renders nothing at all,
+   * which is the point.
+   */
+  function renderFolderBody() {
+    if (folderPath === null) return null;
+    const folderName = folderPath.split("/").pop() ?? folderPath;
+
+    if (folderStatus === "error") {
+      return (
+        <div className="flex h-full w-full items-center justify-center p-6">
+          <EmptyState
+            variant="zero-data"
+            scale="canvas"
+            icon={<FolderTree className="h-6 w-6" />}
+            title="Can't show this folder"
+            description="The folder couldn't be read. It may have been moved or deleted."
+            action={
+              <button
+                type="button"
+                onClick={onRefresh}
+                className="text-xs underline underline-offset-2"
+              >
+                Retry
+              </button>
+            }
+            className="w-full"
+          />
+        </div>
+      );
+    }
+
+    // `== null`, so an absent value is treated the same as an explicit null:
+    // "no rows yet" is the honest reading either way, and reaching `.length`
+    // on it below would throw rather than degrade.
+    if (folderStatus === "pending" || folderRows == null) {
+      return (
+        // Predictable shape (a column of rows), so a skeleton rather than a
+        // spinner — and `Skeleton` carries the 400ms gate itself, so a listing
+        // already in the cache shows nothing before the rows appear.
+        <div className="p-3">
+          <Skeleton label="Loading folder">
+            <SkeletonText lines={10} />
+          </Skeleton>
+        </div>
+      );
+    }
+
+    if (folderRows.length === 0) {
+      // "Filtered" only when turning the dotfile toggle off would actually
+      // reveal something here — otherwise the folder is genuinely empty, and
+      // offering a control that changes nothing would be a dead end.
+      const canRevealDotfiles = folderHasHiddenDotfiles;
+      return (
+        <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+          <EmptyState
+            variant={canRevealDotfiles ? "filtered-empty" : "zero-data"}
+            scale="canvas"
+            className="w-full"
+            {...(canRevealDotfiles ? {} : { icon: <FolderTree className="h-6 w-6" /> })}
+            title={canRevealDotfiles ? "Dotfiles are hidden here" : "Nothing in this folder yet"}
+            {...(canRevealDotfiles
+              ? {}
+              : { description: "Add a file to it and it'll show up here." })}
+            action={
+              canRevealDotfiles ? (
+                <button
+                  type="button"
+                  onClick={onShowDotfiles}
+                  className="text-xs underline underline-offset-2"
+                >
+                  Show dotfiles
+                </button>
+              ) : undefined
+            }
+          />
+        </div>
+      );
+    }
+
+    return (
+      <FolderListingView
+        rows={folderRows}
+        onSelect={onSelectEntry}
+        {...(rowContextMenu ? { rowContextMenu } : {})}
+        basePath={basePath}
+        label={`Contents of ${folderName}`}
+      />
+    );
+  }
 
   function renderBody() {
     // Narrows `filePath` for this closure — the caller only reaches here through
@@ -491,14 +828,17 @@ export function FileBrowserViewer({
       case "video":
         return (
           <div className="h-full w-full overflow-auto">
-            {/* Deliberately NOT keyed on `revision`: it ticks on every worktree
-                write, and remounting the player would reset playback whenever
-                an agent touches any file. A rewritten video shows its new bytes
-                on re-selection — continuity beats freshness mid-playback. */}
+            {/* Reloaded on `surfaceRefreshNonce`, never on `revision`: that
+                ticks on every worktree write, and re-fetching would reset
+                playback whenever an agent touches any file. Only a foreground
+                refresh outranks continuity — pressing Refresh (#11586), or
+                coming back to this project (#11588) — so only those pull the
+                rewritten bytes. */}
             <FileVideoPreview
               filePath={filePath}
               rootPath={rootPath}
               label={fileName}
+              reloadKey={surfaceRefreshNonce}
               onError={(error) =>
                 setState({
                   status: "error",
@@ -513,13 +853,14 @@ export function FileBrowserViewer({
       case "audio":
         return (
           <div className="h-full w-full overflow-auto">
-            {/* Deliberately NOT keyed on `revision`, for the same reason as
-                video above: a worktree write elsewhere must not restart the
-                track someone is listening to. */}
+            {/* Same split as video above: a worktree write elsewhere must not
+                restart the track someone is listening to, while Refresh
+                still re-fetches it on demand. */}
             <FileAudioPreview
               filePath={filePath}
               rootPath={rootPath}
               label={fileName}
+              reloadKey={surfaceRefreshNonce}
               onError={(error) =>
                 setState({
                   status: "error",
@@ -532,10 +873,15 @@ export function FileBrowserViewer({
 
       case "pdf":
         return (
-          // Same reasoning as the video case: no `revision` key. Remounting the
-          // frame on every worktree write would throw away the reader's page
-          // and zoom; a rewritten PDF shows new bytes on re-selection.
-          <FilePdfPreview filePath={filePath} rootPath={rootPath} label={fileName} />
+          // Same split as the video case: re-navigating the frame on every
+          // worktree write would throw away the reader's page and zoom, so only
+          // an explicit Refresh moves the key.
+          <FilePdfPreview
+            filePath={filePath}
+            rootPath={rootPath}
+            label={fileName}
+            reloadKey={surfaceRefreshNonce}
+          />
         );
 
       case "html":
@@ -575,11 +921,17 @@ export function FileBrowserViewer({
             {/* min-h-full, never h-full: a floor lets a tall document grow past
                 the wrapper and scroll it, while a short one still fills the
                 preview. h-full would clamp it and silently restore the bug. */}
+            {/* `cacheBust` rather than a new `key`, for the same reason as the
+                image branch above: remounting would throw away the reader's
+                scroll position, while changing the image srcs reloads the
+                bytes in place. Unlike video/audio/pdf there is no playback to
+                interrupt (#11587). */}
             <MarkdownViewer
               content={state.content}
               filePath={filePath}
               rootPath={rootPath}
               viewMode={markdownMode}
+              cacheBust={revision}
               className="min-h-full"
             />
           </div>

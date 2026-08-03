@@ -22,7 +22,7 @@ export function registerAppConfigActions(
     id: "agentSettings.get",
     title: "Get Agent Settings",
     description:
-      "Read the per-agent settings map (model, flags, and other agent configuration). Takes no args. Returns { agents } — a record keyed by agent id of settings entries — plus an optional `settingsVersion`. Never errors; unconfigured agents are absent from the map. Use `agentSettings.set` to change a value.",
+      "Read the stored per-agent configuration, such as each agent's model and launch flags, plus the global overrides. Use this to see how an agent is currently set up; a write merges into the stored entry, so unrelated values survive without reading first. Agents that have never been configured are simply absent from the result rather than appearing with defaults, so absence means unconfigured.",
     category: "settings",
     kind: "query",
     danger: "safe",
@@ -30,6 +30,11 @@ export function registerAppConfigActions(
     resultSchema: z.object({
       agents: z.record(z.string(), AgentSettingsEntrySchema),
       settingsVersion: z.number().optional(),
+      // The two root-level global switches. Both are live overrides OR-ed in at
+      // flag-generation time, so an agent reading its own launch conditions needs
+      // them; dispatch strips whatever isn't declared here (#11539).
+      globalSkipPermissions: z.boolean().optional(),
+      globalUseAltScreen: z.boolean().optional(),
     }),
     run: async () => {
       const settings = await agentSettingsClient.get();
@@ -108,7 +113,6 @@ export function registerAppConfigActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    mcpVisibility: "discoverable",
     resultSchema: z.object({
       enabled: z.boolean(),
       inactiveThresholdHours: z.number(),

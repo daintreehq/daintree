@@ -10,7 +10,7 @@ export function registerKeybindingActions(
     id: "keybinding.getOverrides",
     title: "Get Keybinding Overrides",
     description:
-      "Read the user's keybinding overrides (custom shortcuts that differ from defaults). Takes no args. Returns a record mapping action id to an array of key combos. Never errors; returns an empty map when no overrides are configured. Defaults are not included — only explicit overrides.",
+      "Read the keyboard shortcuts the user has deliberately customised. Only explicit overrides are included — the built-in defaults are not — so an empty result means the user has customised nothing, not that no shortcuts exist.",
     category: "settings",
     kind: "query",
     danger: "safe",

@@ -124,17 +124,16 @@ const DURABLE_ALLOWLIST = new Set([
   // Current worktree card left-edge accent bar (single primary anchor per active focus region)
   "src/components/Worktree/WorktreeCard.tsx",
 
-  // PanelPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
-  "src/components/PanelPalette/PanelPalette.tsx",
-
-  // ResumeSessionsPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
-  "src/components/Terminal/ResumeSessionsPalette.tsx",
-
-  // ProjectSwitcherPalette selected-row left-edge accent stripe (single primary anchor per active focus region)
-  "src/components/Project/ProjectSwitcherPalette.tsx",
-
-  // PluginQuickPickDialog selected-row left-edge accent stripe (single primary anchor per active focus region)
-  "src/components/Plugin/PluginQuickPickDialog.tsx",
+  // The one definition of the palette selected-row treatment: the left-edge
+  // accent stripe plus the half-strength accent outline that carries the same
+  // anchor around the row (single primary anchor per active focus region).
+  // PilotView, ProjectSwitcherPalette, ResumeSessionsPalette, QuickSwitcherItem,
+  // ActionPaletteItem, DockLaunchButton, PanelPalette, PluginQuickPickDialog,
+  // PromptHistoryPalette, WorktreePalette and QuickCreatePalette all take it
+  // from here rather than spelling it out themselves, which is why none of them
+  // needs a bucket entry for the row treatment. QuickCreatePalette still has one
+  // below, but for an unrelated `checked:bg-daintree-accent` checkbox.
+  "src/components/ui/paletteRowStyles.ts",
 
   // PluginManagerView selected-row left-edge accent stripe in the master-detail
   // list, plus the detail subtab active-tab underline (single primary anchor per
@@ -170,7 +169,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "plugins/builtin/github/renderer/components/CommitList.tsx",
     "plugins/builtin/github/renderer/components/GitHubListItem.tsx",
     "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
-    "src/components/ActionPalette/ActionPaletteItem.tsx",
     "src/components/Browser/WebviewDialog.tsx",
     "src/components/Commands/CommandBuilder.tsx",
     "src/components/Commands/CommandPicker.tsx",
@@ -196,7 +194,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Project/GitInitDialog.tsx",
     "src/components/Project/ProjectNotificationsTab.tsx",
     "src/components/Project/WelcomeScreen.tsx",
-    "src/components/QuickSwitcher/QuickSwitcherItem.tsx",
     "src/components/Recovery/CrashRecoveryDialog.tsx",
     "src/components/Settings/AgentSelectorDropdown.tsx",
     "src/components/Settings/EditorIntegrationTab.tsx",
@@ -216,23 +213,18 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Terminal/ContentGridDefault.tsx",
     "src/components/Terminal/ContentGridTwoPaneSplit.tsx",
     "src/components/Terminal/HybridInputBar.tsx",
-    "src/components/Terminal/PromptHistoryPalette.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerGrid.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerList.tsx",
-    "src/components/Terminal/SendToAgentPalette.tsx",
     "src/components/Terminal/TwoPaneSplitDivider.tsx",
     "src/components/Terminal/UpdateCwdDialog.tsx",
     "src/components/Terminal/VoiceInputButton.tsx",
-    "src/components/TerminalPalette/NewTerminalPalette.tsx",
     "src/components/TerminalRecipe/RecipeEditor.tsx",
-    "src/components/ThemePalette/ThemePalette.tsx",
     "src/components/Worktree/NewWorktreeDialog.tsx",
     "src/components/Worktree/QuickCreatePalette.tsx",
     "src/components/Worktree/WorktreeCard/WorktreeTerminalSection.tsx",
     "src/components/Worktree/WorktreeDeleteDialog.tsx",
     "src/components/Worktree/WorktreeFilterPopover.tsx",
-    "src/components/Worktree/WorktreePalette.tsx",
     "src/components/Worktree/views/ExistingBranchPicker.tsx",
     "src/components/Worktree/views/HighlightBranchText.tsx",
     "src/components/Worktree/views/IssueSelectorView.tsx",

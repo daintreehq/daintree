@@ -28,16 +28,19 @@ import {
 } from "@/store";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useThemeBrowserStore } from "@/store/themeBrowserStore";
 import { useCcrPresetsSubscription } from "@/hooks/useCcrPresetsSubscription";
 import { useProjectPresetsSubscription } from "@/hooks/useProjectPresetsSubscription";
 import { useDiagnosticsAutoOpen } from "@/hooks/useDiagnosticsAutoOpen";
+import { useDockPopoverLayerSync } from "@/components/Layout/useOpenDockPopoverId";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
 import type { CliAvailability, AgentSettings } from "@shared/types";
 import { useLayoutState, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
+import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import {
   createAssistantRevealCoordinator,
@@ -141,6 +144,9 @@ export function AppLayout({
   useCcrPresetsSubscription();
   useProjectPresetsSubscription();
   useDiagnosticsAutoOpen();
+  // Published once for the whole view: every AppDialog layers itself against
+  // this rather than each caller working it out (#11505).
+  useDockPopoverLayerSync();
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   // Issue #7627: track active drag-resize per panel so AppLayout can suppress
   // the 250ms ease-out-expo width transition during the drag (the transition
@@ -161,6 +167,18 @@ export function AppLayout({
   // paint (the new width arrives with the class already gone — no animation).
   const [isSidebarWidthHydrating, setIsSidebarWidthHydrating] = useState(true);
   const currentProject = useProjectStore((state) => state.currentProject);
+  // Per-workspace state is keyed by workspace id, and a scratch owns one even
+  // though it has no Project row. Persisting a scratch through the legacy
+  // global fallback would overwrite the global focus record that unmigrated
+  // real projects still migrate from, destroying it for every project the user
+  // has not reopened yet (#11497). Only a renderer with no workspace at all may
+  // fall back to the global write.
+  //
+  // The view's own workspace id is the identity to use here, never
+  // `currentProject ?? currentScratch`: both of those are broadcast to every
+  // view, so a cached project view momentarily without a project would write
+  // its focus state into a sibling window's scratch.
+  const workspaceId = getViewWorkspaceId() ?? currentProject?.id;
   const layout = useLayoutState();
   const diagnosticsMounted = useKeepMounted(layout.diagnosticsOpen);
   const isThemeBrowserOpen = useOverlayOpen("theme-browser");
@@ -172,7 +190,14 @@ export function AppLayout({
   const isPluginManagerOpen = useOverlayOpen("plugin-manager");
   const chromeInert = isThemeBrowserOpen || isPluginManagerOpen;
   const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
-  const showSidebar = !layout.gestureSidebarHidden && currentProject != null;
+  // Every workspace kind has something for the sidebar to hold — a scratch and
+  // a folder opened without git each have their own root — so the gate is "is
+  // there a workspace at all", not "is there a project". Gating on the project
+  // left the toggle and Cmd+B flipping `aria-pressed` over a slot that could
+  // never appear in a scratch (#11499). Only the welcome screen, which has no
+  // workspace of any kind, still has no sidebar (#5023).
+  const hasWorkspace = useWorkspaceRoot() !== null;
+  const showSidebar = !layout.gestureSidebarHidden && hasWorkspace;
   const showAssistant = !layout.gestureAssistantHidden && layout.helpPanelOpen;
   const effectiveAssistantWidth = showAssistant ? layout.helpPanelWidth : 0;
   // #10693 (off-canvas): the assistant wrapper is always full-width and slides
@@ -414,9 +439,8 @@ export function AppLayout({
     const persistedFocusMode = layout.gestureSidebarHidden;
 
     const persistFocusMode = async () => {
-      // Persist focus mode to per-project state if a project is active
-      if (!currentProject?.id) {
-        // No project - fall back to global state for backward compatibility
+      if (!workspaceId) {
+        // No workspace at all - fall back to global state for backward compatibility
         try {
           await appClient.setState({ focusMode: persistedFocusMode });
         } catch (error) {
@@ -427,7 +451,7 @@ export function AppLayout({
 
       try {
         await window.electron.project.setFocusMode(
-          currentProject.id,
+          workspaceId,
           persistedFocusMode,
           layout.savedPanelState as PanelState | undefined
         );
@@ -438,7 +462,7 @@ export function AppLayout({
 
     const timer = setTimeout(persistFocusMode, 100);
     return () => clearTimeout(timer);
-  }, [layout.gestureSidebarHidden, layout.savedPanelState, currentProject?.id, isHydrated]);
+  }, [layout.gestureSidebarHidden, layout.savedPanelState, workspaceId, isHydrated]);
 
   const handleToggleFocusMode = async () => {
     // Gesture-active signal is "snapshot present", not the combined
@@ -467,15 +491,15 @@ export function AppLayout({
       if (restoreAssistant) {
         useHelpPanelStore.getState().setOpen(assistantWasOpen);
       }
-      // Persist to per-project state
-      if (currentProject?.id) {
+      // Persist to per-workspace state
+      if (workspaceId) {
         try {
-          await window.electron.project.setFocusMode(currentProject.id, false, undefined);
+          await window.electron.project.setFocusMode(workspaceId, false, undefined);
         } catch (error) {
           logError("Failed to clear focus panel state", error);
         }
       } else {
-        // Fall back to global state if no project
+        // Fall back to global state only when there is no workspace at all
         try {
           await appClient.setState({ focusPanelState: undefined });
         } catch (error) {
@@ -505,14 +529,14 @@ export function AppLayout({
       // toggleFocusMode is a no-op if neither sidebar was visible.
       const persistFocusMode = useFocusStore.getState().isFocusMode || showSidebar || showAssistant;
       if (!persistFocusMode) return;
-      if (currentProject?.id) {
+      if (workspaceId) {
         try {
-          await window.electron.project.setFocusMode(currentProject.id, true, currentPanelState);
+          await window.electron.project.setFocusMode(workspaceId, true, currentPanelState);
         } catch (error) {
           logError("Failed to persist focus panel state", error);
         }
       } else {
-        // Fall back to global state if no project
+        // Fall back to global state only when there is no workspace at all
         try {
           await appClient.setState({ focusPanelState: currentPanelState });
         } catch (error) {
@@ -531,13 +555,19 @@ export function AppLayout({
   // Independent from the assistant: clicking this button hides/shows only the
   // worktree sidebar, leaving the Daintree Assistant untouched.
   const handleToggleSidebar = useCallback(() => {
+    // No workspace means no sidebar mounts at all (welcome screen), so there is
+    // nothing to hide or reveal. Flipping the gesture flag anyway is what let
+    // the toolbar button and Cmd+B move their own aria-pressed over a slot that
+    // could never appear (#11499). Also guards the `nav.toggleSidebar` action,
+    // which reaches this through the window event below.
+    if (!hasWorkspace) return;
     suppressSidebarResizes();
     const focus = useFocusStore.getState();
     focus.setSidebarGestureHidden(!focus.gestureSidebarHidden, {
       sidebarWidth,
       diagnosticsOpen: layout.diagnosticsOpen,
     });
-  }, [sidebarWidth, layout.diagnosticsOpen]);
+  }, [hasWorkspace, sidebarWidth, layout.diagnosticsOpen]);
 
   const handleToggleSidebarRef = useRef(handleToggleSidebar);
   useEffect(() => {
@@ -822,6 +852,7 @@ export function AppLayout({
           onToggleProblems={handleToggleProblems}
           isFocusMode={layout.gestureSidebarHidden}
           onToggleFocusMode={handleToggleSidebar}
+          hasWorkspace={hasWorkspace}
           agentAvailability={agentAvailability}
           agentSettings={agentSettings}
           projectSwitcherPalette={projectSwitcherPalette}
@@ -879,7 +910,7 @@ export function AppLayout({
             }}
           >
             <div className="absolute top-0 left-0 h-full" style={{ width: sidebarWidth }}>
-              {currentProject != null && (
+              {hasWorkspace && (
                 <ErrorBoundary variant="section" componentName="Sidebar">
                   <Sidebar
                     width={sidebarWidth}

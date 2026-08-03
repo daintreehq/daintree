@@ -28,7 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { Folders } from "@/components/icons";
+import { FolderTree, Folders } from "@/components/icons";
 import { buildPluginToolbarMeta } from "./pluginToolbarMeta";
 import { TOOLBAR_BUTTON_METADATA, isToolbarButtonVisible } from "./toolbarButtonMetadata";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
@@ -472,6 +472,11 @@ interface ToolbarProps {
   onToggleProblems?: () => void;
   isFocusMode?: boolean;
   onToggleFocusMode?: () => void;
+  /**
+   * Whether this view owns a workspace of any kind. The sidebar toggle degrades
+   * to disabled without one — there is no slot for it to reveal (#11499).
+   */
+  hasWorkspace: boolean;
   agentAvailability?: CliAvailability;
   agentSettings?: AgentSettings | null;
   projectSwitcherPalette: UseProjectSwitcherPaletteReturn;
@@ -485,6 +490,7 @@ export function Toolbar({
   onToggleProblems,
   isFocusMode = false,
   onToggleFocusMode,
+  hasWorkspace,
   agentAvailability,
   agentSettings,
   projectSwitcherPalette,
@@ -600,12 +606,36 @@ export function Toolbar({
   const problemsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
   const terminalShortcut = useKeybindingDisplay("agent.terminal");
   const browserShortcut = useKeybindingDisplay("agent.browser");
+  const fileBrowserShortcut = useKeybindingDisplay("worktree.openFileBrowser");
   const sidebarAriaShortcut = useAriaKeyshortcuts("nav.toggleSidebar");
   const copyTreeAriaShortcut = useAriaKeyshortcuts("worktree.copyTree");
+  const fileBrowserAriaShortcut = useAriaKeyshortcuts("worktree.openFileBrowser");
 
   const sidebarHintHover = useShortcutHintHover("nav.toggleSidebar");
   const devServerHintHover = useShortcutHintHover("devServer.start");
   const copyTreeHintHover = useShortcutHintHover("worktree.copyTree");
+  const fileBrowserHintHover = useShortcutHintHover("worktree.openFileBrowser");
+
+  // The one launcher button whose action can legitimately refuse: it resolves
+  // its own target (focused worktree, else the project or scratch root), and a
+  // workspace with nothing to browse makes it throw. `dispatch` turns that into
+  // `ok: false` rather than a rejection, so without this the press would do
+  // nothing at all. Mirrors `LauncherQuickActions`, which offers the same action.
+  // A named function expression so the retry action can name itself.
+  const openFileBrowser = useCallback(function openFileBrowser() {
+    void actionService
+      .dispatch("worktree.openFileBrowser", undefined, { source: "user" })
+      .then((result) => {
+        if (result.ok) return;
+        notify({
+          type: "error",
+          title: "Couldn't open the file browser",
+          message: "No folder resolved for this workspace. Select a worktree and try again.",
+          context: { eventKind: "uiFeedback" },
+          action: { label: "Retry", onClick: openFileBrowser },
+        });
+      });
+  }, []);
 
   const handleOpenProjectSettings = useCallback(() => {
     projectSwitcher.close();
@@ -847,18 +877,28 @@ export function Toolbar({
     Record<string, { render: () => React.ReactNode; isAvailable: boolean }>
   >(
     () => ({
+      // Degraded rather than removed when there is no workspace: the welcome
+      // screen has no sidebar slot to reveal, so an enabled toggle would flip
+      // its own icon and aria-pressed over nothing (#11499). `aria-disabled`
+      // rather than `disabled` so the tooltip carrying the reason still opens
+      // — a browser drops pointer events on a disabled button. Label is
+      // unchanged; only the tooltip explains.
       "sidebar-toggle": {
         render: () => (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                {...sidebarHintHover}
+                {...(hasWorkspace ? sidebarHintHover : {})}
                 variant="ghost"
                 size="icon"
                 data-toolbar-item=""
                 data-sidebar-toggle=""
-                onClick={onToggleFocusMode}
-                className={toolbarIconButtonClass}
+                onClick={hasWorkspace ? onToggleFocusMode : undefined}
+                aria-disabled={!hasWorkspace || undefined}
+                className={cn(
+                  toolbarIconButtonClass,
+                  "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                )}
                 aria-label="Toggle Sidebar"
                 aria-pressed={!isFocusMode}
                 aria-keyshortcuts={sidebarAriaShortcut}
@@ -867,7 +907,12 @@ export function Toolbar({
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {createTooltipContent(isFocusMode ? "Show Sidebar" : "Hide Sidebar", sidebarShortcut)}
+              {hasWorkspace
+                ? createTooltipContent(
+                    isFocusMode ? "Show Sidebar" : "Hide Sidebar",
+                    sidebarShortcut
+                  )
+                : "Open a project or scratch to use the sidebar"}
             </TooltipContent>
           </Tooltip>
         ),
@@ -921,6 +966,50 @@ export function Toolbar({
             onLaunchAgent={onLaunchAgent}
             data-toolbar-item=""
           />
+        ),
+        isAvailable: true,
+      },
+      "file-browser": {
+        // Deliberately not in PROJECT_SCOPED_TOOLBAR_IDS: the action browses the
+        // project or scratch root when no worktree is selected (#11482), so
+        // gating it on `currentProject` would disable it in exactly the
+        // worktree-less workspaces where it still works. `hasWorkspace` is the
+        // gate that does apply — with no workspace of any kind the action
+        // resolves no folder at all and can only answer with an error toast, so
+        // it degrades the same way the sidebar toggle above does (#11499).
+        render: () => (
+          <ContextMenu>
+            <ContextMenuTrigger asChild>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    {...(hasWorkspace ? fileBrowserHintHover : {})}
+                    variant="ghost"
+                    size="icon"
+                    data-toolbar-item=""
+                    onClick={hasWorkspace ? openFileBrowser : undefined}
+                    aria-disabled={!hasWorkspace || undefined}
+                    className={cn(
+                      toolbarIconButtonClass,
+                      "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                    )}
+                    aria-label="Browse files"
+                    aria-keyshortcuts={fileBrowserAriaShortcut}
+                  >
+                    <FolderTree />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {hasWorkspace
+                    ? createTooltipContent("Browse files", fileBrowserShortcut)
+                    : "Open a project or scratch to browse files"}
+                </TooltipContent>
+              </Tooltip>
+            </ContextMenuTrigger>
+            <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+              <ToolbarContextMenuItems buttonId="file-browser" side="left" />
+            </ContextMenuContent>
+          </ContextMenu>
         ),
         isAvailable: true,
       },
@@ -1120,6 +1209,7 @@ export function Toolbar({
     [
       isFocusMode,
       onToggleFocusMode,
+      hasWorkspace,
       agentAvailability,
       effectiveAgentSettings,
       onLaunchAgent,
@@ -1148,6 +1238,10 @@ export function Toolbar({
       pluginConfigs,
       devServerShortcut,
       devServerHintHover,
+      openFileBrowser,
+      fileBrowserShortcut,
+      fileBrowserAriaShortcut,
+      fileBrowserHintHover,
     ]
   );
 
@@ -1363,6 +1457,7 @@ export function Toolbar({
       ...Object.fromEntries(LAUNCHABLE_AGENT_IDS.map((id) => [id, () => onLaunchAgent(id)])),
       terminal: () => onLaunchAgent("terminal"),
       browser: () => onLaunchAgent("browser"),
+      "file-browser": openFileBrowser,
       "dev-server": () => {
         void actionService.dispatch("devServer.start", undefined, { source: "user" });
       },
@@ -1400,6 +1495,7 @@ export function Toolbar({
     }),
     [
       onLaunchAgent,
+      openFileBrowser,
       handleCopyTreeOverflow,
       onSettings,
       onToggleProblems,
@@ -1418,6 +1514,7 @@ export function Toolbar({
     problems: problemsShortcut,
     terminal: terminalShortcut,
     browser: browserShortcut,
+    "file-browser": fileBrowserShortcut,
   };
 
   const renderOverflowMenu = (
@@ -1645,9 +1742,11 @@ export function Toolbar({
                     scratchResults={projectSwitcher.scratchResults}
                     onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
                     onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
-                    onRemoveScratch={(scratchId) =>
-                      void projectSwitcher.removeScratchAction(scratchId)
-                    }
+                    onRequestDeleteScratch={projectSwitcher.requestDeleteScratch}
+                    deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
+                    onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
+                    onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
+                    isDeletingScratch={projectSwitcher.isDeletingScratch}
                     onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
                     deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
                     onDismissDeleteAllScratchesConfirm={

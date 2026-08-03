@@ -865,6 +865,16 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Worktrees",
   },
   {
+    // One step further out than the project switcher it sits beside: the
+    // switcher picks a project, this shows every project at once.
+    actionId: "pilot.toggle",
+    combo: "Cmd+Alt+O",
+    scope: "global",
+    priority: 0,
+    description: "View all agents",
+    category: "Project",
+  },
+  {
     actionId: "project.switcherPalette",
     combo: "Cmd+Alt+P",
     scope: "global",
@@ -1022,6 +1032,20 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Open changes for focused worktree",
+    category: "Worktrees",
+  },
+  // Cmd+Alt, not a Cmd+K chord, and not Cmd+Shift: the file browser is a panel
+  // you open, so it belongs with terminal.new/agent.* rather than the worktree
+  // chord family. Cmd+K Cmd+B reads as the obvious "browse" mnemonic but Cmd+B
+  // is nav.toggleSidebar, and a chord swallowing it turns a cancelled Cmd+K
+  // into a surprise panel; Cmd+Shift+F folds onto terminal.maximize's
+  // Ctrl+Shift+F off-Mac.
+  {
+    actionId: "worktree.openFileBrowser",
+    combo: "Cmd+Alt+F",
+    scope: "global",
+    priority: 0,
+    description: "Open file browser for focused worktree",
     category: "Worktrees",
   },
   {

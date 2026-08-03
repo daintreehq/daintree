@@ -62,13 +62,14 @@ export const TIPS: TipEntry[] = [
     id: "panel-palette",
     message: (
       <>
-        Press <Kbd>⌘N</Kbd> to open the panel palette — add terminals, browsers, or dev previews
+        Press <Kbd>⌘N</Kbd> to open the panel palette — add terminals, file browsers, web browsers,
+        or dev previews
       </>
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <Kbd>{shortcut}</Kbd> to open the panel palette — add terminals, browsers, or dev
-        previews
+        Press <Kbd>{shortcut}</Kbd> to open the panel palette — add terminals, file browsers, web
+        browsers, or dev previews
       </>
     ),
     actionId: "panel.palette",

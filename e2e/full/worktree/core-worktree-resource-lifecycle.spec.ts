@@ -128,12 +128,9 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
     await expect(newCard).toBeVisible({ timeout: T_LONG });
 
     await newCard.click({ position: { x: 10, y: 10 } });
-    await expect
-      .poll(() => newCard.getAttribute("aria-label"), {
-        timeout: T_LONG,
-        message: "New worktree card should become selected",
-      })
-      .toContain("selected");
+    await expect(window.locator(SEL.worktree.row(BRANCH))).toHaveAttribute("aria-current", "true", {
+      timeout: T_LONG,
+    });
 
     await provisionViaPalette(window, ctx.app);
 
@@ -182,13 +179,11 @@ test.describe.serial("Full: Worktree Resource Lifecycle", () => {
       })
       .toBe(false);
 
-    const mainCard = window.locator(SEL.worktree.card(mainBranch));
-    await expect
-      .poll(() => mainCard.getAttribute("aria-label"), {
-        timeout: T_LONG,
-        message: "Main card should become selected after delete",
-      })
-      .toContain("selected");
+    await expect(window.locator(SEL.worktree.row(mainBranch))).toHaveAttribute(
+      "aria-current",
+      "true",
+      { timeout: T_LONG }
+    );
   });
 
   test("teardown failure does not block worktree deletion", async () => {

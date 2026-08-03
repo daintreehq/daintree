@@ -1,117 +1,258 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
+import type { ForgeUser } from "@shared/types/forge";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { forgeClient } from "@/clients";
+import {
+  worktreeLocationShape,
+  withProjectLocation,
+  requireWorktreePath,
+  resolveProjectLocation,
+  type WorktreeLocationArgs,
+} from "./locationArgs";
 import { useProjectStore } from "@/store/projectStore";
 import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
 import { logError } from "@/utils/logger";
+import {
+  ForgeIssuePageResultSchema,
+  ForgeListViewSchema,
+  ForgePRPageResultSchema,
+  projectForgePage,
+  projectIssueSummary,
+  projectPRSummary,
+} from "./forgeListProjection";
 
 /**
  * The cache keys on the PROJECT ROOT, but these actions resolve their forge
- * target to `cwd ?? ctx.activeWorktreePath` — and a linked worktree path
- * matches no cache slot. So when the caller named no `cwd`, the mutation went
- * to the active worktree's repo, which is the active project: patch that root.
- * An explicit `cwd` is honored as given, since it may name another repo
- * entirely; if it isn't a project root the patch simply finds nothing.
+ * target from the caller's location argument — and a linked worktree path
+ * matches no cache slot.
+ *
+ * So only an explicit PATH is honored as given, because only a path can name a
+ * repo outside this project. Everything else — no location at all, or a
+ * `worktreeId`, which necessarily resolves inside the current project and yields
+ * a linked-worktree path — patches the current project root instead; otherwise
+ * the optimistic assign/unassign update is silently dropped. If an explicit path
+ * isn't a project root the patch simply finds nothing.
  */
-function assigneeCachePath(cwd: string | undefined): string | null {
-  if (cwd) return cwd;
+function assigneeCachePath(location: WorktreeLocationArgs, resolvedCwd: string): string | null {
+  if (location.worktreePath || location.cwd) return resolvedCwd;
   return useProjectStore.getState().currentProject?.path ?? null;
 }
 
 /**
- * Optimistically reflect an assign/unassign in the cached issue lists so the
- * toolbar dropdown updates immediately (#11087). Best-effort by design: the
- * forge mutation has already succeeded by the time this runs, so a cache-layer
- * throw must never surface as a failed action.
+ * Reflect an assign/unassign in the cached issue lists so the toolbar dropdown
+ * updates immediately (#11087). Driven by the forge's own resulting assignee
+ * list rather than the requested username: a forge silently drops an assignee
+ * the account can't take, so trusting the request would show a membership that
+ * never landed. The list also carries the account's avatar, which the request
+ * alone never had.
  *
- * No avatar is available: these actions take an arbitrary username, not the
- * viewer. A login-only assignee is valid — the next forge refresh fills it in.
+ * Best-effort by design: the forge mutation has already succeeded by the time
+ * this runs, so a cache-layer throw must never surface as a failed action.
  */
-function patchAssigneeCache(
+function syncAssigneeCache(
   projectPath: string | null,
   issueNumber: number,
   username: string,
-  assigned: boolean
+  assignees: readonly Pick<ForgeUser, "login" | "avatarUrl">[]
 ): void {
   if (!projectPath) return;
+  const match = username.trim().toLowerCase();
+  const landed = assignees.find((a) => a.login.trim().toLowerCase() === match);
   try {
-    patchIssueAssigneeCache(projectPath, issueNumber, { login: username }, assigned);
+    patchIssueAssigneeCache(
+      projectPath,
+      issueNumber,
+      { login: landed?.login ?? username, avatarUrl: landed?.avatarUrl },
+      landed !== undefined
+    );
   } catch (err) {
     logError("Failed to patch issue cache after assignment change", err);
   }
 }
 
-const ForgeListOptionsSchema = z.object({
-  cwd: z
-    .string()
-    .optional()
-    .describe("Working directory of the git repo. Defaults to the active worktree path."),
-  search: z.string().optional().describe("Search query"),
-  state: z.enum(["open", "closed", "all"]).optional().describe("State filter (default: open)"),
+/**
+ * Paging and ordering shared by both list actions. `.strict()` is deliberate
+ * and, as of #11527, the only strict action schema in the codebase: these are
+ * `danger: "safe"` queries whose worst failure is silent — Zod's default strip
+ * meant `labels: [...]` or `limit: 10` returned a confidently UNFILTERED page,
+ * and an agent then acted on the wrong set. A validation error naming the bad
+ * key is strictly more useful than a wrong answer.
+ */
+const ForgeListPagingSchema = z.object({
+  ...worktreeLocationShape({ legacy: ["cwd"] }),
   cursor: z
     .string()
+    // An empty cursor is not "page one": the provider keys its cache on
+    // `cursor ?? ""` but queries on `cursor ?? null`, so `""` would share the
+    // first page's cache entry while asking GitHub for an invalid Relay
+    // cursor — a cold call errors, the same call after a cache warm quietly
+    // returns page one. Reject it here rather than let it alias.
+    .min(1, "cursor must be a non-empty value from a previous response's nextCursor")
     .optional()
     .describe(
       "Opaque pagination cursor — pass the previous response's `nextCursor` to fetch the next page."
     ),
+  // 100 is the tightest page ceiling across the provider roster, so it is the
+  // largest request every provider can serve in one round trip.
+  perPage: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("Rows per page, 1-100 (default: 20)."),
+  sort: z.enum(["created", "updated"]).optional().describe("Sort field (default: created)."),
+  direction: z.enum(["asc", "desc"]).optional().describe("Sort direction (default: desc)."),
+  // The only escape hatch from a warm list cache. Without it an out-of-band
+  // change — the user running a forge CLI in a terminal, another agent closing
+  // an issue — stays invisible until the cached page ages out, and the agent
+  // has no way to ask for the truth. Mirrors `forge.getRepoStats`.
+  bypassCache: z
+    .boolean()
+    .optional()
+    .describe(
+      "Skip the provider's list cache and fetch fresh (default: false). Use after the list may have changed outside this app; costs a provider round trip, so leave it off for ordinary paging."
+    ),
+  view: ForgeListViewSchema,
 });
 
+const ForgeListOptionsSchema = ForgeListPagingSchema.extend({
+  state: z.enum(["open", "closed", "all"]).optional().describe("State filter (default: open)"),
+  search: z
+    .string()
+    .optional()
+    .describe(
+      "Provider-native query fragment — NOT a plain-text filter. The dialect is the active provider's own issue search, which typically supports negation: 'no:assignee -label:human-review'. It is trimmed and appended after the generated repo/type/state/sort qualifiers, and truncated to the provider's query-length cap. Routes via the provider's search API, which caps result depth."
+    ),
+}).strict();
+
 // PR listing adds `merged` to the state filter — pull requests have a merged
-// state that issues don't.
-const ForgePRListOptionsSchema = ForgeListOptionsSchema.extend({
+// state that issues don't. `search` is absent on purpose: no provider on the
+// roster routes PR listing through a search API, so accepting the key would
+// silently return an unfiltered page. Strict mode turns that into an error
+// instead; re-admitting the key once a provider can honor it only widens the
+// schema, which is non-breaking.
+const ForgePRListOptionsSchema = ForgeListPagingSchema.extend({
   state: z
     .enum(["open", "closed", "merged", "all"])
     .optional()
     .describe("State filter (default: open)"),
+}).strict();
+
+// A forge label, as both the write actions and the issue result describe it.
+const ForgeLabelResultSchema = z.object({ name: z.string(), color: z.string().optional() });
+
+/**
+ * A forge user, minus `rawData`. `ForgeUser` carries the provider's entire
+ * unnormalized node on that field, so an `z.array(z.unknown())` assignee arm
+ * shipped every GitHub/GitLab user attribute to agents unannounced (#11539).
+ * Naming the two portable fields is what drops it — dispatch strips the rest.
+ */
+const ForgeUserResultSchema = z.object({
+  login: z.string(),
+  avatarUrl: z.string().optional(),
 });
 
-const ForgePageResultSchema = z.object({
-  items: z.array(z.unknown()),
-  nextCursor: z.string().nullable(),
-  hasMore: z.boolean(),
-  totalCount: z.number().optional(),
+// Compact projection of the PR an issue links to, mirroring `LinkedPRSummary`.
+const ForgeLinkedPRResultSchema = z.object({
+  number: z.number(),
+  state: z.string(),
+  url: z.string(),
+  ciStatus: z.string().optional(),
 });
 
-// Normalized PR shape returned by getPR/createPR/editPR. Kept loose (provider
-// payload passes through `rawData`) — only the cross-provider fields are typed.
+// Normalized PR shape returned by getPR/createPR/editPR. Every cross-provider
+// field of `PR` is named except `rawData`, the verbatim provider node — dispatch
+// parses results now (#11539), so an omission here is a field an agent stops
+// receiving, not just one the manifest fails to mention. `reviewDecision` and
+// `ciStatus` in particular are what a caller reads to judge a PR.
+//
+// Fields the `PR` interface marks required (`rawState`, `createdAt`, `updatedAt`)
+// are declared optional anyway: providers are plugins, and a value the host never
+// verifies should degrade to an absent key rather than reject the whole result.
 const ForgePRResultSchema = z.object({
   number: z.number(),
   title: z.string(),
   body: z.string(),
   state: z.string(),
+  rawState: z.string().optional().describe("The forge's own spelling of the state"),
   isDraft: z.boolean(),
   merged: z.boolean(),
   url: z.string(),
+  author: ForgeUserResultSchema.optional(),
   baseRef: z.string(),
   headRef: z.string(),
+  mergeable: z
+    .boolean()
+    .nullable()
+    .optional()
+    .describe("null when the provider has not computed mergeability yet"),
+  // `null` is a real answer — "this provider gates on no review" — and readers
+  // treat it as equivalent to approved. Only `undefined` ("not reported") drops.
+  reviewDecision: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED, or null when reviews aren't gated"),
+  ciStatus: z
+    .string()
+    .optional()
+    .describe("Roll-up head-commit CI state: success, failure, pending, neutral or unknown"),
+  commentCount: z.number().optional(),
   createdAt: z.number().optional(),
   updatedAt: z.number().optional(),
+  closedAt: z.number().nullable().optional(),
+  mergedAt: z.number().nullable().optional(),
 });
 
-// Normalized issue returned by the create/close/reopen/edit write actions.
+// Roll-up CI state vocabulary, mirroring `CIStatusState`. `neutral` means the
+// PR has no required checks configured; `unknown` means the provider reported
+// checks whose state doesn't map onto the other four.
+const ForgeCIStatusStateSchema = z.enum(["success", "failure", "pending", "neutral", "unknown"]);
+
+const ForgeCIStatusSchema = z.object({
+  state: ForgeCIStatusStateSchema,
+  total: z.number().int().nonnegative(),
+  passed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  requiredChecksPassing: z.boolean().optional(),
+});
+
+// Wrapped rather than a bare `.nullable()` so the MCP output schema stays
+// object-typed: `buildToolOutputSchema` drops any schema whose top-level `type`
+// isn't "object", and Zod emits `anyOf` for a nullable object — which would
+// silently advertise no schema at all.
+const ForgeCIStatusActionResultSchema = z.object({
+  ciStatus: ForgeCIStatusSchema.nullable(),
+});
+
+// Normalized issue returned by `forge.getIssue` and by the
+// create/close/reopen/edit write actions. Same reasoning as
+// `ForgePRResultSchema`: every cross-provider field of `Issue` bar `rawData` is
+// named, because dispatch strips whatever isn't. `author` and `commentCount` are
+// both promised by action descriptions, so omitting them made those false.
 const ForgeIssueResultSchema = z.object({
   number: z.number(),
   title: z.string(),
   body: z.string(),
   state: z.string(),
+  rawState: z.string().optional().describe("The forge's own spelling of the state"),
   url: z.string(),
-  labels: z.array(z.unknown()).optional(),
-  assignees: z.array(z.unknown()).optional(),
+  author: ForgeUserResultSchema.optional(),
+  labels: z.array(ForgeLabelResultSchema).optional(),
+  assignees: z.array(ForgeUserResultSchema).optional(),
+  commentCount: z.number().optional(),
+  linkedPR: ForgeLinkedPRResultSchema.optional(),
   createdAt: z.number().optional(),
   updatedAt: z.number().optional(),
+  closedAt: z.number().nullable().optional(),
 });
 
-const cwdArg = z
-  .string()
-  .optional()
-  .describe("Working directory of the git repo. Defaults to the active worktree path.");
-
 // Label set returned by the add/remove-label write actions.
-const ForgeLabelArrayResultSchema = z.array(
-  z.object({ name: z.string(), color: z.string().optional() })
-);
+const ForgeLabelArrayResultSchema = z.array(ForgeLabelResultSchema);
 
 // Comment returned by the add-comment write action.
 const ForgeCommentResultSchema = z.object({
@@ -119,6 +260,58 @@ const ForgeCommentResultSchema = z.object({
   body: z.string(),
   url: z.string(),
   createdAt: z.number(),
+});
+
+// Resulting assignee list after an assign/unassign. The list is authoritative:
+// forges silently drop assignees the account can't take, so it can omit the
+// username that was just requested.
+const ForgeAssigneesResultSchema = z.object({
+  issueNumber: z.number(),
+  assignees: z.array(ForgeUserResultSchema),
+});
+
+// Review created (or dismissed) by the review-write actions.
+const ForgeReviewResultSchema = z.object({
+  id: z.string(),
+  state: z.string().describe("Normalized verdict: approved, changes_requested, dismissed, …"),
+  rawState: z.string().describe("The forge's own spelling of the verdict"),
+  body: z.string(),
+  url: z.string(),
+  author: ForgeUserResultSchema.optional(),
+  submittedAt: z.number().nullable(),
+  commitId: z.string().nullable(),
+});
+
+// Reviewer requests a PR carries after a request-reviewers call.
+const ForgeRequestedReviewersResultSchema = z.object({
+  prNumber: z.number(),
+  requestedUsers: z.array(z.string()),
+  requestedTeams: z.array(z.string()),
+});
+
+// Merge acknowledgement. Deliberately narrow — a merge endpoint reports whether
+// the merge landed and under which commit, not the resulting pull request.
+const ForgeMergePRResultSchema = z.object({
+  prNumber: z.number(),
+  sha: z.string().nullable().describe("Merge commit SHA, or null when the forge reports none"),
+  merged: z.boolean(),
+  message: z.string(),
+});
+
+// Draft state a PR ended in after a draft-toggle action.
+const ForgePRDraftStateResultSchema = z.object({
+  prNumber: z.number(),
+  isDraft: z.boolean(),
+});
+
+// One page of an issue's comment thread, from the read action. Reuses the
+// single-comment shape so the read and write halves describe a comment
+// identically, plus the author the write action doesn't echo back.
+const ForgeCommentPageResultSchema = z.object({
+  items: z.array(ForgeCommentResultSchema.extend({ author: ForgeUserResultSchema.optional() })),
+  nextCursor: z.string().nullable(),
+  hasMore: z.boolean(),
+  totalCount: z.number().optional(),
 });
 
 // Provider-agnostic forge action surface. Each action calls forgeClient (the
@@ -130,27 +323,26 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     defineAction({
       id: "forge.openIssues",
       title: "Open Issues",
-      description: "Open the forge issues list for the current project",
+      description:
+        "Open the forge's issue list for this project in the system browser, for a human to read. This hands off to another application rather than returning data — use the issue-listing capability to actually retrieve issues.",
       category: "forge",
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z
-        .object({
-          projectPath: z.string().optional(),
-          query: z.string().optional(),
-          state: z.string().optional(),
-        })
-        .optional(),
-      run: async (args) => {
-        const projectPath = args?.projectPath;
-        const query = args?.query;
-        const state = args?.state;
-        const path = projectPath ?? useProjectStore.getState().currentProject?.path;
+      argsSchema: withProjectLocation({
+        query: z.string().optional(),
+        state: z.string().optional(),
+      }).optional(),
+      run: async (args, ctx) => {
+        // An explicit selector is resolved (or rejected) by the resolver, so this
+        // fallback only applies when the caller named no project at all.
+        const path =
+          resolveProjectLocation(args, ctx).projectPath ??
+          useProjectStore.getState().currentProject?.path;
         if (!path) {
           throw new Error("No project path available to open issues");
         }
-        await forgeClient.openIssues(path, query, state);
+        await forgeClient.openIssues(path, args?.query, args?.state);
       },
     })
   );
@@ -159,27 +351,26 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     defineAction({
       id: "forge.openPRs",
       title: "Open Pull Requests",
-      description: "Open the forge pull requests list for the current project",
+      description:
+        "Open the forge's pull-request list for this project in the system browser, for a human to read. This hands off to another application rather than returning data — use the pull-request listing capability to actually retrieve PRs.",
       category: "forge",
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z
-        .object({
-          projectPath: z.string().optional(),
-          query: z.string().optional(),
-          state: z.string().optional(),
-        })
-        .optional(),
-      run: async (args) => {
-        const projectPath = args?.projectPath;
-        const query = args?.query;
-        const state = args?.state;
-        const path = projectPath ?? useProjectStore.getState().currentProject?.path;
+      argsSchema: withProjectLocation({
+        query: z.string().optional(),
+        state: z.string().optional(),
+      }).optional(),
+      run: async (args, ctx) => {
+        // An explicit selector is resolved (or rejected) by the resolver, so this
+        // fallback only applies when the caller named no project at all.
+        const path =
+          resolveProjectLocation(args, ctx).projectPath ??
+          useProjectStore.getState().currentProject?.path;
         if (!path) {
           throw new Error("No project path available to open pull requests");
         }
-        await forgeClient.openPRs(path, query, state);
+        await forgeClient.openPRs(path, args?.query, args?.state);
       },
     })
   );
@@ -188,22 +379,23 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     defineAction({
       id: "forge.openCommits",
       title: "Open Commits",
-      description: "Open the forge commits page for the current project",
+      description:
+        "Open the forge's commit history for this project in the system browser, for a human to read. This hands off to another application rather than returning data — use a git history capability to actually retrieve commits.",
       category: "forge",
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z
-        .object({ projectPath: z.string().optional(), branch: z.string().optional() })
-        .optional(),
-      run: async (args) => {
-        const projectPath = args?.projectPath;
-        const branch = args?.branch;
-        const path = projectPath ?? useProjectStore.getState().currentProject?.path;
+      argsSchema: withProjectLocation({ branch: z.string().optional() }).optional(),
+      run: async (args, ctx) => {
+        // An explicit selector is resolved (or rejected) by the resolver, so this
+        // fallback only applies when the caller named no project at all.
+        const path =
+          resolveProjectLocation(args, ctx).projectPath ??
+          useProjectStore.getState().currentProject?.path;
         if (!path) {
           throw new Error("No project path available to open commits");
         }
-        await forgeClient.openCommits(path, branch);
+        await forgeClient.openCommits(path, args?.branch);
       },
     })
   );
@@ -212,21 +404,18 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     defineAction({
       id: "forge.openIssue",
       title: "Open Issue",
-      description: "Open a forge issue in the system browser",
+      description:
+        "Open one issue on the forge in the system browser, for a human to read. This hands off to another application rather than returning data — use the single-issue lookup to retrieve its title, body or state.",
       category: "forge",
       kind: "command",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         issueNumber: z.number().int().positive(),
       }),
-      run: async ({ cwd, issueNumber }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ issueNumber, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         await forgeClient.openIssue(resolvedCwd, issueNumber);
       },
     })
@@ -236,21 +425,18 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     defineAction({
       id: "forge.openPR",
       title: "Open pull request",
-      description: "Open a forge pull request in the system browser",
+      description:
+        "Open one pull request on the forge in the system browser, for a human to read. This hands off to another application rather than returning data — use the single-PR lookup to retrieve its title, body or state.",
       category: "forge",
       kind: "command",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         prNumber: z.number().int().positive(),
       }),
-      run: async ({ cwd, prNumber }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         await forgeClient.openPR(resolvedCwd, prNumber);
       },
     })
@@ -260,24 +446,30 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     defineAction({
       id: "forge.assignIssue",
       title: "Assign Issue",
-      description: "Assign a forge issue to a user via the active provider",
+      description:
+        "Assign an issue to a user on the active forge. Read back the resulting assignee list rather than assuming the request applied in full: forges silently drop accounts that lack access to the repository, so the returned list is what actually landed. Assigning someone already assigned is harmless.",
       category: "forge",
       kind: "command",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         issueNumber: z.number().int().positive(),
         username: z.string().min(1).describe("Account to assign the issue to"),
       }),
-      run: async ({ cwd, issueNumber, username }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
-        await forgeClient.assignIssue(resolvedCwd, issueNumber, username);
-        patchAssigneeCache(assigneeCachePath(cwd), issueNumber, username, true);
+      resultSchema: ForgeAssigneesResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ issueNumber, username, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        const assignees = await forgeClient.assignIssue(resolvedCwd, issueNumber, username);
+        const result = ForgeAssigneesResultSchema.parse({ issueNumber, assignees });
+        syncAssigneeCache(
+          assigneeCachePath(location, resolvedCwd),
+          issueNumber,
+          username,
+          result.assignees
+        );
+        return result;
       },
     })
   );
@@ -286,24 +478,30 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     defineAction({
       id: "forge.unassignIssue",
       title: "Unassign Issue",
-      description: "Remove a user's assignment from a forge issue via the active provider",
+      description:
+        "Remove one user's assignment from an issue on the active forge. Read back the resulting assignee list to confirm what remains. Removing someone who was not assigned is harmless rather than an error, so this is safe to call without checking first.",
       category: "forge",
       kind: "command",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         issueNumber: z.number().int().positive(),
         username: z.string().min(1).describe("Account whose assignment should be removed"),
       }),
-      run: async ({ cwd, issueNumber, username }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
-        await forgeClient.unassignIssue(resolvedCwd, issueNumber, username);
-        patchAssigneeCache(assigneeCachePath(cwd), issueNumber, username, false);
+      resultSchema: ForgeAssigneesResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ issueNumber, username, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        const assignees = await forgeClient.unassignIssue(resolvedCwd, issueNumber, username);
+        const result = ForgeAssigneesResultSchema.parse({ issueNumber, assignees });
+        syncAssigneeCache(
+          assigneeCachePath(location, resolvedCwd),
+          issueNumber,
+          username,
+          result.assignees
+        );
+        return result;
       },
     })
   );
@@ -313,7 +511,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.approvePR",
       title: "Approve Pull Request",
       description:
-        "Submit an approving review on a pull request via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int); `body` (optional) — an approval comment. Errors when `cwd` is omitted and no worktree is active, when the provider can't approve PRs, or when the forge rejects the review (e.g. approving your own PR).",
+        "Submit an approving review on a pull request, visible to everyone watching it on the forge. This is a public act of sign-off, so read the PR first. The forge rejects approvals it does not permit — approving your own pull request, most commonly — and a provider with no review support fails outright rather than silently doing nothing.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -321,17 +519,17 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Submits an approving review to the remote forge. Retracting it requires dismissing the review.",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         prNumber: z.number().int().positive().describe("Pull request number to approve"),
         body: z.string().optional().describe("Optional approval comment"),
       }),
-      run: async ({ cwd, prNumber, body }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
-        await forgeClient.approvePR(resolvedCwd, prNumber, body);
+      resultSchema: ForgeReviewResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ prNumber, body, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return ForgeReviewResultSchema.parse(
+          await forgeClient.approvePR(resolvedCwd, prNumber, body)
+        );
       },
     })
   );
@@ -341,7 +539,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.requestChanges",
       title: "Request Changes on Pull Request",
       description:
-        "Submit a request-changes review on a pull request via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int); `body` (required) — explains what needs to change. Errors when `cwd` is omitted and no worktree is active, when the provider can't review PRs, or when the forge rejects the review.",
+        "Submit a request-changes review on a pull request, which blocks merging on most forges until it is resolved. This is publicly visible and requires an explanatory body, so write the reasoning for the author. A provider without review support fails rather than silently doing nothing.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -349,17 +547,17 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Submits a request-changes review to the remote forge. Blocks the PR until addressed or dismissed.",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         prNumber: z.number().int().positive().describe("Pull request number to review"),
         body: z.string().trim().min(1).describe("Explanation of the changes being requested"),
       }),
-      run: async ({ cwd, prNumber, body }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
-        await forgeClient.requestChanges(resolvedCwd, prNumber, body);
+      resultSchema: ForgeReviewResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ prNumber, body, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return ForgeReviewResultSchema.parse(
+          await forgeClient.requestChanges(resolvedCwd, prNumber, body)
+        );
       },
     })
   );
@@ -369,29 +567,31 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.dismissReview",
       title: "Dismiss Pull Request Review",
       description:
-        "Dismiss a submitted review on a pull request via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int); `reviewId` (required, positive int) — the review to dismiss, obtained from a prior review-thread lookup; `message` (required) — explains the dismissal. Errors when `cwd` is omitted and no worktree is active, or when the provider can't dismiss reviews.",
+        "Dismiss a submitted review on a pull request, clearing the block it placed on merging. This is publicly visible, usually needs elevated permissions, and requires a message explaining why. Identify the review by the forge's own review id, which nothing on this surface can list — dismissing the wrong one silently unblocks a merge someone intended to gate.",
       category: "forge",
       kind: "command",
       danger: "confirm",
       dangerRationale: "Dismisses a submitted review on the remote forge. Cannot be undone.",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         prNumber: z.number().int().positive().describe("Pull request number"),
         reviewId: z
           .number()
           .int()
           .positive()
-          .describe("Review id to dismiss, from a prior review-thread lookup"),
+          .describe(
+            "Review id to dismiss, as assigned by the forge. Nothing on this surface lists reviews, so read it from the forge itself."
+          ),
         message: z.string().trim().min(1).describe("Reason for dismissing the review"),
       }),
-      run: async ({ cwd, prNumber, reviewId, message }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
-        await forgeClient.dismissReview(resolvedCwd, prNumber, reviewId, message);
+      resultSchema: ForgeReviewResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ prNumber, reviewId, message, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return ForgeReviewResultSchema.parse(
+          await forgeClient.dismissReview(resolvedCwd, prNumber, reviewId, message)
+        );
       },
     })
   );
@@ -401,7 +601,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.requestReviewers",
       title: "Request Pull Request Reviewers",
       description:
-        "Request reviewers on a pull request via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int); `users` (optional) — account logins; `teams` (optional) — team identifiers (GitHub team slugs). Provide at least one user or team. Errors when `cwd` is omitted and no worktree is active, or when the provider can't request reviewers.",
+        "Request reviewers on a pull request, notifying each of them on the forge. Supply at least one account or team. Read back the resulting request list rather than assuming it applied: it includes reviewers requested earlier and omits any the forge refused, typically for lacking repository access.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -410,10 +610,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       scope: "renderer",
       argsSchema: z
         .object({
-          cwd: z
-            .string()
-            .optional()
-            .describe("Working directory of the git repo. Defaults to the active worktree path."),
+          ...worktreeLocationShape({ legacy: ["cwd"] }),
           prNumber: z.number().int().positive().describe("Pull request number"),
           users: z
             .array(z.string().min(1))
@@ -427,10 +624,13 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         .refine((args) => (args.users?.length ?? 0) + (args.teams?.length ?? 0) > 0, {
           message: "Provide at least one user or team to request a review from",
         }),
-      run: async ({ cwd, prNumber, users, teams }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
-        await forgeClient.requestReviewers(resolvedCwd, prNumber, { users, teams });
+      resultSchema: ForgeRequestedReviewersResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ prNumber, users, teams, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return ForgeRequestedReviewersResultSchema.parse(
+          await forgeClient.requestReviewers(resolvedCwd, prNumber, { users, teams })
+        );
       },
     })
   );
@@ -439,7 +639,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
     defineAction({
       id: "forge.validateToken",
       title: "Validate Forge Token",
-      description: "Validate a forge access token without saving it",
+      description:
+        "Check whether a forge access token is accepted by the provider, without storing it anywhere. Use this to verify credentials before saving them. It performs a live authentication round trip, so a rejection may mean an expired or insufficiently scoped token rather than a malformed one.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -469,16 +670,13 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getRepoStats",
       title: "Get Repo Stats",
       description:
-        "Get repository statistics (commit/issue/PR counts) via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `bypassCache` (optional) to force a fresh fetch. Returns commitCount, issueCount, prCount, loading, plus optional error/stale/lastUpdated/rate-limit fields. Errors when `cwd` is omitted and no worktree is active; forge failures surface in `error` rather than throwing.",
+        "Get headline repository counts — commits, issues and pull requests — from the active forge provider. Use this for a cheap overview rather than paging a list to count it. Results are cached and may be stale; bypassing the cache costs a live provider round trip against your rate limit. A provider failure comes back as an error field on an otherwise valid result rather than failing the call, so check it before trusting the counts.",
       category: "forge",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         bypassCache: z.boolean().optional(),
       }),
       resultSchema: z.object({
@@ -492,9 +690,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         rateLimitResetAt: z.number().optional(),
         rateLimitKind: z.string().optional(),
       }),
-      run: async ({ cwd, bypassCache }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ bypassCache, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         return await forgeClient.getRepoStats(resolvedCwd, bypassCache);
       },
     })
@@ -505,17 +702,30 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listIssues",
       title: "List Issues",
       description:
-        "List repository issues via the active forge provider (paginated). Args (all optional): `cwd` (repo dir, defaults to the active worktree path); `search`; `state` ('open'|'closed'|'all', default 'open'); `cursor` from a previous response's `nextCursor`. Returns { items, nextCursor, hasMore }. Errors when `cwd` is omitted and no worktree is active. Do NOT use this for pull requests — call `forge.listPRs`.",
+        "List repository issues from the active forge provider, one page at a time. Use this to discover or filter issues; use the pull-request listing for PRs, and the single-issue lookup when the number is already known. Summary results keep responses small by dropping bodies and raw provider payloads — ask for full results only when the body is needed. Results are cached, and bypassing the cache spends a live provider round trip against your rate limit.",
       category: "forge",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       argsSchema: ForgeListOptionsSchema,
-      resultSchema: ForgePageResultSchema,
-      run: async ({ cwd, search, state, cursor }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
-        return await forgeClient.listIssues(resolvedCwd, { search, state, cursor });
+      resultSchema: ForgeIssuePageResultSchema,
+      run: async (
+        { search, state, cursor, perPage, sort, direction, bypassCache, view, ...location },
+        ctx: ActionContext
+      ) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        const page = await forgeClient.listIssues(resolvedCwd, {
+          search,
+          state,
+          cursor,
+          perPage,
+          sort,
+          direction,
+          bypassCache,
+        });
+        // `view` is action-local presentation: it never reaches the provider,
+        // so it must not participate in provider cache identity either.
+        return projectForgePage(page, view ?? "summary", projectIssueSummary);
       },
     })
   );
@@ -525,17 +735,27 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listPRs",
       title: "List Pull Requests",
       description:
-        "List repository pull requests via the active forge provider (paginated). Args (all optional): `cwd` (repo dir, defaults to the active worktree path); `search`; `state` ('open'|'closed'|'merged'|'all', default 'open'); `cursor` from a previous response's `nextCursor`. Returns { items, nextCursor, hasMore }. Errors when `cwd` is omitted and no worktree is active. Do NOT use this for issues — call `forge.listIssues`.",
+        "List repository pull requests from the active forge provider, one page at a time. Use this to discover or filter PRs; use the issue listing for issues, and the single-PR lookup when the number is already known. There is no text search here — no provider on the roster can query PRs, so asking for one is rejected rather than quietly returning an unfiltered page. Summary results keep responses small, and bypassing the cache spends a live provider round trip.",
       category: "forge",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       argsSchema: ForgePRListOptionsSchema,
-      resultSchema: ForgePageResultSchema,
-      run: async ({ cwd, search, state, cursor }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
-        return await forgeClient.listPRs(resolvedCwd, { search, state, cursor });
+      resultSchema: ForgePRPageResultSchema,
+      run: async (
+        { state, cursor, perPage, sort, direction, bypassCache, view, ...location },
+        ctx: ActionContext
+      ) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        const page = await forgeClient.listPRs(resolvedCwd, {
+          state,
+          cursor,
+          perPage,
+          sort,
+          direction,
+          bypassCache,
+        });
+        return projectForgePage(page, view ?? "summary", projectPRSummary);
       },
     })
   );
@@ -545,16 +765,13 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getIssue",
       title: "Get Issue",
       description:
-        "Fetch a single issue by its number via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int). Returns the normalized forge issue { number, title, body, state ('open'|'closed'), url, author, assignees, labels, createdAt, updatedAt, ... } or null when not found. Errors when `cwd` is omitted and no worktree is active. Do NOT use `forge.listIssues` to fetch one known number — this is the direct lookup.",
+        "Fetch one issue by number from the active forge provider, including its body. This is the direct lookup — reach for it instead of paging the issue listing to find a number you already have. An issue that does not exist comes back empty rather than failing, so treat an empty result as absence rather than an error. It reports how many comments exist but not their text; read the comment thread for that.",
       category: "forge",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         issueNumber: z.number().int().positive().describe("Issue number to fetch"),
       }),
       examples: [
@@ -567,23 +784,57 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
           description: "Fetch issue #100 from a specific repo",
         },
       ],
-      resultSchema: z
-        .object({
-          number: z.number(),
-          title: z.string(),
-          body: z.string(),
-          state: z.string(),
-          url: z.string(),
-          labels: z.array(z.unknown()).optional(),
-          assignees: z.array(z.unknown()).optional(),
-          createdAt: z.number().optional(),
-          updatedAt: z.number().optional(),
-        })
-        .nullable(),
-      run: async ({ cwd, issueNumber }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      // The same normalized issue the write actions return — one shape for one
+      // provider object, so the read and write halves cannot drift.
+      resultSchema: ForgeIssueResultSchema.nullable(),
+      run: async ({ issueNumber, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         return await forgeClient.getIssue(resolvedCwd, issueNumber);
+      },
+    })
+  );
+
+  actions.set("forge.listIssueComments", () =>
+    defineAction({
+      id: "forge.listIssueComments",
+      title: "List Issue Comments",
+      description:
+        "Read one page of an issue's comment thread from the active forge provider. Use this when comment text matters — the single-issue lookup reports only how many comments exist. Comments arrive oldest first, so reaching the newest reply means paging to the end rather than reading the first page. An empty page genuinely means nobody has commented: a missing issue or a provider that cannot read threads fails instead, so silence is never ambiguous.",
+      category: "forge",
+      kind: "query",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
+        issueNumber: z.number().int().positive().describe("Issue number whose comments to read"),
+        cursor: z
+          .string()
+          .optional()
+          .describe(
+            "Opaque pagination cursor — pass the previous response's `nextCursor` to fetch the next page."
+          ),
+        perPage: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("Comments per page (1-100, default 20)"),
+      }),
+      examples: [
+        {
+          args: { issueNumber: 42 },
+          description: "Read the first page of comments on issue #42",
+        },
+        {
+          args: { issueNumber: 42, cursor: "Y3Vyc29yOnYyOpHOAAAAAQ==", perPage: 50 },
+          description: "Read the next 50 comments after a previous page's `nextCursor`",
+        },
+      ],
+      resultSchema: ForgeCommentPageResultSchema,
+      run: async ({ issueNumber, cursor, perPage, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return await forgeClient.listIssueComments(resolvedCwd, issueNumber, { cursor, perPage });
       },
     })
   );
@@ -593,20 +844,52 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getPR",
       title: "Get Pull Request",
       description:
-        "Fetch a single pull request by its number via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `prNumber` (required, positive int). Returns the normalized forge PR { number, title, body, state ('open'|'closed'|'merged'), isDraft, merged, url, baseRef, headRef, createdAt, updatedAt, ... } or null when not found. Errors when `cwd` is omitted and no worktree is active. Use this before editing or merging a known PR; do NOT page `forge.listPRs` to find one known number.",
+        "Fetch one pull request by number from the active forge provider, including its body, draft state and branches. This is the direct lookup — reach for it instead of paging the PR listing for a number you already have, and read it before editing or merging so the current state is known. A pull request that does not exist comes back empty rather than failing, so treat an empty result as absence rather than an error.",
       category: "forge",
       kind: "query",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: cwdArg,
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         prNumber: z.number().int().positive().describe("Pull request number to fetch"),
       }),
       resultSchema: ForgePRResultSchema.nullable(),
-      run: async ({ cwd, prNumber }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         return await forgeClient.getPR(resolvedCwd, prNumber);
+      },
+    })
+  );
+
+  actions.set("forge.getCIStatus", () =>
+    defineAction({
+      id: "forge.getCIStatus",
+      title: "Get CI Status",
+      description:
+        "Fetch the roll-up CI verdict for one pull request from the active forge provider. Read the overall state for the answer: the accompanying counts cover required checks only, and a zero total also appears when the required-check list could not be read in full, so it is never evidence that nothing gates the merge. Values are provider-cached and can lag by around a minute, so poll for a settled verdict rather than treating a single success as final.",
+      category: "forge",
+      kind: "query",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
+        prNumber: z
+          .number()
+          .int()
+          .positive()
+          .describe("Pull request number whose CI status to fetch"),
+      }),
+      examples: [
+        {
+          args: { prNumber: 42 },
+          description: "Check whether PR #42 is green in the active worktree's repo",
+        },
+      ],
+      resultSchema: ForgeCIStatusActionResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return { ciStatus: await forgeClient.getCIStatus(resolvedCwd, prNumber) };
       },
     })
   );
@@ -616,7 +899,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.createPR",
       title: "Create pull request",
       description:
-        "Open a new pull request from `head` into `base` via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `head` (source branch, required); `base` (target branch, required); `title` (required); `body` (optional); `draft` (optional). Returns the created normalized PR. Errors when `cwd` is omitted and no worktree is active.",
+        "Open a new pull request between two branches on the active forge. This is publicly visible and notifies watchers, so confirm the branches are pushed and the target is right before calling. The forge rejects the request when the branches do not exist or a pull request already links them.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -624,7 +907,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Opens a pull request on the remote forge — a shared-state mutation reviewers and automation react to.",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: cwdArg,
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         head: z.string().min(1).describe("Source branch the changes come from"),
         base: z.string().min(1).describe("Target branch the PR merges into"),
         title: z.string().min(1).describe("Pull request title"),
@@ -632,9 +915,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         draft: z.boolean().optional().describe("Open as a draft pull request"),
       }),
       resultSchema: ForgePRResultSchema,
-      run: async ({ cwd, head, base, title, body, draft }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ head, base, title, body, draft, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         return await forgeClient.createPR(resolvedCwd, { head, base, title, body, draft });
       },
     })
@@ -645,7 +927,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.closePR",
       title: "Close pull request",
       description:
-        "Close an open pull request without merging, via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `prNumber` (required, positive int). Errors when `cwd` is omitted and no worktree is active.",
+        "Close a pull request without merging it, discarding it as a proposal while leaving its branch intact. This is publicly visible and can be undone by reopening. Use the merge capability when the intent is to land the change instead.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -653,13 +935,14 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Closes a pull request on the remote forge — a shared-state change reviewers and automation react to.",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: cwdArg,
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         prNumber: z.number().int().positive().describe("Pull request number to close"),
       }),
-      run: async ({ cwd, prNumber }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
-        await forgeClient.closePR(resolvedCwd, prNumber);
+      resultSchema: ForgePRResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return ForgePRResultSchema.parse(await forgeClient.closePR(resolvedCwd, prNumber));
       },
     })
   );
@@ -669,7 +952,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.reopenPR",
       title: "Reopen pull request",
       description:
-        "Reopen a previously closed pull request via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `prNumber` (required, positive int). Errors when `cwd` is omitted and no worktree is active.",
+        "Reopen a previously closed pull request, putting it back in the review queue. This is publicly visible. A pull request that was merged, or whose branch has since been deleted, cannot be reopened and the forge rejects the request.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -677,13 +960,14 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Reopens a pull request on the remote forge — a shared-state change reviewers and automation react to.",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: cwdArg,
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         prNumber: z.number().int().positive().describe("Pull request number to reopen"),
       }),
-      run: async ({ cwd, prNumber }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
-        await forgeClient.reopenPR(resolvedCwd, prNumber);
+      resultSchema: ForgePRResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return ForgePRResultSchema.parse(await forgeClient.reopenPR(resolvedCwd, prNumber));
       },
     })
   );
@@ -693,7 +977,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.mergePR",
       title: "Merge pull request",
       description:
-        "Merge a pull request via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `prNumber` (required, positive int); `mergeMethod` (optional 'merge'|'squash'|'rebase'); `commitTitle`/`commitMessage` (optional overrides). Irreversible — writes to the shared base branch. Errors when `cwd` is omitted and no worktree is active, or when the PR is not mergeable.",
+        "Merge a pull request, writing its commits onto the shared base branch. This is irreversible and affects everyone working from that branch — confirm the CI verdict and the review state first. The forge rejects the merge when the pull request is not mergeable, so a failure here usually means conflicts or unsatisfied checks rather than a bad request.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -701,7 +985,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Merging a pull request is irreversible and writes the change into the shared base branch.",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: cwdArg,
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         prNumber: z.number().int().positive().describe("Pull request number to merge"),
         mergeMethod: z
           .enum(["merge", "squash", "rebase"])
@@ -710,17 +994,20 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         commitTitle: z.string().optional().describe("Override the merge commit title"),
         commitMessage: z.string().optional().describe("Override the merge commit message"),
       }),
+      resultSchema: ForgeMergePRResultSchema,
+      mcpOutputSchema: true,
       run: async (
-        { cwd, prNumber, mergeMethod, commitTitle, commitMessage },
+        { prNumber, mergeMethod, commitTitle, commitMessage, ...location },
         ctx: ActionContext
       ) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
-        await forgeClient.mergePR(resolvedCwd, prNumber, {
-          mergeMethod,
-          commitTitle,
-          commitMessage,
-        });
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return ForgeMergePRResultSchema.parse(
+          await forgeClient.mergePR(resolvedCwd, prNumber, {
+            mergeMethod,
+            commitTitle,
+            commitMessage,
+          })
+        );
       },
     })
   );
@@ -730,16 +1017,13 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.createIssue",
       title: "Create Issue",
       description:
-        "Create a new issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `title` (required); `body` (optional markdown); `labels` (optional array of label names). Returns the created issue { number, title, body, state, url, ... }. Errors when `cwd` is omitted and no worktree is active.",
+        "File a new issue on the active forge. This is publicly visible and notifies watchers. Labels must already exist on the repository — the forge rejects the request rather than creating them, so confirm the names first.",
       category: "forge",
       kind: "command",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         title: z.string().min(1).describe("Issue title"),
         body: z.string().optional().describe("Issue body (markdown)"),
         labels: z.array(z.string()).optional().describe("Label names to apply on creation"),
@@ -751,9 +1035,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         },
       ],
       resultSchema: ForgeIssueResultSchema,
-      run: async ({ cwd, title, body, labels }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ title, body, labels, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         return await forgeClient.createIssue(resolvedCwd, { title, body, labels });
       },
     })
@@ -764,7 +1047,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.convertPRToDraft",
       title: "Convert pull request to draft",
       description:
-        "Convert an open pull request to a draft via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `prNumber` (required, positive int). Errors when `cwd` is omitted and no worktree is active.",
+        "Mark an open pull request as a draft, signalling it is not ready and removing it from most review queues. This is publicly visible and reversible by marking it ready again. A provider without draft support fails rather than silently doing nothing.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -772,13 +1055,16 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Changes a pull request's review state on the remote forge — reviewers and automation react to it.",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: cwdArg,
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         prNumber: z.number().int().positive().describe("Pull request number to convert to draft"),
       }),
-      run: async ({ cwd, prNumber }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
-        await forgeClient.convertPRToDraft(resolvedCwd, prNumber);
+      resultSchema: ForgePRDraftStateResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return ForgePRDraftStateResultSchema.parse(
+          await forgeClient.convertPRToDraft(resolvedCwd, prNumber)
+        );
       },
     })
   );
@@ -788,7 +1074,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.closeIssue",
       title: "Close Issue",
       description:
-        "Close an open issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `stateReason` (optional, 'completed', 'not_planned', or 'duplicate'). Returns the updated issue. Errors when `cwd` is omitted and no worktree is active.",
+        "Close an issue on the active forge, optionally recording why it was closed. This is publicly visible and reversible by reopening. Prefer stating a reason, since it distinguishes finished work from something declined or duplicated.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -796,10 +1082,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Closes an issue on the shared forge — a state change other collaborators see; undoing it requires a deliberate reopen.",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         issueNumber: z.number().int().positive().describe("Issue number to close"),
         stateReason: z
           .enum(["completed", "not_planned", "duplicate"])
@@ -807,9 +1090,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
           .describe("Why the issue is being closed (default: completed)"),
       }),
       resultSchema: ForgeIssueResultSchema,
-      run: async ({ cwd, issueNumber, stateReason }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ issueNumber, stateReason, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         return await forgeClient.closeIssue(resolvedCwd, issueNumber, stateReason);
       },
     })
@@ -820,7 +1102,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.markPRReadyForReview",
       title: "Mark pull request ready for review",
       description:
-        "Mark a draft pull request ready for review via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `prNumber` (required, positive int). Errors when `cwd` is omitted and no worktree is active.",
+        "Mark a draft pull request as ready for review, which notifies reviewers and re-enters it in review queues. This is publicly visible and reversible by converting it back to a draft.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -828,13 +1110,16 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Changes a pull request's review state on the remote forge, notifying reviewers.",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: cwdArg,
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         prNumber: z.number().int().positive().describe("Pull request number to mark ready"),
       }),
-      run: async ({ cwd, prNumber }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
-        await forgeClient.markPRReadyForReview(resolvedCwd, prNumber);
+      resultSchema: ForgePRDraftStateResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return ForgePRDraftStateResultSchema.parse(
+          await forgeClient.markPRReadyForReview(resolvedCwd, prNumber)
+        );
       },
     })
   );
@@ -844,22 +1129,18 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.reopenIssue",
       title: "Reopen Issue",
       description:
-        "Reopen a closed issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int). Returns the updated issue. Errors when `cwd` is omitted and no worktree is active.",
+        "Reopen a closed issue, putting it back in the active queue and notifying watchers. This is publicly visible and reversible by closing it again.",
       category: "forge",
       kind: "command",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         issueNumber: z.number().int().positive().describe("Issue number to reopen"),
       }),
       resultSchema: ForgeIssueResultSchema,
-      run: async ({ cwd, issueNumber }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ issueNumber, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         return await forgeClient.reopenIssue(resolvedCwd, issueNumber);
       },
     })
@@ -870,7 +1151,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.commentOnPR",
       title: "Comment on pull request",
       description:
-        "Post a comment on a pull request via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `prNumber` (required, positive int); `body` (required comment text). Errors when `cwd` is omitted and no worktree is active.",
+        "Post a comment on a pull request, visible to everyone watching it and delivered as a notification. Comments cannot be edited or withdrawn through this capability, so treat posting as final.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -878,14 +1159,17 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
         "Posts a public comment on a pull request that participants are notified about.",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: cwdArg,
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         prNumber: z.number().int().positive().describe("Pull request number to comment on"),
         body: z.string().min(1).describe("Comment body (Markdown)"),
       }),
-      run: async ({ cwd, prNumber, body }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
-        await forgeClient.commentOnPR(resolvedCwd, prNumber, body);
+      resultSchema: ForgeCommentResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ prNumber, body, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        return ForgeCommentResultSchema.parse(
+          await forgeClient.commentOnPR(resolvedCwd, prNumber, body)
+        );
       },
     })
   );
@@ -895,7 +1179,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.editPR",
       title: "Edit pull request",
       description:
-        "Edit a pull request's title and/or body via the active forge provider. Args: `cwd` (optional, defaults to the active worktree path); `prNumber` (required, positive int); `title` (optional); `body` (optional). Provide at least one of title/body. Returns the updated normalized PR. Errors when `cwd` is omitted and no worktree is active.",
+        "Change a pull request's title or body on the active forge. Supply at least one of them; whichever is omitted is left as it is, so this cannot accidentally blank a field. The new text replaces the old wholesale rather than appending, and the edit is publicly visible.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -904,7 +1188,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       scope: "renderer",
       argsSchema: z
         .object({
-          cwd: cwdArg,
+          ...worktreeLocationShape({ legacy: ["cwd"] }),
           prNumber: z.number().int().positive().describe("Pull request number to edit"),
           title: z.string().min(1).optional().describe("New pull request title"),
           body: z.string().optional().describe("New pull request body (Markdown)"),
@@ -913,9 +1197,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
           message: "Provide a title or body to edit",
         }),
       resultSchema: ForgePRResultSchema,
-      run: async ({ cwd, prNumber, title, body }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ prNumber, title, body, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         return await forgeClient.editPR(resolvedCwd, prNumber, { title, body });
       },
     })
@@ -926,7 +1209,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.editIssue",
       title: "Edit Issue",
       description:
-        "Edit an issue's title and/or body via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `title` (optional); `body` (optional). Provide at least one of title or body. Only the supplied fields change. Returns the updated issue. Errors when `cwd` is omitted and no worktree is active.",
+        "Change an issue's title or body on the active forge. Supply at least one of them; whichever is omitted is left as it is, so this cannot accidentally blank a field. The new text replaces the old wholesale rather than appending, and the edit is publicly visible.",
       category: "forge",
       kind: "command",
       danger: "confirm",
@@ -935,10 +1218,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       scope: "renderer",
       argsSchema: z
         .object({
-          cwd: z
-            .string()
-            .optional()
-            .describe("Working directory of the git repo. Defaults to the active worktree path."),
+          ...worktreeLocationShape({ legacy: ["cwd"] }),
           issueNumber: z.number().int().positive().describe("Issue number to edit"),
           title: z.string().optional().describe("New issue title"),
           body: z.string().optional().describe("New issue body (markdown)"),
@@ -947,9 +1227,8 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
           message: "Provide at least one of title or body to edit",
         }),
       resultSchema: ForgeIssueResultSchema,
-      run: async ({ cwd, issueNumber, title, body }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ issueNumber, title, body, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         return await forgeClient.editIssue(resolvedCwd, issueNumber, { title, body });
       },
     })
@@ -960,23 +1239,19 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.addIssueComment",
       title: "Add Issue Comment",
       description:
-        "Add a comment to an issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `body` (required markdown). Returns the created comment { id, body, url, createdAt }. Errors when `cwd` is omitted and no worktree is active.",
+        "Post a comment on an issue, visible to everyone watching it and delivered as a notification. Comments cannot be edited or withdrawn through this capability, so treat posting as final.",
       category: "forge",
       kind: "command",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         issueNumber: z.number().int().positive().describe("Issue number to comment on"),
         body: z.string().min(1).describe("Comment body (markdown)"),
       }),
       resultSchema: ForgeCommentResultSchema,
-      run: async ({ cwd, issueNumber, body }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ issueNumber, body, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         return await forgeClient.addIssueComment(resolvedCwd, issueNumber, body);
       },
     })
@@ -987,23 +1262,19 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.addIssueLabel",
       title: "Add Issue Label",
       description:
-        "Add a label (by name) to an issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `label` (required label name). Additive — existing labels are kept. Returns the issue's full label set. Errors when `cwd` is omitted and no worktree is active.",
+        "Add one existing label to an issue. This is additive — labels already on the issue are kept — so read back the returned label set to see the result. The label must already exist on the repository; the forge rejects an unknown name rather than creating it.",
       category: "forge",
       kind: "command",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         issueNumber: z.number().int().positive().describe("Issue number to label"),
         label: z.string().min(1).describe("Label name to add"),
       }),
       resultSchema: ForgeLabelArrayResultSchema,
-      run: async ({ cwd, issueNumber, label }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ issueNumber, label, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         return await forgeClient.addIssueLabel(resolvedCwd, issueNumber, label);
       },
     })
@@ -1014,23 +1285,19 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.removeIssueLabel",
       title: "Remove Issue Label",
       description:
-        "Remove a label (by name) from an issue via the active forge provider. Args: `cwd` (optional) — git repo working directory, defaults to the active worktree path; `issueNumber` (required, positive int); `label` (required label name). Errors if the label isn't on the issue. Returns the issue's remaining label set. Errors when `cwd` is omitted and no worktree is active.",
+        "Remove one label from an issue. Unlike adding, this fails when the label is not currently on the issue, so check the issue's labels first rather than calling speculatively. Read back the remaining label set to confirm the result.",
       category: "forge",
       kind: "command",
       danger: "safe",
       scope: "renderer",
       argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Working directory of the git repo. Defaults to the active worktree path."),
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
         issueNumber: z.number().int().positive().describe("Issue number to unlabel"),
         label: z.string().min(1).describe("Label name to remove"),
       }),
       resultSchema: ForgeLabelArrayResultSchema,
-      run: async ({ cwd, issueNumber, label }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ issueNumber, label, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         return await forgeClient.removeIssueLabel(resolvedCwd, issueNumber, label);
       },
     })

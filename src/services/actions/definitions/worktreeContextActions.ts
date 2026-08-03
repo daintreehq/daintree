@@ -5,12 +5,14 @@ import type { ActionContext } from "@shared/types/actions";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import { copyTreeClient, systemClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
-import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { getCurrentViewStore, getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
 import { basename } from "@shared/utils/path";
+import { paginate } from "@shared/utils/boundedOutput";
+import { GIT_PAGE_LIMIT_DEFAULT, GIT_PAGE_LIMIT_MAX } from "@shared/config/gitReadLimits";
 import {
   deriveReviewReadiness,
   REVIEW_READINESS_ITEM_IDS,
@@ -210,7 +212,8 @@ export function registerWorktreeContextActions(
     defineAction({
       id: "worktree.copyContext",
       title: "Copy Worktree Context (Alias)",
-      description: "Alias for worktree.copyTree",
+      description:
+        "Alias for generating a worktree context bundle. It accepts a subset of the copy-tree capability's arguments — path scoping is not available here, so use that capability directly for a scoped copy.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -396,16 +399,44 @@ export function registerWorktreeContextActions(
   actions.set("worktree.openFileBrowser", () =>
     defineAction({
       id: "worktree.openFileBrowser",
-      title: "Browse Files",
-      description: "Open a read-only file browser for a worktree",
+      title: "Browse files",
+      description:
+        "Open a read-only file browser for a worktree, or for the current project or scratch folder when no worktree is selected",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      // A palette gate rather than `isEnabled`, for the same reason
+      // `worktree.openChanges` above spells out: `isEnabled` never sees args,
+      // so on an explicit `worktreeId` it would answer for the focused
+      // worktree instead. Readiness is broader than a worktree now — a scratch
+      // or worktree-less project can open its own root (#11482).
+      palette: {
+        mode: "requireContext",
+        isReady: (ctx: ActionContext) => {
+          // Resolvability, not mere presence: a stale id whose worktree is gone
+          // now makes `run` throw, so a readiness check that only tested for a
+          // non-empty string would enable a row that cannot open anything.
+          const contextWorktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+          if (contextWorktreeId !== undefined) {
+            // `OrNull`, not `getCurrentViewStore`: that one throws before the
+            // worktree provider mounts, and the action manifest is listed in
+            // exactly that window — the throw would disable the row rather than
+            // answer it.
+            const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
+            return worktrees ? worktrees.has(contextWorktreeId) : false;
+          }
+          return Boolean(ctx.projectPath ?? ctx.scratchPath);
+        },
+        reason: "No folder to browse",
+      },
       argsSchema: z
         .object({
-          worktreeId: z.string().optional(),
-          /** Worktree-relative path to select and scroll into view on open. */
+          // `.min(1)`, unlike the siblings above: an empty string here is not a
+          // harmless falsy worktree — it would slip past the unknown-worktree
+          // guard and open the workspace root instead of failing.
+          worktreeId: z.string().min(1).optional(),
+          /** Path relative to the browser root, to select and scroll into view on open. */
           revealPath: z.string().optional(),
           /**
            * What `revealPath` points at. A directory is also expanded so its
@@ -416,12 +447,38 @@ export function registerWorktreeContextActions(
         })
         .optional(),
       run: async (args, ctx: ActionContext) => {
-        const worktreeId = args?.worktreeId;
-        const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-        if (!targetWorktreeId) return;
+        const targetWorktreeId = args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+        const worktree = targetWorktreeId
+          ? getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
+          : undefined;
 
-        const worktree = getCurrentViewStore().getState().worktrees.get(targetWorktreeId);
-        if (!worktree) return;
+        // One rule for every source of the id, explicit arg or ambient context:
+        // a named worktree that doesn't resolve is an error, never a cue to
+        // browse something else. Falling through to the workspace root would
+        // open the folder *above* the one named — the wrong folder, not a
+        // degraded one — and a stale `focusedWorktreeId` outliving its deleted
+        // worktree is exactly how that would happen unnoticed.
+        if (targetWorktreeId !== undefined && !worktree) {
+          throw new Error(`Worktree not found: ${targetWorktreeId}`);
+        }
+
+        // No worktree id at all is the normal state in a scratch or a
+        // worktree-less project (#11482) — browse the workspace root instead of
+        // silently doing nothing. The context provider resolves both pointers
+        // from one view-scoped lookup, so only one of them is ever set and this
+        // names the folder `useWorkspaceRootPath` opens; the project-first
+        // tie-break is a defensive echo of `resolveWorkspaceCwd`, not a choice
+        // this action is expected to have to make.
+        const workspacePath = ctx.projectPath ?? ctx.scratchPath;
+        if (!worktree && !workspacePath) {
+          // Thrown, not a bare return: a silent no-op still reports ok from
+          // dispatch, so the palette and quick action would look like they
+          // worked.
+          throw new Error("No folder to browse");
+        }
+        const workspaceTitle = worktree
+          ? undefined
+          : `Files — ${ctx.projectName ?? ctx.scratchName ?? (workspacePath ? basename(workspacePath) : "workspace")}`;
 
         // Lazily imported for the same reason as the review hub above: a static
         // import drags panelStore -> panelPersistence in, which reads
@@ -444,10 +501,15 @@ export function registerWorktreeContextActions(
           };
         }
 
+        // No `worktreeId` for a workspace root: its absence is what tells the
+        // create path to resolve the view's own workspace folder, which nothing
+        // ever names explicitly. `createFileBrowserDefaults` records that as
+        // `browserWorkspaceRooted`, since grid promotion later stamps a
+        // placement worktreeId onto the panel (#11489).
         await usePanelDialogStore.getState().openPanelDialog({
           kind: "file-browser",
-          title: `Files — ${worktree.branch ?? worktree.name}`,
-          worktreeId: targetWorktreeId,
+          title: worktree ? `Files — ${worktree.branch ?? worktree.name}` : workspaceTitle,
+          ...(worktree && { worktreeId: targetWorktreeId }),
           ...reveal,
         });
       },
@@ -480,7 +542,7 @@ export function registerWorktreeContextActions(
       id: "worktree.compareDiff",
       title: "Compare Worktree Diff",
       description:
-        "Compare two worktrees and return the list of files that differ between their branches. Args: `worktreeId` (optional — the left/base side; defaults to the focused or active worktree), `compareToWorktreeId` (required — the right side to compare against), `useMergeBase` (optional — three-dot/PR-accurate range), `ignoreWhitespace` (optional). Returns { branch1, branch2, files } where each file has path, oldPath?, status, insertions, deletions. Read-only; does not open any UI. For a single file's full diff, call `git.getFileDiff` afterwards.",
+        "Compare two worktrees and list the files that differ between their branches, a page at a time. Use this to survey the shape of a change; read a single file's diff afterwards for its contents. It is read-only and opens no UI. Ask for the merge-base comparison when the goal is to see what a pull request would show, rather than every difference between the two tips.",
       category: "worktree",
       kind: "query",
       danger: "safe",
@@ -490,6 +552,21 @@ export function registerWorktreeContextActions(
         compareToWorktreeId: z.string(),
         useMergeBase: z.boolean().optional(),
         ignoreWhitespace: z.boolean().optional(),
+        offset: z
+          .number()
+          .int()
+          .nonnegative()
+          .optional()
+          .describe("Index to start from — pass a previous `nextOffset` (default 0)."),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .max(GIT_PAGE_LIMIT_MAX)
+          .optional()
+          .describe(
+            `Files per page (default ${GIT_PAGE_LIMIT_DEFAULT}, max ${GIT_PAGE_LIMIT_MAX}).`
+          ),
       }),
       resultSchema: z.object({
         branch1: z.string(),
@@ -503,6 +580,11 @@ export function registerWorktreeContextActions(
             deletions: z.number().nullable(),
           })
         ),
+        total: z.number(),
+        hasMore: z.boolean(),
+        offset: z.number(),
+        limit: z.number(),
+        nextOffset: z.number().nullable(),
       }),
       mcpOutputSchema: true,
       mcpAnnotations: { readOnlyHint: true, idempotentHint: true, destructiveHint: false },
@@ -542,7 +624,30 @@ export function registerWorktreeContextActions(
         if (typeof res === "string") {
           throw new Error("Unexpected diff string from worktree comparison; expected a file list.");
         }
-        return res;
+
+        const start = Math.max(Math.trunc(args.offset ?? 0) || 0, 0);
+        const size = Math.min(
+          Math.max(Math.trunc(args.limit ?? GIT_PAGE_LIMIT_DEFAULT) || 1, 1),
+          GIT_PAGE_LIMIT_MAX
+        );
+        const page = paginate(res.files ?? [], start, size);
+
+        return {
+          branch1: res.branch1,
+          branch2: res.branch2,
+          files: page.items.map((file) => ({
+            path: file.path,
+            oldPath: file.oldPath,
+            status: file.status,
+            insertions: file.insertions,
+            deletions: file.deletions,
+          })),
+          total: page.total,
+          hasMore: page.hasMore,
+          offset: start,
+          limit: size,
+          nextOffset: page.nextOffset,
+        };
       },
     })
   );
@@ -552,7 +657,7 @@ export function registerWorktreeContextActions(
       id: "worktree.reviewReadiness",
       title: "Review Readiness",
       description:
-        "Summarize whether a worktree is ready to commit, push, and merge without performing any git or forge operation. Args: `worktreeId` (optional — defaults to the focused or active worktree). Returns the readiness level (ready / needs-review / blocked / unknown), commit/push/PR readiness flags, prioritized blocker/warning/info items with suggested follow-up action ids, staged/unstaged/conflict counts, ahead/behind counts, and linked PR + CI + forge-provider health context. Signals that depend on forge data report as unknown (never as passing) when the data has not arrived. Read-only; does not open any UI.",
+        "Judge whether a worktree is ready to commit, push and merge, and list what is blocking it. This is a read-only summary: it reads git state and performs no git or forge mutation. Signals that depend on forge data report as unknown rather than as passing when that data has not arrived, so an unknown is genuinely unknown and should not be read as a green light.",
       category: "worktree",
       kind: "query",
       danger: "safe",

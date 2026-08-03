@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { isDockPanelRendered, type DockPanelScope } from "../dockPanelVisibility";
+import {
+  isDockPanelRendered,
+  selectOpenDockPopoverId,
+  type DockPanelScope,
+  type DockPopoverPointerState,
+} from "../dockPanelVisibility";
 import type { PanelInstance, PtyPanelData, ReviewPanelData } from "@shared/types/panel";
 import {
   clearPanelKindRegistry,
@@ -86,6 +91,76 @@ describe("isDockPanelRendered", () => {
     };
 
     expect(isDockPanelRendered(panel, createScope())).toBe(false);
+  });
+});
+
+/**
+ * The pointer-to-visible-popover derivation. Two callers depend on this being
+ * the same answer: maximized-group focus enforcement (#11065) and the dialog
+ * z-tier promotion of #11505 — a dialog that trusted the raw pointer would
+ * promote itself above a popover that isn't on screen.
+ */
+describe("selectOpenDockPopoverId", () => {
+  function createState(overrides: Partial<DockPopoverPointerState> = {}): DockPopoverPointerState {
+    const panel = createDockPanel("dock-1");
+    return {
+      activeDockTerminalId: "dock-1",
+      panelIds: ["dock-1"],
+      panelsById: { "dock-1": panel },
+      trashedTerminals: new Map<string, unknown>(),
+      ...overrides,
+    };
+  }
+
+  const scope = { helpTerminalId: null, activeWorktreeId: "wt-a" };
+
+  it("returns the id of a dock panel the dock actually renders", () => {
+    expect(selectOpenDockPopoverId(createState(), scope)).toBe("dock-1");
+  });
+
+  it("returns null when no dock popover has been opened", () => {
+    expect(selectOpenDockPopoverId(createState({ activeDockTerminalId: null }), scope)).toBeNull();
+  });
+
+  // #7278 — the offscreen watchdog keeps the pointer alive across a worktree
+  // switch so the popover can reopen on the way back. Nothing is on screen in
+  // the meantime, so a dialog must not promote itself over it.
+  it("returns null while the pointer names another worktree's panel", () => {
+    expect(
+      selectOpenDockPopoverId(createState(), { ...scope, activeWorktreeId: "wt-b" })
+    ).toBeNull();
+  });
+
+  // Both dock surfaces iterate `panelIds`; a record that lingers in `panelsById`
+  // without being registered there has no chip, so it has no popover either.
+  it("returns null for a panel that is not registered in panelIds", () => {
+    expect(selectOpenDockPopoverId(createState({ panelIds: [] }), scope)).toBeNull();
+  });
+
+  it("returns null once the panel is trashed", () => {
+    const state = createState({ trashedTerminals: new Map([["dock-1", {}]]) });
+
+    expect(selectOpenDockPopoverId(state, scope)).toBeNull();
+  });
+
+  it("returns null for the help panel, which owns its own surface", () => {
+    expect(
+      selectOpenDockPopoverId(createState(), { ...scope, helpTerminalId: "dock-1" })
+    ).toBeNull();
+  });
+
+  it("returns null when the pointer outlived its panel record", () => {
+    const state = createState({ panelIds: ["dock-1"], panelsById: {} });
+
+    expect(selectOpenDockPopoverId(state, scope)).toBeNull();
+  });
+
+  it("returns null once the panel has moved back to the grid", () => {
+    const state = createState({
+      panelsById: { "dock-1": createDockPanel("dock-1", { location: "grid" }) },
+    });
+
+    expect(selectOpenDockPopoverId(state, scope)).toBeNull();
   });
 });
 

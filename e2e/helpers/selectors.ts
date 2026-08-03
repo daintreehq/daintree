@@ -104,7 +104,9 @@ export const SEL = {
   },
   worktree: {
     card: (branch: string) => `[data-worktree-branch="${branch}"]`,
+    row: (branch: string) => `[data-worktree-row]:has([data-worktree-branch="${branch}"])`,
     mainCard: '[data-worktree-is-main="true"]',
+    mainRow: '[data-worktree-row]:has([data-worktree-is-main="true"])',
     actionsMenu: '[data-testid="worktree-actions-menu"]',
     newDialog: '[data-testid="new-worktree-dialog"]',
     branchNameInput: '[data-testid="branch-name-input"]',

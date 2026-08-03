@@ -9,10 +9,11 @@ import {
 // string so plugin-contributed agent ids (#10560) validate through the action
 // system (`agent.launch`). Plugin ids are validated at registration time in
 // `pluginAgentRegistry`; this schema is not the authoritative boundary for them.
-export const AgentIdSchema = z.union([
-  z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser", "dev-preview"]),
-  z.string().min(1),
-]);
+export const AgentIdSchema = z
+  .union([z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser", "dev-preview"]), z.string().min(1)])
+  .describe(
+    "Which agent CLI to run. The enumerated ids are the built-ins; any other non-empty string is accepted so user- and plugin-contributed agents work, which means an unrecognised id fails at launch rather than at validation. Query the agent-listing capability for the ids actually installed and launchable."
+  );
 
 export const LaunchLocationSchema = z
   .enum(["grid", "dock", "overlay"])
@@ -26,15 +27,20 @@ export const LaunchLocationSchema = z
  * stamps `"mcp"` on spawn-producing dispatches; user surfaces stamp their own
  * origin (`"quickrun"`, `"recipe"`, `"agent"`, `"palette"`).
  */
-export const TerminalSpawnSourceSchema = z.enum(["quickrun", "recipe", "agent", "palette", "mcp"]);
+export const TerminalSpawnSourceSchema = z
+  .enum(["quickrun", "recipe", "agent", "palette", "mcp"])
+  .describe(
+    "Records which surface asked for the spawn, for provenance and run history only; it never changes what is launched. Leave it unset when dispatching over MCP — the bridge stamps its own origin."
+  );
 
 /**
- * Mirror of `AddPanelFocusPolicy` from `shared/types/panel.ts`. `"auto"` (the
- * effective default) suppresses focus change only when the assistant owns
- * keyboard input. `"preserve"` always keeps focus where it is. `"take"`
- * always advances focus to the new panel.
+ * Mirror of `AddPanelFocusPolicy` from `shared/types/panel.ts`.
  */
-export const AddPanelFocusPolicySchema = z.enum(["auto", "preserve", "take"]);
+export const AddPanelFocusPolicySchema = z
+  .enum(["auto", "preserve", "take"])
+  .describe(
+    'Whether creating the panel moves keyboard focus to it. "auto" (the effective default) moves focus except while the assistant owns input, "preserve" always leaves focus where it is, and "take" always moves it. Prefer "preserve" when spawning in the background so the user\'s typing is not interrupted.'
+  );
 
 // Derived from the settingsTabIds tuples so the action schema can't drift from
 // the registry (the previous hand-written enum was missing plugins,
@@ -58,6 +64,11 @@ export const TerminalTypeSchema = z.enum(BUILT_IN_TERMINAL_TYPES);
 
 export const BuiltInAgentIdSchema = z.enum(BUILT_IN_AGENT_IDS);
 
+// Every member of the `GitStatus` union (shared/types/git.ts). `conflicted` is
+// unreachable through git.getStagingStatus today only because its loop skips the
+// conflicted set first — but `StagingFileEntry.status` is typed as the full
+// union, and since dispatch parses results (#11539) a missing member would fail
+// the whole action rather than one row.
 export const GitStatusSchema = z.enum([
   "modified",
   "added",
@@ -66,23 +77,185 @@ export const GitStatusSchema = z.enum([
   "ignored",
   "renamed",
   "copied",
+  "conflicted",
 ]);
+
+export const StagingFileEntrySchema = z.object({
+  path: z.string(),
+  status: GitStatusSchema,
+  insertions: z.number().nullable(),
+  deletions: z.number().nullable(),
+});
+
+export const ConflictedFileEntrySchema = z.object({
+  path: z.string(),
+  xy: z.string(),
+  label: z.string(),
+});
 
 export const PulseRangeDaysSchema = z
   .union([z.literal(60), z.literal(120), z.literal(180)])
   .optional()
-  .default(60);
+  .default(60)
+  .describe(
+    "How far back to aggregate commit activity, in days. A wider window costs more history to walk, so widen it only when the shorter window leaves the trend ambiguous."
+  );
 
 export const FileSearchPayloadSchema = z.object({
   cwd: z
     .string()
     .optional()
     .describe(
-      "Working directory to search in (project root path). Defaults to the active worktree path."
+      "Absolute root path to search under. Defaults to the active worktree; the call fails when it is omitted and no worktree is active."
     ),
-  query: z.string().describe("File name search query"),
-  limit: z.number().int().positive().optional().describe("Max results to return"),
+  query: z
+    .string()
+    .describe(
+      "Matched as a plain substring against file names and paths — not as a glob, and not file contents. Use a source-reading capability to search inside files."
+    ),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Caps how many matches come back; results are truncated silently rather than paged."),
 });
+
+/**
+ * Canonical pagination arguments (#11543). Four schemes existed before —
+ * `skip`/`limit`, `limit`/`offset`, an opaque `cursor`, and none at all. The
+ * documented shape is now `limit` plus a positional selector: `cursor` for
+ * sources that issue one, `offset` for sources that page by index. `skip` stays
+ * accepted as a legacy alias for `offset`.
+ *
+ * Ceiling values are deliberately left to each action (issue #11531 owns
+ * choosing them); this only converges the shape.
+ */
+export type LegacyPaginationAlias = "skip";
+
+export interface PaginationOptions {
+  legacy?: readonly LegacyPaginationAlias[];
+  cursor?: boolean;
+  offset?: boolean;
+  maxLimit?: number;
+}
+
+/**
+ * The pagination fields on their own, so they can be merged into a larger object
+ * BEFORE it is transformed. A transformed schema is a `ZodPipe` and can no
+ * longer be `.extend()`ed, so a tool that paginates *and* takes a location has
+ * to assemble one flat shape rather than chaining two builders.
+ */
+export function paginationShape(options: PaginationOptions = {}): Record<string, z.ZodTypeAny> {
+  const { legacy = [], cursor = false, offset = true, maxLimit } = options;
+
+  const limitField = maxLimit
+    ? z.number().int().positive().max(maxLimit)
+    : z.number().int().positive();
+
+  const shape: Record<string, z.ZodTypeAny> = {
+    limit: limitField.optional().describe("Maximum number of items to return."),
+  };
+  if (offset) {
+    shape.offset = z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe("Number of items to skip before collecting results.");
+  }
+  if (cursor) {
+    shape.cursor = z
+      .string()
+      .optional()
+      .describe(
+        "Opaque cursor — pass the previous response's `nextCursor` to fetch the next page."
+      );
+  }
+  for (const alias of legacy) {
+    shape[alias] = z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe("Legacy alias for `offset`; prefer `offset`.");
+  }
+  return shape;
+}
+
+/**
+ * Collapse the legacy `skip` spelling into `offset`. See {@link paginationShape}.
+ * Only consumes `skip` when the tool opted into it, so a tool with its own
+ * unrelated `skip` field keeps it.
+ */
+export function foldPagination(
+  value: Record<string, unknown>,
+  ctx: z.RefinementCtx,
+  legacy: readonly LegacyPaginationAlias[] = []
+): Record<string, unknown> | typeof z.NEVER {
+  if (!legacy.includes("skip")) return value;
+
+  const { skip, ...rest } = value as { skip?: number; offset?: number } & Record<string, unknown>;
+  const supplied = [rest.offset, skip].filter(
+    (candidate): candidate is number => candidate !== undefined
+  );
+  if (new Set(supplied).size > 1) {
+    ctx.addIssue({
+      code: "custom",
+      message: "`offset` and `skip` are aliases for the same value — supply only one.",
+    });
+    return z.NEVER;
+  }
+  const resolved = supplied[0];
+  return resolved === undefined ? rest : { ...rest, offset: resolved };
+}
+
+/**
+ * Decode a cursor issued by an index-paged source back into its offset.
+ *
+ * Those sources emit `String(nextOffset)` as their `nextCursor`, so decoding is
+ * the inverse. It is strict on purpose: a garbage cursor silently restarting at
+ * page zero would look like a successful re-read of the first page, and a
+ * negative one would reach `git log --skip`. Throws a static message — the
+ * rejected value is never echoed back.
+ */
+export function decodeIndexCursor(cursor: string | undefined): number | undefined {
+  if (cursor === undefined) return undefined;
+  // `Number("")` and `Number(" ")` are 0, so an empty cursor would read as a
+  // valid "start from the top" rather than the caller error it is.
+  const parsed = cursor.trim() === "" ? Number.NaN : Number(cursor);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error("Invalid cursor — pass back the `nextCursor` from the previous response.");
+  }
+  return parsed;
+}
+
+export function withPagination<T extends z.ZodRawShape>(extra: T, options: PaginationOptions = {}) {
+  return z.object({ ...paginationShape(options), ...extra }).transform((value, ctx) => {
+    const folded = foldPagination(value as Record<string, unknown>, ctx, options.legacy ?? []);
+    if (folded === z.NEVER) return z.NEVER;
+    return folded as Omit<z.core.output<z.ZodObject<T>>, "offset" | "skip"> & {
+      limit?: number;
+      offset?: number;
+      cursor?: string;
+    };
+  });
+}
+
+/**
+ * Canonical list-result envelope (#11543). Every paginated tool returns the same
+ * four keys so a caller writes its paging loop once: `items`, `hasMore`, a
+ * `nextCursor` that is null at the end of the list, and `total` only where an
+ * exact count is already cheap to produce.
+ */
+export function PaginatedResultSchema<T extends z.ZodTypeAny>(item: T) {
+  return z.object({
+    items: z.array(item),
+    hasMore: z.boolean(),
+    nextCursor: z.string().nullable(),
+    total: z.number().optional(),
+  });
+}
 
 export const CopyTreeOptionsSchema = z.object({
   format: z.enum(["xml", "json", "markdown", "tree", "ndjson", "sarif"]).optional(),
@@ -90,9 +263,15 @@ export const CopyTreeOptionsSchema = z.object({
   exclude: z.union([z.string(), z.array(z.string())]).optional(),
   always: z.array(z.string()).optional(),
   includePaths: z.array(z.string()).optional(),
-  // Empty list or blank entry would resolve to the worktree root — a folder
+  // An empty list or blank entry would resolve to the worktree root — a folder
   // copy that silently became a whole-worktree copy. Absent means no scoping.
-  scopePaths: z.array(z.string().min(1)).min(1).optional(),
+  scopePaths: z
+    .array(z.string().min(1))
+    .min(1)
+    .optional()
+    .describe(
+      "Restricts the copy to these subtrees, relative to the worktree root. Omit to include the whole worktree; supplying an empty list is rejected rather than treated as no scoping, since that would silently copy everything."
+    ),
   modified: z.boolean().optional(),
   changed: z.string().optional(),
   maxFileSize: z.number().int().positive().optional(),
@@ -100,6 +279,12 @@ export const CopyTreeOptionsSchema = z.object({
   maxFileCount: z.number().int().positive().optional(),
   withLineNumbers: z.boolean().optional(),
   charLimit: z.number().int().positive().optional(),
+  // These actions validate against their own copy of the options schema, so a
+  // field only the IPC schema knows about is stripped before the request ever
+  // leaves the renderer. `sort` was missing here while `CopyTreeOptions` and the
+  // IPC schema both accepted it, so an MCP caller asking for a sort order
+  // silently got the default one.
+  sort: z.enum(["path", "size", "modified", "name", "extension", "depth"]).optional(),
 });
 
 export const AgentPresetSchema = z.object({
@@ -154,7 +339,12 @@ export const TerminalSummarySchema = z.object({
   type: z.unknown().nullable().optional(),
   worktreeId: z.string().nullable(),
   title: z.string().nullable(),
-  location: z.enum(["grid", "dock", "trash", "background"]),
+  // All six members of `PanelLocation`. `dialog` is filtered out by
+  // isEphemeralPanel and `overlay` only incidentally — every overlay creation
+  // site happens to set `excludeFromPersistence`. One that doesn't would fail
+  // the enum and, since dispatch parses results (#11539), take down the whole
+  // listing instead of dropping a row.
+  location: z.enum(["grid", "dock", "overlay", "trash", "background", "dialog"]),
   agentId: z.string().nullable(),
   agentState: z.string().nullable(),
   isInputLocked: z.boolean(),
@@ -167,19 +357,20 @@ export const TerminalStatusEntrySchema = z.object({
   agentState: z.string().nullable(),
   waitingReason: z.string().optional(),
   lastTransitionAt: z.number().optional(),
-  // Process exit code from the last exit, present once the PTY has exited;
-  // null when the process was signal-terminated with no numeric code. Lets a
-  // supervisor tell a clean finish from a failure without scraping output.
-  exitCode: z.number().int().nullable().optional(),
-  // Wall-clock spawn timestamp (ms), for run-duration/staleness reasoning.
-  spawnedAt: z.number().optional(),
-  // Parsed test/lint/build result from the agent's most recent recognized check
-  // summary (issue #10682). Best-effort and PARSED, not an authoritative exit
-  // code — the check runs as a child of the agent CLI inside the PTY, so the
-  // real subcommand exit code is unobservable. `passed` is derived from
-  // tsc/ESLint/Vitest/Jest summary lines; absence means "no recognized check
-  // summary was seen", NOT "no check ran" and NOT "passed". Read `ranAt` for
-  // freshness and `command` (may be null) for which check it was.
+  exitCode: z
+    .number()
+    .int()
+    .nullable()
+    .optional()
+    .describe(
+      "Present once the process has exited, so its absence means still running. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output."
+    ),
+  spawnedAt: z
+    .number()
+    .optional()
+    .describe(
+      "Wall-clock spawn time in epoch milliseconds, for run-duration and staleness checks."
+    ),
   lastCheckResult: z
     .object({
       command: z.string().nullable(),
@@ -188,13 +379,23 @@ export const TerminalStatusEntrySchema = z.object({
       failureSummary: z.string().nullable(),
       truncated: z.boolean(),
     })
-    .optional(),
+    .optional()
+    .describe(
+      "A best-effort reading of the agent's most recent test, lint, or build summary, parsed from its output rather than from a process exit code — the check runs inside the terminal, so its real exit status is unobservable. Absence means no recognized summary was seen, which is not the same as no check running and not the same as passing. Check the run time for freshness before trusting it."
+    ),
   recentOutput: z.string().nullable().optional(),
-  // True when this terminal is in the fleet arming set (broadcast input is
-  // routed to it). Always populated for found terminals; absent on not-found
-  // entries (which carry `error` instead).
-  armed: z.boolean().optional(),
-  error: z.string().optional(),
+  armed: z
+    .boolean()
+    .optional()
+    .describe(
+      "Whether fleet broadcast input is routed to this terminal. Populated for every terminal that was found; absent only when the terminal itself could not be resolved."
+    ),
+  error: z
+    .string()
+    .optional()
+    .describe(
+      "Set when the terminal was not found, and also stamped on every resolved entry when the batched output fetch fails — in that case the status fields are still populated and only the recent output is missing. Its presence therefore does not by itself mean this terminal was unreadable, and it never fails the call as a whole."
+    ),
 });
 
 export const PersistedStoreInfoSchema = z.object({
@@ -262,4 +463,29 @@ export const AgentSessionRecordSchema = z.object({
   branch: z.string().optional(),
   // Present when the user has pinned this session as a durable bookmark (#11288).
   bookmark: AgentSessionBookmarkMetadataSchema.optional(),
+});
+
+// Agent-facing projection of the bookmark metadata (#11530). The full schema
+// above documents what main stores; this documents what the list actions
+// actually hand an agent. The pane-presentation hints an agent cannot act on
+// (`sourcePanelId`, `titleMode`, `agentPresetColor`, `isUsingFallback`,
+// `fallbackChainIndex`) are dropped — the retained fields are the ones that
+// identify the bookmark or feed a relaunch.
+export const AgentFacingBookmarkMetadataSchema = z.object({
+  bookmarkedAt: z.number(),
+  label: z.string(),
+  sourceLocation: z.enum(["grid", "dock"]).optional(),
+  agentPresetId: z.string().optional(),
+  originalPresetId: z.string().optional(),
+  isInputLocked: z.boolean().optional(),
+});
+
+// The record shape the MCP-exposed list actions return. Identical to
+// `AgentSessionRecordSchema` except for the leaner bookmark. Dispatch parses
+// results against this now (#11539), so it strips as well as documents — but the
+// hand projection in each `run()` stays: the journal admits degraded records, and
+// each list action filters them out against this schema before returning so one
+// bad row cannot reject the whole page.
+export const AgentFacingSessionRecordSchema = AgentSessionRecordSchema.extend({
+  bookmark: AgentFacingBookmarkMetadataSchema.optional(),
 });

@@ -135,7 +135,6 @@ const storeState = vi.hoisted(() => ({
     enabled: true,
     port: 0,
     apiKey: "",
-    fullToolSurface: false,
     auditEnabled: true,
     auditMaxRecords: 500,
   },
@@ -396,6 +395,8 @@ function createMockWindow(options?: {
 
   const projectViewManager = {
     getActiveView: vi.fn((): { webContents: typeof webContents } | null => ({ webContents })),
+
+    getWorkspaceRefForWebContents: vi.fn(() => null),
   };
 
   const windowContext = {
@@ -410,6 +411,7 @@ function createMockWindow(options?: {
 
   const registry = {
     all: () => [windowContext],
+    focusOrder: () => [windowContext],
     getPrimary: () => windowContext,
     getByWindowId: () => windowContext,
     getByWebContentsId: () => windowContext,
@@ -501,7 +503,6 @@ describe("McpServerService", () => {
       enabled: true,
       port: 0,
       apiKey: "",
-      fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: 500,
     };
@@ -581,13 +582,21 @@ describe("McpServerService", () => {
         "actions.list",
         "worktree.list",
         "worktree.createWithRecipe",
-        "worktree.delete",
         "terminal.list",
         "terminal.inject",
         "terminal.sendCommand",
         "recipe.run",
-        "git.commit",
         "agent.getState",
+        // Ids the RENDERER offers but the external tier must refuse. They have to
+        // be in this fixture or the "not listed" assertions below pass for the
+        // wrong reason — a manifest that never contained them proves nothing
+        // about the server's filter. These are the #11585 cuts.
+        "git.commit",
+        "git.push",
+        "worktree.delete",
+        "forge.getCIStatus",
+        "worktree.reviewReadiness",
+        "project.runCheck",
       ];
       return ids.map((id) =>
         createManifestEntry({
@@ -665,7 +674,7 @@ describe("McpServerService", () => {
       expect(ids).not.toContain("git.commit");
     });
 
-    it("external tier: backward compatibility for the apiKey-authenticated server", async () => {
+    it("external tier: orchestration tools stay callable for the apiKey server", async () => {
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
         ok: true,
         result: { dispatched: payload.actionId },
@@ -679,10 +688,9 @@ describe("McpServerService", () => {
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
-      // External tier inherits the legacy MCP_TOOL_ALLOWLIST — destructive
-      // actions in that list (e.g. worktree.delete, git.commit) and broader
-      // in-app mutations (terminal.sendCommand, agent.launch) remain callable
-      // so existing user-facing clients keep working.
+      // What the external tier is FOR after #11585: driving terminals, agents,
+      // worktrees and recipes — the things only Daintree can do. This half of
+      // the contract is unchanged by the cut.
       const ids = (await client.listTools()).tools.map((t) => t.name);
       expect(ids).toContain("worktree.createWithRecipe");
       expect(ids).not.toContain("worktree.create");
@@ -697,6 +705,55 @@ describe("McpServerService", () => {
       expect(dispatchMock).toHaveBeenCalledWith(
         expect.objectContaining({ actionId: "terminal.sendCommand" })
       );
+    });
+
+    // The other half, and an intentional breaking change (#11585). These ids
+    // WERE externally callable, on a deliberate backward-compatibility promise
+    // to existing api-key clients. That promise is superseded: at 99 tools the
+    // surface exceeded what MCP clients accept, so the client was truncating it
+    // for us and picking the survivors at random. Choosing which tools to drop
+    // beats having Cursor choose. Everything here has a shell equivalent the
+    // caller already has, and all of it stays reachable for the in-app assistant.
+    it("external tier: shell-equivalent mutations are neither listed nor callable (#11585)", async () => {
+      const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+        ok: true,
+        result: { dispatched: payload.actionId },
+      }));
+      const { window } = createMockWindow({
+        getManifest: manifestForAllAllowlistedTools,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((t) => t.name);
+      const CUT = ["git.commit", "git.push", "worktree.delete"];
+
+      // Guard the guard: the renderer manifest DOES offer these, so their
+      // absence below is the server's filter at work rather than a fixture that
+      // never had them.
+      const offered = manifestForAllAllowlistedTools().map((e) => e.id);
+      for (const id of CUT) {
+        expect(offered).toContain(id);
+        expect(ids).not.toContain(id);
+      }
+
+      // Withholding from tools/list is not the mechanism — the allowlist cut is.
+      // A client that cached the old surface must be refused at dispatch, with
+      // no renderer round-trip. This is the assertion #11582 could not make, and
+      // it has to run for every cut id: listing and calling authorize through
+      // different functions, so one proves nothing about the other.
+      for (const id of CUT) {
+        const denied = (await client.callTool({
+          name: id,
+          arguments: {},
+        })) as TextToolResult;
+        expect(denied.isError).toBe(true);
+        expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
+      }
+      expect(dispatchMock).not.toHaveBeenCalled();
     });
 
     it("audit records carry the resolved tier and unauthorized denials are classified", async () => {
@@ -723,35 +780,6 @@ describe("McpServerService", () => {
       expect(denied?.errorCode).toBe("TIER_NOT_PERMITTED");
       expect(allowed?.tier).toBe("workbench");
       expect(allowed?.result).toBe("success");
-    });
-
-    it("fullToolSurface widens external tier only — workbench remains tightly scoped", async () => {
-      storeState.mcpServer.fullToolSurface = true;
-      const { window } = createMockWindow({
-        getManifest: () => [
-          createManifestEntry({
-            id: "actions.list" as ActionId,
-            title: "List Actions",
-            description: "Read the action registry",
-            kind: "query",
-          }),
-          createManifestEntry({
-            id: "panel.gridLayout.setStrategy" as ActionId,
-            title: "Set grid layout",
-            description: "UI plumbing",
-          }),
-        ],
-      });
-
-      await service.start(window);
-      const { client, transport } = await connectWorkbench(service.currentPort!);
-      transports.push(transport);
-
-      const ids = (await client.listTools()).tools.map((t) => t.name);
-      expect(ids).toContain("actions.list");
-      // panel.gridLayout.setStrategy is NOT in the workbench allowlist —
-      // fullToolSurface must not widen anything for non-external tiers.
-      expect(ids).not.toContain("panel.gridLayout.setStrategy");
     });
 
     it("Streamable HTTP transport stamps the resolved tier on the session", async () => {
@@ -921,9 +949,14 @@ describe("McpServerService", () => {
       }),
       createManifestEntry({
         id: "workflow.prepBranchForReview" as ActionId,
-        title: "Prep Branch for Review",
+        title: "Inspect Branch for Review",
         description: "Macro: inspect staging status and detected runners",
         kind: "query",
+      }),
+      createManifestEntry({
+        id: "project.runCheck" as ActionId,
+        title: "Run Project Check",
+        description: "Run a detected runner and return its exit code",
       }),
       // Renderer-only primitives included in the manifest so the
       // NEVER_EXPOSED_VIA_MCP absence loops below catch regressions: a
@@ -1290,6 +1323,18 @@ describe("McpServerService", () => {
         kind: "query",
       }),
       createManifestEntry({
+        id: "forge.getCIStatus" as ActionId,
+        title: "Get CI Status",
+        description: "Fetch the roll-up CI status for a pull request",
+        kind: "query",
+      }),
+      createManifestEntry({
+        id: "worktree.reviewReadiness" as ActionId,
+        title: "Review Readiness",
+        description: "Summarize whether a worktree is ready to commit, push, and merge",
+        kind: "query",
+      }),
+      createManifestEntry({
         id: "forge.createPR" as ActionId,
         title: "Create PR",
         description: "Open a pull request via the forge provider",
@@ -1565,6 +1610,101 @@ describe("McpServerService", () => {
       }
     });
 
+    // #11544 gave the external tier two routes to "is this PR green?", because
+    // neither was reachable there. #11585 takes both back, and the reasoning is
+    // narrower than it looks: the question is still worth answering, but an
+    // external agent is sitting in a terminal with `gh` and can answer it
+    // itself, and every slot on a capped surface has to earn its place against
+    // something only Daintree can do. The in-app assistant has no shell, so
+    // #11544's fix survives intact where it was actually load-bearing — see the
+    // workbench assertions below.
+    it("external tier (apiKey) no longer carries the CI-status routes (#11585)", async () => {
+      const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+        ok: true,
+        result: { dispatched: payload.actionId },
+      }));
+      const { window } = createMockWindow({
+        getManifest: tierManifest,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      const CI_ROUTES = ["forge.getCIStatus", "worktree.reviewReadiness"];
+
+      // `tierManifest` offers both, so absence here is the server filtering
+      // rather than a fixture that never carried them.
+      const offered = tierManifest().map((e) => e.id);
+      for (const id of CI_ROUTES) {
+        expect(offered).toContain(id);
+        expect(ids).not.toContain(id);
+      }
+
+      // Unlisted AND undispatchable, for both routes — the cut is an access
+      // decision, so a stale client holding either name is refused before the
+      // renderer is touched.
+      for (const id of CI_ROUTES) {
+        const denied = (await client.callTool({
+          name: id,
+          arguments: {},
+        })) as TextToolResult;
+        expect(denied.isError).toBe(true);
+        expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
+      }
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it.each(["forge.getCIStatus", "worktree.reviewReadiness"])(
+      "workbench tier can actually CALL %s, so #11544's fix survives where it matters",
+      async (actionId) => {
+        // listTools and callTool authorize through different functions
+        // (shouldExposeTool vs isTierPermitted), so advertising a tool does not
+        // by itself prove a caller can invoke it.
+        paneTokenTiers.set("token-wb", "workbench");
+        const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+          ok: true,
+          result: { dispatched: payload.actionId },
+        }));
+        const { window } = createMockWindow({
+          getManifest: tierManifest,
+          dispatchAction: dispatchMock,
+        });
+
+        await service.start(window);
+        const { client, transport } = await connectClient(service.currentPort!, {
+          Authorization: "Bearer token-wb",
+        });
+        transports.push(transport);
+
+        const ids = (await client.listTools()).tools.map((tool) => tool.name);
+        expect(ids).toContain(actionId);
+
+        const res = (await client.callTool({ name: actionId, arguments: {} })) as TextToolResult;
+
+        expect(res.isError).toBeFalsy();
+        expect(dispatchMock).toHaveBeenCalledWith(expect.objectContaining({ actionId }));
+      }
+    );
+
+    it("workbench tier also reaches forge.getCIStatus (it is a read)", async () => {
+      paneTokenTiers.set("token-wb", "workbench");
+      const { window } = createMockWindow({ getManifest: tierManifest });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-wb",
+      });
+      transports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).toContain("forge.getCIStatus");
+      // Sanity: the tier is still scoped — a write neighbour stays out.
+      expect(ids).not.toContain("forge.createPR");
+    });
+
     it("rejects callTool for fleet-broadcast tools across every tier with TIER_NOT_PERMITTED", async () => {
       paneTokenTiers.set("token-wb", "workbench");
       paneTokenTiers.set("token-action", "action");
@@ -1605,8 +1745,7 @@ describe("McpServerService", () => {
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    it("tier filtering takes precedence over fullToolSurface for pane-scoped sessions", async () => {
-      storeState.mcpServer.fullToolSurface = true;
+    it("filters listTools by the pane token's tier for pane-scoped sessions", async () => {
       paneTokenTiers.set("token-wb", "workbench");
       const { window } = createMockWindow({
         getManifest: () => [
@@ -1627,7 +1766,7 @@ describe("McpServerService", () => {
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
-      // workbench excludes these even with fullToolSurface enabled.
+      // Outside the workbench allowlist — the pane tier is the ceiling.
       expect(ids).not.toContain("worktree.create");
       expect(ids).not.toContain("git.commit");
       expect(ids).not.toContain("panel.gridLayout.setStrategy");

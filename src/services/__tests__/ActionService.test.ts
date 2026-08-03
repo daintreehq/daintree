@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeAll, afterAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { z } from "zod";
 
 const hintMocks = vi.hoisted(() => {
@@ -32,6 +32,7 @@ const notifyMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
 import { ActionService } from "../ActionService";
+import { useUIStore } from "@/store/uiStore";
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
 
 describe("ActionService", () => {
@@ -102,6 +103,37 @@ describe("ActionService", () => {
       // After unregister the title is no longer resolvable.
       service.unregister("actions.list" as ActionId);
       expect(service.getTitle("actions.list" as ActionId)).toBe("");
+    });
+
+    it("selfNotifiesOnExecutionError() reflects the flag and fails closed for unknown ids", () => {
+      const base = {
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockResolvedValue(undefined),
+      } as const;
+
+      // An unknown id fails closed — the caller keeps its own fallback toast
+      // rather than silencing one that was never shown.
+      expect(service.selfNotifiesOnExecutionError("never.registered" as ActionId)).toBe(false);
+
+      service.register({
+        ...base,
+        id: "actions.list" as ActionId,
+        title: "Self notifying",
+        selfNotifiesOnExecutionError: true,
+      } as ActionDefinition);
+      expect(service.selfNotifiesOnExecutionError("actions.list" as ActionId)).toBe(true);
+
+      service.register({
+        ...base,
+        id: "actions.get" as ActionId,
+        title: "Quiet",
+      } as ActionDefinition);
+      expect(service.selfNotifiesOnExecutionError("actions.get" as ActionId)).toBe(false);
     });
 
     it("unregister() removes an action and is a no-op for unknown ids", async () => {
@@ -1821,6 +1853,148 @@ describe("ActionService", () => {
       expect(mockShow).not.toHaveBeenCalled();
       expect(mockIncrementCount).not.toHaveBeenCalled();
     });
+
+    describe("overlay-opening actions", () => {
+      /**
+       * Builds an action whose run() crosses a real macrotask before it
+       * mutates the overlay stack, so the dispatch continuation resumes
+       * *after* the mutation — the ordering a React passive effect produces
+       * in production. A bare `Promise.resolve()` leaves no gap and would
+       * pass whether or not the ordering logic is correct.
+       */
+      const makeOverlayAction = (id: string, mutateOverlays: () => void): ActionDefinition => ({
+        ...makeAction(id),
+        run: async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(() => {
+              mutateOverlays();
+              resolve();
+            }, 0);
+          });
+        },
+      });
+
+      const { addOverlayClaim, removeOverlayClaim } = useUIStore.getState();
+
+      beforeEach(() => {
+        useUIStore.setState({ overlayStack: [] });
+        mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+        mockGetDisplayCombo.mockReturnValue("⌘K");
+        mockShow.mockReturnValue(true);
+      });
+
+      // uiStore is a module-scope singleton — leave it clean so a test added
+      // after this block doesn't inherit claims from here.
+      afterEach(() => {
+        useUIStore.setState({ overlayStack: [] });
+      });
+
+      it("suppresses the hint when the action opens an overlay", async () => {
+        service.register(
+          makeOverlayAction("test.opensDialog", () => addOverlayClaim("dialog-opened"))
+        );
+
+        const result = await service.dispatch("test.opensDialog" as ActionId, undefined, {
+          source: "user",
+        });
+
+        // A rejected dispatch also emits no hint, so pin the success path —
+        // otherwise a broken fixture would satisfy the assertions below.
+        expect(result.ok).toBe(true);
+        expect(mockShow).not.toHaveBeenCalled();
+        expect(mockIncrementCount).not.toHaveBeenCalled();
+      });
+
+      it("suppresses the hint when an overlay opens on top of an existing one", async () => {
+        addOverlayClaim("dialog-base");
+        service.register(
+          makeOverlayAction("test.nestsDialog", () => addOverlayClaim("dialog-nested"))
+        );
+
+        const result = await service.dispatch("test.nestsDialog" as ActionId, undefined, {
+          source: "user",
+        });
+
+        expect(result.ok).toBe(true);
+        expect(mockShow).not.toHaveBeenCalled();
+        expect(mockIncrementCount).not.toHaveBeenCalled();
+      });
+
+      it("still emits the hint when a pre-existing overlay is left untouched", async () => {
+        addOverlayClaim("dialog-already-open");
+        service.register(makeOverlayAction("test.insideDialog", () => {}));
+
+        await service.dispatch("test.insideDialog" as ActionId, undefined, { source: "user" });
+
+        expect(mockIncrementCount).toHaveBeenCalledWith("test.insideDialog");
+        expect(mockShow).toHaveBeenCalledWith("test.insideDialog", "⌘K");
+      });
+
+      it("suppresses the hint when one overlay replaces another at the same depth", async () => {
+        addOverlayClaim("dialog-a");
+        service.register(
+          makeOverlayAction("test.swapsDialog", () => {
+            removeOverlayClaim("dialog-a");
+            addOverlayClaim("dialog-b");
+          })
+        );
+
+        const result = await service.dispatch("test.swapsDialog" as ActionId, undefined, {
+          source: "user",
+        });
+
+        expect(result.ok).toBe(true);
+        expect(mockShow).not.toHaveBeenCalled();
+        expect(mockIncrementCount).not.toHaveBeenCalled();
+      });
+
+      it("still emits the hint when an overlay opened during the run has closed again", async () => {
+        service.register(
+          makeOverlayAction("test.transientDialog", () => {
+            addOverlayClaim("dialog-transient");
+            removeOverlayClaim("dialog-transient");
+          })
+        );
+
+        await service.dispatch("test.transientDialog" as ActionId, undefined, { source: "user" });
+
+        expect(mockIncrementCount).toHaveBeenCalledWith("test.transientDialog");
+        expect(mockShow).toHaveBeenCalledWith("test.transientDialog", "⌘K");
+      });
+
+      it("suppresses the hint when a claim id is released and re-registered", async () => {
+        // A dialog reopening at the same tree position keeps its useId(), so
+        // the stack reads identically before and after — only the epoch shows
+        // that an overlay opened during the dispatch.
+        addOverlayClaim("dialog-reused-id");
+        service.register(
+          makeOverlayAction("test.reopensDialog", () => {
+            removeOverlayClaim("dialog-reused-id");
+            addOverlayClaim("dialog-reused-id");
+          })
+        );
+
+        const result = await service.dispatch("test.reopensDialog" as ActionId, undefined, {
+          source: "user",
+        });
+
+        expect(result.ok).toBe(true);
+        expect(mockShow).not.toHaveBeenCalled();
+        expect(mockIncrementCount).not.toHaveBeenCalled();
+      });
+
+      it("still emits the hint when the action closes the open overlay", async () => {
+        addOverlayClaim("dialog-being-closed");
+        service.register(
+          makeOverlayAction("test.closesDialog", () => removeOverlayClaim("dialog-being-closed"))
+        );
+
+        await service.dispatch("test.closesDialog" as ActionId, undefined, { source: "user" });
+
+        expect(mockIncrementCount).toHaveBeenCalledWith("test.closesDialog");
+        expect(mockShow).toHaveBeenCalledWith("test.closesDialog", "⌘K");
+      });
+    });
   });
 
   describe("action definition validation", () => {
@@ -2591,6 +2765,156 @@ describe("ActionService", () => {
       // Must NOT be the live reference — that would silently defeat replay isolation.
       expect(captured?.args).not.toBe(args);
       expect(captured?.args).toBeUndefined();
+    });
+  });
+
+  describe("result validation (#11539)", () => {
+    function makeAction(
+      id: string,
+      resultSchema: z.ZodType | undefined,
+      result: unknown
+    ): ActionDefinition<undefined, unknown> {
+      return {
+        id: id as ActionId,
+        title: "Result Validation Test",
+        description:
+          "A test action used to verify that dispatch parses run() output against the declared resultSchema.",
+        category: "test",
+        kind: "query",
+        danger: "safe",
+        scope: "renderer",
+        resultSchema,
+        run: vi.fn().mockResolvedValue(result),
+      };
+    }
+
+    it("strips keys the resultSchema does not declare", async () => {
+      service.register(
+        makeAction("test.strip", z.object({ id: z.string() }), {
+          id: "abc",
+          insertText: "/compact",
+          aliases: ["a", "b"],
+        })
+      );
+
+      const res = await service.dispatch("test.strip" as ActionId);
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.result).toEqual({ id: "abc" });
+    });
+
+    it("strips undeclared keys from array rows, not just the root", async () => {
+      service.register(
+        makeAction("test.stripRows", z.object({ items: z.array(z.object({ id: z.string() })) }), {
+          items: [
+            { id: "1", processIds: [4711] },
+            { id: "2", processIds: [4712] },
+          ],
+        })
+      );
+
+      const res = await service.dispatch("test.stripRows" as ActionId);
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.result).toEqual({ items: [{ id: "1" }, { id: "2" }] });
+    });
+
+    it("strips for agent dispatch too — the MCP surface is not a special case", async () => {
+      service.register(
+        makeAction("test.stripAgent", z.object({ id: z.string() }), { id: "abc", secret: "leak" })
+      );
+
+      const res = await service.dispatch("test.stripAgent" as ActionId, undefined, {
+        source: "agent",
+      });
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.result).toEqual({ id: "abc" });
+    });
+
+    it("returns RESULT_VALIDATION_ERROR when the result violates its own schema", async () => {
+      service.register(makeAction("test.violate", z.object({ id: z.string() }), { id: 42 }));
+
+      const res = await service.dispatch("test.violate" as ActionId);
+
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe("RESULT_VALIDATION_ERROR");
+    });
+
+    it("never echoes the rejected value back in error details", async () => {
+      // details crosses IPC to the MCP client, and a rejected result can hold
+      // secrets. Only issue codes and structural depth may travel.
+      service.register(
+        makeAction("test.noEcho", z.object({ token: z.string() }), {
+          token: { nested: "sk-live-SUPERSECRET" },
+        })
+      );
+
+      const res = await service.dispatch("test.noEcho" as ActionId);
+
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(JSON.stringify(res.error.details)).not.toContain("sk-live-SUPERSECRET");
+    });
+
+    it("never echoes a record KEY back in error details", async () => {
+      // Under z.record the issue path segment IS data, not a schema-declared
+      // field name — so a secret used as a key would ride out on the path.
+      service.register(
+        makeAction("test.recordKey", z.record(z.string(), z.string()), {
+          "sk-live-SUPERSECRET": 42,
+        })
+      );
+
+      const res = await service.dispatch("test.recordKey" as ActionId);
+
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error.code).toBe("RESULT_VALIDATION_ERROR");
+      expect(JSON.stringify(res.error.details)).not.toContain("sk-live-SUPERSECRET");
+    });
+
+    it("does not record a rejected dispatch as repeatable or emit a completion event", async () => {
+      // action:dispatched is a completion event and lastAction feeds
+      // action.repeatLast — a dispatch that returned an error is neither.
+      service.register(makeAction("test.notRepeatable", z.object({ id: z.string() }), { id: 1 }));
+
+      const before = service.getLastAction();
+      const res = await service.dispatch("test.notRepeatable" as ActionId, undefined, {
+        source: "user",
+      });
+
+      expect(res.ok).toBe(false);
+      expect(service.getLastAction()).toBe(before);
+    });
+
+    it("leaves the result untouched when no resultSchema is declared", async () => {
+      const raw = { anything: "goes", n: 1 };
+      service.register(makeAction("test.noSchema", undefined, raw));
+
+      const res = await service.dispatch("test.noSchema" as ActionId);
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.result).toBe(raw);
+    });
+
+    it("does not strip through a z.unknown() arm — the documented escape still works", async () => {
+      service.register(
+        makeAction("test.unknownArm", z.object({ items: z.array(z.unknown()) }), {
+          items: [{ id: "1", providerNode: { raw: true } }],
+        })
+      );
+
+      const res = await service.dispatch("test.unknownArm" as ActionId);
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.result).toEqual({ items: [{ id: "1", providerNode: { raw: true } }] });
     });
   });
 });

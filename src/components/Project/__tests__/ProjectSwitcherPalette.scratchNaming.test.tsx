@@ -103,8 +103,9 @@ vi.mock("@/components/ui/AppPaletteDialog", async () => {
   Dialog.Input = Input;
   Dialog.Body = Body;
   Dialog.Footer = Footer;
+  Dialog.Divider = (props: React.HTMLAttributes<HTMLDivElement>) => <div {...props} />;
 
-  return { AppPaletteDialog: Dialog, KBD_CLASS: "kbd" };
+  return { AppPaletteDialog: Dialog, KBD_CLASS: "kbd", PALETTE_SURFACE_WIDTH: "w-[484px]" };
 });
 
 vi.mock("@/components/ui/popover", () => ({
@@ -167,6 +168,12 @@ function makeScratch(overrides: Partial<SearchableScratch> = {}): SearchableScra
     createdAt: Date.now(),
     lastOpened: Date.now(),
     isActive: false,
+    activeAgentCount: 0,
+    waitingAgentCount: 0,
+    blockedAgentCount: 0,
+    completedAgentCount: 0,
+    unacknowledgedCompletedAgentCount: 0,
+    processCount: 0,
     ...overrides,
   };
 }
@@ -187,7 +194,7 @@ function baseProps() {
     onCreateScratch: vi.fn(),
     onRenameScratch: vi.fn(),
     onSelectScratch: vi.fn(),
-    onRemoveScratch: vi.fn(),
+    onRequestDeleteScratch: vi.fn(),
   };
 }
 

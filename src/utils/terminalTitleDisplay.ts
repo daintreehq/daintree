@@ -17,7 +17,14 @@ import { cleanTaskTitle, stripIdentityAffixes } from "@shared/utils/taskTitle";
  */
 export type TerminalTitleVariant = "full" | "compact" | "base";
 
-type TitledPanel = Pick<
+/**
+ * The minimum a surface must know to compose a title.
+ *
+ * Exported because not every caller holds a panel: the fleet overview renders
+ * runs from other projects, whose panels live in V8 contexts this one cannot
+ * reach, so it reconstructs this shape from the main-process snapshot.
+ */
+export type TitledPanel = Pick<
   PtyPanelData,
   "title" | "titleMode" | "lastObservedTitle" | "detectedAgentId" | "agentState"
 > &
@@ -184,9 +191,25 @@ export function getTerminalDisplayTitle(
   variant: TerminalTitleVariant,
   opts?: { showTask?: boolean }
 ): string {
+  if (variant !== "base" && opts?.showTask !== false && !isPtyPanel(panel)) return panel.title;
+  return composeTitledPanel(panel, variant, opts);
+}
+
+/**
+ * The same composition for a caller that has the fields but not a panel.
+ *
+ * Split out rather than duplicated because the rules here are the product
+ * decision — identity-echo suppression, affix stripping, the user-title veto —
+ * and a second surface re-deriving them is how "Claude Code" ends up rendered
+ * as a task in one list and not another.
+ */
+export function composeTitledPanel(
+  panel: TitledPanel,
+  variant: TerminalTitleVariant,
+  opts?: { showTask?: boolean }
+): string {
   const base = panel.title;
   if (variant === "base" || opts?.showTask === false) return base;
-  if (!isPtyPanel(panel)) return base;
   const observed = getObservedTask(panel);
   if (!observed) return base;
   if (observed.isIdentityEcho) {

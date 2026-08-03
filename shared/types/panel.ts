@@ -517,8 +517,11 @@ export interface PtyPanelData extends BasePanelData {
    * could not be safely resumed — unreachable, or resume-latest suppressed
    * because a sibling pane owns the slot (#11461) — and a fresh session was
    * launched instead. Drives the
-   * "Session no longer reachable" restart banner. Cleared on restart; never
-   * serialized — see `serializePtyPanel`.
+   * "Session no longer reachable" restart banner. Cleared on restart, and when
+   * the user dismisses the banner (#11589) — dismissal consumes this signal
+   * rather than shadowing it with a second flag, so the acknowledgement
+   * survives the unmount a worktree switch causes. Never serialized — see
+   * `serializePtyPanel`.
    */
   sessionLostOnRestore?: boolean;
 }
@@ -728,17 +731,41 @@ export interface FileBrowserTreeSnapshotEntry {
  * rather than a Map because it round-trips through JSON persistence.
  */
 export interface FileBrowserTreeSnapshot {
-  worktreeId: string;
-  /** Worktree-relative browse root at capture time; "" = the worktree root. */
+  /** Absent when the browser is rooted at the workspace itself (#11482). */
+  worktreeId?: string;
+  /**
+   * Absolute root the listings were captured under. Identity only — never
+   * joined against, so it can't strand the panel the way a persisted absolute
+   * *root* would; a mismatch (a relocated project) just cold-starts, which is
+   * the same self-healing outcome as a worktree switch.
+   */
+  basePath?: string;
+  /** Browse root relative to the base at capture time; "" = the base itself. */
   rootPath: string;
   listings: FileBrowserTreeSnapshotEntry[];
 }
 
 /**
- * File browser panel — a lazily-expanded directory tree over one worktree with
- * a read-only viewer beside it. Every field is worktree-relative rather than
- * absolute (the root comes from `worktreeId`, like `DiffPanelData.filePath`),
- * so moving or renaming the worktree can't strand the panel on a dead path.
+ * What the file browser orders directory entries by (#11620). Lives here
+ * rather than beside the comparator in the renderer because it is a persisted
+ * panel field, and `shared/` cannot import from `src/`.
+ */
+export type FileBrowserSortKey = "name" | "modified" | "size" | "type";
+export type FileBrowserSortDirection = "asc" | "desc";
+
+/**
+ * File browser panel — a lazily-expanded directory tree over one folder with a
+ * read-only viewer beside it. Every field is relative rather than absolute (the
+ * root comes from `worktreeId`, like `DiffPanelData.filePath`), so moving or
+ * renaming the folder can't strand the panel on a dead path.
+ *
+ * A panel opened without a worktree is rooted at the *view's own workspace* —
+ * the project or scratch folder it was created for (#11482) — and records that
+ * as `browserWorkspaceRooted`, because grid promotion later stamps a
+ * placement `worktreeId` onto it (#11290) and absence alone would stop
+ * answering (#11489). Deliberately no absolute root is stored for that case
+ * either: main derives it from the same sender binding it authorizes against,
+ * so resolving it fresh on both sides is what keeps them from ever disagreeing.
  *
  * Every field persists: the issue's contract is that a pinned panel keeps its
  * expansion, selection and layout, and `promoteDialogPanelToGrid` reuses the
@@ -763,8 +790,10 @@ export interface FileBrowserPanelData extends BasePanelData {
    */
   browserHideDotfiles?: boolean;
   /**
-   * Worktree-relative directory the tree is rooted at. Absent or "" = the
-   * worktree root itself.
+   * Directory the tree is rooted at, relative to the base. Absent or "" = the
+   * base itself. Always relative, in both modes — `canonicalizeRootPath`
+   * collapses anything traversal-shaped, so it structurally cannot carry an
+   * absolute path.
    */
   browserRootPath?: string;
   /**
@@ -772,6 +801,16 @@ export interface FileBrowserPanelData extends BasePanelData {
    * default); only `true` is persisted, so an open panel stays sparse.
    */
   browserSidebarCollapsed?: boolean;
+  /**
+   * Whether the viewer column is collapsed, leaving the tree as the whole
+   * panel (#11496). Absent or `false` = open; only `true` is persisted.
+   *
+   * Independent of `browserSidebarCollapsed` on disk, but the two are mutually
+   * exclusive on screen: each column's toggle lives in the *other* column's
+   * header, so a reachable gesture can never hide both. A record holding both
+   * flags resolves tree-hidden/viewer-visible at read time in the pane.
+   */
+  browserViewerCollapsed?: boolean;
   /**
    * Last-known tree structure, captured when the view goes away and painted
    * back instantly on restore while a live refresh runs (#11367). Derived
@@ -783,10 +822,36 @@ export interface FileBrowserPanelData extends BasePanelData {
   /**
    * Dragged width of the tree column in px. Absent = the 288px default; only a
    * non-default, in-range width is persisted, so an unresized panel stays
-   * sparse. Independent of `browserSidebarCollapsed`: collapsing never clears
-   * it, so re-opening restores the last-dragged width (#11331).
+   * sparse. Independent of both collapse flags: collapsing either column never
+   * clears it, so re-opening restores the last-dragged split (#11331, #11496).
+   * Governs the split layout only — as the sole column the tree simply fills
+   * the panel, so the width is remembered rather than applied.
    */
   browserSidebarWidth?: number;
+  /**
+   * Whether the tree is rooted at the view's workspace folder — a scratch or
+   * worktree-less project root (#11482) — rather than at `worktreeId`.
+   *
+   * Decided once at creation from the absence of a requested worktree, and
+   * never changed by a placement gesture. Promotion into the grid adopts the
+   * active worktree so the panel lands in a rendered index bucket (#11290);
+   * for a workspace-rooted panel that id is placement metadata only, and
+   * re-deriving the browse root from it silently re-roots the tree to a folder
+   * the user never asked for (#11489). Only `true` is persisted.
+   */
+  browserWorkspaceRooted?: boolean;
+  /**
+   * What the tree and the folder listing are ordered by (#11620). Absent = the
+   * `name`/`asc` default, which is the order the listing service already
+   * returns, so only a non-default choice earns a persisted field.
+   *
+   * One setting drives both surfaces deliberately: the sort menu is a single
+   * control, and letting the two columns disagree about the order of the same
+   * directory would make the listing read as a different folder.
+   */
+  browserSortKey?: FileBrowserSortKey;
+  /** Direction for `browserSortKey`. Absent = `asc`; only `desc` is persisted. */
+  browserSortDirection?: FileBrowserSortDirection;
 }
 
 export type PanelInstance =

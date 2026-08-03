@@ -32,9 +32,9 @@ async function switchMainWorktree(ctx: AppContext): Promise<Page> {
   await test.step("switch to main worktree", async () => {
     const mainCard = window.locator(SEL.worktree.mainCard);
     await mainCard.click({ position: { x: 10, y: 10 } });
-    await expect
-      .poll(() => mainCard.getAttribute("aria-label"), { timeout: T_LONG })
-      .toContain("selected");
+    await expect(window.locator(SEL.worktree.mainRow)).toHaveAttribute("aria-current", "true", {
+      timeout: T_LONG,
+    });
   });
   return refreshProjectWindow(ctx);
 }
@@ -320,10 +320,11 @@ test.describe.serial("Core: Worktree Selection Persists Across Project Switch", 
     // Select feature worktree in Project A
     await test.step("select feature worktree in Project A", async () => {
       await switchWorktree(window, FEATURE);
-      const featureCard = window.locator(SEL.worktree.card(FEATURE));
-      await expect
-        .poll(() => featureCard.getAttribute("aria-label"), { timeout: T_LONG })
-        .toContain("selected");
+      await expect(window.locator(SEL.worktree.row(FEATURE))).toHaveAttribute(
+        "aria-current",
+        "true",
+        { timeout: T_LONG }
+      );
       // Allow time for the async worktree selection to persist to the main process
       await window.waitForTimeout(T_SETTLE * 2);
     });
@@ -352,12 +353,11 @@ test.describe.serial("Core: Worktree Selection Persists Across Project Switch", 
 
       const featureCard = window.locator(SEL.worktree.card(FEATURE));
       await expect(featureCard).toBeVisible({ timeout: T_LONG });
-      await expect
-        .poll(() => featureCard.getAttribute("aria-label"), {
-          timeout: T_LONG,
-          message: "Feature worktree should still be selected after project round-trip",
-        })
-        .toContain("selected");
+      await expect(window.locator(SEL.worktree.row(FEATURE))).toHaveAttribute(
+        "aria-current",
+        "true",
+        { timeout: T_LONG }
+      );
     });
   });
 });
@@ -430,9 +430,9 @@ test.describe.serial("Core: Worktree Creation Resilience", () => {
     await test.step("verify original terminal still works", async () => {
       // Switch back to main if needed (creation may auto-switch)
       await mainCard.click({ position: { x: 10, y: 10 } });
-      await expect
-        .poll(() => mainCard.getAttribute("aria-label"), { timeout: T_LONG })
-        .toContain("selected");
+      await expect(window.locator(SEL.worktree.mainRow)).toHaveAttribute("aria-current", "true", {
+        timeout: T_LONG,
+      });
 
       const originalPanel = getPanelById(window, originalPanelId);
       await expect(originalPanel).toBeVisible({ timeout: T_LONG });

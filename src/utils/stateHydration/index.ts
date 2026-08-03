@@ -14,6 +14,7 @@ import type {
 import type { WaitingReason } from "@shared/types/agent";
 import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types/ipc/terminal";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { isGitBackedProject } from "@shared/types";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { inferKind } from "./statePatcher";
 import { RECONNECT_TIMEOUT_MS } from "./reconnectManager";
@@ -255,7 +256,22 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     // Discover running terminals from the backend
     // Terminals stay running across project switches - we just reconnect to them
     const currentProjectId = currentProject?.id;
+    // Owner of the persisted layout and of every live PTY in this view. In a
+    // scratch view `currentProject` is null, so keying the restore off it left
+    // the grid unrestored and the still-running PTYs orphaned in the pty-host
+    // (#11484). Layout and terminal reconnect use this; anything that genuinely
+    // needs a git repository (in-repo presets, recipes) keeps using the project.
+    const currentWorkspaceId = hydrateResult.workspaceId ?? currentProjectId;
     const projectRoot = currentProject?.path;
+    // Whether this view's workspace can have git worktrees at all. A scratch has
+    // no project row behind it, and a folder opened without git has one that is
+    // explicitly not git-backed (#11405) — neither can ever enumerate a worktree.
+    // `isGitBackedProject` reads absence as git-backed (legacy rows carry no
+    // discriminator), so the null check has to be its own clause. Every use of
+    // the saved `appState.activeWorktreeId` below is gated on this: that value is
+    // one app-global field shared by every workspace, so in a worktree-less view
+    // it names whichever worktree the last git-backed project left behind.
+    const workspaceHasWorktrees = currentProject != null && isGitBackedProject(currentProject);
 
     const worktreesPromise = worktreeClient.getAll().catch((error) => {
       logWarn("Failed to prefetch worktrees during hydration", { error });
@@ -267,11 +283,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     // when the field is absent (older main process, or the safe-boot
     // {ok:false} payload). Mirrors the systemTmpDir fallback above.
     const tabGroupsPromise =
-      currentProjectId && options.hydrateTabGroups
+      currentWorkspaceId && options.hydrateTabGroups
         ? hydrateResult.tabGroups !== undefined
           ? Promise.resolve(hydrateResult.tabGroups)
           : projectClient
-              .getTabGroups(currentProjectId)
+              .getTabGroups(currentWorkspaceId)
               .then((tabGroups) => tabGroups ?? [])
               .catch((error) => {
                 logWarn("Failed to prefetch tab groups", { error });
@@ -281,11 +297,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
     type TerminalSizeMap = Record<string, { cols: number; rows: number }>;
     const emptyTerminalSizes: TerminalSizeMap = {};
-    const terminalSizesPromise: Promise<TerminalSizeMap> = currentProjectId
+    const terminalSizesPromise: Promise<TerminalSizeMap> = currentWorkspaceId
       ? hydrateResult.terminalSizes !== undefined
         ? Promise.resolve(hydrateResult.terminalSizes)
         : projectClient
-            .getTerminalSizes(currentProjectId)
+            .getTerminalSizes(currentWorkspaceId)
             .then((sizes) => sizes ?? emptyTerminalSizes)
             .catch((error) => {
               logWarn("Failed to prefetch terminal sizes", { error });
@@ -294,11 +310,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       : Promise.resolve(emptyTerminalSizes);
 
     const emptyDraftInputs: Record<string, string> = {};
-    const draftInputsPromise: Promise<Record<string, string>> = currentProjectId
+    const draftInputsPromise: Promise<Record<string, string>> = currentWorkspaceId
       ? hydrateResult.draftInputs !== undefined
         ? Promise.resolve(hydrateResult.draftInputs)
         : projectClient
-            .getDraftInputs(currentProjectId)
+            .getDraftInputs(currentWorkspaceId)
             .then((drafts) => drafts ?? emptyDraftInputs)
             .catch((error) => {
               logWarn("Failed to prefetch draft inputs", { error });
@@ -335,11 +351,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     // Perf span is split into startRendererSpan + manual finishGetForProject so
     // the `:end` mark fires when the awaited result is consumed below, not when
     // the in-flight promise settles in the background.
-    const finishGetForProjectSpan = currentProjectId
+    const finishGetForProjectSpan = currentWorkspaceId
       ? startRendererSpan(PERF_MARKS.HYDRATE_GET_TERMINALS)
       : null;
-    const getForProjectPromise: Promise<BackendTerminalInfo[]> = currentProjectId
-      ? terminalClient.getForProject(currentProjectId).catch((error: unknown) => {
+    const getForProjectPromise: Promise<BackendTerminalInfo[]> = currentWorkspaceId
+      ? terminalClient.getForProject(currentWorkspaceId).catch((error: unknown) => {
           logWarn("Failed to query backend terminals; continuing with saved panel restore", {
             error,
           });
@@ -349,23 +365,25 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
     // Restore hybrid input bar draft inputs BEFORE terminal panels are created,
     // so HybridInputBar components pick up drafts from the store at mount time.
-    if (currentProjectId) {
+    if (currentWorkspaceId) {
       try {
         const draftInputs = await draftInputsPromise;
         // Seed the close-flush baseline from the authoritative on-disk record
         // (even when empty) BEFORE restoring into the store, so a later clear of
         // a hydrated draft yields a removal tombstone instead of resurrecting on
         // next load (#11352).
-        draftInputPersistence.primeProject(currentProjectId, draftInputs);
+        draftInputPersistence.primeProject(currentWorkspaceId, draftInputs);
         if (Object.keys(draftInputs).length > 0) {
-          useTerminalInputStore.getState().restoreProjectDraftInputs(currentProjectId, draftInputs);
+          useTerminalInputStore
+            .getState()
+            .restoreProjectDraftInputs(currentWorkspaceId, draftInputs);
         }
       } catch (error) {
         logWarn("Failed to restore draft inputs", { error });
       }
     }
 
-    if (currentProjectId) {
+    if (currentWorkspaceId) {
       // Saved→restored panel id remap produced by restorePanelsPhase; consumed
       // by the tab-group hydration block below. Declared here (not in the
       // restore try) so it survives into that block even if panel restore
@@ -377,11 +395,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         finishGetForProjectSpan?.();
 
         logHydrationInfo(
-          `Found ${backendTerminals.length} running terminals for project ${currentProjectId}`
+          `Found ${backendTerminals.length} running terminals for project ${currentWorkspaceId}`
         );
 
         if (isDaintreeEnvEnabled("DAINTREE_VERBOSE")) {
-          logDebug(`Project: ${currentProjectId.slice(0, 8)}`);
+          logDebug(`Project: ${currentWorkspaceId.slice(0, 8)}`);
           logDebug("Backend terminals", {
             terminals: backendTerminals.map((t) => ({
               id: t.id.slice(0, 8),
@@ -434,7 +452,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         // Fetch terminal sizes for restoration
         const terminalSizes = await terminalSizesPromise;
 
-        const activeWorktreeId = appState.activeWorktreeId ?? null;
+        // Withheld from a worktree-less workspace rather than merely left
+        // unselected later: restore re-homes worktree-less and stale-worktree
+        // panels onto it, so passing it through would stamp another workspace's
+        // worktree onto this one's panels.
+        const activeWorktreeId = workspaceHasWorktrees ? (appState.activeWorktreeId ?? null) : null;
         const projectPresetsByAgent = await projectPresetsPromise;
 
         // Seed the persistence cache so the first save after launch can
@@ -444,9 +466,9 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         // appState.terminals is TerminalState[] (IPC wire type, more
         // lenient); the on-disk data was written by panelToSnapshot so is
         // structurally PanelSnapshot[].
-        if (currentProjectId && appState.terminals && appState.terminals.length > 0) {
+        if (currentWorkspaceId && appState.terminals && appState.terminals.length > 0) {
           panelPersistence.primeProject(
-            currentProjectId,
+            currentWorkspaceId,
             appState.terminals as unknown as PanelSnapshot[]
           );
         }
@@ -481,6 +503,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           prefetchedReconnectResults,
           terminalSizes,
           activeWorktreeId,
+          workspaceHasWorktrees,
           projectRoot: projectRoot || "",
           agentSettings,
           clipboardDirectory,
@@ -575,9 +598,9 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
             // save can emit correct removals and Main can merge concurrent
             // writes from sibling windows instead of resurrecting deleted
             // groups (#11350). Mirrors the terminal `primeProject` above.
-            if (currentProjectId) {
+            if (currentWorkspaceId) {
               panelPersistence.primeTabGroups(
-                currentProjectId,
+                currentWorkspaceId,
                 tabGroups.filter((g) => g && Array.isArray(g.panelIds) && g.panelIds.length > 1)
               );
             }
@@ -628,9 +651,25 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
       }
     }
 
-    // An unknown worktree set keeps the saved selection rather than dropping it
-    // on the floor (#11234).
-    if (!worktreesAreKnown) {
+    // A worktree-less workspace has nothing to select, now or ever, so its
+    // selection stays null. The empty-list branch below reads an empty list as
+    // "the host hasn't reported yet" (#11234) — true for a project, never for a
+    // scratch — so without this gate the view adopts whichever worktree the last
+    // git-backed project left behind. Nothing then resolves it: the grid renders
+    // that foreign worktree's bucket while new panels land in the worktree-less
+    // one (invisible panels with live PTYs), and every worktree-resolving action
+    // refuses with "Worktree not found". Skipping the call — rather than clearing
+    // with `setActiveWorktree(null)` — also leaves the shared persisted restore
+    // point intact for the projects that own it.
+    if (!workspaceHasWorktrees) {
+      if (savedActiveId) {
+        logHydrationInfo(
+          `Workspace has no worktrees; leaving active worktree unset (ignoring saved ${savedActiveId})`
+        );
+      }
+    } else if (!worktreesAreKnown) {
+      // An unknown worktree set keeps the saved selection rather than dropping it
+      // on the floor (#11234).
       if (savedActiveId) {
         setActiveWorktree(savedActiveId);
       }

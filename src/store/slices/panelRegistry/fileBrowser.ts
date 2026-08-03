@@ -1,4 +1,8 @@
-import type { FileBrowserTreeSnapshot } from "@shared/types/panel";
+import type {
+  FileBrowserSortDirection,
+  FileBrowserSortKey,
+  FileBrowserTreeSnapshot,
+} from "@shared/types/panel";
 import { deepEqualIgnoringUndefined } from "@shared/utils/layoutMerge";
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { saveNormalized } from "./persistence";
@@ -17,10 +21,16 @@ export interface FileBrowserViewPatch {
   browserRootPath?: string;
   /** `true` collapses the tree sidebar; `false` and absent both mean open. */
   browserSidebarCollapsed?: boolean;
+  /** `true` collapses the viewer column; `false` and absent both mean open. */
+  browserViewerCollapsed?: boolean;
   /** Last-known tree structure, captured as the view goes away (#11367). */
   browserTreeSnapshot?: FileBrowserTreeSnapshot;
   /** Tree column width in px; clamped into range before it lands. */
   browserSidebarWidth?: number;
+  /** What the tree and folder listing order entries by (#11620). */
+  browserSortKey?: FileBrowserSortKey;
+  /** Direction for `browserSortKey`; `asc` and absent are the same state. */
+  browserSortDirection?: FileBrowserSortDirection;
 }
 
 function sameStringList(a: string[] | undefined, b: string[]): boolean {
@@ -69,9 +79,15 @@ export const createFileBrowserPanelActions = (
       // `false` and absent are the same open state, so patching `false` onto a
       // never-collapsed panel must not count as a change. Compared as
       // normalized booleans rather than raw optionals for that reason.
-      const collapsedUnchanged =
+      const sidebarCollapsedUnchanged =
         patch.browserSidebarCollapsed === undefined ||
         (patch.browserSidebarCollapsed === true) === (panel.browserSidebarCollapsed === true);
+      // The viewer flag gets its own comparison rather than riding the sidebar's:
+      // folding them together would make a viewer-only patch look unchanged and
+      // bail out below, so every viewer toggle would be a silent no-op (#11496).
+      const viewerCollapsedUnchanged =
+        patch.browserViewerCollapsed === undefined ||
+        (patch.browserViewerCollapsed === true) === (panel.browserViewerCollapsed === true);
       // Deep rather than reference equality: capture builds a fresh snapshot
       // object on every hide, and most hides change nothing — a reference
       // check would dirty the panel entry (and the persisted layout) each time.
@@ -84,6 +100,15 @@ export const createFileBrowserPanelActions = (
       const widthUnchanged =
         nextWidth === undefined ||
         nextWidth === (panel.browserSidebarWidth ?? FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH);
+      // Both sort halves normalize absent to their default before comparing,
+      // like the collapse flags: patching "name"/"asc" onto a never-sorted
+      // panel is the state it is already in, not a change worth a write.
+      const sortKeyUnchanged =
+        patch.browserSortKey === undefined ||
+        patch.browserSortKey === (panel.browserSortKey ?? "name");
+      const sortDirectionUnchanged =
+        patch.browserSortDirection === undefined ||
+        patch.browserSortDirection === (panel.browserSortDirection ?? "asc");
 
       // Bail on a no-op write. The tree calls this on every arrow key, and a
       // drag calls it on every mousemove; a fresh panel object each time would
@@ -94,9 +119,12 @@ export const createFileBrowserPanelActions = (
         expandedUnchanged &&
         hideDotfilesUnchanged &&
         rootUnchanged &&
-        collapsedUnchanged &&
+        sidebarCollapsedUnchanged &&
+        viewerCollapsedUnchanged &&
         treeSnapshotUnchanged &&
-        widthUnchanged
+        widthUnchanged &&
+        sortKeyUnchanged &&
+        sortDirectionUnchanged
       )
         return state;
 
@@ -117,10 +145,19 @@ export const createFileBrowserPanelActions = (
         ...(patch.browserSidebarCollapsed !== undefined && {
           browserSidebarCollapsed: patch.browserSidebarCollapsed,
         }),
+        ...(patch.browserViewerCollapsed !== undefined && {
+          browserViewerCollapsed: patch.browserViewerCollapsed,
+        }),
         ...(patch.browserTreeSnapshot !== undefined && {
           browserTreeSnapshot: patch.browserTreeSnapshot,
         }),
         ...(nextWidth !== undefined && { browserSidebarWidth: nextWidth }),
+        ...(patch.browserSortKey !== undefined && {
+          browserSortKey: patch.browserSortKey,
+        }),
+        ...(patch.browserSortDirection !== undefined && {
+          browserSortDirection: patch.browserSortDirection,
+        }),
       };
 
       const newById = { ...state.panelsById, [id]: nextPanel };

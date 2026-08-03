@@ -169,7 +169,7 @@ export function ColorSchemePicker() {
     <div className="space-y-3">
       <div className="flex flex-col rounded-[var(--radius-md)] border border-daintree-border overflow-hidden">
         <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-daintree-border shrink-0">
-          <div className="flex items-center gap-1.5 flex-1 min-w-0 focus-within:border-daintree-accent">
+          <div className="flex items-center gap-1.5 flex-1 min-w-0 focus-within:border-daintree-accent/40">
             <Search className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none" />
             <input
               type="search"

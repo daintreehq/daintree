@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
+import {
+  GIT_FILE_DIFF_MAX_BYTES,
+  GIT_FILE_DIFF_MAX_SOURCE_BYTES,
+} from "../../../shared/config/gitReadLimits.js";
 
 const mockSimpleGit = {
   raw: vi.fn().mockResolvedValue(undefined),
@@ -206,9 +210,9 @@ describe("WorkspaceService.getFileDiff", () => {
     expect(mockSimpleGit.diff).toHaveBeenCalledWith(expect.arrayContaining(["--no-textconv"]));
   });
 
-  it("returns FILE_TOO_LARGE without reading when the file exceeds 1MB", async () => {
+  it("refuses a file past the source ceiling without reading it or diffing", async () => {
     const { stat, readFile } = await import("fs/promises");
-    vi.mocked(stat).mockResolvedValueOnce({ size: 1024 * 1024 + 1 } as never);
+    vi.mocked(stat).mockResolvedValueOnce({ size: GIT_FILE_DIFF_MAX_SOURCE_BYTES + 1 } as never);
 
     await service.getFileDiff("req-7", "/test/repo", "huge.txt", "untracked");
 
@@ -217,26 +221,153 @@ describe("WorkspaceService.getFileDiff", () => {
         type: "get-file-diff-result",
         requestId: "req-7",
         diff: "FILE_TOO_LARGE",
+        offset: 0,
+        totalBytes: 0,
+        truncated: false,
+        nextOffset: null,
       })
     );
     expect(readFile).not.toHaveBeenCalled();
     expect(mockSimpleGit.diff).not.toHaveBeenCalled();
   });
 
-  it("returns FILE_TOO_LARGE when the tracked-file diff output exceeds 1MB", async () => {
-    mockSimpleGit.diff.mockResolvedValueOnce(
-      "diff --git a/foo.ts b/foo.ts\n" + "+x".repeat(1024 * 1024)
+  it("applies the source ceiling to tracked files too, bounding peak memory", async () => {
+    const { stat } = await import("fs/promises");
+    vi.mocked(stat).mockResolvedValueOnce({ size: GIT_FILE_DIFF_MAX_SOURCE_BYTES + 1 } as never);
+
+    await service.getFileDiff("req-16", "/test/repo", "huge.ts", "modified");
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: "req-16", diff: "FILE_TOO_LARGE" })
     );
+    // The point of the gate: git never buffers the diff of a file this size.
+    expect(mockSimpleGit.diff).not.toHaveBeenCalled();
+  });
+
+  it("never windows the BINARY_FILE sentinel", async () => {
+    mockSimpleGit.diff.mockResolvedValueOnce("Binary files a/x.bin and b/x.bin differ");
+
+    await service.getFileDiff("req-17", "/test/repo", "x.bin", "modified", undefined, 0, 1);
+
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "req-17",
+        diff: "BINARY_FILE",
+        offset: 0,
+        totalBytes: 0,
+        truncated: false,
+        nextOffset: null,
+      })
+    );
+  });
+
+  it("reconstructs a multibyte diff across windows without replacement characters", async () => {
+    const full = "diff --git a/f.ts b/f.ts\n" + "+日本語テキスト😀\n".repeat(50);
+    mockSimpleGit.diff.mockResolvedValue(full);
+
+    let offset: number | null = 0;
+    let rebuilt = "";
+    let guard = 0;
+    while (offset !== null) {
+      await service.getFileDiff("req-mb", "/test/repo", "f.ts", "modified", undefined, offset, 7);
+      const event = mockSendEvent.mock.calls.at(-1)?.[0];
+      rebuilt += event.diff;
+      offset = event.nextOffset;
+      expect(++guard).toBeLessThan(500);
+    }
+
+    expect(rebuilt).toBe(full);
+    expect(rebuilt).not.toContain("�");
+  });
+
+  it("windows a tracked-file diff past 1MB instead of refusing it (#11531)", async () => {
+    const header = "diff --git a/foo.ts b/foo.ts\n";
+    const body = "+x".repeat(GIT_FILE_DIFF_MAX_BYTES);
+    const full = header + body;
+    mockSimpleGit.diff.mockResolvedValueOnce(full);
 
     await service.getFileDiff("req-8", "/test/repo", "foo.ts", "modified");
+
+    const event = mockSendEvent.mock.calls.at(-1)?.[0];
+    expect(event.diff).not.toBe("FILE_TOO_LARGE");
+    expect(event.diff.startsWith(header)).toBe(true);
+    expect(event.truncated).toBe(true);
+    expect(event.totalBytes).toBe(full.length);
+    expect(event.nextOffset).toBe(GIT_FILE_DIFF_MAX_BYTES);
+  });
+
+  it("diffs a large file with a small diff, which the old 1MB gate refused", async () => {
+    const { stat } = await import("fs/promises");
+    vi.mocked(stat).mockResolvedValueOnce({
+      size: GIT_FILE_DIFF_MAX_SOURCE_BYTES / 2,
+    } as never);
+    mockSimpleGit.diff.mockResolvedValueOnce("diff --git a/big.ts b/big.ts\n+one line");
+
+    await service.getFileDiff("req-11", "/test/repo", "big.ts", "modified");
+
+    const event = mockSendEvent.mock.calls.at(-1)?.[0];
+    expect(event.diff).toContain("+one line");
+    expect(event.truncated).toBe(false);
+  });
+
+  it("serves a requested window and a continuation that reconstructs the diff", async () => {
+    const full = "diff --git a/foo.ts b/foo.ts\n" + "+abcdefghij".repeat(100);
+    mockSimpleGit.diff.mockResolvedValue(full);
+
+    await service.getFileDiff("req-12", "/test/repo", "foo.ts", "modified", undefined, 0, 100);
+    const first = mockSendEvent.mock.calls.at(-1)?.[0];
+    expect(first.diff).toHaveLength(100);
+    expect(first.truncated).toBe(true);
+
+    await service.getFileDiff(
+      "req-13",
+      "/test/repo",
+      "foo.ts",
+      "modified",
+      undefined,
+      first.nextOffset,
+      10_000
+    );
+    const second = mockSendEvent.mock.calls.at(-1)?.[0];
+    expect(first.diff + second.diff).toBe(full);
+    expect(second.truncated).toBe(false);
+    expect(second.nextOffset).toBeNull();
+  });
+
+  it("never windows a sentinel result", async () => {
+    mockSimpleGit.diff.mockResolvedValueOnce("   ");
+
+    await service.getFileDiff("req-14", "/test/repo", "foo.ts", "modified", undefined, 0, 1);
 
     expect(mockSendEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "get-file-diff-result",
-        requestId: "req-8",
-        diff: "FILE_TOO_LARGE",
+        requestId: "req-14",
+        diff: "NO_CHANGES",
+        totalBytes: 0,
+        truncated: false,
+        nextOffset: null,
       })
     );
+  });
+
+  it("clamps a caller-supplied maxBytes to the 1MB transport ceiling", async () => {
+    const full = "diff --git a/foo.ts b/foo.ts\n" + "+y".repeat(GIT_FILE_DIFF_MAX_BYTES);
+    mockSimpleGit.diff.mockResolvedValueOnce(full);
+
+    await service.getFileDiff(
+      "req-15",
+      "/test/repo",
+      "foo.ts",
+      "modified",
+      undefined,
+      0,
+      Number.MAX_SAFE_INTEGER
+    );
+
+    const event = mockSendEvent.mock.calls.at(-1)?.[0];
+    expect(event.diff.length).toBe(GIT_FILE_DIFF_MAX_BYTES);
+    expect(event.truncated).toBe(true);
   });
 
   it("passes --ignore-all-space when ignoreWhitespace is true", async () => {

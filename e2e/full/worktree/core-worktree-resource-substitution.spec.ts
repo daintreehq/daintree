@@ -63,12 +63,11 @@ test.describe.serial("Full: Worktree Resource Substitution", () => {
 
     const card = await createWorktree(ctx.window, BRANCH);
     await card.click({ position: { x: 10, y: 10 } });
-    await expect
-      .poll(() => card.getAttribute("aria-label"), {
-        timeout: T_LONG,
-        message: "Worktree card should become selected",
-      })
-      .toContain("selected");
+    await expect(ctx.window.locator(SEL.worktree.row(BRANCH))).toHaveAttribute(
+      "aria-current",
+      "true",
+      { timeout: T_LONG }
+    );
   });
 
   test.afterAll(async () => {

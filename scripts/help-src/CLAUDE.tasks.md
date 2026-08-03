@@ -12,7 +12,7 @@ These cover ~90% of what the assistant is asked to do. They all live in the defa
 
 1. `terminal.list` to enumerate the fleet (or filter by `worktreeId`/`location`).
 2. `terminal.getStatus({ terminalIds: [<id1>, <id2>, …], includeOutput: { lines: 30 } })` — single round-trip. Returns each terminal's `agentState`, `waitingReason`, `lastTransitionAt`, and recent output.
-3. Summarize for the user by state group (`working`, `waiting`, `completed`, `exited`). Don't fan out N `terminal.getOutput` calls — that's N round-trips for what `getStatus` does in one.
+3. Summarize for the user by state group, keyed on each entry's returned `agentState` (`working`, `waiting`, `completed`, `exited`, and others such as `idle` or `directing` — group whatever comes back rather than dropping states you didn't expect). Don't fan out N `terminal.getOutput` calls — that's N round-trips for what `getStatus` does in one.
 
 ### Send a prompt to one running agent
 
@@ -34,9 +34,9 @@ When the user broadcasts from the in-app fleet UI, Daintree supervises the run p
 
 ### Spawn an agent on a task
 
-1. `agent.launch({ agentId: "claude" | "codex" | "gemini" | …, prompt: <task>, worktreeId: <id>, name: <short label> })` — single round-trip per agent. The `prompt` field becomes the agent's first message; you don't need to send it separately. **Always pass `name`** — a short task-descriptive label (e.g. `"Claude: auth refactor"`) that becomes the terminal tab title so the user can tell parallel agents apart at a glance. The name is pinned, so agent detection won't overwrite it. Each call returns a `terminalId` you can map back to the prompt you sent.
+1. `agent.launch({ agentId: "claude" | "codex" | "gemini" | …, prompt: <task>, worktreeId: <id>, name: <short label> })` — single round-trip per agent. The `prompt` field becomes the agent's first message; you don't need to send it separately. **Always pass `name`** — a short task-descriptive label (e.g. `"Claude: auth refactor"`) that becomes the terminal tab title so the user can tell parallel agents apart at a glance. The name is pinned, so agent detection won't overwrite it. Each call returns `{ launched, terminalId, location, spawnStatus, worktreeId, worktreePath, branch, cwd }` — the resolved identity tells you where the agent actually landed, so parallel launches map back to their prompts without a second lookup. `launched: true` means the panel was created and its process is starting, **not** that the agent is ready — poll for that. `launched: false` means no agent is running: either nothing was created (`terminalId` and the rest null) or the CLI is missing, in which case Daintree opened a setup diagnostic instead and `spawnStatus` is `missing-cli`. That diagnostic panel has a real `terminalId`, but no agent is behind it — report it and tell the user to install the CLI rather than polling a terminal that will never come up.
 2. **Fan out in parallel batches of up to 4.** For N agents, fire up to 4 `agent.launch` calls in parallel within a single message. The Claude Code harness executes multi-tool turns concurrently, so the calls land at the backend together. For N > 4, chunk into multiple messages of ≤ 4 so the user sees natural progress between batches. Do **not** insert `terminal.getStatus` round-trips between launches — that's the slow loop we're avoiding.
-3. Once every batch is dispatched, do **one** `terminal.getStatus({ terminalIds: [<all ids>], includeOutput: { lines: 20 } })` to confirm each terminal picked up its prompt, then report a state summary grouped by `working` / `waiting` / `completed` / `exited`. Sequential one-at-a-time pacing is only appropriate when the user explicitly asks for it.
+3. Once every batch is dispatched, collect the `terminalId`s from results with `launched: true` and do **one** `terminal.getStatus({ terminalIds: [<those ids>], includeOutput: { lines: 20 } })` to confirm each terminal picked up its prompt, then report a state summary grouped by each entry's returned `agentState`. Report any `missing-cli` or declined launches separately instead of polling them. Sequential one-at-a-time pacing is only appropriate when the user explicitly asks for it.
 
 ### Close terminals
 
@@ -55,6 +55,6 @@ Action tier exposes several spawn/send tools that look similar. Pick by what you
 - **Inject project context into a terminal** → `terminal.inject({ terminalId })` — dumps the project's prepared CopyTree context into the named terminal. Pass an explicit `terminalId` (panel UUID from `terminal.list`); agent/MCP dispatch **requires** it and errors without it, so a focus shift can't route the dump into the wrong terminal. Use only when the user explicitly asks to inject context — not a general-purpose prompt sender.
 - **Inject context into a specific terminal** → `copyTree.injectToTerminal({ terminalId })`. Same as above, targeted.
 
-If the right tool isn't in this list, you probably need a higher tier — explain that to the user rather than improvising.
+These are worked examples, not the whole tier — plenty of same-tier tools aren't listed here. If the operation you need isn't above, look for it with `actions.search` before concluding you can't do it (see **Finding the Right Tool** below); if it's absent from `ListTools` entirely, report it as unavailable rather than assuming a higher tier would provide it.
 
-For sustained monitoring loops over many agents (stuck-state detection, `ScheduleWakeup` pacing across rounds), see the **Watching Multiple Agent Terminals** section below.
+For sustained monitoring loops over many agents (stuck-state detection, `ScheduleWakeup` pacing across rounds), see the **Watching Agent Terminals** section below.

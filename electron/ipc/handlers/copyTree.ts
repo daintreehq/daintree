@@ -1,8 +1,6 @@
 import { clipboard } from "electron";
 import crypto from "crypto";
-import os from "os";
 import path from "path";
-import { chmod, mkdir, writeFile } from "fs/promises";
 import { pathToFileURL } from "url";
 import { z } from "zod";
 import { CHANNELS } from "../channels.js";
@@ -108,6 +106,12 @@ import type {
 } from "../../types/index.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { contextInjectionTracker } from "../../services/ContextInjectionTracker.js";
+import {
+  fitContentToResultBudget,
+  readContentPreview,
+  releaseContextFilePath,
+  reserveContextFilePath,
+} from "../../services/copyTreeOutputFile.js";
 
 function getStringField(payload: unknown, key: string): string | undefined {
   if (!payload || typeof payload !== "object") {
@@ -255,6 +259,56 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   // copyTree progress is broadcast to all windows
   const handlers: Array<() => void> = [];
 
+  /**
+   * Generate a bundle straight into a freshly reserved temp file.
+   *
+   * Both file-backed callers come through here. The write happens in the
+   * workspace host, not in this process: that is the whole point of #11528 —
+   * the bundle used to be built as one multi-MB string and then cloned across
+   * the host → main → renderer boundaries before anything trimmed it.
+   */
+  const generateToFile = async (
+    worktree: { path: string; branch?: string },
+    options: CopyTreeOptions,
+    onProgress: (progress: CopyTreeProgress) => void
+  ): Promise<CopyTreeResult> => {
+    let filePath: string;
+    try {
+      filePath = await reserveContextFilePath({
+        worktreePath: worktree.path,
+        branch: worktree.branch,
+        // The merged options, not the caller's: project settings decide the
+        // format too, and the extension has to match what actually gets written.
+        extension: getExtensionForFormat(options.format),
+      });
+    } catch (error) {
+      // A raw fs rejection carries absolute paths, and this result is published
+      // to MCP callers verbatim — so only the static message crosses.
+      console.error("[CopyTree] Failed to reserve a context file:", error);
+      return { content: "", fileCount: 0, error: "Can't write the context file" };
+    }
+
+    try {
+      const result = await deps.worktreeService!.generateContext(
+        worktree.path,
+        options,
+        onProgress,
+        filePath
+      );
+      if (result.error) return result;
+      // A successful generation names the file we reserved and reports its
+      // size. Anything else is a result that outlived its operation: publishing
+      // its path would hand this caller another run's bundle, and the missing
+      // size would break the shape the tool advertises.
+      if (result.filePath !== filePath || typeof result.outputBytes !== "number") {
+        return { content: "", fileCount: 0, error: "Failed to generate context" };
+      }
+      return result;
+    } finally {
+      releaseContextFilePath(filePath);
+    }
+  };
+
   const handleCopyTreeGenerate = async (
     ctx: import("../types.js").IpcContext,
     payload: CopyTreeGeneratePayload
@@ -316,7 +370,27 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const projectSettings = await loadCopyTreeProjectSettings(settingsProjectId);
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
-    return deps.worktreeService.generateContext(worktree.path, mergedOptions, onProgress);
+    const result = await generateToFile(worktree, mergedOptions, onProgress);
+    if (result.error || !result.filePath || !validated.includeContent) {
+      return result;
+    }
+
+    // The opt-in reads a head back out of the file rather than asking for the
+    // string: the bundle stays on disk, and only what the caller can actually
+    // receive is loaded.
+    try {
+      const preview = await readContentPreview(result.filePath);
+      return fitContentToResultBudget(
+        preview.content,
+        (content, contentTruncated) => ({ ...result, content, contentTruncated }),
+        preview.truncated
+      ).result;
+    } catch (error) {
+      // The bundle itself is fine and its path is already usable, so a failed
+      // read-back downgrades to the default shape instead of failing the run.
+      console.warn(`[${traceId}] Failed to read back context preview:`, error);
+      return result;
+    }
   };
   handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_GENERATE, handleCopyTreeGenerate));
 
@@ -383,52 +457,18 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const projectSettings = await loadCopyTreeProjectSettings(settingsProjectId);
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
-    const result = await deps.worktreeService.generateContext(
-      worktree.path,
-      mergedOptions,
-      onProgress
-    );
+    // Written by the workspace host straight to disk. This handler used to pull
+    // the whole bundle across two process boundaries only to write it out here
+    // (#11528); the file it needs is now already on disk when the call returns.
+    const result = await generateToFile(worktree, mergedOptions, onProgress);
 
-    if (result.error) {
+    if (result.error || !result.filePath) {
       return result;
     }
 
+    const filePath = result.filePath;
+
     try {
-      const tempDir = path.join(os.tmpdir(), "daintree-context");
-      await mkdir(tempDir, { recursive: true, mode: 0o700 });
-      // mkdir({ mode }) is ignored when the directory already exists, so
-      // chmod the directory explicitly each run to evict any stale, more
-      // permissive mode left behind by a previous build or another process.
-      // chmod is a no-op for permission bits on Windows.
-      if (process.platform !== "win32") {
-        try {
-          await chmod(tempDir, 0o700);
-        } catch {
-          // best effort — file mode below still protects the contents
-        }
-      }
-
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const projectName =
-        path
-          .basename(worktree.path)
-          .replace(/[^a-zA-Z0-9-_]/g, "-")
-          .replace(/-+/g, "-")
-          .replace(/^-+|-+$/g, "")
-          .toLowerCase()
-          .slice(0, 50) || "project";
-      const safeBranch =
-        (worktree.branch || "head")
-          .replace(/[^a-zA-Z0-9-_]/g, "-")
-          .replace(/-+/g, "-")
-          .replace(/^-+|-+$/g, "")
-          .slice(0, 100) || "head";
-      const extension = getExtensionForFormat(validated.options?.format);
-      const filename = `${projectName}-${safeBranch}-${timestamp}.${extension}`;
-      const filePath = path.join(tempDir, filename);
-
-      await writeFile(filePath, result.content, { encoding: "utf8", mode: 0o600 });
-
       if (process.platform === "darwin") {
         // Electron's `clipboard.writeBuffer` maps to Chromium's
         // `WritePortableAndPlatformRepresentations`, which calls
@@ -456,20 +496,24 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
       console.log(`[${traceId}] Copied context file to clipboard: ${filePath}`);
 
-      // Content was written to the temp file; renderer callers read only
-      // fileCount/stats/error, so drop it to avoid cloning a second copy.
       return {
         content: "",
         fileCount: result.fileCount,
+        filePath,
+        outputBytes: result.outputBytes,
         stats: result.stats,
         outputFormatVersion: result.outputFormatVersion,
       };
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to copy context file");
       console.error(`[${traceId}] Failed to save/copy context file:`, errorMessage);
+      // The bundle exists either way, so its path still rides back — only the
+      // clipboard step failed, and the caller can still reach the file.
       return {
         content: "",
         fileCount: result.fileCount,
+        filePath,
+        outputBytes: result.outputBytes,
         stats: result.stats,
         outputFormatVersion: result.outputFormatVersion,
         error: `Failed to copy file to clipboard: ${errorMessage}`,

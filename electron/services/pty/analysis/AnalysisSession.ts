@@ -14,7 +14,7 @@ import { buildActivityMonitorOptions, buildPatternConfig } from "../terminalActi
 import { installHeadlessResponder } from "../headlessResponder.js";
 import { Osc94Parser } from "../Osc94Parser.js";
 import { SynchronizedFrameDetector } from "../SynchronizedFrameDetector.js";
-import { restoreSessionFromFile } from "../terminalSessionPersistence.js";
+import { resizeMirror, restoreSessionFromFile } from "../terminalSessionPersistence.js";
 import {
   measureVisibleContentDelta,
   type VisibleContentSnapshot,
@@ -35,6 +35,7 @@ import type {
   AnalysisMonitorStartSpec,
   WorkerToHostMessage,
 } from "../analysisWorkerProtocol.js";
+import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
 
 // Mirrors AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS in TerminalProcess: floor between
 // agent-output content comparisons.
@@ -176,7 +177,9 @@ export class AnalysisSession {
   resize(cols: number, rows: number): void {
     if (this.disposed || !this.headlessTerminal) return;
     try {
-      this.headlessTerminal.resize(cols, rows);
+      // Parked, not applied, while a session replay owns the grid — the replay
+      // reflows to this geometry instead of to the one it opened on (#11552).
+      resizeMirror(this.headlessTerminal, cols, rows);
     } catch (error) {
       console.error(`[AnalysisSession] Failed to resize ${this.terminalId}:`, error);
       return;
@@ -310,19 +313,35 @@ export class AnalysisSession {
     };
   }
 
-  serialize(): Promise<string | null> {
-    return this.drainThen(() => this.serializeFull());
+  serialize(): Promise<SerializedTerminalSnapshot | null> {
+    return this.drainThen(() => this.withGeometry(this.serializeFull()));
   }
 
-  serializeForPersistence(): Promise<string | null> {
-    return this.drainThen(() => this.serializeBannerAware());
+  serializeForPersistence(): Promise<SerializedTerminalSnapshot | null> {
+    return this.drainThen(() => this.withGeometry(this.serializeBannerAware()));
   }
 
   captureFinalSnapshot(): Promise<AnalysisFinalSnapshot> {
     return this.drainThen(() => ({
-      snapshot: this.serializeFull(),
-      persistence: this.serializeBannerAware(),
+      snapshot: this.withGeometry(this.serializeFull()),
+      persistence: this.withGeometry(this.serializeBannerAware()),
     }));
+  }
+
+  /**
+   * Stamp a payload with the grid the mirror is on RIGHT NOW (#11552).
+   *
+   * Only meaningful when called in the same synchronous step as the
+   * `addon.serialize()` that produced `data` — which is why every caller sits
+   * inside a `drainThen` callback. The pty-host cannot compute this itself: a
+   * restore replay parks the mirror at the snapshot's capture grid and reflows
+   * home on a later turn without any host-posted resize, so the host's view of
+   * the grid can describe a layout this payload was never produced at.
+   */
+  private withGeometry(data: string | null): SerializedTerminalSnapshot | null {
+    const terminal = this.headlessTerminal;
+    if (data === null || !terminal) return null;
+    return { data, cols: terminal.cols, rows: terminal.rows };
   }
 
   free(): void {

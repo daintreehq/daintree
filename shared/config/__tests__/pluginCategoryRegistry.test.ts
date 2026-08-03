@@ -24,6 +24,7 @@ function makeManifest(overrides: Partial<PluginManifest> = {}): PluginManifest {
       forgeProviders: [],
       fileDecorationProviders: [],
       agents: [],
+      processTools: [],
       settings: [],
     },
     ...overrides,
@@ -39,6 +40,16 @@ describe("pluginCategoryRegistry", () => {
     // indistinguishable in the listbox.
     const labels = PLUGIN_CATEGORIES.map((c) => c.label);
     expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it("does not let process-tool detections alone claim a catalog category (#11613)", () => {
+    // Deliberate: a command → icon mapping says nothing about what a plugin is
+    // for, so it must not pull the plugin out of the fallback bucket the way a
+    // forge provider or an agent does.
+    const manifest = makeManifest();
+    const before = resolvePluginCategory(manifest);
+    manifest.contributes.processTools = [{ command: "acme-cli", iconId: "sparkles" }];
+    expect(resolvePluginCategory(manifest)).toBe(before);
   });
 
   it("places the fallback category last so real categories render above it", () => {

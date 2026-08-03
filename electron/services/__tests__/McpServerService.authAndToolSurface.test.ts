@@ -77,7 +77,6 @@ const storeState = vi.hoisted(() => ({
     enabled: true,
     port: 0,
     apiKey: "",
-    fullToolSurface: false,
     auditEnabled: true,
     auditMaxRecords: 500,
   },
@@ -196,6 +195,7 @@ type DispatchRequest = {
 type TextToolResult = {
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
+  _meta?: Record<string, unknown>;
 };
 
 function createManifestEntry(entry: {
@@ -242,6 +242,8 @@ function createMockWindow(options?: {
       };
   senderIdOverride?: number;
   hostShellWebContentsId?: number;
+  /** Workspace this window's view belongs to, for the #11536 result stamp. */
+  workspaceRef?: { kind: "project" | "scratch"; workspaceId: string; workspacePath: string };
 }) {
   const getManifest = options?.getManifest ?? (() => []);
   const dispatchAction =
@@ -338,6 +340,9 @@ function createMockWindow(options?: {
 
   const projectViewManager = {
     getActiveView: vi.fn((): { webContents: typeof webContents } | null => ({ webContents })),
+    getWorkspaceRefForWebContents: vi.fn((id: number) =>
+      options?.workspaceRef && id === projectViewWcId ? options.workspaceRef : null
+    ),
   };
 
   const windowContext = {
@@ -352,6 +357,7 @@ function createMockWindow(options?: {
 
   const registry = {
     all: () => [windowContext],
+    focusOrder: () => [windowContext],
     getPrimary: () => windowContext,
     getByWindowId: () => windowContext,
     getByWebContentsId: () => windowContext,
@@ -492,7 +498,6 @@ describe("McpServerService", () => {
       enabled: true,
       port: 0,
       apiKey: "",
-      fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: 500,
     };
@@ -933,34 +938,53 @@ describe("McpServerService", () => {
     // pinning, both sessions would dispatch into whatever the shared
     // `getActiveProjectWebContents()` returns first; with the fix, each
     // session routes to the WebContents that minted it.
+    const pinnedRefA = {
+      kind: "project" as const,
+      workspaceId: "proj-a",
+      workspacePath: "/repos/a",
+    };
+    const pinnedRefB = {
+      kind: "project" as const,
+      workspaceId: "proj-b",
+      workspacePath: "/repos/b",
+    };
     const winA = createMockWindow({
       getManifest: () => [
         createManifestEntry({
-          id: "actions.list",
-          title: "List Actions",
-          description: "Read the action registry",
+          id: "terminal.list",
+          title: "List Terminals",
+          description: "Read the terminal list",
           kind: "query",
         }),
       ],
       dispatchAction: () => ({ ok: true, result: "from-window-A" }),
+      workspaceRef: pinnedRefA,
     });
     const winB = createMockWindow({
       getManifest: () => [
         createManifestEntry({
-          id: "actions.list",
-          title: "List Actions",
-          description: "Read the action registry",
+          id: "terminal.list",
+          title: "List Terminals",
+          description: "Read the terminal list",
           kind: "query",
         }),
       ],
       dispatchAction: () => ({ ok: true, result: "from-window-B" }),
+      workspaceRef: pinnedRefB,
     });
 
+    // Indexed by id rather than always answering window A, so each pinned
+    // session's stamp is resolved through its OWN window's manager.
+    const pinnedContextByWcId = new Map([
+      [winA.webContents.id, winA.windowContext],
+      [winB.webContents.id, winB.windowContext],
+    ]);
     const combinedRegistry = {
       all: () => [winA.windowContext, winB.windowContext],
+      focusOrder: () => [winA.windowContext, winB.windowContext],
       getPrimary: () => winA.windowContext,
       getByWindowId: () => winA.windowContext,
-      getByWebContentsId: () => winA.windowContext,
+      getByWebContentsId: (id: number) => pinnedContextByWcId.get(id),
       size: 2,
     } as never;
 
@@ -978,11 +1002,17 @@ describe("McpServerService", () => {
     const b = await connectClient(service.currentPort!, { Authorization: "Bearer help-B" });
     transports.push(b.transport);
 
-    const resA = getTextResult(await a.client.callTool({ name: "actions.list", arguments: {} }));
-    const resB = getTextResult(await b.client.callTool({ name: "actions.list", arguments: {} }));
+    const resA = getTextResult(await a.client.callTool({ name: "terminal.list", arguments: {} }));
+    const resB = getTextResult(await b.client.callTool({ name: "terminal.list", arguments: {} }));
 
     expect(resA.content[0].text).toBe('"from-window-A"');
     expect(resB.content[0].text).toBe('"from-window-B"');
+
+    // Each pinned result reports its own window's workspace (#11536) — the
+    // stamp is resolved from the responding sender, so it is right on the
+    // pinned path too, not just the focus-following external one.
+    expect(resA._meta?.["org.daintree/resolved-workspace"]).toEqual(pinnedRefA);
+    expect(resB._meta?.["org.daintree/resolved-workspace"]).toEqual(pinnedRefB);
 
     // Both windows' WebContents.send must have been invoked — and only for
     // the dispatch belonging to that window. (Each window also receives one
@@ -998,6 +1028,71 @@ describe("McpServerService", () => {
     expect(sendsToB).toHaveLength(1);
   });
 
+  it("routes an unpinned external session by focus order and reports the workspace it landed on (#11536)", async () => {
+    // Registration order is [A, B]; focus order is the opposite. Before the
+    // fix the bridge walked `all()` (Map insertion order) and every external
+    // call landed on A — whichever window happened to register first —
+    // regardless of what the user was actually looking at.
+    // A non-introspection carrier: tier filtering rewrites `actions.list`
+    // results (#11525), which would replace the routing payload this test reads.
+    // The routing behaviour is tool-agnostic, and `terminal.list` is reachable
+    // at the external tier on the curated allowlist alone.
+    const manifest = () => [
+      createManifestEntry({
+        id: "terminal.list",
+        title: "List Terminals",
+        description: "Read the terminal list",
+        kind: "query",
+      }),
+    ];
+    const refA = { kind: "project" as const, workspaceId: "proj-a", workspacePath: "/repos/a" };
+    const refB = { kind: "project" as const, workspaceId: "proj-b", workspacePath: "/repos/b" };
+    const winA = createMockWindow({
+      getManifest: manifest,
+      dispatchAction: () => ({ ok: true, result: "from-window-A" }),
+      workspaceRef: refA,
+    });
+    const winB = createMockWindow({
+      getManifest: manifest,
+      dispatchAction: () => ({ ok: true, result: "from-window-B" }),
+      workspaceRef: refB,
+    });
+
+    const focus = { current: [winB.windowContext, winA.windowContext] };
+    const contextByWcId = new Map([
+      [winA.webContents.id, winA.windowContext],
+      [winB.webContents.id, winB.windowContext],
+    ]);
+    const combinedRegistry = {
+      all: () => [winA.windowContext, winB.windowContext],
+      focusOrder: () => focus.current,
+      getPrimary: () => winA.windowContext,
+      getByWindowId: () => winA.windowContext,
+      getByWebContentsId: (id: number) => contextByWcId.get(id),
+      size: 2,
+    } as never;
+
+    await service.start(combinedRegistry);
+
+    // No help token — an api-key bearer, i.e. the unpinned external path.
+    const external = await connectClient(service.currentPort!);
+    transports.push(external.transport);
+
+    const first = await external.client.callTool({ name: "terminal.list", arguments: {} });
+    expect(getTextResult(first).content[0].text).toBe('"from-window-B"');
+    // Read by literal key, as a real external client would: this string is the
+    // wire contract, so renaming it must fail here even if the constant moves.
+    expect(first._meta?.["org.daintree/resolved-workspace"]).toEqual(refB);
+
+    // The user switches windows mid-session. The session stays unpinned by
+    // design (#7003), so the next call follows focus — and says so.
+    focus.current = [winA.windowContext, winB.windowContext];
+
+    const second = await external.client.callTool({ name: "terminal.list", arguments: {} });
+    expect(getTextResult(second).content[0].text).toBe('"from-window-A"');
+    expect(second._meta?.["org.daintree/resolved-workspace"]).toEqual(refA);
+  });
+
   it("fails closed when the pinned WebContents has been destroyed (#7002 — never silently re-routes)", async () => {
     const winA = createMockWindow({
       dispatchAction: () => ({ ok: true, result: "from-A" }),
@@ -1008,6 +1103,7 @@ describe("McpServerService", () => {
 
     const combinedRegistry = {
       all: () => [winA.windowContext, winB.windowContext],
+      focusOrder: () => [winA.windowContext, winB.windowContext],
       getPrimary: () => winA.windowContext,
       getByWindowId: () => winA.windowContext,
       getByWebContentsId: () => winA.windowContext,
@@ -1115,6 +1211,7 @@ describe("McpServerService", () => {
 
     const combinedRegistry = {
       all: () => [winA.windowContext, winB.windowContext],
+      focusOrder: () => [winA.windowContext, winB.windowContext],
       getPrimary: () => winA.windowContext,
       getByWindowId: () => winA.windowContext,
       getByWebContentsId: () => winA.windowContext,
@@ -1135,7 +1232,7 @@ describe("McpServerService", () => {
     transports.push(ext.transport);
 
     const result = getTextResult(
-      await ext.client.callTool({ name: "actions.list", arguments: {} })
+      await ext.client.callTool({ name: "terminal.list", arguments: {} })
     );
 
     // Falls through to getActiveProjectWebContents which returns winA (first
@@ -1166,7 +1263,9 @@ describe("McpServerService", () => {
     expect(webContents.send).not.toHaveBeenCalled();
   });
 
-  it("hides non-allowlisted tools by default (curated MCP surface)", async () => {
+  // The curated allowlist is the only external surface — nothing widens it
+  // (#10701, #11537). Non-allowlisted and restricted entries both stay off.
+  it("hides non-allowlisted and restricted tools (curated MCP surface)", async () => {
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
@@ -1180,39 +1279,13 @@ describe("McpServerService", () => {
           title: "Set grid layout",
           description: "UI plumbing — should not appear in curated surface",
         }),
-      ],
-    });
-
-    await service.start(window);
-    const { client, transport } = await connectClient(service.currentPort!);
-    transports.push(transport);
-
-    const result = await client.listTools();
-    const ids = result.tools.map((tool) => tool.name);
-
-    expect(ids).toContain("actions.list");
-    expect(ids).not.toContain("panel.gridLayout.setStrategy");
-  });
-
-  it("keeps non-allowlisted tools off the surface even when fullToolSurface is enabled (#10701)", async () => {
-    storeState.mcpServer.fullToolSurface = true;
-    const { window } = createMockWindow({
-      getManifest: () => [
+        // Allowlisted, so only the restricted filter can withhold it — using a
+        // non-allowlisted id here would pass even with that filter deleted.
         createManifestEntry({
-          id: "actions.list" as ActionId,
-          title: "List Actions",
-          description: "Read the action registry",
+          id: "actions.search" as ActionId,
+          title: "Search Actions",
+          description: "Restricted despite being allowlisted",
           kind: "query",
-        }),
-        createManifestEntry({
-          id: "panel.gridLayout.setStrategy" as ActionId,
-          title: "Set grid layout",
-          description: "Sensitive UI plumbing — not in the curated allowlist",
-        }),
-        createManifestEntry({
-          id: "internal.dangerous" as ActionId,
-          title: "Restricted",
-          description: "Should never be advertised",
           danger: "restricted",
         }),
       ],
@@ -1225,16 +1298,12 @@ describe("McpServerService", () => {
     const result = await client.listTools();
     const ids = result.tools.map((tool) => tool.name);
 
-    // fullToolSurface lifts the floor through the curated full-surface allowlist;
-    // it does not bypass it. Allowlisted tools stay reachable; non-allowlisted
-    // and restricted tools stay hidden.
     expect(ids).toContain("actions.list");
     expect(ids).not.toContain("panel.gridLayout.setStrategy");
-    expect(ids).not.toContain("internal.dangerous");
+    expect(ids).not.toContain("actions.search");
   });
 
-  it("denies dispatch of non-allowlisted tools even with fullToolSurface enabled (#10701)", async () => {
-    storeState.mcpServer.fullToolSurface = true;
+  it("denies dispatch of non-allowlisted tools for the external tier (#10701)", async () => {
     const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
       ok: true,
       result: { dispatched: payload.actionId },
@@ -1267,8 +1336,16 @@ describe("McpServerService", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("treats non-true fullToolSurface values as curated (fail-closed)", async () => {
-    (storeState.mcpServer as { fullToolSurface: unknown }).fullToolSurface = "false";
+  // A store written before #11537 (or hand-edited since) can still carry
+  // `mcpServer.fullToolSurface: true` until migration 026 runs. It must be inert
+  // — this is the regression guard for reintroducing the #10701 config-gated
+  // bypass, which no other test would catch now that the flag is gone.
+  it("ignores a stale persisted fullToolSurface key (#11537)", async () => {
+    (storeState.mcpServer as Record<string, unknown>)["fullToolSurface"] = true;
+    const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => ({
+      ok: true,
+      result: { dispatched: payload.actionId },
+    }));
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
@@ -1277,12 +1354,16 @@ describe("McpServerService", () => {
           description: "Read the action registry",
           kind: "query",
         }),
+        // Real, currently-shipping danger:"safe" action with a genuine side
+        // effect that the curated allowlist deliberately excludes — one of the
+        // 335 the old flag leaked.
         createManifestEntry({
-          id: "panel.gridLayout.setStrategy" as ActionId,
-          title: "Set grid layout",
-          description: "UI plumbing",
+          id: "system.openExternal" as ActionId,
+          title: "Open External URL",
+          description: "Launches a URL in the OS browser",
         }),
       ],
+      dispatchAction: dispatchMock,
     });
 
     await service.start(window);
@@ -1291,7 +1372,15 @@ describe("McpServerService", () => {
 
     const ids = (await client.listTools()).tools.map((tool) => tool.name);
     expect(ids).toContain("actions.list");
-    expect(ids).not.toContain("panel.gridLayout.setStrategy");
+    expect(ids).not.toContain("system.openExternal");
+
+    const result = getTextResult(
+      await client.callTool({ name: "system.openExternal", arguments: { url: "https://x.test" } })
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("TIER_NOT_PERMITTED");
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 
   it("denies non-allowlisted actions for the external tier (dispatch never reached)", async () => {

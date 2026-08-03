@@ -10,6 +10,7 @@ import type {
   AgentUpdateSettings,
   AppAgentConfig,
 } from "../shared/types/index.js";
+import type { PendingUpdateInstallStage } from "./utils/updateInstallStages.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
@@ -266,7 +267,6 @@ export interface StoreSchema {
     enabled: boolean;
     port: number | null;
     apiKey: string;
-    fullToolSurface: boolean;
     auditEnabled: boolean;
     auditMaxRecords: number;
     /** @deprecated Moved to the audit-logs store by migration022. Read-only carryover. */
@@ -365,6 +365,22 @@ export interface StoreSchema {
    * pending" — no migration entry required (mirrors `dismissedUpdateVersion`).
    */
   pendingUpdateVersion?: string;
+  /**
+   * How far the last install attempt got, written before the process hands off
+   * to the installer and read alongside `pendingUpdateVersion` on the next boot.
+   * Its presence is what separates "an install was tried and the version still
+   * didn't move" from "a staged update simply never got installed" — an app
+   * killed before `autoInstallOnAppQuit` runs leaves the version marker behind
+   * too, and there the staged installer is still perfectly good. Only a stored
+   * attempt promotes the boot-time mismatch from telemetry to a user-facing
+   * recovery prompt.
+   *
+   * A closed enum, never a raw error string: electron-updater and Squirrel
+   * embed absolute cache paths in their messages, which would persist the
+   * user's home directory into the config file. Absent means "no install
+   * attempted" — no migration entry required (mirrors `dismissedUpdateVersion`).
+   */
+  pendingUpdateInstallStage?: PendingUpdateInstallStage;
   /**
    * Windows Store notifier state. All fields are optional and read with `??`
    * fallbacks at the call site so an absent value behaves like a default —
@@ -599,7 +615,7 @@ const storeOptions = {
       language: "en",
       customDictionary: [],
       transcriptionProvider: "openai",
-      transcriptionModel: "gpt-realtime-whisper",
+      transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
       correctionModel: "gpt-5.6-luna",
       correctionCustomInstructions: "",
@@ -616,7 +632,6 @@ const storeOptions = {
       enabled: false,
       port: 45454,
       apiKey: "",
-      fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: MCP_AUDIT_DEFAULT_MAX_RECORDS,
       abusePolicyEnabled: false,

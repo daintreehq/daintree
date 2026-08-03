@@ -147,6 +147,10 @@ import {
   registerPluginAgents,
   unregisterPluginAgents,
 } from "../../shared/config/pluginAgentRegistry.js";
+import {
+  registerPluginProcessTools,
+  unregisterPluginProcessTools,
+} from "../../shared/config/pluginProcessToolRegistry.js";
 import { registerPluginSkills, unregisterPluginSkills } from "./plugin/PluginSkillRegistry.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
@@ -1382,6 +1386,14 @@ export class PluginService {
       // renderer is covered by the broadcast above; the pty-host is a separate
       // process that never registers agents itself.
       getPtyClient()?.syncPluginAgentRegistry();
+    }
+
+    if (manifest.contributes.processTools.length > 0) {
+      registerPluginProcessTools(manifest.name, manifest.contributes.processTools);
+      // Mirror into the pty-host, where `ProcessDetector` runs — the renderer
+      // needs no broadcast because the detected icon id already reaches it on
+      // the terminal identity event (#11613).
+      getPtyClient()?.syncPluginProcessToolRegistry();
     }
 
     // Insert the plugin into the registry BEFORE importing its main module so
@@ -3044,6 +3056,16 @@ export class PluginService {
     // detection patterns for the unloaded plugin's agents (#10587).
     runUnloadStep(pluginId, "syncPluginAgentRegistryToPtyHost", () =>
       getPtyClient()?.syncPluginAgentRegistry()
+    );
+    runUnloadStep(pluginId, "unregisterPluginProcessTools", () =>
+      unregisterPluginProcessTools(pluginId)
+    );
+    // Re-mirror the (now-smaller) registry so the pty-host stops resolving the
+    // unloaded plugin's command detections. A discrete step from the unregister
+    // above per the unload-cascade contract — a throw in one can't strand the
+    // other (#11613).
+    runUnloadStep(pluginId, "syncPluginProcessToolRegistryToPtyHost", () =>
+      getPtyClient()?.syncPluginProcessToolRegistry()
     );
     // Subscriber disposers already fired in flushPluginEventCleanups() above;
     // this drops any leftover subscriber-set entry and the in-memory settings

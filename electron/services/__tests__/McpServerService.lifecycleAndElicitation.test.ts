@@ -77,7 +77,6 @@ const storeState = vi.hoisted(() => ({
     enabled: true,
     port: 0,
     apiKey: "",
-    fullToolSurface: false,
     auditEnabled: true,
     auditMaxRecords: 500,
   },
@@ -338,6 +337,8 @@ function createMockWindow(options?: {
 
   const projectViewManager = {
     getActiveView: vi.fn((): { webContents: typeof webContents } | null => ({ webContents })),
+
+    getWorkspaceRefForWebContents: vi.fn(() => null),
   };
 
   const windowContext = {
@@ -352,6 +353,7 @@ function createMockWindow(options?: {
 
   const registry = {
     all: () => [windowContext],
+    focusOrder: () => [windowContext],
     getPrimary: () => windowContext,
     getByWindowId: () => windowContext,
     getByWebContentsId: () => windowContext,
@@ -425,7 +427,6 @@ describe("McpServerService", () => {
       enabled: true,
       port: 0,
       apiKey: "",
-      fullToolSurface: false,
       auditEnabled: true,
       auditMaxRecords: 500,
     };
@@ -496,16 +497,16 @@ describe("McpServerService", () => {
           kind: "query",
         }),
         createManifestEntry({
-          id: "worktree.delete" as ActionId,
-          title: "Delete Worktree",
-          description: "Delete a worktree",
+          id: "recipe.run" as ActionId,
+          title: "Run Recipe",
+          description: "Run a saved recipe",
           danger: "confirm",
           inputSchema: {
             type: "object",
             properties: {
-              worktreeId: { type: "string" },
+              recipeId: { type: "string" },
             },
-            required: ["worktreeId"],
+            required: ["recipeId"],
           },
           requiresArgs: true,
         }),
@@ -518,7 +519,7 @@ describe("McpServerService", () => {
 
     const result = await client.listTools();
     const safeTool = result.tools.find((tool) => tool.name === "actions.list");
-    const dangerousTool = result.tools.find((tool) => tool.name === "worktree.delete");
+    const dangerousTool = result.tools.find((tool) => tool.name === "recipe.run");
 
     expect(safeTool).toBeDefined();
     expect(dangerousTool).toBeDefined();
@@ -531,7 +532,7 @@ describe("McpServerService", () => {
     expect(safeTool?.inputSchema.additionalProperties).toBe(false);
     expect(dangerousTool?.inputSchema.additionalProperties).toBe(false);
     expect(dangerousTool?.inputSchema.properties).toEqual({
-      worktreeId: { type: "string" },
+      recipeId: { type: "string" },
     });
     expect(dangerousTool?.inputSchema.properties?._meta).toBeUndefined();
 
@@ -550,7 +551,7 @@ describe("McpServerService", () => {
     // primary signal clients use to detect that a host confirmation will be
     // required on the next `tools/call` for this tool.
     expect(dangerousTool?.annotations).toEqual({
-      title: "Delete Worktree",
+      title: "Run Recipe",
       readOnlyHint: false,
       idempotentHint: false,
       destructiveHint: true,
@@ -563,9 +564,9 @@ describe("McpServerService", () => {
       getManifest: () => [
         // Query that requires UX confirmation but is not destructive.
         createManifestEntry({
-          id: "copyTree.generate" as ActionId,
-          title: "Generate Context",
-          description: "Generate worktree context",
+          id: "terminal.new" as ActionId,
+          title: "New Terminal",
+          description: "Open a terminal",
           kind: "query",
           danger: "confirm",
           mcpAnnotations: { destructiveHint: false },
@@ -573,7 +574,7 @@ describe("McpServerService", () => {
         // Command that is semantically a read-only lookup; both readOnly and
         // idempotent hints are forced on via override.
         createManifestEntry({
-          id: "git.stageFile" as ActionId,
+          id: "terminal.inject" as ActionId,
           title: "Read Only Command",
           description: "Allowlisted command used for override coverage",
           kind: "command",
@@ -583,7 +584,7 @@ describe("McpServerService", () => {
         // Query whose readOnly/idempotent hints are explicitly forced off via
         // override — guards against regressing the merge from `??` to `||`.
         createManifestEntry({
-          id: "git.listCommits" as ActionId,
+          id: "terminal.getOutput" as ActionId,
           title: "Query With False Overrides",
           description: "Allowlisted query whose hints are explicitly false",
           kind: "query",
@@ -598,14 +599,14 @@ describe("McpServerService", () => {
     transports.push(transport);
 
     const result = await client.listTools();
-    const generate = result.tools.find((t) => t.name === "copyTree.generate");
-    const readOnlyCmd = result.tools.find((t) => t.name === "git.stageFile");
-    const queryFalse = result.tools.find((t) => t.name === "git.listCommits");
+    const newTerminal = result.tools.find((t) => t.name === "terminal.new");
+    const readOnlyCmd = result.tools.find((t) => t.name === "terminal.inject");
+    const queryFalse = result.tools.find((t) => t.name === "terminal.getOutput");
 
     // Override flips destructiveHint off; readOnlyHint/idempotentHint still
     // come from the `kind: "query"` default. openWorldHint now defaults to true.
-    expect(generate?.annotations).toEqual({
-      title: "Generate Context",
+    expect(newTerminal?.annotations).toEqual({
+      title: "New Terminal",
       readOnlyHint: true,
       idempotentHint: true,
       destructiveHint: false,
@@ -640,9 +641,9 @@ describe("McpServerService", () => {
       getManifest: () => [
         // openWorldHint defaults to true; explicit false override must win.
         createManifestEntry({
-          id: "worktree.delete" as ActionId,
-          title: "Reset All Keybindings",
-          description: "Local-only destructive action",
+          id: "recipe.run" as ActionId,
+          title: "Run Recipe",
+          description: "Local-only confirm-gated action",
           category: "settings",
           kind: "command",
           danger: "confirm",
@@ -650,9 +651,9 @@ describe("McpServerService", () => {
         }),
         // No override — must default to true (spec-conservative).
         createManifestEntry({
-          id: "forge.createPR" as ActionId,
-          title: "Some GitHub Tool",
-          description: "Tool without openWorldHint override",
+          id: "agent.launch" as ActionId,
+          title: "Launch Agent",
+          description: "Tool without an openWorldHint override",
           category: "github",
           kind: "command",
           danger: "safe",
@@ -670,27 +671,27 @@ describe("McpServerService", () => {
     transports.push(transport);
 
     const result = await client.listTools();
-    const localTool = result.tools.find((t) => t.name === "worktree.delete");
-    const ghTool = result.tools.find((t) => t.name === "forge.createPR");
+    const localTool = result.tools.find((t) => t.name === "recipe.run");
+    const openWorldTool = result.tools.find((t) => t.name === "agent.launch");
 
     expect(localTool?.annotations?.openWorldHint).toBe(false);
-    expect(ghTool?.annotations?.openWorldHint).toBe(true);
+    expect(openWorldTool?.annotations?.openWorldHint).toBe(true);
   });
 
   it("defaults openWorldHint to true for all categories per spec", async () => {
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
-          id: "forge.listPRs" as ActionId,
-          title: "List PRs",
-          description: "List pull requests",
+          id: "recipe.list" as ActionId,
+          title: "List Recipes",
+          description: "List recipes",
           category: "github",
           kind: "query",
         }),
         createManifestEntry({
-          id: "system.checkCommand" as ActionId,
-          title: "Check Command",
-          description: "Check if a command exists",
+          id: "terminal.getStatus" as ActionId,
+          title: "Terminal Status",
+          description: "Read terminal status",
           category: "system",
           kind: "query",
         }),
@@ -709,11 +710,11 @@ describe("McpServerService", () => {
     transports.push(transport);
 
     const result = await client.listTools();
-    const ghTool = result.tools.find((t) => t.name === "forge.listPRs");
-    const systemTool = result.tools.find((t) => t.name === "system.checkCommand");
+    const queryTool = result.tools.find((t) => t.name === "recipe.list");
+    const systemTool = result.tools.find((t) => t.name === "terminal.getStatus");
     const wtTool = result.tools.find((t) => t.name === "worktree.createWithRecipe");
 
-    expect(ghTool?.annotations?.openWorldHint).toBe(true);
+    expect(queryTool?.annotations?.openWorldHint).toBe(true);
     expect(systemTool?.annotations?.openWorldHint).toBe(true);
     expect(wtTool?.annotations?.openWorldHint).toBe(true);
   });
@@ -742,16 +743,16 @@ describe("McpServerService", () => {
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
-          id: "worktree.delete" as ActionId,
-          title: "Delete Worktree",
-          description: "Delete a worktree",
+          id: "recipe.run" as ActionId,
+          title: "Run Recipe",
+          description: "Run a saved recipe",
           danger: "confirm",
           inputSchema: {
             type: "object",
             properties: {
-              worktreeId: { type: "string" },
+              recipeId: { type: "string" },
             },
-            required: ["worktreeId"],
+            required: ["recipeId"],
           },
           requiresArgs: true,
         }),
@@ -775,8 +776,8 @@ describe("McpServerService", () => {
 
     const unconfirmed = getTextResult(
       await client.callTool({
-        name: "worktree.delete",
-        arguments: { worktreeId: "wt-123" },
+        name: "recipe.run",
+        arguments: { recipeId: "r-123" },
       })
     );
 
@@ -789,8 +790,8 @@ describe("McpServerService", () => {
     expect(dispatchMock).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        actionId: "worktree.delete",
-        args: { worktreeId: "wt-123" },
+        actionId: "recipe.run",
+        args: { recipeId: "r-123" },
         confirmed: false,
       })
     );
@@ -889,9 +890,9 @@ describe("McpServerService", () => {
     const { window } = createMockWindow({
       getManifest: () => [
         createManifestEntry({
-          id: "worktree.delete" as ActionId,
-          title: "Delete Worktree",
-          description: "Delete a worktree",
+          id: "recipe.run" as ActionId,
+          title: "Run Recipe",
+          description: "Run a saved recipe",
           danger: "confirm",
         }),
       ],
@@ -908,9 +909,9 @@ describe("McpServerService", () => {
     // from the args envelope before reaching the renderer.
     const result = getTextResult(
       await client.callTool({
-        name: "worktree.delete",
+        name: "recipe.run",
         arguments: {
-          worktreeId: "wt-123",
+          recipeId: "r-123",
           _meta: { confirmed: true },
         },
       })
@@ -922,8 +923,8 @@ describe("McpServerService", () => {
     expect(dispatchMock).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        actionId: "worktree.delete",
-        args: { worktreeId: "wt-123" },
+        actionId: "recipe.run",
+        args: { recipeId: "r-123" },
         confirmed: false,
       })
     );
@@ -950,7 +951,7 @@ describe("McpServerService", () => {
         }
         return {
           ok: true,
-          result: { deleted: true },
+          result: { ran: true },
         };
       });
     }
@@ -962,7 +963,7 @@ describe("McpServerService", () => {
       // client advertises `elicitation.form` and auto-accepts, but the server
       // must never consult it — approval authority lives host-side (#11342).
       const dispatchMock = vi.fn(() => ({
-        result: { ok: true, result: { deleted: true } } as ActionDispatchResult,
+        result: { ok: true, result: { ran: true } } as ActionDispatchResult,
         confirmationDecision: "approved" as const,
       }));
       const onElicit = vi.fn(async (): Promise<ElicitResult> => ({
@@ -972,9 +973,9 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "worktree.delete" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            id: "recipe.run" as ActionId,
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
         ],
@@ -990,22 +991,22 @@ describe("McpServerService", () => {
 
       const result = getTextResult(
         await client.callTool({
-          name: "worktree.delete",
-          arguments: { worktreeId: "wt-123" },
+          name: "recipe.run",
+          arguments: { recipeId: "r-123" },
         })
       );
 
       // The self-declared elicitation capability is never exercised.
       expect(onElicit).not.toHaveBeenCalled();
       expect(result.isError).not.toBe(true);
-      expect(result.content[0].text).toContain('"deleted": true');
+      expect(JSON.parse(result.content[0].text)).toEqual({ ran: true });
       // Exactly one dispatch, sent UNCONFIRMED — the renderer owns the confirm.
       expect(dispatchMock).toHaveBeenCalledTimes(1);
       expect(dispatchMock).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
-          actionId: "worktree.delete",
-          args: { worktreeId: "wt-123" },
+          actionId: "recipe.run",
+          args: { recipeId: "r-123" },
           confirmed: false,
         })
       );
@@ -1035,9 +1036,9 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "worktree.delete" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            id: "recipe.run" as ActionId,
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
         ],
@@ -1053,8 +1054,8 @@ describe("McpServerService", () => {
 
       const result = getTextResult(
         await client.callTool({
-          name: "worktree.delete",
-          arguments: { worktreeId: "wt-123" },
+          name: "recipe.run",
+          arguments: { recipeId: "r-123" },
         })
       );
 
@@ -1064,7 +1065,7 @@ describe("McpServerService", () => {
       expect(dispatchMock).toHaveBeenCalledTimes(1);
       expect(dispatchMock).toHaveBeenNthCalledWith(
         1,
-        expect.objectContaining({ actionId: "worktree.delete", confirmed: false })
+        expect.objectContaining({ actionId: "recipe.run", confirmed: false })
       );
 
       const records = readAuditRecords(service);
@@ -1088,9 +1089,9 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "worktree.delete" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            id: "recipe.run" as ActionId,
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
         ],
@@ -1106,8 +1107,8 @@ describe("McpServerService", () => {
 
       const result = getTextResult(
         await client.callTool({
-          name: "worktree.delete",
-          arguments: { worktreeId: "wt-123" },
+          name: "recipe.run",
+          arguments: { recipeId: "r-123" },
         })
       );
 
@@ -1117,7 +1118,7 @@ describe("McpServerService", () => {
       expect(dispatchMock).toHaveBeenCalledTimes(1);
       expect(dispatchMock).toHaveBeenNthCalledWith(
         1,
-        expect.objectContaining({ actionId: "worktree.delete", confirmed: false })
+        expect.objectContaining({ actionId: "recipe.run", confirmed: false })
       );
 
       const records = readAuditRecords(service);
@@ -1145,9 +1146,9 @@ describe("McpServerService", () => {
       const { window } = createMockWindow({
         getManifest: () => [
           createManifestEntry({
-            id: "worktree.delete" as ActionId,
-            title: "Delete Worktree",
-            description: "Delete a worktree",
+            id: "recipe.run" as ActionId,
+            title: "Run Recipe",
+            description: "Run a saved recipe",
             danger: "confirm",
           }),
         ],
@@ -1163,8 +1164,8 @@ describe("McpServerService", () => {
 
       const result = getTextResult(
         await client.callTool({
-          name: "worktree.delete",
-          arguments: { worktreeId: "wt-1" },
+          name: "recipe.run",
+          arguments: { recipeId: "r-1" },
         })
       );
 
@@ -1176,7 +1177,7 @@ describe("McpServerService", () => {
       // host envelope, never a client-forged confirmed:true (#11342).
       expect(dispatchMock).toHaveBeenNthCalledWith(
         1,
-        expect.objectContaining({ actionId: "worktree.delete", confirmed: false })
+        expect.objectContaining({ actionId: "recipe.run", confirmed: false })
       );
 
       const records = readAuditRecords(service);

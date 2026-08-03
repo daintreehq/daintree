@@ -62,8 +62,20 @@ export function summarizeForgeArgs(
       if (typeof opts.perPage === "number") summary.perPage = opts.perPage;
       return JSON.stringify(summary);
     }
+    case "listIssueComments": {
+      // Paging shape only. Comment bodies are the whole payload here and are
+      // never summarized; the cursor is opaque but can encode position, so
+      // only its presence is recorded.
+      const opts = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
+      const summary: Record<string, unknown> = {};
+      if (typeof opts.issueNumber === "number") summary.number = opts.issueNumber;
+      if (typeof opts.perPage === "number") summary.perPage = opts.perPage;
+      if (typeof opts.cursor === "string") summary.paged = true;
+      return JSON.stringify(summary);
+    }
     case "getIssue":
     case "getPR":
+    case "getCIStatus":
     case "assignIssue":
     case "unassignIssue":
     case "approvePR":

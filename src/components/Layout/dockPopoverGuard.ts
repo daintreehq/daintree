@@ -1,3 +1,5 @@
+import { markEscapeYieldedToDialog, ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
+
 type RadixOutsideEvent = Event & {
   preventDefault: () => void;
   detail?: {
@@ -68,7 +70,28 @@ export function handleDockEscapeKeyDown(
 ) {
   if (portalContainer?.contains(document.activeElement)) {
     event.preventDefault();
+    return;
   }
+  // A dialog opened from inside this popover (a file viewer, a kill
+  // confirmation) portals to the body and traps focus, so the check above
+  // misses it and Radix would dismiss the popover out from under a dialog the
+  // user is looking at. The focused dialog owns Escape: block the dock's
+  // dismissal and hand the keypress to `AppDialog`'s backstop, which otherwise
+  // stands down on seeing this popover open (#11505).
+  if (isFocusInsideBackstopDialog()) {
+    event.preventDefault();
+    markEscapeYieldedToDialog(event);
+  }
+}
+
+/**
+ * Whether focus sits inside a dialog whose Escape the shared backstop handles.
+ * Scoped to that contract rather than `aria-modal`, so the popover only steps
+ * aside for a surface that will actually take the keypress.
+ */
+function isFocusInsideBackstopDialog(): boolean {
+  const active = document.activeElement;
+  return active instanceof Element && active.closest(`[${ESCAPE_BACKSTOP_DIALOG_ATTR}]`) !== null;
 }
 
 /**

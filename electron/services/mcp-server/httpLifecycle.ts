@@ -43,6 +43,7 @@ import type { SessionStore } from "./sessionStore.js";
 import type { AuditService } from "./auditLog.js";
 import { classifyMcpDispatchResult } from "./auditLog.js";
 import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js";
+import { buildMcpClientConfig } from "../../../shared/config/mcpClientConfigs.js";
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
 import type { AbusePolicy } from "./abusePolicy.js";
 import {
@@ -54,7 +55,6 @@ import {
   RESTART_JITTER_MS,
   RESTART_STABLE_RESET_MS,
   MCP_STOP_DRAIN_TIMEOUT_MS,
-  MCP_SERVER_KEY,
   MCP_TIER_ELEVATION_TTL_MS,
   MCP_GRANT_MAX_LIFETIME_MS,
   MCP_NATIVE_GRANT_DEFAULT_MAX_USES,
@@ -104,6 +104,10 @@ export interface HttpLifecycleDeps {
     rawArgs: unknown
   ) => import("../../../shared/types/skills.js").SkillSearchResult;
   handleSkillsLoad: (rawArgs: unknown) => import("../../../shared/types/skills.js").SkillLoadResult;
+  handleProjectRunCheck: (
+    rawArgs: unknown,
+    signal: AbortSignal
+  ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   // Per-WebContents manifest cache read for pinned help sessions (#9887). Lets
   // the pinned `getCachedManifest` closure return the session's own window's
@@ -1450,6 +1454,7 @@ export class HttpLifecycle {
       handleWaitUntilIdleBatch: this.deps.handleWaitUntilIdleBatch,
       handleSkillsSearch: this.deps.handleSkillsSearch,
       handleSkillsLoad: this.deps.handleSkillsLoad,
+      handleProjectRunCheck: this.deps.handleProjectRunCheck,
       appendAuditRecord: (input) => {
         // Scrub structural secrets BEFORE the truncation step inside
         // `summarizeMcpArgs` — running the scrubber after truncation would
@@ -1488,7 +1493,6 @@ export class HttpLifecycle {
         });
       },
       getCachedManifest,
-      getFullToolSurface: () => this.getConfig().fullToolSurface === true,
       notifyTierMismatch,
       recordDenial,
       notifySessionRevoked,
@@ -1617,6 +1621,15 @@ export class HttpLifecycle {
     }
     if (callerWcId !== undefined && callerWcId !== pinnedWcId) {
       throw new Error("Caller is not the pinned renderer for this session");
+    }
+    // Same floor `issueNativeGrant` enforces: a grant may only name a tool some
+    // non-external help tier already permits. Without this the single-tool path
+    // could mint a grant for an id in NO tier at all (`actions.persistedStores`),
+    // and the call gate honours a grant over failed tier membership — so the
+    // authorization contract would rest on the UI never offering the button
+    // rather than on the main process refusing (#11585).
+    if (minimumPermittingTier(toolId) === null) {
+      throw new Error(`Unknown or non-grantable tool: ${toolId}`);
     }
     const entry = this.deps.sessionStore.grantCache.issueGrant(sessionId, toolId);
     return {
@@ -1811,12 +1824,14 @@ export class HttpLifecycle {
     };
   }
 
+  /**
+   * The Claude Code shape, kept as the zero-argument IPC contract. Per-client
+   * variants are built in the renderer from the same shared builder (#11535).
+   */
   getConfigSnippet(): string {
-    const url = this.port ? `http://127.0.0.1:${this.port}/mcp` : "http://127.0.0.1:<port>/mcp";
-    const entry: Record<string, unknown> = { type: "http", url };
-    if (this.apiKey) {
-      entry.headers = { Authorization: `Bearer ${this.apiKey}` };
-    }
-    return JSON.stringify({ mcpServers: { [MCP_SERVER_KEY]: entry } }, null, 2);
+    return buildMcpClientConfig("claude-code", {
+      port: this.port,
+      apiKey: this.apiKey ?? null,
+    }).snippet;
   }
 }

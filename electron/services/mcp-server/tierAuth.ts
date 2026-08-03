@@ -1,10 +1,16 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import type { ActionManifestEntry } from "../../../shared/types/actions.js";
+import type { ActionDispatchResult, ActionManifestEntry } from "../../../shared/types/actions.js";
 import { deriveBand, BAND_OVERRIDES } from "../../../shared/utils/actionRiskBand.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import type { HelpTokenValidator } from "./shared.js";
-import { type McpTier, TIER_ALLOWLISTS, MCP_FULL_TOOL_SURFACE_ALLOWLIST } from "./shared.js";
+import { type McpTier, TIER_ALLOWLISTS } from "./shared.js";
+import {
+  ACTIONS_LIST_DEFAULT_LIMIT,
+  ACTIONS_LIST_MAX_LIMIT,
+  ACTIONS_SEARCH_DEFAULT_LIMIT,
+  ACTIONS_SEARCH_MAX_LIMIT,
+} from "../../../shared/config/mcpIntrospection.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -83,35 +89,270 @@ export function resolveTokenTier(
   return "workbench";
 }
 
-export function shouldExposeTool(
-  entry: ActionManifestEntry,
-  tier: McpTier,
-  fullToolSurface: boolean
-): boolean {
+/**
+ * `tools/list` gate. The manifest-metadata exclusions are advertisement-only
+ * filters layered on top of the tier floor; membership itself defers to
+ * {@link isTierPermitted} so exposure and dispatch can never drift apart and
+ * advertise a tool the dispatcher then rejects (#7155).
+ *
+ * Only two things withhold a tier-permitted tool from the listing, and both are
+ * genuine ceilings rather than deferrals: `danger: "restricted"` (which
+ * `ActionService.dispatch` rejects independently of tier) and
+ * `mcpVisibility: "hidden"`. `mcpVisibility: "discoverable"` used to be a third,
+ * on the theory that omitted tools stayed reachable through the meta-tools —
+ * #11585 established that no shipped client can act on that, so withholding a
+ * name is equivalent to revoking it. Tools we do not want an external caller to
+ * reach are now cut from the tier allowlist itself, which revokes them honestly
+ * at both gates.
+ */
+export function shouldExposeTool(entry: ActionManifestEntry, tier: McpTier): boolean {
   if (entry.danger === "restricted") {
     return false;
   }
   if (entry.mcpVisibility === "hidden") {
     return false;
   }
-  if (entry.mcpVisibility === "discoverable") {
-    return false;
-  }
-  if (tier === "external" && fullToolSurface) {
-    return MCP_FULL_TOOL_SURFACE_ALLOWLIST.has(entry.id);
-  }
-  return TIER_ALLOWLISTS[tier].has(entry.id);
+  return isTierPermitted(tier, entry.id);
 }
 
-export function isTierPermitted(
-  tier: McpTier,
-  actionId: string,
-  fullToolSurface: boolean
-): boolean {
-  if (tier === "external" && fullToolSurface) {
-    return MCP_FULL_TOOL_SURFACE_ALLOWLIST.has(actionId);
+/**
+ * The exact allowlist {@link isTierPermitted} consults for a tier. Exposed as a
+ * set so discovery filtering can enumerate the tier's surface instead of
+ * probing it id-by-id; both callers share this one selector so the discovery
+ * gate can never drift from the dispatch gate.
+ */
+export function getTierPermittedActionIds(tier: McpTier): ReadonlySet<string> {
+  return TIER_ALLOWLISTS[tier];
+}
+
+export function isTierPermitted(tier: McpTier, actionId: string): boolean {
+  return getTierPermittedActionIds(tier).has(actionId);
+}
+
+/**
+ * The introspection tools whose results enumerate the action registry, and so
+ * must be narrowed to the caller's effective surface (#11525). Discovery that
+ * advertises ids the session cannot dispatch just trades a `TIER_NOT_PERMITTED`
+ * round-trip for every pick the model makes.
+ *
+ * `actions.getContext` / `actions.persistedStores` never touch the registry —
+ * there is nothing tier-shaped in their results to narrow.
+ */
+export const ACTIONS_LIST_TOOL_ID = "actions.list";
+export const ACTIONS_SEARCH_TOOL_ID = "actions.search";
+export const ACTIONS_GET_SCHEMA_TOOL_ID = "actions.getSchema";
+
+export const INTROSPECTION_TOOL_IDS: ReadonlySet<string> = new Set([
+  ACTIONS_LIST_TOOL_ID,
+  ACTIONS_SEARCH_TOOL_ID,
+  ACTIONS_GET_SCHEMA_TOOL_ID,
+]);
+
+export {
+  ACTIONS_LIST_DEFAULT_LIMIT,
+  ACTIONS_LIST_MAX_LIMIT,
+  ACTIONS_SEARCH_DEFAULT_LIMIT,
+  ACTIONS_SEARCH_MAX_LIMIT,
+};
+
+/**
+ * The page size an `actions.search` caller asked for, clamped to the tool's
+ * contract. Returns null when the caller supplied a `limit` the renderer's own
+ * validation will reject, so the over-fetch leaves those args untouched rather
+ * than rewriting an out-of-contract request into a legal one.
+ */
+export function readSearchLimit(args: unknown): number | null {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return ACTIONS_SEARCH_DEFAULT_LIMIT;
   }
-  return TIER_ALLOWLISTS[tier].has(actionId);
+  const limit = (args as { limit?: unknown }).limit;
+  if (limit === undefined) return ACTIONS_SEARCH_DEFAULT_LIMIT;
+  if (typeof limit !== "number" || !Number.isInteger(limit)) return null;
+  if (limit < 1 || limit > ACTIONS_SEARCH_MAX_LIMIT) return null;
+  return limit;
+}
+
+/**
+ * The page window an `actions.list` caller asked for. Returns null when the
+ * caller supplied bounds the renderer's own validation will reject, so the
+ * handler leaves those args alone instead of rewriting an out-of-contract
+ * request into a legal one.
+ */
+export function readListPaging(args: unknown): { offset: number; limit: number } | null {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return { offset: 0, limit: ACTIONS_LIST_DEFAULT_LIMIT };
+  }
+  const { limit, offset } = args as { limit?: unknown; offset?: unknown };
+  let resolvedLimit = ACTIONS_LIST_DEFAULT_LIMIT;
+  if (limit !== undefined) {
+    if (typeof limit !== "number" || !Number.isInteger(limit)) return null;
+    if (limit < 1 || limit > ACTIONS_LIST_MAX_LIMIT) return null;
+    resolvedLimit = limit;
+  }
+  let resolvedOffset = 0;
+  if (offset !== undefined) {
+    if (typeof offset !== "number" || !Number.isInteger(offset) || offset < 0) return null;
+    resolvedOffset = offset;
+  }
+  return { offset: resolvedOffset, limit: resolvedLimit };
+}
+
+/**
+ * Read a manifest entry's id from an untyped result payload. The introspection
+ * result schemas declare their entries as `z.unknown()`, so main re-narrows
+ * rather than trusting the renderer's shape.
+ */
+function readEntryId(entry: unknown): string | null {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+  const id = (entry as { id?: unknown }).id;
+  return typeof id === "string" ? id : null;
+}
+
+/**
+ * Whether a discovered manifest entry may be surfaced to a session holding
+ * `permittedActionIds`. The `hidden` / `restricted` ceilings are re-applied
+ * here even though the renderer already enforces them: this is the host-side
+ * authorization boundary, and it does not take the renderer's word for it.
+ *
+ * This narrows introspection results to the session's *effective* surface, so
+ * `actions.search` / `actions.getSchema` describe tools the caller can actually
+ * dispatch. It is not a progressive-disclosure escape hatch: since #11585 the
+ * tier allowlist is the whole surface, and introspection reports it rather than
+ * reaching past it.
+ */
+function isIntrospectableForSession(
+  entry: unknown,
+  permittedActionIds: ReadonlySet<string>
+): boolean {
+  const id = readEntryId(entry);
+  if (id === null) return false;
+  const record = entry as { mcpVisibility?: unknown; danger?: unknown };
+  if (record.mcpVisibility === "hidden") return false;
+  if (record.danger === "restricted") return false;
+  return permittedActionIds.has(id);
+}
+
+/**
+ * Narrow an introspection tool's result to the ids the calling session can
+ * actually dispatch. Pure: takes one immutable permission snapshot, returns a
+ * new payload, and never reads the session store or the grant cache.
+ *
+ * `permittedActionIds` is the session's *effective* surface — its static tier
+ * allowlist widened by any live grants — so a tool the user has approved stays
+ * discoverable for as long as the approval lasts.
+ */
+export function filterIntrospectionResultForSession(
+  actionId: string,
+  result: ActionDispatchResult,
+  permittedActionIds: ReadonlySet<string>,
+  options: {
+    callerLimit: number;
+    requestedActionId?: string;
+    listPaging?: { offset: number; limit: number };
+  }
+): ActionDispatchResult {
+  if (!result.ok) return result;
+
+  // Every branch below rebuilds the payload from scratch rather than spreading
+  // the renderer's, and treats an unrecognised shape as a denial. Nothing
+  // validates these payloads at runtime — not the IPC bridge, not
+  // `ActionService.dispatch` — so passing an unexpected shape through would
+  // hand back an unfiltered result, and spreading would forward any extra
+  // field the renderer attached alongside the one being filtered.
+  if (actionId === ACTIONS_LIST_TOOL_ID) {
+    const payload = result.result as { actions?: unknown } | null | undefined;
+    const entries = Array.isArray(payload?.actions) ? payload.actions : [];
+    const permitted = entries.filter((entry) =>
+      isIntrospectableForSession(entry, permittedActionIds)
+    );
+    // `entries` is the COMPLETE match set — the handler walked every renderer
+    // page before calling this. Paging the permitted set here (rather than
+    // filtering a page the renderer already cut) is what keeps `total` and
+    // `hasMore` describing the surface the caller can actually reach: a page
+    // sliced before the tier filter would come back short, and its `total`
+    // would count actions this session can never dispatch (#11529 + #11525).
+    const { offset, limit } = options.listPaging ?? {
+      offset: 0,
+      limit: ACTIONS_LIST_DEFAULT_LIMIT,
+    };
+    return {
+      ok: true,
+      result: {
+        actions: permitted.slice(offset, offset + limit),
+        total: permitted.length,
+        limit,
+        offset,
+        hasMore: offset + limit < permitted.length,
+      },
+    };
+  }
+
+  if (actionId === ACTIONS_SEARCH_TOOL_ID) {
+    const payload = result.result as { results?: unknown } | null | undefined;
+    const entries = Array.isArray(payload?.results) ? payload.results : [];
+    const permitted = entries.filter((entry) =>
+      isIntrospectableForSession(entry, permittedActionIds)
+    );
+    // `totalMatches` counts the permitted matches main actually saw. The
+    // handler over-fetches to ACTIONS_SEARCH_MAX_LIMIT so that window is the
+    // complete match set for any query matching at most that many actions —
+    // the common case, where this count is exact. A broader query truncates
+    // the window and the count becomes a lower bound, which is the safe
+    // direction: discovery never advertises more surface than it can show.
+    return {
+      ok: true,
+      result: {
+        totalMatches: permitted.length,
+        results: permitted.slice(0, options.callerLimit),
+      },
+    };
+  }
+
+  if (actionId === ACTIONS_GET_SCHEMA_TOOL_ID) {
+    const payload = result.result as { ok?: unknown; entry?: unknown } | null | undefined;
+    // Authorize the id the CALLER asked for, never the one the payload
+    // carries: a mismatch means the renderer answered a different question,
+    // and honouring the payload's id would let a permitted id vouch for a
+    // denied entry's schema. An absent request id fails closed — the tool's
+    // schema requires one, so its absence means this is not an answer to a
+    // well-formed request.
+    const requestedId = options.requestedActionId;
+    const answersTheRequest =
+      payload?.ok === true &&
+      requestedId !== undefined &&
+      readEntryId(payload.entry) === requestedId;
+    if (answersTheRequest && isIntrospectableForSession(payload.entry, permittedActionIds)) {
+      return { ok: true, result: { ok: true, entry: payload.entry } };
+    }
+    // Collapse onto the shape the renderer already returns for an unknown,
+    // hidden, or restricted id rather than minting a tier-specific error: a
+    // distinct error would confirm the id exists while offering no way to
+    // reach it (grants are issued off a denied *dispatch*, not a schema read).
+    // The renderer's own denial is rebuilt rather than forwarded, so the
+    // message can only ever name the id the caller asked about.
+    return {
+      ok: true,
+      result: {
+        ok: false,
+        error: {
+          code: "NOT_FOUND",
+          message: `No action found with id "${requestedId ?? "unknown"}". Use actions.search to find available actions.`,
+        },
+      },
+    };
+  }
+
+  return result;
+}
+
+/**
+ * The action id an `actions.getSchema` caller asked about, so the filter can
+ * authorize the request rather than whatever id the answer came back carrying.
+ */
+export function readRequestedActionId(args: unknown): string | undefined {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return undefined;
+  const actionId = (args as { actionId?: unknown }).actionId;
+  return typeof actionId === "string" && actionId.length > 0 ? actionId : undefined;
 }
 
 export function buildToolInputSchema(entry: ActionManifestEntry): Record<string, unknown> {

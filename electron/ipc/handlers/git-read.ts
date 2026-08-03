@@ -6,6 +6,8 @@ import type { HandlerDependencies } from "../types.js";
 import type { PulseRangeDays, ProjectPulse } from "../../../shared/types/pulse.js";
 import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import type { GitFileDiffResult } from "../../../shared/types/ipc/git.js";
+import { GIT_FILE_DIFF_MAX_BYTES } from "../../../shared/config/gitReadLimits.js";
 
 export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -54,13 +56,15 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     filePath: string;
     status: string;
     ignoreWhitespace?: boolean;
-  }): Promise<string> => {
+    offset?: number;
+    maxBytes?: number;
+  }): Promise<GitFileDiffResult> => {
     checkRateLimit(CHANNELS.GIT_GET_FILE_DIFF, 20, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
 
-    const { cwd, filePath, status, ignoreWhitespace } = payload;
+    const { cwd, filePath, status, ignoreWhitespace, offset, maxBytes } = payload;
 
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
@@ -74,13 +78,31 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     if (ignoreWhitespace !== undefined && typeof ignoreWhitespace !== "boolean") {
       throw new Error("Invalid ignoreWhitespace");
     }
+    // The renderer argsSchema is one caller among several; the ceiling is
+    // re-enforced here so no IPC client can ask for an unbounded window.
+    if (offset !== undefined && (!Number.isInteger(offset) || offset < 0)) {
+      throw new Error("Invalid offset");
+    }
+    if (
+      maxBytes !== undefined &&
+      (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > GIT_FILE_DIFF_MAX_BYTES)
+    ) {
+      throw new Error(`Invalid maxBytes (1-${GIT_FILE_DIFF_MAX_BYTES})`);
+    }
 
     if (!deps.worktreeService) {
       throw new Error("WorkspaceClient not initialized");
     }
 
     try {
-      return await deps.worktreeService.getFileDiff(cwd, filePath, status, ignoreWhitespace);
+      return await deps.worktreeService.getFileDiff(
+        cwd,
+        filePath,
+        status,
+        ignoreWhitespace,
+        offset,
+        maxBytes
+      );
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to get file diff");
       console.error("[Git] Failed to get file diff via WorkspaceClient:", errorMessage);

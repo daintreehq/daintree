@@ -19,7 +19,7 @@ import { registerGitInitHandlers } from "./gitInit.js";
 import { registerGitCloneHandlers } from "./gitClone.js";
 import { registerProjectPrefetchHandlers } from "./prefetch.js";
 
-export { getProjectStatsService } from "./stats.js";
+export { getProjectStatsService, getFleetSnapshotService } from "./stats.js";
 
 export function registerProjectCrudHandlers(deps: HandlerDependencies): () => void {
   const cleanups = [

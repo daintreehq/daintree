@@ -56,3 +56,49 @@ export interface TerminalActivityPayload extends TerminalActivity {
   /** Last detected command for this terminal (e.g., 'npm run dev') */
   lastCommand?: string;
 }
+
+/** A terminal grid size, in cells. */
+export interface TerminalGeometry {
+  cols: number;
+  rows: number;
+}
+
+/**
+ * A SerializeAddon snapshot bundled with the grid it was captured at (#11552).
+ *
+ * The addon emits a hard `\r\n` at every row boundary not marked `isWrapped`
+ * and omits the break where a row was exactly filled. Both encodings are only
+ * decodable at the capture width, so a snapshot replayed into a differently
+ * sized terminal commits real newlines mid-phrase and welds full-width rules
+ * onto the following line — damage no later reflow can undo, because it is
+ * baked into cell data. Carrying `cols`/`rows` alongside `data` lets every
+ * replay site size its target to the capture grid first, write, then reflow to
+ * the live grid with xterm's own algorithm.
+ */
+export interface SerializedTerminalSnapshot extends TerminalGeometry {
+  data: string;
+}
+
+/** Upper bound for a plausible terminal grid; guards replay against a corrupt or hostile geometry. */
+export const MAX_TERMINAL_GRID_DIMENSION = 2000;
+
+/**
+ * True when `value` is a grid a terminal could actually have been captured at.
+ * Replay sizes a real xterm to these numbers, so anything non-integral, zero,
+ * negative or absurd must degrade to "no geometry" (replay verbatim) rather
+ * than allocate a 2-billion-column buffer.
+ */
+export function isValidTerminalGeometry(value: unknown): value is TerminalGeometry {
+  if (typeof value !== "object" || value === null) return false;
+  const { cols, rows } = value as Partial<TerminalGeometry>;
+  return (
+    typeof cols === "number" &&
+    typeof rows === "number" &&
+    Number.isInteger(cols) &&
+    Number.isInteger(rows) &&
+    cols >= 1 &&
+    rows >= 1 &&
+    cols <= MAX_TERMINAL_GRID_DIMENSION &&
+    rows <= MAX_TERMINAL_GRID_DIMENSION
+  );
+}

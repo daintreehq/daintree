@@ -10,13 +10,17 @@ export * from "./brands";
 export {
   Activity, // project pulse / live activity heartbeat
   ArrowDownAZ, // alphabetical sort order (A to Z)
+  AtSign, // @file reference handed to an agent's prompt
   BellDot, // watch alert / notify on completion
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
+  CircleCheck, // finished run awaiting review (Pilot's review band)
+  CircleHelp, // workspace whose metadata is missing (removed while its agents ran)
   Clock, // recency sort order (most recently opened first)
   FileText, // view selected file path in the read-only file viewer
   FolderGit2, // git worktree (single)
   FolderOpen, // reveal in file manager (Finder / Explorer / file manager)
   FolderOutput, // worktree living outside the project directory (external)
+  FolderTree, // Daintree's own file browser panel (the worktree file tree)
   Folders, // copy tree / file hierarchy capture (two overlapping folders)
   GitPullRequest, // forge provider / code-host plugin category
   History, // resume closed session / session history

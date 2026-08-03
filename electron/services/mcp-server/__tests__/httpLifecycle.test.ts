@@ -36,6 +36,7 @@ import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { HttpLifecycle } from "../httpLifecycle.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
+import { minimumPermittingTier } from "../shared.js";
 
 type BearerTestHandle = {
   touchBearer: (
@@ -127,6 +128,7 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
     handleWaitUntilIdle: vi.fn(),
     handleSkillsSearch: vi.fn(() => ({ skills: [] })),
     handleSkillsLoad: vi.fn(),
+    handleProjectRunCheck: vi.fn(),
     getCachedManifest: vi.fn(() => null),
     clearCachedManifest: vi.fn(),
     cleanupListeners: [],
@@ -519,6 +521,51 @@ describe("HttpLifecycle", () => {
       const deps = fakeDeps();
       const lc = new HttpLifecycle(deps);
       expect(() => lc.resetDenialCounts("")).toThrow(/Invalid sessionId/);
+    });
+  });
+
+  // The single-tool "Approve once" path must enforce the same floor as
+  // issueNativeGrant: a grant may only name a tool some non-external help tier
+  // already permits. The call gate honours a grant OVER failed tier membership,
+  // so without this check a pinned renderer could mint a grant for an id in no
+  // tier at all and the authorization contract would rest on the UI never
+  // offering the button rather than on main refusing it (#11585).
+  describe("issueGrant tool validation (#11585)", () => {
+    function grantCacheOf(deps: HttpLifecycleDeps) {
+      return (
+        deps.sessionStore as unknown as { grantCache: { issueGrant: ReturnType<typeof vi.fn> } }
+      ).grantCache;
+    }
+    function pinnedDeps() {
+      const deps = fakeDeps();
+      deps.sessionStore.httpSessions.set("sess-1", {} as never);
+      deps.sessionStore.sessionWebContentsMap.set("sess-1", 42);
+      return deps;
+    }
+
+    it("mints a grant for a tool a help tier permits", () => {
+      const deps = pinnedDeps();
+      grantCacheOf(deps).issueGrant.mockReturnValue({ ttlMs: 900_000, expiresAt: 1_000_000 });
+      const lc = new HttpLifecycle(deps);
+
+      // Ground truth: git.commit is genuinely reachable at the system tier, so
+      // the rejections below are a real boundary rather than an unknown string.
+      expect(minimumPermittingTier("git.commit")).not.toBeNull();
+      expect(lc.issueGrant("sess-1", "git.commit", 42).toolId).toBe("git.commit");
+      expect(grantCacheOf(deps).issueGrant).toHaveBeenCalledWith("sess-1", "git.commit");
+    });
+
+    it.each([
+      // In no tier allowlist at all — the case the new hidden marking documents.
+      "actions.persistedStores",
+      "totally.notatool",
+    ])("refuses to grant %s", (toolId) => {
+      const deps = pinnedDeps();
+      const lc = new HttpLifecycle(deps);
+
+      expect(minimumPermittingTier(toolId)).toBeNull();
+      expect(() => lc.issueGrant("sess-1", toolId, 42)).toThrow(/non-grantable/);
+      expect(grantCacheOf(deps).issueGrant).not.toHaveBeenCalled();
     });
   });
 

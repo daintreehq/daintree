@@ -200,8 +200,10 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
   }
 
   // Restore the per-panel focus the batch suppressed: focus the last spawned
-  // grid panel, matching the prior serial behaviour.
-  if (!suppressFocus && lastSpawnedId !== null) {
+  // grid panel, matching the prior serial behaviour. An aborted batch skips it —
+  // the dispatched panels can't be recalled, but yanking focus into work the
+  // user just cancelled compounds it (#11517).
+  if (!suppressFocus && lastSpawnedId !== null && !signal?.aborted) {
     // The batch suppressed addPanel's maximize exit along with its focus set, so
     // apply it here too — a spawned grid panel that takes focus has to be
     // visible, not stranded behind a fullscreen cell (#11060). Read the panel

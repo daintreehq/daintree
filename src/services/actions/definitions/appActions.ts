@@ -148,7 +148,8 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
   actions.set("app.theme.pick", () => ({
     id: "app.theme.pick",
     title: "Pick Theme…",
-    description: "Open the theme palette to browse and preview themes",
+    description:
+      "Open the theme palette so the user can browse and preview themes. This is a user-facing chooser, not a way to set a theme programmatically — nothing changes until the user picks something. It takes over the foreground, so avoid opening it during other work.",
     category: "app",
     kind: "command",
     danger: "safe",
@@ -163,7 +164,8 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
   actions.set("app.theme.browser.open", () => ({
     id: "app.theme.browser.open",
     title: "Browse Themes…",
-    description: "Open the theme browser to preview and commit a new theme",
+    description:
+      "Open the theme browser so the user can preview themes in full and commit to one. This is a user-facing chooser — nothing changes until the user decides. It takes over the foreground, so avoid opening it during other work.",
     category: "app",
     kind: "command",
     danger: "safe",
@@ -178,7 +180,8 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
   actions.set("app.theme.toggle", () => ({
     id: "app.theme.toggle",
     title: "Toggle Dark/Light Theme",
-    description: "Switch between preferred dark and light themes",
+    description:
+      "Switch between the user's preferred dark and light themes. This changes the appearance of the whole app immediately and is reversible by calling it again. It flips whichever way the app currently is rather than setting a specific mode.",
     category: "app",
     kind: "command",
     danger: "safe",

@@ -256,6 +256,7 @@ function registerTerminalActions(actions: ActionRegistry, callbacks: ActionCallb
 const { registerPanelActions } = await import("../definitions/panelActions");
 const { registerWorktreeActions } = await import("../definitions/worktreeActions");
 const { usePanelStore } = await import("../../../store/panelStore");
+const { useLayoutUndoStore } = await import("../../../store/layoutUndoStore");
 const { usePortalStore } = await import("../../../store/portalStore");
 const { useUIStore } = await import("../../../store/uiStore");
 const { useWorktreeSelectionStore } = await import("../../../store/worktreeStore");
@@ -469,6 +470,100 @@ describe("terminal action hardening", () => {
     expect(usePanelStore.getState().focusedId).toBe("existing");
     expect(usePanelStore.getState().activeDockTerminalId).toBeNull();
     expect(mocks.terminalInstanceService.wake).not.toHaveBeenCalled();
+  });
+
+  // moveToDock, moveToGrid and toggleDock are reachable from the in-app
+  // assistant's action tier, so an unbound agent call would rearrange whatever
+  // the user was looking at (#11532); toggleDock previously had no terminalId
+  // at all. toggleMaximize is dormant and guarded as defense in depth.
+  describe("terminal layout target binding (#11532)", () => {
+    function seedGridPair() {
+      usePanelStore.setState({
+        panelsById: {
+          focused: createTerminal({ id: "focused" }),
+          named: createTerminal({ id: "named" }),
+        },
+        // "named" leads so terminal.close-style "first visible panel" fallbacks
+        // cannot land on the focused panel by coincidence.
+        panelIds: ["named", "focused"],
+        focusedId: "focused",
+        maximizedId: null,
+        activeDockTerminalId: null,
+      });
+    }
+
+    it.each([
+      "terminal.moveToDock",
+      "terminal.moveToGrid",
+      "terminal.toggleDock",
+      "terminal.toggleMaximize",
+    ])(
+      "%s rejects agent dispatch that names no terminal, leaving the focused panel put",
+      async (id) => {
+        const actions = buildRegistry(registerTerminalActions);
+        const action = actions.get(id)!();
+        seedGridPair();
+        const before = usePanelStore.getState().panelsById.focused?.location;
+
+        // Matched in full so an unguarded-args TypeError (which also names
+        // terminalId) cannot pass for a guard rejection.
+        await expect(action.run({} as never, { dispatchSource: "agent" } as never)).rejects.toThrow(
+          /requires an explicit `terminalId` when dispatched by an agent or MCP client/
+        );
+
+        expect(usePanelStore.getState().panelsById.focused?.location).toBe(before);
+        // toggleMaximize moves maximizedId rather than location, so checking
+        // location alone would pass even if it had already run.
+        expect(usePanelStore.getState().maximizedId).toBeNull();
+      }
+    );
+
+    it("toggleDock moves the terminal the agent named, not the focused one", async () => {
+      const actions = buildRegistry(registerTerminalActions);
+      const toggleDock = actions.get("terminal.toggleDock")!();
+      seedGridPair();
+
+      await toggleDock.run({ terminalId: "named" } as never, { dispatchSource: "agent" } as never);
+
+      expect(usePanelStore.getState().panelsById.named?.location).toBe("dock");
+      expect(usePanelStore.getState().panelsById.focused?.location).not.toBe("dock");
+    });
+
+    it("toggleDock keeps the focus fallback for interactive dispatch", async () => {
+      const actions = buildRegistry(registerTerminalActions);
+      const toggleDock = actions.get("terminal.toggleDock")!();
+      seedGridPair();
+
+      await toggleDock.run({} as never, { dispatchSource: "keybinding" } as never);
+
+      expect(usePanelStore.getState().panelsById.focused?.location).toBe("dock");
+    });
+
+    it("toggleDock leaves redo history alone when the named terminal is gone", async () => {
+      // pushLayoutSnapshot clears the redo stack, so taking it before the
+      // existence check would let a stale UUID wipe the user's redo history
+      // and then move nothing.
+      const actions = buildRegistry(registerTerminalActions);
+      const toggleDock = actions.get("terminal.toggleDock")!();
+      seedGridPair();
+      const pendingRedo = {
+        terminals: [],
+        tabGroups: new Map(),
+        focusedId: null,
+        maximizedId: null,
+        activeDockTerminalId: null,
+      };
+      useLayoutUndoStore.setState({ undoStack: [], redoStack: [pendingRedo] });
+
+      try {
+        await toggleDock.run({ terminalId: "gone" } as never, { dispatchSource: "agent" } as never);
+
+        expect(useLayoutUndoStore.getState().redoStack).toEqual([pendingRedo]);
+        expect(useLayoutUndoStore.getState().undoStack).toHaveLength(0);
+      } finally {
+        useLayoutUndoStore.setState({ undoStack: [], redoStack: [] });
+      }
+    });
   });
 
   it("preserves focus when moving a missing or already-aligned terminal to a worktree", async () => {
@@ -996,6 +1091,25 @@ describe("worktree action hardening", () => {
     expect(selectWorktree).toHaveBeenCalledWith("wt-focused");
 
     await expect(select.run(undefined, {} as never)).rejects.toThrow("No worktree selected");
+  });
+
+  it.each([
+    ["worktree.getDefaultPath", { branchName: "feature/login" }],
+    [
+      "worktree.create",
+      { options: { baseBranch: "main", newBranch: "feature/login", path: "/repo-wt/login" } },
+    ],
+  ])("%s refuses to fall back to the active worktree", (id, args) => {
+    const actions = buildRegistry(registerWorktreeActions);
+    const schema = actions.get(id)!().argsSchema!;
+
+    // Both anchor on the REPO ROOT, and the active worktree is usually a LINKED
+    // worktree — a silent fallback misses the project's configured
+    // worktreePathPattern and answers about the wrong directory instead of
+    // erroring. The dialog dispatching worktree.create always passes rootPath.
+    expect(schema.safeParse(args).success).toBe(false);
+    expect(schema.safeParse({ ...args, rootPath: "/repo" }).success).toBe(true);
+    expect(schema.safeParse({ ...args, worktreeId: "wt-1" }).success).toBe(true);
   });
 
   it("maps empty modified-copy results to a user-facing error", async () => {

@@ -4,12 +4,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionManifestEntry } from "@shared/types/actions";
 import { __resetMcpConfirmStoreForTesting, useMcpConfirmStore } from "@/store/mcpConfirmStore";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
+import {
+  resetStoreAccessorsForTesting,
+  setWorktreePathIndexAccessor,
+} from "@/store/storeAccessors";
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(() => [] as ActionManifestEntry[]),
   get: vi.fn((_id: string): ActionManifestEntry | null => null),
   dispatch: vi.fn(),
+  getContext: vi.fn((): Record<string, unknown> => ({})),
   buildPreview: vi.fn(),
+  buildGitPreview: vi.fn(),
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -17,6 +23,7 @@ vi.mock("@/services/ActionService", () => ({
     list: mocks.list,
     getDispatchMeta: mocks.get,
     dispatch: mocks.dispatch,
+    getContext: mocks.getContext,
   },
 }));
 
@@ -29,7 +36,19 @@ vi.mock("@/components/Worktree/worktreeDeletePreview", async (importOriginal) =>
   return { ...actual, buildWorktreeDeletePreview: mocks.buildPreview };
 });
 
-import { useMcpBridge, buildMcpConfirmPreview } from "../useMcpBridge";
+// Same split for the git preview: mock only the fresh fetch, keep the real
+// formatter so the emitted lines are genuinely exercised (#11538).
+vi.mock("@/components/Git/gitRemoteOperationPreview", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/Git/gitRemoteOperationPreview")>();
+  return { ...actual, buildGitRemoteOperationPreview: mocks.buildGitPreview };
+});
+
+import {
+  useMcpBridge,
+  buildMcpConfirmPreview,
+  resolveMcpConfirmPreviewTarget,
+} from "../useMcpBridge";
 
 function safeManifestEntry(overrides: Partial<ActionManifestEntry> = {}): ActionManifestEntry {
   return {
@@ -84,6 +103,8 @@ describe("useMcpBridge", () => {
     // Default: no fresh preview → the off-critical-path fetch is a no-op, so
     // the confirmation-flow tests are unaffected by the #11343 preview change.
     mocks.buildPreview.mockResolvedValue(null);
+    mocks.getContext.mockReturnValue({});
+    mocks.buildGitPreview.mockResolvedValue({ branch: "main", commits: [] });
     __resetMcpConfirmStoreForTesting();
     manifestHandler = undefined;
     dispatchHandler = undefined;
@@ -680,33 +701,430 @@ describe("useMcpBridge", () => {
     useMcpConfirmStore.getState().resolveCurrent("approved");
     await dispatched;
   });
+
+  it("previews the branch and local commits for an MCP git.push (#11538)", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+    mocks.buildGitPreview.mockResolvedValue({
+      branch: "feature/x",
+      commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
+    });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-push",
+      actionId: "git.push",
+      args: { cwd: "/repo" },
+    });
+
+    await Promise.resolve();
+    // Approval is gated until the human can actually see what would be pushed.
+    expect(useMcpConfirmStore.getState().current?.previewPending).toBe(true);
+    // The heading travels with the lines — a commit list is not "working tree
+    // changes", which is what the dialog hardcoded before this change.
+    expect(useMcpConfirmStore.getState().current?.previewTitle).toBe("Branch and local commits");
+
+    await vi.waitFor(() => {
+      const current = useMcpConfirmStore.getState().current;
+      expect(current?.previewPending).toBe(false);
+      expect(current?.preview?.[0]).toBe("Branch: feature/x");
+      expect(current?.preview?.[1]).toContain("Fix the thing");
+    });
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+    expect(mocks.buildGitPreview).toHaveBeenCalledWith("/repo");
+  });
+
+  // The preview resolves cwd when the modal opens; ActionService would otherwise
+  // re-read live context AFTER the wait. Switching worktrees mid-modal would
+  // then push a repository the human never previewed (#8725).
+  it("dispatches git.push against the previewed cwd even if live context drifts", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/previewed" });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-drift",
+      actionId: "git.push",
+      args: { setUpstream: true },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+
+    // The user switches worktrees while the modal is open.
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/somewhere-else" });
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { setUpstream: true, cwd: "/previewed" },
+      expect.objectContaining({ source: "agent", confirmed: true })
+    );
+  });
+
+  // The whole point of #11538 is that nothing can leave a destructive dispatch
+  // permanently unapprovable. A failed preview fetch must still clear
+  // previewPending and say so, rather than stranding the modal until timeout.
+  it("clears previewPending and warns when the git preview fetch fails", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+    mocks.buildGitPreview.mockRejectedValue(new Error("git exploded"));
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-fail",
+      actionId: "git.push",
+      args: { cwd: "/repo" },
+    });
+
+    await vi.waitFor(() => {
+      const current = useMcpConfirmStore.getState().current;
+      expect(current?.previewPending).toBe(false);
+      expect(current?.preview?.[0]).toContain("Could not verify");
+    });
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+    expect(mocks.dispatch).toHaveBeenCalled();
+  });
+
+  it("previews and pins git.pullRebase the same way as git.push (#11538)", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({
+        id: "git.pullRebase",
+        name: "git.pullRebase",
+        title: "Pull and rebase",
+      })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/previewed" });
+    mocks.buildGitPreview.mockResolvedValue({
+      branch: "feature/y",
+      commits: [{ hash: "1234567890a", message: "Replay me", author: "Cy" }],
+    });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-rebase",
+      actionId: "git.pullRebase",
+      args: {},
+    });
+
+    await Promise.resolve();
+    expect(useMcpConfirmStore.getState().current?.previewPending).toBe(true);
+    expect(useMcpConfirmStore.getState().current?.previewTitle).toBe("Branch and local commits");
+
+    await vi.waitFor(() => {
+      const current = useMcpConfirmStore.getState().current;
+      expect(current?.previewPending).toBe(false);
+      expect(current?.preview?.[0]).toBe("Branch: feature/y");
+      expect(current?.preview?.[1]).toContain("Replay me");
+    });
+
+    // Live context drifts while the modal is open.
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/elsewhere" });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.buildGitPreview).toHaveBeenCalledWith("/previewed");
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.pullRebase",
+      { cwd: "/previewed" },
+      expect.objectContaining({ source: "agent", confirmed: true })
+    );
+  });
+
+  // A supplied-but-unusable cwd must reach validation unchanged (#7880).
+  it("passes an invalid cwd through untouched rather than repairing it", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: false, error: { code: "VALIDATION_ERROR" } });
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/active" });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-badcwd",
+      actionId: "git.push",
+      args: { cwd: "" },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-badcwd");
+    });
+    // No preview was promised, so nothing gates approval on one.
+    expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    expect(mocks.buildGitPreview).not.toHaveBeenCalled();
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { cwd: "" },
+      expect.objectContaining({ source: "agent" })
+    );
+  });
+
+  // Malformed top-level args must reach validation as-is. Synthesizing `{cwd}`
+  // over them would manufacture a valid push out of a request that should have
+  // been rejected — the same #7880 hazard as repairing an empty cwd string.
+  it.each([
+    ["null", null],
+    ["an array", []],
+    ["a string", "nope"],
+  ])("passes %s args through cwd pinning untouched", async (label, args) => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: false, error: { code: "VALIDATION_ERROR" } });
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/active" });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: `req-malformed-${label}`,
+      actionId: "git.push",
+      args,
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      args,
+      expect.objectContaining({ source: "agent" })
+    );
+  });
+
+  it("synthesizes only a cwd when args are omitted entirely", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/previewed" });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({ requestId: "req-noargs", actionId: "git.push" });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/elsewhere" });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { cwd: "/previewed" },
+      expect.objectContaining({ source: "agent", confirmed: true })
+    );
+  });
+
+  it("leaves non-git dispatch args untouched by cwd pinning", async () => {
+    mocks.get.mockReturnValue(confirmManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-nopin",
+      actionId: "worktree.delete",
+      args: { worktreeId: "wt-1" },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "worktree.delete",
+      { worktreeId: "wt-1" },
+      expect.objectContaining({ source: "agent" })
+    );
+  });
 });
 
-describe("buildMcpConfirmPreview (#11343)", () => {
+describe("resolveMcpConfirmPreviewTarget (#11538)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getContext.mockReturnValue({});
+  });
+
+  it("returns undefined for actions with nothing meaningful to preview", () => {
+    expect(
+      resolveMcpConfirmPreviewTarget("terminal.kill", { terminalId: "t-1" }, undefined)
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when worktree.delete args carry no worktreeId", () => {
+    expect(
+      resolveMcpConfirmPreviewTarget("worktree.delete", { force: true }, undefined)
+    ).toBeUndefined();
+  });
+
+  it("resolves a worktree.delete target from its worktreeId", () => {
+    expect(
+      resolveMcpConfirmPreviewTarget("worktree.delete", { worktreeId: "wt-1" }, undefined)
+    ).toEqual({ kind: "worktreeDelete", worktreeId: "wt-1" });
+  });
+
+  it("prefers an explicit cwd arg over any context for git dispatch", () => {
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/live" });
+    expect(
+      resolveMcpConfirmPreviewTarget(
+        "git.push",
+        { cwd: "/explicit" },
+        { activeWorktreePath: "/bound" }
+      )
+    ).toEqual({ kind: "gitPush", cwd: "/explicit" });
+  });
+
+  it("falls back to the bound context's worktree path when no cwd arg is given", () => {
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/live" });
+    expect(
+      resolveMcpConfirmPreviewTarget("git.pullRebase", {}, { activeWorktreePath: "/bound" })
+    ).toEqual({ kind: "gitPullRebase", cwd: "/bound" });
+    expect(mocks.getContext).not.toHaveBeenCalled();
+  });
+
+  it("falls back to live context only for unpinned dispatch (no bound context)", () => {
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/live" });
+    expect(resolveMcpConfirmPreviewTarget("git.push", undefined, undefined)).toEqual({
+      kind: "gitPush",
+      cwd: "/live",
+    });
+  });
+
+  // #7880 no-silent-fallback: a caller that NAMES a cwd but gives an unusable
+  // one must not have it quietly swapped for the active worktree. Before this
+  // path existed those dispatches failed validation; silently repairing them
+  // would turn a rejected request into a real push against a repository the
+  // caller never asked for.
+  it.each([
+    ["empty string", { cwd: "" }],
+    ["null", { cwd: null }],
+    ["a number", { cwd: 0 }],
+  ])("refuses to preview git.push when cwd is supplied as %s", (_label, args) => {
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/active" });
+    expect(resolveMcpConfirmPreviewTarget("git.push", args, undefined)).toBeUndefined();
+  });
+
+  it("still resolves from context when cwd is explicitly undefined (genuinely omitted)", () => {
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/active" });
+    expect(resolveMcpConfirmPreviewTarget("git.push", { cwd: undefined }, undefined)).toEqual({
+      kind: "gitPush",
+      cwd: "/active",
+    });
+  });
+
+  // ActionService selects context with a WHOLE-OBJECT `??` (ActionService.ts:349),
+  // so a bound context that carries no worktree path does NOT borrow the live
+  // one — the action would throw "No active worktree". A per-field fallback here
+  // would preview a repository the dispatch never touches.
+  it("does not borrow the live worktree path per-field when a bound context lacks one", () => {
+    mocks.getContext.mockReturnValue({ activeWorktreePath: "/live" });
+    expect(resolveMcpConfirmPreviewTarget("git.push", {}, { projectId: "p-1" })).toBeUndefined();
+  });
+
+  // Since #11543 the git actions also accept `worktreeId`/`worktreePath`.
+  // Reading only `cwd` would report "omitted" for those, preview the ACTIVE
+  // worktree, and then pin a dispatch that `run()` resolves somewhere else —
+  // the approver attesting to a repository they never saw, which is the whole
+  // point of the preview (#8725) and a D2 no-silent-fallback violation (#7880).
+  describe("with the shared location vocabulary (#11543)", () => {
+    beforeEach(() => {
+      setWorktreePathIndexAccessor(
+        () =>
+          new Map([
+            ["wt-1", "/repo/one"],
+            ["wt-2", "/repo/two"],
+          ])
+      );
+    });
+
+    afterEach(() => {
+      resetStoreAccessorsForTesting();
+    });
+
+    it("previews the worktree a worktreeId names rather than the active one", () => {
+      expect(
+        resolveMcpConfirmPreviewTarget(
+          "git.push",
+          { worktreeId: "wt-2" },
+          { activeWorktreePath: "/repo/one" }
+        )
+      ).toEqual({ kind: "gitPush", cwd: "/repo/two" });
+    });
+
+    it("previews an explicit worktreePath rather than the active worktree", () => {
+      expect(
+        resolveMcpConfirmPreviewTarget(
+          "git.pullRebase",
+          { worktreePath: "/repo/two" },
+          { activeWorktreePath: "/repo/one" }
+        )
+      ).toEqual({ kind: "gitPullRebase", cwd: "/repo/two" });
+    });
+
+    it("refuses to preview a worktreeId no open worktree matches", () => {
+      expect(
+        resolveMcpConfirmPreviewTarget(
+          "git.push",
+          { worktreeId: "wt-gone" },
+          { activeWorktreePath: "/repo/one" }
+        )
+      ).toBeUndefined();
+    });
+
+    it("refuses to preview contradictory path spellings the schema will reject", () => {
+      expect(
+        resolveMcpConfirmPreviewTarget(
+          "git.push",
+          { worktreePath: "/repo/one", cwd: "/repo/two" },
+          { activeWorktreePath: "/repo/one" }
+        )
+      ).toBeUndefined();
+    });
+  });
+});
+
+describe("buildMcpConfirmPreview (#11343, #11538)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.buildPreview.mockResolvedValue(null);
+    mocks.buildGitPreview.mockResolvedValue({ branch: "main", commits: [] });
   });
 
-  it("returns undefined for actions that are not worktree.delete", async () => {
-    await expect(
-      buildMcpConfirmPreview("terminal.kill", { terminalId: "t-1" })
-    ).resolves.toBeUndefined();
-    expect(mocks.buildPreview).not.toHaveBeenCalled();
-  });
-
-  it("returns undefined when worktree.delete args carry no worktreeId", async () => {
-    await expect(
-      buildMcpConfirmPreview("worktree.delete", { force: true })
-    ).resolves.toBeUndefined();
-    expect(mocks.buildPreview).not.toHaveBeenCalled();
-  });
-
-  it("returns undefined when the monitor is gone (builder resolves null)", async () => {
+  it("returns no lines when the monitor is gone (builder resolves null)", async () => {
     mocks.buildPreview.mockResolvedValue(null);
     await expect(
-      buildMcpConfirmPreview("worktree.delete", { worktreeId: "wt-1" })
-    ).resolves.toBeUndefined();
+      buildMcpConfirmPreview({ kind: "worktreeDelete", worktreeId: "wt-1" })
+    ).resolves.toEqual([]);
     expect(mocks.buildPreview).toHaveBeenCalledWith("wt-1");
   });
 
@@ -718,17 +1136,36 @@ describe("buildMcpConfirmPreview (#11343)", () => {
       hasUntrackedFiles: false,
       changes: [{ path: "src/app.ts", status: "modified", insertions: null, deletions: null }],
     });
-    const lines = await buildMcpConfirmPreview("worktree.delete", {
-      worktreeId: "wt-1",
-      force: true,
-    });
-    expect(lines?.[0]).toContain("1 uncommitted tracked file");
+    const lines = await buildMcpConfirmPreview({ kind: "worktreeDelete", worktreeId: "wt-1" });
+    expect(lines[0]).toContain("1 uncommitted tracked file");
     expect(lines).toContain("  M src/app.ts");
   });
 
   it("fails closed with a couldn't-verify note when the fresh fetch throws", async () => {
     mocks.buildPreview.mockRejectedValue(new Error("timeout"));
-    const lines = await buildMcpConfirmPreview("worktree.delete", { worktreeId: "wt-1" });
+    const lines = await buildMcpConfirmPreview({ kind: "worktreeDelete", worktreeId: "wt-1" });
     expect(lines).toEqual(["⚠ Could not verify current changes — proceed with caution."]);
+  });
+
+  it("surfaces the branch and actual commits for a git.push target", async () => {
+    mocks.buildGitPreview.mockResolvedValue({
+      branch: "feature/x",
+      commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
+    });
+    const lines = await buildMcpConfirmPreview({ kind: "gitPush", cwd: "/repo" });
+    expect(mocks.buildGitPreview).toHaveBeenCalledWith("/repo");
+    expect(lines[0]).toBe("Branch: feature/x");
+    expect(lines[1]).toContain("Fix the thing");
+    expect(lines[1]).toContain("Ada");
+  });
+
+  it("distinguishes an empty branch from an unverifiable one for git targets", async () => {
+    mocks.buildGitPreview.mockResolvedValue({ branch: "main", commits: [] });
+    const empty = await buildMcpConfirmPreview({ kind: "gitPullRebase", cwd: "/repo" });
+    expect(empty).toEqual(["Branch: main", "No local commits to replay."]);
+
+    mocks.buildGitPreview.mockRejectedValue(new Error("git exploded"));
+    const failed = await buildMcpConfirmPreview({ kind: "gitPush", cwd: "/repo" });
+    expect(failed[0]).toContain("Could not verify");
   });
 });

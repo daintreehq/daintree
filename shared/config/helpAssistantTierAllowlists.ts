@@ -9,6 +9,10 @@ export const WORKBENCH_TIER_TOOLS = [
   "actions.getContext",
   "actions.search",
   "actions.getSchema",
+  // Reports the caller's own tool surface as data (#11549) — a read of what
+  // `tools/list` already told this session, so it grants nothing the caller
+  // does not already hold and belongs at the lowest tier.
+  "mcp.surface",
 
   "project.getAll",
   "project.getCurrent",
@@ -70,7 +74,9 @@ export const WORKBENCH_TIER_TOOLS = [
   "forge.listIssues",
   "forge.listPRs",
   "forge.getIssue",
+  "forge.listIssueComments",
   "forge.getPR",
+  "forge.getCIStatus",
 
   "workflow.prepBranchForReview",
 
@@ -150,6 +156,9 @@ export const ACTION_TIER_ADDONS = [
   "project.update",
   "project.saveSettings",
   "project.muteNotifications",
+  // Runs a project-declared command as a real child process. Read-only
+  // workbench sessions detect runners but must not execute them.
+  "project.runCheck",
 ] as const satisfies readonly BuiltInActionId[];
 
 export const SYSTEM_TIER_ADDONS = [

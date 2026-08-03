@@ -10,9 +10,16 @@ import type { FileTreeNode } from "./copyTree.js";
  * another call.
  */
 export interface FileBrowserListDirectoryPayload {
-  /** Worktree whose root the listing is resolved against */
-  worktreeId: string;
-  /** Worktree-relative directory to list; absent or "" lists the root */
+  /**
+   * Worktree whose root the listing is resolved against. Absent means "this
+   * sender's own workspace root" — the project or scratch folder its view is
+   * bound to (#11482). No absolute root is ever named by the renderer: main
+   * derives it from the trusted `ctx.projectId` binding, so a scratch or
+   * worktree-less project is reachable without widening what a renderer can
+   * ask for.
+   */
+  worktreeId?: string;
+  /** Directory to list, relative to the resolved root; absent or "" lists the root */
   dirPath?: string;
 }
 
@@ -26,9 +33,9 @@ export type FileBrowserListDirectoryResult = FileTreeNode[];
  * links, so the check has to be cheap and batched (one call per hovered line).
  */
 export interface FileBrowserStatPathsPayload {
-  /** Worktree whose root the paths are resolved against */
-  worktreeId: string;
-  /** Worktree-relative candidate paths, at most 32 per call */
+  /** Worktree whose root the paths are resolved against; absent = the sender's workspace root */
+  worktreeId?: string;
+  /** Candidate paths relative to the resolved root, at most 32 per call */
   paths: string[];
 }
 

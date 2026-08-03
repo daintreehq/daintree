@@ -39,3 +39,41 @@ export function isDockPanelRendered(
   // Global panels (no worktree) ride along with every worktree.
   return panel.worktreeId == null || panel.worktreeId === activeWorktreeId;
 }
+
+/** The panel-store fields the pointer derivation reads, structurally. */
+export interface DockPopoverPointerState {
+  activeDockTerminalId: string | null;
+  panelIds: string[];
+  panelsById: Record<string, PanelInstance>;
+  trashedTerminals: { has: (id: string) => boolean };
+}
+
+/**
+ * Which dock popover is genuinely on screen, or null.
+ *
+ * The pointer alone can't answer that — see `isDockPanelRendered` — so this
+ * intersects it with what the dock actually renders. Kept as one exported
+ * derivation because two callers now need the same answer for different
+ * reasons (maximized-group focus enforcement, and dialog z-tier promotion in
+ * #11505); a paraphrase in either would drift from the render predicate.
+ *
+ * Returns the id rather than a boolean so selector consumers compare a
+ * primitive and short-circuit the re-render on unrelated store writes.
+ */
+export function selectOpenDockPopoverId(
+  state: DockPopoverPointerState,
+  { helpTerminalId, activeWorktreeId }: Omit<DockPanelScope, "trashedTerminals">
+): string | null {
+  const id = state.activeDockTerminalId;
+  if (id === null) return null;
+  // Both dock surfaces render from `panelIds`; a panel that lingers in
+  // `panelsById` without being registered there has no chip, hence no popover.
+  const panel = state.panelIds.includes(id) ? state.panelsById[id] : undefined;
+  return isDockPanelRendered(panel, {
+    trashedTerminals: state.trashedTerminals,
+    helpTerminalId,
+    activeWorktreeId,
+  })
+    ? id
+    : null;
+}

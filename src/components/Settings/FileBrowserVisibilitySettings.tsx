@@ -106,7 +106,7 @@ export function FileBrowserVisibilitySettings() {
             aria-label="Add an always-hidden pattern"
             className={cn(
               "flex-1 rounded-[var(--radius-md)] border bg-daintree-bg px-3 py-1.5 font-mono text-sm text-daintree-text",
-              "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent",
+              "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30",
               error ? "border-status-error/50" : "border-daintree-border"
             )}
           />

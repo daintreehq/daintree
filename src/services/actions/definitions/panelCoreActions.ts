@@ -4,6 +4,7 @@ import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useErrorStore } from "@/store/errorStore";
 import { usePortalStore } from "@/store/portalStore";
 import { usePanelStore } from "@/store/panelStore";
+import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getPanelKindConfig } from "@shared/config/panelKindRegistry";
 
@@ -37,7 +38,11 @@ export function registerPanelCoreActions(
         z.object({
           id: z.string(),
           kind: z.string(),
-          type: z.unknown().nullable(),
+          // `.optional()` is load-bearing: zod 4 strips `z.unknown()`'s implicit
+          // optionality once it's wrapped in `.nullable()`, so without it a
+          // MISSING key fails where an explicit `undefined` passes. Same fix as
+          // the sibling TerminalSummarySchema in schemas.ts.
+          type: z.unknown().nullable().optional(),
           worktreeId: z.string().nullable(),
           title: z.string().nullable(),
           location: z.string(),
@@ -104,7 +109,8 @@ export function registerPanelCoreActions(
   actions.set("panel.focus", () => ({
     id: "panel.focus",
     title: "Focus Panel",
-    description: "Focus a specific panel by ID",
+    description:
+      "Move keyboard focus to a specific panel, changing what the user is looking at and where their typing goes. Use it to surface a panel the user should attend to. It reports nothing about the panel — list terminals or panels to inspect state.",
     category: "panel",
     kind: "command",
     danger: "safe",
@@ -121,6 +127,17 @@ export function registerPanelCoreActions(
         throw new Error("Terminal panel no longer exists");
       }
       terminalState.activateTerminal(panelId);
+      // Selection and DOM focus are two states, and this action owes the caller
+      // both. `activateTerminal` only moves selection — the pane grabs focus
+      // from an effect keyed on *becoming* focused, so re-selecting the panel
+      // that is already selected changes nothing and the keyboard stays
+      // wherever it drifted (the sidebar, a dialog, the worktree list). Asking
+      // the pane directly is what makes "focus this run" mean it every time.
+      //
+      // Unmounted panes report `false` here; that path is already covered,
+      // because a pane that is not mounted was not focused either, so its
+      // mount-time effect runs with `isFocused` already true.
+      focusPanelInput(panelId);
     },
   }));
 
@@ -222,6 +239,9 @@ export function registerPanelCoreActions(
     nonRepeatable: true,
     // Opens a modal palette — a post-dispatch hint would land on top of it
     // (ShortcutHint sits at z-toast, above z-modal). Issue #11030.
+    // Not redundant with dispatch()'s overlay-claim check (#11507): this
+    // opener is synchronous, so the continuation can beat the palette's
+    // claim effect. Keep the flag.
     suppressShortcutHint: true,
     run: async () => {
       callbacks.onOpenPanelPalette();

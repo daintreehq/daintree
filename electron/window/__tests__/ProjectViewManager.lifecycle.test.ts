@@ -624,7 +624,13 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       // Free RAM collapses below the profile floor while the gate is open.
       manager.setLowMemoryFreeThresholdMb(1024);
       stubSystemMemoryInfo({ free: 100 * 1024, total: 8 * 1024 * 1024 });
-      (manager as unknown as { maybeEvictUnderPressure: () => void }).maybeEvictUnderPressure();
+      // Two ticks, because the sampler sheds one view per pass at every band
+      // since #11477 — what matters here is WHICH views it is willing to take,
+      // not how fast, so drive it to its settled target.
+      const tick = (manager as unknown as { maybeEvictUnderPressure: () => void })
+        .maybeEvictUnderPressure;
+      tick.call(manager);
+      tick.call(manager);
 
       // The bridge (C) and the incoming active view (D) survive; A and B go.
       expect(setup.onViewEvicted).toHaveBeenCalledWith(initialWc.id);
@@ -658,10 +664,14 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       await coldSwitch(setup, "proj-d", "/d");
       expect(manager.getAllViews()).toHaveLength(3);
 
-      // One low-memory pass clamps to 1 without rewriting the preference.
+      // Low-memory passes converge on 1 without rewriting the preference. Two
+      // ticks: the sampler sheds one view per pass at every band (#11477).
       manager.setLowMemoryFreeThresholdMb(1024);
       stubSystemMemoryInfo({ free: 100 * 1024, total: 8 * 1024 * 1024 });
-      (manager as unknown as { maybeEvictUnderPressure: () => void }).maybeEvictUnderPressure();
+      const tick = (manager as unknown as { maybeEvictUnderPressure: () => void })
+        .maybeEvictUnderPressure;
+      tick.call(manager);
+      tick.call(manager);
       expect(manager.getAllViews().map((entry) => entry.projectId)).toEqual(["proj-d"]);
       expect(manager.getCacheConfig().maxCachedViews).toBe(5);
 
@@ -837,6 +847,131 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       expect(sharedWcTwo.isDestroyed()).toBe(false);
       assertLifecycleInvariants(setupTwo.manager as never, setupTwo.win as never);
       setupTwo.ledger.assertNoPortsForDeadViews(setupTwo.manager as never);
+    });
+  });
+
+  describe("getWorkspaceRefForWebContents (#11536)", () => {
+    // Every manager here schedules a recurring memory sampler and window
+    // listeners; dispose() is what clears them, so a leaked manager can fire
+    // into later tests.
+    const managers: ManagerSetup[] = [];
+    const track = (setup: ManagerSetup): ManagerSetup => {
+      managers.push(setup);
+      return setup;
+    };
+
+    afterEach(() => {
+      for (const setup of managers.splice(0)) {
+        setup.manager.dispose();
+      }
+    });
+
+    it("reports the id and path of the workspace a view belongs to", async () => {
+      const setup = track(createManager());
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+
+      expect(setup.manager.getWorkspaceRefForWebContents(bWc.id)).toEqual({
+        kind: "project",
+        workspaceId: "proj-b",
+        workspacePath: "/b",
+      });
+    });
+
+    it("marks a scratch workspace as a scratch, not a project", async () => {
+      // A scratch id is a dashed UUID and has no Project row, so a caller must
+      // not try to resolve it through project APIs.
+      const scratchId = "6f1c9d2e-4a7b-4c3d-9e8f-1a2b3c4d5e6f";
+      const setup = track(createManager());
+      const scratchWc = await coldSwitch(setup, scratchId, "/scratch/one");
+
+      expect(setup.manager.getWorkspaceRefForWebContents(scratchWc.id)).toEqual({
+        kind: "scratch",
+        workspaceId: scratchId,
+        workspacePath: "/scratch/one",
+      });
+    });
+
+    it("reports a cached (deactivated) view's own workspace, not the active one", async () => {
+      const setup = track(createManager());
+      // Switching away leaves proj-a's view cached but still registered — an
+      // in-flight MCP dispatch can settle against it after the user moves on.
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+
+      expect(setup.manager.getActiveProjectId()).toBe("proj-b");
+      expect(setup.manager.getWorkspaceRefForWebContents(setup.initialWc.id)).toMatchObject({
+        workspaceId: "proj-a",
+        workspacePath: "/a",
+      });
+      expect(setup.manager.getWorkspaceRefForWebContents(bWc.id)).toMatchObject({
+        workspaceId: "proj-b",
+        workspacePath: "/b",
+      });
+    });
+
+    it("reflects a rebound path rather than the registration-time one", async () => {
+      const setup = track(createManager());
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+
+      await setup.manager.rebindProjectPath("proj-b", "/moved/b");
+
+      expect(setup.manager.getWorkspaceRefForWebContents(bWc.id)).toMatchObject({
+        workspaceId: "proj-b",
+        workspacePath: "/moved/b",
+      });
+    });
+
+    it("returns null for an unknown id, a foreign window's view, and after teardown", async () => {
+      const setup = track(createManager());
+      const other = track(createManager());
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+
+      // Positive control, so the null assertions below can't pass vacuously.
+      expect(setup.manager.getWorkspaceRefForWebContents(bWc.id)).not.toBeNull();
+
+      expect(setup.manager.getWorkspaceRefForWebContents(999_999)).toBeNull();
+      // Sender-scoped: one window's manager must not answer for another's view.
+      expect(other.manager.getWorkspaceRefForWebContents(bWc.id)).toBeNull();
+
+      setup.manager.dispose();
+      expect(setup.manager.getWorkspaceRefForWebContents(bWc.id)).toBeNull();
+    });
+
+    it("returns null once the view's webContents is destroyed", async () => {
+      const setup = track(createManager());
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+      expect(setup.manager.getWorkspaceRefForWebContents(bWc.id)).not.toBeNull();
+
+      bWc.isDestroyed.mockReturnValue(true);
+
+      expect(setup.manager.getWorkspaceRefForWebContents(bWc.id)).toBeNull();
+    });
+
+    it("returns null when the entry no longer owns the requested webContents", async () => {
+      // Pins the ownership guard: a stale reverse mapping must not attribute an
+      // old webContents id to whatever view now holds that project entry.
+      const setup = track(createManager());
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+      const staleId = bWc.id;
+      expect(setup.manager.getWorkspaceRefForWebContents(staleId)).not.toBeNull();
+
+      bWc.id = staleId + 1_000;
+
+      expect(setup.manager.getWorkspaceRefForWebContents(staleId)).toBeNull();
+    });
+
+    it("returns null when the webContents getter is gone (Electron #50249)", async () => {
+      const setup = track(createManager());
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+      expect(setup.manager.getWorkspaceRefForWebContents(bWc.id)).not.toBeNull();
+
+      const entry = setup.manager.getAllViews().find((e) => e.projectId === "proj-b");
+      Object.defineProperty(entry!.view, "webContents", {
+        get() {
+          throw new Error("webContents getter gone");
+        },
+      });
+
+      expect(setup.manager.getWorkspaceRefForWebContents(bWc.id)).toBeNull();
     });
   });
 });

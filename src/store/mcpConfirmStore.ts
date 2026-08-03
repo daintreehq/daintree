@@ -43,6 +43,14 @@ export interface PendingMcpConfirm {
    */
   preview?: string[];
   /**
+   * Section heading for {@link preview}. Different dispatches preview different
+   * things — a `worktree.delete` shows working-tree changes, a `git.push` shows
+   * the target branch and local commits (#11538) — so the heading travels with
+   * the lines instead of being hardcoded in the dialog. Absent when there is no
+   * preview; the dialog falls back to its original working-tree wording.
+   */
+  previewTitle?: string;
+  /**
    * True while the fresh preview fetch is still in flight (#11343). The modal
    * opens immediately but keeps its approve button disabled until the preview
    * (or a verification-failure note) arrives, so an approver can't confirm a

@@ -360,7 +360,7 @@ ContextMenuLabel.displayName = "ContextMenuLabel";
 const ContextMenuShortcut = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
   return (
     <span
-      className={cn("ml-auto text-[11px] font-mono text-daintree-text/50", className)}
+      className={cn("ml-auto pl-2 text-[11px] font-mono text-daintree-text/50", className)}
       {...props}
     />
   );

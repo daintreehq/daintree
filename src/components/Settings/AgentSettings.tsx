@@ -402,7 +402,7 @@ export function AgentSettings({
                 onChange={(e) =>
                   setDefaultAgent(e.target.value ? (e.target.value as DefaultAgentId) : undefined)
                 }
-                className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent focus:outline-hidden transition-colors"
+                className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
               >
                 <option value="">None (first available)</option>
                 {agentOptions.map((agent) => (

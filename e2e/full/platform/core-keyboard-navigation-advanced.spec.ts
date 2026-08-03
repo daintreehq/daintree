@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
@@ -8,6 +8,10 @@ import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
+
+function worktreeRow(card: Locator): Locator {
+  return card.locator("xpath=ancestor::*[@data-worktree-row][1]");
+}
 
 async function dispatchAction<Result = unknown>(
   ctx: AppContext,
@@ -243,36 +247,48 @@ test.describe.serial("Core: Keyboard Worktree Navigation", () => {
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);
 
-    // Verify main is initially selected
+    // Verify main is initially current
     const mainCard = window.locator(SEL.worktree.card(mainBranch));
-    await expect(mainCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+    await expect(worktreeRow(mainCard)).toHaveAttribute("aria-current", "true", {
+      timeout: T_MEDIUM,
+    });
 
     // Cycle next → feature
     await window.keyboard.press(`${mod}+Alt+]`);
     const featureCard = window.locator(SEL.worktree.card(FEATURE_BRANCH));
-    await expect(featureCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+    await expect(worktreeRow(featureCard)).toHaveAttribute("aria-current", "true", {
+      timeout: T_MEDIUM,
+    });
 
     // Cycle next → main (wrap)
     await window.keyboard.press(`${mod}+Alt+]`);
-    await expect(mainCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+    await expect(worktreeRow(mainCard)).toHaveAttribute("aria-current", "true", {
+      timeout: T_MEDIUM,
+    });
   });
 
   test("Cmd+Alt+[ cycles to previous worktree", async () => {
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);
 
-    // Main should be selected from previous test
+    // Main should be current from previous test
     const mainCard = window.locator(SEL.worktree.card(mainBranch));
-    await expect(mainCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+    await expect(worktreeRow(mainCard)).toHaveAttribute("aria-current", "true", {
+      timeout: T_MEDIUM,
+    });
 
     // Cycle previous → feature (wrap)
     await window.keyboard.press(`${mod}+Alt+[`);
     const featureCard = window.locator(SEL.worktree.card(FEATURE_BRANCH));
-    await expect(featureCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+    await expect(worktreeRow(featureCard)).toHaveAttribute("aria-current", "true", {
+      timeout: T_MEDIUM,
+    });
 
     // Cycle previous → main
     await window.keyboard.press(`${mod}+Alt+[`);
-    await expect(mainCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+    await expect(worktreeRow(mainCard)).toHaveAttribute("aria-current", "true", {
+      timeout: T_MEDIUM,
+    });
   });
 
   test("Cmd+Alt+N jumps to worktree by index", async () => {
@@ -284,16 +300,22 @@ test.describe.serial("Core: Keyboard Worktree Navigation", () => {
 
     // Jump to worktree 2 (feature)
     await window.keyboard.press(`${mod}+Alt+2`);
-    await expect(featureCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+    await expect(worktreeRow(featureCard)).toHaveAttribute("aria-current", "true", {
+      timeout: T_MEDIUM,
+    });
 
     // Jump to out-of-range worktree 9 while on worktree 2 — should be no-op
     await window.keyboard.press(`${mod}+Alt+9`);
     await window.waitForTimeout(T_SETTLE);
-    await expect(featureCard).toHaveAttribute("aria-label", /selected/, { timeout: T_SHORT });
+    await expect(worktreeRow(featureCard)).toHaveAttribute("aria-current", "true", {
+      timeout: T_SHORT,
+    });
 
     // Jump to worktree 1 (main) to leave clean state
     await window.keyboard.press(`${mod}+Alt+1`);
-    await expect(mainCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+    await expect(worktreeRow(mainCard)).toHaveAttribute("aria-current", "true", {
+      timeout: T_MEDIUM,
+    });
   });
 
   test("focus state visible via DOM attributes after keyboard navigation", async () => {
@@ -303,17 +325,23 @@ test.describe.serial("Core: Keyboard Worktree Navigation", () => {
     // Switch to feature via keyboard
     await window.keyboard.press(`${mod}+Alt+2`);
     const featureCard = window.locator(SEL.worktree.card(FEATURE_BRANCH));
-    await expect(featureCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+    await expect(worktreeRow(featureCard)).toHaveAttribute("aria-current", "true", {
+      timeout: T_MEDIUM,
+    });
 
     // Verify DOM attributes are correct
     await expect(featureCard).toHaveAttribute("data-worktree-branch", FEATURE_BRANCH);
 
-    // Main card should NOT be selected
+    // Main row should NOT be current
     const mainCard = window.locator(SEL.worktree.card(mainBranch));
-    await expect(mainCard).not.toHaveAttribute("aria-label", /selected/, { timeout: T_SHORT });
+    await expect(worktreeRow(mainCard)).not.toHaveAttribute("aria-current", "true", {
+      timeout: T_SHORT,
+    });
 
     // Switch back to main to leave clean state
     await window.keyboard.press(`${mod}+Alt+1`);
-    await expect(mainCard).toHaveAttribute("aria-label", /selected/, { timeout: T_MEDIUM });
+    await expect(worktreeRow(mainCard)).toHaveAttribute("aria-current", "true", {
+      timeout: T_MEDIUM,
+    });
   });
 });

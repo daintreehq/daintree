@@ -248,6 +248,12 @@ export function useActionPalette(): UseActionPaletteReturn {
       // instead of the headless action the user searched for. MRU above still
       // records the picked id so the familiar entry reappears.
       const dispatchId = item.redirectTo ?? item.id;
+      // Read off `dispatchId`, not `item.id` — a redirect row's failure comes
+      // from the sibling that actually ran, so that's the definition whose
+      // toast ownership matters.
+      const selfNotifies = actionService.selfNotifiesOnExecutionError(
+        dispatchId as Parameters<typeof actionService.selfNotifiesOnExecutionError>[0]
+      );
       void actionService
         .dispatch(
           dispatchId as Parameters<typeof actionService.dispatch>[0],
@@ -260,14 +266,21 @@ export function useActionPalette(): UseActionPaletteReturn {
           if (result.ok) return;
           // DISABLED is already visible on the originating surface (#8814).
           if (result.error.code === "DISABLED") return;
-          // A plugin action's synthetic run() self-notifies *only* when its own
-          // handler throws — surfaced by ActionService as EXECUTION_ERROR.
-          // Suppress the generic palette toast for that exact case to avoid
-          // double-notifying. Any other plugin failure (e.g. NOT_FOUND when the
-          // action was unregistered while the palette was open) never
-          // self-notified, and built-in EXECUTION_ERRORs never self-notify, so
-          // the palette must still toast those.
-          if (item.pluginId !== undefined && result.error.code === "EXECUTION_ERROR") return;
+          // Two kinds of action own their failure toast, and only for a failure
+          // thrown out of run() (EXECUTION_ERROR): a plugin action, whose
+          // synthetic run() self-notifies in usePluginActions, and a built-in
+          // that opted in via `selfNotifiesOnExecutionError`. Suppress the
+          // generic palette toast for exactly those so the specific message
+          // isn't stacked under a vaguer duplicate. Everything else — a failure
+          // raised before run() (e.g. NOT_FOUND when the action was
+          // unregistered while the palette was open), or a built-in that never
+          // self-notifies — still needs the palette to toast.
+          if (
+            result.error.code === "EXECUTION_ERROR" &&
+            (item.pluginId !== undefined || selfNotifies)
+          ) {
+            return;
+          }
           // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
           notify({
             type: "error",

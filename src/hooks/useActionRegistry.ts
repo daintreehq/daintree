@@ -7,6 +7,11 @@ import {
 import type { ActionContext } from "@shared/types/actions";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
+// Leaf import, never the `@/store` barrel: many suites mock the barrel without
+// listing this store and would crash on an undefined destructure.
+import { useScratchStore } from "@/store/scratchStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { resolveViewWorkspace } from "@/store/viewWorkspace";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -81,7 +86,28 @@ export function useActionRegistry(options: ActionCallbacks): void {
     }
 
     actionService.setContextProvider((): ActionContext => {
-      const project = useProjectStore.getState().currentProject;
+      // Both halves of the workspace pointer come from one lookup. A scratch is
+      // the active workspace when no project is (#11076), and an action that
+      // only reads `currentProject` sees nothing at all there — but reading
+      // either `current*` pointer directly is just as wrong the other way, since
+      // both are broadcast to every view: a sibling window switching workspaces
+      // would make an action here name — or refuse — the wrong folder. Resolving
+      // through this view's own seeded id also makes the two pointers mutually
+      // exclusive, so a consumer picking project-first can never land on a
+      // leftover project beside this view's scratch. Shared with the file
+      // browser's own root resolution, which is what keeps the two from
+      // disagreeing.
+      const projectStoreState = useProjectStore.getState();
+      const scratchStoreState = useScratchStore.getState();
+      const viewWorkspace = resolveViewWorkspace({
+        viewWorkspaceId: getViewWorkspaceId(),
+        projects: projectStoreState.projects,
+        currentProject: projectStoreState.currentProject,
+        scratches: scratchStoreState.scratches,
+        currentScratch: scratchStoreState.currentScratch,
+      });
+      const project = viewWorkspace?.kind === "project" ? viewWorkspace.project : undefined;
+      const scratch = viewWorkspace?.kind === "scratch" ? viewWorkspace.scratch : undefined;
       const terminalState = usePanelStore.getState();
       const focusedId = terminalState.focusedId;
       const focusedTerminal = focusedId ? terminalState.panelsById[focusedId] : null;
@@ -104,6 +130,9 @@ export function useActionRegistry(options: ActionCallbacks): void {
         focusedTerminalId: focusedId ?? undefined,
         focusedTerminalKind: focusedTerminal?.kind,
         focusedTerminalTitle: focusedTerminal?.title,
+        scratchId: scratch?.id,
+        scratchName: scratch?.name,
+        scratchPath: scratch?.path,
         isSettingsOpen: callbacksRef.current.getIsSettingsOpen(),
       };
     });

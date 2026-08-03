@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Check, ChevronsUpDown, Copy, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TerminalRecipe } from "@/types";
+import { getRecipeScope } from "@/utils/recipeScope";
 import { CLONE_LAYOUT_ID } from "../hooks/useRecipePicker";
 
 interface RecipePickerPopoverProps {
@@ -147,15 +148,24 @@ export function RecipePickerPopover({
                 onClick={() => handleSelect(recipe.id)}
                 className={cn(
                   "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
-                  recipe.id === selectedRecipeId && "bg-daintree-border"
+                  recipe.id === selectedRecipeId && "bg-daintree-border",
+                  recipe.shadowedBy && "opacity-60"
                 )}
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="truncate">{recipe.name}</span>
                   <span className="text-xs text-daintree-text/50 shrink-0">
+                    {getRecipeScope(recipe).label}
+                  </span>
+                  <span className="text-xs text-daintree-text/50 shrink-0">
                     {recipe.terminals.length} terminal
                     {recipe.terminals.length !== 1 ? "s" : ""}
                   </span>
+                  {recipe.shadowedBy && (
+                    <span className="text-xs text-daintree-text/50 shrink-0">
+                      Overridden by Team
+                    </span>
+                  )}
                   {recipe.id === defaultRecipeId && (
                     <span className="text-xs text-daintree-text/50 shrink-0">(default)</span>
                   )}

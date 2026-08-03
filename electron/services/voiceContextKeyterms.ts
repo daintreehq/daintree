@@ -321,7 +321,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
 
   function add(term: string): boolean {
     if (result.length >= MAX_KEYTERMS) return false;
-    const capped = term.length > MAX_KEYTERM_LENGTH ? term.slice(0, MAX_KEYTERM_LENGTH) : term;
+    const capped = capTermLength(term, MAX_KEYTERM_LENGTH);
     const key = capped.toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
@@ -411,6 +411,74 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
   });
 
   return result;
+}
+
+// OpenAI's Realtime API rejects an entire `session.update` if any entry in
+// `transcription.keywords` contains one of these characters, so a single bad
+// keyterm would kill the whole dictation session. Terminal output is a rich
+// source of `<`/`>` (shell redirects, JSX, diff markers), so this is a live
+// hazard, not a theoretical one.
+const OPENAI_FORBIDDEN_KEYWORD_CHARS = /[<>\r\n]/;
+
+// An unpaired surrogate is corrupted input (a term already truncated mid-emoji
+// upstream, or a mangled terminal read), not a meaningful character. It has no
+// valid UTF-8 encoding, so it's dropped like any other unsendable term rather
+// than repaired into a different word.
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/**
+ * Truncates to at most `maxLength` UTF-16 code units without splitting a
+ * surrogate pair. A bare `slice` on "…99 chars…😀" leaves a lone high surrogate,
+ * which serializes as a malformed `\ud83d` the server may reject or replace.
+ */
+function capTermLength(term: string, maxLength: number): string {
+  if (term.length <= maxLength) return term;
+  const cut = term.slice(0, maxLength);
+  // A trailing high surrogate (D800-DBFF) means the pair was split — drop it.
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+/**
+ * Sanitizes assembled keyterms for OpenAI's `transcription.keywords` array.
+ *
+ * Offending terms are DROPPED WHOLE rather than stripped: deleting `<` from
+ * `<div>` yields `div`, a different literal that would bias transcription
+ * toward a word the user never has on screen. A dropped term is simply absent;
+ * a mangled one is silently wrong.
+ *
+ * The count and length bounds are Daintree's own conservative limits (shared
+ * with the Deepgram path) — OpenAI documents neither, so we do not claim to
+ * mirror an API limit here.
+ *
+ * Pure and non-mutating: the session keyterm snapshot is frozen for the
+ * session's lifetime and reused across reconnects.
+ */
+export function sanitizeOpenAIKeywords(terms: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const term of terms) {
+    if (out.length >= MAX_KEYTERMS) break;
+    // Defensive: `keyterms` crosses an IPC boundary, so a malformed payload can
+    // carry non-strings despite the declared type.
+    if (typeof term !== "string") continue;
+
+    const trimmed = term.trim();
+    if (trimmed.length === 0) continue;
+    if (OPENAI_FORBIDDEN_KEYWORD_CHARS.test(trimmed)) continue;
+    if (LONE_SURROGATE.test(trimmed)) continue;
+
+    const capped = capTermLength(trimmed, MAX_KEYTERM_LENGTH);
+    // Dedup after trimming/capping so two terms that collapse to the same wire
+    // value don't burn two slots.
+    const key = capped.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(capped);
+  }
+
+  return out;
 }
 
 export function formatKeytermPrompt(terms: string[], maxChars: number = MAX_PROMPT_CHARS): string {

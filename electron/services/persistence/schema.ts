@@ -73,6 +73,7 @@ export const scratches = sqliteTable("scratches", {
   // partially-deleted directory. Rows with `deletedAt` set are filtered out of
   // all renderer-facing queries.
   deletedAt: integer("deleted_at"),
+  lastCompletionSeenAt: integer("last_completion_seen_at"),
 });
 
 export type ProjectRow = typeof projects.$inferSelect;

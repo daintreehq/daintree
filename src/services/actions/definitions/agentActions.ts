@@ -4,7 +4,7 @@ import {
   LaunchLocationSchema,
   TerminalSpawnSourceSchema,
   AddPanelFocusPolicySchema,
-  AgentSessionRecordSchema,
+  AgentFacingSessionRecordSchema,
 } from "./schemas";
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
@@ -24,6 +24,10 @@ import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type { ActionContext, ActionId } from "@shared/types/actions";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
+import type {
+  AgentSessionBookmarkMetadata,
+  AgentSessionRecord,
+} from "@shared/types/ipc/agentSessionHistory";
 
 // Named so the bookmark actions can both declare `argsSchema` and `.parse()` in
 // run() for typed args without an unsafe `as` cast (#11288).
@@ -36,11 +40,126 @@ const BookmarkMutateArgsSchema = z.object({
   label: z.string().trim().min(1).max(120),
 });
 const BookmarkDeleteArgsSchema = z.object({ sessionId: z.string().min(1) });
+
+// Bounds for the two agent-facing session listings (#11530). Deliberately
+// tighter than the 50/500 used for log-shaped actions: a session record is an
+// order of magnitude heavier than a log line, and an MCP result is billed twice
+// (once as text, once as `structuredContent`). 20 matches RESUME_PAGE_SIZE, the
+// resume palette's own page size.
+const SESSION_LIST_DEFAULT_LIMIT = 20;
+const SESSION_LIST_MAX_LIMIT = 100;
+const SessionListLimitSchema = z
+  .number()
+  .int()
+  .min(1)
+  .max(SESSION_LIST_MAX_LIMIT)
+  .default(SESSION_LIST_DEFAULT_LIMIT)
+  .describe(
+    `Max records to return, newest-first (default: ${SESSION_LIST_DEFAULT_LIMIT}, max: ${SESSION_LIST_MAX_LIMIT}).`
+  );
+
+// Paired with the limit so a bounded page isn't a one-way door. Bookmarks are
+// exempt from every eviction rule, so a project can hold more of them than the
+// maximum limit — without an offset those records would be unreachable through
+// the action, and their sessionId is the only handle rename/delete accept.
+const SessionListOffsetSchema = z
+  .number()
+  .int()
+  .min(0)
+  .default(0)
+  .describe("Records to skip before the page, for reaching past the limit (default: 0).");
+
 const BookmarkListArgsSchema = z
   .object({
     projectId: z.string().min(1).optional(),
+    limit: SessionListLimitSchema,
+    offset: SessionListOffsetSchema,
   })
   .optional();
+
+const SessionHistoryListArgsSchema = z
+  .object({
+    // `.min(1)`: an empty string would fall through the bridge's `if
+    // (!worktreeId)` guard to an unfiltered listing — a surprising result for a
+    // caller that passed a (blank) id expecting a scoped one.
+    worktreeId: z.string().min(1).optional().describe("Restrict the listing to one worktree id."),
+    projectId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Restrict the listing to one project id; combines with `worktreeId`."),
+    limit: SessionListLimitSchema,
+    offset: SessionListOffsetSchema,
+  })
+  .optional();
+
+/**
+ * Rebuild bookmark metadata as the lean shape an agent is given (#11530).
+ * Allowlist rather than omit/rest-destructuring: a pane-presentation field
+ * added to the record later must stay out of MCP output until someone
+ * deliberately opts it in here.
+ */
+function toAgentFacingBookmark(
+  bookmark: AgentSessionBookmarkMetadata
+): AgentSessionBookmarkMetadata {
+  return {
+    bookmarkedAt: bookmark.bookmarkedAt,
+    label: bookmark.label,
+    ...(bookmark.sourceLocation !== undefined && { sourceLocation: bookmark.sourceLocation }),
+    ...(bookmark.agentPresetId !== undefined && { agentPresetId: bookmark.agentPresetId }),
+    ...(bookmark.originalPresetId !== undefined && { originalPresetId: bookmark.originalPresetId }),
+    ...(bookmark.isInputLocked !== undefined && { isInputLocked: bookmark.isInputLocked }),
+  };
+}
+
+/**
+ * Rebuild a journal record as the agent-facing shape (#11530). Applied by BOTH
+ * list actions — a bookmarked record surfaces through session history too, so
+ * stripping in only one of them would leave the other as an open path for the
+ * same pane-presentation fields. Dispatch parses results against `resultSchema`
+ * now (#11539), but this stays real code: the records ride under an
+ * `z.unknown()` arm that opts out of stripping, so the parse cannot narrow them.
+ */
+function toAgentFacingRecord(record: AgentSessionRecord): AgentSessionRecord {
+  return {
+    sessionId: record.sessionId,
+    agentId: record.agentId,
+    worktreeId: record.worktreeId,
+    title: record.title,
+    projectId: record.projectId,
+    savedAt: record.savedAt,
+    ...(record.agentLaunchFlags !== undefined && { agentLaunchFlags: record.agentLaunchFlags }),
+    ...(record.agentModelId !== undefined && { agentModelId: record.agentModelId }),
+    ...(record.cwd !== undefined && { cwd: record.cwd }),
+    ...(record.branch !== undefined && { branch: record.branch }),
+    // Truthiness, not `!== undefined`, only for the nested object: the journal
+    // is a plain JSON file on disk and `normalizeRecords` admits any object
+    // with a string sessionId, so a hand-edited `"bookmark": null` would reach
+    // this projection and throw — taking down a whole listing the journal is
+    // documented to survive. The scalar spreads above stay `!== undefined` on
+    // purpose so falsy-but-present values (`isInputLocked: false`) survive.
+    ...(record.bookmark ? { bookmark: toAgentFacingBookmark(record.bookmark) } : {}),
+  };
+}
+
+/**
+ * Drop projected records the advertised shape cannot carry.
+ *
+ * `normalizeRecords` (electron/services/pty/agentSessionHistory.ts) deliberately
+ * admits any object with a string `sessionId` so a garbage, hand-edited, or
+ * newer-schema journal degrades gracefully instead of crashing reads that are
+ * documented never to error. Dispatch now parses results against `resultSchema`
+ * (#11539), which would turn one degraded row back into exactly that crash — for
+ * the whole page, not the row. Filtering here keeps the guarantee: the caller
+ * loses the unrepresentable record and nothing else. `session.bookmarks.list`
+ * needs this doubly, since it selects on `bookmark !== undefined` and so admits
+ * a hand-written `"bookmark": {}` that carries neither `bookmarkedAt` nor
+ * `label`.
+ */
+function keepRepresentableRecords(records: AgentSessionRecord[]): AgentSessionRecord[] {
+  return records.filter((record) => AgentFacingSessionRecordSchema.safeParse(record).success);
+}
+
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   const readAgentDiscoveryState = async () => {
     // These are the same normalized renderer stores the toolbar reads. Fall back to
@@ -70,7 +189,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.launch",
     title: "Launch Agent",
     description:
-      "Launch an AI agent in a new terminal. Returns terminalId and location. If Daintree opens a setup diagnostic instead of a PTY, the result also carries spawnStatus: missing-cli. Fire up to 4 in parallel per message.",
+      "Start an AI agent in a new terminal and report where it landed, so parallel launches can be told apart without re-resolving the target. Success means the panel was created and its process is starting, not that the agent is ready — poll its state or a terminal status snapshot for that. A failure to launch may mean the agent's CLI is missing, in which case a setup diagnostic panel is opened instead. Launching consumes real resources, so keep concurrent launches modest.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -78,21 +197,87 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     argsSchema: z.object({
       agentId: AgentIdSchema,
       location: LaunchLocationSchema.optional(),
-      cwd: z.string().optional(),
-      worktreeId: z.string().optional(),
-      prompt: z.string().optional(),
-      interactive: z.boolean().optional(),
-      model: z.string().optional(),
-      presetId: z.string().nullable().optional(),
-      activateDockOnCreate: z.boolean().optional(),
-      env: z.record(z.string(), z.string()).optional(),
-      excludeFromPersistence: z.boolean().optional(),
-      removeOnExit: z.boolean().optional(),
-      agentLaunchFlags: z.array(z.string()).optional(),
+      cwd: z
+        .string()
+        .optional()
+        .describe(
+          "Absolute directory to start the agent process in. This is the launch directory, not a worktree selector — name the worktree separately. Defaults to the resolved worktree root."
+        ),
+      worktreeId: z
+        .string()
+        .optional()
+        .describe(
+          "Identifies the worktree to launch in, using an id from the worktree-listing capability. Defaults to the active worktree."
+        ),
+      prompt: z
+        .string()
+        .optional()
+        .describe(
+          "Initial text submitted to the agent once it starts, as its first turn. Omit to leave the agent waiting for input."
+        ),
+      interactive: z
+        .boolean()
+        .optional()
+        .describe(
+          "Whether the agent runs as a conversation the user can continue, rather than a single non-interactive pass."
+        ),
+      model: z
+        .string()
+        .optional()
+        .describe(
+          "Overrides the model the agent CLI would otherwise pick. Accepted values are the agent's own model names, so an unrecognised one fails when the CLI starts rather than here."
+        ),
+      presetId: z
+        .string()
+        .nullable()
+        .optional()
+        .describe(
+          "Applies one of the user's saved launch presets for this agent. Pass an explicit null to ignore the configured default preset rather than inherit it."
+        ),
+      activateDockOnCreate: z
+        .boolean()
+        .optional()
+        .describe(
+          "Whether to open the sidebar dock when the agent is placed there. Only meaningful for a dock placement; it changes what the user sees."
+        ),
+      env: z
+        .record(z.string(), z.string())
+        .optional()
+        .describe(
+          "Extra environment variables for the agent process, merged over the inherited environment. These reach a real subprocess, so never put credentials here that the user has not already agreed to expose."
+        ),
+      excludeFromPersistence: z
+        .boolean()
+        .optional()
+        .describe(
+          "Keeps the terminal out of the saved session, so it does not come back after a restart. It also hides the panel from terminal listings, status snapshots and agent-state reads, and spares it from bulk close and kill — so the launching caller cannot find or poll the terminal afterwards. Use for throwaway work the user should not inherit."
+        ),
+      removeOnExit: z
+        .boolean()
+        .optional()
+        .describe(
+          "Closes the panel automatically once the agent process ends, discarding its output. Leave off when the output still needs reading."
+        ),
+      agentLaunchFlags: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Extra command-line flags passed through to the agent CLI verbatim. Unrecognised flags fail when the CLI starts, not here."
+        ),
       spawnedBy: TerminalSpawnSourceSchema.optional(),
       focusPolicy: AddPanelFocusPolicySchema.optional(),
-      requestedId: z.string().optional(),
-      force: z.boolean().optional(),
+      requestedId: z
+        .string()
+        .optional()
+        .describe(
+          "Asks for a specific panel id when the terminal is created, so a caller can correlate the launch it requested with the terminal it got."
+        ),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "Skips the check that the agent's CLI can actually run. Without it an unlaunchable CLI opens a setup diagnostic instead of failing; with it the process is started anyway and simply fails. Leave it off unless the check itself is known to be wrong."
+        ),
       name: z
         .string()
         .max(200)
@@ -101,13 +286,23 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
           'Always provide a short, task-descriptive name for the terminal tab (e.g. "Claude: auth refactor") so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.'
         ),
     }),
-    resultSchema: z
-      .object({
-        terminalId: z.string(),
-        location: LaunchLocationSchema,
-        spawnStatus: z.literal("missing-cli").optional(),
-      })
-      .nullable(),
+    // Top-level object, never `.nullable()`: `buildToolOutputSchema` (tierAuth)
+    // forwards a manifest schema only when its JSON Schema has
+    // `type === "object"`, and zod renders a nullable object as a top-level
+    // `anyOf`. A nullable schema here silently disabled `mcpOutputSchema` and
+    // no `structuredContent` was ever emitted (#11547). Every field is
+    // required and individually nullable — same shape as `agent.getState`, so
+    // a strict client validating structuredContent never sees a missing key.
+    resultSchema: z.object({
+      launched: z.boolean(),
+      terminalId: z.string().nullable(),
+      location: z.enum(["grid", "dock"]).nullable(),
+      spawnStatus: z.literal("missing-cli").nullable(),
+      worktreeId: z.string().nullable(),
+      worktreePath: z.string().nullable(),
+      branch: z.string().nullable(),
+      cwd: z.string().nullable(),
+    }),
     mcpOutputSchema: true,
     run: async (args: unknown) => {
       const {
@@ -168,11 +363,35 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         force,
         name,
       });
-      if (!result) return null;
+      // Nothing to report: the launcher declined (Electron unavailable, a
+      // re-entrant launch of the same agent, or a caught spawn failure). Still
+      // an object so the MCP output schema stays satisfiable — `launched:false`
+      // is the honest discriminant, where a bare null read as a success with no
+      // terminal. Genuine rejections (unknown id, unresolvable worktree) throw
+      // out of the launcher and surface as ok:false instead.
+      if (!result) {
+        return {
+          launched: false,
+          terminalId: null,
+          location: null,
+          spawnStatus: null,
+          worktreeId: null,
+          worktreePath: null,
+          branch: null,
+          cwd: null,
+        };
+      }
       return {
+        // A missing CLI opens a diagnostic panel but starts no agent, so it is
+        // not a launch — the caller reads spawnStatus for the reason.
+        launched: result.spawnStatus !== "missing-cli",
         terminalId: result.terminalId,
         location: result.location,
-        ...(result.spawnStatus ? { spawnStatus: result.spawnStatus } : {}),
+        spawnStatus: result.spawnStatus ?? null,
+        worktreeId: result.worktreeId,
+        worktreePath: result.worktreePath,
+        branch: result.branch,
+        cwd: result.cwd,
       };
     },
   }));
@@ -245,7 +464,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("agent.terminal", () => ({
     id: "agent.terminal",
     title: "Launch Terminal",
-    description: "Launch a plain terminal",
+    description:
+      "Open a plain shell terminal with no agent attached, for running ordinary commands. Use an agent launch instead when the intent is to start an AI CLI. This creates a visible panel and starts a shell process, so it consumes resources until closed.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -295,7 +515,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("agent.focusNextWaiting", () => ({
     id: "agent.focusNextWaiting",
     title: "Focus Next Waiting Agent",
-    description: "Focus the next agent in waiting state",
+    description:
+      "Move keyboard focus to the next agent that is blocked waiting on the user, so it can be answered. This changes what the user sees and is a navigation aid only — it reports no agent state. Use an agent status snapshot to find out which agents are waiting and why.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -369,14 +590,17 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       // delivers `project:focus-on-activate` to the incoming view once the
       // paint gate resolves (cold start) or immediately on cache hit, and
       // the renderer subscriber dispatches local `agent.focusNextWaiting`.
-      await projectState.switchProject(target.id, { focusIntent: "focus-next-waiting" });
+      await projectState.switchProject(target.id, {
+        focusIntent: { intent: "focus-next-waiting" },
+      });
     },
   }));
 
   actions.set("agent.focusNextWorking", () => ({
     id: "agent.focusNextWorking",
     title: "Focus Next Working Agent",
-    description: "Focus the next agent in working state",
+    description:
+      "Move keyboard focus to the next agent that is currently working, to watch its progress. This changes what the user sees and is a navigation aid only — it reports no agent state. Use an agent status snapshot to find out which agents are working.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -396,7 +620,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("agent.focusNextAgent", () => ({
     id: "agent.focusNextAgent",
     title: "Focus Next Agent",
-    description: "Cycle through all agent panels",
+    description:
+      "Move keyboard focus to the next agent panel in order, cycling back to the first at the end. This changes what the user sees and reports no agent state; use a terminal listing to enumerate panels instead.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -432,7 +657,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.getState",
     title: "Get Agent State",
     description:
-      "Look up the live state of an agent by its agent id. Args: `agentId` (required) — agent id such as 'claude' or 'codex', as seen in `terminal.list` entries' `agentId` field. Returns { agentId, state, waitingReason ('prompt'|'question'|'approval'|'error', non-null only when state is 'waiting'), lastTransitionAt, exitCode (number|null — set once the PTY has exited, null while running or on a signal kill; read alongside `state` to tell pass from fail), spawnedAt, terminalId, found }. Never errors — an unknown agent returns found:false with null fields. Do NOT use this to enumerate terminals — use `terminal.list` or `terminal.getStatus`.",
+      "Look up one agent's live state by its agent id, to tell whether it is working, waiting on the user, or finished. Use a terminal listing or status snapshot to enumerate terminals — this answers about a single agent only. It never fails: with no matching panel the result is flagged not found with empty fields, while a panel whose agent has exited stays found and carries its exit code.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -442,7 +667,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .string()
         .min(1)
         .describe(
-          "Agent id to look up (e.g. 'claude', 'codex') — from `terminal.list` entries' `agentId` field."
+          "Identifies the agent to look up, using an agent id such as 'claude' or 'codex' as reported by the terminal-listing capability."
         ),
     }),
     examples: [
@@ -504,40 +729,75 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agentSessionHistory.list",
     title: "List Resumable Sessions",
     description:
-      "List resumable agent sessions from the on-disk journal — the closed sessions the user can relaunch. This is a faithful record listing, NOT a summary of what happened in each session. Args: `worktreeId` (optional) — restrict to one worktree; omit to list every resumable session across all worktrees and projects (the default). Returns { sessions: [{ sessionId, agentId, worktreeId, title, projectId, savedAt (epoch ms; the list is newest-first), agentLaunchFlags?, agentModelId?, cwd?, branch? }] }, capped and pruned by the journal's retention policy. Never errors — returns { sessions: [] } when the journal is empty or unreadable. To relaunch a listed session, feed its `agentId`/`cwd`/`worktreeId`/`agentLaunchFlags`/`agentModelId` into `agent.launch`.",
+      "List closed agent sessions that can be relaunched, read from the on-disk journal. This is a faithful record of which sessions exist, not a summary of what happened in them — it carries no transcript text. It must be scoped to a worktree or project and fails rather than listing every project when no scope can be resolved. Old sessions are pruned by the journal's retention policy, so absence does not mean a session never existed.",
     category: "agent",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z
-      .object({
-        // `.min(1)`: an empty string would fall through the bridge's `if
-        // (!worktreeId)` guard to an unfiltered cross-project listing — a
-        // surprising result for a caller that passed a (blank) id expecting a
-        // scoped one. Reject it; omit the arg to list across all worktrees.
-        worktreeId: z
-          .string()
-          .min(1)
-          .optional()
-          .describe(
-            "Restrict the listing to one worktree id. Omit to list resumable sessions across all worktrees and projects."
-          ),
-      })
-      .optional(),
+    argsSchema: SessionHistoryListArgsSchema,
     examples: [
       {
-        args: {},
-        description: "List every resumable agent session across the whole workspace",
+        args: { worktreeId: "wt-1" },
+        description: "List the most recent resumable sessions for one worktree",
+      },
+      {
+        args: { projectId: "proj-1", limit: 50 },
+        description: "List up to 50 resumable sessions across one project",
       },
     ],
     resultSchema: z.object({
-      sessions: z.array(AgentSessionRecordSchema),
+      sessions: z.array(AgentFacingSessionRecordSchema),
+      total: z.number(),
+      hasMore: z.boolean(),
     }),
     mcpOutputSchema: true,
-    run: async (args: unknown) => {
-      const { worktreeId } = (args ?? {}) as { worktreeId?: string };
-      const sessions = await window.electron.agentSessionHistory.list(worktreeId);
-      return { sessions };
+    run: async (args: unknown, ctx: ActionContext) => {
+      // `args ?? {}` means zod always parses the object branch, so the schema
+      // defaults for limit/offset are always applied.
+      const { worktreeId, projectId, limit, offset } = SessionHistoryListArgsSchema.parse(
+        args ?? {}
+      ) ?? { limit: SESSION_LIST_DEFAULT_LIMIT, offset: 0 };
+      // Explicit args are honoured verbatim — never widened, and never silently
+      // narrowed with context the caller didn't ask for. Falling back to
+      // context contributes BOTH ids when it has them: a worktree id is a
+      // normalized absolute path, so the same worktree opened as its own
+      // project journals records under a different projectId. Scoping by
+      // worktree alone would surface that other project's sessions and could
+      // even fill the whole page with them.
+      let scopeWorktreeId: string | undefined;
+      let scopeProjectId: string | undefined;
+      if (worktreeId || projectId) {
+        scopeWorktreeId = worktreeId;
+        scopeProjectId = projectId;
+      } else if (ctx.activeWorktreeId || ctx.projectId || ctx.scratchId) {
+        scopeWorktreeId = ctx.activeWorktreeId;
+        // A scratch view has neither a project nor any git worktrees, but its
+        // terminals are journaled under the opaque scratch id as their
+        // ownership stamp (see the terminal.create handler). Without this the
+        // scope guard turns every scratch into a dead end (#11482 class).
+        scopeProjectId = ctx.projectId ?? ctx.scratchId;
+      } else {
+        // Throw rather than return empty: an empty list is indistinguishable
+        // from a valid scope that simply has no sessions, which would read as
+        // "nothing to resume" and send an agent down the wrong path.
+        throw new Error(
+          "No session history scope: pass worktreeId or projectId, or dispatch from an active worktree or project"
+        );
+      }
+      const sessions = await window.electron.agentSessionHistory.list(
+        scopeWorktreeId,
+        scopeProjectId
+      );
+      // The journal is already newest-first (main sorts by `savedAt` descending
+      // after eviction), so the window keeps the most recent records.
+      const total = sessions.length;
+      const scanned = sessions.slice(offset, offset + limit);
+      // `hasMore` is computed from the unfiltered slice: paging is over the
+      // journal's records, so a row dropped as unrepresentable must not read as
+      // "end of list" and strand the records behind it.
+      const hasMore = offset + scanned.length < total;
+      const page = keepRepresentableRecords(scanned.map(toAgentFacingRecord));
+      return { sessions: page, total, hasMore };
     },
   }));
 
@@ -650,27 +910,40 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "session.bookmarks.list",
     title: "List bookmarks",
     description:
-      "List the user's durable session bookmarks for one project, newest-first by bookmark time. Args: `projectId` (optional) — the project to scope to; when omitted the caller's project context is used. Bookmarks are project-scoped: with no explicit `projectId` and no project context this returns an empty list rather than leaking bookmarks across projects. Returns { bookmarks: [{ sessionId, agentId, worktreeId, title, projectId, savedAt, agentLaunchFlags?, agentModelId?, cwd?, branch?, bookmark: { bookmarkedAt, label, ... } }] }. Read-only metadata; NO transcript content. Never errors.",
+      "List the durable session bookmarks the user has saved for one project, newest first. Bookmarks never expire, unlike ordinary session history, so this is where deliberately kept sessions live. It is strictly project-scoped: with no project to scope to it returns nothing rather than leaking bookmarks between projects. Read-only metadata — it carries no transcript text.",
     category: "agent",
     kind: "query",
     danger: "safe",
     scope: "renderer",
     argsSchema: BookmarkListArgsSchema,
     resultSchema: z.object({
-      bookmarks: z.array(AgentSessionRecordSchema),
+      bookmarks: z.array(AgentFacingSessionRecordSchema),
+      total: z.number(),
+      hasMore: z.boolean(),
     }),
     mcpOutputSchema: true,
     run: async (args: unknown, ctx: ActionContext) => {
-      const projectId = BookmarkListArgsSchema.parse(args ?? {})?.projectId;
+      const { projectId, limit, offset } = BookmarkListArgsSchema.parse(args ?? {}) ?? {
+        limit: SESSION_LIST_DEFAULT_LIMIT,
+        offset: 0,
+      };
       // Bookmarks are project-scoped (privacy). Resolve the explicit arg, then the
       // caller's project context. With neither, DO NOT fall open to every project
       // — return empty; an all-project view is a deliberate future enhancement.
-      const scope = projectId ?? ctx.projectId;
-      if (!scope) return { bookmarks: [] };
+      const scope = projectId ?? ctx.projectId ?? ctx.scratchId;
+      if (!scope) return { bookmarks: [], total: 0, hasMore: false };
       const bookmarks = await window.electron.agentSessionHistory.listBookmarks({
         projectId: scope,
       });
-      return { bookmarks };
+      // Bookmarks are exempt from both the age window and the per-worktree cap,
+      // so this set grows without bound — the limit is the only thing holding
+      // the agent-facing payload down, and the offset is how a caller still
+      // reaches a bookmark that sits past it (#11530).
+      const total = bookmarks.length;
+      const scanned = bookmarks.slice(offset, offset + limit);
+      const hasMore = offset + scanned.length < total;
+      const page = keepRepresentableRecords(scanned.map(toAgentFacingRecord));
+      return { bookmarks: page, total, hasMore };
     },
   }));
 
@@ -678,12 +951,11 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.listToolbar",
     title: "List Toolbar Agents",
     description:
-      "List the built-in agents and their resolved toolbar visibility. Returns { agents: [{ id, displayName, pinned, installed, visible }] } for every launchable built-in agent. `pinned` is tri-state: true (explicitly pinned), false (explicitly hidden), or omitted (follows CLI availability). `installed` is whether the agent's CLI binary was detected. `visible` is the resolved toolbar state — true when the agent button currently shows in the toolbar. Use this to discover which agents the user has surfaced without reading the full agent settings.",
+      "List the built-in agents together with whether each one currently shows in the toolbar. Use this to see what the user has surfaced without reading full agent settings. Visibility is resolved for you: an agent can be explicitly pinned, explicitly hidden, or left to follow whether its CLI is installed, so read the resolved visibility rather than inferring it from pinning alone.",
     category: "agent",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    mcpVisibility: "discoverable",
     resultSchema: z.object({
       agents: z.array(
         z.object({
@@ -721,12 +993,11 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.listAvailable",
     title: "List Available Agents",
     description:
-      "List every registered direct-agent candidate in Daintree's current effective registry, including built-in, user-defined, and plugin agents. Returns { complete, availabilityComplete, agents: [{ id, displayName, source, availability?, installed?, launchable?, pinned?, toolbarVisible? }] }. Registry membership comes from the authoritative main process; `complete` marks a full (never-truncated) read of the current effective registry — plugin agents still initializing at call time appear on a later call. `launchable` is true only for ready/unauthenticated agents and is omitted with availability (and `availabilityComplete` is false) until a live CLI probe has finished this session — never inferred from the still-hydrating cache. Built-in rows include tri-state explicit pin intent and resolved main-toolbar visibility; user/plugin rows omit toolbar fields because they are not toolbar entries.",
+      "List every registered agent — built-in, user-defined and plugin-contributed — from the authoritative registry, including ones that are not currently launchable. Use this before launching so an id is known to exist, and read each entry's launchability rather than assuming membership implies it. Those fields appear only once a live probe of each CLI finishes, and the result says so while that is incomplete.",
     category: "agent",
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    mcpVisibility: "discoverable",
     resultSchema: z.object({
       complete: z.literal(true),
       availabilityComplete: z.boolean(),
@@ -800,7 +1071,8 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("agent.focusPreviousAgent", () => ({
     id: "agent.focusPreviousAgent",
     title: "Focus Previous Agent",
-    description: "Cycle backwards through all agent panels",
+    description:
+      "Move keyboard focus to the previous agent panel in order, cycling to the last at the beginning. This changes what the user sees and reports no agent state; use a terminal listing to enumerate panels instead.",
     category: "agent",
     kind: "command",
     danger: "safe",

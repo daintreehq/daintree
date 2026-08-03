@@ -18,9 +18,20 @@ const forgeClientMock = vi.hoisted(() => ({
   requestReviewers: vi.fn(),
   validateToken: vi.fn(),
   getRepoStats: vi.fn(),
-  listIssues: vi.fn(),
-  listPRs: vi.fn(),
+  // Typed so `.mock.calls` reads back as a tuple: asserting on an untyped
+  // `vi.fn()`'s calls needs a cast per read, which regresses the
+  // no-unsafe-type-assertion lint ratchet.
+  listIssues: vi.fn<(cwd: string, opts: Record<string, unknown>) => Promise<unknown>>(),
+  listPRs: vi.fn<(cwd: string, opts: Record<string, unknown>) => Promise<unknown>>(),
   getIssue: vi.fn(),
+  listIssueComments: vi.fn(),
+  getCIStatus: vi.fn(),
+  closePR: vi.fn(),
+  reopenPR: vi.fn(),
+  mergePR: vi.fn(),
+  convertPRToDraft: vi.fn(),
+  markPRReadyForReview: vi.fn(),
+  commentOnPR: vi.fn(),
 }));
 
 const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
@@ -62,22 +73,167 @@ function setupActions() {
   };
 }
 
-async function runAction(
+// Generic in the result so callers name the shape they read as a type
+// argument rather than asserting on an `unknown` return.
+async function runAction<T = unknown>(
   id: string,
   args?: unknown,
   ctx?: Record<string, unknown>
-): Promise<unknown> {
+): Promise<T> {
   const def = setupActions()(id);
-  return def.run(args, (ctx ?? {}) as never);
+  return (await def.run(args, (ctx ?? {}) as never)) as T;
 }
 
 function setCurrentProject(project: { path?: string } | null) {
   projectStoreMock.getState.mockReturnValue({ currentProject: project });
 }
 
+// Provider results the write actions now project into their published result
+// (#11546). Deliberately wider than the schemas — `rawData` and the extra
+// normalized fields must not survive into what an MCP client receives.
+const providerUser = (login: string) => ({
+  login,
+  avatarUrl: `https://avatars/${login}`,
+  rawData: { login, secret: "raw" },
+});
+
+const providerReview = {
+  id: "8801",
+  state: "approved",
+  rawState: "APPROVED",
+  body: "LGTM",
+  url: "https://forge.test/pull/12#review-8801",
+  author: providerUser("octocat"),
+  submittedAt: 1_700_000_000_000,
+  commitId: "deadbeef",
+  rawData: { everything: "raw" },
+};
+
+const providerPR = {
+  number: 12,
+  title: "Add dark mode",
+  body: "Body",
+  state: "closed",
+  rawState: "closed",
+  isDraft: false,
+  merged: false,
+  url: "https://forge.test/pull/12",
+  author: providerUser("octocat"),
+  baseRef: "main",
+  headRef: "feature",
+  mergeable: null,
+  createdAt: 1,
+  updatedAt: 2,
+  closedAt: 3,
+  mergedAt: null,
+  rawData: { everything: "raw" },
+};
+
+const providerComment = {
+  id: "55501",
+  body: "Looks good",
+  url: "https://forge.test/pull/12#comment-55501",
+  author: providerUser("octocat"),
+  createdAt: 1_700_000_000_000,
+  rawData: { everything: "raw" },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   for (const fn of Object.values(forgeClientMock)) fn.mockResolvedValue(undefined);
+  forgeClientMock.assignIssue.mockResolvedValue([providerUser("bob")]);
+  forgeClientMock.unassignIssue.mockResolvedValue([]);
+  forgeClientMock.approvePR.mockResolvedValue(providerReview);
+  forgeClientMock.requestChanges.mockResolvedValue({
+    ...providerReview,
+    state: "changes_requested",
+    rawState: "CHANGES_REQUESTED",
+  });
+  forgeClientMock.dismissReview.mockResolvedValue({
+    ...providerReview,
+    state: "dismissed",
+    rawState: "DISMISSED",
+  });
+  forgeClientMock.requestReviewers.mockResolvedValue({
+    prNumber: 12,
+    requestedUsers: ["octocat"],
+    requestedTeams: ["core-team"],
+  });
+  forgeClientMock.closePR.mockResolvedValue(providerPR);
+  forgeClientMock.reopenPR.mockResolvedValue({ ...providerPR, state: "open" });
+  forgeClientMock.mergePR.mockResolvedValue({
+    prNumber: 12,
+    sha: "9fceb02",
+    merged: true,
+    message: "Pull Request successfully merged",
+  });
+  forgeClientMock.convertPRToDraft.mockResolvedValue({ prNumber: 12, isDraft: true });
+  forgeClientMock.markPRReadyForReview.mockResolvedValue({ prNumber: 12, isDraft: false });
+  forgeClientMock.commentOnPR.mockResolvedValue(providerComment);
+});
+
+describe("forge.getCIStatus", () => {
+  const summary = { state: "success" as const, total: 3, passed: 3, failed: 0, pending: 0 };
+
+  it("wraps the client result so a missing PR is {ciStatus:null}, never a bare null", async () => {
+    // A bare null result would be dropped by the MCP structured-content path;
+    // the wrapper is what keeps "PR not found" expressible to an MCP caller.
+    forgeClientMock.getCIStatus.mockResolvedValue(null);
+
+    const result = await runAction(
+      "forge.getCIStatus",
+      { prNumber: 7 },
+      { activeWorktreePath: "/repo" }
+    );
+
+    expect(result).toEqual({ ciStatus: null });
+  });
+
+  it("wraps a resolved status under the ciStatus key", async () => {
+    forgeClientMock.getCIStatus.mockResolvedValue(summary);
+
+    const result = await runAction(
+      "forge.getCIStatus",
+      { prNumber: 7 },
+      { activeWorktreePath: "/repo" }
+    );
+
+    expect(result).toEqual({ ciStatus: summary });
+  });
+
+  it("falls back to the active worktree path when cwd is omitted", async () => {
+    forgeClientMock.getCIStatus.mockResolvedValue(summary);
+
+    await runAction("forge.getCIStatus", { prNumber: 9 }, { activeWorktreePath: "/active" });
+
+    expect(forgeClientMock.getCIStatus).toHaveBeenCalledWith("/active", 9);
+  });
+
+  it("prefers an explicit cwd over the active worktree path", async () => {
+    forgeClientMock.getCIStatus.mockResolvedValue(summary);
+
+    await runAction(
+      "forge.getCIStatus",
+      { cwd: "/explicit", prNumber: 9 },
+      { activeWorktreePath: "/active" }
+    );
+
+    expect(forgeClientMock.getCIStatus).toHaveBeenCalledWith("/explicit", 9);
+  });
+
+  it("throws without calling the client when no cwd and no active worktree", async () => {
+    await expect(runAction("forge.getCIStatus", { prNumber: 9 }, {})).rejects.toThrow(
+      /No active worktree/
+    );
+    expect(forgeClientMock.getCIStatus).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-positive prNumber through the args schema", async () => {
+    const def = setupActions()("forge.getCIStatus");
+    expect(def.argsSchema?.safeParse({ prNumber: 0 }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ prNumber: 1.5 }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ prNumber: 12 }).success).toBe(true);
+  });
 });
 
 describe("forge.* navigation adversarial", () => {
@@ -180,7 +336,7 @@ describe("forge.* navigation adversarial", () => {
     ).rejects.toThrow("No active worktree");
   });
 
-  describe("optimistic issue-cache patching (#11087)", () => {
+  describe("issue-cache patching from the authoritative assignee list (#11087, #11546)", () => {
     const seedIssueSlot = (projectPath: string, issue: Issue): string => {
       const key = buildCacheKey(projectPath, "issue", "open", "created");
       setCache(key, { items: [issue], nextCursor: null, hasMore: false, timestamp: 1 });
@@ -206,10 +362,48 @@ describe("forge.* navigation adversarial", () => {
 
     it("unassignIssue removes the username — the Quick Create Undo path", async () => {
       const key = seedIssueSlot("/repo", makeIssue(42, ["bob"]));
+      forgeClientMock.unassignIssue.mockResolvedValueOnce([]);
 
       await runAction("forge.unassignIssue", { cwd: "/repo", issueNumber: 42, username: "bob" });
 
       expect(assigneesOn(key, 42)).toEqual([]);
+    });
+
+    it("does NOT add an assignee the forge silently dropped", async () => {
+      // GitHub ignores assignees without push access: the call succeeds but the
+      // user is absent from the resulting list. Trusting the request instead of
+      // the response would show an assignment that never landed.
+      const key = seedIssueSlot("/repo", makeIssue(42, []));
+      forgeClientMock.assignIssue.mockResolvedValueOnce([]);
+
+      await runAction("forge.assignIssue", {
+        cwd: "/repo",
+        issueNumber: 42,
+        username: "no-access",
+      });
+
+      expect(assigneesOn(key, 42)).toEqual([]);
+    });
+
+    it("keeps an assignee the forge reports as still present after a refused unassign", async () => {
+      const key = seedIssueSlot("/repo", makeIssue(42, ["bob"]));
+      forgeClientMock.unassignIssue.mockResolvedValueOnce([providerUser("bob")]);
+
+      await runAction("forge.unassignIssue", { cwd: "/repo", issueNumber: 42, username: "bob" });
+
+      expect(assigneesOn(key, 42)).toEqual(["bob"]);
+    });
+
+    it("caches the login spelling and avatar the forge returned, not the requested casing", async () => {
+      const key = seedIssueSlot("/repo", makeIssue(42, []));
+      forgeClientMock.assignIssue.mockResolvedValueOnce([providerUser("Octocat")]);
+
+      await runAction("forge.assignIssue", { cwd: "/repo", issueNumber: 42, username: "octocat" });
+
+      expect(assigneesOn(key, 42)).toEqual(["Octocat"]);
+      const item = getCache(key)?.items.find((i) => i.number === 42);
+      const assignees = item && "assignees" in item ? item.assignees : [];
+      expect(assignees[0]?.avatarUrl).toBe("https://avatars/Octocat");
     });
 
     it("leaves the cache untouched when the forge rejects the assign", async () => {
@@ -351,6 +545,161 @@ describe("forge.* navigation adversarial", () => {
   });
 });
 
+describe("forge.* write actions return the state they changed (#11546)", () => {
+  const run = (id: string, args: Record<string, unknown>) =>
+    runAction(id, { cwd: "/repo", ...args });
+
+  it("mergePR returns the merge acknowledgement", async () => {
+    const result = await run("forge.mergePR", { prNumber: 12 });
+
+    expect(result).toEqual({
+      prNumber: 12,
+      sha: "9fceb02",
+      merged: true,
+      message: "Pull Request successfully merged",
+    });
+  });
+
+  it("assignIssue reports the resulting assignee list alongside the issue", async () => {
+    const result = await run("forge.assignIssue", { issueNumber: 42, username: "bob" });
+
+    expect(result).toEqual({
+      issueNumber: 42,
+      assignees: [{ login: "bob", avatarUrl: "https://avatars/bob" }],
+    });
+  });
+
+  it("unassignIssue reports the emptied assignee list", async () => {
+    const result = await run("forge.unassignIssue", { issueNumber: 42, username: "bob" });
+
+    expect(result).toEqual({ issueNumber: 42, assignees: [] });
+  });
+
+  it.each([
+    ["forge.approvePR", { prNumber: 12 }, "approved"],
+    ["forge.requestChanges", { prNumber: 12, body: "fix" }, "changes_requested"],
+    ["forge.dismissReview", { prNumber: 12, reviewId: 5, message: "stale" }, "dismissed"],
+  ])("%s returns the review carrying its verdict", async (id, args, state) => {
+    const result = (await run(id, args)) as { state: string; id: string };
+
+    expect(result.state).toBe(state);
+    expect(result.id).toBe("8801");
+  });
+
+  it("requestReviewers returns the PR's resulting reviewer requests", async () => {
+    const result = await run("forge.requestReviewers", { prNumber: 12, users: ["octocat"] });
+
+    expect(result).toEqual({
+      prNumber: 12,
+      requestedUsers: ["octocat"],
+      requestedTeams: ["core-team"],
+    });
+  });
+
+  it.each([
+    ["forge.convertPRToDraft", true],
+    ["forge.markPRReadyForReview", false],
+  ])("%s returns the resulting draft state", async (id, isDraft) => {
+    expect(await run(id, { prNumber: 12 })).toEqual({ prNumber: 12, isDraft });
+  });
+
+  it("closePR and reopenPR return the updated PR", async () => {
+    const closed = (await run("forge.closePR", { prNumber: 12 })) as { state: string };
+    const reopened = (await run("forge.reopenPR", { prNumber: 12 })) as { state: string };
+
+    expect(closed.state).toBe("closed");
+    expect(reopened.state).toBe("open");
+  });
+
+  it("commentOnPR returns the created comment", async () => {
+    const result = (await run("forge.commentOnPR", { prNumber: 12, body: "Looks good" })) as {
+      id: string;
+      url: string;
+    };
+
+    expect(result.id).toBe("55501");
+    expect(result.url).toBe(providerComment.url);
+  });
+
+  // Nothing downstream strips a run() return before it reaches MCP
+  // structuredContent (buildStructuredContent casts without parsing), so the
+  // projection has to happen here or the provider's raw payload ships verbatim.
+  it.each([
+    ["forge.approvePR", { prNumber: 12 }],
+    ["forge.requestChanges", { prNumber: 12, body: "fix" }],
+    ["forge.dismissReview", { prNumber: 12, reviewId: 5, message: "stale" }],
+    ["forge.closePR", { prNumber: 12 }],
+    ["forge.reopenPR", { prNumber: 12 }],
+    ["forge.commentOnPR", { prNumber: 12, body: "hi" }],
+    ["forge.assignIssue", { issueNumber: 42, username: "bob" }],
+    ["forge.unassignIssue", { issueNumber: 42, username: "bob" }],
+    ["forge.mergePR", { prNumber: 12 }],
+    ["forge.convertPRToDraft", { prNumber: 12 }],
+    ["forge.markPRReadyForReview", { prNumber: 12 }],
+    ["forge.requestReviewers", { prNumber: 12, users: ["octocat"] }],
+  ])("%s publishes no rawData, at any depth", async (id, args) => {
+    const result = await run(id, args);
+
+    expect(JSON.stringify(result)).not.toContain("rawData");
+    expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it.each([
+    ["forge.mergePR", { prNumber: 12 }],
+    ["forge.convertPRToDraft", { prNumber: 12 }],
+    ["forge.markPRReadyForReview", { prNumber: 12 }],
+    ["forge.requestReviewers", { prNumber: 12, users: ["octocat"] }],
+  ])("%s rejects a provider result that contradicts its published schema", async (id, args) => {
+    // The schema is what the MCP client is promised. A provider answering with
+    // the wrong scalar type must surface as an error, not ship a payload that
+    // contradicts the advertised contract.
+    const method = id.slice("forge.".length) as keyof typeof forgeClientMock;
+    forgeClientMock[method].mockResolvedValueOnce({ prNumber: "twelve", isDraft: "yes" });
+
+    await expect(runAction(id, { cwd: "/repo", ...args })).rejects.toThrow();
+  });
+
+  it("keeps every cross-provider PR field and drops only the raw provider node", async () => {
+    const result = (await run("forge.closePR", { prNumber: 12 })) as Record<string, unknown>;
+
+    // `mergeable`, `closedAt` and `author` are cross-provider fields an agent
+    // reads to judge a PR, so the published schema names them and dispatch's
+    // parse keeps them. Only `rawData` — the verbatim provider node, redundant
+    // with everything above and the reason a page of PRs is enormous — is cut.
+    expect(result).toMatchObject({ mergeable: null, closedAt: 3, author: { login: "octocat" } });
+    expect(Object.keys(result)).not.toContain("rawData");
+    // The author projection is still a projection: `ForgeUser.rawData` carries
+    // the provider's whole user node and must not ride along inside it.
+    expect(result.author).toEqual({ login: "octocat", avatarUrl: expect.any(String) });
+  });
+
+  it("still returns the result when the renderer cache patch throws", async () => {
+    // The forge mutation already succeeded — a cache-layer failure must not
+    // turn a completed assignment into a failed action. Seed a corrupt row so
+    // patchIssueAssigneeCache genuinely throws on `item.assignees.some(...)`:
+    // deleting the guard in syncAssigneeCache must fail this test.
+    resetForgeResourceCache();
+    const key = buildCacheKey("/repo", "issue", "open", "created");
+    setCache(key, {
+      items: [{ ...makeIssue(42, []), assignees: null }] as never,
+      nextCursor: null,
+      hasMore: false,
+      timestamp: 1,
+    });
+
+    const result = await runAction("forge.assignIssue", {
+      cwd: "/repo",
+      issueNumber: 42,
+      username: "bob",
+    });
+
+    expect(result).toEqual({
+      issueNumber: 42,
+      assignees: [{ login: "bob", avatarUrl: "https://avatars/bob" }],
+    });
+  });
+});
+
 describe("forge.* query adversarial", () => {
   it("listIssues forwards cwd positionally and the filters as options", async () => {
     forgeClientMock.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
@@ -383,16 +732,285 @@ describe("forge.* query adversarial", () => {
     forgeClientMock.listPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
     await runAction(
       "forge.listPRs",
-      { search: "q", state: "all", cursor: "c1" },
+      { state: "all", cursor: "c1" },
       { activeWorktreePath: "/repo" }
     );
-    expect(forgeClientMock.listPRs).toHaveBeenCalledWith("/repo", {
-      search: "q",
-      state: "all",
-      cursor: "c1",
+    const [, opts] = forgeClientMock.listPRs.mock.calls[0]!;
+    expect(opts).toMatchObject({ state: "all", cursor: "c1" });
+  });
+
+  it("listIssues forwards paging and ordering to the provider", async () => {
+    forgeClientMock.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    await runAction(
+      "forge.listIssues",
+      {
+        search: "no:assignee -label:human-review",
+        state: "open",
+        perPage: 10,
+        sort: "updated",
+        direction: "asc",
+      },
+      { activeWorktreePath: "/repo" }
+    );
+    const [, opts] = forgeClientMock.listIssues.mock.calls[0]!;
+    expect(opts).toMatchObject({
+      search: "no:assignee -label:human-review",
+      state: "open",
+      perPage: 10,
+      sort: "updated",
+      direction: "asc",
     });
   });
 
+  it("listPRs forwards paging and ordering to the provider", async () => {
+    forgeClientMock.listPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    await runAction(
+      "forge.listPRs",
+      { perPage: 5, sort: "updated", direction: "asc" },
+      { activeWorktreePath: "/repo" }
+    );
+    const [, opts] = forgeClientMock.listPRs.mock.calls[0]!;
+    expect(opts).toMatchObject({ perPage: 5, sort: "updated", direction: "asc" });
+  });
+
+  it("keeps `view` out of the provider options — it is action-local presentation", async () => {
+    forgeClientMock.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    forgeClientMock.listPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    await runAction("forge.listIssues", { view: "full" }, { activeWorktreePath: "/repo" });
+    await runAction("forge.listPRs", { view: "full" }, { activeWorktreePath: "/repo" });
+    const [, issueOpts] = forgeClientMock.listIssues.mock.calls[0]!;
+    const [, prOpts] = forgeClientMock.listPRs.mock.calls[0]!;
+    expect(issueOpts).not.toHaveProperty("view");
+    expect(prOpts).not.toHaveProperty("view");
+  });
+
+  it("forwards `bypassCache` to the provider — the only escape from a warm list cache", async () => {
+    forgeClientMock.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    forgeClientMock.listPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    await runAction("forge.listIssues", { bypassCache: true }, { activeWorktreePath: "/repo" });
+    await runAction("forge.listPRs", { bypassCache: true }, { activeWorktreePath: "/repo" });
+    const [, issueOpts] = forgeClientMock.listIssues.mock.calls[0]!;
+    const [, prOpts] = forgeClientMock.listPRs.mock.calls[0]!;
+    expect(issueOpts).toMatchObject({ bypassCache: true });
+    expect(prOpts).toMatchObject({ bypassCache: true });
+  });
+
+  it("leaves `bypassCache` unset when omitted, so ordinary paging stays cache-first", async () => {
+    forgeClientMock.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    await runAction("forge.listIssues", { cursor: "c1" }, { activeWorktreePath: "/repo" });
+    const [, opts] = forgeClientMock.listIssues.mock.calls[0]!;
+    expect(opts.bypassCache).toBeUndefined();
+  });
+});
+
+/**
+ * A silently-stripped filter is the failure mode #11527 exists to remove: the
+ * caller asked for a subset, got the unfiltered page, and had no signal. These
+ * assert the schema now refuses rather than lies.
+ */
+describe("forge list arg validation rejects rather than strips", () => {
+  const parse = (id: string, args: unknown) => {
+    const def = setupActions()(id);
+    if (!def.argsSchema) throw new Error(`${id} has no argsSchema`);
+    return def.argsSchema.safeParse(args);
+  };
+
+  it.each([
+    ["labels", { labels: ["bug"] }],
+    ["assignee", { assignee: "octocat" }],
+    ["limit", { limit: 10 }],
+  ])("rejects unsupported filter `%s` on listIssues", (_name, args) => {
+    expect(parse("forge.listIssues", args).success).toBe(false);
+  });
+
+  it("rejects `search` on listPRs — the provider has no PR query path", () => {
+    expect(parse("forge.listPRs", { search: "is:open" }).success).toBe(false);
+  });
+
+  it("still accepts `search` on listIssues, where it is wired", () => {
+    expect(parse("forge.listIssues", { search: "no:assignee" }).success).toBe(true);
+  });
+
+  it("admits `bypassCache` on both lists — strictness must not strand the freshness knob", () => {
+    expect(parse("forge.listIssues", { bypassCache: true }).success).toBe(true);
+    expect(parse("forge.listPRs", { bypassCache: true }).success).toBe(true);
+    expect(parse("forge.listIssues", { bypassCache: "yes" }).success).toBe(false);
+  });
+
+  it("bounds perPage to what the provider can request, inclusive of both ends", () => {
+    // The exact boundaries matter: an off-by-one that narrowed the range to
+    // 2-99 would still pass a test that only probed 20/0/101.
+    expect(parse("forge.listIssues", { perPage: 1 }).success).toBe(true);
+    expect(parse("forge.listIssues", { perPage: 100 }).success).toBe(true);
+    expect(parse("forge.listIssues", { perPage: 0 }).success).toBe(false);
+    expect(parse("forge.listIssues", { perPage: 101 }).success).toBe(false);
+    expect(parse("forge.listIssues", { perPage: 2.5 }).success).toBe(false);
+  });
+
+  it("rejects an empty cursor, which would alias the first page's cache entry", () => {
+    expect(parse("forge.listIssues", { cursor: "" }).success).toBe(false);
+    expect(parse("forge.listIssues", { cursor: "abc" }).success).toBe(true);
+  });
+
+  it("constrains sort and direction to values the provider can express", () => {
+    expect(parse("forge.listIssues", { sort: "comments" }).success).toBe(false);
+    expect(parse("forge.listIssues", { direction: "sideways" }).success).toBe(false);
+    expect(parse("forge.listIssues", { sort: "updated", direction: "asc" }).success).toBe(true);
+  });
+
+  it("carries the issue's motivating query through validation into the provider call", async () => {
+    // Parsing alone proves nothing — the OLD schema also "accepted" this, by
+    // silently dropping perPage. What matters is that every field survives
+    // validation and reaches the client, so run the parsed output, not the raw
+    // args, through the handler.
+    const args = { state: "open", search: "no:assignee -label:human-review", perPage: 10 };
+    const parsed = parse("forge.listIssues", args);
+    expect(parsed.success).toBe(true);
+
+    forgeClientMock.listIssues.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    const def = setupActions()("forge.listIssues");
+    await def.run(parsed.success ? parsed.data : args, { activeWorktreePath: "/repo" } as never);
+
+    const [, opts] = forgeClientMock.listIssues.mock.calls[0]!;
+    expect(opts).toMatchObject(args);
+  });
+});
+
+describe("forge list view projection", () => {
+  const heavyIssue: Issue = {
+    ...makeIssue(7, ["octocat"]),
+    body: "a".repeat(5000),
+    labels: [{ name: "bug", color: "ff0000" }],
+    commentCount: 3,
+    linkedPR: { number: 42, state: "open", url: "https://fake.test/pull/42" },
+    rawData: { enormous: "x".repeat(20000) },
+  };
+
+  const page = { items: [heavyIssue], nextCursor: "cur", hasMore: true, totalCount: 99 };
+
+  it("defaults to summary: no rawData and no body anywhere in the response", async () => {
+    forgeClientMock.listIssues.mockResolvedValue(page);
+    const result = await runAction("forge.listIssues", {}, { activeWorktreePath: "/repo" });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("rawData");
+    expect(serialized).not.toContain("aaaa");
+  });
+
+  it("summary keeps the fields needed to choose an item, including linkedPR", async () => {
+    forgeClientMock.listIssues.mockResolvedValue(page);
+    const result = await runAction<{ items: Array<Record<string, unknown>> }>(
+      "forge.listIssues",
+      {},
+      { activeWorktreePath: "/repo" }
+    );
+    expect(result.items[0]).toMatchObject({
+      number: 7,
+      assignees: ["octocat"],
+      labels: ["bug"],
+      commentCount: 3,
+      linkedPR: { number: 42, state: "open" },
+    });
+  });
+
+  it("summary carries the pagination envelope through untouched", async () => {
+    forgeClientMock.listIssues.mockResolvedValue(page);
+    const result = await runAction<{ nextCursor: unknown; hasMore: unknown; totalCount: unknown }>(
+      "forge.listIssues",
+      {},
+      { activeWorktreePath: "/repo" }
+    );
+    expect(result.nextCursor).toBe("cur");
+    expect(result.hasMore).toBe(true);
+    expect(result.totalCount).toBe(99);
+  });
+
+  it("view:'full' hands back the provider page itself, unmodified", async () => {
+    forgeClientMock.listIssues.mockResolvedValue(page);
+    const result = await runAction(
+      "forge.listIssues",
+      { view: "full" },
+      { activeWorktreePath: "/repo" }
+    );
+    expect(result).toBe(page);
+  });
+
+  // forge.listPRs has its own projector and its own run() branch; an
+  // issue-only suite would stay green if listPRs returned the full page for
+  // both views.
+  describe("forge.listPRs", () => {
+    const heavyPR = {
+      number: 900,
+      title: "Fix the thing",
+      body: "b".repeat(5000),
+      state: "open",
+      rawState: "OPEN",
+      isDraft: false,
+      merged: false,
+      url: "https://fake.test/pull/900",
+      author: { login: "gpriday", avatarUrl: "a", rawData: { big: "x" } },
+      baseRef: "develop",
+      headRef: "feature/thing",
+      mergeable: undefined,
+      reviewDecision: null,
+      commentCount: 2,
+      ciStatus: "success",
+      createdAt: 1,
+      updatedAt: 2,
+      closedAt: null,
+      mergedAt: null,
+      rawData: { node: "y".repeat(20000) },
+    };
+    const prPage = { items: [heavyPR], nextCursor: null, hasMore: false };
+
+    it("defaults to summary: no rawData and no body", async () => {
+      forgeClientMock.listPRs.mockResolvedValue(prPage);
+      const result = await runAction("forge.listPRs", {}, { activeWorktreePath: "/repo" });
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain("rawData");
+      expect(serialized).not.toContain("bbbb");
+    });
+
+    it("keeps a null reviewDecision, which reads as 'no review gate', not 'unknown'", async () => {
+      forgeClientMock.listPRs.mockResolvedValue(prPage);
+      const result = await runAction<{ items: Array<Record<string, unknown>> }>(
+        "forge.listPRs",
+        {},
+        { activeWorktreePath: "/repo" }
+      );
+      expect(result.items[0]).toHaveProperty("reviewDecision", null);
+      expect(result.items[0]).toMatchObject({
+        number: 900,
+        author: "gpriday",
+        baseRef: "develop",
+        ciStatus: "success",
+      });
+    });
+
+    it("view:'full' hands back the provider page itself", async () => {
+      forgeClientMock.listPRs.mockResolvedValue(prPage);
+      const result = await runAction(
+        "forge.listPRs",
+        { view: "full" },
+        { activeWorktreePath: "/repo" }
+      );
+      expect(result).toBe(prPage);
+    });
+  });
+
+  it("summary is materially smaller than full for the same page", async () => {
+    forgeClientMock.listIssues.mockResolvedValue(page);
+    const summary = await runAction("forge.listIssues", {}, { activeWorktreePath: "/repo" });
+    forgeClientMock.listIssues.mockResolvedValue(page);
+    const full = await runAction(
+      "forge.listIssues",
+      { view: "full" },
+      { activeWorktreePath: "/repo" }
+    );
+    expect(JSON.stringify(summary).length).toBeLessThan(JSON.stringify(full).length / 10);
+  });
+});
+
+describe("forge.* single-resource query adversarial", () => {
   it("getRepoStats forwards cwd + bypassCache", async () => {
     const def = setupActions()("forge.getRepoStats");
     await def.run({ cwd: "/repo", bypassCache: true }, {} as never);
@@ -416,6 +1034,82 @@ describe("forge.* query adversarial", () => {
     forgeClientMock.getIssue.mockResolvedValue(null);
     await runAction("forge.getIssue", { issueNumber: 5 }, { activeWorktreePath: "/repo" });
     expect(forgeClientMock.getIssue).toHaveBeenCalledWith("/repo", 5);
+  });
+
+  describe("listIssueComments (#11545)", () => {
+    const emptyPage = { items: [], nextCursor: null, hasMore: false };
+
+    it("forwards cwd positionally and the paging args as options", async () => {
+      forgeClientMock.listIssueComments.mockResolvedValue(emptyPage);
+      const def = setupActions()("forge.listIssueComments");
+      await def.run({ cwd: "/repo", issueNumber: 42, cursor: "c1", perPage: 50 }, {} as never);
+      expect(forgeClientMock.listIssueComments).toHaveBeenCalledWith("/repo", 42, {
+        cursor: "c1",
+        perPage: 50,
+      });
+    });
+
+    it("falls back to ctx.activeWorktreePath and prefers an explicit cwd over it", async () => {
+      forgeClientMock.listIssueComments.mockResolvedValue(emptyPage);
+      await runAction(
+        "forge.listIssueComments",
+        { issueNumber: 1 },
+        { activeWorktreePath: "/ctx" }
+      );
+      expect(forgeClientMock.listIssueComments).toHaveBeenCalledWith("/ctx", 1, expect.any(Object));
+
+      await runAction(
+        "forge.listIssueComments",
+        { issueNumber: 1, cwd: "/explicit" },
+        { activeWorktreePath: "/ctx" }
+      );
+      expect(forgeClientMock.listIssueComments).toHaveBeenLastCalledWith(
+        "/explicit",
+        1,
+        expect.any(Object)
+      );
+    });
+
+    it("throws when no cwd and no ctx.activeWorktreePath", async () => {
+      await expect(runAction("forge.listIssueComments", { issueNumber: 1 })).rejects.toThrow(
+        "No active worktree"
+      );
+      expect(forgeClientMock.listIssueComments).not.toHaveBeenCalled();
+    });
+
+    it("rejects a missing, non-positive or fractional issue number", async () => {
+      const schema = setupActions()("forge.listIssueComments").argsSchema;
+      for (const args of [{}, { issueNumber: 0 }, { issueNumber: -1 }, { issueNumber: 1.5 }]) {
+        expect(schema?.safeParse(args).success).toBe(false);
+      }
+      expect(schema?.safeParse({ issueNumber: 1 }).success).toBe(true);
+    });
+
+    it("rejects perPage outside GitHub's 1-100 window", async () => {
+      const schema = setupActions()("forge.listIssueComments").argsSchema;
+      for (const perPage of [0, -5, 101, 2.5]) {
+        expect(schema?.safeParse({ issueNumber: 1, perPage }).success).toBe(false);
+      }
+      for (const perPage of [1, 20, 100]) {
+        expect(schema?.safeParse({ issueNumber: 1, perPage }).success).toBe(true);
+      }
+    });
+
+    it("returns the provider's page unchanged", async () => {
+      const page = {
+        items: [{ id: "1", body: "hi", url: "u", createdAt: 0 }],
+        nextCursor: "c2",
+        hasMore: true,
+        totalCount: 3,
+      };
+      forgeClientMock.listIssueComments.mockResolvedValue(page);
+      const result = await runAction(
+        "forge.listIssueComments",
+        { issueNumber: 1 },
+        { activeWorktreePath: "/repo" }
+      );
+      expect(result).toEqual(page);
+    });
   });
 });
 

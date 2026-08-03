@@ -3,6 +3,7 @@ import { defineAction } from "../defineAction";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { projectClient } from "@/clients";
+import { withWorktreeLocation, requireWorktreePath } from "./locationArgs";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
@@ -14,25 +15,27 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
   actions.set("workflow.prepBranchForReview", () =>
     defineAction({
       id: "workflow.prepBranchForReview",
-      title: "Prep Branch for Review",
+      // The id is stable (keybindings, plugins, and MCP clients reference it),
+      // but the old "Prep" title promised work this never did — it reads git
+      // status and detected runners and changes nothing (#11548).
+      title: "Inspect Branch for Review",
       description:
-        "Inspect a worktree's working tree and detected runners and return a typed go/no-go verdict for starting review checks. Args (all optional): `cwd` — worktree path, defaults to the active worktree path; `projectId` — for runner detection, defaults to the current project (pass explicitly when `cwd` is in another project). Returns verdict ('ready'|'blocked_uncommitted_changes'|'blocked_merge_conflicts'|'blocked_repo_busy'|'no_runners_detected'), the uncommitted/conflict flags, staged/unstaged counts, currentBranch, repoState, and detectedRunners. Errors when `cwd` is omitted and no worktree is active.",
+        "Inspect a worktree and report a go/no-go verdict on whether review checks can start, naming what is blocking if not. Despite the name it prepares nothing and runs nothing — it is read-only, and running a detected check is a separate step. Use it to avoid launching checks against a dirty or conflicted tree.",
       category: "worktree",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        cwd: z
-          .string()
-          .optional()
-          .describe("Worktree path to inspect. Defaults to the active worktree path when omitted."),
-        projectId: z
-          .string()
-          .optional()
-          .describe(
-            "Project ID for runner detection. Defaults to the current project. Pass explicitly when `cwd` belongs to a different project."
-          ),
-      }),
+      argsSchema: withWorktreeLocation(
+        {
+          projectId: z
+            .string()
+            .optional()
+            .describe(
+              "Project ID for runner detection. Defaults to the current project. Pass explicitly when the worktree belongs to a different project."
+            ),
+        },
+        { legacy: ["cwd"] }
+      ),
       resultSchema: z.object({
         verdict: z.enum([
           "ready",
@@ -55,9 +58,8 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
           })
         ),
       }),
-      run: async ({ cwd, projectId }, ctx: ActionContext) => {
-        const resolvedCwd = cwd ?? ctx.activeWorktreePath;
-        if (!resolvedCwd) throw new Error("No active worktree");
+      run: async ({ projectId, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
         const resolvedProjectId =
           projectId ?? ctx.projectId ?? useProjectStore.getState().currentProject?.id ?? null;
 
@@ -113,7 +115,7 @@ export function registerWorkflowUtilityActions(actions: ActionRegistry): void {
       id: "workflow.focusNextAttention",
       title: "Focus Next Attention",
       description:
-        "Focus the next agent needing attention (waiting before working); returns focused state and counts.",
+        "Move keyboard focus to the agent most in need of attention, preferring one blocked on the user over one merely working. Use this to triage a fleet by hand. It changes what the user sees, and reports whether anything was focused, which state that agent was in, and how many are waiting or working — read an agent status snapshot for the state of each terminal.",
       category: "worktree",
       kind: "command",
       danger: "safe",

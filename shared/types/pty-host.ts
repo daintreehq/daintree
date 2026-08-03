@@ -15,6 +15,7 @@ import type { AgentConfig } from "../config/agentRegistry.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
 import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js";
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
+import type { SerializedTerminalSnapshot } from "./terminal.js";
 
 export type { TerminalFlowStatus };
 
@@ -325,6 +326,15 @@ export type PtyHostRequest =
    * restarted host re-syncs before any spawn replay.
    */
   | { type: "set-plugin-agent-registry"; registry: Record<string, AgentConfig> }
+  /**
+   * Mirror the main-process plugin process-tool registry into the pty-host
+   * (#11613). `ProcessDetector` runs in this process and resolves a command
+   * name to a terminal-tab icon, but never registers plugin contributions
+   * itself — main is authoritative. Carries the flattened command → icon-id
+   * snapshot; the host applies it via `setPluginProcessToolRegistry`. Replayed
+   * on every host-ready so a restarted host re-syncs before any spawn replay.
+   */
+  | { type: "set-plugin-process-tool-registry"; registry: Record<string, string> }
   | { type: "get-flow-control-snapshot"; requestId: string }
   | { type: "get-worker-governance-snapshot"; requestId: string };
 
@@ -602,7 +612,12 @@ export type PtyHostEvent =
   | { type: "terminals-for-project"; requestId: string; terminalIds: string[] }
   | { type: "terminal-info"; requestId: string; terminal: PtyHostTerminalInfo | null }
   | { type: "replay-history-result"; requestId: string; replayed: number }
-  | { type: "serialized-state"; requestId: string; id: string; state: string | null }
+  | {
+      type: "serialized-state";
+      requestId: string;
+      id: string;
+      state: SerializedTerminalSnapshot | null;
+    }
   | { type: "terminal-diagnostic-info"; requestId: string; info: TerminalInfoPayload | null }
   | { type: "available-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "terminals-by-state"; requestId: string; terminals: PtyHostTerminalInfo[] }

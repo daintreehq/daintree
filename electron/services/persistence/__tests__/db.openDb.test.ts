@@ -478,6 +478,14 @@ describe("openDb (integration)", () => {
         frecency_score REAL NOT NULL DEFAULT 3.0,
         last_accessed_at INTEGER NOT NULL DEFAULT 0
       );
+      CREATE TABLE scratches (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_opened INTEGER NOT NULL,
+        deleted_at INTEGER
+      );
     `);
     const ins = seed.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)");
     for (const entry of applied) ins.run(entry.tag, entry.when);
@@ -488,26 +496,31 @@ describe("openDb (integration)", () => {
     // instead of a copy of whichever migration happens to be last today.
     const finalTag = journal[journal.length - 1].tag;
     const finalSql = fs.readFileSync(path.join(migrationsFolder, `${finalTag}.sql`), "utf8");
-    const addedColumns = [...finalSql.matchAll(/ALTER TABLE `projects` ADD `([a-z_]+)`/g)].map(
-      (m) => m[1]
+    // Whichever table the newest migration happens to touch — naming one here
+    // would reintroduce exactly the copy-of-the-last-migration coupling this
+    // extraction exists to avoid.
+    const additions = [...finalSql.matchAll(/ALTER TABLE `([a-z_]+)` ADD `([a-z_]+)`/g)].map(
+      (m) => ({ table: m[1]!, column: m[2]! })
     );
-    expect(addedColumns.length).toBeGreaterThan(0);
+    expect(additions.length).toBeGreaterThan(0);
 
     // Those columns must be absent before the upgrade for the test to mean
-    // anything — the seed `projects` table was created without them.
+    // anything — the seed tables were created without them.
     const preCheck = new Database(dbPath, { readonly: true });
-    const seededColumns = (preCheck.prepare("PRAGMA table_info(projects)").all() as ColInfo[]).map(
-      (c) => c.name
-    );
+    for (const { table, column } of additions) {
+      const seededColumns = (
+        preCheck.prepare(`PRAGMA table_info(${table})`).all() as ColInfo[]
+      ).map((c) => c.name);
+      expect(seededColumns).not.toContain(column);
+    }
     preCheck.close();
-    for (const column of addedColumns) expect(seededColumns).not.toContain(column);
 
     const { sqlite } = openDb(dbPath, migrationsFolder);
     try {
-      const projectColumns = (sqlite.pragma("table_info(projects)") as ColInfo[]).map(
-        (c) => c.name
-      );
-      expect(projectColumns).toEqual(expect.arrayContaining(addedColumns));
+      for (const { table, column } of additions) {
+        const columns = (sqlite.pragma(`table_info(${table})`) as ColInfo[]).map((c) => c.name);
+        expect(columns).toContain(column);
+      }
 
       // The skipped migration is now recorded — total equals the full journal.
       const migrations = sqlite.prepare("SELECT id FROM __drizzle_migrations").all();

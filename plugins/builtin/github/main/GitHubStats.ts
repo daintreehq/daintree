@@ -32,7 +32,7 @@ import type {
   GitHubFirstPageCachePayload,
 } from "../shared/types.js";
 import { parseIssueNode } from "./GitHubIssues.js";
-import { parsePRNode, buildListCacheKey } from "./GitHubPRs.js";
+import { parsePRNode, buildListCacheKey, DEFAULT_LIST_PER_PAGE } from "./GitHubPRs.js";
 
 export interface RepoStatsAndPageResult {
   stats: RepoStats | null;
@@ -410,24 +410,22 @@ export async function getRepoStatsAndPageForContext(
   const persistentCache = GitHubStatsCache.getInstance();
   const client = GitHubAuth.createClient();
 
-  const issuesListCacheKey = buildListCacheKey(
-    "issue",
-    context.owner,
-    context.repo,
-    "open",
-    "",
-    "created",
-    ""
-  );
-  const prsListCacheKey = buildListCacheKey(
-    "pr",
-    context.owner,
-    context.repo,
-    "open",
-    "",
-    "created",
-    ""
-  );
+  // Seeds the legacy first page, so these must match exactly what
+  // `GitHubIssues.listIssues`/`GitHubPRs.listPullRequests` build for an
+  // unfiltered, uncursored, default-ordered first page — otherwise the seed
+  // lands under a key nothing ever reads.
+  const firstPageKeyDefaults = {
+    owner: context.owner,
+    repo: context.repo,
+    state: "open",
+    search: "",
+    sortOrder: "created",
+    direction: "desc",
+    perPage: DEFAULT_LIST_PER_PAGE,
+    cursor: "",
+  } as const;
+  const issuesListCacheKey = buildListCacheKey({ type: "issue", ...firstPageKeyDefaults });
+  const prsListCacheKey = buildListCacheKey({ type: "pr", ...firstPageKeyDefaults });
 
   if (!client) {
     const diskCached = persistentCache.get(cacheKey);

@@ -112,7 +112,7 @@ function BuilderTextField({
           "focus:outline-hidden focus:ring-1",
           error
             ? "border-status-error focus:border-status-error focus:ring-status-error"
-            : "border-daintree-border focus:border-daintree-accent focus:ring-daintree-accent"
+            : "border-daintree-border focus:border-daintree-accent/40 focus:ring-daintree-accent/30"
         )}
       />
       {field.helpText && !error && (
@@ -164,7 +164,7 @@ function BuilderTextareaField({
           "focus:outline-hidden focus:ring-1",
           error
             ? "border-status-error focus:border-status-error focus:ring-status-error"
-            : "border-daintree-border focus:border-daintree-accent focus:ring-daintree-accent"
+            : "border-daintree-border focus:border-daintree-accent/40 focus:ring-daintree-accent/30"
         )}
       />
       {field.helpText && !error && (
@@ -214,7 +214,7 @@ function BuilderSelectField({
           "focus:outline-hidden focus:ring-1",
           error
             ? "border-status-error focus:border-status-error focus:ring-status-error"
-            : "border-daintree-border focus:border-daintree-accent focus:ring-daintree-accent"
+            : "border-daintree-border focus:border-daintree-accent/40 focus:ring-daintree-accent/30"
         )}
       >
         <option value="">{field.placeholder ?? "Select an option..."}</option>
@@ -257,7 +257,7 @@ function BuilderCheckboxField({
           onChange={(e) => onChange(e.target.checked)}
           className={cn(
             "h-4 w-4 rounded border-daintree-border bg-daintree-bg",
-            "text-daintree-accent focus:ring-daintree-accent focus:ring-offset-0",
+            "text-daintree-accent focus:ring-daintree-accent/30 focus:ring-offset-0",
             "cursor-pointer"
           )}
         />

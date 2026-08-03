@@ -33,9 +33,9 @@ import {
   serializeResourcePayload,
   unwrapDispatchResult,
   truncateText,
-  safeSerializeToolResult,
   readStringField,
   RESOURCE_BACKING_ACTIONS,
+  MCP_SERVER_INSTRUCTIONS,
   TIER_NOT_PERMITTED_CODE,
   CONFIRMATION_REQUIRED_CODE,
   MCP_DEDUP_ALLOWLIST,
@@ -48,6 +48,8 @@ import {
   INVALID_URL_CODE,
   buildToolError,
   buildMcpErrorPayload,
+  withResolvedWorkspace,
+  type DispatchedWorkspaceRef,
 } from "./shared.js";
 import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
@@ -68,7 +70,26 @@ import {
   buildToolOutputSchema,
   buildStructuredContent,
   parseToolArguments,
+  filterIntrospectionResultForSession,
+  getTierPermittedActionIds,
+  readSearchLimit,
+  readListPaging,
+  readRequestedActionId,
+  INTROSPECTION_TOOL_IDS,
+  ACTIONS_LIST_TOOL_ID,
+  ACTIONS_LIST_MAX_LIMIT,
+  ACTIONS_SEARCH_TOOL_ID,
+  ACTIONS_SEARCH_MAX_LIMIT,
+  ACTIONS_SEARCH_DEFAULT_LIMIT,
 } from "./tierAuth.js";
+import { buildToolCallResult } from "./toolCallResult.js";
+import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
+
+/**
+ * Backstop on the `actions.list` page walk. The registry is a few hundred
+ * actions, so this only bounds a renderer that never stops reporting `hasMore`.
+ */
+const MAX_LIST_PAGE_WALK = 20;
 
 const TERMINAL_WAIT_UNTIL_IDLE_TOOL = "terminal.waitUntilIdle";
 const TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL = "terminal.waitUntilIdleBatch";
@@ -76,6 +97,7 @@ const HELP_DISPLAY_IMAGE_TOOL = "help.displayImage";
 const BROWSER_CAPTURE_SCREENSHOT_TOOL = "browser.captureScreenshot";
 const SKILLS_SEARCH_TOOL = "skills.search";
 const SKILLS_LOAD_TOOL = "skills.load";
+const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
 
 /**
  * Narrow a `browser.captureScreenshot` result to its base64-PNG payload so the
@@ -179,6 +201,18 @@ export interface SessionServerDeps {
    * on invalid args or an unknown skill id.
    */
   handleSkillsLoad: (rawArgs: unknown) => import("../../../shared/types/skills.js").SkillLoadResult;
+  /**
+   * Execute `project.runCheck` in the main process (#11548). A check spawns a
+   * real child process and reports its exit code, so it needs main-process
+   * access, a cancellable `AbortSignal` (which cannot cross IPC), and a wait
+   * far longer than the 30s renderer-dispatch wall. Throws {@link McpError} on
+   * invalid args; throws for any reason the check could not start, and resolves
+   * with `passed: false` when it ran and failed.
+   */
+  handleProjectRunCheck: (
+    rawArgs: unknown,
+    signal: AbortSignal
+  ) => Promise<import("../../../shared/types/projectCheck.js").ProjectCheckRunResult>;
   appendAuditRecord: (input: {
     toolId: string;
     sessionId: string;
@@ -198,7 +232,6 @@ export interface SessionServerDeps {
     capturedTurnId?: string | null;
   }) => void;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
-  getFullToolSurface: () => boolean;
   /**
    * Optional renderer notifier fired when a help-session tool call is denied
    * because the session tier doesn't permit it. Implemented by httpLifecycle
@@ -311,9 +344,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     handleWaitUntilIdleBatch: waitUntilIdleBatch,
     handleSkillsSearch,
     handleSkillsLoad,
+    handleProjectRunCheck,
     appendAuditRecord,
     getCachedManifest,
-    getFullToolSurface,
     notifyTierMismatch,
     recordDenial,
     notifySessionRevoked,
@@ -336,39 +369,57 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         resources: { subscribe: true, listChanged: false },
         prompts: {},
       },
+      // The SDK folds this into the `initialize` result on its own, so no
+      // handler of ours is involved (#11541). Passed at construction because
+      // that result is built once, at the handshake, and instructions have no
+      // update notification — there is no later seam to set them from.
+      instructions: MCP_SERVER_INSTRUCTIONS,
     }
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    // Prefer a live fetch so runtime action-set changes (plugin enable/disable)
-    // are reflected. On failure (renderer bridge unavailable / timed out /
-    // destroyed) fall back to the last-known cached manifest instead of failing
-    // the whole tools/list (#9892). For pinned sessions (#7003) getCachedManifest
-    // always returns null, so they correctly fail closed rather than serve
-    // another window's tool surface. `=== null` (not `!manifest`) so an empty
-    // manifest — a valid zero-tool surface — is not misread as "unavailable".
-    //
-    // Snapshot the fallback BEFORE the await: getCachedManifest() reads the
-    // live session→WebContents map, and a pinned session can be torn down
-    // (map entry deleted) while requestManifest() is in flight. Reading it
-    // after the await would then see the session as unpinned and return the
-    // shared cache — another window's tool surface — defeating #7003. Taken
-    // synchronously here, the request is still in flight so the pin holds.
+  /**
+   * The action manifest this session's tool surface is built from.
+   *
+   * Prefer a live fetch so runtime action-set changes (plugin enable/disable)
+   * are reflected. On failure (renderer bridge unavailable / timed out /
+   * destroyed) fall back to the last-known cached manifest instead of failing
+   * the whole request (#9892). For pinned sessions (#7003) getCachedManifest
+   * always returns null, so they correctly fail closed rather than serve
+   * another window's tool surface. `=== null` (not `!manifest`) so an empty
+   * manifest — a valid zero-tool surface — is not misread as "unavailable".
+   *
+   * Snapshot the fallback BEFORE the await: getCachedManifest() reads the live
+   * session→WebContents map, and a pinned session can be torn down (map entry
+   * deleted) while requestManifest() is in flight. Reading it after the await
+   * would then see the session as unpinned and return the shared cache —
+   * another window's tool surface — defeating #7003. Taken synchronously here,
+   * the request is still in flight so the pin holds.
+   *
+   * Shared by `tools/list` and `mcp.surface` so the two cannot describe
+   * different manifests: a surface report built off a stale cache while the
+   * listing served a live fetch would be exactly the drift the report exists to
+   * detect (#11549).
+   */
+  const resolveManifest = async (
+    label: string
+  ): Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]> => {
     const cachedFallback = getCachedManifest();
-    let manifest: import("../../../shared/types/actions.js").ActionManifestEntry[];
     try {
-      manifest = await requestManifest();
+      return await requestManifest();
     } catch (err) {
       if (cachedFallback === null) {
         throw new McpError(ErrorCode.InternalError, "Action manifest unavailable");
       }
-      console.warn("[MCP] tools/list using cached manifest after live fetch failed:", err);
-      manifest = cachedFallback;
+      console.warn(`[MCP] ${label} using cached manifest after live fetch failed:`, err);
+      return cachedFallback;
     }
+  };
+
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const manifest = await resolveManifest("tools/list");
     const tier = sessionStore.getTier(sessionId);
-    const fullToolSurface = getFullToolSurface();
     const tools = manifest
-      .filter((entry) => shouldExposeTool(entry, tier, fullToolSurface))
+      .filter((entry) => shouldExposeTool(entry, tier))
       .map((entry) => {
         const outputSchema = buildToolOutputSchema(entry);
         const _meta =
@@ -391,13 +442,55 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const { args, requestKey } = parseToolArguments(request.params.arguments);
     const startedAt = Date.now();
     const tier = sessionStore.getTier(sessionId);
-    const fullToolSurface = getFullToolSurface();
     // Snapshot the turn id once, at dispatch start, before any guard or await
     // can yield to an active→passive FSM transition that would clear it (#10067).
     // Every consumer below — the started/settled strip events and all audit
     // records — receives this same value so one tool call can never split
     // across two turn groupings in the Assistant panel.
     const capturedTurnId: string | null = getCurrentTurnId?.() ?? null;
+
+    const searchLimit = actionId === ACTIONS_SEARCH_TOOL_ID ? readSearchLimit(args) : null;
+    const listPaging = actionId === ACTIONS_LIST_TOOL_ID ? readListPaging(args) : null;
+    // Discovery must mirror dispatch authority (#11525). The introspection
+    // tools enumerate the action registry from the renderer, which has no idea
+    // which session called it, so main computes the effective surface here and
+    // narrows the result on the way back.
+    //
+    // "Effective" is the static tier allowlist widened by every live grant —
+    // the same three sources the dispatch gate below consults. Native
+    // automation grants (#10648) matter most: they are issued up front with an
+    // explicit `allowedTools` set, so ignoring them would leave an agent unable
+    // to find the very tools it was just approved for. Reads go through the
+    // non-evicting `getLive*` snapshots; `grantCache.check` / `peekNativeGrant`
+    // would delete expired entries and push spurious `grant.expired` lifecycle
+    // events on every discovery call.
+    const introspectionSurface = INTROSPECTION_TOOL_IDS.has(actionId)
+      ? {
+          permittedActionIds: new Set<string>([
+            ...getTierPermittedActionIds(tier),
+            ...sessionStore.grantCache.getLiveGrants(sessionId).map((grant) => grant.toolId),
+            ...sessionStore.grantCache
+              .getLiveNativeGrants(sessionId)
+              .flatMap((grant) => [...grant.allowedTools]),
+          ]),
+          callerLimit: searchLimit ?? ACTIONS_SEARCH_DEFAULT_LIMIT,
+          requestedActionId: readRequestedActionId(args),
+          ...(listPaging ? { listPaging } : {}),
+        }
+      : null;
+    // `actions.search` ranks and slices in the renderer, before main can see
+    // tier. Over-fetching the schema's maximum page makes that slice the
+    // complete match set for any query matching at most that many actions, so
+    // filtering it yields an exact count and a full page instead of a starved
+    // one. Only the forwarded copy is widened — `args` still feeds the audit
+    // record, which must report what the caller actually asked for. A `limit`
+    // the tool contract forbids yields a null `searchLimit` and is left alone,
+    // so the renderer's own validation still rejects it rather than having the
+    // over-fetch quietly rewrite it into a legal request.
+    const dispatchArgs =
+      searchLimit !== null && args && typeof args === "object" && !Array.isArray(args)
+        ? { ...(args as Record<string, unknown>), limit: ACTIONS_SEARCH_MAX_LIMIT }
+        : args;
 
     // Layered authorization (#8442):
     //   1. Static tier floor (`TIER_ALLOWLISTS`) — workbench/action/system
@@ -419,7 +512,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // grant's TTL window, and so the `danger: "confirm"` modal is bypassed —
     // a native grant is an explicit user approval of the tool's scope.
     let nativeGrantId: string | undefined;
-    if (!isTierPermitted(tier, actionId, fullToolSurface)) {
+    if (!isTierPermitted(tier, actionId)) {
       const grant = sessionStore.grantCache.check(sessionId, actionId);
       const native = grant.granted
         ? null
@@ -684,10 +777,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 sessionStore.resetHttpIdleTimer(sessionId);
               }
             }
-            return {
-              content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
+            return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
-            };
+            });
           } catch (err) {
             outcome = { kind: "throw", error: err };
             if (err instanceof McpError) {
@@ -725,10 +817,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 sessionStore.resetHttpIdleTimer(sessionId);
               }
             }
-            return {
-              content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
+            return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
-            };
+            });
           } catch (err) {
             outcome = { kind: "throw", error: err };
             if (err instanceof McpError) {
@@ -754,10 +845,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             const result =
               actionId === SKILLS_SEARCH_TOOL ? handleSkillsSearch(args) : handleSkillsLoad(args);
             outcome = { kind: "result", value: { ok: true, result } };
-            return {
-              content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
+            return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
-            };
+            });
           } catch (err) {
             outcome = { kind: "throw", error: err };
             if (err instanceof McpError) {
@@ -766,6 +856,100 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: EXECUTION_ERROR_CODE,
               message: formatErrorMessage(err, `${actionId} failed`),
+            });
+          }
+        }
+
+        // Short-circuit: mcp.surface runs entirely in the main process (#11549).
+        // The action manifest entry (renderer) carries schema/tier/audit, but
+        // the answer cannot be built there: the caller's authorization tier is
+        // session state that only main holds, and the renderer has no idea
+        // which MCP session dispatched it. Building it here also means the
+        // report and `tools/list` apply one `shouldExposeTool` gate to one
+        // manifest, rather than a renderer-side enumeration that a post-dispatch
+        // filter then has to narrow back down (#11525).
+        //
+        // Read-only and never `danger: "confirm"` — it reports what this session
+        // was already told, so the strip shows a plain in-flight row.
+        if (actionId === MCP_SURFACE_TOOL_ID) {
+          emitToolCallStarted(false);
+          try {
+            const manifest = await resolveManifest(MCP_SURFACE_TOOL_ID);
+            // Build against the tier captured at dispatch start — the one the
+            // permission gate above actually authorized this call at — rather
+            // than re-reading after the await. Re-reading looks fresher but is
+            // not safe: `getTier` falls back to `workbench` once a revoked
+            // session's entry is gone, and workbench is a PEER of `external`,
+            // not a subset, so an external caller whose session was revoked
+            // mid-fetch would be handed a report naming workbench tools its own
+            // allowlist deliberately withholds. Using the gate's tier makes the
+            // report describe exactly what the caller was authorized against,
+            // and keeps it consistent with the audit record, which logs the
+            // same value. A tier that changes mid-call fires
+            // `notifications/tools/list_changed`, so a client re-reads anyway.
+            const result = buildSurfaceManifest(manifest, tier, app.getVersion());
+            outcome = { kind: "result", value: { ok: true, result } };
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) {
+              throw err;
+            }
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "mcp.surface failed"),
+            });
+          }
+        }
+
+        // Short-circuit: project.runCheck runs entirely in the main process
+        // (#11548). The action manifest entry (renderer) carries schema, tier,
+        // and audit metadata, but execution must stay here because (a) it
+        // spawns a real child process and reads its exit code, (b) the MCP
+        // AbortSignal can't cross IPC — without it a runaway suite could never
+        // be cancelled — and (c) renderer dispatch has a 30s wall, shorter than
+        // almost any real test run. Same shape as the waitUntilIdle branch;
+        // audit + strip-settle unify via the shared `finally`.
+        if (actionId === PROJECT_RUN_CHECK_TOOL) {
+          // Never `danger: "confirm"` — the runner is one the project already
+          // declares, so the strip shows a plain in-flight row.
+          emitToolCallStarted(false);
+          try {
+            const result = await handleProjectRunCheck(args, extra.signal);
+            outcome = { kind: "result", value: { ok: true, result } };
+            // A check can outlive the 15-min grant window, so mirror the main
+            // path's post-dispatch grant refresh — otherwise a long suite
+            // silently ages the grant out mid-run (same reasoning as #8442).
+            if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+              if (grantIssuedAt !== undefined) {
+                sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+              }
+              if (nativeGrantId !== undefined) {
+                sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+              }
+              if (sessionStore.sessions.has(sessionId)) {
+                sessionStore.resetIdleTimer(sessionId);
+              } else if (sessionStore.httpSessions.has(sessionId)) {
+                sessionStore.resetHttpIdleTimer(sessionId);
+              }
+            }
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) {
+              throw err;
+            }
+            // Reaching here means the check could not start at all (unknown
+            // runner, unusable cwd, busy target). A check that ran and failed
+            // resolved above with `passed: false` — the two must stay
+            // distinguishable to the caller.
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "project.runCheck failed"),
             });
           }
         }
@@ -834,10 +1018,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             }
             const result = { imageId, figureNumber, figureLabel };
             outcome = { kind: "result", value: { ok: true, result } };
-            return {
-              content: [{ type: "text" as const, text: safeSerializeToolResult(result) }],
+            return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
-            };
+            });
           } catch (err) {
             outcome = { kind: "throw", error: err };
             if (err instanceof McpError) {
@@ -864,10 +1047,80 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // host-issued native grant (`nativeGrantId`) pre-authorizes a dispatch.
         emitToolCallStarted(entry?.danger === "confirm");
 
+        // The workspace the dispatch actually landed on, resolved renderer-side
+        // at response time (#11536). Only ever set from a completed dispatch, so
+        // every failure path below (no window, session binding gone, throw)
+        // leaves it undefined and stamps nothing.
+        let dispatchedWorkspace: DispatchedWorkspaceRef | undefined;
+
+        /**
+         * Collect every page of an `actions.list` match set. The renderer pages
+         * before main can apply the tier filter (#11529), so filtering one of its
+         * pages would return a short page whose `total`/`hasMore` counted actions
+         * this session cannot dispatch. Walking the pages here lets the filter
+         * page the *permitted* set instead, which keeps the contract coherent.
+         * Entries carry no schemas, so this is a handful of cheap round trips.
+         */
+        const collectListPages = async (): Promise<DispatchEnvelope> => {
+          const base = args && typeof args === "object" && !Array.isArray(args) ? args : {};
+          const collected: unknown[] = [];
+          let offset = 0;
+          let confirmationDecision: DispatchEnvelope["confirmationDecision"];
+          // The target is resolved once, before paging, so every page lands on
+          // the same workspace — carrying the first page's ref out with the
+          // synthesized envelope lets the caller stamp the paged result through
+          // the same `withResolvedWorkspace` path the single-shot dispatch uses
+          // (#11536). Skipping it would silently drop the field from exactly the
+          // calls that walked more than one page.
+          let pagedWorkspace: DispatchedWorkspaceRef | undefined;
+          // The registry is a few hundred actions; the cap only stops a renderer
+          // that never stops reporting `hasMore`.
+          for (let page = 0; page < MAX_LIST_PAGE_WALK; page++) {
+            const envelope = await dispatchAction(
+              actionId,
+              { ...(base as Record<string, unknown>), offset, limit: ACTIONS_LIST_MAX_LIMIT },
+              dispatchConfirmed
+            );
+            confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
+            pagedWorkspace = pagedWorkspace ?? envelope.dispatchedWorkspace;
+            if (!envelope.result.ok) return envelope;
+            const payload = envelope.result.result as
+              { actions?: unknown; hasMore?: unknown } | null | undefined;
+            if (!payload || !Array.isArray(payload.actions)) break;
+            collected.push(...payload.actions);
+            if (payload.hasMore !== true || payload.actions.length === 0) break;
+            offset += ACTIONS_LIST_MAX_LIMIT;
+          }
+          return {
+            result: { ok: true, result: { actions: collected } },
+            confirmationDecision,
+            ...(pagedWorkspace ? { dispatchedWorkspace: pagedWorkspace } : {}),
+          };
+        };
+
         try {
-          const envelope = await dispatchAction(actionId, args, dispatchConfirmed);
-          outcome = { kind: "result", value: envelope.result };
+          const envelope = listPaging
+            ? await collectListPages()
+            : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed);
+          // Narrow registry-enumerating results to this session's effective
+          // surface before anything downstream reads them (#11525). Placed
+          // ahead of the `outcome` assignment so the text content, the
+          // structuredContent block, and the audit record all observe one
+          // filtered value — and so both the pinned and unpinned dispatch
+          // paths, which converge on this call, are covered by the same gate.
+          outcome = {
+            kind: "result",
+            value: introspectionSurface
+              ? filterIntrospectionResultForSession(
+                  actionId,
+                  envelope.result,
+                  introspectionSurface.permittedActionIds,
+                  introspectionSurface
+                )
+              : envelope.result,
+          };
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
+          dispatchedWorkspace = envelope.dispatchedWorkspace;
         } catch (err) {
           outcome = { kind: "throw", error: err };
           if (err instanceof SessionBindingError) {
@@ -956,37 +1209,39 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           if (actionId === BROWSER_CAPTURE_SCREENSHOT_TOOL) {
             const shot = asScreenshotResult(outcome.value.result);
             if (shot) {
-              return {
-                content: [
-                  { type: "image" as const, data: shot.pngBase64, mimeType: "image/png" },
-                  {
-                    type: "text" as const,
-                    text: `Screenshot captured (${shot.width}×${shot.height})`,
-                  },
-                ],
-              };
+              return withResolvedWorkspace(
+                {
+                  content: [
+                    { type: "image" as const, data: shot.pngBase64, mimeType: "image/png" },
+                    {
+                      type: "text" as const,
+                      text: `Screenshot captured (${shot.width}×${shot.height})`,
+                    },
+                  ],
+                },
+                dispatchedWorkspace
+              );
             }
           }
           const structuredContent = buildStructuredContent(entry, outcome.value.result);
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text:
-                  outcome.value.result !== undefined && outcome.value.result !== null
-                    ? safeSerializeToolResult(outcome.value.result)
-                    : "OK",
-              },
-            ],
-            ...(structuredContent ? { structuredContent } : {}),
-          };
+          return withResolvedWorkspace(
+            buildToolCallResult(outcome.value.result, {
+              ...(structuredContent ? { structuredContent } : {}),
+            }),
+            dispatchedWorkspace
+          );
         }
 
-        return buildToolError({
-          code: outcome.value.error.code,
-          message: outcome.value.error.message,
-          details: outcome.value.error.details,
-        });
+        // A renderer was reached and reported a failure, so the target is known
+        // and worth reporting — unlike the pre-dispatch errors above.
+        return withResolvedWorkspace(
+          buildToolError({
+            code: outcome.value.error.code,
+            message: outcome.value.error.message,
+            details: outcome.value.error.details,
+          }),
+          dispatchedWorkspace
+        );
       } finally {
         const settledOutcome = outcome ?? { kind: "throw" as const, error: new Error("unknown") };
         // Compute the duration once so the audit record and the live strip
@@ -1341,7 +1596,9 @@ async function readResourceContents(
     return { uri, mimeType: "application/json", text };
   }
   if (parsed.kind === "issues") {
-    const envelope = await dispatchAction("forge.listIssues", {});
+    // Explicit rather than riding the action's default: this resource is read
+    // whole and then truncated, so the compact projection is the point.
+    const envelope = await dispatchAction("forge.listIssues", { view: "summary" });
     const text = serializeResourcePayload(unwrapDispatchResult(envelope));
     return { uri, mimeType: "application/json", text: truncateText(text) };
   }
@@ -1371,12 +1628,7 @@ async function tryDispatchList(
 
 function isResourcePermitted(sessionId: string, deps: SessionServerDeps, kind: string): boolean {
   const tier = deps.sessionStore.getTier(sessionId);
-  const fullToolSurface = deps.getFullToolSurface();
-  return isTierPermitted(
-    tier,
-    (RESOURCE_BACKING_ACTIONS as Record<string, string>)[kind],
-    fullToolSurface
-  );
+  return isTierPermitted(tier, (RESOURCE_BACKING_ACTIONS as Record<string, string>)[kind]);
 }
 
 function subscribeResource(

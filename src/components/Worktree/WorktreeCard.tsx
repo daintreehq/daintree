@@ -797,7 +797,6 @@ export function WorktreeCard({
     ariaStatusParts.push("has uncommitted changes");
   }
   const ariaStatusLabel = ariaStatusParts.join(", ");
-
   const cardContent = (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -835,7 +834,7 @@ export function WorktreeCard({
           aria-busy={isBeingDeleted && !deleteError ? "true" : undefined}
           role={variant === "grid" ? "group" : undefined}
           aria-current={variant === "grid" && isActive ? "true" : undefined}
-          aria-label={`Worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}${worktree.isCurrent ? " (selected, current)" : ""}, Status: ${ariaStatusLabel}`}
+          aria-label={`Worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${ariaStatusLabel}`}
           onClick={handleCardClick}
           onDoubleClick={handleDoubleClick}
           onPointerEnter={handlePointerEnter}

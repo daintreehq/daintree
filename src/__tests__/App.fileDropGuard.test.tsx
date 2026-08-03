@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { renderHook, cleanup } from "@testing-library/react";
 import { useFileDropGuard } from "@/hooks/useFileDropGuard";
+import { FILE_DRAG_MIME } from "@/lib/fileDragPayload";
 
 function createDragEvent(
   type: string,
@@ -59,6 +60,40 @@ describe("useFileDropGuard", () => {
     document.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(false);
+  });
+
+  // An in-app file drag (#11576) has to be refused on the same terms as an OS
+  // one. Nothing else would claim it, so without this the cursor would keep
+  // promising a copy over every surface that cannot take one.
+  it("refuses an in-app file drag on dragover", () => {
+    renderHook(() => useFileDropGuard());
+
+    const { event, dataTransfer } = createDragEvent("dragover", [FILE_DRAG_MIME]);
+    document.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(dataTransfer.dropEffect).toBe("none");
+  });
+
+  it("prevents default on an in-app file drop", () => {
+    renderHook(() => useFileDropGuard());
+
+    const { event } = createDragEvent("drop", [FILE_DRAG_MIME]);
+    document.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  // The two real destinations stop propagation, so their events never reach
+  // this listener and the guard cannot countermand a drag they accepted.
+  it("leaves an in-app drag a destination already claimed alone", () => {
+    renderHook(() => useFileDropGuard());
+
+    const { event, dataTransfer } = createDragEvent("dragover", [FILE_DRAG_MIME]);
+    event.preventDefault();
+    document.dispatchEvent(event);
+
+    expect(dataTransfer.dropEffect).toBe("copy");
   });
 
   it("skips events already handled by a child (defaultPrevented)", () => {

@@ -10,6 +10,16 @@ export function createFileBrowserDefaults(
   options: FileBrowserPanelOptions
 ): Partial<FileBrowserPanelData> {
   const width = normalizeFileBrowserSidebarWidth(options.browserSidebarWidth);
+  // Source identity is settled here, once, rather than at each placement site:
+  // promotion into the grid adopts the active worktree so the panel lands in a
+  // rendered index bucket (#11290), and every later mutation spreads the panel
+  // record — so a marker set at creation survives all of them, while re-reading
+  // `worktreeId` at render time would follow the adopted id and silently re-root
+  // the tree (#11489). `=== undefined`, not truthiness: a `worktreeId: ""` names
+  // a worktree that cannot resolve and must refuse rather than quietly fall back
+  // to the workspace root.
+  const workspaceRooted =
+    options.browserWorkspaceRooted === true || options.worktreeId === undefined;
   return {
     // `!= null` rather than truthiness: an explicit `false` for the dotfile
     // toggle is a deliberate choice, and dropping it here would let a later
@@ -31,6 +41,7 @@ export function createFileBrowserDefaults(
     // Only a collapsed sidebar materializes a field: `false` and absent are the
     // same open state, so we never stamp a default the serializer then drops.
     ...(options.browserSidebarCollapsed === true && { browserSidebarCollapsed: true }),
+    ...(options.browserViewerCollapsed === true && { browserViewerCollapsed: true }),
     ...(options.browserTreeSnapshot != null && {
       browserTreeSnapshot: options.browserTreeSnapshot,
     }),
@@ -38,5 +49,15 @@ export function createFileBrowserDefaults(
     // so a default-width panel stays sparse just like the collapsed bit.
     ...(width != null &&
       width !== FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH && { browserSidebarWidth: width }),
+    ...(workspaceRooted && { browserWorkspaceRooted: true }),
+    // Same sparse rule as the serializer wrote them with (#11620): "name" and
+    // "asc" are the defaults the reader falls back to, so materializing them
+    // would only make the record less sparse than it was persisted. Both must
+    // be copied here even though sort is a runtime toolbar toggle rather than
+    // a spawn-time option — restoring a panel routes the deserialized snapshot
+    // through this factory, and a field it does not copy is silently dropped.
+    ...(options.browserSortKey != null &&
+      options.browserSortKey !== "name" && { browserSortKey: options.browserSortKey }),
+    ...(options.browserSortDirection === "desc" && { browserSortDirection: "desc" as const }),
   };
 }

@@ -15,6 +15,7 @@
 
 import { BrowserWindow, type WebContentsView } from "electron";
 import { registerProjectView } from "./webContentsRegistry.js";
+import { isValidScratchStateId } from "../services/projectStorePaths.js";
 import { logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -28,6 +29,7 @@ import * as EvictionController from "./ProjectViewEvictionController.js";
 import { hasActiveAgent, initAgentStateCache } from "./ProjectViewAgentStateCache.js";
 import type { PaintGate, PaintGateOutcome, ViewEntry } from "./ProjectViewManagerTypes.js";
 import type { MemoryPressurePolicy } from "../utils/cachedProjectViews.js";
+import type { ProjectFocusOnActivateIntent } from "../../shared/types/ipc/project.js";
 
 // Trailing-edge debounce on freeze entry: the lag-pressure path can flip
 // efficiency on/off without going through the 30 s downgrade hysteresis, so
@@ -91,6 +93,18 @@ const DEFAULT_VIEW_LOAD_HARD_TIMEOUT_MS = 30_000;
  * sample period without a new timer.
  */
 const CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS = 30_000;
+
+/**
+ * Identity of the workspace a view belongs to (#11536). Views are keyed on an
+ * opaque workspace id that is either a project id or a scratch id, so `kind`
+ * says which — a scratch has no Project row and cannot be looked up through
+ * project APIs.
+ */
+export interface WorkspaceRef {
+  kind: "project" | "scratch";
+  workspaceId: string;
+  workspacePath: string;
+}
 
 /** Safe-scalar view inventory entry for the diagnostics export (#10500). */
 export interface ViewInventoryEntry {
@@ -245,7 +259,7 @@ export class ProjectViewManager {
   // re-trigger a stale focus jump (#4670 lesson).
   pendingFocusIntent: {
     projectId: string;
-    intent: "focus-next-waiting";
+    intent: ProjectFocusOnActivateIntent;
   } | null = null;
   disposed = false;
   private cachedMemoryTimerCleanup: (() => void) | null = null;
@@ -503,7 +517,7 @@ export class ProjectViewManager {
    * after a cached-view reactivation. Discarded on timeout/cancel/error so a
    * later unrelated switch can't trigger a stale focus jump.
    */
-  setPendingFocusIntent(projectId: string, intent: "focus-next-waiting"): void {
+  setPendingFocusIntent(projectId: string, intent: ProjectFocusOnActivateIntent): void {
     this.pendingFocusIntent = { projectId, intent };
   }
 
@@ -539,6 +553,46 @@ export class ProjectViewManager {
 
   getProjectIdForWebContents(webContentsId: number): string | null {
     return this.webContentsToProject.get(webContentsId) ?? null;
+  }
+
+  /**
+   * Live workspace identity for a view's webContents, or `null` when the id is
+   * unknown to this manager (#11536). Sender-scoped by construction — it walks
+   * this manager's own reverse mapping, never `activeProjectId` or the global
+   * current-project, so a dispatch that landed on a cached (deactivated) view
+   * still reports the workspace that view actually belongs to.
+   *
+   * "Workspace", not "project": views are keyed on an opaque workspace id and
+   * a scratch is seeded through the same `switchTo(id, path)` path, so this can
+   * legitimately describe a scratch with no Project row. `kind` is derived from
+   * the id shape via the owning predicate in `projectStorePaths` — scratch ids
+   * are dashed UUIDs and project ids 64 hex chars, which cannot collide — so a
+   * caller can tell whether the id is resolvable through project APIs instead
+   * of guessing.
+   *
+   * Reads the path off the live `ViewEntry` rather than a registration-time
+   * copy, so a `rebindProjectPath()` (workspace moved on disk) is reflected.
+   * Fails closed to `null` if the entry no longer owns the requested webContents
+   * or the view has been torn down — callers treat that as "identity unknown"
+   * and omit the field rather than reporting a stale workspace.
+   */
+  getWorkspaceRefForWebContents(webContentsId: number): WorkspaceRef | null {
+    const workspaceId = this.webContentsToProject.get(webContentsId);
+    if (workspaceId === undefined) return null;
+    const entry = this.views.get(workspaceId);
+    if (!entry) return null;
+    try {
+      const wc = entry.view.webContents;
+      if (wc.isDestroyed() || wc.id !== webContentsId) return null;
+    } catch {
+      // View torn down mid-read — identity is unknowable, not stale.
+      return null;
+    }
+    return {
+      kind: isValidScratchStateId(entry.projectId) ? "scratch" : "project",
+      workspaceId: entry.projectId,
+      workspacePath: entry.projectPath,
+    };
   }
 
   /**
@@ -722,7 +776,13 @@ export class ProjectViewManager {
    * Legacy single-floor setter, retained as the E2E escape hatch (six specs
    * push `null` to neutralize pressure eviction so host memory can't perturb
    * their deterministic assertions). A positive value collapses the band to a
-   * cliff at `mb`, reproducing the pre-#11469 clamp-to-1 exactly.
+   * cliff at `mb`: every reading below it classifies as critical with a
+   * `targetMax` of 1.
+   *
+   * Since #11477 the cliff is a target, not a one-pass collapse. The periodic
+   * sampler converges on it one view per tick like any other band; only the
+   * forced tier-2 reclaim (`reclaimCachedViewsUnderPressure`) still clears the
+   * cache in a single pass.
    */
   setLowMemoryFreeThresholdMb(mb: number | null): void {
     if (mb == null || !Number.isFinite(mb) || mb <= 0) {

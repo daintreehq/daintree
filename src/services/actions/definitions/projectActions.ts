@@ -1,14 +1,82 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
-import type { ProjectSettings } from "@shared/types";
+import type { AgentVisibleProjectSettingsKey, ProjectSettings } from "@shared/types";
+import { pickAgentVisibleProjectSettings } from "@shared/types";
 import { z } from "zod";
 import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
+import { useScratchStore } from "@/store/scratchStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { usePilotStore } from "@/store/pilotStore";
+import { actionService } from "@/services/ActionService";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { notify, EVENT_KIND_TO_SETTING_KEY, EVENT_KIND_LABEL } from "@/lib/notify";
 import type { NotificationEventKind } from "@/lib/notify";
 import { switchToLastProject } from "@/lib/projectHistoryNav";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
+import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
+
+/**
+ * Wire shape of `project.getSettings`.
+ *
+ * Typing the shape as `Record<AgentVisibleProjectSettingsKey, z.ZodType>` is what keeps
+ * this honest: omitting a key classified `exposed`, or adding one that isn't, is a
+ * compile error, so the advertised schema cannot drift from
+ * `PROJECT_SETTINGS_AGENT_EXPOSURE`.
+ *
+ * `ActionService.dispatch` now parses results through this schema (#11539), so it
+ * filters as well as documents. `pickAgentVisibleProjectSettings` in `run()` is kept
+ * as the inner boundary: it cannot fail, whereas a parse that rejects the payload
+ * would surface `RESULT_VALIDATION_ERROR` instead of a safe subset.
+ */
+const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z.ZodType> = {
+  runCommands: z.array(
+    z.object({
+      id: z.string(),
+      // Every optional key here is typed rather than left open, which is only
+      // safe because `pickAgentVisibleRunCommand` now drops a value whose type
+      // doesn't match instead of forwarding it. Nothing below that projection
+      // guarantees these types: the codec admits any entry with a string
+      // `id`/`command` and copies the rest through verbatim, and the
+      // agent-callable `project.saveSettings` types runCommands as
+      // `z.array(z.unknown())`. Without the sanitize, one persisted
+      // `preferredLocation: "sidebar"` would make this action return
+      // RESULT_VALIDATION_ERROR for that project on every call, forever.
+      name: z.string().optional(),
+      command: z.string(),
+      icon: z.string().optional(),
+      description: z.string().optional(),
+      preferredLocation: z.enum(["dock", "grid"]).optional(),
+      preferredAutoRestart: z.boolean().optional(),
+      isFrameworkDefault: z.boolean().optional(),
+    })
+  ),
+  excludedPaths: z.array(z.string()).optional(),
+  defaultWorktreeRecipeId: z.string().optional(),
+  devServerCommand: z.string().optional(),
+  devServerLoadTimeout: z.number().optional(),
+  turbopackEnabled: z.boolean().optional(),
+  copyTreeSettings: z.record(z.string(), z.unknown()).optional(),
+  branchPrefixMode: z.enum(["none", "username", "custom"]).optional(),
+  branchPrefixCustom: z.string().optional(),
+  forgeRemote: z.string().optional(),
+  forgeProviderOverride: z.string().nullable().optional(),
+  worktreePathPattern: z.string().optional(),
+  terminalSettings: z
+    .object({
+      shell: z.string().optional(),
+      shellArgs: z.array(z.string()).optional(),
+      defaultWorkingDirectory: z.string().optional(),
+      scrollbackLines: z.number().optional(),
+    })
+    .optional(),
+  notificationOverrides: z.record(z.string(), z.unknown()).optional(),
+  activeResourceEnvironment: z.string().optional(),
+  defaultWorktreeMode: z.string().optional(),
+};
+
+const openRunArgs = z.object({ runId: z.string(), workspaceId: z.string() });
 
 export function registerProjectActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("project.switcherPalette", () => ({
@@ -22,6 +90,88 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     nonRepeatable: true,
     run: async () => {
       callbacks.onOpenProjectSwitcherPalette();
+    },
+  }));
+
+  actions.set("pilot.toggle", () => ({
+    id: "pilot.toggle",
+    title: "View all agents",
+    description:
+      "Open the overview of every agent running across all projects and scratches, grouped by project",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    run: async () => {
+      usePilotStore.getState().toggle();
+    },
+  }));
+
+  actions.set("pilot.openRun", () => ({
+    id: "pilot.openRun",
+    title: "Open run",
+    description:
+      "Go to a specific agent run, switching project first when it lives in another workspace",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: openRunArgs,
+    run: async (args: unknown) => {
+      // Parsed rather than asserted: this is the one action whose args arrive
+      // from a click payload, and a parse both narrows the type and rejects a
+      // malformed dispatch instead of trusting it.
+      const { runId, workspaceId } = openRunArgs.parse(args);
+
+      // The workspace THIS view owns, not the one the app is globally pointed
+      // at. `currentProject` is replicated to every view including cached ones,
+      // and it is null outright in a scratch view — reading it here sent a run
+      // that was already on screen through a cross-workspace switch, and sent
+      // every scratch run to `switchProject`, which rejects a scratch id.
+      const currentId = getViewWorkspaceId();
+
+      // Already here: focus directly. Going through a switch would tear down
+      // and rebuild a view that is already the active one.
+      //
+      // Focus BEFORE closing, and only close on success. An agent can exit
+      // between the list rendering and the click, and `panel.focus` rejects on
+      // a panel that no longer exists — closing first would leave the user back
+      // where they started with the overview gone and nothing explaining why.
+      if (workspaceId === currentId) {
+        const result = await actionService.dispatch("panel.focus", { panelId: runId });
+        if (result.ok) {
+          // Closing a palette normally returns the keyboard to whatever opened
+          // it. Here that would undo the line above: the restore fires from the
+          // exit animation and hands focus back to the panel the user was
+          // trying to leave. Set only on the success path — on failure the
+          // dialog stays open and the flag would leak to another palette.
+          suppressPaletteFocusRestore();
+          usePilotStore.getState().close();
+        }
+        return;
+      }
+
+      // Elsewhere: the switch is the only way across, and this context dies
+      // with it — so the target rides along as a one-shot intent that the
+      // incoming view applies once its state has hydrated. Closing first is
+      // right here: the view holding this dialog is about to be replaced.
+      usePilotStore.getState().close();
+      const focusIntent = { intent: "focus-panel", panelId: runId } as const;
+
+      // Projects and scratches are disjoint id spaces with separate stores,
+      // switch handlers and current-pointers (#11518), so the destination has
+      // to be routed by kind — `switchProject` rejects a scratch id outright.
+      //
+      // Routed on the id's SHAPE, not on whether the scratch store happens to
+      // list it. That store hydrates asynchronously, so a membership test
+      // answers "has the list loaded yet" during the boot window and sends a
+      // scratch down the project path exactly when the fleet first renders.
+      if (isScratchWorkspaceId(workspaceId)) {
+        await useScratchStore.getState().switchScratch(workspaceId, { focusIntent });
+        return;
+      }
+      await useProjectStore.getState().switchProject(workspaceId, { focusIntent });
     },
   }));
 
@@ -95,7 +245,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   actions.set("project.update", () => ({
     id: "project.update",
     title: "Update Project",
-    description: "Update project metadata",
+    description:
+      "Change a project's stored metadata, such as its display name. This persists immediately and has no undo here, so read the project's current record first rather than overwriting fields blindly.",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -174,7 +325,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.getAll",
     title: "List Projects",
     description:
-      "List every project registered in Daintree, open or not. Takes no args. Returns { projects } — an array of project records with id, name, path, and metadata. Never errors; returns an empty array when no projects are registered. Do NOT use this just to find the active project — call `project.getCurrent`, which returns only the one currently open.",
+      "List every project registered in the app, whether or not it is currently open. Use this to discover project ids; ask for the current project instead when all you need is the one the user is working in. It never fails — an empty list means no projects are registered rather than an error.",
     category: "project",
     kind: "query",
     danger: "safe",
@@ -190,7 +341,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.getCurrent",
     title: "Get Current Project",
     description:
-      "Get the project currently open in the active window. Takes no args. Returns { project } — the active project record (id, name, path, metadata), or null when no project is open. Never errors. Do NOT use `project.getAll` for this — that lists every registered project; this returns only the active one.",
+      "Get the project currently open in the active window, which is what most work should be scoped to. Use the full project listing only when you genuinely need projects the user is not in. It never fails: an empty result means no project is open.",
     category: "project",
     kind: "query",
     danger: "safe",
@@ -206,25 +357,35 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.getSettings",
     title: "Get Project Settings",
     description:
-      "Read a project's persisted settings (notification overrides, runner config, worktree path pattern, etc.). Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project's id. Returns the settings object as an open-ended key/value map. Errors when no projectId is given and no project is active.",
+      "Read a project's operational settings — run commands, dev server command, worktree naming, forge remote and notification overrides. Dedicated environment-variable, secret and access-control fields are withheld. The command strings themselves come back verbatim though, so treat them as potentially sensitive: a project may have inlined a credential in one.",
     category: "project",
     kind: "query",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string().optional() }).optional(),
-    resultSchema: z.object({}).catchall(z.unknown()),
+    resultSchema: z.object(agentVisibleProjectSettingsShape),
+    mcpOutputSchema: true,
     run: async (args: unknown, ctx: ActionContext) => {
       const { projectId } = (args ?? {}) as { projectId?: string };
       const resolvedProjectId = projectId ?? ctx.projectId;
       if (!resolvedProjectId) throw new Error("No active project");
-      return await projectClient.getSettings(resolvedProjectId);
+      const settings = await projectClient.getSettings(resolvedProjectId);
+      // Project down to the agent-safe field set before returning. This action is on
+      // every MCP tier's allowlist, and the settings payload carries decrypted secure
+      // env vars (ProjectSettingsManager resolves them) plus a 250KB icon blob.
+      // Dispatch also parses the result against `resultSchema` (#11539), but this stays
+      // as the inner boundary — it builds a fresh object (projectClient caches the value
+      // it returns and the renderer's settings UI legitimately needs the full payload)
+      // and, unlike a parse, has no failure mode that could fall back to the raw value.
+      return pickAgentVisibleProjectSettings(settings);
     },
   }));
 
   actions.set("project.saveSettings", () => ({
     id: "project.saveSettings",
     title: "Save Project Settings",
-    description: "Save a project's settings",
+    description:
+      "Persist a project's settings, merging the supplied fields over the stored ones so anything omitted is kept. This writes immediately and has no undo, and settings drive real behaviour such as run commands and worktree naming. The MCP tier and agent-exposure keys are stripped from every write, so setting those reports success and changes nothing.",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -258,7 +419,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   actions.set("project.muteNotifications", () => ({
     id: "project.muteNotifications",
     title: "Mute Project Notifications",
-    description: "Suppress future agent completion and waiting notifications for a project",
+    description:
+      "Stop a project from raising notifications when its agents finish or need attention. The user will no longer be prompted for work that is waiting, so anything blocked on them may sit unnoticed. This persists until it is turned back on.",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -439,7 +601,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.detectRunners",
     title: "Detect Runners",
     description:
-      "Detect runnable commands (test/lint/build/dev scripts) for a project by inspecting its manifest files. Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project. Returns { runners } — an array of { id, name, command }. Errors when no projectId is given and no project is active.",
+      "Detect the runnable commands a project defines, by inspecting its manifest files. Use this to discover the right command to run rather than guessing one. It returns every script it finds, publish and deploy included, and for some frameworks synthesizes conventional commands that are declared nowhere — check what a command actually does before running it.",
     category: "project",
     kind: "query",
     danger: "safe",
@@ -459,13 +621,22 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     id: "project.getStats",
     title: "Get Project Stats",
     description:
-      "Get aggregate statistics for a project (commit/issue/PR counts and activity). Args: `projectId` (optional) — a project id from `project.getAll` (the `id` field); defaults to the active project. Returns an open-ended stats object. Errors when no projectId is given and no project is active.",
+      "Get aggregate resource usage for a project — how many processes and terminals it is running and roughly how much memory they consume. Use this to judge whether there is headroom before launching more work. Host process ids are deliberately withheld, so this cannot be used to target individual processes.",
     category: "project",
     kind: "query",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ projectId: z.string().optional() }).optional(),
-    resultSchema: z.object({}).catchall(z.unknown()),
+    // Shaped, not open: the previous `z.object({}).catchall(z.unknown())` kept
+    // every key, which shipped `ProjectStats.processIds` — live host pids — to
+    // any agent that called this. Naming the fields is what strips them, since
+    // a catchall opts out of zod's unknown-key stripping entirely (#11539).
+    resultSchema: z.object({
+      processCount: z.number(),
+      terminalCount: z.number(),
+      estimatedMemoryMB: z.number(),
+      terminalTypes: z.record(z.string(), z.number()),
+    }),
     run: async (args: unknown, ctx: ActionContext) => {
       const { projectId } = (args ?? {}) as { projectId?: string };
       const resolvedProjectId = projectId ?? ctx.projectId;

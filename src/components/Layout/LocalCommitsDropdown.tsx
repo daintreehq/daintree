@@ -524,7 +524,7 @@ export function LocalCommitsDropdown({
           className={cn(
             "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)]",
             "bg-overlay-soft border border-[var(--border-overlay)]",
-            "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
+            "focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20"
           )}
         >
           <Search

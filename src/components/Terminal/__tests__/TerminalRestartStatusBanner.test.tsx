@@ -173,5 +173,97 @@ describe("TerminalRestartStatusBanner", () => {
       fireEvent.click(button);
       expect(onDismiss).toHaveBeenCalledOnce();
     });
+
+    // A restart can strand this banner on many panes at once, so the bulk
+    // control appears only when the caller says more than one is flagged
+    // (#11589) — otherwise the per-pane X already covers the whole set.
+    describe("bulk dismissal (issue #11589)", () => {
+      it("offers a second control when onDismissAll is supplied", () => {
+        render(
+          <TerminalRestartStatusBanner
+            variant={{ type: "session-resume-unavailable" }}
+            onRestart={vi.fn()}
+            onDismiss={vi.fn()}
+            onDismissAll={vi.fn()}
+          />
+        );
+        expect(screen.getAllByRole("button")).toHaveLength(2);
+        expect(screen.getByRole("button", { name: /\bdismiss all\b/i })).toBeTruthy();
+      });
+
+      // WCAG "Label in Name": the accessible name must start with the visible
+      // label so speech-input users can say what they read, and must add the
+      // scope the short label leaves out.
+      it("names the bulk control with its visible label plus the missing scope", () => {
+        render(
+          <TerminalRestartStatusBanner
+            variant={{ type: "session-resume-unavailable" }}
+            onRestart={vi.fn()}
+            onDismiss={vi.fn()}
+            onDismissAll={vi.fn()}
+          />
+        );
+
+        const bulk = screen.getByRole("button", { name: /\bdismiss all\b/i });
+        const visible = (bulk.textContent ?? "").trim();
+        const accessible = (bulk.getAttribute("aria-label") ?? "").trim();
+
+        expect(visible.length).toBeGreaterThan(0);
+        expect(accessible.toLowerCase().startsWith(visible.toLowerCase())).toBe(true);
+        expect(accessible.length).toBeGreaterThan(visible.length);
+      });
+
+      it("routes each control to its own callback", () => {
+        const onDismiss = vi.fn();
+        const onDismissAll = vi.fn();
+        render(
+          <TerminalRestartStatusBanner
+            variant={{ type: "session-resume-unavailable" }}
+            onRestart={vi.fn()}
+            onDismiss={onDismiss}
+            onDismissAll={onDismissAll}
+          />
+        );
+
+        fireEvent.click(screen.getByRole("button", { name: /\bdismiss all\b/i }));
+        expect(onDismissAll).toHaveBeenCalledOnce();
+        expect(onDismiss).not.toHaveBeenCalled();
+
+        fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+        expect(onDismiss).toHaveBeenCalledOnce();
+        expect(onDismissAll).toHaveBeenCalledOnce();
+      });
+
+      it("still offers no restart action alongside the bulk control", () => {
+        render(
+          <TerminalRestartStatusBanner
+            variant={{ type: "session-resume-unavailable" }}
+            onRestart={vi.fn()}
+            onDismiss={vi.fn()}
+            onDismissAll={vi.fn()}
+          />
+        );
+        expect(screen.queryByRole("button", { name: /restart session/i })).toBeNull();
+      });
+
+      it("does not leak the bulk control onto other variants", () => {
+        for (const variant of [
+          { type: "auto-restarting" },
+          { type: "restarting" },
+          { type: "exit-error", exitCode: 1 },
+        ] as const) {
+          const { unmount } = render(
+            <TerminalRestartStatusBanner
+              variant={variant}
+              onRestart={vi.fn()}
+              onDismiss={vi.fn()}
+              onDismissAll={vi.fn()}
+            />
+          );
+          expect(screen.queryByRole("button", { name: /dismiss all/i })).toBeNull();
+          unmount();
+        }
+      });
+    });
   });
 });

@@ -162,6 +162,16 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["file-browser:stat-paths"]["args"]
     ): Promise<IpcInvokeMap["file-browser:stat-paths"]["result"]>;
   };
+  fileWatch: {
+    fingerprint(
+      ...args: IpcInvokeMap["file-watch:fingerprint"]["args"]
+    ): Promise<IpcInvokeMap["file-watch:fingerprint"]["result"]>;
+  };
+  fleet: {
+    getSnapshot(
+      ...args: IpcInvokeMap["fleet:get-snapshot"]["args"]
+    ): Promise<IpcInvokeMap["fleet:get-snapshot"]["result"]>;
+  };
   forgeAudit: {
     clearLog(
       ...args: IpcInvokeMap["forge-audit:clear-log"]["args"]
@@ -220,6 +230,9 @@ export interface GeneratedElectronAPI {
     reportPanelOpen(
       ...args: IpcInvokeMap["help:report-panel-open"]["args"]
     ): Promise<IpcInvokeMap["help:report-panel-open"]["result"]>;
+    restorePendingHibernation(
+      ...args: IpcInvokeMap["help:restore-pending-hibernation"]["args"]
+    ): Promise<IpcInvokeMap["help:restore-pending-hibernation"]["result"]>;
     revokeSession(
       ...args: IpcInvokeMap["help:revoke-session"]["args"]
     ): Promise<IpcInvokeMap["help:revoke-session"]["result"]>;

@@ -62,7 +62,8 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
   actions.set("browser.navigate", () => ({
     id: "browser.navigate",
     title: "Navigate Browser",
-    description: "Navigate a browser panel to a URL",
+    description:
+      "Point an existing browser panel at a different address. This replaces what that panel is showing, discarding any page state such as filled-in forms. Open a URL instead when no particular existing panel is the target.",
     category: "browser",
     kind: "command",
     danger: "safe",
@@ -87,7 +88,8 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
   actions.set("browser.openUrl", () => ({
     id: "browser.openUrl",
     title: "Open URL in Browser",
-    description: "Open a URL in a browser panel, reusing an existing one or creating a new one",
+    description:
+      "Show a web page in a browser panel, reusing one that is already open rather than piling up duplicates. This creates a visible panel that consumes resources until closed. It loads the page for the user to see; it does not return the page's contents.",
     category: "browser",
     kind: "command",
     danger: "safe",
@@ -239,7 +241,8 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     id: "browser.captureScreenshot",
     palette: { mode: "hidden" },
     title: "Capture Browser Screenshot",
-    description: "Capture a screenshot of the focused browser panel and return it as a PNG image",
+    description:
+      "Capture what a browser or dev-preview panel is currently showing, as an image. Use this to see a rendered page — a running dev server, a deployed site — when its appearance is what matters. Name the panel to capture; without one it falls back to whichever is focused. It returns pixels rather than page text or markup.",
     category: "browser",
     kind: "command",
     danger: "safe",

@@ -675,6 +675,38 @@ A plugin agent is launchable and selectable as a named entry in the effective re
 | `primaryConfidence` / `fallbackConfidence` / `promptConfidence` / `completionConfidence` | no | Confidence weights in `[0, 1]` for a matched tier. |
 | `titleStatePatterns` | no | `{ working, waiting }` string arrays (≤50 entries, each ≤256 chars) matched against the terminal title. |
 
+## Process tools — _Shipped_
+
+Teaches Daintree to recognize a CLI running inside a terminal pane, so the tab shows the plugin's icon instead of the generic terminal glyph. Detection normally runs off a fixed built-in list (npm, Vite, Docker, …); this is how a plugin that ships or wraps its own CLI gets the same treatment. Inert declarative data — no capability required.
+
+```json
+{
+  "contributes": {
+    "processTools": [
+      { "command": "acme-cli", "iconId": "sparkles" },
+      { "command": "acmec", "iconId": "sparkles" }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `command` | yes | Bare executable name to match (≤64 chars), lowercase, starting with a letter or digit and otherwise limited to letters, digits, `.`, `-`, `_`. Lowercase is enforced rather than normalized: the detector lower-cases every process name before lookup, so a mixed-case entry would silently never fire. **Omit the extension** — write `acme`, not `acme.exe` or `acme.py`; detection strips launcher and script suffixes before matching, so the suffixed form would never fire and is rejected. Additive for **new** commands only — a collision with a built-in tool command or a built-in agent CLI is rejected at the manifest gate, as are the package-manager exec subcommands (`exec`, `dlx`, `x`), which name a launcher rather than a tool. Shells and launcher wrappers are rejected for the same reason — they name the process that _runs_ a tool, so `sudo vite` or `bash -c "vite build"` would report the plugin instead of Vite: `sh`, `bash`, `zsh`, `fish`, `dash`, `ash`, `ksh`, `csh`, `tcsh`, `nu`, `pwsh`, `powershell`, `cmd`, `env`, `sudo`, `doas`, `su`, `command`, `nohup`, `setsid`, `xargs`, `time`, `timeout`, `nice`, `stdbuf`. Built-in entries always win at runtime. Declaring the same command twice in one manifest is rejected; a collision with _another plugin_ resolves first-registered-wins with a warning. |
+| `iconId` | yes | Same namespace as `panels[].iconId` / `toolbarButtons[].iconId` — one of the generic plugin icon IDs (`terminal`, `package`, `sparkles`, `globe`, …). **Not** the agent brand-mark namespace; plugins can't ship custom icon assets. Advisory rather than enum-validated, so a manifest written for a newer host still loads: an ID outside the generic set falls back to `terminal` at load time, and `daintree-plugin validate` warns about it. The fallback is why naming a built-in ID (`claude`, `npm`) doesn't borrow that tool's mark, label, or detection priority. |
+
+A tool with several aliases declares one entry per alias, each pointing at the same `iconId`. Up to 100 entries per manifest. There is no `tier` field: plugin detections rank at the same `tool` tier as named built-in tools, so `npm exec acme-cli` reports the plugin's CLI rather than npm.
+
+`__proto__`, `constructor`, and `prototype` are rejected as command names.
+
+Detections are registered at plugin load and mirrored into the pty-host process where detection actually runs, including across a pty-host restart. Unloading or disabling the plugin removes them; a terminal already running the command keeps its icon until the next detection pass, which reclassifies it to whatever else matches — a built-in tool, or the generic terminal chrome.
+
+**No `label` field — yet.** Daintree currently derives a detected process's display name from its icon ID, and panel state retains only that ID, not the matched command. Since generic plugin icon IDs are shared across plugins, there is nowhere today to attribute a plugin-supplied label to. The visible effect is narrow: the terminal tab and panel header show the panel's own title, so the icon — the point of this contribution — is what changes. Only the send-to-agent palette renders the derived name, where a plugin-detected process reads as its icon ID.
+
+This is a wiring gap rather than a hard limit — the detector already computes the matched process name and forwards it to the renderer, which discards it. Adding an optional `label` later is a backwards-compatible addition to the entry shape once panel state carries a process label.
+
 ## What's missing and why
 
 A few surfaces I've decided **not** to expose as dedicated contribution points:

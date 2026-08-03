@@ -11,7 +11,7 @@ export type ActionDanger = "safe" | "confirm" | "restricted";
 export type RiskBand =
   "reversible" | "external-effect" | "destructive-local" | "destructive-network";
 
-export type McpVisibility = "core" | "discoverable" | "hidden";
+export type McpVisibility = "core" | "hidden";
 
 export type ActionScope = "renderer";
 
@@ -69,6 +69,21 @@ export type BuiltInActionId = BuiltInKeyAction | BuiltInRuntimeActionId;
 
 export type ActionId = BuiltInActionId | (string & {});
 
+/**
+ * Marks an action as on its way out, so a client can migrate before the removal
+ * rather than after it (#11549). Surfaced through the `mcp.surface` manifest —
+ * deliberately not through the tool description, which is model-facing prose an
+ * automated compatibility check cannot read.
+ *
+ * Presence is the whole signal: an action carrying this is deprecated, and one
+ * without it is not. `reason` is required because a deprecation nobody can act
+ * on is just a warning, and `replacedBy` names the successor when there is one.
+ */
+export interface ActionDeprecation {
+  reason: string;
+  replacedBy?: ActionId;
+}
+
 export interface ActionExample {
   args: Record<string, unknown>;
   description: string;
@@ -88,6 +103,16 @@ export interface ActionContext {
   focusedTerminalKind?: string;
   focusedTerminalType?: string;
   focusedTerminalTitle?: string;
+  /**
+   * The active workspace is a project OR a scratch — switching to one clears
+   * the other's pointer (#11076). Without these an action dispatched in a
+   * scratch sees no workspace at all, which is what left the file browser
+   * silently no-opping there (#11482). Project fields still win where both are
+   * briefly set, mirroring `resolveWorkspaceCwd`'s precedence.
+   */
+  scratchId?: string;
+  scratchName?: string;
+  scratchPath?: string;
   isSettingsOpen?: boolean;
   /**
    * The dispatch source for the in-flight `run()` call. Set by
@@ -134,6 +159,23 @@ export interface ActionDefinition<
    */
   denyPluginDispatch?: boolean;
   argsSchema?: S;
+  /**
+   * Runtime contract for what `run()` returns — enforced, not documentation.
+   * `ActionService.dispatch` parses every result through this schema before
+   * returning it, so unknown keys are stripped (zod objects default to
+   * `"strip"`) and the delivered payload matches the published projection.
+   * A result that fails to parse yields `RESULT_VALIDATION_ERROR`.
+   *
+   * Enforcement keys off this field's presence, NOT off `mcpOutputSchema` —
+   * the MCP text response serializes the same value whether or not the schema
+   * is advertised, so gating on the advertising flag would leave that path
+   * unfiltered.
+   *
+   * Constructs that opt out of stripping (`z.unknown()`, `z.any()`,
+   * `.catchall()`, `z.record(k, z.unknown())`, `z.union([X, z.unknown()])`)
+   * make the parse a no-op for the nodes they cover. `resultSchemaHygiene`
+   * fails on any new one that is not explicitly allowlisted with a reason.
+   */
   resultSchema?: z.ZodType<Result>;
   isEnabled?: (ctx: ActionContext) => boolean;
   disabledReason?: (ctx: ActionContext) => string | undefined;
@@ -160,6 +202,24 @@ export interface ActionDefinition<
    * doesn't belong in the palette (`hidden`).
    */
   palette?: PaletteBehavior;
+  /**
+   * Declares that *every* exception escaping `run()` has already produced a
+   * user-visible error notification. The action palette reads this (via
+   * `ActionService.selfNotifiesOnExecutionError`) to suppress its generic
+   * "Couldn't run '<title>'" toast for `EXECUTION_ERROR`, so the action's own
+   * specific toast isn't stacked underneath a vaguer duplicate.
+   *
+   * Renderer-local by design — deliberately *not* on `ActionManifestEntry`,
+   * since it describes renderer toast ownership and means nothing to MCP
+   * clients or plugin hosts.
+   *
+   * Only set this when the catch genuinely covers the whole run surface —
+   * including argument/precondition throws, which are easy to leave outside
+   * the `try`. A partial catch makes the claim false and silently swallows the
+   * uncovered failures at the palette. Errors raised *before* `run()` (arg
+   * validation, `NOT_FOUND`) carry a different code and still toast normally.
+   */
+  selfNotifiesOnExecutionError?: boolean;
   run: (args: InferActionArgs<S>, ctx: ActionContext) => Promise<Result>;
   /**
    * Opt-in allowlist of top-level arg keys that are safe to include in Sentry
@@ -214,13 +274,26 @@ export interface ActionDefinition<
    */
   mcpOutputSchema?: boolean;
   /**
-   * MCP progressive-disclosure visibility. `core` tools always appear on
-   * `tools/list`; `discoverable` tools are reachable via `actions.search` +
-   * `actions.getSchema` but omitted from the default list; `hidden` tools
-   * never surface in discovery. Unset (undefined) preserves pre-existing
-   * behavior (tool appears on `tools/list` when tier-permitted).
+   * MCP listing visibility, applied on top of the tier allowlist — never
+   * instead of it. `hidden` withholds the tool from `tools/list` *and* from
+   * introspection results; `core` is an advisory marker for the bootstrap
+   * cohort and does not itself grant or widen anything. Unset (the norm) means
+   * the tool is listed whenever its tier permits it.
+   *
+   * There is no lazy-loading tier here. `discoverable` used to promise that a
+   * tool omitted from `tools/list` stayed reachable through `actions.search` +
+   * `actions.getSchema`; #11585 established that no shipped client can act on
+   * that, so the value meant deletion while reading as deferral. To take a tool
+   * away from a caller class, remove it from that tier's allowlist — which
+   * revokes it at both the listing and dispatch gates, visibly.
    */
   mcpVisibility?: McpVisibility;
+  /**
+   * Marks the action as deprecated. Projected onto {@link ActionManifestEntry}
+   * and reported by `mcp.surface` so an MCP client can migrate ahead of the
+   * removal. See {@link ActionDeprecation}.
+   */
+  deprecated?: ActionDeprecation;
 }
 
 export interface ActionManifestEntry {
@@ -251,8 +324,10 @@ export interface ActionManifestEntry {
   dangerRationale?: string;
   /** Risk band derived from danger + open-world category. Read by consent dialogs. */
   band?: RiskBand;
-  /** MCP progressive-disclosure visibility classification. */
+  /** MCP listing visibility. Layered on the tier allowlist, never a substitute. */
   mcpVisibility?: McpVisibility;
+  /** Set when the action is deprecated. Reported by `mcp.surface` (#11549). */
+  deprecated?: ActionDeprecation;
   /**
    * Projected from {@link ActionDefinition.palette}. Palette-only — these are
    * read by the action-palette layer and ignored by `dispatch()`/MCP. See
@@ -284,6 +359,13 @@ export type ActionDispatchResult<Result = unknown> =
 export type ActionErrorCode =
   | "NOT_FOUND"
   | "VALIDATION_ERROR"
+  /**
+   * `run()` completed but its return value did not satisfy the action's own
+   * `resultSchema`. Distinct from `EXECUTION_ERROR` (which means `run()` threw)
+   * because the action's side effects DID happen — only the payload is
+   * unusable. Signals a bug in the action itself, not in the caller's request.
+   */
+  | "RESULT_VALIDATION_ERROR"
   | "DISABLED"
   | "RESTRICTED"
   | "CONFIRMATION_REQUIRED"

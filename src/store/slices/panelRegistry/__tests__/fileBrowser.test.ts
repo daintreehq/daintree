@@ -136,6 +136,52 @@ describe("setFileBrowserView", () => {
     expect(store.get().panelsById["panel-1"]).toBe(before);
   });
 
+  it("collapses and re-opens the viewer (#11496)", () => {
+    // The viewer flag needs its own unchanged-comparison in the setter. Folded
+    // into the sidebar's, a viewer-only patch would look unchanged and hit the
+    // bail-out, making every toggle click a silent no-op with nothing persisted.
+    setFileBrowserView("panel-1", { browserViewerCollapsed: true });
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserViewerCollapsed: true });
+
+    const collapsed = store.get().panelsById["panel-1"];
+    setFileBrowserView("panel-1", { browserViewerCollapsed: false });
+    expect(store.get().panelsById["panel-1"]).not.toBe(collapsed);
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserViewerCollapsed: false });
+  });
+
+  it("treats collapsing an already-open viewer with false as a no-op", () => {
+    const before = store.get().panelsById["panel-1"];
+
+    setFileBrowserView("panel-1", { browserViewerCollapsed: false });
+
+    expect(store.get().panelsById["panel-1"]).toBe(before);
+  });
+
+  it("writes the viewer flag without disturbing the sidebar's own state", () => {
+    // Two independent bits: a collapsed tree must survive a viewer patch, since
+    // the setter compares and merges them separately.
+    setFileBrowserView("panel-1", { browserSidebarCollapsed: true });
+    setFileBrowserView("panel-1", { browserViewerCollapsed: true });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({
+      browserSidebarCollapsed: true,
+      browserViewerCollapsed: true,
+    });
+  });
+
+  it("preserves selection, expansion and width when the viewer collapses", () => {
+    setFileBrowserView("panel-1", { browserSelectedPath: "src/app.ts" });
+    setFileBrowserView("panel-1", { browserSidebarWidth: 420 });
+    setFileBrowserView("panel-1", { browserViewerCollapsed: true });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({
+      browserViewerCollapsed: true,
+      browserSelectedPath: "src/app.ts",
+      browserExpandedPaths: ["src"],
+      browserSidebarWidth: 420,
+    });
+  });
+
   it("stores a tree snapshot and treats a deep-equal recapture as a no-op (#11367)", () => {
     const snapshot = {
       worktreeId: "wt-1",
@@ -258,6 +304,81 @@ describe("setFileBrowserView", () => {
     const before = store.get();
 
     setFileBrowserView("missing", { browserSelectedPath: "src/app.ts" });
+
+    expect(store.get()).toBe(before);
+  });
+});
+
+describe("setFileBrowserView sort fields (#11620)", () => {
+  let store: ReturnType<typeof makeSet>;
+  let setFileBrowserView: ReturnType<typeof createFileBrowserPanelActions>["setFileBrowserView"];
+
+  beforeEach(() => {
+    store = makeSet({
+      panelsById: { "panel-1": browserPanel() },
+      panelIds: ["panel-1"],
+    });
+    setFileBrowserView = createFileBrowserPanelActions(store.set).setFileBrowserView;
+  });
+
+  it("stores a non-default sort key and direction", () => {
+    setFileBrowserView("panel-1", { browserSortKey: "size", browserSortDirection: "desc" });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({
+      browserSortKey: "size",
+      browserSortDirection: "desc",
+    });
+  });
+
+  it("treats patching the default order onto a never-sorted panel as a no-op", () => {
+    // Absent and name/asc are the same state, so this must not dirty the panel
+    // record (and with it the persisted layout) for nothing.
+    const before = store.get();
+
+    setFileBrowserView("panel-1", { browserSortKey: "name", browserSortDirection: "asc" });
+
+    expect(store.get()).toBe(before);
+  });
+
+  it("commits a direction change even when the key is unchanged", () => {
+    // The direction gets its own comparison rather than riding the key's:
+    // folding them together would make every flip a silent no-op.
+    setFileBrowserView("panel-1", { browserSortKey: "name", browserSortDirection: "desc" });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserSortDirection: "desc" });
+  });
+
+  it("commits a key change even when the direction is unchanged", () => {
+    setFileBrowserView("panel-1", { browserSortKey: "type", browserSortDirection: "asc" });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({ browserSortKey: "type" });
+  });
+
+  it("writes both halves in one commit", () => {
+    // The pane always sends them together; a split write could land a key while
+    // its direction was still being judged unchanged.
+    setFileBrowserView("panel-1", { browserSortKey: "modified", browserSortDirection: "desc" });
+    const panel = store.get().panelsById["panel-1"];
+
+    expect(panel).toMatchObject({ browserSortKey: "modified", browserSortDirection: "desc" });
+  });
+
+  it("leaves an existing sort alone when the patch names neither field", () => {
+    setFileBrowserView("panel-1", { browserSortKey: "size", browserSortDirection: "desc" });
+    setFileBrowserView("panel-1", { browserSelectedPath: "src/app.ts" });
+
+    expect(store.get().panelsById["panel-1"]).toMatchObject({
+      browserSortKey: "size",
+      browserSortDirection: "desc",
+      browserSelectedPath: "src/app.ts",
+    });
+  });
+
+  it("is a no-op when re-patching the sort already in effect", () => {
+    setFileBrowserView("panel-1", { browserSortKey: "size", browserSortDirection: "desc" });
+    const before = store.get();
+
+    setFileBrowserView("panel-1", { browserSortKey: "size", browserSortDirection: "desc" });
 
     expect(store.get()).toBe(before);
   });

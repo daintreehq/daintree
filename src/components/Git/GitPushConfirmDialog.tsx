@@ -7,15 +7,12 @@ import { cn } from "@/lib/utils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
+import {
+  buildGitRemoteOperationPreview,
+  type GitPreviewCommit,
+} from "@/components/Git/gitRemoteOperationPreview";
 
-const COMMIT_LIMIT = 12;
 const SHORT_HASH_LEN = 7;
-
-interface PushPreviewCommit {
-  hash: string;
-  message: string;
-  author: string;
-}
 
 /**
  * D2 confirm for `git.push` dispatched from the action palette or a keybinding
@@ -30,7 +27,7 @@ function GitPushConfirmDialogInner() {
   const cwd = pendingConfirm?.cwd ?? null;
 
   const [branch, setBranch] = useState<string | null>(null);
-  const [commits, setCommits] = useState<PushPreviewCommit[] | null>(null);
+  const [commits, setCommits] = useState<GitPreviewCommit[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const requestIdRef = useRef(0);
@@ -44,20 +41,13 @@ function GitPushConfirmDialogInner() {
     setCommits(null);
 
     safeFireAndForget(
-      Promise.all([
-        window.electron.git.getStagingStatus(cwd),
-        window.electron.git.listCommits({ cwd, limit: COMMIT_LIMIT }),
-      ])
-        .then(([status, commitList]) => {
+      // Shared with the MCP confirm surface so agent and human approvers see
+      // the identical fresh branch/commit content (#11538).
+      buildGitRemoteOperationPreview(cwd)
+        .then((preview) => {
           if (requestIdRef.current !== requestId) return;
-          setBranch(status.currentBranch);
-          setCommits(
-            commitList.items.map((c) => ({
-              hash: c.hash,
-              message: c.message,
-              author: c.author.name,
-            }))
-          );
+          setBranch(preview.branch);
+          setCommits(preview.commits);
         })
         .catch((err: unknown) => {
           if (requestIdRef.current !== requestId) return;

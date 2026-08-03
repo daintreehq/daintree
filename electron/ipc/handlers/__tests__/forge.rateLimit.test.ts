@@ -41,8 +41,10 @@ const fakeImpl = vi.hoisted(() => ({
   listPRs: vi.fn(),
   getIssue: vi.fn(),
   getPR: vi.fn(),
+  getCIStatus: vi.fn(),
   getRepoMetadata: vi.fn(),
   repoStats: { getRepoStats: vi.fn() },
+  issueComments: { listIssueComments: vi.fn() },
   reviews: {
     getReviewThreads: vi.fn(),
     approvePR: vi.fn(),
@@ -146,6 +148,10 @@ describe("forge handlers — rate limiting", () => {
       counts: { issueCount: 0, prCount: 0 },
       source: "memory-cache",
     });
+    // `null` (PR not found) is the only valid no-op CI response — the handler
+    // rejects an undefined provider result as malformed, so this stub must be
+    // explicit rather than relying on the bare mock's undefined.
+    fakeImpl.getCIStatus.mockResolvedValue(null);
     fakeImpl.assignIssue.mockResolvedValue(undefined);
     fakeImpl.unassignIssue.mockResolvedValue(undefined);
     const fakePR = {
@@ -521,6 +527,15 @@ describe("forge handlers — rate limiting", () => {
         invoke: (h) => h({}, { cwd, issueNumber: 1 }),
       },
       { channel: CHANNELS.FORGE_GET_PR, maxCalls: 25, invoke: (h) => h({}, { cwd, prNumber: 1 }) },
+      {
+        channel: CHANNELS.FORGE_GET_CI_STATUS,
+        maxCalls: 25,
+        // Safe to reuse one PR number across the spec loops even though the CI
+        // single-flight is module-scoped: checkRateLimit runs before the
+        // coalescer, so a collapsed lookup still exercises the guard. (If the
+        // guard is ever moved inside the single-flight, that stops holding.)
+        invoke: (h) => h({}, { cwd, prNumber: 8101 }),
+      },
       // token + mutation family: 5/10s (matches github:validate-token / assign-issue)
       {
         channel: CHANNELS.FORGE_VALIDATE_TOKEN,
@@ -642,6 +657,11 @@ describe("forge handlers — rate limiting", () => {
         maxCalls: 10,
         invoke: (h) => h({}, { cwd, prNumber: 1 }),
       },
+      {
+        channel: CHANNELS.FORGE_LIST_ISSUE_COMMENTS,
+        maxCalls: 10,
+        invoke: (h) => h({}, { cwd, issueNumber: 1 }),
+      },
       // tooltip + batch lookups: 20/10s (matches github:get-*-tooltip / by-numbers)
       {
         channel: CHANNELS.FORGE_GET_ISSUE_TOOLTIP,
@@ -678,12 +698,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (44 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(44);
+    it("registers all forge channels (46 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(46);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(46);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(48);
     });
 
     it.each(specs)(
@@ -708,4 +728,137 @@ describe("forge handlers — rate limiting", () => {
       }
     );
   });
+});
+
+describe("forge write handlers forward the provider result (#11546)", () => {
+  // Each handler changed from `await auditForgeCall(...)` to
+  // `return auditForgeCall(...)`. Distinct sentinels per method mean a handler
+  // that swallows its result, or forwards the wrong provider call's, fails
+  // here — the type annotations alone can't catch a dropped `return`.
+  const sentinels = {
+    assignIssue: [{ login: "assignee-sentinel", avatarUrl: undefined, rawData: null }],
+    unassignIssue: [],
+    closePR: { sentinel: "closePR" },
+    reopenPR: { sentinel: "reopenPR" },
+    mergePR: { prNumber: 1, sha: "sha-sentinel", merged: true, message: "merged" },
+    convertPRToDraft: { prNumber: 1, isDraft: true },
+    markPRReadyForReview: { prNumber: 1, isDraft: false },
+    commentOnPR: { sentinel: "commentOnPR" },
+  } as const;
+
+  const reviewSentinels = {
+    approvePR: { sentinel: "approvePR" },
+    requestChanges: { sentinel: "requestChanges" },
+    dismissReview: { sentinel: "dismissReview" },
+    requestReviewers: { prNumber: 1, requestedUsers: ["u"], requestedTeams: [] },
+  } as const;
+
+  const cases: Array<{
+    name: string;
+    channel: string;
+    expected: unknown;
+    invoke: (h: (...a: unknown[]) => Promise<unknown>) => Promise<unknown>;
+  }> = [
+    {
+      name: "assignIssue",
+      channel: CHANNELS.FORGE_ASSIGN_ISSUE,
+      expected: sentinels.assignIssue,
+      invoke: (h) => h({}, { cwd: "/repo", issueNumber: 1, username: "octocat" }),
+    },
+    {
+      name: "unassignIssue",
+      channel: CHANNELS.FORGE_UNASSIGN_ISSUE,
+      expected: sentinels.unassignIssue,
+      invoke: (h) => h({}, { cwd: "/repo", issueNumber: 1, username: "octocat" }),
+    },
+    {
+      name: "closePR",
+      channel: CHANNELS.FORGE_CLOSE_PR,
+      expected: sentinels.closePR,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1 }),
+    },
+    {
+      name: "reopenPR",
+      channel: CHANNELS.FORGE_REOPEN_PR,
+      expected: sentinels.reopenPR,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1 }),
+    },
+    {
+      name: "mergePR",
+      channel: CHANNELS.FORGE_MERGE_PR,
+      expected: sentinels.mergePR,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1 }),
+    },
+    {
+      name: "convertPRToDraft",
+      channel: CHANNELS.FORGE_CONVERT_PR_TO_DRAFT,
+      expected: sentinels.convertPRToDraft,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1 }),
+    },
+    {
+      name: "markPRReadyForReview",
+      channel: CHANNELS.FORGE_MARK_PR_READY_FOR_REVIEW,
+      expected: sentinels.markPRReadyForReview,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1 }),
+    },
+    {
+      name: "commentOnPR",
+      channel: CHANNELS.FORGE_COMMENT_ON_PR,
+      expected: sentinels.commentOnPR,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1, body: "hi" }),
+    },
+    {
+      name: "approvePR",
+      channel: CHANNELS.FORGE_APPROVE_PR,
+      expected: reviewSentinels.approvePR,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1 }),
+    },
+    {
+      name: "requestChanges",
+      channel: CHANNELS.FORGE_REQUEST_CHANGES,
+      expected: reviewSentinels.requestChanges,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1, body: "fix" }),
+    },
+    {
+      name: "dismissReview",
+      channel: CHANNELS.FORGE_DISMISS_REVIEW,
+      expected: reviewSentinels.dismissReview,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1, reviewId: 9, message: "stale" }),
+    },
+    {
+      name: "requestReviewers",
+      channel: CHANNELS.FORGE_REQUEST_REVIEWERS,
+      expected: reviewSentinels.requestReviewers,
+      invoke: (h) => h({}, { cwd: "/repo", prNumber: 1, users: ["octocat"] }),
+    },
+  ];
+
+  beforeEach(() => {
+    // Self-contained: this describe is a sibling of the rate-limit suite, so it
+    // must register its own handlers and resolution rather than inherit them —
+    // otherwise it only passes when the other suite has run first.
+    vi.clearAllMocks();
+    registeredProvidersMock.length = 0;
+    registeredProvidersMock.push({ pluginId: "fake-plugin", contribution: { id: "fake" } });
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake-plugin.fake",
+      providerId: "fake",
+      repoRef,
+      impl: fakeImpl as unknown as ForgeProviderImpl,
+    });
+    for (const [method, value] of Object.entries(sentinels)) {
+      (fakeImpl[method as keyof typeof sentinels] as Mock).mockResolvedValue(value);
+    }
+    for (const [method, value] of Object.entries(reviewSentinels)) {
+      (fakeImpl.reviews[method as keyof typeof reviewSentinels] as Mock).mockResolvedValue(value);
+    }
+    registerForgeHandlers();
+  });
+
+  it.each(cases)(
+    "$name resolves to the provider's result",
+    async ({ channel, expected, invoke }) => {
+      await expect(invoke(getInvokeHandler(channel))).resolves.toEqual(expected);
+    }
+  );
 });

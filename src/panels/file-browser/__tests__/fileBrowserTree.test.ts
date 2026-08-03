@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 import type { FileTreeNode } from "@shared/types";
 import {
   ancestorDirectories,
+  buildFolderListingRows,
   canonicalizeRootPath,
   createVisibilityFilter,
+  DEFAULT_FILE_SORT,
+  findNodeInListings,
+  parentDirectoryOf,
   flattenTree,
   isRowPathVisible,
   listingsFromSnapshot,
+  sortFileNodes,
   MAX_SNAPSHOT_LISTINGS,
   MAX_SNAPSHOT_NODES,
   MAX_SNAPSHOT_TEXT_CHARS,
@@ -15,6 +20,9 @@ import {
   refreshTargets,
   resolveTreeKey,
   snapshotFromListings,
+  snapshotMatchesSource,
+  sourceIdentityKey,
+  type FileBrowserSource,
   type FlatTreeRow,
 } from "../fileBrowserTree";
 
@@ -483,6 +491,9 @@ describe("isRowPathVisible", () => {
   });
 });
 
+const WT_SOURCE = { kind: "worktree", worktreeId: "wt-1", basePath: "/repo" } as const;
+const WS_SOURCE = { kind: "workspace", basePath: "/scratch/abc" } as const;
+
 describe("snapshotFromListings", () => {
   it("captures structure only — size and children never reach the snapshot", () => {
     const listings = listingsOf({
@@ -490,10 +501,11 @@ describe("snapshotFromListings", () => {
       src: [{ name: "app.ts", path: "src/app.ts", isDirectory: false, size: 99, children: [] }],
     });
 
-    const snapshot = snapshotFromListings(listings, "wt-1", "");
+    const snapshot = snapshotFromListings(listings, WT_SOURCE, "");
 
     expect(snapshot).toEqual({
       worktreeId: "wt-1",
+      basePath: "/repo",
       rootPath: "",
       listings: [
         {
@@ -513,14 +525,17 @@ describe("snapshotFromListings", () => {
 
   it("returns null before the root listing has ever arrived", () => {
     // Only a non-root directory somehow present: nothing worth painting from.
-    expect(snapshotFromListings(listingsOf({ src: [file("src/app.ts")] }), "wt-1", "")).toBeNull();
-    expect(snapshotFromListings(new Map(), "wt-1", "")).toBeNull();
+    expect(
+      snapshotFromListings(listingsOf({ src: [file("src/app.ts")] }), WT_SOURCE, "")
+    ).toBeNull();
+    expect(snapshotFromListings(new Map(), WT_SOURCE, "")).toBeNull();
   });
 
   it("keeps an empty root listing — an empty worktree is a real last-known state", () => {
-    const snapshot = snapshotFromListings(listingsOf({ "": [] }), "wt-1", "");
+    const snapshot = snapshotFromListings(listingsOf({ "": [] }), WT_SOURCE, "");
     expect(snapshot).toEqual({
       worktreeId: "wt-1",
+      basePath: "/repo",
       rootPath: "",
       listings: [{ dirPath: "", nodes: [] }],
     });
@@ -539,14 +554,14 @@ describe("snapshotFromListings", () => {
     ]);
 
     // The persistence layer's dirty diff depends on this to skip no-op writes.
-    expect(snapshotFromListings(a, "wt-1", "")).toEqual(snapshotFromListings(b, "wt-1", ""));
+    expect(snapshotFromListings(a, WT_SOURCE, "")).toEqual(snapshotFromListings(b, WT_SOURCE, ""));
   });
 
   it("returns null rather than truncating when the tree exceeds the persistence bounds", () => {
     const wideRoot = listingsOf({
       "": Array.from({ length: MAX_SNAPSHOT_NODES + 1 }, (_, i) => file(`f-${i}`)),
     });
-    expect(snapshotFromListings(wideRoot, "wt-1", "")).toBeNull();
+    expect(snapshotFromListings(wideRoot, WT_SOURCE, "")).toBeNull();
 
     const manyListings = new Map([
       ["", [dir("d-0")]],
@@ -555,7 +570,7 @@ describe("snapshotFromListings", () => {
         [],
       ]),
     ]);
-    expect(snapshotFromListings(manyListings, "wt-1", "")).toBeNull();
+    expect(snapshotFromListings(manyListings, WT_SOURCE, "")).toBeNull();
   });
 
   it("returns null when aggregate text exceeds the byte budget, independent of node count", () => {
@@ -565,16 +580,83 @@ describe("snapshotFromListings", () => {
     const listings = listingsOf({
       "": Array.from({ length: 100 }, (_, i) => file(`${longName}-${i}`)),
     });
-    expect(snapshotFromListings(listings, "wt-1", "")).toBeNull();
+    expect(snapshotFromListings(listings, WT_SOURCE, "")).toBeNull();
   });
 
   it("captures relative to a re-rooted browse root", () => {
     const listings = listingsOf({ src: [file("src/app.ts")] });
-    const snapshot = snapshotFromListings(listings, "wt-1", "src");
+    const snapshot = snapshotFromListings(listings, WT_SOURCE, "src");
     expect(snapshot?.rootPath).toBe("src");
     expect(snapshot?.listings).toEqual([
       { dirPath: "src", nodes: [{ name: "app.ts", path: "src/app.ts", isDirectory: false }] },
     ]);
+  });
+
+  it("tags a workspace capture with its base and no worktree id", () => {
+    const snapshot = snapshotFromListings(listingsOf({ "": [file("a.txt")] }), WS_SOURCE, "");
+    // The absent worktree id is the identity, not a missing field: it is what
+    // distinguishes a workspace-rooted snapshot from a worktree one (#11482).
+    expect(snapshot?.worktreeId).toBeUndefined();
+    expect(snapshot?.basePath).toBe("/scratch/abc");
+  });
+});
+
+describe("snapshotMatchesSource", () => {
+  const snapshotOf = (source: FileBrowserSource, rootPath = "") =>
+    snapshotFromListings(listingsOf({ [rootPath]: [file("a.txt")] }), source, rootPath)!;
+
+  it("matches a snapshot against the identity it was captured under", () => {
+    expect(snapshotMatchesSource(snapshotOf(WT_SOURCE), WT_SOURCE, "")).toBe(true);
+    expect(snapshotMatchesSource(snapshotOf(WS_SOURCE), WS_SOURCE, "")).toBe(true);
+  });
+
+  it("refuses to seed a workspace tree from a worktree snapshot and vice versa", () => {
+    // Both live on the same panel record across a re-root, so a cross-kind
+    // seed would paint another folder's entries as this one's.
+    expect(snapshotMatchesSource(snapshotOf(WT_SOURCE), WS_SOURCE, "")).toBe(false);
+    expect(snapshotMatchesSource(snapshotOf(WS_SOURCE), WT_SOURCE, "")).toBe(false);
+  });
+
+  it("refuses a workspace snapshot whose base has moved", () => {
+    // A relocated project keeps its id, so the base is the only thing that
+    // catches it; cold-starting is the correct self-healing outcome.
+    const moved = { kind: "workspace", basePath: "/scratch/moved" } as const;
+    expect(snapshotMatchesSource(snapshotOf(WS_SOURCE), moved, "")).toBe(false);
+  });
+
+  it("accepts a legacy snapshot that predates the base tag", () => {
+    // Written before `basePath` existed; its worktree id already pins identity,
+    // so dropping it would cost every restored panel its instant paint.
+    const { basePath: _dropped, ...legacy } = snapshotOf(WT_SOURCE);
+    expect(snapshotMatchesSource(legacy, WT_SOURCE, "")).toBe(true);
+  });
+
+  it("refuses an identity-less snapshot rather than matching every workspace", () => {
+    // No worktree id and no base: the legacy tolerance must not extend here, or
+    // a corrupt record would paint its rows in any workspace at all.
+    const { basePath: _dropped, ...untagged } = snapshotOf(WS_SOURCE);
+    expect(snapshotMatchesSource(untagged, WS_SOURCE, "")).toBe(false);
+  });
+
+  it("refuses a snapshot captured at a different browse root", () => {
+    expect(snapshotMatchesSource(snapshotOf(WT_SOURCE, "src"), WT_SOURCE, "")).toBe(false);
+  });
+});
+
+describe("sourceIdentityKey", () => {
+  it("separates a worktree from a workspace sharing the same path", () => {
+    // The kind is part of the key so opening a project root and a worktree
+    // that happens to live at the same path aren't one identity.
+    const key = sourceIdentityKey({ kind: "worktree", worktreeId: "/repo", basePath: "/repo" });
+    expect(key).not.toBe(sourceIdentityKey({ kind: "workspace", basePath: "/repo" }));
+  });
+
+  it("changes whenever the tree must reset, and only then", () => {
+    const a = { kind: "workspace", basePath: "/scratches/one" } as const;
+    // A rebuilt-but-equivalent source keeps the same key, so the pane's
+    // per-render object churn can't reset the tree; a real move changes it.
+    expect(sourceIdentityKey({ ...a })).toBe(sourceIdentityKey(a));
+    expect(sourceIdentityKey({ ...a, basePath: "/scratches/two" })).not.toBe(sourceIdentityKey(a));
   });
 });
 
@@ -585,12 +667,370 @@ describe("listingsFromSnapshot", () => {
       src: [file("src/app.ts")],
     });
 
-    const snapshot = snapshotFromListings(listings, "wt-1", "");
+    const snapshot = snapshotFromListings(listings, WT_SOURCE, "");
     const restored = listingsFromSnapshot(snapshot!);
 
     // The restored map must flatten to the same rows the live tree showed.
     expect(pathsOf(flattenTree(restored, new Set(["src"]), new Set()))).toEqual(
       pathsOf(flattenTree(listings, new Set(["src"]), new Set()))
+    );
+  });
+});
+
+describe("sortFileNodes", () => {
+  const SORT_NAME_DESC = { key: "name", direction: "desc" } as const;
+  const SORT_SIZE_ASC = { key: "size", direction: "asc" } as const;
+  const SORT_SIZE_DESC = { key: "size", direction: "desc" } as const;
+  const SORT_MODIFIED_DESC = { key: "modified", direction: "desc" } as const;
+  const SORT_TYPE_ASC = { key: "type", direction: "asc" } as const;
+
+  it("returns the input array itself for the default order", () => {
+    // Identity, not just equality: the service already emits this order, so the
+    // default path must allocate nothing and keep the memoized rows stable.
+    const nodes = [dir("src"), file("a.ts")];
+    expect(sortFileNodes(nodes, DEFAULT_FILE_SORT)).toBe(nodes);
+  });
+
+  it("keeps directories ahead of files in both directions", () => {
+    const nodes = [file("b.ts", { size: 1 }), dir("zz"), file("a.ts", { size: 9 })];
+    for (const sort of [SORT_SIZE_ASC, SORT_SIZE_DESC, SORT_NAME_DESC]) {
+      const sorted = sortFileNodes(nodes, sort);
+      expect(sorted[0]?.isDirectory).toBe(true);
+      expect(sorted.slice(1).every((node) => !node.isDirectory)).toBe(true);
+    }
+  });
+
+  it("orders files by size and reverses on descending", () => {
+    const nodes = [
+      file("big.ts", { size: 300 }),
+      file("mid.ts", { size: 20 }),
+      file("sm.ts", { size: 1 }),
+    ];
+    expect(sortFileNodes(nodes, SORT_SIZE_ASC).map((n) => n.name)).toEqual([
+      "sm.ts",
+      "mid.ts",
+      "big.ts",
+    ]);
+    expect(sortFileNodes(nodes, SORT_SIZE_DESC).map((n) => n.name)).toEqual([
+      "big.ts",
+      "mid.ts",
+      "sm.ts",
+    ]);
+  });
+
+  it("sorts nodes with no size last in BOTH directions", () => {
+    // A snapshot-restored node carries no size. It is missing data, not a small
+    // value, so a descending sort must not float it to the top.
+    const nodes = [
+      file("known.ts", { size: 10 }),
+      file("unknown.ts"),
+      file("other.ts", { size: 2 }),
+    ];
+    expect(sortFileNodes(nodes, SORT_SIZE_ASC).at(-1)?.name).toBe("unknown.ts");
+    expect(sortFileNodes(nodes, SORT_SIZE_DESC).at(-1)?.name).toBe("unknown.ts");
+  });
+
+  it("sorts nodes with no mtime last in BOTH directions", () => {
+    const nodes = [
+      file("new.ts", { mtimeMs: 900 }),
+      file("stale.ts"),
+      file("old.ts", { mtimeMs: 5 }),
+    ];
+    expect(sortFileNodes(nodes, { key: "modified", direction: "asc" }).at(-1)?.name).toBe(
+      "stale.ts"
+    );
+    expect(sortFileNodes(nodes, SORT_MODIFIED_DESC).at(-1)?.name).toBe("stale.ts");
+  });
+
+  it("falls back to name order when every node lacks the sorted field", () => {
+    // The restored-panel case: structure-only nodes must still land in a
+    // sensible, deterministic order rather than whatever the map iterated.
+    const nodes = [file("c.ts"), file("a.ts"), file("b.ts")];
+    expect(sortFileNodes(nodes, SORT_SIZE_ASC).map((n) => n.name)).toEqual([
+      "a.ts",
+      "b.ts",
+      "c.ts",
+    ]);
+  });
+
+  it("groups by extension when sorting by type", () => {
+    const nodes = [file("b.ts"), file("a.md"), file("c.ts"), file("d.md")];
+    expect(sortFileNodes(nodes, SORT_TYPE_ASC).map((n) => n.name)).toEqual([
+      "a.md",
+      "d.md",
+      "b.ts",
+      "c.ts",
+    ]);
+  });
+
+  it("treats a dotfile as having no extension rather than splitting its name", () => {
+    const nodes = [file("a.ts"), file(".gitignore")];
+    // "" sorts before "ts", so the dotfile leads — it is not filed under
+    // "gitignore" as a type.
+    expect(sortFileNodes(nodes, SORT_TYPE_ASC).map((n) => n.name)).toEqual([".gitignore", "a.ts"]);
+  });
+
+  it("breaks ties on name in the same direction as the primary key", () => {
+    const nodes = [file("a.ts", { size: 5 }), file("b.ts", { size: 5 })];
+    expect(sortFileNodes(nodes, SORT_SIZE_ASC).map((n) => n.name)).toEqual(["a.ts", "b.ts"]);
+    expect(sortFileNodes(nodes, SORT_SIZE_DESC).map((n) => n.name)).toEqual(["b.ts", "a.ts"]);
+  });
+
+  it("does not mutate the array it was given", () => {
+    // The listings map it reads from is what gets persisted and what unsorted
+    // consumers read, so sorting has to be non-destructive.
+    const nodes = [file("b.ts", { size: 2 }), file("a.ts", { size: 1 })];
+    const before = nodes.map((n) => n.name);
+    sortFileNodes(nodes, SORT_SIZE_DESC);
+    expect(nodes.map((n) => n.name)).toEqual(before);
+  });
+});
+
+describe("flattenTree sorting", () => {
+  it("orders each level independently rather than across the whole tree", () => {
+    const listings = listingsOf({
+      "": [dir("src"), file("z.ts", { size: 1 })],
+      src: [file("src/b.ts", { size: 900 }), file("src/a.ts", { size: 2 })],
+    });
+
+    const rows = flattenTree(listings, new Set(["src"]), new Set(), "", undefined, {
+      key: "size",
+      direction: "desc",
+    });
+
+    // The root's own entries are ordered among themselves (dir first, then the
+    // file); src's children are ordered among themselves — the 900-byte child
+    // does not jump above the root-level file.
+    expect(pathsOf(rows)).toEqual(["src", "src/b.ts", "src/a.ts", "z.ts"]);
+  });
+
+  it("leaves the tree in service order for the default sort", () => {
+    const listings = listingsOf({ "": [dir("src"), file("a.ts", { size: 500 })] });
+    expect(
+      pathsOf(flattenTree(listings, new Set(), new Set(), "", undefined, DEFAULT_FILE_SORT))
+    ).toEqual(pathsOf(flattenTree(listings, new Set(), new Set())));
+  });
+});
+
+describe("buildFolderListingRows", () => {
+  it("returns null for a directory that has not been listed", () => {
+    // Distinguishable from an empty array on purpose: null is "still pending",
+    // [] is "this folder really holds nothing".
+    expect(buildFolderListingRows(listingsOf({ "": [dir("src")] }), "src")).toBeNull();
+  });
+
+  it("returns an empty array for a listed but empty directory", () => {
+    expect(buildFolderListingRows(listingsOf({ "": [dir("src")], src: [] }), "src")).toEqual([]);
+  });
+
+  it("carries size and mtime through, and omits them when absent", () => {
+    const listings = listingsOf({
+      src: [file("src/a.ts", { size: 12, mtimeMs: 1_700_000 }), file("src/b.ts")],
+    });
+    const rows = buildFolderListingRows(listings, "src")!;
+    expect(rows[0]).toMatchObject({ path: "src/a.ts", size: 12, mtimeMs: 1_700_000 });
+    expect(rows[1]?.size).toBeUndefined();
+    expect(rows[1]?.mtimeMs).toBeUndefined();
+  });
+
+  it("applies the same visibility filter the tree uses", () => {
+    const listings = listingsOf({ src: [file("src/.env"), file("src/a.ts")] });
+    const isVisible = createVisibilityFilter({ hideDotfiles: true, alwaysHiddenPatterns: [] });
+    expect(buildFolderListingRows(listings, "src", isVisible)!.map((r) => r.name)).toEqual([
+      "a.ts",
+    ]);
+  });
+
+  it("counts a child folder's items only when that folder is already cached", () => {
+    const listings = listingsOf({
+      src: [dir("src/known"), dir("src/unknown")],
+      "src/known": [file("src/known/a.ts"), file("src/known/b.ts")],
+    });
+    const rows = buildFolderListingRows(listings, "src")!;
+    expect(rows.find((r) => r.name === "known")?.itemCount).toBe(2);
+    // Never fetched, never walked — the column says nothing rather than "0".
+    expect(rows.find((r) => r.name === "unknown")?.itemCount).toBeUndefined();
+  });
+
+  it("counts only the visible entries of a child folder", () => {
+    const listings = listingsOf({
+      src: [dir("src/nested")],
+      "src/nested": [file("src/nested/.env"), file("src/nested/a.ts")],
+    });
+    const isVisible = createVisibilityFilter({ hideDotfiles: true, alwaysHiddenPatterns: [] });
+    // The count has to agree with what opening the folder would actually show.
+    expect(buildFolderListingRows(listings, "src", isVisible)![0]?.itemCount).toBe(1);
+  });
+
+  it("never reports a byte size for a directory row", () => {
+    const listings = listingsOf({ src: [dir("src/nested")] });
+    expect(buildFolderListingRows(listings, "src")![0]?.size).toBeUndefined();
+  });
+
+  it("orders rows by the requested sort, folders first", () => {
+    const listings = listingsOf({
+      src: [file("src/a.ts", { size: 1 }), dir("src/z"), file("src/b.ts", { size: 900 })],
+    });
+    const rows = buildFolderListingRows(listings, "src", undefined, {
+      key: "size",
+      direction: "desc",
+    })!;
+    expect(rows.map((r) => r.name)).toEqual(["z", "b.ts", "a.ts"]);
+  });
+});
+
+describe("findNodeInListings", () => {
+  it("resolves a node through its parent directory's listing", () => {
+    const listings = listingsOf({ "": [dir("src")], src: [file("src/a.ts", { size: 4 })] });
+    expect(findNodeInListings(listings, "src/a.ts")?.size).toBe(4);
+  });
+
+  it("resolves a root-level entry", () => {
+    expect(findNodeInListings(listingsOf({ "": [dir("src")] }), "src")?.isDirectory).toBe(true);
+  });
+
+  it("returns undefined when the parent directory has not been listed", () => {
+    // The pruned-parent case: unknown, which the caller must not treat as a file.
+    expect(findNodeInListings(listingsOf({ "": [dir("src")] }), "src/a.ts")).toBeUndefined();
+  });
+
+  it("answers for an entry whose parent is not expanded in the tree", () => {
+    // The whole reason this exists: the folder listing selects entries the tree
+    // has no row for, and those must still resolve to a real kind.
+    const listings = listingsOf({ "": [dir("src")], src: [file("src/deep.ts")] });
+    const rows = flattenTree(listings, new Set(), new Set());
+    expect(pathsOf(rows)).not.toContain("src/deep.ts");
+    expect(findNodeInListings(listings, "src/deep.ts")?.isDirectory).toBe(false);
+  });
+});
+
+describe("pruneListings keepPath", () => {
+  it("retains the folder being listed even when it is not expanded", () => {
+    const listings = listingsOf({
+      "": [dir("src")],
+      src: [file("src/a.ts")],
+    });
+    expect([...pruneListings(listings, new Set(), "", ["src"]).keys()]).toEqual(["", "src"]);
+  });
+
+  it("still drops other collapsed directories alongside the retained one", () => {
+    const listings = listingsOf({
+      "": [dir("src"), dir("docs")],
+      src: [file("src/a.ts")],
+      docs: [file("docs/b.md")],
+    });
+    expect([...pruneListings(listings, new Set(), "", ["src"]).keys()]).toEqual(["", "src"]);
+  });
+
+  it("drops everything but the root when no folder is being listed", () => {
+    const listings = listingsOf({ "": [dir("src")], src: [file("src/a.ts")] });
+    expect([...pruneListings(listings, new Set(), "").keys()]).toEqual([""]);
+  });
+});
+
+describe("refreshTargets keepPath", () => {
+  it("re-lists the folder being viewed even though it is collapsed", () => {
+    const listings = listingsOf({ "": [dir("src")], src: [file("src/a.ts")] });
+    expect(refreshTargets(listings, new Set(), "", undefined, "src")).toEqual(["", "src"]);
+  });
+
+  it("does not list the viewed folder twice when it is also expanded", () => {
+    const listings = listingsOf({ "": [dir("src")], src: [file("src/a.ts")] });
+    expect(refreshTargets(listings, new Set(["src"]), "", undefined, "src")).toEqual(["", "src"]);
+  });
+
+  it("does not duplicate the root when the root itself is being viewed", () => {
+    const listings = listingsOf({ "": [dir("src")] });
+    expect(refreshTargets(listings, new Set(), "", undefined, "")).toEqual([""]);
+  });
+});
+
+describe("parentDirectoryOf", () => {
+  it("names the directory a path lives in", () => {
+    expect(parentDirectoryOf("src/lib/util.ts")).toBe("src/lib");
+  });
+
+  it("returns the root for a top-level entry", () => {
+    expect(parentDirectoryOf("README.md")).toBe("");
+  });
+});
+
+describe("pruneListings retains what the selection needs", () => {
+  it("keeps the parent that answers what a selected file is", () => {
+    // Clicking a file inside a folder listing turns that folder from "being
+    // listed" into "merely the parent". Dropping it right then would forget the
+    // file's own kind at the exact moment it was selected — the viewer would
+    // blank on the click that was supposed to open it.
+    const listings = listingsOf({ "": [dir("src")], src: [file("src/a.ts")] });
+    expect([...pruneListings(listings, new Set(), "", ["src"]).keys()]).toContain("src");
+  });
+
+  it("keeps both the listed folder and the selection's parent at once", () => {
+    const listings = listingsOf({
+      "": [dir("src"), dir("docs")],
+      src: [file("src/a.ts")],
+      docs: [file("docs/b.md")],
+    });
+    expect([...pruneListings(listings, new Set(), "", ["docs", "src"]).keys()].sort()).toEqual([
+      "",
+      "docs",
+      "src",
+    ]);
+  });
+
+  it("still drops a collapsed directory nothing is depending on", () => {
+    const listings = listingsOf({
+      "": [dir("src"), dir("docs")],
+      src: [file("src/a.ts")],
+      docs: [file("docs/b.md")],
+    });
+    expect([...pruneListings(listings, new Set(), "", ["src"]).keys()]).toEqual(["", "src"]);
+  });
+});
+
+describe("sortFileNodes stays a valid total order", () => {
+  // A comparator that is not antisymmetric is undefined behaviour for
+  // Array.prototype.sort, so these are laws, not preferences. Corrupt metadata
+  // is the realistic source: a hand-edited or migrated record can carry a value
+  // the filesystem would never produce.
+  const ODD_VALUES = [undefined, 0, 1, 1024, Number.NaN, Infinity, -Infinity];
+
+  function nodesFor(key: "size" | "modified") {
+    return ODD_VALUES.map((value, index) =>
+      file(`f${index}.ts`, value === undefined ? {} : { [key]: value })
+    );
+  }
+
+  for (const key of ["size", "modified"] as const) {
+    for (const direction of ["asc", "desc"] as const) {
+      it(`is antisymmetric for ${key}/${direction} across corrupt values`, () => {
+        const nodes = nodesFor(key);
+        const sorted = sortFileNodes(nodes, { key, direction });
+        // Sorting is deterministic and stable across repeats — the observable
+        // consequence of a consistent comparator.
+        expect(sortFileNodes(nodes, { key, direction }).map((n) => n.name)).toEqual(
+          sorted.map((n) => n.name)
+        );
+        // And reversing the input cannot change the result of a total order.
+        expect(sortFileNodes([...nodes].reverse(), { key, direction }).map((n) => n.name)).toEqual(
+          sorted.map((n) => n.name)
+        );
+      });
+    }
+  }
+
+  it("treats a NaN size as unknown rather than as a value", () => {
+    // NaN compares false against everything including itself; left in-band it
+    // would make the comparator report `a > b` and `b > a` at once.
+    const nodes = [file("nan.ts", { size: Number.NaN }), file("real.ts", { size: 5 })];
+    expect(sortFileNodes(nodes, { key: "size", direction: "asc" }).at(-1)?.name).toBe("nan.ts");
+    expect(sortFileNodes(nodes, { key: "size", direction: "desc" }).at(-1)?.name).toBe("nan.ts");
+  });
+
+  it("treats an infinite mtime as unknown rather than as the newest file", () => {
+    const nodes = [file("inf.ts", { mtimeMs: Infinity }), file("real.ts", { mtimeMs: 5 })];
+    expect(sortFileNodes(nodes, { key: "modified", direction: "desc" }).at(-1)?.name).toBe(
+      "inf.ts"
     );
   });
 });

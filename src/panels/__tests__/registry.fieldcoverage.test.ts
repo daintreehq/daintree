@@ -281,11 +281,21 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   browserHideDotfiles: true,
   browserRootPath: true,
   browserSidebarCollapsed: true,
+  browserViewerCollapsed: true,
   // The one derived persisted field: the last-known tree snapshot (#11367)
   // must ride the panel record because nothing renderer-side survives LRU
   // eviction.
   browserTreeSnapshot: true,
   browserSidebarWidth: true,
+  // Which folder the panel browses. Derivable from an absent `worktreeId` only
+  // at creation — a promoted panel carries an adopted placement id by save time
+  // (#11489) — so it has to ride the record like any other user intent.
+  browserWorkspaceRooted: true,
+  // What the tree and the folder listing are ordered by (#11620). User intent,
+  // chosen from the toolbar menu, so it rides the record — only a non-default
+  // value is written, which keeps a never-sorted panel sparse.
+  browserSortKey: true,
+  browserSortDirection: true,
   // BasePanelData carrier-bookkeeping timestamps — written by the base
   // serialization layer in panelToSnapshot, not per-kind serializers.
   createdAt: false,
@@ -472,11 +482,21 @@ const fileBrowserFixture: FileBrowserPanelData = {
   browserExpandedPaths: ["src"],
   browserHideDotfiles: true,
   browserRootPath: "src",
+  // Both collapse bits, which is not a state the UI can reach but is exactly
+  // what persistence must round-trip unaltered: the two fields are independent
+  // on disk, and the pane resolves the pair at read time (#11496).
   browserSidebarCollapsed: true,
+  browserViewerCollapsed: true,
   browserTreeSnapshot: browserTreeSnapshotFixture,
   // A non-default width (the serializer omits 288), so the coverage spread emits
   // the key instead of dropping it as a default.
   browserSidebarWidth: 360,
+  browserWorkspaceRooted: true,
+  // A non-default order for the same reason as the width above: the serializer
+  // omits name/ascending, so a default fixture would drop both keys and the
+  // coverage spread could not tell that from a missing implementation (#11620).
+  browserSortKey: "size",
+  browserSortDirection: "desc",
 };
 
 const savedFileBrowser: SavedTerminalData = {
@@ -487,8 +507,12 @@ const savedFileBrowser: SavedTerminalData = {
   browserHideDotfiles: true,
   browserRootPath: "src",
   browserSidebarCollapsed: true,
+  browserViewerCollapsed: true,
   browserTreeSnapshot: browserTreeSnapshotFixture,
   browserSidebarWidth: 360,
+  browserWorkspaceRooted: true,
+  browserSortKey: "size",
+  browserSortDirection: "desc",
 };
 
 const diffFixture: DiffPanelData = {

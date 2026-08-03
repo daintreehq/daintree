@@ -199,7 +199,7 @@ export function WorktreeSettingsTab() {
                 disabled={isLoading}
                 className={cn(
                   "flex-1 px-3 py-1.5 bg-daintree-bg border rounded-[var(--radius-md)] text-daintree-text font-mono text-sm",
-                  "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent",
+                  "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30",
                   !validation.valid ? "border-status-error/50" : "border-daintree-border"
                 )}
                 placeholder="{parent-dir}/{base-folder}-worktrees/{branch-slug}"

@@ -9,6 +9,8 @@ import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { isAbsolute, isPathInside, join, normalize, toWorktreeRelative } from "@shared/utils/path";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
+import { isForegroundDispatch } from "./dispatchSource";
 
 const viewArgsSchema = z.object({
   path: z.string().describe("Absolute or repo-relative file path to open."),
@@ -16,7 +18,7 @@ const viewArgsSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Repository root used to resolve a relative `path` (a worktree `path` from `worktree.list`)."
+      "Repository root that a relative path is resolved against — use a worktree root from the worktree-listing capability."
     ),
   line: z.number().int().positive().optional().describe("1-based line to scroll to."),
   col: z.number().int().positive().optional().describe("1-based column to scroll to."),
@@ -51,7 +53,7 @@ const readArgsSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Repository root used to resolve a relative `path` (a worktree `path` from `worktree.list`). Defaults to the current project root."
+      "Repository root that a relative path is resolved against — use a worktree root from the worktree-listing capability. Defaults to the current project root."
     ),
 });
 
@@ -61,7 +63,7 @@ const openPanelArgsSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Root used to resolve a relative `path` (a worktree `path` from `worktree.list`). Defaults to the current project root."
+      "Root that a relative path is resolved against — use a worktree root from the worktree-listing capability. Defaults to the current project root."
     ),
   viewMode: z
     .enum(["rendered", "source"])
@@ -103,7 +105,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     id: "file.view",
     title: "View File",
     description:
-      "Open a file in the in-app file viewer dialog (read-only, with optional line scroll). The dialog is ephemeral — it is never persisted, never counts toward the panel limit, and is never restored on restart; use its 'Open as panel' control to keep it in the grid. Args: `path` (required) — absolute or repo-relative file path; `rootPath` (optional) — repo root used to resolve a relative `path`; `line` (optional, positive int) to scroll to a line; `col` (optional, accepted for compatibility, does not affect scrolling). Returns { panelId }. Errors when `path` is missing. Use `file.openPanel` to open directly in the grid, or `file.openInEditor` for the external editor.",
+      "Show a file to the user in a temporary read-only viewer dialog, optionally scrolled to a line. The dialog is deliberately ephemeral — it is never restored on restart. Open it as a grid panel instead when it should persist, or read the file directly when the content is for you rather than the user. This displays a file; it does not return its contents.",
     category: "files",
     kind: "command",
     danger: "safe",
@@ -146,7 +148,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     id: "file.read",
     title: "Read File",
     description:
-      "Read a text file's contents (UTF-8, 500 KB limit). Args: `path` (required) — absolute or repo-relative file path; `rootPath` (optional) — root used to resolve a relative `path` (defaults to the current project root). Only files inside the current project or one of its worktrees are readable — anything else errors. Returns { content }. Errors: BINARY_FILE, FILE_TOO_LARGE (> 500 KB), LFS_POINTER, NOT_FOUND, PERMISSION, outside-project paths. Use `file.openPanel` to display a file to the user instead of reading it.",
+      "Read a text file's contents. Only files inside the current project or one of its worktrees are readable — anything outside fails, so this cannot reach arbitrary paths on the machine. Files that are binary, too large, or stored as large-file pointers fail with a specific reason rather than returning partial text. Open a viewer panel instead when the goal is to show the file to the user.",
     category: "files",
     kind: "query",
     danger: "safe",
@@ -194,7 +196,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     id: "file.openPanel",
     title: "Open File Panel",
     description:
-      "Open a file in a read-only file viewer panel in the grid. Markdown and HTML files get a Source/Rendered toggle (source is the default view; rendered HTML shows the page in a sandboxed iframe). Args: `path` (required) — absolute or repo-relative file path; `rootPath` (optional) — root used to resolve a relative `path` (defaults to the current project root); `viewMode` (optional) — 'source' (default) or 'rendered' (Markdown and HTML only). Reuses a panel already showing the same file instead of opening a duplicate. Returns { panelId }. Use `file.read` to read a file's content without displaying it.",
+      "Show a file to the user in a persistent read-only panel in the grid. Markdown and HTML can be shown as source or rendered, with rendered HTML sandboxed. It reuses an existing grid or dock panel showing the same file rather than duplicating it, but will not revive a trashed or backgrounded one. Read the file directly when the content is for you rather than the user.",
     category: "files",
     kind: "command",
     danger: "safe",
@@ -215,7 +217,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
         description: "Pin any repo file into the grid as a source view",
       },
     ],
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx?: ActionContext) => {
       const { path, rootPath, viewMode } = openPanelArgsSchema.parse(args);
       const absolutePath = resolveFilePanelPath(path, rootPath);
       // "rendered" applies only to Markdown and HTML — clamp so a stray request
@@ -250,14 +252,19 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
         return { panelId: existing.id };
       }
 
-      // Omit focusPolicy so the store resolves "auto" vs "preserve" via its
-      // MCP focus-suppression guard — never steal focus from a typing user.
+      // A person asking for a file expects to see it, so a foreground dispatch
+      // takes focus outright — that policy is also the one that leaves
+      // fullscreen, so the panel can't land buried behind a maximized cell
+      // (#11506). Agent/plugin dispatches omit focusPolicy entirely and keep
+      // the store's "auto" vs "preserve" resolution, so a background open still
+      // never steals focus from a typing user.
       const panelId = await store.addPanel({
         kind: "file",
         filePath: absolutePath,
         fileViewMode: effectiveViewMode,
         worktreeId: callbacks.getActiveWorktreeId(),
         location: "grid",
+        ...(isForegroundDispatch(ctx?.dispatchSource) && { focusPolicy: "take" as const }),
       });
       if (!panelId) {
         throw new Error("Could not open file panel: panel limit reached");
@@ -270,7 +277,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     id: "file.openDiff",
     title: "Open Diff",
     description:
-      "Open a file's working-tree diff in the in-app side-by-side diff viewer dialog. The dialog is ephemeral — it is never persisted, never counts toward the panel limit, and is never restored on restart; use its 'Open as panel' control to keep it in the grid. Args: `path` (required) — absolute or repo-relative file path; `worktreePath` (optional) — worktree root the diff is computed against (defaults to the current project path); `status` (optional git status, defaults to `modified`). Returns { panelId }. Use `file.view` for a read-only file view without a diff.",
+      "Open a file's working-tree diff in the in-app side-by-side diff viewer dialog. The dialog is ephemeral — it is never persisted, never counts toward the panel limit, and is never restored on restart; use its 'Open as panel' control to keep it in the grid. Args: `path` (required) — absolute or repo-relative file path; `worktreePath` (optional) — worktree root the diff is computed against (defaults to the current project path); `status` (optional git status, defaults to `modified`). Returns { panelId }. Open a plain file viewer instead when no diff is wanted.",
     category: "files",
     kind: "command",
     danger: "safe",
@@ -307,7 +314,8 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
   actions.set("file.openInEditor", () => ({
     id: "file.openInEditor",
     title: "Open in Editor",
-    description: "Open a file in the configured external editor at an optional line/column",
+    description:
+      "Open a file in the user's configured external editor, optionally at a line. This hands off to another application on the user's machine and returns nothing about the file. Read the file directly, or open an in-app viewer panel, when the content is needed here rather than by the user.",
     category: "files",
     kind: "command",
     danger: "safe",
@@ -324,7 +332,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     id: "file.openInBrowser",
     title: "Open in Browser",
     description:
-      "Open a file with the OS default handler for its type — for HTML files this is the default web browser. Args: `path` (required) — absolute file path. Use `file.openInEditor` to open in the external editor instead.",
+      "Open a file with the OS default handler for its type — for HTML files this is the default web browser. Args: `path` (required) — absolute file path. Open the file in the configured external editor instead when that is what you want.",
     category: "files",
     kind: "command",
     danger: "safe",

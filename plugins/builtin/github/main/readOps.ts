@@ -2,6 +2,7 @@ import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import type {
   CIStatus,
   Issue,
+  IssueComment,
   IssueTooltipData,
   ListOptions,
   Page,
@@ -18,6 +19,7 @@ import type {
 import { GitHubAuth } from "./GitHubAuth.js";
 import {
   LIST_ISSUES_QUERY,
+  LIST_ISSUE_COMMENTS_QUERY,
   LIST_PRS_QUERY,
   SEARCH_QUERY,
   GET_ISSUE_QUERY,
@@ -35,6 +37,7 @@ import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import {
   forgeIssueListCache,
   forgePRListCache,
+  getIssueCommentsEpoch,
   getRepoListEpoch,
   issueTooltipCache,
   prRequiredStatusCache,
@@ -49,6 +52,9 @@ import type { RollupContextNode } from "./prRequiredCIStatus.js";
 import { getIssuesByNumbersForContext } from "./GitHubIssues.js";
 import {
   buildListCacheKey,
+  normalizeListDirection,
+  normalizeListPerPage,
+  normalizeListSortOrder,
   parseBatchRequiredChecksResponse,
   updateRepoStatsCount,
 } from "./GitHubPRs.js";
@@ -56,6 +62,7 @@ import {
   mapIssueGraphQLStates,
   mapPRGraphQLStates,
   toForgeIssue,
+  toForgeIssueComment,
   toForgePR,
   gitHubIssueToForgeIssue,
 } from "./mappers.js";
@@ -63,6 +70,7 @@ import {
   dedupe,
   runQuery,
   listIssuesInflight,
+  listIssueCommentsInflight,
   listPRsInflight,
   getIssueInflight,
   getPRInflight,
@@ -72,10 +80,21 @@ import {
   getCIStatusesInflight,
 } from "./queryInfra.js";
 
-function buildOrderBy(opts: ListOptions): { field: string; direction: string } {
-  const direction = opts.direction === "asc" ? "ASC" : "DESC";
-  const field = opts.sort === "updated" ? "UPDATED_AT" : "CREATED_AT";
-  return { field, direction };
+/**
+ * Takes the ALREADY-normalized order rather than raw `ListOptions`, so the
+ * ordering sent to GitHub and the ordering baked into the cache key can only
+ * ever come from one decision. Re-deriving it here is how the query and the
+ * key drift apart — the failure this module's cache key was just widened to
+ * prevent (#11527).
+ */
+function buildOrderBy(
+  sortOrder: "created" | "updated",
+  direction: "asc" | "desc"
+): { field: string; direction: string } {
+  return {
+    field: sortOrder === "updated" ? "UPDATED_AT" : "CREATED_AT",
+    direction: direction === "asc" ? "ASC" : "DESC",
+  };
 }
 
 function listCacheState(opts: ListOptions): "open" | "closed" | "merged" | "all" {
@@ -198,20 +217,25 @@ async function searchIssuesImpl(
   search: string,
   opts: ListOptions
 ): Promise<Page<Issue>> {
+  // Read once, before `dedupe()` defers the fetch — see `listIssuesImpl`.
   const state = listCacheState(opts);
   const bypass = opts.bypassCache === true;
-  const limit = opts.perPage ?? 20;
+  const limit = normalizeListPerPage(opts.perPage);
+  const cursor = opts.cursor ?? null;
   // Free text is appended unquoted — GitHub search tokenizes it as keywords,
   // matching what its own search box does (see findPRByBranchImpl, which only
   // quotes because branch refs must not parse as separate operators). GitHub
   // caps search queries at 256 chars, so the term is truncated to the budget
   // left after the qualifiers rather than letting the whole query be rejected.
   const stateQualifier = state === "all" ? "" : ` state:${state}`;
-  const sortQualifier = opts.sort === "updated" ? "sort:updated-desc" : "sort:created-desc";
+  // Both halves of the order come from the caller. This path used to pin
+  // `-desc` and silently drop an `asc` request (#11527) — harmless while
+  // `direction` was unreachable, wrong the moment the action exposed it.
+  const sortQualifier = `sort:${normalizeListSortOrder(opts.sort)}-${normalizeListDirection(opts.direction)}`;
   const prefix = `repo:${repo.owner}/${repo.repo} is:issue${stateQualifier} ${sortQualifier} `;
   const available = 256 - prefix.length;
   const searchQuery = `${prefix}${available > 0 ? search.slice(0, available) : ""}`.trim();
-  const dedupeKey = `search:${searchQuery}:${opts.cursor ?? ""}:${limit}`;
+  const dedupeKey = `search:${searchQuery}:${cursor ?? ""}:${limit}`;
 
   return dedupe(listIssuesInflight, dedupeKey, bypass, async () => {
     const response = await runQuery(
@@ -219,7 +243,7 @@ async function searchIssuesImpl(
       {
         searchQuery,
         type: "ISSUE",
-        cursor: opts.cursor ?? null,
+        cursor,
         limit,
       },
       "SEARCH_QUERY",
@@ -247,20 +271,30 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
   const searchTerm = opts.search?.trim();
   if (searchTerm) return searchIssuesImpl(repo, searchTerm, opts);
 
+  // Every option that reaches either the key or the query is read ONCE, here,
+  // before `dedupe()` defers the fetch to a microtask. Re-reading `opts` inside
+  // that callback would let a caller who reuses and mutates one options object
+  // between calls cache a descending page under an ascending key.
   const state = listCacheState(opts);
-  const sortOrder = opts.sort === "updated" ? "updated" : "created";
+  const sortOrder = normalizeListSortOrder(opts.sort);
+  const direction = normalizeListDirection(opts.direction);
+  const limit = normalizeListPerPage(opts.perPage);
+  const states = mapIssueGraphQLStates(opts.state);
+  const cursor = opts.cursor ?? null;
   const bypass = opts.bypassCache === true;
   // The unfiltered list path keeps `search` out of the cache key — search
   // routes through `searchIssuesImpl` above and never touches this cache.
-  const cacheKey = buildListCacheKey(
-    "issue",
-    repo.owner,
-    repo.repo,
+  const cacheKey = buildListCacheKey({
+    type: "issue",
+    owner: repo.owner,
+    repo: repo.repo,
     state,
-    "",
+    search: "",
     sortOrder,
-    opts.cursor ?? ""
-  );
+    direction,
+    perPage: limit,
+    cursor: cursor ?? "",
+  });
 
   if (!bypass) {
     const cached = forgeIssueListCache.get(cacheKey);
@@ -268,8 +302,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
   }
 
   return dedupe(listIssuesInflight, cacheKey, bypass, async (isCurrent) => {
-    const limit = opts.perPage ?? 20;
-    const orderBy = buildOrderBy(opts);
+    const orderBy = buildOrderBy(sortOrder, direction);
     // Captured before the network call: if the count-as-cache-buster bumps
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
@@ -280,8 +313,8 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
       {
         owner: repo.owner,
         repo: repo.repo,
-        states: mapIssueGraphQLStates(opts.state),
-        cursor: opts.cursor ?? null,
+        states,
+        cursor,
         limit,
         orderBy,
       },
@@ -316,7 +349,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     // back to its pre-change total under a fresh `lastUpdated`.
     if (isCurrent() && getRepoListEpoch("issue", repo.owner, repo.repo) === epochAtStart) {
       forgeIssueListCache.set(cacheKey, page);
-      if (state === "open" && !opts.cursor && typeof issues?.totalCount === "number") {
+      if (state === "open" && !cursor && typeof issues?.totalCount === "number") {
         updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "issue", issues.totalCount);
       }
     }
@@ -394,21 +427,28 @@ async function enrichPRPageWithRequiredStatus(repo: RepoRef, items: PR[]): Promi
 }
 
 export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> {
+  // Read once, before `dedupe()` defers the fetch — see `listIssuesImpl`.
   const state = listCacheState(opts);
-  const sortOrder = opts.sort === "updated" ? "updated" : "created";
+  const sortOrder = normalizeListSortOrder(opts.sort);
+  const direction = normalizeListDirection(opts.direction);
+  const limit = normalizeListPerPage(opts.perPage);
+  const states = mapPRGraphQLStates(opts.state);
+  const cursor = opts.cursor ?? null;
   const bypass = opts.bypassCache === true;
   // The PR list query ignores `opts.search` (advisory — see ListOptions), so
   // it's kept out of the cache key. Wiring it would mean routing to
   // SEARCH_QUERY like `searchIssuesImpl` does for issues.
-  const cacheKey = buildListCacheKey(
-    "pr",
-    repo.owner,
-    repo.repo,
+  const cacheKey = buildListCacheKey({
+    type: "pr",
+    owner: repo.owner,
+    repo: repo.repo,
     state,
-    "",
+    search: "",
     sortOrder,
-    opts.cursor ?? ""
-  );
+    direction,
+    perPage: limit,
+    cursor: cursor ?? "",
+  });
 
   if (!bypass) {
     const cached = forgePRListCache.get(cacheKey);
@@ -416,8 +456,7 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
   }
 
   return dedupe(listPRsInflight, cacheKey, bypass, async (isCurrent) => {
-    const limit = opts.perPage ?? 20;
-    const orderBy = buildOrderBy(opts);
+    const orderBy = buildOrderBy(sortOrder, direction);
     // Same mid-flight count-buster guard as the issues list above.
     const epochAtStart = getRepoListEpoch("pr", repo.owner, repo.repo);
 
@@ -426,8 +465,8 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
       {
         owner: repo.owner,
         repo: repo.repo,
-        states: mapPRGraphQLStates(opts.state),
-        cursor: opts.cursor ?? null,
+        states,
+        cursor,
         limit,
         orderBy,
       },
@@ -459,7 +498,7 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
 
     if (isCurrent() && getRepoListEpoch("pr", repo.owner, repo.repo) === epochAtStart) {
       forgePRListCache.set(cacheKey, page);
-      if (state === "open" && !opts.cursor && typeof prs?.totalCount === "number") {
+      if (state === "open" && !cursor && typeof prs?.totalCount === "number") {
         updateRepoStatsCount(`${repo.owner}/${repo.repo}`, "pr", prs.totalCount);
       }
     }
@@ -863,6 +902,104 @@ export async function getReviewThreadsImpl(
     break;
   }
   return threads;
+}
+
+/** GitHub caps a GraphQL connection's `first:` at 100. */
+const MAX_ISSUE_COMMENTS_PER_PAGE = 100;
+const DEFAULT_ISSUE_COMMENTS_PER_PAGE = 20;
+
+/**
+ * Clamp a caller-supplied page size into GitHub's `first:` window. The IPC
+ * boundary types `opts` loosely and only the MCP action validates it, so a
+ * direct renderer call can land here with `NaN`/`Infinity` — which would sail
+ * through a bare `Math.trunc` clamp and reach GraphQL as an invalid `Int!`.
+ */
+function clampCommentsPerPage(perPage: number | undefined): number {
+  if (typeof perPage !== "number" || !Number.isFinite(perPage)) {
+    return DEFAULT_ISSUE_COMMENTS_PER_PAGE;
+  }
+  return Math.min(Math.max(Math.trunc(perPage), 1), MAX_ISSUE_COMMENTS_PER_PAGE);
+}
+
+/**
+ * Paged read of an issue's comment thread (#11545) — the read half of
+ * `addIssueComment`.
+ *
+ * Deliberately bypasses `runQuery`'s 60-second raw-response cache: the calling
+ * agent has often just posted into this very thread, or is polling for a human
+ * reply, so a minute of staleness reads as "nobody answered" and defeats the
+ * point. The call-site `dedupe` below still collapses concurrent identical
+ * reads, so bypassing costs nothing under fan-out.
+ *
+ * The dedupe key carries the auth token version and the issue's comment epoch
+ * so coalescing can't span a credential switch (joining a request made with
+ * someone else's token) or a write (a read issued after `addIssueComment`
+ * joining one issued before it, and so missing the comment just posted).
+ *
+ * Order is GitHub's own: oldest-first. `opts.sort`/`opts.direction` are
+ * advisory and ignored — neither GitHub API honors them on a comment thread
+ * (see {@link IssueCommentCapability}), so accepting them would be a lie.
+ */
+export async function listIssueCommentsImpl(
+  repo: RepoRef,
+  issueNumber: number,
+  opts: ListOptions
+): Promise<Page<IssueComment>> {
+  const bypass = opts.bypassCache === true;
+  const limit = clampCommentsPerPage(opts.perPage);
+  // A blank cursor is not the first page under a different name — treating it
+  // as `null` keeps it from colliding with the real first page's dedupe slot.
+  const cursor = opts.cursor?.trim() ? opts.cursor : null;
+  const dedupeKey = JSON.stringify([
+    GitHubAuth.getTokenVersion(),
+    repo.owner,
+    repo.repo,
+    issueNumber,
+    getIssueCommentsEpoch(repo.owner, repo.repo),
+    cursor,
+    limit,
+  ]);
+
+  return dedupe(listIssueCommentsInflight, dedupeKey, bypass, async () => {
+    const response = await runQuery(
+      LIST_ISSUE_COMMENTS_QUERY,
+      { owner: repo.owner, repo: repo.repo, number: issueNumber, cursor, limit },
+      "LIST_ISSUE_COMMENTS_QUERY",
+      true
+    );
+
+    const issue = (response?.repository as Record<string, unknown> | undefined)?.issue as
+      | {
+          comments?: {
+            nodes?: unknown[];
+            pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+            totalCount?: number;
+          };
+        }
+      | null
+      | undefined;
+
+    // An empty page must mean "nobody has commented", never "no such issue" —
+    // an agent checking for a reply would read the latter as the former.
+    if (!issue) {
+      throw new Error(`Issue #${issueNumber} not found in ${repo.owner}/${repo.repo}`);
+    }
+
+    const comments = issue.comments;
+    const nodes = (comments?.nodes ?? []) as Array<Record<string, unknown>>;
+    const endCursor = comments?.pageInfo?.endCursor ?? null;
+    // Relay connections keep returning the last edge's cursor after the final
+    // page, but `Page.nextCursor` is contractually null once nothing follows —
+    // and a cursor with no page behind it makes a caller fetch one more time.
+    // A `hasNextPage` with no cursor to follow is likewise not "more".
+    const hasMore = (comments?.pageInfo?.hasNextPage ?? false) && endCursor !== null;
+    return {
+      items: nodes.filter(Boolean).map(toForgeIssueComment),
+      nextCursor: hasMore ? endCursor : null,
+      hasMore,
+      ...(typeof comments?.totalCount === "number" ? { totalCount: comments.totalCount } : {}),
+    };
+  });
 }
 
 export function getRateLimitImpl(): Promise<RateLimitInfo> {

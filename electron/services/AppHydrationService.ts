@@ -36,13 +36,25 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
     : undefined;
   const globalAppState = store.get("appState");
 
+  // Mirrors `handleAppHydrate`'s ownership gate: the legacy global
+  // focus/worktree/MRU fields may only be inherited by a workspace with a real
+  // Project row. The three callers (hover prefetch, project switch, cold-start
+  // cache prime) normally resolve the id to a row first, but none holds that
+  // guarantee across its later awaits, so a row deleted mid-build lands here
+  // with no row — this keeps the leak from reappearing in that window (#11497).
+  const canInheritLegacyWorkspaceState = currentProject !== null;
+
   let terminalsToUse: typeof globalAppState.terminals = [];
-  let focusModeToUse = globalAppState.focusMode ?? false;
-  let focusPanelStateToUse = globalAppState.focusPanelState;
-  let activeWorktreeIdToUse = globalAppState.activeWorktreeId;
+  let focusModeToUse = canInheritLegacyWorkspaceState ? (globalAppState.focusMode ?? false) : false;
+  let focusPanelStateToUse = canInheritLegacyWorkspaceState
+    ? globalAppState.focusPanelState
+    : undefined;
+  let activeWorktreeIdToUse = canInheritLegacyWorkspaceState
+    ? globalAppState.activeWorktreeId
+    : undefined;
   // Quick-switcher MRU: prefer per-project, fall back to the legacy global list
   // so a switch can't serve the previous project's order (#9922).
-  let mruListToUse = globalAppState.mruList;
+  let mruListToUse = canInheritLegacyWorkspaceState ? globalAppState.mruList : undefined;
 
   const { state: projectState, quarantinedPath: projectStateQuarantinedPath } =
     await projectStore.getProjectStateWithRecovery(projectId);

@@ -186,7 +186,7 @@ export function WorktreeSidebarSearchBar({
             "flex flex-1 min-w-0 items-center gap-1.5 px-2.5 py-2 rounded-[var(--radius-md)]",
             // Fallback keeps themes without --worktree-search-input-bg byte-identical.
             "bg-[var(--worktree-search-input-bg,var(--color-daintree-bg))] border border-daintree-border",
-            "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
+            "focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20"
           )}
         >
           <Search

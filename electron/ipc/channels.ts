@@ -85,6 +85,8 @@ export const CHANNELS = {
   FILE_BROWSER_LIST_DIRECTORY: "file-browser:list-directory",
   FILE_BROWSER_STAT_PATHS: "file-browser:stat-paths",
 
+  FILE_WATCH_FINGERPRINT: "file-watch:fingerprint",
+
   TERMINAL_ACTIVITY: "terminal:activity",
 
   ARTIFACT_DETECTED: "artifact:detected",
@@ -239,6 +241,8 @@ export const CHANNELS = {
   PROJECT_GET_BULK_STATS: "project:get-bulk-stats",
   PROJECT_GET_NOTIFICATION_OVERRIDES: "project:get-notification-overrides",
   PROJECT_STATS_UPDATED: "project:stats-updated",
+  FLEET_SNAPSHOT_UPDATED: "fleet:snapshot-updated",
+  FLEET_GET_SNAPSHOT: "fleet:get-snapshot",
   PROJECT_HISTORY_PEEK: "project-history:peek",
   PROJECT_CREATE_FOLDER: "project:create-folder",
   PROJECT_INIT_GIT: "project:init-git",
@@ -533,6 +537,7 @@ export const CHANNELS = {
   HELP_REVOKE_SESSION: "help:revoke-session",
   HELP_PEEK_PENDING_HIBERNATION: "help:peek-pending-hibernation",
   HELP_TAKE_PENDING_HIBERNATION: "help:take-pending-hibernation",
+  HELP_RESTORE_PENDING_HIBERNATION: "help:restore-pending-hibernation",
   HELP_REPORT_PANEL_OPEN: "help:report-panel-open",
   HELP_GET_PINNED_ACTION_CONTEXT: "help:get-pinned-action-context",
 
@@ -891,6 +896,7 @@ export const CHANNELS = {
   FORGE_LIST_PRS: "forge:list-prs",
   FORGE_GET_ISSUE: "forge:get-issue",
   FORGE_GET_PR: "forge:get-pr",
+  FORGE_GET_CI_STATUS: "forge:get-ci-status",
   FORGE_GET_REPO_METADATA: "forge:get-repo-metadata",
   FORGE_GET_CURRENT_USER: "forge:get-current-user",
   FORGE_CLASSIFY_PUSH_ERROR: "forge:classify-push-error",
@@ -902,6 +908,7 @@ export const CHANNELS = {
   FORGE_GET_ISSUES_BY_NUMBERS: "forge:get-issues-by-numbers",
   FORGE_GET_PRS_BY_NUMBERS: "forge:get-prs-by-numbers",
   FORGE_GET_PR_REVIEW_THREADS: "forge:get-pr-review-threads",
+  FORGE_LIST_ISSUE_COMMENTS: "forge:list-issue-comments",
   FORGE_RESOLVE_AUTHOR_AVATAR: "forge:resolve-author-avatar",
   FORGE_GET_TOKEN_HEALTH: "forge:get-token-health",
   FORGE_GET_RATE_LIMIT_DETAILS: "forge:get-rate-limit-details",

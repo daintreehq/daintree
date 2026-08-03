@@ -2,6 +2,13 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext, ActionManifestEntry } from "@shared/types/actions";
 import { z } from "zod";
 import { PersistedStoreInfoSchema } from "./schemas";
+import { McpSurfaceResultSchema } from "@shared/types/mcpSurface";
+import {
+  ACTIONS_LIST_DEFAULT_LIMIT,
+  ACTIONS_LIST_MAX_LIMIT,
+  ACTIONS_SEARCH_DEFAULT_LIMIT,
+  ACTIONS_SEARCH_MAX_LIMIT,
+} from "@shared/config/mcpIntrospection";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
 import { usePortalStore } from "@/store/portalStore";
@@ -11,6 +18,12 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { listPersistedStores } from "@/store/persistence/persistedStoreRegistry";
 import { readLocalStorageItemSafely } from "@/store/persistence/safeStorage";
 
+// Page bounds for actions.list, shared with the main-process tier filter so
+// the advertised default can never drift from the applied one (#11529) nor
+// from the window main walks to collect the full match set (#11525).
+const DEFAULT_LIST_LIMIT = ACTIONS_LIST_DEFAULT_LIMIT;
+const MAX_LIST_LIMIT = ACTIONS_LIST_MAX_LIMIT;
+
 export function registerIntrospectionActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -19,7 +32,7 @@ export function registerIntrospectionActions(
     id: "actions.list",
     title: "List Actions",
     description:
-      "List the full action manifest, each entry including inputSchema/outputSchema. Args (all optional): `category` filters by domain (e.g. terminal, git, github); `search` substring-matches id/title/description; `enabledOnly` drops disabled actions. Returns { actions } — an array of manifest entries. Never errors; empty filters return everything. Do NOT use this for discovery — it returns every schema and is expensive; call `actions.search` first, then `actions.getSchema` for the one you need.",
+      "Enumerate the available actions as lightweight entries, filtered by domain or substring and returned a page at a time. Use ranked search instead when looking for a capability by intent; use this when the goal is to walk a domain systematically. Entries omit argument and result schemas to stay small — fetch one action's schema before dispatching it. Ordering is stable, so paging cannot skip or repeat entries.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -30,19 +43,53 @@ export function registerIntrospectionActions(
         category: z
           .string()
           .optional()
-          .describe("Filter by category (e.g. terminal, git, github, panel, portal)"),
+          .describe("Filter by exact category (e.g. terminal, worktree, forge, git, portal)"),
         search: z.string().optional().describe("Search in action id, title, or description"),
         enabledOnly: z
           .boolean()
           .optional()
           .describe("Only return enabled actions (default: false)"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_LIST_LIMIT)
+          .optional()
+          .default(DEFAULT_LIST_LIMIT)
+          .describe(`Max actions to return (1-${MAX_LIST_LIMIT}, default ${DEFAULT_LIST_LIMIT})`),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .default(0)
+          .describe("Number of matching actions to skip (default: 0)"),
       })
       .optional(),
-    resultSchema: z.object({ actions: z.array(z.unknown()) }),
+    resultSchema: z.object({
+      actions: z.array(z.unknown()),
+      total: z.number().int().nonnegative(),
+      limit: z.number().int(),
+      offset: z.number().int().nonnegative(),
+      hasMore: z.boolean(),
+    }),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { category, search, enabledOnly } =
-        (args as { category?: string; search?: string; enabledOnly?: boolean } | undefined) ?? {};
-      let manifest = actionService.list(ctx);
+      const {
+        category,
+        search,
+        enabledOnly,
+        limit = DEFAULT_LIST_LIMIT,
+        offset = 0,
+      } = (args as
+        | {
+            category?: string;
+            search?: string;
+            enabledOnly?: boolean;
+            limit?: number;
+            offset?: number;
+          }
+        | undefined) ?? {};
+      let manifest = actionService.list(ctx, { includeSchemas: false });
       manifest = manifest.filter((entry) => entry.mcpVisibility !== "hidden");
 
       if (category) {
@@ -61,7 +108,50 @@ export function registerIntrospectionActions(
         manifest = manifest.filter((a) => a.enabled);
       }
 
-      return { actions: manifest };
+      // Count after filtering but before paging so `total`/`hasMore` describe
+      // the whole match set, not the slice the caller happens to be holding.
+      const total = manifest.length;
+      // Sort before slicing: the registry is a Map, and re-registering a plugin
+      // action (usePluginActions replaces any whose descriptor changed) moves it
+      // to the end of insertion order. An offset walk over that order could
+      // repeat one entry and skip another. Compared by code unit rather than
+      // localeCompare so page boundaries don't shift with the host locale —
+      // ids are opaque ASCII identifiers, so collation buys nothing here.
+      manifest.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      const page = manifest.slice(offset, offset + limit);
+
+      return {
+        actions: page,
+        total,
+        limit,
+        offset,
+        hasMore: offset + page.length < total,
+      };
+    },
+  }));
+
+  // Registered here purely for manifest registration — schema, description,
+  // tier, and audit metadata. Execution is short-circuited in the MCP CallTool
+  // handler (electron/services/mcp-server/sessionServer.ts) and runs against the
+  // main process, because the caller's authorization tier exists only there:
+  // the renderer has no idea which MCP session dispatched it. Same pattern as
+  // `skills.search`. `run()` throws if the renderer ever invokes it directly.
+  actions.set("mcp.surface", () => ({
+    id: "mcp.surface",
+    title: "Get MCP Surface",
+    description:
+      "Report this session's tool surface as data: its authorization tier, a stable hash, and per-tool tier, kind, read-only and idempotency hints, and deprecation. Call it once at startup to check the surface matches what this client was built against, then re-read the hash to detect drift without diffing everything. It describes exactly what tools/list returns for this session.",
+    category: "introspection",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    mcpVisibility: "core",
+    mcpOutputSchema: true,
+    resultSchema: McpSurfaceResultSchema,
+    run: async () => {
+      throw new Error(
+        "mcp.surface must be invoked through the MCP main-process path, not renderer dispatch."
+      );
     },
   }));
 
@@ -69,7 +159,7 @@ export function registerIntrospectionActions(
     id: "actions.getContext",
     title: "Get Action Context",
     description:
-      "Snapshot the current UI context the assistant operates in. Takes no args. Returns the active project (id/name/path), active and focused worktree (id/name/path/branch/isMain), focused terminal (id/kind/title), portal open state and active tab, plus terminalCount and worktreeCount. Fields are omitted when nothing is focused/active. Never errors. Call this first to resolve the implicit 'current' worktree or terminal before actions that take an explicit id.",
+      "Snapshot what the user currently has open — active project, worktree, focused terminal, and panel state. Call this first to resolve an implicit 'current' target before an action that needs an explicit id. Anything not focused or active is simply absent, so treat a missing field as nothing being selected. It can fail early in a session, before the worktree view store has initialised.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -142,7 +232,10 @@ export function registerIntrospectionActions(
     kind: "query",
     danger: "safe",
     scope: "renderer",
-    mcpVisibility: "discoverable",
+    // Genuinely off the MCP surface: this id is in no tier allowlist, so it is
+    // neither dispatchable nor grantable (httpLifecycle.ts). `hidden` states
+    // that plainly instead of implying it is one search away (#11585).
+    mcpVisibility: "hidden",
     resultSchema: z.object({
       storeCount: z.number(),
       stores: z.array(PersistedStoreInfoSchema),
@@ -195,7 +288,7 @@ export function registerIntrospectionActions(
     id: "actions.search",
     title: "Search Actions",
     description:
-      "Search the action registry by natural-language query, ranked by relevance. Args: `query` (required — keywords or phrase); `limit` (optional, 1-100, default 20). Returns { totalMatches, results } where results are lightweight manifest entries WITHOUT inputSchema/outputSchema. Errors when `query` is empty or whitespace-only. Use this for discovery, then `actions.getSchema` for the chosen action's full schema. Do NOT use `actions.list` for discovery — it returns every schema and is far heavier.",
+      "Find actions by describing what you want to do, ranked by how well each matches. This is the discovery path: start here, then fetch the chosen action's schema before dispatching it. Use the plain listing instead when walking a domain systematically rather than searching by intent. Results omit argument and result schemas to stay small, and matching nothing returns an empty list rather than failing.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -211,10 +304,12 @@ export function registerIntrospectionActions(
         .number()
         .int()
         .min(1)
-        .max(100)
+        .max(ACTIONS_SEARCH_MAX_LIMIT)
         .optional()
-        .default(20)
-        .describe("Max results (1-100, default 20)"),
+        .default(ACTIONS_SEARCH_DEFAULT_LIMIT)
+        .describe(
+          `Max results (1-${ACTIONS_SEARCH_MAX_LIMIT}, default ${ACTIONS_SEARCH_DEFAULT_LIMIT})`
+        ),
     }),
     examples: [
       {
@@ -231,7 +326,10 @@ export function registerIntrospectionActions(
       results: z.array(z.unknown()),
     }),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { query, limit = 20 } = args as { query: string; limit?: number };
+      const { query, limit = ACTIONS_SEARCH_DEFAULT_LIMIT } = args as {
+        query: string;
+        limit?: number;
+      };
       const manifest = actionService.list(ctx, { includeSchemas: false });
 
       const q = query.toLowerCase();
@@ -282,7 +380,9 @@ export function registerIntrospectionActions(
 
       scored.sort((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id));
 
-      const results = scored.slice(0, Math.min(limit, 100)).map((s) => s.entry);
+      const results = scored
+        .slice(0, Math.min(limit, ACTIONS_SEARCH_MAX_LIMIT))
+        .map((s) => s.entry);
 
       return { totalMatches: scored.length, results };
     },
@@ -292,7 +392,7 @@ export function registerIntrospectionActions(
     id: "actions.getSchema",
     title: "Get Action Schema",
     description:
-      "Fetch one action's full manifest entry, including inputSchema and outputSchema. Args: `actionId` (required) — an action id from `actions.search` results (the `id` field). Returns { ok: true, entry } on success, or { ok: false, error: { code: 'NOT_FOUND', message } } as data (not a thrown error) when the id is unknown, hidden, or restricted. Use after `actions.search` to inspect the exact arguments an action expects before dispatching it.",
+      "Fetch one action's full manifest entry, including the exact arguments it accepts and the shape it returns. Use this after finding a candidate by search or listing, before dispatching it, so the arguments are known rather than guessed. An unknown, hidden or restricted id comes back as a structured failure in the result rather than as a thrown error.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -303,13 +403,14 @@ export function registerIntrospectionActions(
         .string()
         .min(1)
         .describe(
-          "Action id returned by `actions.search` (the `id` field), e.g. 'terminal.getStatus'."
+          "Identifies the action to inspect, using an id from a registry search or listing. This is a Daintree action id passed as a value, not the name of a tool to call."
         ),
     }),
     examples: [
       {
         args: { actionId: "terminal.getStatus" },
-        description: "Inspect the input/output schema for terminal.getStatus",
+        description:
+          "Inspect the input and output schema of a terminal status tool before calling it",
       },
     ],
     resultSchema: z.union([

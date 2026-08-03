@@ -222,8 +222,30 @@ function vadCommitSegment(
   worker.emitSpeechEnd();
 }
 
+// ── Capture logger output ────────────────────────────────────────────────────
+//
+// Keyterms carry the user's branch names, custom dictionary and terminal output,
+// and main-process logs are readable by agents. Capturing every log argument
+// lets the privacy tests assert that no keyterm content ever reaches a log,
+// at the real call sites rather than only inside the summarizer.
+
+const logCalls = vi.hoisted(() => [] as unknown[][]);
+
+vi.mock("../../../utils/logger.js", () => ({
+  logDebug: (...args: unknown[]) => void logCalls.push(args),
+  logInfo: (...args: unknown[]) => void logCalls.push(args),
+  logWarn: (...args: unknown[]) => void logCalls.push(args),
+  logError: (...args: unknown[]) => void logCalls.push(args),
+}));
+
+/** Everything written to the logger this test, flattened to one string. */
+function loggedText(): string {
+  return logCalls.map((args) => args.map((a) => JSON.stringify(a) ?? "").join(" ")).join("\n");
+}
+
 // Import the service AFTER vi.mock so the mocked `ws` is used.
-const { OpenAITranscriptionProvider } = await import("../OpenAITranscriptionProvider.js");
+const { OpenAITranscriptionProvider, summarizeEchoedSession } =
+  await import("../OpenAITranscriptionProvider.js");
 type OpenAITranscriptionProviderInstance = InstanceType<typeof OpenAITranscriptionProvider>;
 type VoiceTranscriptionEvent = import("../TranscriptionProvider.js").VoiceTranscriptionEvent;
 
@@ -234,7 +256,7 @@ const BASE_SETTINGS: VoiceInputSettings = {
   language: "en",
   customDictionary: [],
   transcriptionProvider: "openai",
-  transcriptionModel: "gpt-realtime-whisper",
+  transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,
   correctionModel: "gpt-5.6-luna",
   correctionCustomInstructions: "",
@@ -252,6 +274,14 @@ function latestInstance(): MockWebSocket {
   const instance = instances.at(-1);
   if (!instance) throw new Error("No MockWebSocket instance created");
   return instance;
+}
+
+/** Parses `session.audio.input.transcription` out of a sent session.update. */
+function readTranscription(socket: MockWebSocket, index = 0): Record<string, unknown> {
+  const payload = JSON.parse(socket.sent[index]) as {
+    session: { audio: { input: { transcription: Record<string, unknown> } } };
+  };
+  return payload.session.audio.input.transcription;
 }
 
 /** Advance the service through connect → ready. Returns the active mock socket. */
@@ -286,6 +316,7 @@ describe("OpenAITranscriptionProvider", () => {
     constructError = null;
     vadWorkers.length = 0;
     throwOnVadConstruct = false;
+    logCalls.length = 0;
     vi.useFakeTimers();
   });
 
@@ -335,11 +366,19 @@ describe("OpenAITranscriptionProvider", () => {
     expect(sessionUpdate.session.type).toBe("transcription");
     expect(sessionUpdate.session.audio.input).toMatchObject({
       format: { type: "audio/pcm", rate: 24000 },
-      transcription: { model: "gpt-realtime-whisper", language: "en" },
+      transcription: { model: "gpt-live-transcribe", languages: ["en"] },
     });
-    // `turn_detection` must be EXPLICITLY null for gpt-realtime-whisper — see
-    // the session.update comment in OpenAITranscriptionProvider. Omitting it
-    // makes the server silently emit no transcription items.
+    // `delay` must be present and a valid tier. The specific tier is tuning, so
+    // asserting the literal here would just restate the provider's constant.
+    expect(["minimal", "low", "medium", "high", "xhigh"]).toContain(
+      (sessionUpdate.session.audio.input.transcription as { delay: string }).delay
+    );
+    // `languages` (array) supersedes the deprecated singular `language`, and the
+    // two are mutually exclusive on the wire — sending both is invalid.
+    expect(sessionUpdate.session.audio.input.transcription).not.toHaveProperty("language");
+    // `turn_detection` must be EXPLICITLY null — see the session.update comment
+    // in OpenAITranscriptionProvider. Omitting it makes the server silently emit
+    // no transcription items.
     expect(sessionUpdate.session.audio.input.turn_detection).toBeNull();
 
     // Still not ready — start() must wait for session.updated
@@ -348,55 +387,164 @@ describe("OpenAITranscriptionProvider", () => {
     socket.simulateMessage("session.updated");
     await expect(startPromise).resolves.toEqual({ ok: true });
     expect(statuses).toEqual(["connecting", "recording"]);
+    // Ready sessions own a VAD worker and a heartbeat — stop so neither
+    // outlives the test.
+    service.stop();
   });
 
-  it("uses the configured language in session.update", async () => {
+  it("sends the configured language as a one-element languages array", async () => {
     const service = new OpenAITranscriptionProvider();
     void service.start({ ...BASE_SETTINGS, language: "es" });
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
-    const payload = JSON.parse(socket.sent[0]) as {
-      session: { audio: { input: { transcription: { language: string } } } };
-    };
-    expect(payload.session.audio.input.transcription.language).toBe("es");
+    const transcription = readTranscription(socket);
+    expect(transcription.languages).toEqual(["es"]);
+    expect(transcription).not.toHaveProperty("language");
     service.stop();
   });
 
-  it("omits transcription.prompt even with keyterms (gpt-realtime-whisper rejects it)", async () => {
-    // `gpt-realtime-whisper` hard-rejects a `prompt` field and kills the session,
-    // so MODEL_SUPPORTS_PROMPT is false and keyterms must never reach session.update.
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("falls back to en when the configured language is %s", async (_label, language) => {
+    const service = new OpenAITranscriptionProvider();
+    void service.start({ ...BASE_SETTINGS, language });
+    await Promise.resolve();
+    const socket = latestInstance();
+    socket.simulateOpen();
+    expect(readTranscription(socket).languages).toEqual(["en"]);
+    service.stop();
+  });
+
+  it.each([
+    ["a number", 42],
+    ["an object", { code: "en" }],
+    ["an array", ["en"]],
+    ["null", null],
+  ])("falls back to en without throwing when language is %s", async (_label, language) => {
+    // Persisted settings are cast, not validated, and setSettings takes an
+    // arbitrary patch — a non-string here would otherwise throw inside the
+    // WebSocket `open` handler, outside any try/catch.
+    const service = new OpenAITranscriptionProvider();
+    void service.start({ ...BASE_SETTINGS, language } as unknown as VoiceInputSettings);
+    await Promise.resolve();
+    const socket = latestInstance();
+    expect(() => socket.simulateOpen()).not.toThrow();
+    expect(readTranscription(socket).languages).toEqual(["en"]);
+    service.stop();
+  });
+
+  it("sends frozen keyterms as native keywords and a formatted prompt", async () => {
+    // `gpt-live-transcribe` supports both, which is what retired the old
+    // MODEL_SUPPORTS_PROMPT gate.
     const service = new OpenAITranscriptionProvider();
     void service.start({ ...BASE_SETTINGS, keyterms: ["Daintree", "xterm"] });
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
-    const payload = JSON.parse(socket.sent[0]) as {
-      session: { audio: { input: { transcription: Record<string, unknown> } } };
-    };
-    expect(payload.session.audio.input.transcription).not.toHaveProperty("prompt");
+    const transcription = readTranscription(socket);
+    expect(transcription.keywords).toEqual(["Daintree", "xterm"]);
+    expect(transcription.prompt).toBe("Keywords: Daintree, xterm");
     service.stop();
   });
 
-  it("omits transcription.prompt when there are no frozen keyterms", async () => {
+  it("drops keyterms containing characters the API rejects, from both fields", async () => {
+    // A single forbidden character rejects the ENTIRE session.update, so an
+    // unsanitized keyterm would kill the whole dictation session.
+    const service = new OpenAITranscriptionProvider();
+    void service.start({
+      ...BASE_SETTINGS,
+      keyterms: ["Daintree", "<div>", `a${String.fromCharCode(10)}b`, "xterm"],
+    });
+    await Promise.resolve();
+    const socket = latestInstance();
+    socket.simulateOpen();
+    const transcription = readTranscription(socket);
+    expect(transcription.keywords).toEqual(["Daintree", "xterm"]);
+    expect(transcription.prompt).toBe("Keywords: Daintree, xterm");
+    expect(socket.sent[0]).not.toContain("<div>");
+    service.stop();
+  });
+
+  it("omits both keywords and prompt when there are no frozen keyterms", async () => {
     const service = new OpenAITranscriptionProvider();
     void service.start(BASE_SETTINGS);
     await Promise.resolve();
     const socket = latestInstance();
     socket.simulateOpen();
-    const payload = JSON.parse(socket.sent[0]) as {
-      session: { audio: { input: { transcription: Record<string, unknown> } } };
-    };
-    expect(payload.session.audio.input.transcription).not.toHaveProperty("prompt");
+    const transcription = readTranscription(socket);
+    expect(transcription).not.toHaveProperty("prompt");
+    expect(transcription).not.toHaveProperty("keywords");
     service.stop();
   });
 
-  it("does not send a keyterm prompt on reconnect (model rejects it)", async () => {
+  it("never logs keyterm content, on the outbound payload or either server echo", async () => {
+    // Guards the real call sites, not just summarizeEchoedSession: reverting any
+    // of them to logging the raw session object must fail this test. The echo
+    // carries a DIFFERENT sentinel per field so leaking only one is still caught.
+    const sentTerm = "secret-branch-name";
+    const echoedKeyword = "echoed-keyword-sentinel";
+    const echoedPrompt = "echoed-prompt-sentinel";
+
+    const service = new OpenAITranscriptionProvider();
+    void service.start({ ...BASE_SETTINGS, keyterms: [sentTerm] });
+    await Promise.resolve();
+    const socket = latestInstance();
+    socket.simulateOpen();
+
+    const echo = {
+      session: {
+        audio: {
+          input: {
+            transcription: {
+              model: "gpt-live-transcribe",
+              languages: ["en"],
+              delay: "low",
+              keywords: [echoedKeyword],
+              prompt: `Keywords: ${echoedPrompt}`,
+            },
+            turn_detection: null,
+          },
+        },
+      },
+    };
+    socket.simulateMessage("session.created", echo);
+    socket.simulateMessage("session.updated", echo);
+
+    // The term really was sent — otherwise this test would pass vacuously.
+    expect(socket.sent[0]).toContain(sentTerm);
+    const logs = loggedText();
+    expect(logs).not.toContain(sentTerm);
+    expect(logs).not.toContain(echoedKeyword);
+    expect(logs).not.toContain(echoedPrompt);
+    // The diagnostic itself must survive redaction — a key named `keywordCount`
+    // is blanked by the logger's "key" substring rule.
+    expect(logs).toContain("biasTermCount");
+    service.stop();
+  });
+
+  it("omits both keywords and prompt when every keyterm is rejected", async () => {
+    // Never send `[]` / `""` — omit the fields entirely.
+    const service = new OpenAITranscriptionProvider();
+    void service.start({ ...BASE_SETTINGS, keyterms: ["<a>", "b>c"] });
+    await Promise.resolve();
+    const socket = latestInstance();
+    socket.simulateOpen();
+    const transcription = readTranscription(socket);
+    expect(transcription).not.toHaveProperty("prompt");
+    expect(transcription).not.toHaveProperty("keywords");
+    service.stop();
+  });
+
+  it("resends the identical sanitized keywords and prompt on reconnect", async () => {
+    // Keyterms are frozen on the settings snapshot at session start, so a
+    // reconnect must deterministically rebuild the same transcription config.
     vi.spyOn(Math, "random").mockReturnValue(0.5);
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service, {
       ...BASE_SETTINGS,
-      keyterms: ["Daintree", "xterm"],
+      keyterms: ["Daintree", "<div>", "xterm"],
     });
 
     socket.simulateClose(1006, Buffer.from("abnormal"));
@@ -405,10 +553,10 @@ describe("OpenAITranscriptionProvider", () => {
     expect(socket2).not.toBe(socket);
     socket2.simulateOpen();
 
-    const payload = JSON.parse(socket2.sent[0]) as {
-      session: { audio: { input: { transcription: Record<string, unknown> } } };
-    };
-    expect(payload.session.audio.input.transcription).not.toHaveProperty("prompt");
+    const reconnected = readTranscription(socket2);
+    expect(reconnected.keywords).toEqual(["Daintree", "xterm"]);
+    expect(reconnected.prompt).toBe("Keywords: Daintree, xterm");
+    expect(reconnected).toEqual(readTranscription(socket));
     service.stop();
   });
 
@@ -658,7 +806,7 @@ describe("OpenAITranscriptionProvider", () => {
   });
 
   // ── VAD-driven commit ─────────────────────────────────────────────────────
-  // gpt-realtime-whisper has no server VAD, so a client-side VAD side-chain
+  // The provider sends `turn_detection: null`, so a client-side VAD side-chain
   // (Silero v5, on a worker thread) drives segmentation: commit at end-of-speech
   // and clear the server buffer on speech onset. Without commits no
   // transcription events ever arrive.
@@ -1519,5 +1667,103 @@ describe("OpenAITranscriptionProvider", () => {
 
     expect(instances.length).toBe(instancesBefore);
     expect(statuses).toContain("error");
+  });
+});
+
+describe("summarizeEchoedSession", () => {
+  const SECRET_TERM = "super-secret-branch-name";
+  const echoed = {
+    audio: {
+      input: {
+        transcription: {
+          model: "gpt-live-transcribe",
+          languages: ["en"],
+          delay: "low",
+          keywords: [SECRET_TERM, "xterm"],
+          prompt: `Keywords: ${SECRET_TERM}, xterm`,
+        },
+        turn_detection: null,
+      },
+    },
+  };
+
+  it("keeps the diagnostic fields that explain a silent session", () => {
+    expect(summarizeEchoedSession(echoed)).toEqual({
+      model: "gpt-live-transcribe",
+      languages: ["en"],
+      delay: "low",
+      biasTermCount: 2,
+      hasPrompt: true,
+      turnDetectionNull: true,
+    });
+  });
+
+  it("reduces a non-scalar model/delay to a type marker instead of forwarding it", () => {
+    // Config fields are forwarded for diagnostics, so an unexpected echo shape
+    // must not become a channel for arbitrary content reaching the log.
+    const hostile = {
+      audio: {
+        input: {
+          transcription: {
+            model: { leaked: SECRET_TERM },
+            languages: [{ leaked: SECRET_TERM }],
+            delay: ["a", "b"],
+          },
+          turn_detection: null,
+        },
+      },
+    };
+    expect(JSON.stringify(summarizeEchoedSession(hostile))).not.toContain(SECRET_TERM);
+  });
+
+  it("reduces an oversized model string to a length marker", () => {
+    const hostile = {
+      audio: {
+        input: {
+          transcription: { model: `${SECRET_TERM}${"x".repeat(500)}` },
+          turn_detection: null,
+        },
+      },
+    };
+    expect(JSON.stringify(summarizeEchoedSession(hostile))).not.toContain(SECRET_TERM);
+  });
+
+  it("does not throw on a transcription of the wrong type", () => {
+    for (const transcription of ["nope", 42, [], null]) {
+      const payload = { audio: { input: { transcription, turn_detection: null } } };
+      expect(() => summarizeEchoedSession(payload)).not.toThrow();
+    }
+  });
+
+  it("never leaks keyword or prompt contents", () => {
+    // These logs are readable by agents; keyterms carry the user's branch names,
+    // project terms, custom dictionary and terminal output.
+    expect(JSON.stringify(summarizeEchoedSession(echoed))).not.toContain(SECRET_TERM);
+  });
+
+  it("reports a non-null turn_detection so a server-applied VAD default is visible", () => {
+    const withVad = {
+      audio: { input: { transcription: { model: "m" }, turn_detection: { type: "server_vad" } } },
+    };
+    expect(summarizeEchoedSession(withVad).turnDetectionNull).toBe(false);
+  });
+
+  it("reports hasPrompt false for an absent or empty prompt", () => {
+    const noPrompt = {
+      audio: { input: { transcription: { model: "m", prompt: "" }, turn_detection: null } },
+    };
+    expect(summarizeEchoedSession(noPrompt)).toMatchObject({ hasPrompt: false, biasTermCount: 0 });
+  });
+
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["a string", "nope"],
+  ])("degrades safely when the session is %s", (_label, session) => {
+    expect(summarizeEchoedSession(session)).toEqual({ session: "(absent)" });
+  });
+
+  it("degrades safely when audio.input is missing", () => {
+    expect(summarizeEchoedSession({ id: "sess_1" })).toEqual({ sessionShape: "(no audio.input)" });
   });
 });

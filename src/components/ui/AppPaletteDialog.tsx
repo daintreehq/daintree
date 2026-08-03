@@ -2,6 +2,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -13,16 +14,20 @@ import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { KBD_CLASS, KbdChord } from "@/components/ui/Kbd";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
+import { PALETTE_HEADER_ATTR } from "./paletteHeaderAttr";
 import { useOverlayState, useEscapeStack } from "@/hooks";
 import {
+  ESCAPE_BACKSTOP_DIALOG_ATTR,
   registerDialogEscapeBackstop,
   isTopmostDialogBackstop,
   radixLayerWasOpenWhenEscapePressed,
+  escapeWasYieldedToDialog,
   markBackstopConsumedEscape,
 } from "@/lib/dialogEscapeBackstop";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { usePaletteStore } from "@/store/paletteStore";
+import { consumePaletteFocusRestoreSuppression } from "./paletteFocusRestore";
 import {
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
@@ -35,11 +40,27 @@ import {
 
 export { KBD_CLASS };
 
+/**
+ * One width for the whole palette family. Palettes are opened from the same
+ * keyboard reflex and often in sequence, so a per-palette width reads as the
+ * surface jumping around rather than as a deliberate size. Popover-hosted
+ * palettes take this too, which is what keeps the project switcher identical
+ * whether it opens as a dropdown or as a modal.
+ */
+export const PALETTE_SURFACE_WIDTH = "w-[484px] max-w-[calc(100vw-2rem)]";
+
 export interface AppPaletteDialogProps {
   isOpen: boolean;
   onClose: () => void;
   children: React.ReactNode;
   ariaLabel: string;
+  /**
+   * Extra classes for the palette box — sizing and layout only. The surface
+   * itself is NOT overridable from here: `surface-overlay` is a handwritten
+   * rule emitted after the generated utilities, so a `bg-*` or `border-*`
+   * passed in loses the cascade and silently does nothing. That is deliberate —
+   * one material for the whole family is the point.
+   */
   className?: string;
 }
 
@@ -53,10 +74,18 @@ export function AppPaletteDialog({
   useEscapeStack(isOpen, onClose);
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const autofocusRafRef = useRef<number | null>(null);
 
   const restoreFocus = useCallback(() => {
     const el = previousFocusRef.current;
     previousFocusRef.current = null;
+    // A caller placed focus deliberately (the fleet overview focusing the run
+    // it opened); putting it back would undo that. Overlays are still cleared —
+    // only the focus move is skipped.
+    if (consumePaletteFocusRestoreSuppression()) {
+      clearDialogOverlays();
+      return;
+    }
     if (!el) return;
     // Palette-to-palette handoff: the next palette will install its
     // own focus, so skip restore entirely — and skip the overlay clear
@@ -95,11 +124,17 @@ export function AppPaletteDialog({
     clearDialogOverlays();
   }, [isOpen]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (isOpen) {
       const el = document.activeElement;
       if (el instanceof HTMLElement) previousFocusRef.current = el;
-      requestAnimationFrame(() => {
+      // Own keyboard input immediately when the modal commits. The first
+      // tabbable still receives focus on the next animation frame, but leaving
+      // the prior terminal/input focused during that gap lets it stop Escape
+      // before the document-bubble dialog backstop can close the palette.
+      dialogRef.current?.focus();
+      autofocusRafRef.current = requestAnimationFrame(() => {
+        autofocusRafRef.current = null;
         const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(TABBABLE_SELECTOR);
         if (firstFocusable) {
           firstFocusable.focus();
@@ -108,7 +143,13 @@ export function AppPaletteDialog({
         }
       });
     }
-  }, [isOpen]);
+    return () => {
+      if (autofocusRafRef.current !== null) {
+        cancelAnimationFrame(autofocusRafRef.current);
+        autofocusRafRef.current = null;
+      }
+    };
+  }, [isOpen, shouldRender]);
 
   // If the host of an open palette unmounts before the exit animation
   // finishes, useAnimatedPresence's cleanup deliberately does NOT call
@@ -136,7 +177,7 @@ export function AppPaletteDialog({
     onCloseRef.current = onClose;
   }, [onClose]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!isOpen) return;
     const closeThis = () => onCloseRef.current();
     const unregister = registerDialogEscapeBackstop(closeThis);
@@ -150,7 +191,11 @@ export function AppPaletteDialog({
       // palette underneath stays open. The backstop exists only for the
       // mid-exit case where Radix's stale `preventDefault` would otherwise
       // leave the palette stuck.
-      if (radixLayerWasOpenWhenEscapePressed()) return;
+      // A dock popover can remain open underneath the palette it spawned. Its
+      // Escape guard explicitly yields this event to the focused dialog, so
+      // honor the same handoff contract as AppDialog rather than dead-ending
+      // between the open-layer gate and the palette backstop.
+      if (radixLayerWasOpenWhenEscapePressed() && !escapeWasYieldedToDialog(e)) return;
       // We deliberately do NOT bail on `e.defaultPrevented`: Radix Select /
       // Combobox triggers call `preventDefault` on Escape even when their
       // popup is closed, which would leave the palette stuck. The
@@ -223,9 +268,19 @@ export function AppPaletteDialog({
         role="dialog"
         aria-modal={isOpen ? "true" : "false"}
         aria-label={ariaLabel}
+        {...(isOpen ? { [ESCAPE_BACKSTOP_DIALOG_ATTR]: "" } : {})}
         tabIndex={-1}
         className={cn(
-          "w-full max-w-xl mx-4 bg-surface-dialog border border-border-default rounded-[var(--radius-xl)] shadow-[var(--theme-shadow-dialog)] overflow-hidden origin-top",
+          // `surface-overlay` is the floating-surface material shared with every
+          // Radix popover, so a palette looks identical whether it opens as a
+          // modal or as a dropdown (the project switcher renders both). It also
+          // carries the border and the performance-mode / light-polarity
+          // fallbacks, which a hand-rolled `bg-*` + `border-*` pair does not.
+          // `shadow-modal` sits one step above the popovers' `shadow-overlay`:
+          // same inset top lip, deeper drop, because this one floats over a
+          // scrim.
+          PALETTE_SURFACE_WIDTH,
+          "mx-4 surface-overlay shadow-modal rounded-[var(--radius-lg)] overflow-hidden origin-top",
           // Tailwind v4 scale-* emits the individual `scale` property, which
           // `transform` in a transition list does NOT cover — the palette
           // zoom only animates when `scale` is listed explicitly.
@@ -239,8 +294,11 @@ export function AppPaletteDialog({
             transitionDuration: isVisible
               ? `${UI_PALETTE_ENTER_DURATION}ms`
               : `${UI_PALETTE_EXIT_DURATION}ms`,
+            // No `--scroll-shadow-color` here: `surface-overlay` sets it per
+            // polarity (sidebar plane on dark, elevated on light). Overriding it
+            // inline would repaint the scroll fade in a colour the surface no
+            // longer uses.
             transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
-            "--scroll-shadow-color": "var(--color-surface-dialog)",
           } as CSSProperties
         }
         onClick={(e) => e.stopPropagation()}
@@ -279,8 +337,13 @@ AppPaletteDialog.Header = function AppPaletteHeader({
 }: AppPaletteHeaderProps) {
   return (
     <div
+      {...{ [PALETTE_HEADER_ATTR]: "" }}
       className={cn(
-        "relative overflow-hidden px-3 pt-2 pb-1 border-b border-border-strong",
+        // `pb-2`, not `pb-1`: the project switcher and pilot both overrode the
+        // tighter default to give the search box room above the rule, and they
+        // are the two surfaces the family is modelled on. Promoted to the
+        // default so every palette breathes the same.
+        "relative overflow-hidden px-3 pt-2 pb-2 border-b border-border-strong",
         className
       )}
     >
@@ -318,6 +381,13 @@ AppPaletteDialog.Header = function AppPaletteHeader({
 const BODY_NAVIGATION_KEYS = new Set([
   "ArrowUp",
   "ArrowDown",
+  // Horizontal arrows carry the disclosure half of the tree pattern for palettes
+  // whose list has collapsible groups (`PilotView`). Withholding them left the
+  // region able to move between rows but not in or out of a group, which is
+  // half a keyboard. Flat-list palettes have no case for them and ignore them,
+  // uncancelled, exactly as they did before.
+  "ArrowLeft",
+  "ArrowRight",
   "Home",
   "End",
   "Enter",
@@ -327,6 +397,20 @@ const BODY_NAVIGATION_KEYS = new Set([
   // unaffected, and unmodified Backspace still falls through untouched.
   "Backspace",
 ]);
+
+/**
+ * Hairline between sections inside a palette body. Same weight and token as the
+ * header and footer rules, so a palette's internal structure reads as one
+ * system instead of a stack of differently-drawn breaks. Accepts the usual div
+ * props — `hidden` is the one palettes actually reach for, to drop a separator
+ * while a search collapses its sections into a single ranked list.
+ */
+AppPaletteDialog.Divider = function AppPaletteDivider({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) {
+  return <div aria-hidden="true" className={cn("h-px bg-border-strong", className)} {...props} />;
+};
 
 interface AppPaletteBodyProps {
   children: React.ReactNode;
@@ -352,7 +436,11 @@ interface AppPaletteBodyProps {
 AppPaletteDialog.Body = function AppPaletteBody({
   children,
   className,
-  maxHeight = "max-h-[50vh]",
+  // 60vh, matching what the project switcher and pilot already asked for. The
+  // dialog is top-anchored at 15vh, so header + 60vh + footer still clears the
+  // viewport, and a shorter default made otherwise-identical palettes scroll at
+  // different list lengths.
+  maxHeight = "max-h-[60vh]",
   ariaLabel,
   activeDescendant,
   onNavigationKeyDown,
@@ -381,7 +469,12 @@ AppPaletteDialog.Body = function AppPaletteBody({
       onKeyDown={handleKeyDown}
       className={cn(
         maxHeight,
-        "min-h-32 transition-[height] motion-reduce:transition-none palette-body-height",
+        // Floor sized off the row rhythm, not a round number: `p-2` (16) + a
+        // section label (19) + three 34px rows is 137px, so the old 128px floor
+        // seated two rows and then grew the surface by 9px on the third — which
+        // is the launcher's most common result count. 144 seats three rows in
+        // the reserved space, so typing through a narrowing list holds still.
+        "min-h-36 transition-[height] motion-reduce:transition-none palette-body-height",
         className
       )}
       style={{
@@ -488,6 +581,22 @@ function DefaultKeyboardHints() {
   );
 }
 
+// The search box IS the palette, not a form field sitting inside one, so it
+// takes a recessed wash over the dialog surface rather than the standalone
+// `surface-input` fill. Alpha-based, so it reads the same over a dialog and
+// over the dock launcher's popover.
+//
+// The focus lift that pairs with it is accent at /40, the same strength every
+// focus border in the app now carries — this input used to be the one holdout,
+// drawn neutral on the theory that the selection rail should own the region's
+// only accent, which just made the focused element the dimmest thing on the
+// surface. /40 also matches `PALETTE_ROW_CLASS`'s selected outline, so the
+// focused field and the selected row render the same green; change them
+// together. Tailwind needs the variants written out at each use site, so they
+// live inline below.
+const PALETTE_INPUT_SURFACE =
+  "bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)]";
+
 interface AppPaletteInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   inputRef?: React.Ref<HTMLInputElement>;
   /**
@@ -510,8 +619,9 @@ AppPaletteDialog.Input = function AppPaletteInput({
       <div
         className={cn(
           "flex w-full items-center gap-1.5 pl-2 pr-3 py-1.5",
-          "bg-surface-input border border-daintree-border rounded-[var(--radius-md)]",
-          "focus-within:border-daintree-accent focus-within:ring-1 focus-within:ring-daintree-accent/20"
+          PALETTE_INPUT_SURFACE,
+          // Accent focus — see `PALETTE_INPUT_SURFACE`.
+          "focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20"
         )}
       >
         {inputPrefix}
@@ -535,9 +645,10 @@ AppPaletteDialog.Input = function AppPaletteInput({
       type="text"
       className={cn(
         "w-full px-3 py-2 text-sm",
-        "bg-surface-input border border-daintree-border rounded-[var(--radius-md)]",
+        PALETTE_INPUT_SURFACE,
         "text-daintree-text placeholder:text-text-placeholder",
-        "focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/20",
+        // Accent focus — see `PALETTE_INPUT_SURFACE`.
+        "focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/20",
         className
       )}
       {...props}
@@ -551,12 +662,24 @@ interface AppPaletteEmptyProps {
   noMatchMessage?: string;
   noMatchContent?: React.ReactNode;
   children?: React.ReactNode;
+  /**
+   * Name of a narrowing control, other than the query, that is also excluding
+   * rows — supplied only while that control is actually active.
+   *
+   * Without it the zero-data branch claims the surface itself is empty when a
+   * filter the user set is what emptied it: the ghost-filter dead end, where
+   * someone hits no results and cannot see why. Naming BOTH constraints is the
+   * point, so the default title states the filter and the query together rather
+   * than whichever one the caller happened to think of. Pair it with a
+   * `noMatchContent` action that clears the filter.
+   */
+  filterLabel?: string;
 }
 
 const NO_MATCH_QUERY_MAX = 40;
 const EMPTY_ANNOUNCEMENT_DEBOUNCE_MS = 600;
 
-function defaultNoMatchTitle(trimmedQuery: string) {
+function defaultNoMatchTitle(trimmedQuery: string, filterLabel: string | undefined) {
   // Iterate by codepoint (Array.from handles surrogate pairs) so we never
   // truncate inside an astral-plane character like an emoji.
   const codepoints = Array.from(trimmedQuery);
@@ -564,7 +687,15 @@ function defaultNoMatchTitle(trimmedQuery: string) {
     codepoints.length > NO_MATCH_QUERY_MAX
       ? `${codepoints.slice(0, NO_MATCH_QUERY_MAX).join("")}…`
       : trimmedQuery;
-  return `No matches for "${display}"`;
+
+  // "with X selected" rather than "in X": the point of naming the filter is to
+  // explain why the list is empty, and only the causal phrasing does that.
+  // Generic noun throughout — this component serves every palette, and only the
+  // caller knows whether its rows are agents, projects or commands.
+  if (!trimmedQuery) return `No matches with ${filterLabel} selected`;
+  return filterLabel === undefined
+    ? `No matches for "${display}"`
+    : `No matches for "${display}" with ${filterLabel} selected`;
 }
 
 AppPaletteDialog.Empty = function AppPaletteEmpty({
@@ -573,6 +704,7 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
   noMatchMessage,
   noMatchContent,
   children,
+  filterLabel,
 }: AppPaletteEmptyProps) {
   const trimmedQuery = query.trim();
   // Defer the *displayed* query so the title doesn't redraw every keystroke
@@ -592,8 +724,19 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
   // doesn't suppress repeated identical announcements.
   const srTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [srAnnouncement, setSrAnnouncement] = useState("");
-  const displayQuery = deferredTrimmedQuery || trimmedQuery;
-  const title = trimmedQuery ? (noMatchMessage ?? defaultNoMatchTitle(displayQuery)) : emptyMessage;
+  // Forced empty the instant the real query is, never merely deferred to it.
+  // A filter keeps the narrowed branch mounted after the box is cleared, so a
+  // lagging deferred value would go on rendering `No matches for "docs"` over a
+  // query the user had already deleted — the stale flash the immediate-branch
+  // decision above exists to prevent.
+  const displayQuery = trimmedQuery ? deferredTrimmedQuery || trimmedQuery : "";
+  // A filter narrows the population exactly as a query does, so it takes the
+  // same branch. The branch decision stays on the immediate values; only the
+  // rendered query text is deferred.
+  const isNarrowed = trimmedQuery.length > 0 || filterLabel !== undefined;
+  const title = isNarrowed
+    ? (noMatchMessage ?? defaultNoMatchTitle(displayQuery, filterLabel))
+    : emptyMessage;
 
   useEffect(() => {
     return () => {
@@ -612,7 +755,7 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
     };
   }, [title, trimmedQuery]);
 
-  if (trimmedQuery) {
+  if (isNarrowed) {
     return (
       <>
         <EmptyState

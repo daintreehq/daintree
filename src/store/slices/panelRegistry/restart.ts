@@ -27,7 +27,7 @@ import { getAgentConfig } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isPtyPanel } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
@@ -173,7 +173,51 @@ export const createRestartActions = (
   | "setInputLocked"
   | "toggleInputLocked"
   | "activateFallbackPreset"
+  | "dismissSessionLost"
+  | "dismissAllSessionLost"
 > => ({
+  // Dismissing the banner acknowledges the lost session, which is exactly what
+  // `sessionLostOnRestore` tracks — so consume the signal rather than shadowing
+  // it with a second "was it dismissed" flag. Keeping the acknowledgement in the
+  // store is the fix for #11589: a worktree switch unmounts the pane, so
+  // component state could never survive it. Same reasoning as the restart path
+  // below, which has always cleared this signal on acknowledgement (#9802).
+  dismissSessionLost: (id) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal || !isPtyPanel(terminal)) return state;
+      // Already acknowledged (or never flagged) — keep the same state object so
+      // a repeat dismissal doesn't wake every subscriber.
+      if (!terminal.sessionLostOnRestore) return state;
+      return {
+        panelsById: {
+          ...state.panelsById,
+          [id]: { ...terminal, sessionLostOnRestore: undefined },
+        },
+      };
+    });
+  },
+
+  // One atomic pass over the carrier so N flagged panes produce a single store
+  // notification. Iterates `panelsById` directly, not `panelIds`: a hydration
+  // batch publishes the carrier before appending ids (#9655), and this action
+  // exists precisely for the post-restart moment when many panels are flagged.
+  // Deliberately unscoped by worktree — leaving flagged panels behind a
+  // worktree switch is the bug this issue is about.
+  dismissAllSessionLost: () => {
+    set((state) => {
+      let next: Record<string, PanelInstance> | undefined;
+      for (const [panelId, panel] of Object.entries(state.panelsById)) {
+        if (!isPtyPanel(panel) || !panel.sessionLostOnRestore) continue;
+        next ??= { ...state.panelsById };
+        next[panelId] = { ...panel, sessionLostOnRestore: undefined };
+      }
+      // Nothing flagged — return the same state object so no subscriber wakes.
+      if (!next) return state;
+      return { panelsById: next };
+    });
+  },
+
   restartTerminal: async (id, options) => {
     const allowResumeLatest = options?.allowResumeLatest !== false;
     const terminal = get().panelsById[id];

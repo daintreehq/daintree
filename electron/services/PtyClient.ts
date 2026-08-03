@@ -62,6 +62,7 @@ import { fileURLToPath } from "url";
 import { createLogger, isValidLogOverrideLevel } from "../utils/logger.js";
 import { store } from "../store.js";
 import { getPluginAgentRegistry } from "../../shared/config/pluginAgentRegistry.js";
+import { getPluginProcessToolRegistry } from "../../shared/config/pluginProcessToolRegistry.js";
 
 const logger = createLogger("main:PtyClient");
 const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
@@ -107,6 +108,7 @@ import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
 import type { PanelKind, PanelTitleMode } from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
+import type { SerializedTerminalSnapshot } from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -746,6 +748,13 @@ export class PtyClient extends EventEmitter {
     // main-process snapshot directly — no cache needed, and a host restart
     // re-syncs whatever plugins are loaded now.
     shard.send({ type: "set-plugin-agent-registry", registry: getPluginAgentRegistry() });
+    // Same contract for plugin-contributed process detections (#11613): mirror
+    // before any spawn replay so a respawned terminal resolves its tab icon from
+    // the first process-tree poll rather than after the next plugin mutation.
+    shard.send({
+      type: "set-plugin-process-tool-registry",
+      registry: getPluginProcessToolRegistry(),
+    });
     // A project shard forked mid-session missed every earlier config setter
     // (resource profile, monitoring, persistence suppression) — those are
     // host-process-wide, so replay the caches on its first ready. Restart
@@ -1161,6 +1170,24 @@ export class PtyClient extends EventEmitter {
     for (const shard of this.shards.values()) {
       if (shard.lifecycle.isInitialized && shard.lifecycle.child) {
         shard.send({ type: "set-plugin-agent-registry", registry: getPluginAgentRegistry() });
+      }
+    }
+  }
+
+  /**
+   * Push the current plugin process-tool registry to every ready shard so their
+   * `ProcessDetector` resolves plugin-contributed command → icon detections
+   * (#11613). Same contract as {@link syncPluginAgentRegistry}: called by
+   * `PluginService` after a plugin load/unload, reads the authoritative main
+   * snapshot at call time, and leaves the restart case to the `ready` replay.
+   */
+  syncPluginProcessToolRegistry(): void {
+    for (const shard of this.shards.values()) {
+      if (shard.lifecycle.isInitialized && shard.lifecycle.child) {
+        shard.send({
+          type: "set-plugin-process-tool-registry",
+          registry: getPluginProcessToolRegistry(),
+        });
       }
     }
   }
@@ -2003,17 +2030,50 @@ export class PtyClient extends EventEmitter {
 
   /** Get all terminals, across all shards */
   async getAllTerminalsAsync(): Promise<TerminalInfoResponse[]> {
+    return (await this.getAllTerminalsWithCompletenessAsync()).terminals;
+  }
+
+  /**
+   * Get all terminals plus whether every shard actually answered.
+   *
+   * {@link getAllTerminalsAsync} substitutes `[]` for a failed shard, so a
+   * total pty-host outage is indistinguishable from a machine with no
+   * terminals — both resolve to an empty array with no rejection. That is
+   * tolerable for a count that will self-correct on the next poll, but not for
+   * a caller whose contract says "empty means genuinely nothing running":
+   * reporting a fleet as clear because the host stopped answering is the one
+   * wrong answer such a caller must never give.
+   *
+   * `degraded` is true when at least one shard failed, so callers can retain
+   * their last known-good view instead of publishing a false zero.
+   */
+  async getAllTerminalsWithCompletenessAsync(): Promise<{
+    terminals: TerminalInfoResponse[];
+    degraded: boolean;
+    shardsTotal: number;
+    shardsFailed: number;
+  }> {
+    const shards = this.fanOutShards();
     const results = await Promise.all(
-      this.fanOutShards().map((shard) => {
+      shards.map((shard) => {
         const promise = sendPtyHostRpc<TerminalInfoResponse[]>(
           shard,
           "all-terminals",
           (requestId) => ({ type: "get-all-terminals", requestId })
         );
-        return promise.catch(() => [] as TerminalInfoResponse[]);
+        return promise.then(
+          (terminals) => ({ terminals, ok: true }),
+          () => ({ terminals: [] as TerminalInfoResponse[], ok: false })
+        );
       })
     );
-    return results.flat();
+    const shardsFailed = results.filter((r) => !r.ok).length;
+    return {
+      terminals: results.flatMap((r) => r.terminals),
+      degraded: shardsFailed > 0,
+      shardsTotal: shards.length,
+      shardsFailed,
+    };
   }
 
   /**
@@ -2149,10 +2209,10 @@ export class PtyClient extends EventEmitter {
    * @param id - Terminal identifier
    * @returns Serialized state string or null if terminal not found
    */
-  async getSerializedStateAsync(id: string): Promise<string | null> {
+  async getSerializedStateAsync(id: string): Promise<SerializedTerminalSnapshot | null> {
     const shard = this.shardForTerminal(id);
     // Extended timeout for large terminals with lots of scrollback (see PTY_TIMEOUTS).
-    const promise = sendPtyHostRpc<string | null>(
+    const promise = sendPtyHostRpc<SerializedTerminalSnapshot | null>(
       shard,
       `serialize-${id}`,
       (requestId) => ({ type: "get-serialized-state", id, requestId }),

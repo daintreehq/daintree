@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionSnapshotter, type SessionSnapshotterHost } from "../SessionSnapshotter.js";
+import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
+
+// Snapshots now carry the grid they were captured at, so persistence writers
+// receive an object rather than a bare payload string (#11552).
+const SYNC_STATE: SerializedTerminalSnapshot = { data: "sync-state", cols: 80, rows: 24 };
+const ASYNC_STATE: SerializedTerminalSnapshot = { data: "async-state", cols: 80, rows: 24 };
+const BANNER_STATE: SerializedTerminalSnapshot = { data: "banner-state", cols: 80, rows: 24 };
 
 const persistAsyncMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 const persistSyncMock = vi.hoisted(() => vi.fn());
@@ -21,9 +28,9 @@ interface MutableHost extends SessionSnapshotterHost {
   launchAgentId: string | undefined;
   contentEpoch: number;
   bannerMarkers: boolean;
-  serializedState: string | null;
-  serializedStateAsync: string | null;
-  serializedForPersistence: string | null;
+  serializedState: SerializedTerminalSnapshot | null;
+  serializedStateAsync: SerializedTerminalSnapshot | null;
+  serializedForPersistence: SerializedTerminalSnapshot | null;
   asyncResolve: () => void;
   asyncResolved: boolean;
 }
@@ -49,9 +56,9 @@ function createHost(overrides: Partial<MutableHost> = {}): MutableHost {
     launchAgentId: undefined,
     contentEpoch: 1,
     bannerMarkers: false,
-    serializedState: "sync-state",
-    serializedStateAsync: "async-state",
-    serializedForPersistence: "banner-state",
+    serializedState: SYNC_STATE,
+    serializedStateAsync: ASYNC_STATE,
+    serializedForPersistence: BANNER_STATE,
     hasBannerMarkers() {
       return this.bannerMarkers;
     },
@@ -111,7 +118,7 @@ describe("SessionSnapshotter", () => {
       await vi.advanceTimersByTimeAsync(5000);
 
       expect(persistAsyncMock).toHaveBeenCalledTimes(1);
-      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", "async-state");
+      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", ASYNC_STATE);
     });
 
     it("uses banner-aware sync serialize when banner markers are present", async () => {
@@ -122,7 +129,7 @@ describe("SessionSnapshotter", () => {
       await vi.advanceTimersByTimeAsync(5000);
 
       expect(persistAsyncMock).toHaveBeenCalledTimes(1);
-      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", "banner-state");
+      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", BANNER_STATE);
     });
 
     it("skips scheduling when launchAgentId is set (agent terminal)", async () => {
@@ -254,7 +261,7 @@ describe("SessionSnapshotter", () => {
       await flushMicrotasks();
 
       expect(persistAsyncMock).toHaveBeenCalledTimes(1);
-      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", "async-state");
+      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", ASYNC_STATE);
     });
 
     it("strips restore banner via sync serializeForPersistence when banner markers are present", async () => {
@@ -265,7 +272,7 @@ describe("SessionSnapshotter", () => {
       await flushMicrotasks();
 
       expect(persistAsyncMock).toHaveBeenCalledTimes(1);
-      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", "banner-state");
+      expect(persistAsyncMock).toHaveBeenCalledWith("t-test", BANNER_STATE);
     });
 
     it("throttles repeated calls within 2s", async () => {
@@ -441,7 +448,7 @@ describe("SessionSnapshotter", () => {
       snap.flushSyncOnKill();
 
       expect(persistSyncMock).toHaveBeenCalledTimes(1);
-      expect(persistSyncMock).toHaveBeenCalledWith("t-test", "banner-state");
+      expect(persistSyncMock).toHaveBeenCalledWith("t-test", BANNER_STATE);
     });
 
     it("skips for agent terminals", () => {
@@ -474,7 +481,7 @@ describe("SessionSnapshotter", () => {
       snap.flushSyncOnKill();
 
       expect(persistSyncMock).toHaveBeenCalledTimes(1);
-      expect(persistSyncMock).toHaveBeenCalledWith("t-test", "banner-state");
+      expect(persistSyncMock).toHaveBeenCalledWith("t-test", BANNER_STATE);
     });
 
     it("skips when serialized state is null", () => {
@@ -505,7 +512,7 @@ describe("SessionSnapshotter", () => {
       snap.flushSyncOnDispose();
 
       expect(persistSyncMock).toHaveBeenCalledTimes(1);
-      expect(persistSyncMock).toHaveBeenCalledWith("t-test", "banner-state");
+      expect(persistSyncMock).toHaveBeenCalledWith("t-test", BANNER_STATE);
     });
 
     it("skips when wasKilled is true", () => {
@@ -527,7 +534,7 @@ describe("SessionSnapshotter", () => {
       snap.flushSyncOnDispose();
 
       expect(persistSyncMock).toHaveBeenCalledTimes(1);
-      expect(persistSyncMock).toHaveBeenCalledWith("t-test", "sync-state");
+      expect(persistSyncMock).toHaveBeenCalledWith("t-test", SYNC_STATE);
     });
 
     it("clears dirty flag after persist so a second call is a no-op", () => {

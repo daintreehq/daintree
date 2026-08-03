@@ -14,8 +14,13 @@ import type { AnyActionDefinition } from "./actions/actionTypes";
 import { logWarn } from "@/utils/logger";
 import { keybindingService } from "./KeybindingService";
 import { shortcutHintStore } from "../store/shortcutHintStore";
+import { useUIStore } from "@/store/uiStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { WORKBENCH_TIER_TOOLS } from "@shared/config/helpAssistantTierAllowlists";
+import {
+  WORKBENCH_TIER_TOOLS,
+  ACTION_TIER_ADDONS,
+  SYSTEM_TIER_ADDONS,
+} from "@shared/config/helpAssistantTierAllowlists";
 import { deriveBand } from "../../shared/utils/actionRiskBand.js";
 
 /**
@@ -28,6 +33,17 @@ const SENSITIVE_ARG_FIELD_PATTERN = /token|password|secret|key|auth|credential/i
 
 /** Max size for args in event payloads (prevents explosion) */
 const MAX_ARG_PAYLOAD_SIZE = 1024;
+
+/**
+ * Every action a model can be shown, at any assistant tier. Derived from the
+ * live allowlists so a newly exposed action picks up the description rules
+ * without a second list to keep in step.
+ */
+const LLM_EXPOSED_ACTION_IDS = new Set<string>([
+  ...WORKBENCH_TIER_TOOLS,
+  ...ACTION_TIER_ADDONS,
+  ...SYSTEM_TIER_ADDONS,
+]);
 
 /**
  * Validate a definition against invariants that should hold for every action.
@@ -44,7 +60,14 @@ export function validateDefinitionInvariants(definition: AnyActionDefinition): s
     );
   }
 
-  if ((definition.description?.length ?? 0) < 80) {
+  // Scoped to the tools a model can actually be shown (#11542). It used to fire
+  // for every action, which meant ~300 warnings for panel movement and focus
+  // cycling — prose no model ever reads. That noise is not free: renderer
+  // console output is captured into the buffer agents read back, so an
+  // unactionable warning per UI action is worse than no warning at all. The
+  // hard range for this cohort lives in actionDefinitions.quality.test.ts; this
+  // is the authoring-time nudge that points the same way.
+  if (LLM_EXPOSED_ACTION_IDS.has(definition.id) && (definition.description?.length ?? 0) < 80) {
     violations.push(
       `Action "${definition.id}" description is ${definition.description?.length ?? 0} chars ` +
         `(minimum 80). Descriptions are the primary MCP tool docs — short descriptions ` +
@@ -113,6 +136,41 @@ function zodSchemaToJsonSchema(
     logWarn("Failed to convert zod schema to JSON Schema", { error: err });
     return undefined;
   }
+}
+
+/**
+ * Cap on reported issues. A deeply wrong result can produce an issue per row;
+ * the first few identify the mismatch and the rest only inflate a payload that
+ * crosses IPC.
+ */
+const MAX_REPORTED_RESULT_ISSUES = 10;
+
+/**
+ * Summarize a result-validation failure as issue CODES and structural depth.
+ *
+ * Deliberately drops the rejected value, zod's rendered message, AND the issue
+ * path. Dropping the path is not over-caution: under `z.record(...)` the path
+ * segment IS a key from the data, so a result shaped
+ * `{ "sk-live-abc": 42 }` reports that key verbatim. This summary reaches two
+ * surfaces an agent can read — `ActionError.details`, which crosses IPC to the
+ * MCP client, and the renderer log buffer, which `logs.getAll` serves as a tool
+ * — so a leaked key would re-open the hole this validation exists to close.
+ *
+ * There is deliberately no richer DEV-only variant either: `console.warn` is
+ * not local. `rendererConsoleCapture` forwards renderer console messages to
+ * the main logger, which buffers them before scrubbing, so a prettified error
+ * would reach `logs.getAll` too.
+ *
+ * The action id plus code and depth locate the mismatch against a schema the
+ * developer already has.
+ */
+function summarizeResultIssues(error: z.ZodError): string[] {
+  const seen = new Set<string>();
+  for (const issue of error.issues) {
+    seen.add(`${issue.code} at depth ${issue.path.length}`);
+    if (seen.size >= MAX_REPORTED_RESULT_ISSUES) break;
+  }
+  return [...seen];
 }
 
 /**
@@ -274,6 +332,19 @@ export class ActionService {
    */
   getTitle(id: ActionId): string {
     return this.registry.get(id)?.title ?? "";
+  }
+
+  /**
+   * Whether the action guarantees it has already shown its own error toast for
+   * any failure escaping `run()`. Single O(1) registry lookup — the flag is
+   * renderer-local and deliberately absent from `ActionManifestEntry`, so the
+   * palette reads it here rather than off the manifest row.
+   *
+   * Fails closed: unknown ids return false, so a caller that can't confirm
+   * ownership keeps showing its own fallback toast rather than silencing one.
+   */
+  selfNotifiesOnExecutionError(id: ActionId): boolean {
+    return this.registry.get(id)?.selfNotifiesOnExecutionError === true;
   }
 
   /**
@@ -460,6 +531,15 @@ export class ActionService {
     const wallClockStartMs = Date.now();
     const monotonicStartMs = typeof performance !== "undefined" ? performance.now() : Date.now();
 
+    // Snapshot the overlay epoch before run() so the post-run hint can tell
+    // "an overlay opened while this ran" from "one was already open". Only the
+    // former must suppress — see emitShortcutHint. Skipped entirely when no
+    // hint can be emitted anyway.
+    const overlayEpochBeforeRun =
+      source === "user" && !definition.suppressShortcutHint
+        ? useUIStore.getState().overlayClaimEpoch
+        : null;
+
     try {
       // Derive (don't mutate — `context` may be a shared object from the
       // context provider) a run-scoped context carrying the dispatch source
@@ -467,6 +547,35 @@ export class ActionService {
       // double-confirming an agent dispatch the MCP bridge already gated.
       const runContext: ActionContext = { ...context, dispatchSource: source };
       const result = await definition.run(validatedArgs, runContext);
+      // Enforce the action's own result contract. Zod objects strip unknown
+      // keys, so this is what makes the published projection the delivered one
+      // rather than a claim nothing checks (#11539). Keyed on `resultSchema`
+      // alone: `mcpOutputSchema` only gates the advertised JSON Schema, while
+      // the MCP *text* response serializes this value either way.
+      //
+      // Fails closed, mirroring the argsSchema gate above. A result that
+      // violates its own schema means the action is wrong; passing the raw
+      // value through would preserve the leak in exactly the case this exists
+      // to catch.
+      //
+      // Returns BEFORE the success-only bookkeeping below. `run()` did execute
+      // and its side effects stand, but `action:dispatched` is contractually a
+      // completion event and `lastAction` feeds `action.repeatLast` — recording
+      // a dispatch whose result was rejected would let a keybinding replay it
+      // and would log a success breadcrumb for a call that returned an error.
+      const validatedResult = definition.resultSchema
+        ? definition.resultSchema.safeParse(result)
+        : undefined;
+      if (validatedResult && !validatedResult.success) {
+        const issues = summarizeResultIssues(validatedResult.error);
+        logWarn("Action result failed its own resultSchema", { actionId, issues });
+        const error: ActionError = {
+          code: "RESULT_VALIDATION_ERROR",
+          message: `Action "${actionId}" returned a result that does not match its declared schema`,
+          details: issues,
+        };
+        return { ok: false, error };
+      }
       const durationMs =
         (typeof performance !== "undefined" ? performance.now() : Date.now()) - monotonicStartMs;
       if (
@@ -492,8 +601,9 @@ export class ActionService {
         confirmed: options?.confirmed,
         pluginId: definition.pluginId,
       });
-      if (!definition.suppressShortcutHint) this.emitShortcutHint(actionId, source);
-      return { ok: true, result: result as Result };
+      if (!definition.suppressShortcutHint)
+        this.emitShortcutHint(actionId, source, overlayEpochBeforeRun);
+      return { ok: true, result: (validatedResult ? validatedResult.data : result) as Result };
     } catch (err) {
       const error: ActionError = {
         code: "EXECUTION_ERROR",
@@ -641,6 +751,7 @@ export class ActionService {
       keywords: definition.keywords?.slice(),
       ...(definition.mcpAnnotations ? { mcpAnnotations: { ...definition.mcpAnnotations } } : {}),
       ...(definition.mcpVisibility ? { mcpVisibility: definition.mcpVisibility } : {}),
+      ...(definition.deprecated ? { deprecated: { ...definition.deprecated } } : {}),
       ...(definition.pluginId ? { pluginId: definition.pluginId } : {}),
       ...(definition.examples ? { examples: structuredClone(definition.examples) } : {}),
       ...(definition.dangerRationale ? { dangerRationale: definition.dangerRationale } : {}),
@@ -726,9 +837,41 @@ export class ActionService {
     return hasAny ? picked : undefined;
   }
 
-  private emitShortcutHint(actionId: ActionId, source: ActionSource): void {
+  /**
+   * Suppresses the hint when an overlay is on screen that opened while run()
+   * was in flight. Such a hint would render above it (z-toast sits over
+   * z-modal) and the dialog's own `clearDialogOverlays()` already fired
+   * *before* this emit, so nothing would take the hint down for the full
+   * auto-dismiss window — issue #11507.
+   *
+   * Both halves are load-bearing. The epoch alone would suppress after a
+   * dialog that opened and closed again, where there is nothing left to strand
+   * on; a non-empty stack alone would suppress hints for actions invoked
+   * inside a dialog that was already open and stays open.
+   *
+   * The epoch rather than the stack contents because claim ids are reused: a
+   * dialog reopening at the same tree position keeps its `useId()`, so an
+   * open→close→reopen across one dispatch is invisible to a contents diff.
+   *
+   * The test is temporal, not attributive: claims carry no owning action, so a
+   * dialog opened by a *concurrent* dispatch suppresses this one's hint too.
+   * That is the conservative direction — the hint would have landed over that
+   * dialog either way.
+   */
+  private emitShortcutHint(
+    actionId: ActionId,
+    source: ActionSource,
+    overlayEpochBeforeRun: number | null
+  ): void {
     if (source !== "user") return;
     try {
+      // Bail before incrementCount so a suppressed hint doesn't silently
+      // consume one of the teaching milestones.
+      if (overlayEpochBeforeRun !== null) {
+        const { overlayStack, overlayClaimEpoch } = useUIStore.getState();
+        if (overlayStack.length > 0 && overlayClaimEpoch !== overlayEpochBeforeRun) return;
+      }
+
       const combo = keybindingService.getEffectiveCombo(actionId);
       if (!combo) return;
 

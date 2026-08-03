@@ -2,6 +2,9 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { WorktreeSummarySchema } from "./schemas";
+import { paginate } from "@shared/utils/boundedOutput";
+import { GIT_PAGE_LIMIT_DEFAULT, GIT_PAGE_LIMIT_MAX } from "@shared/config/gitReadLimits";
+import { withWorktreeLocation, requireWorktreePath } from "./locationArgs";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { worktreeClient } from "@/clients";
 
@@ -13,7 +16,7 @@ export function registerWorktreeQueryActions(
     id: "worktree.list",
     title: "List Worktrees",
     description:
-      "List every worktree in the active project with summary status. Takes no args. Returns { worktrees } — each entry has id, path, branch, isActive, isMain, issueNumber/issueTitle, prNumber/prTitle/prUrl, status (mood), and lastCommit. Never errors; returns an empty array when none exist. Do NOT use this when you only need the active worktree — call `worktree.getCurrent`.",
+      "List every worktree in the active project with its branch, status and any linked issue or pull request. Use this to discover worktree ids; ask for the current worktree instead when all you need is the one in use. It never fails — an empty list means the project has no worktrees.",
     category: "worktree",
     kind: "query",
     danger: "safe",
@@ -26,7 +29,9 @@ export function registerWorktreeQueryActions(
       const result = worktrees.map((w) => ({
         id: w.id,
         path: w.path,
-        branch: w.branch,
+        // `Worktree.branch` is undefined on a detached HEAD, and the summary
+        // shape declares `string | null` like every sibling field here.
+        branch: w.branch ?? null,
         isActive: w.id === activeWorktreeId,
         isMain: w.isMainWorktree ?? false,
         issueNumber: w.issueNumber ?? null,
@@ -46,7 +51,7 @@ export function registerWorktreeQueryActions(
     id: "worktree.getCurrent",
     title: "Get Current Worktree",
     description:
-      "Get the currently active worktree's summary. Takes no args. Returns { worktree } — the same shape as a `worktree.list` entry (id, path, branch, isActive, isMain, issue/PR fields, status, lastCommit), or null when no worktree is active or it can't be found. Never errors. Do NOT use `worktree.list` for this — that returns all worktrees; this returns only the active one.",
+      "Get the worktree currently in use, which is what most work should be scoped to. Use the full worktree listing only when you genuinely need the others. An empty result means no worktree is active, or the active one can no longer be found — either way, handle it before acting.",
     category: "worktree",
     kind: "query",
     danger: "safe",
@@ -66,7 +71,8 @@ export function registerWorktreeQueryActions(
       const result = {
         id: worktree.id,
         path: worktree.path,
-        branch: worktree.branch,
+        // Undefined on a detached HEAD; the summary shape declares `string | null`.
+        branch: worktree.branch ?? null,
         isActive: true,
         isMain: worktree.isMainWorktree ?? false,
         issueNumber: worktree.issueNumber ?? null,
@@ -87,20 +93,37 @@ export function registerWorktreeQueryActions(
       id: "worktree.listBranches",
       title: "List Branches",
       description:
-        "List git branches for a repository. Args: `rootPath` (required) — absolute path to the repository root (a worktree `path` from `worktree.list`). Returns { branches } — each entry has name, current (bool), commit (sha), and optional remote. Errors when `rootPath` is missing or not a git repository.",
+        "List a repository's git branches a page at a time, flagging which one is checked out. Use this to discover branch names before creating a worktree or opening a pull request. Long branch lists are paged, so continue from the offset it hands back while more remain. A target that is not a git repository fails rather than returning nothing.",
       category: "worktree",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        rootPath: z
-          .string()
-          .describe("Absolute repository root path — a worktree `path` from `worktree.list`."),
-      }),
+      // `offset`/`limit` are declared inline rather than through `paginationShape`
+      // so the branch-specific ceilings and their descriptions survive (#11531).
+      argsSchema: withWorktreeLocation(
+        {
+          offset: z
+            .number()
+            .int()
+            .nonnegative()
+            .optional()
+            .describe("Index to start from — pass a previous `nextOffset` (default 0)."),
+          limit: z
+            .number()
+            .int()
+            .positive()
+            .max(GIT_PAGE_LIMIT_MAX)
+            .optional()
+            .describe(
+              `Branches per page (default ${GIT_PAGE_LIMIT_DEFAULT}, max ${GIT_PAGE_LIMIT_MAX}).`
+            ),
+        },
+        { legacy: ["rootPath"] }
+      ).optional(),
       examples: [
         {
-          args: { rootPath: "/Users/me/Projects/app" },
-          description: "List branches for the repository at that path",
+          args: { worktreePath: "/Users/me/Projects/app" },
+          description: "List the first 100 branches for the repository at that path",
         },
       ],
       resultSchema: z.object({
@@ -112,10 +135,37 @@ export function registerWorktreeQueryActions(
             remote: z.string().optional(),
           })
         ),
+        total: z.number(),
+        hasMore: z.boolean(),
+        offset: z.number(),
+        limit: z.number(),
+        nextOffset: z.number().nullable(),
       }),
-      run: async ({ rootPath }) => {
-        const result = await worktreeClient.listBranches(rootPath);
-        return { branches: result };
+      mcpOutputSchema: true,
+      run: async (args, ctx) => {
+        const { offset, limit, ...location } = args ?? {};
+        const result = await worktreeClient.listBranches(requireWorktreePath(location, ctx));
+        // Clamped here as well as in argsSchema: dispatch paths that bypass
+        // schema validation must not be able to request an unbounded page.
+        const start = Math.max(Math.trunc(offset ?? 0) || 0, 0);
+        const size = Math.min(
+          Math.max(Math.trunc(limit ?? GIT_PAGE_LIMIT_DEFAULT) || 1, 1),
+          GIT_PAGE_LIMIT_MAX
+        );
+        const page = paginate(result, start, size);
+        return {
+          branches: page.items.map((branch) => ({
+            name: branch.name,
+            current: branch.current,
+            commit: branch.commit,
+            remote: branch.remote,
+          })),
+          total: page.total,
+          hasMore: page.hasMore,
+          offset: start,
+          limit: size,
+          nextOffset: page.nextOffset,
+        };
       },
     })
   );
@@ -125,26 +175,27 @@ export function registerWorktreeQueryActions(
       id: "worktree.getDefaultPath",
       title: "Get Default Worktree Path",
       description:
-        "Compute the default filesystem path for a new worktree from the repo root, branch name, and the configured path pattern. Args: `rootPath` (required) — repository root path (a worktree `path` from `worktree.list`); `branchName` (required) — the branch the worktree will track. Returns { path }. Errors when either arg is missing.",
+        "Work out where a new worktree for a given branch should live, honouring the project's configured path pattern. Use this before creating a worktree so the path matches project convention rather than being invented. The repository must be named explicitly — there is deliberately no active-worktree fallback, because anchoring on a linked worktree silently produces a path nested inside it.",
       category: "worktree",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        rootPath: z
-          .string()
-          .describe("Absolute repository root path — a worktree `path` from `worktree.list`."),
-        branchName: z.string().describe("Branch name the new worktree will track."),
-      }),
+      argsSchema: withWorktreeLocation(
+        { branchName: z.string().describe("Branch name the new worktree will track.") },
+        { legacy: ["rootPath"], requireSelector: true }
+      ),
       examples: [
         {
-          args: { rootPath: "/Users/me/Projects/app", branchName: "feature/login" },
+          args: { worktreePath: "/Users/me/Projects/app", branchName: "feature/login" },
           description: "Resolve where a worktree for 'feature/login' would be created",
         },
       ],
       resultSchema: z.object({ path: z.string() }),
-      run: async ({ rootPath, branchName }) => {
-        const result = await worktreeClient.getDefaultPath(rootPath, branchName);
+      run: async ({ branchName, ...location }, ctx) => {
+        const result = await worktreeClient.getDefaultPath(
+          requireWorktreePath(location, ctx),
+          branchName
+        );
         return { path: result };
       },
     })
@@ -155,26 +206,27 @@ export function registerWorktreeQueryActions(
       id: "worktree.getAvailableBranch",
       title: "Get Available Branch Name",
       description:
-        "Resolve a collision-safe branch name: returns the requested name if free, otherwise a numbered variant (e.g. 'feature-2'). Args: `rootPath` (required) — repository root path (a worktree `path` from `worktree.list`); `branchName` (required) — the desired branch name. Returns { branch } — the safe name to use. Errors when either arg is missing.",
+        "Turn a desired branch name into one that is actually free, appending a numeric suffix when the name is taken. Use this before creating a branch or worktree so creation does not fail on a collision. It reserves nothing — the name can still be taken between this call and the one that uses it.",
       category: "worktree",
       kind: "query",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        rootPath: z
-          .string()
-          .describe("Absolute repository root path — a worktree `path` from `worktree.list`."),
-        branchName: z.string().describe("Desired branch name to check for collisions."),
-      }),
+      argsSchema: withWorktreeLocation(
+        { branchName: z.string().describe("Desired branch name to check for collisions.") },
+        { legacy: ["rootPath"] }
+      ),
       examples: [
         {
-          args: { rootPath: "/Users/me/Projects/app", branchName: "feature/login" },
+          args: { worktreePath: "/Users/me/Projects/app", branchName: "feature/login" },
           description: "Get a non-colliding branch name based on 'feature/login'",
         },
       ],
       resultSchema: z.object({ branch: z.string() }),
-      run: async ({ rootPath, branchName }) => {
-        const result = await worktreeClient.getAvailableBranch(rootPath, branchName);
+      run: async ({ branchName, ...location }, ctx) => {
+        const result = await worktreeClient.getAvailableBranch(
+          requireWorktreePath(location, ctx),
+          branchName
+        );
         return { branch: result };
       },
     })

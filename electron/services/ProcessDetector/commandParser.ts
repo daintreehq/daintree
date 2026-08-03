@@ -1,5 +1,6 @@
 import type { CommandIdentity } from "./types.js";
-import { AGENT_CLI_NAMES, PROCESS_ICON_MAP } from "./registries.js";
+import { getProcessToolPriority } from "../../../shared/config/processToolRegistry.js";
+import { AGENT_CLI_NAMES, getProcessIconMap } from "./registries.js";
 
 const WINDOWS_LAUNCHER_EXTENSION_PATTERN = /\.(?:exe|cmd|bat|com|ps1)$/i;
 const SCRIPT_EXTENSION_PATTERN = /\.(?:m?jsx?|cjs|tsx?|py|rb|php|pl)$/i;
@@ -112,6 +113,31 @@ export function redactArgv(command: string | undefined): string {
   return JSON.stringify(basename);
 }
 
+// Package-manager subcommands whose next argument is a real binary rather than
+// a user-defined script name. `run` is deliberately absent: `npm run docker`
+// runs whatever the "docker" script says, which is usually not Docker.
+/**
+ * Package-manager subcommands that run *another* binary rather than being one.
+ * Exported because the plugin-manifest schema reserves these names: a plugin
+ * that registered `exec` as its own command would match at argv[1] of
+ * `npm exec vite` and win the tie against Vite at argv[2] (leftmost wins on
+ * equal tier), reporting the plugin for a process it never launched.
+ */
+export const BINARY_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "x"]);
+
+/**
+ * Highest candidate index that can still name the tool being run. Normally
+ * argv[0] and the token it executes; a package manager's exec subcommand
+ * shifts that one further right (`pnpm exec vitest`).
+ *
+ * This is positional, not a full argv grammar — a flag that takes a value
+ * (`node --require ts-node/register app.js`) still consumes a slot, so the
+ * process-tree walk remains the primary signal.
+ */
+export function executablePositionLimit(candidates: string[]): number {
+  return candidates[1] && BINARY_EXEC_SUBCOMMANDS.has(candidates[1].toLowerCase()) ? 2 : 1;
+}
+
 /**
  * Best-effort identity resolution from a shell command line.
  *
@@ -122,23 +148,31 @@ export function redactArgv(command: string | undefined): string {
  */
 export function detectCommandIdentity(command: string | undefined): CommandIdentity | null {
   const candidates = extractCommandNameCandidates(command);
-  let iconMatch: { name: string; icon: string } | null = null;
+  let iconMatch: { name: string; icon: string; priority: number } | null = null;
+  // Captured once so every lookup in this resolution sees one consistent map,
+  // even if a plugin loads mid-pass.
+  const processIconMap = getProcessIconMap();
 
-  for (const candidate of candidates) {
+  for (const [index, candidate] of candidates.entries()) {
     const lowerCandidate = candidate.toLowerCase();
     const candidateAgent = AGENT_CLI_NAMES[lowerCandidate];
     if (candidateAgent) {
       return {
         agentType: candidateAgent,
-        processIconId: PROCESS_ICON_MAP[lowerCandidate],
+        processIconId: processIconMap[lowerCandidate],
         processName: candidate,
       };
     }
 
-    if (!iconMatch) {
-      const candidateIcon = PROCESS_ICON_MAP[lowerCandidate];
-      if (candidateIcon) {
-        iconMatch = { name: candidate, icon: candidateIcon };
+    // Same executable-position rule as the process-tree path.
+    if (index > executablePositionLimit(candidates)) continue;
+    const candidateIcon = processIconMap[lowerCandidate];
+    if (candidateIcon) {
+      // Tier preference, so a typed `npx vitest` reports Vitest rather than
+      // npm. Strict `<` keeps argv order on ties.
+      const priority = getProcessToolPriority(candidateIcon);
+      if (!iconMatch || priority < iconMatch.priority) {
+        iconMatch = { name: candidate, icon: candidateIcon, priority };
       }
     }
   }

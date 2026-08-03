@@ -273,7 +273,7 @@ export function EnvironmentSettingsTab() {
                       onChange={(e) => updateRow(index, "key", e.target.value)}
                       spellCheck={false}
                       autoCapitalize="none"
-                      className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+                      className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                       placeholder="VARIABLE_NAME"
                       aria-label="Environment variable name"
                       aria-invalid={!!error || undefined}
@@ -289,7 +289,7 @@ export function EnvironmentSettingsTab() {
                         autoCapitalize="none"
                         autoComplete={isSensitive ? "new-password" : "off"}
                         className={cn(
-                          "w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30",
+                          "w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30",
                           isSensitive && "pr-8"
                         )}
                         placeholder="e.g. /usr/local/bin"

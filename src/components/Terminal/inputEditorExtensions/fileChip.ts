@@ -1,6 +1,10 @@
 import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/view";
 import { StateField } from "@codemirror/state";
-import { getAllAtFileTokens, type AtFileToken } from "../hybridInputParsing";
+import {
+  getAllAtFileTokens,
+  RESERVED_AT_TOKEN_PATHS,
+  type AtFileToken,
+} from "../hybridInputParsing";
 import { chipPendingDeleteField, isChipSelected } from "./chipBackspace";
 import { fileDropChipField } from "./fileDropChip";
 import { imageChipField } from "./imageChip";
@@ -8,8 +12,6 @@ import { imageChipField } from "./imageChip";
 interface FileChipState {
   tokens: AtFileToken[];
 }
-
-const RESERVED_TOKEN_PATHS = new Set(["diff", "diff:staged", "diff:head", "terminal", "selection"]);
 
 interface RangeOwner {
   from: number;
@@ -59,7 +61,7 @@ class FileChipWidget extends WidgetType {
 }
 
 function buildFileChipState(text: string): FileChipState {
-  const tokens = getAllAtFileTokens(text).filter((t) => !RESERVED_TOKEN_PATHS.has(t.path));
+  const tokens = getAllAtFileTokens(text).filter((t) => !RESERVED_AT_TOKEN_PATHS.has(t.path));
   return { tokens };
 }
 

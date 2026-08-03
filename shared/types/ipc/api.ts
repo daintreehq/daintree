@@ -35,6 +35,10 @@ import type {
   CreateIssueInput,
   EditIssueInput,
   IssueCloseReason,
+  MergePRResult,
+  PRDraftStateResult,
+  PullRequestReview,
+  RequestReviewersResult,
   ReviewThread,
   ForgeTokenHealthState,
   RateLimitDetails,
@@ -61,6 +65,7 @@ import type {
   SemanticSearchMatch,
 } from "./terminal.js";
 import type { AppVersionInfo } from "./app.js";
+import type { SerializedTerminalSnapshot } from "../terminal.js";
 import type {
   SaveArtifactOptions,
   SaveArtifactResult,
@@ -269,8 +274,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     reconnect(terminalId: string): Promise<TerminalReconnectResult>;
     reconnectBulk(terminalIds: string[]): Promise<Record<string, TerminalReconnectResult>>;
     replayHistory(terminalId: string, maxLines?: number): Promise<{ replayed: number }>;
-    getSerializedState(terminalId: string): Promise<string | null>;
-    getSerializedStates(terminalIds: string[]): Promise<Record<string, string | null>>;
+    getSerializedState(terminalId: string): Promise<SerializedTerminalSnapshot | null>;
+    getSerializedStates(
+      terminalIds: string[]
+    ): Promise<Record<string, SerializedTerminalSnapshot | null>>;
     getSharedBuffers(): Promise<{
       visualBuffers: SharedArrayBuffer[];
       signalBuffer: SharedArrayBuffer | null;
@@ -354,7 +361,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     applyPatch(options: ApplyPatchOptions): Promise<ApplyPatchResult>;
   };
   copyTree: {
-    generate(worktreeId: string, options?: CopyTreeOptions): Promise<CopyTreeResult>;
+    generate(
+      worktreeId: string,
+      options?: CopyTreeOptions,
+      includeContent?: boolean
+    ): Promise<CopyTreeResult>;
     generateAndCopyFile(worktreeId: string, options?: CopyTreeOptions): Promise<CopyTreeResult>;
     injectToTerminal(
       terminalId: string,
@@ -547,7 +558,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     switch(
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { focusIntent?: "focus-next-waiting" }
+      options?: { focusIntent?: import("./project.js").ProjectFocusOnActivateIntent }
     ): Promise<Project>;
     /**
      * Hover-prefetch trigger for the project switcher palette. Fire-and-forget:
@@ -569,7 +580,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: { projectId: string; worktreeLoadError: string | null }) => void
     ): () => void;
     onOpenGitInitDialog(callback: (payload: { directoryPath: string }) => void): () => void;
-    onFocusOnActivate(callback: (payload: { intent: "focus-next-waiting" }) => void): () => void;
+    onFocusOnActivate(
+      callback: (payload: import("./project.js").ProjectFocusOnActivateIntent) => void
+    ): () => void;
     onBackgroundResize(callback: (payload: { width: number; height: number }) => void): () => void;
     onUpdated(callback: (project: Project) => void): () => void;
     onRemoved(callback: (projectId: string) => void): () => void;
@@ -755,6 +768,21 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     locate(projectId: string): Promise<Project | null>;
   };
+  /**
+   * Fleet-wide run snapshot. `getSnapshot` is inherited from the generated
+   * namespace rather than restated, so the pull signature can't drift from
+   * codegen; only the push subscription is declared by hand.
+   */
+  fleet: GeneratedElectronAPI["fleet"] & {
+    /**
+     * Subscribe to the fleet-wide run snapshot: every agent run across every
+     * project and scratch, including workspaces whose renderer view has been
+     * evicted. Pushed on a 5s aligned poll and debounced on agent state
+     * changes, with unchanged payloads suppressed — so a subscription alone
+     * never guarantees a first payload. Pair it with `getSnapshot` on mount.
+     */
+    onSnapshotUpdated(callback: (snapshot: import("./fleet.js").FleetSnapshot) => void): () => void;
+  };
   scratch: {
     getAll(): Promise<import("../scratch.js").Scratch[]>;
     getCurrent(): Promise<import("../scratch.js").Scratch | null>;
@@ -764,7 +792,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       updates: { name?: string; lastOpened?: number }
     ): Promise<import("../scratch.js").Scratch>;
     remove(scratchId: string): Promise<void>;
-    switch(scratchId: string): Promise<import("../scratch.js").Scratch>;
+    switch(
+      scratchId: string,
+      options?: { focusIntent?: import("./project.js").ProjectFocusOnActivateIntent }
+    ): Promise<import("../scratch.js").Scratch>;
     saveAsProject(scratchId: string): Promise<import("./scratch.js").ScratchSaveAsProjectResult>;
     onUpdated(callback: (scratch: import("../scratch.js").Scratch) => void): () => void;
     onRemoved(callback: (scratchId: string) => void): () => void;
@@ -840,8 +871,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       cwd: string,
       filePath: string,
       status: GitStatus,
-      ignoreWhitespace?: boolean
-    ): Promise<string>;
+      ignoreWhitespace?: boolean,
+      window?: { offset?: number; maxBytes?: number }
+    ): Promise<import("./git.js").GitFileDiffResult>;
     getProjectPulse(options: {
       worktreeId: string;
       rangeDays: import("../pulse.js").PulseRangeDays;
@@ -1313,7 +1345,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
   };
   agentSessionHistory: {
-    list(worktreeId?: string): Promise<AgentSessionRecord[]>;
+    // Both filters are optional and additive; omitting both returns the whole
+    // retained journal (the resume palette depends on that unscoped read).
+    list(worktreeId?: string, projectId?: string): Promise<AgentSessionRecord[]>;
     clear(worktreeId?: string): Promise<void>;
     getRetentionDays(): Promise<AgentSessionRetentionDays>;
     setRetentionDays(days: AgentSessionRetentionDays): Promise<void>;
@@ -1418,10 +1452,25 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     openIssue(payload: { cwd: string; issueNumber: number }): Promise<void>;
     /** Resolve the canonical URL for a single issue via the resolved forge provider. */
     getIssueUrl(payload: { cwd: string; issueNumber: number }): Promise<string>;
-    /** Assign an issue to a user via the resolved forge provider. */
-    assignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
-    /** Unassign a user from an issue via the resolved forge provider. */
-    unassignIssue(payload: { cwd: string; issueNumber: number; username: string }): Promise<void>;
+    /**
+     * Assign an issue to a user via the resolved forge provider, returning the
+     * issue's resulting assignee list. Forges may silently drop an assignee the
+     * account can't take, so the returned list is what actually landed.
+     */
+    assignIssue(payload: {
+      cwd: string;
+      issueNumber: number;
+      username: string;
+    }): Promise<ForgeUser[]>;
+    /**
+     * Unassign a user from an issue via the resolved forge provider, returning
+     * the issue's resulting assignee list.
+     */
+    unassignIssue(payload: {
+      cwd: string;
+      issueNumber: number;
+      username: string;
+    }): Promise<ForgeUser[]>;
     /** Create a new issue via the resolved forge provider, returning the created issue. */
     createIssue(payload: { cwd: string; input: CreateIssueInput }): Promise<Issue>;
     /** Close an open issue via the resolved forge provider, returning the updated issue. */
@@ -1453,39 +1502,50 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       label: string;
     }): Promise<ForgeLabel[]>;
     /**
-     * Approve a pull request via the resolved provider's `reviews` capability.
-     * `body` is an optional approval comment. Rejects when the provider lacks
-     * the capability or the forge refuses (e.g. approving your own PR).
+     * Approve a pull request via the resolved provider's `reviews` capability,
+     * returning the created review. `body` is an optional approval comment.
+     * Rejects when the provider lacks the capability or the forge refuses
+     * (e.g. approving your own PR).
      */
-    approvePR(payload: { cwd: string; prNumber: number; body?: string }): Promise<void>;
+    approvePR(payload: {
+      cwd: string;
+      prNumber: number;
+      body?: string;
+    }): Promise<PullRequestReview>;
     /**
      * Submit a request-changes review on a pull request via the resolved
-     * provider's `reviews` capability. `body` is required — it explains what
-     * needs to change.
+     * provider's `reviews` capability, returning the created review. `body` is
+     * required — it explains what needs to change.
      */
-    requestChanges(payload: { cwd: string; prNumber: number; body: string }): Promise<void>;
+    requestChanges(payload: {
+      cwd: string;
+      prNumber: number;
+      body: string;
+    }): Promise<PullRequestReview>;
     /**
      * Dismiss a submitted review on a pull request via the resolved provider's
-     * `reviews` capability. `reviewId` identifies the review (obtained from a
-     * prior review-thread lookup); `message` explains the dismissal.
+     * `reviews` capability, returning the dismissed review. `reviewId`
+     * identifies the review (obtained from a prior review-thread lookup);
+     * `message` explains the dismissal.
      */
     dismissReview(payload: {
       cwd: string;
       prNumber: number;
       reviewId: number;
       message: string;
-    }): Promise<void>;
+    }): Promise<PullRequestReview>;
     /**
      * Request reviewers on a pull request via the resolved provider's `reviews`
-     * capability. `users` are account logins; `teams` are team identifiers
-     * (GitHub team slugs). At least one must be non-empty.
+     * capability, returning the PR's resulting reviewer requests. `users` are
+     * account logins; `teams` are team identifiers (GitHub team slugs). At
+     * least one must be non-empty.
      */
     requestReviewers(payload: {
       cwd: string;
       prNumber: number;
       users?: string[];
       teams?: string[];
-    }): Promise<void>;
+    }): Promise<RequestReviewersResult>;
     /**
      * Validate a token against a specific forge provider, identified by its
      * canonical `{pluginId}.{contributionId}` id. The Test button in the
@@ -1521,6 +1581,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getIssue(payload: { cwd: string; issueNumber: number }): Promise<Issue | null>;
     /** Fetch a single normalized PR, or `null` when it doesn't exist. */
     getPR(payload: { cwd: string; prNumber: number }): Promise<PR | null>;
+    /**
+     * Fetch the roll-up CI status for one PR, or `null` when the PR doesn't
+     * exist. The provider's transport fields (`rawData`, `freshnessToken`,
+     * `notModified`) are stripped at the handler — see
+     * {@link import("./forge.js").ForgeCIStatusSummary}.
+     */
+    getCIStatus(payload: {
+      cwd: string;
+      prNumber: number;
+    }): Promise<import("./forge.js").ForgeCIStatusSummary | null>;
     /** Fetch the normalized repository metadata roll-up. */
     getRepoMetadata(payload: { cwd: string }): Promise<RepoMetadata>;
     /**
@@ -1612,6 +1682,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * `github.getPRReviewThreads` per-path count record.
      */
     getPRReviewThreads(payload: { cwd: string; prNumber: number }): Promise<ReviewThread[]>;
+    /**
+     * One page of an issue's comment thread, oldest-first, via the provider's
+     * `issueComments` capability. Rejects when the provider lacks the
+     * capability or the issue doesn't exist, so an empty page always means
+     * "nobody has commented" and never "couldn't look".
+     */
+    listIssueComments(payload: {
+      cwd: string;
+      issueNumber: number;
+      opts?: ListOptions;
+    }): Promise<Page<IssueComment>>;
     /** Resolve a commit-author email to an avatar URL. Best-effort — `null` on any failure. */
     resolveAuthorAvatar(payload: { cwd: string; email: string }): Promise<string | null>;
     /**
@@ -1634,24 +1715,27 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       body?: string;
       draft?: boolean;
     }): Promise<PR>;
-    /** Close an open pull request without merging. */
-    closePR(payload: { cwd: string; prNumber: number }): Promise<void>;
-    /** Reopen a previously closed pull request. */
-    reopenPR(payload: { cwd: string; prNumber: number }): Promise<void>;
-    /** Merge a pull request with the optional strategy/commit overrides. Irreversible. */
+    /** Close an open pull request without merging, returning the updated PR. */
+    closePR(payload: { cwd: string; prNumber: number }): Promise<PR>;
+    /** Reopen a previously closed pull request, returning the updated PR. */
+    reopenPR(payload: { cwd: string; prNumber: number }): Promise<PR>;
+    /**
+     * Merge a pull request with the optional strategy/commit overrides,
+     * returning the merge acknowledgement. Irreversible.
+     */
     mergePR(payload: {
       cwd: string;
       prNumber: number;
       mergeMethod?: "merge" | "squash" | "rebase";
       commitTitle?: string;
       commitMessage?: string;
-    }): Promise<void>;
-    /** Convert an open pull request to a draft. */
-    convertPRToDraft(payload: { cwd: string; prNumber: number }): Promise<void>;
-    /** Mark a draft pull request ready for review. */
-    markPRReadyForReview(payload: { cwd: string; prNumber: number }): Promise<void>;
-    /** Post a comment on a pull request. */
-    commentOnPR(payload: { cwd: string; prNumber: number; body: string }): Promise<void>;
+    }): Promise<MergePRResult>;
+    /** Convert an open pull request to a draft, returning its resulting draft state. */
+    convertPRToDraft(payload: { cwd: string; prNumber: number }): Promise<PRDraftStateResult>;
+    /** Mark a draft pull request ready for review, returning its resulting draft state. */
+    markPRReadyForReview(payload: { cwd: string; prNumber: number }): Promise<PRDraftStateResult>;
+    /** Post a comment on a pull request, returning the created comment. */
+    commentOnPR(payload: { cwd: string; prNumber: number; body: string }): Promise<IssueComment>;
     /** Edit a pull request's title and/or body via the resolved forge provider. */
     editPR(payload: { cwd: string; prNumber: number; title?: string; body?: string }): Promise<PR>;
     /** Provider-keyed stats + first-page push after a fresh network poll. */
@@ -2070,14 +2154,24 @@ export interface ElectronAPI extends GeneratedElectronAPI {
 export type MicPermissionStatus =
   "granted" | "denied" | "not-determined" | "restricted" | "unknown";
 
-export type VoiceTranscriptionModel = "gpt-realtime-whisper";
+/**
+ * The transcription model is single-valued: `gpt-live-transcribe` replaced the
+ * retired `gpt-realtime-whisper`, and the provider — not the model — is what
+ * selects the backend, so there is no user-facing model choice. Kept as a named
+ * type (rather than inlining the literal) so the persisted setting and this
+ * union stay recognizably one concept. Widening this to a real union would also
+ * mean replacing the single-target normalizer in `getVoiceSettings` with
+ * valid-choice preservation.
+ */
+export type VoiceTranscriptionModel = "gpt-live-transcribe";
 
 /**
  * Transcription backend. Each provider owns its own WebSocket protocol, audio
  * framing, and turn-detection behavior:
  *
- * - "openai": OpenAI Realtime (`gpt-realtime-whisper`). No server VAD, so the
- *   provider drives segmentation with a client-side commit cadence.
+ * - "openai": OpenAI Realtime (`gpt-live-transcribe`). Segmentation is driven by
+ *   a client-side VAD side-chain — see the `turn_detection` note in
+ *   `OpenAITranscriptionProvider`.
  * - "deepgram": Deepgram Nova-3 streaming. Native server-side VAD / endpointing,
  *   so no client commit timer is needed.
  */
@@ -2148,7 +2242,8 @@ export interface VoiceInputSettings {
    * Runtime-only. Context keyterms (custom dictionary + project/branch/terminal
    * context) assembled at session start and frozen for the session's lifetime.
    * Deepgram injects them into the streaming URL as repeated `keyterm=` params;
-   * OpenAI passes them through the transcription prompt. Populated by the
+   * OpenAI sends them as a native `keywords` array plus a bounded free-form
+   * prompt, both built from the same sanitized list. Populated by the
    * voice-input start handler — never persisted to the store or supplied by the
    * renderer. Reconnects reuse this snapshot.
    */

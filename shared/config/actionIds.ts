@@ -228,7 +228,9 @@ export const BUILT_IN_ACTION_IDS = [
   "forge.listIssues",
   "forge.listPRs",
   "forge.getIssue",
+  "forge.listIssueComments",
   "forge.getPR",
+  "forge.getCIStatus",
   "forge.createPR",
   "forge.closePR",
   "forge.reopenPR",
@@ -239,6 +241,8 @@ export const BUILT_IN_ACTION_IDS = [
   "forge.editPR",
 
   // -- projectActions --
+  "pilot.toggle",
+  "pilot.openRun",
   "project.getAll",
   "project.getCurrent",
   "project.add",
@@ -253,6 +257,7 @@ export const BUILT_IN_ACTION_IDS = [
   "project.muteNotifications",
   "project.silenceNotificationKind",
   "project.detectRunners",
+  "project.runCheck",
   "project.getStats",
   "project.settings.open",
   "project.cloneRepo",
@@ -340,6 +345,7 @@ export const BUILT_IN_ACTION_IDS = [
   "actions.persistedStores",
   "actions.search",
   "actions.getSchema",
+  "mcp.surface",
 
   // -- terminalLifecycleActions --
   "terminal.restart",
@@ -512,6 +518,7 @@ export type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
 export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.sendCommand",
   "terminal.paste",
+  "project.runCheck",
   "fleet.accept",
   "fleet.reject",
   "fleet.interrupt",

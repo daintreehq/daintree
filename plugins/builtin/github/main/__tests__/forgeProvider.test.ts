@@ -15,6 +15,9 @@ vi.mock("../GitHubAuth.js", () => ({
   GitHubAuth: {
     getToken: vi.fn(() => "test-token"),
     createClient: vi.fn(() => mockGraphQLClient),
+    // Read paths that must not coalesce across a credential switch fold the
+    // token version into their single-flight key.
+    getTokenVersion: vi.fn(() => 0),
   },
   GITHUB_API_TIMEOUT_MS: 5000,
 }));
@@ -36,6 +39,7 @@ vi.mock("../GitHubErrors.js", () => ({
 }));
 
 import { githubForgeProvider } from "../forgeProvider.js";
+import { buildListCacheKey } from "../GitHubPRs.js";
 import {
   _resetForgeQueryCachesForTests,
   clearGitHubCaches,
@@ -1052,7 +1056,30 @@ describe("listPRs caching", () => {
   it("writes the cache entry under the forge list cache key", async () => {
     mockGraphQLClient.mockResolvedValue(prListResponse());
     await githubForgeProvider.listPRs(repo, { state: "open" });
-    expect(forgePRListCache.get("pr:owner/repo:open::created:")).toBeDefined();
+    expect(forgePRListCache.get(defaultListKey("pr"))).toBeDefined();
+  });
+
+  // listPRsImpl is a near-copy of listIssuesImpl; without these it could
+  // hardcode or drop either dimension while the issue-side tests stay green.
+  it.each([
+    ["page size", { perPage: 50 }],
+    ["direction", { direction: "asc" as const }],
+  ])("refetches when only the %s differs", async (_label, second) => {
+    mockGraphQLClient.mockResolvedValue(prListResponse());
+    await githubForgeProvider.listPRs(repo, { state: "open" });
+    await githubForgeProvider.listPRs(repo, { state: "open", ...second });
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("carries page size and direction into the PR GraphQL variables", async () => {
+    mockGraphQLClient.mockResolvedValue(prListResponse());
+    await githubForgeProvider.listPRs(repo, { state: "open", perPage: 7, direction: "asc" });
+    const [, variables] = mockGraphQLClient.mock.calls[0] as [
+      string,
+      { limit: number; orderBy: { direction: string } },
+    ];
+    expect(variables.limit).toBe(7);
+    expect(variables.orderBy.direction).toBe("ASC");
   });
 
   it("a superseded slow fetch does not clobber a newer bypass result", async () => {
@@ -1112,9 +1139,28 @@ describe("listPRs caching", () => {
     mockGraphQLClient.mockResolvedValue(prListResponse(99));
     await githubForgeProvider.listPRs(repo, { state: "open", cursor: "next" });
     // No throw and distinct cache keys — cursored result cached separately.
-    expect(forgePRListCache.get("pr:owner/repo:open::created:next")).toBeDefined();
+    expect(forgePRListCache.get(defaultListKey("pr", { cursor: "next" }))).toBeDefined();
   });
 });
+
+/** The cache key a default, unfiltered, uncursored first page lands under. */
+function defaultListKey(
+  type: "issue" | "pr",
+  overrides: Partial<Parameters<typeof buildListCacheKey>[0]> = {}
+): string {
+  return buildListCacheKey({
+    type,
+    owner: "owner",
+    repo: "repo",
+    state: "open",
+    search: "",
+    sortOrder: "created",
+    direction: "desc",
+    perPage: 20,
+    cursor: "",
+    ...overrides,
+  });
+}
 
 describe("listIssues caching", () => {
   beforeEach(() => mockGraphQLClient.mockReset());
@@ -1125,7 +1171,52 @@ describe("listIssues caching", () => {
     const second = await githubForgeProvider.listIssues(repo, { state: "open" });
     expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
     expect(second.items[0]?.number).toBe(5);
-    expect(forgeIssueListCache.get("issue:owner/repo:open::created:")).toBeDefined();
+    expect(forgeIssueListCache.get(defaultListKey("issue"))).toBeDefined();
+  });
+
+  it("treats an omitted page size and an explicit default as the same request", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse());
+    await githubForgeProvider.listIssues(repo, { state: "open" });
+    await githubForgeProvider.listIssues(repo, { state: "open", perPage: 20 });
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Before #11527 neither `perPage` nor `direction` was part of the cache key,
+   * so the second call here would have been served the first call's page.
+   */
+  it.each([
+    ["page size", { perPage: 50 }],
+    ["direction", { direction: "asc" as const }],
+  ])("refetches when only the %s differs", async (_label, second) => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse());
+    await githubForgeProvider.listIssues(repo, { state: "open" });
+    await githubForgeProvider.listIssues(repo, { state: "open", ...second });
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks GitHub for the page size the caller requested", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse());
+    await githubForgeProvider.listIssues(repo, { state: "open", perPage: 7 });
+    const [, variables] = mockGraphQLClient.mock.calls[0] as [string, { limit: number }];
+    expect(variables.limit).toBe(7);
+  });
+
+  it("clamps a page size GitHub would reject rather than sending it on", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse());
+    await githubForgeProvider.listIssues(repo, { state: "open", perPage: 5000 });
+    const [, variables] = mockGraphQLClient.mock.calls[0] as [string, { limit: number }];
+    expect(variables.limit).toBeLessThanOrEqual(100);
+  });
+
+  it("carries the caller's direction into the GraphQL ordering", async () => {
+    mockGraphQLClient.mockResolvedValue(issueListResponse());
+    await githubForgeProvider.listIssues(repo, { state: "open", direction: "asc" });
+    const [, variables] = mockGraphQLClient.mock.calls[0] as [
+      string,
+      { orderBy: { direction: string } },
+    ];
+    expect(variables.orderBy.direction).toBe("ASC");
   });
 });
 
@@ -1199,6 +1290,50 @@ describe("listIssues search", () => {
     expect(searchQuery).toBe("repo:owner/repo is:issue state:open sort:updated-desc flaky");
   });
 
+  /**
+   * The search path used to pin `-desc` and drop `direction` on the floor
+   * (#11527) — invisible while the action couldn't set it, wrong afterwards.
+   */
+  it.each([
+    ["created", "asc", "sort:created-asc"],
+    ["created", "desc", "sort:created-desc"],
+    ["updated", "asc", "sort:updated-asc"],
+    ["updated", "desc", "sort:updated-desc"],
+  ] as const)("honors sort '%s' with direction '%s'", async (sort, direction, expected) => {
+    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
+
+    await githubForgeProvider.listIssues(repo, { state: "open", search: "flaky", sort, direction });
+
+    const { searchQuery } = mockGraphQLClient.mock.calls[0]![1] as { searchQuery: string };
+    expect(searchQuery).toContain(expected);
+  });
+
+  it("asks for a different page when only the direction flips", async () => {
+    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
+
+    await githubForgeProvider.listIssues(repo, { search: "flaky", direction: "asc" });
+    await githubForgeProvider.listIssues(repo, { search: "flaky", direction: "desc" });
+
+    // Both calls must actually reach the client first. When direction was
+    // ignored the two requests were byte-identical, so the second was served
+    // from `forgeQueryCache` and never appeared here — leaving the comparison
+    // below to compare a string against `undefined` and pass vacuously.
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+    const queries = mockGraphQLClient.mock.calls.map(
+      (call) => (call[1] as { searchQuery: string }).searchQuery
+    );
+    expect(queries[0]).not.toBe(queries[1]);
+  });
+
+  it("passes the requested page size to the search query", async () => {
+    mockGraphQLClient.mockResolvedValue(issueSearchResponse());
+
+    await githubForgeProvider.listIssues(repo, { search: "flaky", perPage: 3 });
+
+    const [, variables] = mockGraphQLClient.mock.calls[0] as [string, { limit: number }];
+    expect(variables.limit).toBe(3);
+  });
+
   it("truncates the free-text term so the query stays within GitHub's 256-char cap", async () => {
     mockGraphQLClient.mockResolvedValue(issueSearchResponse());
 
@@ -1250,7 +1385,7 @@ describe("listIssues search", () => {
 
     await githubForgeProvider.listIssues(repo, { state: "open", search: "flaky" });
 
-    expect(forgeIssueListCache.get("issue:owner/repo:open::created:")).toBeUndefined();
+    expect(forgeIssueListCache.get(defaultListKey("issue"))).toBeUndefined();
 
     // A following unfiltered list call misses the cache and issues its own query.
     mockGraphQLClient.mockResolvedValue(issueListResponse());
@@ -1747,6 +1882,320 @@ describe("getReviewThreads", () => {
   });
 });
 
+describe("listIssueComments", () => {
+  beforeEach(() => {
+    mockGraphQLClient.mockReset();
+  });
+
+  function makeCommentNode(databaseId: number, body: string) {
+    return {
+      id: `MDEyOklzc3VlQ29tbWVudD${databaseId}`,
+      databaseId,
+      body,
+      url: `https://github.com/owner/repo/issues/7#issuecomment-${databaseId}`,
+      createdAt: "2025-03-01T12:00:00Z",
+      author: { login: "octocat", avatarUrl: "https://avatars/u" },
+    };
+  }
+
+  function makePageResponse(
+    nodes: unknown[],
+    {
+      hasNextPage = false,
+      endCursor = null as string | null,
+      totalCount = nodes.length as number | undefined,
+    } = {}
+  ) {
+    return {
+      repository: {
+        issue: {
+          comments: {
+            ...(totalCount !== undefined ? { totalCount } : {}),
+            pageInfo: { hasNextPage, endCursor },
+            nodes,
+          },
+        },
+      },
+    };
+  }
+
+  it("normalizes GraphQL comment nodes onto the forge shape", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(101, "First **reply**")])
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).toMatchObject({
+      id: "101",
+      body: "First **reply**",
+      url: "https://github.com/owner/repo/issues/7#issuecomment-101",
+      author: { login: "octocat" },
+    });
+    expect(page.items[0].createdAt).toBe(Date.parse("2025-03-01T12:00:00Z"));
+    expect(page.items[0].rawData).toEqual(makeCommentNode(101, "First **reply**"));
+  });
+
+  it("stringifies databaseId so read ids match what addIssueComment returns", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(makePageResponse([makeCommentNode(12345, "hi")]));
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items[0].id).toBe("12345");
+  });
+
+  it("falls back to the node id when databaseId is absent or not finite", async () => {
+    const base = makeCommentNode(1, "a");
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([
+        { ...base, id: "NODE_A", databaseId: undefined },
+        { ...base, id: "NODE_B", databaseId: null },
+        { ...base, id: "NODE_C", databaseId: NaN },
+        { ...base, id: "NODE_D", databaseId: "77" },
+      ])
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    // Distinct ids, not four colliding empty strings.
+    expect(page.items.map((c) => c.id)).toEqual(["NODE_A", "NODE_B", "NODE_C", "NODE_D"]);
+  });
+
+  it("omits author entirely for a deleted account (GraphQL returns author: null)", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([{ ...makeCommentNode(1, "ghost"), author: null }])
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items[0].body).toBe("ghost");
+    expect("author" in page.items[0]).toBe(false);
+  });
+
+  it("drops null nodes without disturbing the surrounding order", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(1, "first"), null, makeCommentNode(3, "third")])
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items.map((c) => c.body)).toEqual(["first", "third"]);
+  });
+
+  it("omits totalCount when the connection does not report one", async () => {
+    // Built inline rather than through makePageResponse: its `totalCount`
+    // default fires on `undefined`, so the helper can't express "absent".
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: {
+        issue: {
+          comments: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [makeCommentNode(1, "a")],
+          },
+        },
+      },
+    });
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items).toHaveLength(1);
+    expect("totalCount" in page).toBe(false);
+  });
+
+  it("preserves the thread's oldest-first order", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([
+        makeCommentNode(1, "oldest"),
+        makeCommentNode(2, "middle"),
+        makeCommentNode(3, "newest"),
+      ])
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page.items.map((c) => c.body)).toEqual(["oldest", "middle", "newest"]);
+  });
+
+  it("maps pageInfo onto nextCursor/hasMore and threads a cursor back through", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(1, "a")], {
+        hasNextPage: true,
+        endCursor: "cursor-2",
+        totalCount: 40,
+      })
+    );
+
+    const first = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+    expect(first).toMatchObject({ nextCursor: "cursor-2", hasMore: true, totalCount: 40 });
+
+    mockGraphQLClient.mockResolvedValueOnce(makePageResponse([makeCommentNode(2, "b")]));
+    await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {
+      cursor: first.nextCursor,
+    });
+
+    const [, vars] = mockGraphQLClient.mock.calls[1] as [string, Record<string, unknown>];
+    expect(vars.cursor).toBe("cursor-2");
+    expect(vars.number).toBe(7);
+  });
+
+  it("defaults perPage to 20 and clamps out-of-range values into GitHub's 1-100 window", async () => {
+    // NaN/Infinity reach here from a direct renderer IPC call, which the MCP
+    // action's schema never sees; unguarded they'd hit GraphQL's `Int!`.
+    const requested = [undefined, 50, 0, -5, 250, 7.9, NaN, Infinity, -Infinity];
+    const expected = [20, 50, 1, 1, 100, 7, 20, 20, 20];
+
+    for (const perPage of requested) {
+      mockGraphQLClient.mockResolvedValueOnce(makePageResponse([]));
+      await githubForgeProvider.issueComments!.listIssueComments(repo, 7, { perPage });
+    }
+
+    const limits = mockGraphQLClient.mock.calls.map(
+      (call) => (call[1] as Record<string, unknown>).limit
+    );
+    expect(limits).toEqual(expected);
+  });
+
+  it("re-fetches on a repeat read so a reply posted meanwhile is visible", async () => {
+    mockGraphQLClient.mockResolvedValueOnce(makePageResponse([makeCommentNode(1, "question")]));
+    const before = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(1, "question"), makeCommentNode(2, "answer")])
+    );
+    const after = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(before.items).toHaveLength(1);
+    expect(after.items.map((c) => c.body)).toEqual(["question", "answer"]);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces concurrent identical reads into one request", async () => {
+    mockGraphQLClient.mockResolvedValue(makePageResponse([makeCommentNode(1, "a")]));
+
+    const [a, b] = await Promise.all([
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, {}),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, {}),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    expect(a).toEqual(b);
+  });
+
+  it("does not coalesce reads that differ by issue, cursor or page size", async () => {
+    mockGraphQLClient.mockResolvedValue(makePageResponse([]));
+
+    await Promise.all([
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, {}),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 8, {}),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, { cursor: "c" }),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, { perPage: 50 }),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(4);
+    // Each request carried its own variables — four calls with identical args
+    // would satisfy the count above while still being the same query.
+    const variants = mockGraphQLClient.mock.calls.map((call) => {
+      const vars = call[1] as Record<string, unknown>;
+      return `${String(vars.number)}:${String(vars.cursor)}:${String(vars.limit)}`;
+    });
+    expect(new Set(variants).size).toBe(4);
+  });
+
+  it("treats a blank cursor as the first page rather than a distinct slot", async () => {
+    mockGraphQLClient.mockResolvedValue(makePageResponse([]));
+
+    await Promise.all([
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, {}),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, { cursor: "" }),
+      githubForgeProvider.issueComments!.listIssueComments(repo, 7, { cursor: "   " }),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    const [, vars] = mockGraphQLClient.mock.calls[0] as [string, Record<string, unknown>];
+    expect(vars.cursor).toBeNull();
+  });
+
+  it("does not let a read issued after addIssueComment join one issued before it", async () => {
+    // The post-then-poll sequence an agent runs: a read already in flight must
+    // not be reused for a read that starts after the comment landed.
+    let releaseFirst: ((value: unknown) => void) | undefined;
+    mockGraphQLClient.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseFirst = resolve;
+        })
+    );
+    const inFlight = githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+    await Promise.resolve();
+
+    (globalThis as unknown as { fetch: unknown }).fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: vi.fn().mockResolvedValue({
+        id: 2,
+        body: "answer",
+        html_url: "https://github.com/owner/repo/issues/7#issuecomment-2",
+        created_at: "2025-03-01T13:00:00Z",
+      }),
+    });
+    await githubForgeProvider.addIssueComment(repo, 7, "answer");
+
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(1, "question"), makeCommentNode(2, "answer")])
+    );
+    const afterWrite = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    releaseFirst?.(makePageResponse([makeCommentNode(1, "question")]));
+    await inFlight;
+
+    expect(afterWrite.items.map((c) => c.body)).toEqual(["question", "answer"]);
+  });
+
+  it("throws for a missing issue rather than passing it off as an empty thread", async () => {
+    // An agent asking "did anyone reply?" must not read "no such issue" as "no".
+    mockGraphQLClient.mockResolvedValueOnce({ repository: { issue: null } });
+
+    await expect(
+      githubForgeProvider.issueComments!.listIssueComments(repo, 999, {})
+    ).rejects.toThrow(/#999 not found/);
+  });
+
+  it("nulls nextCursor on the terminal page even when GitHub still returns endCursor", async () => {
+    // Relay connections keep echoing the last edge's cursor; Page.nextCursor is
+    // contractually null once nothing follows, or callers fetch one page too many.
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(1, "a")], {
+        hasNextPage: false,
+        endCursor: "terminal-cursor",
+      })
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page).toMatchObject({ hasMore: false, nextCursor: null });
+  });
+
+  it("reports no more pages when hasNextPage is set but no cursor follows it", async () => {
+    // hasMore:true with nextCursor:null would strand a caller mid-thread.
+    mockGraphQLClient.mockResolvedValueOnce(
+      makePageResponse([makeCommentNode(1, "a")], { hasNextPage: true, endCursor: null })
+    );
+
+    const page = await githubForgeProvider.issueComments!.listIssueComments(repo, 7, {});
+
+    expect(page).toMatchObject({ hasMore: false, nextCursor: null });
+  });
+
+  it("propagates provider failures rather than reporting an empty thread", async () => {
+    mockGraphQLClient.mockRejectedValueOnce(new Error("Bad credentials"));
+
+    await expect(githubForgeProvider.issueComments!.listIssueComments(repo, 7, {})).rejects.toThrow(
+      /bad credentials/i
+    );
+  });
+});
+
 describe("createIssue", () => {
   const restIssueResponse = {
     number: 7,
@@ -1916,8 +2365,32 @@ describe("createIssue", () => {
 });
 
 describe("review write operations", () => {
-  function mockReviewFetchOk(status = 200) {
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status });
+  // GitHub answers the submit/dismiss endpoints with the review itself, and the
+  // requested-reviewers endpoint with the pull request. Both are normalized and
+  // returned to the caller (#11546), so the fixture must carry a real body.
+  const restReview = {
+    id: 8801,
+    node_id: "PRR_abc",
+    user: { login: "octocat", avatar_url: "https://avatars/octocat" },
+    body: "Looks good to me",
+    state: "APPROVED",
+    html_url: "https://github.com/owner/repo/pull/3#pullrequestreview-8801",
+    submitted_at: "2025-03-04T05:06:07Z",
+    commit_id: "deadbeefcafe",
+  };
+
+  const restReviewerPR = {
+    number: 6,
+    requested_reviewers: [{ login: "octocat" }, { login: "hubot" }],
+    requested_teams: [{ slug: "core-team", name: "Core Team" }],
+  };
+
+  function mockReviewFetchOk(status = 200, body: unknown = restReview) {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status,
+      json: vi.fn().mockResolvedValue(body),
+    });
     (globalThis as unknown as { fetch: typeof fetchMock }).fetch = fetchMock;
     return fetchMock;
   }
@@ -1976,6 +2449,55 @@ describe("review write operations", () => {
       );
     });
 
+    it("normalizes the created review (REST field names -> contract review)", async () => {
+      mockReviewFetchOk();
+
+      const review = await githubForgeProvider.reviews!.approvePR!(repo, 3, "LGTM");
+
+      expect(review.id).toBe(String(restReview.id));
+      expect(review.state).toBe("approved");
+      // rawState keeps GitHub's own spelling alongside the normalized verdict.
+      expect(review.rawState).toBe(restReview.state);
+      expect(review.url).toBe(restReview.html_url);
+      expect(review.author?.login).toBe(restReview.user.login);
+      expect(review.author?.avatarUrl).toBe(restReview.user.avatar_url);
+      expect(review.submittedAt).toBe(Date.parse(restReview.submitted_at));
+      expect(review.commitId).toBe(restReview.commit_id);
+    });
+
+    it.each([
+      ["APPROVED", "approved"],
+      ["CHANGES_REQUESTED", "changes_requested"],
+      ["COMMENTED", "commented"],
+      ["DISMISSED", "dismissed"],
+      ["PENDING", "pending"],
+      ["approved", "approved"],
+    ])("normalizes the %s verdict to %s", async (rawState, expected) => {
+      mockReviewFetchOk(200, { ...restReview, state: rawState });
+
+      const review = await githubForgeProvider.reviews!.approvePR!(repo, 3);
+
+      expect(review.state).toBe(expected);
+      expect(review.rawState).toBe(rawState);
+    });
+
+    it("maps an unrecognized verdict to `unknown` without losing the raw value", async () => {
+      mockReviewFetchOk(200, { ...restReview, state: "SOMETHING_NEW" });
+
+      const review = await githubForgeProvider.reviews!.approvePR!(repo, 3);
+
+      expect(review.state).toBe("unknown");
+      expect(review.rawState).toBe("SOMETHING_NEW");
+    });
+
+    it("rejects a 2xx body that carries no review id", async () => {
+      mockReviewFetchOk(200, { state: "APPROVED" });
+
+      await expect(githubForgeProvider.reviews!.approvePR!(repo, 3)).rejects.toThrow(
+        /missing review id/i
+      );
+    });
+
     it("surfaces the HTTP status when the forge rejects the review", async () => {
       (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
         .fn()
@@ -2014,6 +2536,15 @@ describe("review write operations", () => {
       expect(prTooltipCache.get("owner/repo:4")).toBeUndefined();
     });
 
+    it("returns the created changes-requested review", async () => {
+      mockReviewFetchOk(200, { ...restReview, state: "CHANGES_REQUESTED", body: "Please fix" });
+
+      const review = await githubForgeProvider.reviews!.requestChanges!(repo, 4, "Please fix");
+
+      expect(review.state).toBe("changes_requested");
+      expect(review.body).toBe("Please fix");
+    });
+
     it("surfaces the HTTP status on failure", async () => {
       (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
         .fn()
@@ -2045,6 +2576,15 @@ describe("review write operations", () => {
       });
     });
 
+    it("returns the dismissed review", async () => {
+      mockReviewFetchOk(200, { ...restReview, state: "DISMISSED" });
+
+      const review = await githubForgeProvider.reviews!.dismissReview!(repo, 5, 99, "stale");
+
+      expect(review.state).toBe("dismissed");
+      expect(review.id).toBe(String(restReview.id));
+    });
+
     it("surfaces the HTTP status on failure", async () => {
       (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch = vi
         .fn()
@@ -2070,7 +2610,7 @@ describe("review write operations", () => {
 
   describe("requestReviewers", () => {
     it("POSTs users as reviewers and teams as team_reviewers", async () => {
-      const fetchMock = mockReviewFetchOk(201);
+      const fetchMock = mockReviewFetchOk(201, restReviewerPR);
 
       await githubForgeProvider.reviews!.requestReviewers!(repo, 6, {
         users: ["octocat"],
@@ -2088,7 +2628,7 @@ describe("review write operations", () => {
     });
 
     it("sends empty arrays for the side not supplied", async () => {
-      const fetchMock = mockReviewFetchOk(201);
+      const fetchMock = mockReviewFetchOk(201, restReviewerPR);
 
       await githubForgeProvider.reviews!.requestReviewers!(repo, 6, { users: ["octocat"] });
 
@@ -2097,6 +2637,42 @@ describe("review write operations", () => {
         reviewers: ["octocat"],
         team_reviewers: [],
       });
+    });
+
+    it("reports the PR's resulting reviewer lists, not the requested ones", async () => {
+      // The response carries a reviewer the caller did not ask for (`hubot`,
+      // requested earlier) — the result must reflect the PR's actual state.
+      mockReviewFetchOk(201, restReviewerPR);
+
+      const result = await githubForgeProvider.reviews!.requestReviewers!(repo, 6, {
+        users: ["octocat"],
+      });
+
+      expect(result.prNumber).toBe(6);
+      expect(result.requestedUsers).toEqual(["octocat", "hubot"]);
+      expect(result.requestedTeams).toEqual(["core-team"]);
+    });
+
+    it("rejects a body carrying neither reviewer array rather than claiming nobody is requested", async () => {
+      // Reporting empty lists here would tell the agent the request landed on
+      // nobody, which is indistinguishable from the mutation having done
+      // nothing — an unusable body must not read as authoritative emptiness.
+      mockReviewFetchOk(201, { number: 6 });
+
+      await expect(
+        githubForgeProvider.reviews!.requestReviewers!(repo, 6, { users: ["octocat"] })
+      ).rejects.toThrow(/missing requested reviewers/i);
+    });
+
+    it("treats one present array and one absent as an empty side, not a failure", async () => {
+      mockReviewFetchOk(201, { number: 6, requested_reviewers: [{ login: "octocat" }] });
+
+      const result = await githubForgeProvider.reviews!.requestReviewers!(repo, 6, {
+        users: ["octocat"],
+      });
+
+      expect(result.requestedUsers).toEqual(["octocat"]);
+      expect(result.requestedTeams).toEqual([]);
     });
 
     it("rejects without hitting the network when no reviewer is supplied", async () => {
@@ -2123,13 +2699,80 @@ describe("review write operations", () => {
     });
 
     it("does NOT invalidate the PR caches (requested reviewers are not part of the cached PR)", async () => {
-      mockReviewFetchOk(201);
+      mockReviewFetchOk(201, restReviewerPR);
       prTooltipCache.set("owner/repo:6", {} as never);
 
       await githubForgeProvider.reviews!.requestReviewers!(repo, 6, { users: ["octocat"] });
 
       expect(prTooltipCache.get("owner/repo:6")).toBeDefined();
     });
+  });
+});
+
+describe("assignIssue / unassignIssue results (#11546)", () => {
+  const assigneesBody = (logins: string[]) => ({
+    number: 7,
+    html_url: "https://github.com/owner/repo/issues/7",
+    assignees: logins.map((login) => ({ login, avatar_url: `https://avatars/${login}` })),
+  });
+
+  function mockAssignOk(body: unknown, status = 201) {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status,
+      json: vi.fn().mockResolvedValue(body),
+      text: vi.fn().mockResolvedValue(""),
+    });
+    (globalThis as unknown as { fetch: typeof fetchMock }).fetch = fetchMock;
+    return fetchMock;
+  }
+
+  beforeEach(() => {
+    vi.mocked(GitHubAuth.getToken).mockReturnValue("test-token");
+  });
+
+  it("returns the issue's resulting assignee list, not the requested user", async () => {
+    // GitHub silently ignores an assignee without push access: the POST still
+    // succeeds, but the user is absent from the resulting list. Reporting the
+    // request back would claim an assignment that never landed.
+    mockAssignOk(assigneesBody(["existing-user"]));
+
+    const assignees = await githubForgeProvider.assignIssue(repo, 7, "no-access-user");
+
+    expect(assignees.map((a) => a.login)).toEqual(["existing-user"]);
+  });
+
+  it("carries the avatar the response supplies", async () => {
+    mockAssignOk(assigneesBody(["octocat"]));
+
+    const assignees = await githubForgeProvider.assignIssue(repo, 7, "octocat");
+
+    expect(assignees[0]?.avatarUrl).toBe("https://avatars/octocat");
+  });
+
+  it("unassignIssue DELETEs and returns the remaining assignees", async () => {
+    const fetchMock = mockAssignOk(assigneesBody(["kept-user"]), 200);
+
+    const assignees = await githubForgeProvider.unassignIssue(repo, 7, "removed-user");
+
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).method).toBe("DELETE");
+    expect(assignees.map((a) => a.login)).toEqual(["kept-user"]);
+  });
+
+  it("skips entries the response can't be mapped to an account", async () => {
+    mockAssignOk({ number: 7, assignees: [{ login: "octocat" }, {}, null, { id: 4 }] });
+
+    const assignees = await githubForgeProvider.assignIssue(repo, 7, "octocat");
+
+    expect(assignees.map((a) => a.login)).toEqual(["octocat"]);
+  });
+
+  it("rejects a 2xx body with no assignees array", async () => {
+    mockAssignOk({ number: 7, html_url: "https://example.test" });
+
+    await expect(githubForgeProvider.assignIssue(repo, 7, "octocat")).rejects.toThrow(
+      /missing issue assignees/i
+    );
   });
 });
 
@@ -2311,6 +2954,21 @@ describe("issue write mutations (close/reopen/edit/comment/labels)", () => {
         /comment body is required/i
       );
       expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("still invalidates when a 201 carries an unusable body — the comment exists", async () => {
+      // Past the ok check the comment is on GitHub whatever the payload says.
+      // Leaving stale reads behind would tell a caller checking whether the
+      // post landed that it didn't, and invite a duplicate.
+      mockJsonOk({ id: "not-a-number" }, 201);
+      const invalidateSpy = vi.spyOn(issueTooltipCache, "invalidate");
+
+      await expect(githubForgeProvider.addIssueComment(repo, 7, "hi")).rejects.toThrow(
+        /missing comment id or URL/i
+      );
+
+      expect(invalidateSpy).toHaveBeenCalledWith("owner/repo:7");
+      invalidateSpy.mockRestore();
     });
   });
 

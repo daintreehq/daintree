@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "crypto";
 import path from "path";
+import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../shared/utils/workspaceIds.js";
 
 export const UTF8_BOM = "\uFEFF";
 
@@ -46,11 +47,36 @@ export function mintProjectId(normalizedPath: string, isTaken: (id: string) => b
 }
 
 export function isValidProjectId(projectId: string): boolean {
-  return /^[0-9a-f]{64}$/.test(projectId);
+  return isProjectWorkspaceId(projectId);
+}
+
+/**
+ * Shape of a scratch id. The patterns themselves live in `shared/` because the
+ * renderer has to route on them too — `pilot.openRun` picks between the project
+ * and scratch switch handlers — and this module cannot be imported there (it
+ * pulls in node `crypto`). `isValidScratchId` delegates here, keeping one
+ * source of truth for the shape.
+ */
+export function isValidScratchStateId(id: string): boolean {
+  return isScratchWorkspaceId(id);
+}
+
+/**
+ * Ids allowed to own a directory under `userData/projects/`. Scratches have no
+ * Project row but still need durable panel state (#11484), and a scratch UUID
+ * (36 chars, dashed) can never collide with a project id (64 hex, undashed), so
+ * both kinds share one state-directory namespace and all of the atomic-write /
+ * quarantine / recovery machinery built on it.
+ *
+ * Deliberately distinct from {@link isValidProjectId}, which still means "a
+ * project id" for the git-tracked `.daintree/project.json` anchor.
+ */
+export function isValidWorkspaceStateId(id: string): boolean {
+  return isValidProjectId(id) || isValidScratchStateId(id);
 }
 
 export function getProjectStateDir(projectsConfigDir: string, projectId: string): string | null {
-  if (!isValidProjectId(projectId)) {
+  if (!isValidWorkspaceStateId(projectId)) {
     return null;
   }
   const normalizedRoot = path.normalize(projectsConfigDir);

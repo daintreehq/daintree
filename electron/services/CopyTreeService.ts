@@ -1,11 +1,15 @@
 import type {
   CopyResult,
   CopyOptions as SdkCopyOptions,
+  CopyStreamOptions as SdkCopyStreamOptions,
   ProgressEvent,
   ConfigManager as SdkConfigManager,
 } from "copytree";
 import * as path from "path";
 import * as fs from "fs/promises";
+import { Readable } from "stream";
+import { pipeline } from "stream/promises";
+import { MAX_OUTPUT_BYTES } from "./copyTreeOutputFile.js";
 import type { CopyTreeOptions, CopyTreeResult, CopyTreeProgress } from "../types/index.js";
 import type {
   CopyTreeBudgetStats,
@@ -34,6 +38,13 @@ const ERROR_CODE_MESSAGES: Record<string, string> = {
   ERR_ABORTED: "Context generation cancelled",
   ENOENT: "Project path is unavailable",
   EACCES: "Can't read the project files",
+  ERR_OUTPUT_TOO_LARGE:
+    "Context is too large to write — narrow the scope or lower the context size limits",
+  ERR_STREAM_INCOMPLETE: "Context generation ended before it finished",
+  // Distinct from ENOENT/EACCES above: those describe the project being read,
+  // and a failure writing our own output file would otherwise be reported as
+  // "Project path is unavailable" and send the user looking in the wrong place.
+  ERR_OUTPUT_WRITE_FAILED: "Can't write the context file",
 };
 
 /**
@@ -78,6 +89,9 @@ export type { CopyTreeOptions, CopyTreeResult, CopyTreeProgress };
 
 export type ProgressCallback = (progress: CopyTreeProgress) => void;
 
+/** What `copyStream`'s `onComplete` hands back — the stats and manifest `copy()` returns. */
+type StreamCompletion = Parameters<NonNullable<SdkCopyStreamOptions["onComplete"]>>[0];
+
 /**
  * CopyTreeService - Generates context trees for AI agents.
  *
@@ -97,11 +111,24 @@ export type ProgressCallback = (progress: CopyTreeProgress) => void;
 class CopyTreeService {
   private activeOperations = new Map<string, AbortController>();
 
+  /**
+   * Build a context bundle.
+   *
+   * With `outputPath` the bundle is streamed straight to that file and only its
+   * path and size come back (#11528). Without it the whole document is returned
+   * as one string, which is what `injectToTerminal` still needs — it writes the
+   * bundle into a PTY in chunks and has nowhere else to read it from.
+   *
+   * `outputPath` is an internal argument: it is chosen by the main process and
+   * is deliberately absent from `CopyTreeOptions`, which arrives from MCP
+   * callers and would otherwise make this an arbitrary file write.
+   */
   async generate(
     rootPath: string,
     options: CopyTreeOptions = {},
     onProgress?: ProgressCallback,
-    traceId?: string
+    traceId?: string,
+    outputPath?: string
   ): Promise<CopyTreeResult> {
     const opId = traceId || crypto.randomUUID();
     const effectiveTraceId = opId;
@@ -128,7 +155,10 @@ class CopyTreeService {
       const controller = new AbortController();
       this.activeOperations.set(opId, controller);
 
-      const { copy } = await getCopytree();
+      // Reached through the namespace rather than destructured: only one of the
+      // two entry points is used per call, and touching the other would make
+      // every caller (and every test double) have to provide it.
+      const copytree = await getCopytree();
       this.throwIfAborted(controller.signal);
 
       const config = await this.createConfig(controller.signal);
@@ -152,7 +182,17 @@ class CopyTreeService {
         progressThrottleMs: 100,
       };
 
-      const result: CopyResult = await copy(rootPath, sdkOptions);
+      if (outputPath) {
+        return await this.streamToFile(
+          copytree.copyStream,
+          rootPath,
+          sdkOptions,
+          outputPath,
+          controller
+        );
+      }
+
+      const result: CopyResult = await copytree.copy(rootPath, sdkOptions);
       this.logScanErrors(result);
 
       return {
@@ -162,13 +202,131 @@ class CopyTreeService {
         stats: {
           totalSize: result.stats.totalSize,
           duration: result.stats.duration,
-          ...this.mapBudgetStats(result),
+          ...this.mapBudgetStats(result.stats),
         },
       };
     } catch (error: unknown) {
       return this.handleError(error);
     } finally {
       this.activeOperations.delete(opId);
+    }
+  }
+
+  /**
+   * Stream the bundle to `outputPath` without ever holding it whole.
+   *
+   * `copy()` cannot do this job even when handed an output path: it assembles
+   * the entire document as one string and only then writes it, so the
+   * allocation this exists to avoid happens either way. `copyStream()` emits
+   * the formatted document in chunks instead, and `onComplete` still delivers
+   * the stats and manifest `copy()` would have returned.
+   *
+   * Chunks go through `pipeline()` rather than a hand-rolled write loop: it
+   * honours backpressure, propagates errors from either end, destroys both
+   * sides on abort, and resolves only once the file is actually flushed.
+   *
+   * The bundle is published by renaming a unique `.part` file over the final
+   * path. A caller that finds the final path finds a complete bundle — a
+   * cancelled or failed run never leaves one that merely looks finished.
+   */
+  private async streamToFile(
+    copyStream: (typeof import("copytree"))["copyStream"],
+    rootPath: string,
+    sdkOptions: SdkCopyOptions,
+    outputPath: string,
+    controller: AbortController
+  ): Promise<CopyTreeResult> {
+    const partialPath = `${outputPath}.${crypto.randomUUID()}.part`;
+    let completion: StreamCompletion | undefined;
+    let outputBytes = 0;
+    let published = false;
+
+    const streamOptions: SdkCopyStreamOptions = {
+      ...sdkOptions,
+      onComplete: (result) => {
+        completion = result;
+      },
+    };
+
+    async function* countedChunks(): AsyncGenerator<Buffer> {
+      for await (const chunk of copyStream(rootPath, streamOptions)) {
+        // Each chunk is independently valid UTF-8 — the SDK guarantees it never
+        // splits a surrogate pair — so encoding per chunk is safe and gives an
+        // exact byte count without re-measuring the whole document.
+        const buffer = Buffer.from(chunk, "utf8");
+        outputBytes += buffer.length;
+        if (outputBytes > MAX_OUTPUT_BYTES) {
+          // Pruning runs between operations and so cannot stop a single
+          // runaway run from filling the disk. This can.
+          throw Object.assign(new Error("Context output exceeded the size ceiling"), {
+            code: "ERR_OUTPUT_TOO_LARGE",
+          });
+        }
+        yield buffer;
+      }
+    }
+
+    // Opened before the stream starts so a destination we cannot create is
+    // reported as exactly that. Once both ends are running, `pipeline` tears
+    // the destination down whenever the SOURCE fails and the write stream emits
+    // the source's own error object — so after that point the two are
+    // indistinguishable, and guessing would mislabel a scan failure as a disk
+    // problem. `wx` rather than `w`: the file must be one this run created, not
+    // whatever a symlink in a shared temp directory happens to point at.
+    let handle: Awaited<ReturnType<typeof fs.open>>;
+    try {
+      handle = await fs.open(partialPath, "wx", 0o600);
+    } catch (error) {
+      throw Object.assign(new Error("Failed to create the context file"), {
+        code: "ERR_OUTPUT_WRITE_FAILED",
+        cause: error,
+      });
+    }
+
+    try {
+      await pipeline(Readable.from(countedChunks()), handle.createWriteStream(), {
+        signal: controller.signal,
+      });
+      this.throwIfAborted(controller.signal);
+
+      const finished = completion;
+      if (!finished) {
+        // `onComplete` fires only on normal completion, so a pipeline that
+        // resolved without it means the source stopped early — the file on disk
+        // is a prefix, not a bundle.
+        throw Object.assign(new Error("CopyTree stream produced no completion"), {
+          code: "ERR_STREAM_INCOMPLETE",
+        });
+      }
+
+      await fs.rename(partialPath, outputPath).catch((error: unknown) => {
+        throw Object.assign(new Error("Failed to publish the context bundle"), {
+          code: "ERR_OUTPUT_WRITE_FAILED",
+          cause: error,
+        });
+      });
+      published = true;
+
+      return {
+        content: "",
+        filePath: outputPath,
+        outputBytes,
+        fileCount: finished.stats.totalFiles,
+        outputFormatVersion: finished.outputFormatVersion,
+        stats: {
+          totalSize: finished.stats.totalSize,
+          duration: finished.stats.duration,
+          ...this.mapBudgetStats(finished.stats),
+        },
+      };
+    } catch (error) {
+      // Only unlink the destination when this run is the one that put it there:
+      // after a failed rename the path may still hold a previous bundle.
+      await Promise.allSettled([
+        fs.rm(partialPath, { force: true }),
+        ...(published ? [fs.rm(outputPath, { force: true })] : []),
+      ]);
+      throw error;
     }
   }
 
@@ -228,7 +386,7 @@ class CopyTreeService {
         includedFiles: included.length,
         includedSize: included.reduce((total, entry) => total + entry.size, 0),
         files: included,
-        ...this.mapBudgetStats(result),
+        ...this.mapBudgetStats(result.stats),
       };
     } catch (error: unknown) {
       return {
@@ -481,8 +639,7 @@ class CopyTreeService {
     };
   }
 
-  private mapBudgetStats(result: CopyResult): CopyTreeBudgetStats {
-    const stats = result.stats;
+  private mapBudgetStats(stats: CopyResult["stats"]): CopyTreeBudgetStats {
     return {
       estimatedOutputChars: stats.estimatedOutputChars,
       estimatedTokens: stats.estimatedTokens,

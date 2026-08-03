@@ -7,6 +7,7 @@ import {
 import { actionService } from "../services/ActionService";
 import { logError } from "@/utils/logger";
 import { dispatchEscape, hasHandlers } from "@/lib/escapeStack";
+import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
 import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
 import { buildKeybindingWhenContext } from "@/services/keybindingWhenContext";
 import { usePaletteStore, usePanelStore } from "../store";
@@ -103,6 +104,9 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       const pendingChord = keybindingService.getPendingChord();
       const hudPending =
         pendingChord !== null && combosFieldsEqual(pendingChord, COMMAND_HUD_PREFIX);
+      const activePaletteId = usePaletteStore.getState().activePaletteId;
+      const hasModalDialog = document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+      const hasDialogBackstop = document.querySelector(`[${ESCAPE_BACKSTOP_DIALOG_ATTR}]`) !== null;
       // The command HUD's search input is the active typing surface while the
       // Cmd+K chord is pending AND focus sits inside the HUD.
       const insideHud = hudPending && target.closest("[data-command-hud]") != null;
@@ -119,14 +123,24 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       }
 
       if (e.key === "Escape" && pendingChord) {
-        e.preventDefault();
-        e.stopPropagation();
         keybindingService.clearPendingChord();
-        return;
+        // A modal that opened from the chord now owns Escape. Under renderer
+        // saturation its committed DOM can become visible one frame before the
+        // command HUD retires, so consuming the key for that stale chord would
+        // force users to press Escape twice to close the modal.
+        if (activePaletteId === null && !hasModalDialog) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
       }
 
-      const activePaletteId = usePaletteStore.getState().activePaletteId;
-      const hasModalDialog = document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+      // AppDialog/AppPaletteDialog arbitrate layered Escape at document bubble
+      // through their dedicated LIFO backstop. Let that owner see the event;
+      // dispatching the general escape stack here can hit a retiring entry and
+      // stop propagation before the visible modal gets a chance to close.
+      if (e.key === "Escape" && hasDialogBackstop) return;
+
       if (
         e.key === "Escape" &&
         hasHandlers() &&

@@ -20,7 +20,10 @@ interface ScratchStoreState {
   isLoading: boolean;
   loadScratches: () => Promise<void>;
   createScratch: (name?: string) => Promise<Scratch>;
-  switchScratch: (scratchId: string) => Promise<void>;
+  switchScratch: (
+    scratchId: string,
+    options?: { focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent }
+  ) => Promise<void>;
   removeScratch: (scratchId: string) => Promise<void>;
   renameScratch: (scratchId: string, name: string) => Promise<void>;
   setCurrentScratch: (scratch: Scratch | null) => void;
@@ -28,23 +31,39 @@ interface ScratchStoreState {
   removeScratchLocal: (scratchId: string) => void;
 }
 
+/**
+ * The load in flight, so a concurrent caller can await the SAME work instead of
+ * being told "already loading" and resolving against an empty store.
+ *
+ * Boot hydration starts a fire-and-forget load; the switcher then awaits its own
+ * `loadScratches()` before reading ids for the agent-status pull. Returning a
+ * bare resolved promise there let the palette read zero scratches and omit them
+ * from that pull, leaving their rows on the opened-time fallback until some
+ * later transition happened to re-broadcast (#11518).
+ */
+let scratchLoadInFlight: Promise<void> | null = null;
+
 export const useScratchStore = create<ScratchStoreState>((set, get) => ({
   scratches: [],
   currentScratch: null,
   isLoading: false,
 
-  loadScratches: async () => {
-    if (get().isLoading) return;
+  loadScratches: () => {
+    if (scratchLoadInFlight) return scratchLoadInFlight;
     set({ isLoading: true });
-    try {
-      const [scratches, current] = await Promise.all([
-        scratchClient.getAll(),
-        scratchClient.getCurrent(),
-      ]);
-      set({ scratches, currentScratch: current });
-    } finally {
-      set({ isLoading: false });
-    }
+    scratchLoadInFlight = (async () => {
+      try {
+        const [scratches, current] = await Promise.all([
+          scratchClient.getAll(),
+          scratchClient.getCurrent(),
+        ]);
+        set({ scratches, currentScratch: current });
+      } finally {
+        set({ isLoading: false });
+        scratchLoadInFlight = null;
+      }
+    })();
+    return scratchLoadInFlight;
   },
 
   createScratch: async (name?: string) => {
@@ -56,8 +75,8 @@ export const useScratchStore = create<ScratchStoreState>((set, get) => ({
     return scratch;
   },
 
-  switchScratch: async (scratchId: string) => {
-    const switched = await scratchClient.switch(scratchId);
+  switchScratch: async (scratchId: string, options) => {
+    const switched = await scratchClient.switch(scratchId, options);
     set((state) => ({
       currentScratch: switched,
       scratches: state.scratches.map((s) => (s.id === switched.id ? switched : s)),

@@ -84,7 +84,12 @@ export const theme: BuiltInThemeSource = {
   },
   tokens: {
     "border-divider": "rgba(140,200,180,0.05)",
-    "border-interactive": "rgba(140,200,180,0.12)",
+    // Must stay above `border-strong`: interactive is the lift a control shows
+    // on focus or hover, and several resting borders (the palette input among
+    // them) sit at strong. At 0.12 the lift landed *below* the resting state, so
+    // focusing the palette search box faded its own border. 0.30 over a 0.20
+    // resting border is the same ~1.5x step every other built-in theme keeps.
+    "border-interactive": "rgba(140,200,180,0.30)",
     "border-strong": "rgba(140,200,180,0.20)",
     "border-subtle": "rgba(140,200,180,0.08)",
     "focus-ring": "rgba(74,158,127,0.50)",

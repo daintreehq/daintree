@@ -168,6 +168,9 @@ function makeContext(overrides: Partial<RawContext> = {}): MockedContext {
     backendTerminalMap: new Map<string, BackendTerminalInfo>(),
     terminalSizes: {} as Record<string, { cols: number; rows: number }>,
     activeWorktreeId: null,
+    // The default is the git-backed workspace every existing case assumes; the
+    // worktree-less workspace cases override it.
+    workspaceHasWorktrees: true,
     projectRoot: "/proj",
     agentSettings: undefined,
     clipboardDirectory: undefined,
@@ -499,6 +502,71 @@ describe("restorePanelsPhase — worktree re-home validation (#11387)", () => {
     expect(restoreTasks).toHaveLength(1);
     // Active worktree is live — a stranded no-worktree panel homes onto it.
     expect(resolvedWorktreeId(restoreTasks)).toBe("wMain");
+  });
+
+  // A scratch, or a folder opened without git, can never enumerate a worktree,
+  // so the app-global active id belongs to some other workspace and any saved id
+  // can only be one an earlier buggy run stamped on. Restoring either leaves a
+  // live PTY in a bucket the grid never renders.
+  describe("worktree-less workspace", () => {
+    it("restores a stranded panel with no worktree instead of re-homing onto the foreign active id", async () => {
+      const ctx = makeContext({
+        workspaceHasWorktrees: false,
+        activeWorktreeId: "/other/project/main",
+        worktreesPromise: Promise.resolve([]),
+      });
+      ctx.backendTerminalMap.set("t1", backend("t1"));
+      const { restoreTasks } = await restorePanelsPhase(
+        [panel("t1", { worktreeId: undefined })],
+        ctx
+      );
+      expect(restoreTasks).toHaveLength(1);
+      expect(resolvedWorktreeId(restoreTasks)).toBeUndefined();
+    });
+
+    it("strips a foreign worktreeId a previous run persisted onto a panel", async () => {
+      const ctx = makeContext({
+        workspaceHasWorktrees: false,
+        activeWorktreeId: null,
+        worktreesPromise: Promise.resolve([]),
+      });
+      ctx.backendTerminalMap.set("t1", backend("t1"));
+      const { restoreTasks } = await restorePanelsPhase(
+        [panel("t1", { worktreeId: "/other/project/main" })],
+        ctx
+      );
+      expect(resolvedWorktreeId(restoreTasks)).toBeUndefined();
+    });
+
+    it("strips a foreign worktreeId from a non-PTY panel too", async () => {
+      const ctx = makeContext({
+        workspaceHasWorktrees: false,
+        activeWorktreeId: "/other/project/main",
+        worktreesPromise: Promise.resolve([]),
+      });
+      await restorePanelsPhase(
+        [panel("b1", { kind: "browser", worktreeId: "/other/project/main" })],
+        ctx
+      );
+      expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+      expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: undefined });
+    });
+
+    it("leaves an orphan PTY worktree-less even when a foreign worktree matches its cwd", async () => {
+      const ctx = makeContext({
+        workspaceHasWorktrees: false,
+        activeWorktreeId: "/other/project/main",
+        // A worktree-less view should never see a list, but if a stale one leaks
+        // through, cwd inference must not attribute the orphan to it either.
+        worktreesPromise: Promise.resolve(wtList("wForeign")),
+      });
+      ctx.backendTerminalMap.set("o1", backend("o1", { cwd: "/proj/wForeign" }));
+      await restorePanelsPhase([], ctx);
+      // Read the field rather than `toMatchObject`: the orphan builder omits the
+      // key entirely when unattributed, which that matcher would not accept.
+      const orphanArgs = ctx.addPanel.mock.calls[0]![0] as { worktreeId?: string };
+      expect(orphanArgs.worktreeId).toBeUndefined();
+    });
   });
 });
 

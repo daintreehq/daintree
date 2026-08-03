@@ -76,9 +76,11 @@ test.describe.serial("Core: Worktree Session Bulk", () => {
 
     const featureCard = window.locator(SEL.worktree.card(FEATURE));
     await featureCard.click({ position: { x: 10, y: 10 } });
-    await expect
-      .poll(() => featureCard.getAttribute("aria-label"), { timeout: T_LONG })
-      .toContain("selected");
+    await expect(window.locator(SEL.worktree.row(FEATURE))).toHaveAttribute(
+      "aria-current",
+      "true",
+      { timeout: T_LONG }
+    );
 
     await spawnTerminalAndVerify(window);
     await spawnTerminalAndVerify(window);

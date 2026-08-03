@@ -37,12 +37,9 @@ test.describe.serial("Core: External Git Detection", () => {
 
     await expect(mainCard).toBeVisible({ timeout: T_LONG });
 
-    await expect
-      .poll(() => mainCard.getAttribute("aria-label"), {
-        timeout: T_LONG,
-        message: "Main card should be selected",
-      })
-      .toContain("selected");
+    await expect(window.locator(SEL.worktree.mainRow)).toHaveAttribute("aria-current", "true", {
+      timeout: T_LONG,
+    });
 
     await expect
       .poll(() => mainCard.getAttribute("aria-label"), {

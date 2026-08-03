@@ -27,9 +27,15 @@ function post(message: CopytreeWorkerResponse): void {
 port.on("message", (message: CopytreeWorkerRequest) => {
   switch (message.type) {
     case "generate": {
-      const { id, rootPath, options } = message;
+      const { id, rootPath, options, outputPath } = message;
       void copyTreeService
-        .generate(rootPath, options, (progress) => post({ type: "progress", id, progress }), id)
+        .generate(
+          rootPath,
+          options,
+          (progress) => post({ type: "progress", id, progress }),
+          id,
+          outputPath
+        )
         .then(
           (result) => post({ type: "generate-result", id, result }),
           (error: unknown) =>

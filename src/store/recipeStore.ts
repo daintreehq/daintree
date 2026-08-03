@@ -691,7 +691,14 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   getRecipeById: (id) => {
     const recipe = get().recipes.find((r) => r.id === id);
     if (recipe?.shadowedBy) {
-      return get().inRepoRecipes.find((r) => r.name === recipe.name) ?? recipe;
+      // Resolve through the merged list, not `inRepoRecipes` directly: the
+      // merged entry is the ProjectFileStore mirror, which keeps the local env
+      // values the git-tracked canonical copy redacts. Going straight to
+      // `inRepoRecipes` would launch a shadowed row with blank env while the
+      // Team row it defers to runs hydrated.
+      const winner = get().inRepoRecipes.find((r) => r.name === recipe.name);
+      if (!winner) return recipe;
+      return get().recipes.find((r) => r.id === winner.id) ?? winner;
     }
     return recipe;
   },

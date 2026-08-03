@@ -43,7 +43,15 @@ export function shouldUseBracketedPaste(
 
 /**
  * Format text with bracketed paste if needed.
+ *
+ * Embedded ESC bytes are replaced with their visible representation (U+241B)
+ * before wrapping. Without that, text containing `\x1b[201~` — legal in a POSIX
+ * filename, and reachable from a dropped path — would terminate the wrapper
+ * early and hand the remainder to the program as ordinary input, which can
+ * include a submit. This mirrors xterm's own `bracketTextForPaste`.
  */
 export function formatWithBracketedPaste(text: string): string {
-  return `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}`;
+  // String literal, not a regex: `no-control-regex` bans the pattern form.
+  const sanitized = text.replaceAll("\x1b", "␛");
+  return `${BRACKETED_PASTE_START}${sanitized}${BRACKETED_PASTE_END}`;
 }

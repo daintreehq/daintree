@@ -4,6 +4,7 @@ import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../..
 const errorStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const notificationHistoryMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const logsClientMock = vi.hoisted(() => ({ clear: vi.fn() }));
+const eventInspectorClientMock = vi.hoisted(() => ({ getEvents: vi.fn() }));
 const logsStoreMock = vi.hoisted(() => ({ clearLogs: vi.fn() }));
 
 vi.mock("@/store/errorStore", () => ({
@@ -17,7 +18,7 @@ vi.mock("@/store/logsStore", () => ({
 }));
 vi.mock("@/clients", () => ({
   errorsClient: { openLogs: vi.fn() },
-  eventInspectorClient: {},
+  eventInspectorClient: eventInspectorClientMock,
   logsClient: logsClientMock,
   telemetryPreviewClient: {},
 }));
@@ -361,5 +362,63 @@ describe("logs.clear", () => {
     await expect(run(actions, "logs.clear")).rejects.toThrow("buffer locked");
 
     expect(logsStoreMock.clearLogs).not.toHaveBeenCalled();
+  });
+});
+
+describe("eventInspector.getEvents pagination", () => {
+  /** Mirrors ActionService.dispatch, which validates argsSchema before run(). */
+  async function runParsed(actions: ActionRegistry, id: string, args?: unknown): Promise<any> {
+    const def = getDef(actions, id);
+    return def.run(def.argsSchema ? def.argsSchema.parse(args) : args, {} as never);
+  }
+
+  beforeEach(() => {
+    eventInspectorClientMock.getEvents.mockReset();
+    eventInspectorClientMock.getEvents.mockResolvedValue(
+      Array.from({ length: 10 }, (_, i) => ({ n: i }))
+    );
+  });
+
+  it("round-trips its own nextCursor onto the next page", async () => {
+    const actions = setupActions();
+
+    const first = await runParsed(actions, "eventInspector.getEvents", { limit: 4 });
+    expect(first.items).toEqual([{ n: 0 }, { n: 1 }, { n: 2 }, { n: 3 }]);
+    expect(first.hasMore).toBe(true);
+
+    const second = await runParsed(actions, "eventInspector.getEvents", {
+      limit: 4,
+      cursor: first.nextCursor,
+    });
+    expect(second.items).toEqual([{ n: 4 }, { n: 5 }, { n: 6 }, { n: 7 }]);
+  });
+
+  it("ends the list with hasMore false and a null cursor", async () => {
+    const actions = setupActions();
+    const page = await runParsed(actions, "eventInspector.getEvents", { limit: 4, offset: 6 });
+
+    expect(page.items).toHaveLength(4);
+    expect(page.hasMore).toBe(false);
+    expect(page.nextCursor).toBeNull();
+  });
+
+  it("accepts the legacy skip alias for offset", async () => {
+    const actions = setupActions();
+    const viaSkip = await runParsed(actions, "eventInspector.getEvents", { limit: 2, skip: 4 });
+
+    expect(viaSkip.items).toEqual([{ n: 4 }, { n: 5 }]);
+  });
+
+  it("rejects a cursor that would silently restart or slice backwards", async () => {
+    const actions = setupActions();
+
+    // Falling back to offset 0 would look like a legitimate first page; a
+    // negative offset would slice from the end of the array.
+    await expect(runParsed(actions, "eventInspector.getEvents", { cursor: "abc" })).rejects.toThrow(
+      /Invalid cursor/
+    );
+    await expect(runParsed(actions, "eventInspector.getEvents", { cursor: "-1" })).rejects.toThrow(
+      /Invalid cursor/
+    );
   });
 });

@@ -100,9 +100,12 @@ vi.mock("@/components/Terminal/XtermAdapter", () => ({
 }));
 vi.mock("@/components/Terminal/HybridInputBar", () => ({ HybridInputBar: () => null }));
 vi.mock("@/components/Terminal/MissingCliGate", () => ({ MissingCliGate: () => null }));
-vi.mock("@/components/Terminal/terminalFocus", () => ({
-  shouldShowHybridInputBar: () => false,
-}));
+vi.mock("@/components/Terminal/terminalFocus", async (importOriginal) => {
+  // Keep the real `getTerminalFocusTarget` — the reveal effect resolves the
+  // remembered target through it, and a hand-stubbed copy would drift.
+  const actual = await importOriginal<typeof import("@/components/Terminal/terminalFocus")>();
+  return { ...actual, shouldShowHybridInputBar: () => false };
+});
 vi.mock("./HelpIntroBanner", () => ({ HelpIntroBanner: () => null }));
 vi.mock("./HelpPanelBanners", () => ({ HelpPanelBanners: () => null }));
 vi.mock("./HelpPanelVersionGate", () => ({ HelpPanelVersionGate: () => null }));
@@ -202,7 +205,12 @@ vi.mock("@/store/macroFocusStore", () => {
     const next = typeof partial === "function" ? partial(state) : partial;
     Object.assign(state, next);
   };
-  return { useMacroFocusStore: store };
+  return {
+    useMacroFocusStore: store,
+    // Mirrors the real contract (macroFocusStore.ts:94) closely enough for these
+    // suites: the assistant owns focus when its macro region is selected.
+    isAssistantFocused: () => state.focusedRegion === "assistant",
+  };
 });
 
 vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));

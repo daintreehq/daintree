@@ -121,7 +121,7 @@ export function AutomationTab({
                           updated[index] = { ...cmd, name: e.target.value };
                           onRunCommandsChange(updated);
                         }}
-                        className="flex-1 bg-transparent border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+                        className="flex-1 bg-transparent border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                         placeholder="Command name"
                         aria-label="Run command name"
                       />
@@ -135,7 +135,7 @@ export function AutomationTab({
                         updated[index] = { ...cmd, command: e.target.value };
                         onRunCommandsChange(updated);
                       }}
-                      className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-xs text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent focus:ring-1 focus:ring-daintree-accent/30"
+                      className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-xs text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                       placeholder="npm run build"
                       aria-label="Run command"
                     />
@@ -314,7 +314,7 @@ export function AutomationTab({
               value={branchPrefixCustom}
               onChange={(e) => onBranchPrefixCustomChange(e.target.value)}
               placeholder="e.g. feature/ or myteam/"
-              className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
+              className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
             />
           </div>
         )}
@@ -353,7 +353,7 @@ export function AutomationTab({
           value={worktreePathPattern}
           onChange={(e) => onWorktreePathPatternChange(e.target.value)}
           placeholder="e.g. {parent-dir}/{base-folder}-worktrees/{branch-slug}"
-          className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
+          className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
         />
 
         {worktreePathPattern.trim() &&

@@ -18,6 +18,7 @@ import type { WorkspaceClient } from "./WorkspaceClient.js";
 import type { HibernationService } from "./HibernationService.js";
 import type { ProjectViewManager } from "../window/ProjectViewManager.js";
 import type { ProjectStatsService } from "./ProjectStatsService.js";
+import type { FleetSnapshotService } from "./FleetSnapshotService.js";
 import {
   RESOURCE_PROFILE_CONFIGS,
   type ResourceProfile,
@@ -155,6 +156,7 @@ export interface ResourceProfileDeps {
   getHibernationService: () => HibernationService | null;
   getAllProjectViewManagers: () => ProjectViewManager[];
   getProjectStatsService: () => ProjectStatsService | null;
+  getFleetSnapshotService?: () => FleetSnapshotService | null;
   getUserCachedViewLimit: () => number;
   /**
    * Renderer-saturation signal from ProcessMemoryMonitor's 30s LoAF sampling
@@ -1152,11 +1154,16 @@ export class ResourceProfileService {
       }
     }
 
-    // Update project stats polling cadence
-    const statsService = this.deps.getProjectStatsService();
-    if (statsService) {
+    // Update the terminal-poll cadence. Both services fan out to every pty
+    // shard on the same interval, so they move together — leaving one at the
+    // fast cadence would keep paying the cost the profile exists to avoid.
+    for (const poller of [
+      this.deps.getProjectStatsService(),
+      this.deps.getFleetSnapshotService?.() ?? null,
+    ]) {
+      if (!poller) continue;
       try {
-        statsService.updatePollInterval(config.projectStatsPollInterval * pollMultiplier);
+        poller.updatePollInterval(config.projectStatsPollInterval * pollMultiplier);
       } catch {
         // non-critical
       }

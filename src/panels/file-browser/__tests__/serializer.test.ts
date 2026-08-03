@@ -16,10 +16,15 @@ const basePanel: FileBrowserPanelData = {
  * Re-enter the create path with a serialized snapshot fragment. The snapshot is
  * a flat bag shared by every kind, so its `kind` is the open `PanelKind` union
  * — pin the discriminant here rather than spreading it through.
+ *
+ * `worktreeId` rides the base object rather than the per-kind fragment
+ * `serializeFileBrowser` returns, so restore carries it separately; supplying
+ * one here keeps these cases worktree-rooted, which is what their fixtures
+ * describe. The workspace-rooted cases below omit it deliberately.
  */
 function asOptions(snapshot: Partial<PanelSnapshot>): FileBrowserPanelOptions {
   const { kind: _kind, ...rest } = snapshot;
-  return { ...rest, kind: "file-browser" };
+  return { ...rest, kind: "file-browser", worktreeId: "wt-1" };
 }
 
 describe("serializeFileBrowser", () => {
@@ -58,7 +63,7 @@ describe("serializeFileBrowser", () => {
     // The old field's meaning was inverted; an old panel that showed gitignored
     // files must NOT hydrate as hiding dotfiles (#10938-class trap). The
     // serializer only knows the new field, so the stale key is simply dropped.
-    const legacy = { ...basePanel, browserShowIgnored: true } as FileBrowserPanelData;
+    const legacy = { ...basePanel, browserShowIgnored: true } as unknown as FileBrowserPanelData;
 
     const snapshot = serializeFileBrowser(legacy);
 
@@ -142,12 +147,161 @@ describe("serializeFileBrowser", () => {
       browserSidebarWidth: 360,
     });
   });
+
+  it("round-trips a collapsed viewer but keeps the open default sparse (#11496)", () => {
+    const collapsed: FileBrowserPanelData = { ...basePanel, browserViewerCollapsed: true };
+    expect(createFileBrowserDefaults(asOptions(serializeFileBrowser(collapsed)))).toEqual({
+      browserViewerCollapsed: true,
+    });
+
+    const open: FileBrowserPanelData = { ...basePanel, browserViewerCollapsed: false };
+    expect(serializeFileBrowser(open)).toEqual({});
+    expect(serializeFileBrowser(basePanel)).toEqual({});
+  });
+
+  it("keeps the remembered split width across a collapsed viewer (#11496)", () => {
+    // The sole-column tree ignores the width rather than clearing it, so
+    // reopening the viewer has to land back on the last-dragged split.
+    const both: FileBrowserPanelData = {
+      ...basePanel,
+      browserViewerCollapsed: true,
+      browserSidebarWidth: 360,
+    };
+
+    expect(createFileBrowserDefaults(asOptions(serializeFileBrowser(both)))).toEqual({
+      browserViewerCollapsed: true,
+      browserSidebarWidth: 360,
+    });
+  });
+
+  it("carries both collapse bits through persistence without resolving them", () => {
+    // Unreachable through the UI, reachable on disk. The pane resolves the pair
+    // at read time, so persistence must not quietly drop either side — doing so
+    // would rewrite the user's last choice on the way to a corrupt record.
+    const both: FileBrowserPanelData = {
+      ...basePanel,
+      browserSidebarCollapsed: true,
+      browserViewerCollapsed: true,
+    };
+
+    expect(createFileBrowserDefaults(asOptions(serializeFileBrowser(both)))).toEqual({
+      browserSidebarCollapsed: true,
+      browserViewerCollapsed: true,
+    });
+  });
+
+  it("persists workspace rooting so a promoted panel keeps its folder (#11489)", () => {
+    // Promotion into the grid adopts the active worktree as a placement key, so
+    // by save time an absent worktreeId no longer distinguishes the two — the
+    // marker is the only thing that survives to say which folder to browse.
+    const promoted: FileBrowserPanelData = {
+      ...basePanel,
+      worktreeId: "wt-1",
+      browserWorkspaceRooted: true,
+    };
+
+    expect(serializeFileBrowser(promoted)).toEqual({ browserWorkspaceRooted: true });
+
+    const restored = createFileBrowserDefaults({
+      ...asOptions(serializeFileBrowser(promoted)),
+      worktreeId: "wt-1",
+    });
+    expect(restored).toEqual({ browserWorkspaceRooted: true });
+  });
+
+  it("keeps a worktree-rooted panel sparse rather than writing the marker false", () => {
+    const worktreeRooted: FileBrowserPanelData = {
+      ...basePanel,
+      worktreeId: "wt-1",
+      browserWorkspaceRooted: false,
+    };
+
+    expect(serializeFileBrowser(worktreeRooted)).toEqual({});
+  });
 });
 
 describe("createFileBrowserDefaults", () => {
-  it("produces no fields when the opener passes only the kind", () => {
+  it("produces no fields when the opener names a worktree and nothing else", () => {
     // The sidebar entry point opens the browser with nothing but a worktree, so
     // this is the common path — it must not stamp defaults that then persist.
-    expect(createFileBrowserDefaults({ kind: "file-browser" })).toEqual({});
+    expect(createFileBrowserDefaults({ kind: "file-browser", worktreeId: "wt-1" })).toEqual({});
+  });
+
+  it("marks a panel opened without a worktree as workspace-rooted (#11489)", () => {
+    expect(createFileBrowserDefaults({ kind: "file-browser" })).toEqual({
+      browserWorkspaceRooted: true,
+    });
+  });
+
+  it("treats an unresolvable empty worktree id as naming a worktree, not as absent", () => {
+    // Fail closed, matching the pane's presence check: "" names a worktree that
+    // cannot resolve, and browsing the workspace root instead would be the wrong
+    // folder rather than a degraded one.
+    expect(createFileBrowserDefaults({ kind: "file-browser", worktreeId: "" })).toEqual({});
+  });
+
+  it("keeps a restored workspace-rooted panel workspace-rooted despite an adopted worktree", () => {
+    // The shape a promoted panel persists: grid placement stamped a worktreeId
+    // on it (#11290), so only the marker still tells the two apart.
+    expect(
+      createFileBrowserDefaults({
+        kind: "file-browser",
+        worktreeId: "wt-1",
+        browserWorkspaceRooted: true,
+      })
+    ).toEqual({ browserWorkspaceRooted: true });
+  });
+});
+
+describe("serializeFileBrowser sort fields (#11620)", () => {
+  function base(): FileBrowserPanelData {
+    return { ...basePanel };
+  }
+
+  it("persists neither field for the default name/ascending order", () => {
+    // The default is the order the listing service already returns, so a
+    // never-sorted panel must stay as sparse as it was before the feature.
+    const snapshot = serializeFileBrowser({
+      ...base(),
+      browserSortKey: "name",
+      browserSortDirection: "asc",
+    });
+    expect(snapshot.browserSortKey).toBeUndefined();
+    expect(snapshot.browserSortDirection).toBeUndefined();
+  });
+
+  it("persists neither field when the panel has never been sorted", () => {
+    const snapshot = serializeFileBrowser(base());
+    expect("browserSortKey" in snapshot).toBe(false);
+    expect("browserSortDirection" in snapshot).toBe(false);
+  });
+
+  it("persists a non-default key", () => {
+    expect(serializeFileBrowser({ ...base(), browserSortKey: "size" }).browserSortKey).toBe("size");
+  });
+
+  it("persists a descending direction even under the default key", () => {
+    // Name-descending is a real choice, and the two halves are written
+    // independently — dropping the direction because its key is the default
+    // would silently reset the order on restore.
+    const snapshot = serializeFileBrowser({
+      ...base(),
+      browserSortKey: "name",
+      browserSortDirection: "desc",
+    });
+    expect(snapshot.browserSortKey).toBeUndefined();
+    expect(snapshot.browserSortDirection).toBe("desc");
+  });
+
+  it("round-trips a non-default order through serialize", () => {
+    const snapshot = serializeFileBrowser({
+      ...base(),
+      browserSortKey: "modified",
+      browserSortDirection: "desc",
+    });
+    expect(snapshot).toMatchObject({
+      browserSortKey: "modified",
+      browserSortDirection: "desc",
+    });
   });
 });

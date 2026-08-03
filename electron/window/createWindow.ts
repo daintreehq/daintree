@@ -136,6 +136,16 @@ export interface SetupBrowserWindowOptions {
   /** Last-active projectId read synchronously from DB before window creation.
    *  Used to assign the correct session partition to the initial view. */
   initialProjectId?: string;
+  /**
+   * How the reveal gate maps the window (#11492). "showInactive" is for the
+   * background windows of a startup restore: they finish loading in an
+   * unpredictable order, and a plain `show()` hands focus to whichever renderer
+   * happens to parse its skeleton last.
+   *
+   * Defaults to "show" — every pre-existing call site is a window the user just
+   * asked for and should get focus.
+   */
+  revealMode?: "show" | "showInactive";
 }
 
 export interface CreateWindowResult {
@@ -150,7 +160,7 @@ export function setupBrowserWindow(
   dirname: string,
   options: SetupBrowserWindowOptions = {}
 ): CreateWindowResult {
-  const { onRecreateWindow, onCreateWindow, projectPath } = options;
+  const { onRecreateWindow, onCreateWindow, projectPath, revealMode = "show" } = options;
   let smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
   let _smokeRendererUnresponsive = false;
 
@@ -251,7 +261,14 @@ export function setupBrowserWindow(
       console.warn("[MAIN] Failed to load E2E BrowserWindow sentinel:", err);
     });
     if (isE2EDeferRendererLoad && !win.isDestroyed()) {
-      win.show();
+      // Honours revealMode like showOnce() does: this path reveals the shell
+      // before the renderer loads, so a restored background window would
+      // otherwise take focus here and never reach its showInactive().
+      if (revealMode === "showInactive") {
+        win.showInactive();
+      } else {
+        win.show();
+      }
     }
   }
 
@@ -426,7 +443,11 @@ export function setupBrowserWindow(
       }
       if (!win.isDestroyed()) {
         markPerformance(PERF_MARKS.MAIN_WINDOW_SHOWN, viaFallback ? { fallback: true } : undefined);
-        win.show();
+        if (revealMode === "showInactive") {
+          win.showInactive();
+        } else {
+          win.show();
+        }
       }
     };
     let fallbackTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {

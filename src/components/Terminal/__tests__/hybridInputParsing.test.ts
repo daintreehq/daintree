@@ -12,6 +12,10 @@ import {
   getAllAtDiffTokens,
   getAllAtTerminalTokens,
   getAllAtSelectionTokens,
+  getAllAtFileTokens,
+  formatAtFileToken,
+  formatAtFileTokenForCwd,
+  RESERVED_AT_TOKEN_PATHS,
 } from "../hybridInputParsing";
 
 const ALL: ReadonlySet<CompletionTrigger> = new Set(["/", "$", "@"]);
@@ -381,4 +385,141 @@ describe("getAllAtSelectionTokens", () => {
     const tokens = getAllAtSelectionTokens("just plain text");
     expect(tokens).toHaveLength(0);
   });
+});
+
+describe("formatAtFileTokenForCwd", () => {
+  const cwd = "/Users/greg/Projects/daintree";
+
+  // The point of the helper: an OS-absolute path (drop/paste) and the
+  // cwd-relative hit autocomplete's file search returns for the same file have
+  // to land on the identical token. Comparing the two producers rather than a
+  // copied literal is what makes this a real invariant.
+  it("agrees with the autocomplete producer for a file under cwd", () => {
+    expect(formatAtFileTokenForCwd(`${cwd}/src/App.tsx`, cwd)).toBe(
+      formatAtFileToken("src/App.tsx")
+    );
+  });
+
+  it("keeps the absolute form for a file outside cwd", () => {
+    const outside = "/etc/hosts";
+    expect(formatAtFileTokenForCwd(outside, cwd)).toBe(formatAtFileToken(outside));
+  });
+
+  // A sibling whose name merely extends the root is outside it — the mangling
+  // a bare `startsWith` would produce (`-sandbox/src/App.tsx`) is the exact
+  // failure `toWorktreeRelative` exists to prevent.
+  it("treats a sibling directory sharing the cwd prefix as outside", () => {
+    const sibling = `${cwd}-sandbox/src/App.tsx`;
+    expect(formatAtFileTokenForCwd(sibling, cwd)).toBe(formatAtFileToken(sibling));
+  });
+
+  it("falls back to absolute when there is no cwd to relativize against", () => {
+    const absolute = `${cwd}/src/App.tsx`;
+    expect(formatAtFileTokenForCwd(absolute, "")).toBe(formatAtFileToken(absolute));
+  });
+
+  // Relativizing must not cost the quoting a whitespace-bearing path needs, and
+  // the quotes belong around the emitted (relative) path, not the original.
+  it("quotes the relative path when the file name carries whitespace", () => {
+    const token = formatAtFileTokenForCwd(`${cwd}/src/my notes.md`, cwd);
+    expect(token).toBe(formatAtFileToken("src/my notes.md"));
+    expect(token).not.toContain(cwd);
+  });
+
+  // Windows hands back backslashes; autocomplete's results are posix. Both
+  // producers have to spell the same file the same way.
+  it("emits forward slashes for a Windows-style path and cwd", () => {
+    expect(formatAtFileTokenForCwd("C:\\repo\\src\\App.tsx", "C:\\repo")).toBe(
+      formatAtFileToken("src/App.tsx")
+    );
+  });
+
+  it("leaves an already-relative path alone", () => {
+    expect(formatAtFileTokenForCwd("src/App.tsx", cwd)).toBe(formatAtFileToken("src/App.tsx"));
+  });
+
+  // The inverse of the case above: the whitespace lives entirely in the prefix
+  // being stripped. Quoting decided before relativizing would needlessly quote
+  // a clean relative path and diverge from autocomplete.
+  it("does not quote when only the stripped cwd prefix carried whitespace", () => {
+    const spacedCwd = "/Users/greg/My Projects/daintree";
+    expect(formatAtFileTokenForCwd(`${spacedCwd}/src/App.tsx`, spacedCwd)).toBe(
+      formatAtFileToken("src/App.tsx")
+    );
+  });
+
+  it("still quotes an outside-cwd absolute path carrying whitespace", () => {
+    const outside = "/Volumes/My Drive/notes.md";
+    expect(formatAtFileTokenForCwd(outside, cwd)).toBe(formatAtFileToken(outside));
+  });
+});
+
+describe("formatAtFileToken reserved-token collision", () => {
+  // Relativizing can reduce a real file to a bare `terminal`/`diff`/`selection`,
+  // which the send path resolves as that provider's content. The emitted token
+  // has to survive every special-token scanner as a plain file reference.
+  it.each(["terminal", "selection", "diff", "diff:staged", "diff:head"])(
+    "does not emit %s as a bare reserved token",
+    (reserved) => {
+      const token = formatAtFileToken(reserved);
+      const text = `look at ${token} please`;
+      expect(getAllAtTerminalTokens(text)).toHaveLength(0);
+      expect(getAllAtSelectionTokens(text)).toHaveLength(0);
+      expect(getAllAtDiffTokens(text)).toHaveLength(0);
+    }
+  );
+
+  it("routes a reserved-name drop through the cwd formatter too", () => {
+    const cwd = "/repo";
+    expect(formatAtFileTokenForCwd(`${cwd}/terminal`, cwd)).toBe(formatAtFileToken("terminal"));
+  });
+
+  it("leaves a reserved name alone when it is not the whole path", () => {
+    expect(formatAtFileToken("src/terminal")).toBe("@src/terminal");
+    expect(formatAtFileToken("terminal.ts")).toBe("@terminal.ts");
+  });
+});
+
+// The formatter and the token scanner are two halves of one contract: whatever
+// `formatAtFileToken` emits, `getAllAtFileTokens` has to read back as exactly
+// the path that went in. Asserting the round trip catches a delimiter the
+// scanner stops at that the formatter forgot to quote, which asserting the
+// literal token text would not.
+describe("formatAtFileToken round-trips through getAllAtFileTokens", () => {
+  it.each([
+    "src/App.tsx",
+    "README.md",
+    "./terminal",
+    "diff:staged",
+    "src/my notes.md",
+    "src/a,b.ts",
+    "src/fn(1).ts",
+    "src/list].ts",
+    "weird;name",
+    "trailing.",
+    // Quote chars are the half of the contract relativizing newly exposes: a
+    // quote can now be the token's FIRST char, where the scanner reads it as
+    // opening a quoted path, and one embedded in an otherwise-quoted path is
+    // that path's own terminator unless it is escaped.
+    "'notes.txt",
+    '"notes.txt',
+    "src/it's.txt",
+    'src/say"hi".txt',
+    'src/my "notes".md',
+    '\'mixed "quotes".txt',
+  ])("recovers %s unchanged", (path) => {
+    const tokens = getAllAtFileTokens(`see ${formatAtFileToken(path)} here`);
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]!.path).toBe(RESERVED_AT_TOKEN_PATHS.has(path) ? `./${path}` : path);
+  });
+
+  it.each(["diff:staged", '\'mixed "quotes".txt'])(
+    "covers the whole %s token so the chip can span it",
+    (path) => {
+      const token = formatAtFileToken(path);
+      const text = `see ${token} here`;
+      const [parsed] = getAllAtFileTokens(text);
+      expect(text.slice(parsed!.start, parsed!.end)).toBe(token);
+    }
+  );
 });

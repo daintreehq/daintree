@@ -7,7 +7,7 @@ import { z } from "zod";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { getCurrentDiskSpaceStatus } from "./DiskSpaceMonitor.js";
 
-export const LATEST_SCHEMA_VERSION = 25;
+export const LATEST_SCHEMA_VERSION = 27;
 
 export interface Migration {
   version: number;

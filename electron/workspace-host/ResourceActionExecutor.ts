@@ -224,7 +224,13 @@ export class ResourceActionExecutor {
           lastOutput: result.output,
           lastCheckedAt: Date.now(),
           endpoint: typeof parsed.endpoint === "string" ? parsed.endpoint : undefined,
-          meta: parsed.meta != null && typeof parsed.meta === "object" ? parsed.meta : undefined,
+          // Arrays are typeof "object" but aren't a string-keyed record, and
+          // `worktree.resource.status` now publishes this field to MCP as an
+          // object — passing one through would violate the advertised schema.
+          meta:
+            parsed.meta != null && typeof parsed.meta === "object" && !Array.isArray(parsed.meta)
+              ? parsed.meta
+              : undefined,
         });
       } catch {
         // Non-JSON output: if command succeeded (exit 0), treat as "unknown" (neutral) rather

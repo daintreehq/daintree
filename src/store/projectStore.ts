@@ -9,6 +9,7 @@ import type {
 import { projectClient, worktreeClient } from "@/clients";
 import type { NonGitFolderStep } from "@/components/Project/NonGitFolderDialog";
 import { notify } from "@/lib/notify";
+import { setProjectPathIndexAccessor } from "@/store/storeAccessors";
 import { actionService } from "@/services/ActionService";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
@@ -195,7 +196,7 @@ interface ProjectState {
   createProjectFolder: (parentPath: string, folderName: string, emoji?: string) => Promise<void>;
   switchProject: (
     projectId: string,
-    options?: { focusIntent?: "focus-next-waiting" }
+    options?: { focusIntent?: import("@shared/types/ipc/project").ProjectFocusOnActivateIntent }
   ) => Promise<void>;
   setWorktreeLoadError: (error: string | null) => void;
   clearSwitching: () => void;
@@ -1156,8 +1157,39 @@ registerPersistedStore({
   persistedStateType: "{ projects: Project[] }",
 });
 
-// Break circular dependency by injecting project ID getter
-panelPersistence.setProjectIdGetter(() => useProjectStore.getState().currentProject?.id);
+// Registered here rather than in `rendererStoreOrchestrator` so the accessor
+// wiring never forces an eager import of this store singleton into the
+// orchestrator's module graph. The closure resolves `getState()` lazily, so it
+// always reads the live project list.
+setProjectPathIndexAccessor(() => {
+  const index = new Map<string, string>();
+  for (const project of useProjectStore.getState().projects) {
+    if (project.path) index.set(project.id, project.path);
+  }
+  return index;
+});
+
+// Break circular dependency by injecting project ID getter. Falls back to the
+// view's own workspace id so a scratch view — which has no Project row, and so
+// no `currentProject` — still persists its panel grid instead of silently
+// skipping every save (#11484). Same pattern as the PTY-ownership fix in
+// `panelRegistry/addPanel` and `restart`.
+//
+// The fallback is deliberately narrow. `currentProject` is also null for a
+// *closed* project, and persisting there would let a view that restored nothing
+// overwrite that project's saved grid with an empty one. Only an id that names
+// no project row at all is a scratch, which mirrors how Main resolves a sender's
+// workspace in `resolveScopedProjectForIpcContext`.
+panelPersistence.setProjectIdGetter(() => {
+  const { currentProject, projects } = useProjectStore.getState();
+  if (currentProject?.id) return currentProject.id;
+
+  const viewWorkspaceId = getViewWorkspaceId();
+  if (!viewWorkspaceId) return undefined;
+  return projects.some((candidate) => candidate.id === viewWorkspaceId)
+    ? undefined
+    : viewWorkspaceId;
+});
 
 // Keep this renderer's cached project state in sync when another renderer
 // (e.g., the welcome view where the onboarding wizard ran) adds, updates,

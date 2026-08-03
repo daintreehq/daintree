@@ -77,9 +77,12 @@ import type {
   ProjectSwitchPayload,
   ProjectSwitchOutgoingState,
   ProjectWorktreeLoadStatusPayload,
+  ProjectFocusOnActivateIntent,
 } from "./project.js";
+import type { FleetSnapshot } from "./fleet.js";
 import type {
   GitGetFileDiffPayload,
+  GitFileDiffResult,
   GitCompareWorktreesPayload,
   CrossWorktreeDiffResult,
 } from "./git.js";
@@ -606,7 +609,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     args: [
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
-      options?: { focusIntent?: "focus-next-waiting" },
+      options?: { focusIntent?: ProjectFocusOnActivateIntent },
     ];
     result: Project;
   };
@@ -761,7 +764,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   // Git channels
   "git:get-file-diff": {
     args: [payload: GitGetFileDiffPayload];
-    result: string;
+    result: GitFileDiffResult;
   };
   "git:get-project-pulse": {
     args: [
@@ -1070,7 +1073,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
   "forge:assign-issue": {
     args: [payload: { cwd: string; issueNumber: number; username: string }];
-    result: void;
+    result: ForgeUser[];
   };
   "forge:validate-token": {
     args: [payload: { providerId: string; token: string }];
@@ -1631,9 +1634,10 @@ export interface IpcEventMap {
   // Project events
   "project:on-switch": ProjectSwitchPayload;
   "project:worktree-load-status": ProjectWorktreeLoadStatusPayload;
-  "project:focus-on-activate": { intent: "focus-next-waiting" };
+  "project:focus-on-activate": ProjectFocusOnActivateIntent;
   "project:background-resize": { width: number; height: number };
   "project:stats-updated": ProjectStatusMap;
+  "fleet:snapshot-updated": FleetSnapshot;
   "project:updated": Project;
   "project:removed": string;
   // Main asks the renderer to open the guided git-init dialog for a folder the

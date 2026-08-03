@@ -354,8 +354,9 @@ export interface EditIssueInput {
 }
 
 /**
- * Normalized projection of a comment created via
- * {@link ForgeProviderImpl.addIssueComment}. Mirrors the lowest common
+ * Normalized projection of an issue comment — both the one created via
+ * {@link ForgeProviderImpl.addIssueComment} and the ones read back via
+ * {@link IssueCommentCapability.listIssueComments}. Mirrors the lowest common
  * denominator across forges.
  */
 export interface IssueComment {
@@ -433,6 +434,70 @@ export interface ReviewThread {
   rawData: unknown;
 }
 
+/**
+ * Cross-provider review verdict. `commented` covers a review submitted without
+ * a verdict; `unknown` is the escape hatch for a state this vocabulary doesn't
+ * model, so a provider never has to lie about what the forge reported.
+ */
+export type NormalizedReviewState =
+  "approved" | "changes_requested" | "commented" | "dismissed" | "pending" | "unknown";
+
+/**
+ * A submitted pull-request review, returned by the review-write operations so
+ * the caller learns what verdict landed without re-fetching. `state` is the
+ * normalized verdict; `rawState` preserves the provider's own spelling, the
+ * same split {@link Issue} uses.
+ */
+export interface PullRequestReview {
+  /** Provider review id, as a string so non-numeric forges fit. */
+  id: string;
+  state: NormalizedReviewState;
+  rawState: string;
+  body: string;
+  url: string;
+  author?: ForgeUser;
+  /** Epoch milliseconds, or `null` for a review that isn't submitted yet. */
+  submittedAt: number | null;
+  /** Head commit the review was submitted against, when the forge reports one. */
+  commitId: string | null;
+  rawData: unknown;
+}
+
+/**
+ * Acknowledgement returned by {@link ForgeProviderImpl.mergePR}. Deliberately
+ * narrow: a merge endpoint reports whether the merge landed and under which
+ * commit, not the resulting pull request. Providers must not issue a second
+ * read to enrich this — a follow-up failure would make a completed merge look
+ * like a failed one.
+ */
+export interface MergePRResult {
+  prNumber: number;
+  /** Merge commit SHA, or `null` when the forge reports none. */
+  sha: string | null;
+  merged: boolean;
+  /** Provider-supplied outcome message (e.g. "Pull Request successfully merged"). */
+  message: string;
+}
+
+/** Draft state a pull request ended in after a draft-toggle mutation. */
+export interface PRDraftStateResult {
+  prNumber: number;
+  isDraft: boolean;
+}
+
+/**
+ * Reviewers a pull request carries after a request. These are the resulting
+ * lists, not an echo of the request — forges canonicalize logins and retain
+ * previously-requested reviewers, so the two can differ.
+ */
+export interface RequestReviewersResult {
+  prNumber: number;
+  /** Account logins with a pending review request. */
+  requestedUsers: string[];
+  /** Team identifiers (e.g. GitHub team slugs) with a pending review request. */
+  requestedTeams: string[];
+}
+
 export interface ApprovalState {
   approved: boolean;
   required: number;
@@ -486,15 +551,56 @@ export interface ReviewCapability {
    * remote review state, so the `forge.*` actions that call them carry
    * `danger: "confirm"`.
    */
-  approvePR?(repo: RepoRef, prNumber: number, body?: string): Promise<void>;
-  requestChanges?(repo: RepoRef, prNumber: number, body: string): Promise<void>;
+  approvePR?(repo: RepoRef, prNumber: number, body?: string): Promise<PullRequestReview>;
+  requestChanges?(repo: RepoRef, prNumber: number, body: string): Promise<PullRequestReview>;
   /**
-   * Dismiss a previously-submitted review. `reviewId` identifies the review to
-   * dismiss — there is no dismiss-by-PR shortcut, so callers obtain it first
-   * from a {@link ReviewThread}'s `rawData` (or the provider's review listing).
+   * Dismiss a previously-submitted review, returning the dismissed review.
+   * `reviewId` identifies the review to dismiss — there is no dismiss-by-PR
+   * shortcut, so callers obtain it first from a {@link ReviewThread}'s
+   * `rawData` (or the provider's review listing).
    */
-  dismissReview?(repo: RepoRef, prNumber: number, reviewId: number, message: string): Promise<void>;
-  requestReviewers?(repo: RepoRef, prNumber: number, reviewers: ReviewerRequest): Promise<void>;
+  dismissReview?(
+    repo: RepoRef,
+    prNumber: number,
+    reviewId: number,
+    message: string
+  ): Promise<PullRequestReview>;
+  requestReviewers?(
+    repo: RepoRef,
+    prNumber: number,
+    reviewers: ReviewerRequest
+  ): Promise<RequestReviewersResult>;
+}
+
+/**
+ * Optional paged read of an issue's comment thread — the read half of
+ * {@link ForgeProviderImpl.addIssueComment}, which posts without any way to
+ * see the thread it posts into (#11545). Separate from `getIssue` because a
+ * thread is unbounded: `getIssue` reports `commentCount` and stays one cheap
+ * round-trip, while the comments themselves page.
+ *
+ * Comments come back oldest-first, the natural reading order of a thread and
+ * the only order either GitHub API reliably serves (its per-issue REST
+ * endpoint silently ignores `sort`/`direction`, and GraphQL's
+ * `IssueCommentOrderField` has no `CREATED_AT`). A caller wanting the newest
+ * comment must therefore page to the end and take the last item — never ask
+ * for one descending item.
+ *
+ * Throws when the issue doesn't exist, rather than returning an empty page.
+ * The consumer here is an agent deciding whether anyone replied, and "no such
+ * issue", "this provider can't read comments" and "nobody has replied yet"
+ * lead it to opposite conclusions — so only the last of the three may present
+ * as an empty page. The host applies the same rule to capability absence
+ * (`ForgeProviderImpl.issueComments` missing throws, matching `repoStats`),
+ * which is why this capability is not modeled as best-effort the way
+ * {@link TooltipCapability} is.
+ */
+export interface IssueCommentCapability {
+  listIssueComments(
+    repo: RepoRef,
+    issueNumber: number,
+    opts: ListOptions
+  ): Promise<Page<IssueComment>>;
 }
 
 export interface ApprovalCapability {
@@ -952,8 +1058,15 @@ export interface ForgeProviderImpl {
    * the new issue shows up in subsequent {@link listIssues} calls.
    */
   createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue>;
-  assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
-  unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
+  /**
+   * Assign an issue, returning the issue's resulting assignee list. Forges may
+   * silently drop an assignee the account can't take (GitHub ignores users
+   * without push access), so the returned list — not the requested username —
+   * is what actually landed.
+   */
+  assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]>;
+  /** Remove an assignment, returning the issue's resulting assignee list. */
+  unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]>;
   /**
    * Open a new pull request from `input.head` into `input.base` and return the
    * normalized {@link PR}. Providers that can't create PRs throw
@@ -961,22 +1074,23 @@ export interface ForgeProviderImpl {
    * so the new PR shows up in subsequent {@link listPRs} calls.
    */
   createPR(repo: RepoRef, input: CreatePRInput): Promise<PR>;
-  /** Close an open pull request without merging. */
-  closePR(repo: RepoRef, prNumber: number): Promise<void>;
-  /** Reopen a previously closed pull request. */
-  reopenPR(repo: RepoRef, prNumber: number): Promise<void>;
+  /** Close an open pull request without merging, returning the updated {@link PR}. */
+  closePR(repo: RepoRef, prNumber: number): Promise<PR>;
+  /** Reopen a previously closed pull request, returning the updated {@link PR}. */
+  reopenPR(repo: RepoRef, prNumber: number): Promise<PR>;
   /**
-   * Merge a pull request using the optional {@link MergePRInput} strategy.
-   * Irreversible. Providers surface unmergeable states (draft, conflicts,
-   * failing required checks, stale head) as errors.
+   * Merge a pull request using the optional {@link MergePRInput} strategy,
+   * returning the {@link MergePRResult} acknowledgement. Irreversible.
+   * Providers surface unmergeable states (draft, conflicts, failing required
+   * checks, stale head) as errors.
    */
-  mergePR(repo: RepoRef, prNumber: number, input?: MergePRInput): Promise<void>;
-  /** Convert an open pull request to a draft. */
-  convertPRToDraft(repo: RepoRef, prNumber: number): Promise<void>;
-  /** Mark a draft pull request ready for review. */
-  markPRReadyForReview(repo: RepoRef, prNumber: number): Promise<void>;
-  /** Post a comment on a pull request. */
-  commentOnPR(repo: RepoRef, prNumber: number, body: string): Promise<void>;
+  mergePR(repo: RepoRef, prNumber: number, input?: MergePRInput): Promise<MergePRResult>;
+  /** Convert an open pull request to a draft, returning its resulting draft state. */
+  convertPRToDraft(repo: RepoRef, prNumber: number): Promise<PRDraftStateResult>;
+  /** Mark a draft pull request ready for review, returning its resulting draft state. */
+  markPRReadyForReview(repo: RepoRef, prNumber: number): Promise<PRDraftStateResult>;
+  /** Post a comment on a pull request, returning the created {@link IssueComment}. */
+  commentOnPR(repo: RepoRef, prNumber: number, body: string): Promise<IssueComment>;
   /**
    * Edit a pull request's title and/or body and return the updated
    * normalized {@link PR}.
@@ -1068,6 +1182,7 @@ export interface ForgeProviderImpl {
 
   // Optional capabilities — host checks presence via a truthiness guard (see above).
   reviews?: ReviewCapability;
+  issueComments?: IssueCommentCapability;
   approvals?: ApprovalCapability;
   releases?: ReleaseCapability;
   projectBoards?: ProjectBoardCapability;

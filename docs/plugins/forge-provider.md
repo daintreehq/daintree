@@ -107,8 +107,8 @@ Return the disposer `registerForgeProvider` hands back. `descriptor.id` must mat
 | `buildIssuesUrl(repo, opts?)` | `string` | Optional `{ query, state }` filter. |
 | `buildPRsUrl(repo, opts?)` | `string` | — |
 | `buildCommitsUrl(repo, branch?)` | `string` | — |
-| `assignIssue(repo, n, user)` | `Promise<void>` | Reject (throw) if your forge can't assign. |
-| `unassignIssue(repo, n, user)` | `Promise<void>` | Base method, paired with `assignIssue`. Reject (throw) if your forge can't unassign. |
+| `assignIssue(repo, n, user)` | `Promise<ForgeUser[]>` | Return the issue's resulting assignee list — a forge that silently drops an assignee it won't accept must report the list without them. Reject (throw) if your forge can't assign. |
+| `unassignIssue(repo, n, user)` | `Promise<ForgeUser[]>` | Base method, paired with `assignIssue`. Returns the resulting assignee list. Reject (throw) if your forge can't unassign. |
 | `validateToken(token)` | `Promise<AuthValidation>` | Validate an arbitrary token (used by the token-entry UI before storing it). |
 | `getRateLimit?()` | `Promise<RateLimitInfo>` | Optional. Project your transport's rate-limit signal into the uniform shape. `null` per dimension the provider doesn't report. |
 

@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Pin, PinOff, EyeOff, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
 import { ACTION_CATEGORY_COLORS, ACTION_CATEGORY_DEFAULT_COLOR } from "@/config/categoryColors";
 
@@ -128,12 +129,10 @@ function ActionPaletteItemInner({
   return (
     <div
       className={cn(
-        "group relative w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)] transition-colors",
-        "border border-transparent text-daintree-text/70",
+        PALETTE_ROW_CLASS,
+        "group w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)]",
+        "text-daintree-text/70",
         "hover:bg-overlay-subtle hover:text-daintree-text",
-        "aria-selected:bg-overlay-raised aria-selected:border-overlay aria-selected:text-daintree-text",
-        "aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2",
-        "aria-selected:before:w-[2px] aria-selected:before:bg-daintree-accent aria-selected:before:content-['']",
         !item.enabled && "opacity-50"
       )}
       id={`action-option-${item.id}`}
@@ -155,13 +154,23 @@ function ActionPaletteItemInner({
           !item.enabled && "cursor-not-allowed"
         )}
       >
-        <span
-          className={cn(
-            "shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium leading-tight",
-            categoryColor
-          )}
-        >
-          {item.category}
+        {/* Fixed-width COLUMN holding a natural-width chip. Category names run
+            from "git" to "preferences", so an auto-width badge started every
+            title at a different x and the list read as a ragged left edge. The
+            wrapper reserves the column so titles align; the chip inside stays
+            its own size, because a 3-letter category stretched to 80px reads as
+            a button rather than a label. */}
+        <span className="w-20 shrink-0">
+          <span
+            className={cn(
+              // Natural width inside the fixed column, not stretched to fill it:
+              // a 3-letter category in an 80px pill reads as a stretched button.
+              "inline-block max-w-full truncate rounded px-1.5 py-0.5 text-[10px] font-medium leading-tight",
+              categoryColor
+            )}
+          >
+            {item.category}
+          </span>
         </span>
 
         <div className="flex-1 min-w-0">

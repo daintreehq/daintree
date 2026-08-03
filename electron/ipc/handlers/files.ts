@@ -12,8 +12,7 @@ import {
 } from "../../schemas/ipc.js";
 import type { FileReadResult } from "../../../shared/types/ipc/files.js";
 import { AppError } from "../../utils/errorTypes.js";
-
-const FILE_SIZE_LIMIT = 512 * 1024; // 500 KB
+import { FILE_PREVIEW_MAX_BYTES } from "../../utils/fileLimits.js";
 
 // Git LFS pointer files are plain ASCII with a fixed v1 header. The spec caps
 // pointer files at 1024 bytes total, so any larger file cannot be a pointer.
@@ -148,12 +147,12 @@ export function registerFilesHandlers(): () => void {
       throw fsErrorToAppError(error, "Could not stat file");
     }
 
-    if (stat.size > FILE_SIZE_LIMIT) {
+    if (stat.size > FILE_PREVIEW_MAX_BYTES) {
       throw new AppError({
         code: "FILE_TOO_LARGE",
-        message: `File exceeds ${FILE_SIZE_LIMIT} byte limit`,
+        message: `File exceeds ${FILE_PREVIEW_MAX_BYTES} byte limit`,
         userMessage: "This file is too large to preview.",
-        context: { filePath, size: stat.size, limit: FILE_SIZE_LIMIT },
+        context: { filePath, size: stat.size, limit: FILE_PREVIEW_MAX_BYTES },
       });
     }
 

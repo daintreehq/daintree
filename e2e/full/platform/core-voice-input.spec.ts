@@ -224,13 +224,21 @@ const PRE_SEEDED_KEY = "sk-e2e-test-key-not-real";
  * first .get/.set). Migration tests rely on the full-object replacement to
  * place legacy fields without defaults clobbering them.
  */
-function seedVoiceConfig(userDataDir: string, voiceInput: Record<string, unknown>): void {
+function seedVoiceConfig(
+  userDataDir: string,
+  voiceInput: Record<string, unknown>,
+  schemaVersion?: number
+): void {
   const configPath = path.join(userDataDir, "config.json");
   let config: Record<string, unknown> = {};
   if (existsSync(configPath)) {
     config = JSON.parse(readFileSync(configPath, "utf-8")) as Record<string, unknown>;
   }
   config.voiceInput = voiceInput;
+  // Session 1 wrote the CURRENT schema version, so a seed that leaves it alone
+  // exercises only the read-time safety net — every store migration is skipped
+  // as already-applied. Backdating makes the numbered migrations actually run.
+  if (schemaVersion !== undefined) config._schemaVersion = schemaVersion;
   writeFileSync(configPath, JSON.stringify(config));
 }
 
@@ -367,9 +375,12 @@ test.describe.serial("E2E: Voice Input — Settings Migration", () => {
    * Returns the merged settings as observed via IPC and the post-migration
    * on-disk shape so callers can assert both layers.
    */
-  async function runMigration(legacySeed: Record<string, unknown>): Promise<{
+  async function runMigration(
+    legacySeed: Record<string, unknown>,
+    schemaVersion?: number
+  ): Promise<{
     migrated: Record<string, unknown>;
-    onDisk: { voiceInput: Record<string, unknown> };
+    onDisk: { voiceInput: Record<string, unknown>; _schemaVersion?: number };
   }> {
     activeUserDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-voice-migrate-"));
 
@@ -383,7 +394,7 @@ test.describe.serial("E2E: Voice Input — Settings Migration", () => {
     await waitForProcessExit(pid);
     activeCtx = null;
 
-    seedVoiceConfig(activeUserDataDir, legacySeed);
+    seedVoiceConfig(activeUserDataDir, legacySeed, schemaVersion);
     removeSingletonFiles(activeUserDataDir);
 
     activeCtx = await launchApp({ userDataDir: activeUserDataDir });
@@ -408,15 +419,56 @@ test.describe.serial("E2E: Voice Input — Settings Migration", () => {
     });
 
     expect(migrated.openaiApiKey).toBe("sk-legacy-correction-key");
-    expect(migrated.transcriptionModel).toBe("gpt-realtime-whisper");
+    expect(migrated.transcriptionModel).toBe("gpt-live-transcribe");
     expect(migrated.correctionApiKey).toBeUndefined();
     // The retired gpt-5-mini correction model migrates to gpt-5.6-luna (#11365).
     expect(migrated.correctionModel).toBe("gpt-5.6-luna");
 
     expect(onDisk.voiceInput.openaiApiKey).toBe("sk-legacy-correction-key");
     expect(onDisk.voiceInput.correctionApiKey).toBeUndefined();
-    expect(onDisk.voiceInput.transcriptionModel).toBe("gpt-realtime-whisper");
+    expect(onDisk.voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
     expect(onDisk.voiceInput.correctionModel).toBe("gpt-5.6-luna");
+  });
+
+  test("a schema-26 install on the retired model comes back upgraded and intact", async () => {
+    // Backdated to 26 so the numbered migrations actually run — session 1 stamps
+    // the CURRENT version, and a store already marked current skips every one.
+    //
+    // Scope note: this is an integration smoke, NOT proof that migration 027's
+    // body works. `runMigration` reads settings over IPC, which runs the
+    // read-time normalizer in `getVoiceSettings`, so a no-op migration would
+    // still surface the new model here. The migration body is proven by the
+    // full-barrel test in StoreMigrations.test.ts, where nothing masks it. What
+    // this test uniquely covers is the real Electron boot path: the runner
+    // advances the schema and nothing else in voiceInput is destroyed en route.
+    const { migrated, onDisk } = await runMigration(
+      {
+        enabled: true,
+        openaiApiKey: "sk-existing",
+        language: "en",
+        customDictionary: ["Daintree"],
+        transcriptionProvider: "deepgram",
+        deepgramApiKey: "dg-existing",
+        transcriptionModel: "gpt-realtime-whisper",
+        correctionEnabled: false,
+        correctionModel: "gpt-5.6-luna",
+        correctionCustomInstructions: "",
+        paragraphingStrategy: "spoken-command",
+        resolveFileLinks: true,
+      },
+      26
+    );
+
+    expect(migrated.transcriptionModel).toBe("gpt-live-transcribe");
+    expect(onDisk.voiceInput.transcriptionModel).toBe("gpt-live-transcribe");
+    // Advancement, not a hard-coded latest — the exact number is the migration
+    // registry's business and moves with every future migration.
+    expect(onDisk._schemaVersion).toBeGreaterThan(26);
+    // The provider — not the model — selects the backend, so a Deepgram user's
+    // choice must survive the model upgrade untouched (#9175).
+    expect(migrated.transcriptionProvider).toBe("deepgram");
+    expect(migrated.deepgramApiKey).toBe("dg-existing");
+    expect(migrated.customDictionary).toEqual(["Daintree"]);
   });
 
   test("legacy apiKey field migrates into openaiApiKey when no correctionApiKey is present", async () => {
@@ -427,7 +479,7 @@ test.describe.serial("E2E: Voice Input — Settings Migration", () => {
       apiKey: "sk-original-key",
       language: "en",
       customDictionary: [],
-      transcriptionModel: "gpt-realtime-whisper",
+      transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
       correctionModel: "gpt-5-mini",
       correctionCustomInstructions: "",
@@ -485,7 +537,7 @@ test.describe.serial("E2E: Voice Input — OpenAI Realtime IPC Lifecycle", () =>
       openaiApiKey: PRE_SEEDED_KEY,
       language: "en",
       customDictionary: [],
-      transcriptionModel: "gpt-realtime-whisper",
+      transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
       correctionModel: "gpt-5.6-luna",
       correctionCustomInstructions: "",
@@ -558,13 +610,18 @@ test.describe.serial("E2E: Voice Input — OpenAI Realtime IPC Lifecycle", () =>
     const session = (sessionUpdate!.raw as { session: Record<string, unknown> }).session;
     expect(session.type).toBe("transcription");
     const audio = session.audio as { input: Record<string, unknown> };
-    const transcription = audio.input.transcription as { model: string; language: string };
-    expect(transcription.model).toBe("gpt-realtime-whisper");
-    expect(transcription.language).toBe("en");
-    // `gpt-realtime-whisper` does not support server VAD. `turn_detection` must
-    // be EXPLICITLY null — omitting it makes the server apply a default VAD and
-    // silently emit no transcription. Segmentation is driven client-side via
-    // interval `input_audio_buffer.commit` calls.
+    const transcription = audio.input.transcription as Record<string, unknown>;
+    expect(transcription.model).toBe("gpt-live-transcribe");
+    expect(transcription.languages).toEqual(["en"]);
+    // Presence and validity are the contract; the exact tier is tuning.
+    expect(["minimal", "low", "medium", "high", "xhigh"]).toContain(transcription.delay);
+    // `languages` (array) supersedes the deprecated singular `language`; the two
+    // are mutually exclusive on the wire and must never both be sent.
+    expect(transcription).not.toHaveProperty("language");
+    // `turn_detection` must be EXPLICITLY null — omitting it makes the server
+    // apply a default VAD and silently emit no transcription. Segmentation is
+    // driven client-side by the Silero VAD worker (commit at end-of-speech,
+    // with an 8s max-segment backstop).
     expect(audio.input.turn_detection).toBeNull();
 
     const captured = await getCapturedEvents(ctx.window);

@@ -14,6 +14,21 @@ import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { patchIssueAssigneeCache } from "@/lib/forgeResourceCache";
 import { logError } from "@/utils/logger";
 import { partialSuccessError, slugifyForBranch } from "./workflowHelpers";
+import { resolveAgentLaunchKind } from "@/utils/agentLaunchValidation";
+// The shared registry helper rather than `isRegisteredAgent` from
+// `@/config/agents`: identical result (that one is a one-line delegation to
+// this), but `@/config/agents` pulls the React icon map into the action module
+// graph, which action registration has no business importing.
+import { isEffectivelyRegisteredAgent } from "@shared/config/agentRegistry";
+
+/**
+ * Panel kinds `launchAgent` routes through its own non-PTY branches before it
+ * ever classifies the id against the registry. A workflow that must inject
+ * context into a running agent cannot use them, and the literal check has to be
+ * explicit: a plugin may register an agent under one of these ids, which would
+ * otherwise classify as a launchable agent and then still open a browser pane.
+ */
+const NON_TERMINAL_PANEL_IDS = new Set(["browser", "dev-preview"]);
 
 export function registerWorkflowCreationActions(
   actions: ActionRegistry,
@@ -24,7 +39,7 @@ export function registerWorkflowCreationActions(
       id: "worktree.createWithRecipe",
       title: "Create Worktree with Recipe",
       description:
-        "Create a worktree with branch setup, optionally from a PR, with recipe and issue assignment.",
+        "Create a git worktree with its branch, optionally tracking a pull request, and optionally launch a recipe's terminals in it. This is the heavy composite path: it writes to disk, may check out a remote branch, and may start several processes. Create the worktree alone when no terminals are wanted. Partial failure is possible — the worktree can exist while its recipe did not fully start.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -310,7 +325,7 @@ export function registerWorkflowCreationActions(
       id: "workflow.startWorkOnIssue",
       title: "Start Work on Issue",
       description:
-        "Fetch an issue, create a worktree with a derived branch, launch an agent, and inject context.",
+        "Fetch an issue, create a worktree with a derived branch, launch a terminal-backed agent, and inject context. Returns the issue identity plus worktreeId, worktreePath, branch, terminalId, recipe spawn counts, assignment outcome, and contextInjected. An unknown or non-terminal agentId is rejected before the issue lookup, so no worktree is created.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -320,7 +335,9 @@ export function registerWorkflowCreationActions(
         agentId: z
           .string()
           .min(1)
-          .describe("Agent CLI to launch in the new worktree (e.g. 'claude', 'codex', 'gemini')"),
+          .describe(
+            "Which agent CLI to launch in the new worktree, such as 'claude' or 'codex'; pass 'terminal' for a plain shell. Discover the ids actually installed with the agent-listing capability. An unknown id is rejected before anything is created."
+          ),
         branchName: z
           .string()
           .trim()
@@ -365,6 +382,10 @@ export function registerWorkflowCreationActions(
         assignmentError: z.string().nullable(),
         contextInjected: z.boolean(),
       }),
+      // Already a top-level object, so the manifest schema passes tierAuth's
+      // `type === "object"` gate and the result reaches callers as
+      // structuredContent instead of a text blob only (#11547).
+      mcpOutputSchema: true,
       run: async (
         {
           issueNumber,
@@ -394,6 +415,18 @@ export function registerWorkflowCreationActions(
             "Plugins cannot spawn recipe terminals through worktree creation. Dispatch recipe.run instead."
           );
         }
+
+        // Validate the agent before any IPC. The launcher rejects an unknown id
+        // too, but only at line-of-spawn — by then the worktree exists and any
+        // recipe terminals have started, so a typo'd id from MCP left an orphan
+        // worktree behind (#11547, deferred from #11500).
+        if (NON_TERMINAL_PANEL_IDS.has(agentId)) {
+          throw new Error(
+            `'${agentId}' opens a panel with no PTY, so it cannot work on an issue or receive injected context. ` +
+              `Discover registered agent ids with the agent-listing capability, or use 'terminal' for a plain shell.`
+          );
+        }
+        resolveAgentLaunchKind(agentId, isEffectivelyRegisteredAgent(agentId));
 
         const rootPath = currentProject.path;
         const effectiveAssignToSelf =
@@ -582,8 +615,13 @@ export function registerWorkflowCreationActions(
         let contextInjected = false;
         if (shouldInject) {
           try {
-            await copyTreeClient.injectToTerminal(terminalId, worktreeId);
-            contextInjected = true;
+            // CopyTree reports the common failures (terminal gone, generation
+            // failed) as a RESOLVED result carrying `error`, not a rejection —
+            // the same check useContextInjection makes. Without it every
+            // resolved call reported success, which now matters: the flag is
+            // published as structuredContent rather than buried in text.
+            const injection = await copyTreeClient.injectToTerminal(terminalId, worktreeId);
+            contextInjected = !injection?.error;
           } catch {
             // Best-effort — agent is launched; user can re-inject manually.
           }

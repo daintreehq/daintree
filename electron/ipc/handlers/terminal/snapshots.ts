@@ -10,6 +10,7 @@ import { logDebug, logInfo, logWarn } from "../../../utils/logger.js";
 import { getAgentAvailabilityStore } from "../../../services/AgentAvailabilityStore.js";
 import { defineIpcNamespace, op, opValidated } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
 
 type ValidatedReplayHistoryPayload = z.output<typeof TerminalReplayHistoryPayloadSchema>;
 
@@ -19,7 +20,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     return () => {};
   }
 
-  const handleTerminalGetSerializedState = async (terminalId: string): Promise<string | null> => {
+  const handleTerminalGetSerializedState = async (
+    terminalId: string
+  ): Promise<SerializedTerminalSnapshot | null> => {
     try {
       if (typeof terminalId !== "string" || !terminalId) {
         throw new Error("Invalid terminal ID: must be a non-empty string");
@@ -29,7 +32,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
       if (process.env.DAINTREE_VERBOSE) {
         logDebug(
-          `terminal:getSerializedState(${terminalId}): ${serializedState ? `${serializedState.length} bytes` : "null"}`
+          `terminal:getSerializedState(${terminalId}): ${serializedState ? `${serializedState.data.length} bytes @ ${serializedState.cols}x${serializedState.rows}` : "null"}`
         );
       }
       return serializedState;
@@ -41,7 +44,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
   const handleTerminalGetSerializedStates = async (
     terminalIds: string[]
-  ): Promise<Record<string, string | null>> => {
+  ): Promise<Record<string, SerializedTerminalSnapshot | null>> => {
     if (!Array.isArray(terminalIds)) {
       throw new Error("Invalid terminal IDs: must be an array");
     }

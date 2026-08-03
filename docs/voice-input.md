@@ -73,7 +73,7 @@ interface TranscriptionProvider {
 
 | Provider | `hasServerVAD` | Endpoint | Audio on wire | Segmentation | Keep-alive |
 | --- | --- | --- | --- | --- | --- |
-| `OpenAITranscriptionProvider` | `false` | `wss://api.openai.com/v1/realtime?intent=transcription`, model `gpt-realtime-whisper` | base64 JSON `input_audio_buffer.append` | client-side Silero VAD worker + 8s backstop | ping/pong heartbeat (20s) |
+| `OpenAITranscriptionProvider` | `false` | `wss://api.openai.com/v1/realtime?intent=transcription`, model `gpt-live-transcribe` | base64 JSON `input_audio_buffer.append` | client-side Silero VAD worker + 8s backstop | ping/pong heartbeat (20s) |
 | `DeepgramTranscriptionProvider` | `true` | `wss://api.deepgram.com/v1/listen`, model `nova-3` | raw binary frames, `linear16` @ 24kHz | server-side `endpointing=300` | `KeepAlive` frame (5s) |
 
 Both buffer up to `PRE_CONNECT_BUFFER_MAX` (100) chunks / `150_000` bytes (~3s) while connecting or reconnecting, then flush on session-ready. WebSocket URLs accept env overrides (`DAINTREE_REALTIME_WS_URL`, `DAINTREE_DEEPGRAM_WS_URL`) for testing.
@@ -86,9 +86,39 @@ Both buffer up to `PRE_CONNECT_BUFFER_MAX` (100) chunks / `150_000` bytes (~3s) 
 4. Decide the API-key field: `refreshConfiguration()` in the renderer treats Deepgram as needing `deepgramApiKey` and everything else as needing `openaiApiKey` — extend that branch if your provider uses a distinct key.
 5. Emit `STUB_CONFIDENCE` on `complete` unless you genuinely have word-level confidence.
 
+## OpenAI session config
+
+`OpenAITranscriptionProvider` sends one `session.update` on open (and re-sends the identical payload on every reconnect, rebuilt from the frozen settings snapshot):
+
+```jsonc
+{
+  "type": "session.update",
+  "session": {
+    "type": "transcription",
+    "audio": {
+      "input": {
+        "format": { "type": "audio/pcm", "rate": 24000 },
+        "transcription": {
+          "model": "gpt-live-transcribe",
+          "languages": ["en"], // array supersedes the deprecated singular `language` — never send both
+          "delay": "low",
+          "keywords": ["Daintree"], // omitted entirely when nothing survives sanitising
+          "prompt": "Keywords: Daintree",
+        },
+        "turn_detection": null,
+      },
+    },
+  },
+}
+```
+
+`languages` is a one-element array built from the single language code in settings, falling back to `["en"]` when unset. `delay` (`minimal` | `low` | `medium` | `high` | `xhigh`) governs how long the server buffers before emitting a partial `...transcription.delta`; higher tiers cut word-error rate and partial flapping at the cost of how quickly interim text appears. We render those partials live, so a sluggish tier is directly felt — hence `low`. It costs nothing in final accuracy or latency: the final `...completed` is transcribed from the whole frozen buffer after our explicit commit regardless, which also makes `delay` a different axis to the client-side `VAD_MAX_SEGMENT_MS` backstop — the two do not interact.
+
+The types for `keywords` and `languages` are hand-written in the provider: the installed `openai` SDK's `AudioTranscription` has no `keywords` field and its `model` union predates `gpt-live-transcribe`. `language?: never` on the local type makes reintroducing the deprecated singular field a compile error.
+
 ## OpenAI client-side VAD
 
-`gpt-realtime-whisper` does **not** support server VAD — `turn_detection` must be explicitly `null` (omitting it makes the server apply a default VAD the model can't use, after which it acks commits but emits no transcription). So the OpenAI provider segments itself.
+The OpenAI provider sends `turn_detection: null` explicitly and segments itself. The explicit `null` matters: omitting the field makes the server apply a default VAD, after which it acks commits but emits no transcription. Every documented `gpt-live-transcribe` example still shows `null`, and whether the model would accept a server-VAD block is unverified — adopting one would be its own change, with the error response checked first.
 
 The old approach committed on a blind 2-second interval, which cut words mid-pause and added up to ~2s of end-of-speech latency. It's replaced by a Silero VAD v5 side-chain (`electron/services/voice/openaiVadWorker.ts`, via the `avr-vad` package) running on a **worker thread** so ONNX inference (~every 32ms) never jitters the Electron main loop. The same 24kHz mono PCM16 stream sent to OpenAI is also fed to the worker, which resamples to Silero's 16kHz internally.
 
@@ -140,7 +170,11 @@ Prompt construction lives in `shared/config/voiceCorrection.ts`:
 - `buildCorrectionSystemPrompt(context)` — layers project context, the user's custom dictionary (PREFERRED TERMS), and custom instructions, ending with a fixed guardrail suffix. Ordered fixed-first so the OpenAI prompt cache (`prompt_cache_key`, prefix `voice-correction-v7`) hits. The fixed `CORE_CORRECTION_PROMPT` prefix is kept above OpenAI's 1,024-token cache floor, and `VoiceCorrectionService` sends it as the first `developer` message in the `input` array (not the top-level `instructions` field) so the prefix is actually cache-eligible.
 - `CONFIDENCE_SKIP_THRESHOLD` (0.85) — when every word is high-confidence, correction is skipped entirely (currently always skipped in practice since providers emit the stub; the path exists for a future confidence-bearing backend).
 
-`voiceContextKeyterms.ts` (`assembleKeyterms`, `formatKeytermPrompt`, branch/project/terminal tokenizers) builds a dynamic keyterm list from the active branch, project name, custom dictionary, and terminal output. The voice-input start handler assembles it at session start (Deepgram only — see below) and injects it into the snapshotted settings. `DeepgramTranscriptionProvider` consumes it as repeated Nova-3 `keyterm=` URL params; `OpenAITranscriptionProvider` passes it as a `transcription.prompt` keyterm hint (via `formatKeytermPrompt`) that is dormant until the realtime-whisper model honors `transcription.prompt`, at which point it activates automatically.
+`voiceContextKeyterms.ts` (`assembleKeyterms`, `sanitizeOpenAIKeywords`, `formatKeytermPrompt`, branch/project/terminal tokenizers) builds a dynamic keyterm list from the active branch, project name, custom dictionary, and terminal output. The voice-input start handler assembles it at session start and injects it into the snapshotted settings; both providers consume it, and both reconnect paths reuse the frozen list unchanged. `DeepgramTranscriptionProvider` sends it as repeated Nova-3 `keyterm=` URL params. `OpenAITranscriptionProvider` sends it twice over — as the native `transcription.keywords` array and as a bounded `transcription.prompt` (via `formatKeytermPrompt`) — both built from one `sanitizeOpenAIKeywords` pass, so a term rejected from `keywords` can't reach `prompt`.
+
+Sanitising is not optional: the Realtime API rejects the **entire** `session.update` if any keyword contains `<`, `>`, CR, or LF, so one bad term from terminal output (shell redirects, JSX, diff markers) would kill the whole dictation session. Offending terms are dropped whole rather than stripped — deleting `<` from `<div>` yields `div`, a different literal that would bias transcription toward a word the user never had on screen. The 50-term / 100-char caps are Daintree's own conservative bounds, shared with the Deepgram path; OpenAI documents neither limit.
+
+Neither field is sent empty — when nothing survives sanitising, both `keywords` and `prompt` are omitted rather than sent as `[]` / `""`. The `session.update` log deliberately records only shape (model, languages, delay, keyword count, `hasPrompt`, whether `turn_detection` came back null), never contents: keyterms carry the user's branch names and terminal output, and these logs are readable by agents.
 
 ### File-link resolution
 
@@ -175,7 +209,7 @@ When AI correction and `resolveFileLinks` are both on, every `complete` utteranc
 | AI correction service | `electron/services/VoiceCorrectionService.ts` |
 | Correction prompts/thresholds | `shared/config/voiceCorrection.ts` |
 | File-link resolution | `electron/services/VoiceFileLinkResolver.ts` |
-| Dynamic keyterm assembly (not yet wired) | `electron/services/voiceContextKeyterms.ts` |
+| Dynamic keyterm assembly + OpenAI keyword sanitising | `electron/services/voiceContextKeyterms.ts` |
 | Spoken dictation commands ("new paragraph") | `electron/services/voiceDictationCommands.ts` |
 | IPC handler (the renderer↔provider seam) | `electron/ipc/handlers/voiceInput.ts` |
 | Channel constants | `electron/ipc/channels.ts` |

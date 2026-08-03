@@ -4,6 +4,8 @@ import { TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import { GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS, GRACEFUL_SHUTDOWN_TIMEOUT_MS } from "../types.js";
 import { SUBMIT_ENTER_DELAY_MS } from "../terminalInput.js";
+import { logBuffer } from "../../LogBuffer.js";
+import { getLogLevelOverrides, setLogLevelOverrides } from "../../../utils/logger.js";
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
@@ -14,6 +16,13 @@ interface MockPtyHandles {
   writeMock: ReturnType<typeof vi.fn<(data: string) => void>>;
   emitData: (data: string) => void;
   emitExit: (exitCode: number, signal?: number) => void;
+  /**
+   * Deliver an exit event to the observer even after it was disposed —
+   * node-pty can hand over an already-queued exit during teardown, which is
+   * exactly the re-entry `finish()`'s `resolved` guard exists to absorb.
+   * `emitExit` can't reach it because dispose drops the callback first.
+   */
+  emitExitIgnoringDispose: (exitCode: number, signal?: number) => void;
   onDataDispose: ReturnType<typeof vi.fn>;
   onExitDispose: ReturnType<typeof vi.fn>;
 }
@@ -21,6 +30,8 @@ interface MockPtyHandles {
 function createMockPty(writeOverride?: (data: string) => void): MockPtyHandles {
   let dataCallback: ((data: string) => void) | null = null;
   let exitCallback: ((event: { exitCode: number; signal?: number }) => void) | null = null;
+  let undisposedExitCallback: ((event: { exitCode: number; signal?: number }) => void) | null =
+    null;
 
   const writeMock = vi.fn<(data: string) => void>();
   const onDataDispose = vi.fn(() => {
@@ -48,6 +59,7 @@ function createMockPty(writeOverride?: (data: string) => void): MockPtyHandles {
     },
     onExit: (cb: (e: { exitCode: number; signal?: number }) => void) => {
       exitCallback = cb;
+      undisposedExitCallback = cb;
       return { dispose: onExitDispose };
     },
   };
@@ -57,6 +69,8 @@ function createMockPty(writeOverride?: (data: string) => void): MockPtyHandles {
     writeMock,
     emitData: (data: string) => dataCallback?.(data),
     emitExit: (exitCode: number, signal?: number) => exitCallback?.({ exitCode, signal }),
+    emitExitIgnoringDispose: (exitCode: number, signal?: number) =>
+      undisposedExitCallback?.({ exitCode, signal }),
     onDataDispose,
     onExitDispose,
   };
@@ -480,5 +494,414 @@ describe("TerminalProcess.gracefulShutdown — listener disposal", () => {
 
     expect(handles.onDataDispose).toHaveBeenCalled();
     expect(handles.onExitDispose).toHaveBeenCalled();
+  });
+});
+
+describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
+  const SOURCE = "pty:TerminalGracefulShutdown";
+  let savedOverrides: Record<string, string>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    savedOverrides = getLogLevelOverrides();
+    // Vitest runs with NODE_ENV=development, which floors the logger at
+    // "debug". Pin it to production's "info" floor: these lines only earn
+    // their keep if they reach daintree.log on a user's machine, so an
+    // implementation that emitted them at debug must fail here rather than
+    // pass on the looser dev floor.
+    setLogLevelOverrides({ "*": "info" });
+    logBuffer.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    setLogLevelOverrides(savedOverrides);
+    logBuffer.clear();
+  });
+
+  function shutdownEntries() {
+    return logBuffer.getFiltered({ sources: [SOURCE] });
+  }
+
+  function contextOf(entry: { context?: unknown } | undefined) {
+    return entry?.context as
+      | {
+          terminalId?: string;
+          projectId?: string | null;
+          agentId?: string;
+          outcome?: string;
+          captured?: boolean;
+          elapsedMs?: number;
+        }
+      | undefined;
+  }
+
+  /**
+   * The outcome of the single entry logged so far, asserting there is exactly
+   * one and that it actually names something. Returning `undefined` on a
+   * missing outcome would let a branch that logs nothing useful slip past the
+   * distinctness checks below.
+   */
+  function soleOutcome(): string {
+    const entries = shutdownEntries();
+    expect(entries).toHaveLength(1);
+    const outcome = contextOf(entries[0])?.outcome;
+    expect(typeof outcome).toBe("string");
+    expect(outcome).not.toBe("");
+    logBuffer.clear();
+    return outcome as string;
+  }
+
+  function createPlainTerminal(handles: MockPtyHandles): TerminalProcess {
+    return new TerminalProcess(
+      "t-plain",
+      { cwd: process.cwd(), cols: 80, rows: 24, kind: "terminal" },
+      { emitData: () => {}, onExit: () => {} },
+      {
+        agentStateService: {
+          handleActivityState: () => {},
+          updateAgentState: () => {},
+          emitAgentKilled: () => {},
+        } as never,
+        ptyPool: null,
+        processTreeCache: null,
+      },
+      defaultSpawnContext(),
+      handles.pty
+    );
+  }
+
+  it("stays silent for a terminal that never had an agent", async () => {
+    // The scope gate. A plain shell fails `isAgentLive` for lack of any agent
+    // id, so without the gate every non-agent pane would report
+    // "agent-not-live" on each quit and bury the agent lines that matter.
+    const handles = createMockPty();
+    const terminal = createPlainTerminal(handles);
+
+    await expect(terminal.gracefulShutdown()).resolves.toBeNull();
+
+    expect(shutdownEntries()).toHaveLength(0);
+  });
+
+  // Every branch that is reachable without mocking the agent registry, each
+  // driven to completion and reduced to the outcome it logged. `no-quit-signal`
+  // is absent on purpose: no agent in the roster ships a resume config lacking
+  // both a quitCommand and a shutdownKeySequence, so it is defensive-only.
+  const BRANCHES: Record<string, () => Promise<string>> = {
+    async alreadyExited() {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles);
+      terminal.getInfo().isExited = true;
+      await expect(terminal.gracefulShutdown()).resolves.toBeNull();
+      return soleOutcome();
+    },
+
+    // `wasKilled` is set when a kill is *requested*; the process may still be
+    // running. Distinct from having already exited.
+    async alreadyKilled() {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles);
+      terminal.getInfo().wasKilled = true;
+      await expect(terminal.gracefulShutdown()).resolves.toBeNull();
+      return soleOutcome();
+    },
+
+    // Demoted to a plain shell via /quit — launchAgentId persists for
+    // identity, so this still counts as an agent terminal (issue #6605).
+    async agentNotLive() {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles);
+      terminal.getInfo().agentState = "exited";
+      terminal.getInfo().detectedAgentId = undefined;
+      await expect(terminal.gracefulShutdown()).resolves.toBeNull();
+      return soleOutcome();
+    },
+
+    // Cursor is registered but ships no resume config at all.
+    async noResumeConfig() {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles, "cursor");
+      await expect(terminal.gracefulShutdown()).resolves.toBeNull();
+      return soleOutcome();
+    },
+
+    async capturedOnData() {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles);
+      const promise = terminal.gracefulShutdown();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+      handles.emitData("claude --resume mid-stream\n");
+      await expect(promise).resolves.toBe("mid-stream");
+      return soleOutcome();
+    },
+
+    // No trailing boundary, so onData must decline and only the last-chance
+    // match at exit can capture it.
+    async capturedAtExit() {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles);
+      const promise = terminal.gracefulShutdown();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+      handles.emitData("claude --resume at-exit");
+      // If onData wrongly accepted the buffer-tail capture it would resolve
+      // here, dispose the exit listener, and make the emitExit below a no-op —
+      // the outcome would still look right. Pin the interim state.
+      expect(shutdownEntries()).toHaveLength(0);
+      handles.emitExit(0);
+      await expect(promise).resolves.toBe("at-exit");
+      return soleOutcome();
+    },
+
+    async timeout() {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles);
+      const promise = terminal.gracefulShutdown();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+      await expect(promise).resolves.toBeNull();
+      return soleOutcome();
+    },
+
+    // Kiro is project-scoped: null is the designed result, not a failure.
+    // Folding it into the pattern-miss bucket would send someone hunting a
+    // sessionIdPattern bug for an agent that has no pattern at all (#4781).
+    async exitedNoPattern() {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles, "kiro");
+      const promise = terminal.gracefulShutdown();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(SUBMIT_ENTER_DELAY_MS);
+      handles.emitExit(0);
+      await expect(promise).resolves.toBeNull();
+      return soleOutcome();
+    },
+
+    async exitedNoMatch() {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles);
+      const promise = terminal.gracefulShutdown();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+      handles.emitData("goodbye, nothing resumable here\n");
+      handles.emitExit(0);
+      await expect(promise).resolves.toBeNull();
+      return soleOutcome();
+    },
+
+    async preludeWriteFailed() {
+      let pending = true;
+      const handles = createMockPty((data: string) => {
+        if (pending && data === "\x05\x15") {
+          pending = false;
+          throw new Error("pty dead");
+        }
+      });
+      const terminal = createAgentTerminal(handles);
+      await expect(terminal.gracefulShutdown()).resolves.toBeNull();
+      return soleOutcome();
+    },
+
+    async quitSignalWriteFailed() {
+      const handles = createMockPty((data: string) => {
+        if (data === "/quit\r") throw new Error("pty dead after prelude");
+      });
+      const terminal = createAgentTerminal(handles);
+      const promise = terminal.gracefulShutdown();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+      await expect(promise).resolves.toBeNull();
+      return soleOutcome();
+    },
+
+    // No quit signal has gone out yet at this point...
+    async demotedDuringClearDelay() {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles);
+      const promise = terminal.gracefulShutdown();
+      await Promise.resolve();
+      await Promise.resolve();
+      terminal.getInfo().agentState = "exited";
+      terminal.getInfo().detectedAgentId = undefined;
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+      await expect(promise).resolves.toBeNull();
+      return soleOutcome();
+    },
+
+    // ...whereas here the split-write body landed and only Enter is missing.
+    // Codex splits body and Enter, so only it reaches this gate.
+    async demotedDuringSubmitDelay() {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles, "codex");
+      const promise = terminal.gracefulShutdown();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+      terminal.getInfo().agentState = "exited";
+      terminal.getInfo().detectedAgentId = undefined;
+      await vi.advanceTimersByTimeAsync(SUBMIT_ENTER_DELAY_MS);
+      await expect(promise).resolves.toBeNull();
+      return soleOutcome();
+    },
+  };
+
+  it("gives every branch its own outcome, and both capture paths the same one", async () => {
+    // The point of the whole feature: a reader of daintree.log can tell which
+    // branch fired. That only holds if no two branches share a label —
+    // checking pairs in isolation would miss a label reused across pairs.
+    // The two capture paths are the one deliberate collision: both succeeded,
+    // so neither explains a restore fallthrough.
+    const results: Record<string, string> = {};
+    for (const [name, run] of Object.entries(BRANCHES)) {
+      results[name] = await run();
+      // Every resolved shutdown ends in TerminalProcess.kill(), which leaves a
+      // pending SIGKILL escalation (ProcessTreeKiller). Queued across runners,
+      // the next scenario's timer advance would fire the earlier ones and
+      // sigkillSweep the mock's pid — a real number — against the real OS.
+      vi.clearAllTimers();
+    }
+
+    expect(results.capturedAtExit).toBe(results.capturedOnData);
+
+    const distinct = Object.entries(results)
+      .filter(([name]) => name !== "capturedAtExit")
+      .map(([, outcome]) => outcome);
+    expect(new Set(distinct).size).toBe(distinct.length);
+  });
+
+  it("reports captured only when an id actually came back", async () => {
+    // `captured` is the field the issue asked for — it must track the returned
+    // value, not the branch's optimism.
+    const hitHandles = createMockPty();
+    const hitTerminal = createAgentTerminal(hitHandles);
+    const hitPromise = hitTerminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    hitHandles.emitData("claude --resume landed\n");
+    const hitResult = await hitPromise;
+    expect(contextOf(shutdownEntries()[0])?.captured).toBe(hitResult !== null);
+    expect(hitResult).not.toBeNull();
+    logBuffer.clear();
+
+    const missHandles = createMockPty();
+    const missTerminal = createAgentTerminal(missHandles);
+    const missPromise = missTerminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    missHandles.emitData("goodbye, nothing resumable here\n");
+    missHandles.emitExit(0);
+    const missResult = await missPromise;
+    expect(contextOf(shutdownEntries()[0])?.captured).toBe(missResult !== null);
+    expect(missResult).toBeNull();
+  });
+
+  it("never lets the captured session id reach the log", async () => {
+    // A captured id is a resume credential (`--resume <id>`) and logs.getAll
+    // serves this buffer to agents verbatim, so leaking one would let any
+    // agent with log access resume another terminal's session. `captured`
+    // answers the diagnostic question without carrying the secret.
+    //
+    // The sentinel is deliberately plain: the logger's redaction is keyed on
+    // field names, so a leak under a name like `capturedId` would sail
+    // through it. Absence here has to come from never passing the id at all.
+    const sentinel = "zzz-sentinel-zzz";
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles);
+
+    const shutdownPromise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    handles.emitData(`claude --resume ${sentinel}\n`);
+
+    await expect(shutdownPromise).resolves.toBe(sentinel);
+    expect(terminal.getInfo().agentSessionId).toBe(sentinel);
+
+    // Positive control first: an empty buffer trivially "contains no secret",
+    // so without this the test would stay green if logging were deleted.
+    const entries = shutdownEntries();
+    expect(entries).toHaveLength(1);
+    expect(JSON.stringify(entries)).not.toContain(sentinel);
+
+    // Whitelist the context rather than just scanning for this one value: a
+    // leak under a brand-new key would slip a substring scan, and the logger's
+    // redaction only covers key names it already knows about.
+    expect(Object.keys(contextOf(entries[0]) ?? {}).sort()).toEqual([
+      "agentId",
+      "captured",
+      "elapsedMs",
+      "outcome",
+      "projectId",
+      "terminalId",
+    ]);
+  });
+
+  it("emits at info — loud enough for daintree.log, not louder", async () => {
+    // The info floor above proves it isn't debug, but warn would clear that bar
+    // too. Raising the floor to warn must silence it, which pins the level from
+    // both sides without asserting the literal "info" the implementation uses.
+    setLogLevelOverrides({ "*": "warn" });
+
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles);
+    const promise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+    await expect(promise).resolves.toBeNull();
+
+    expect(shutdownEntries()).toHaveLength(0);
+  });
+
+  it("logs once when a late exit event races the capture that already won", async () => {
+    // `finish()` is re-entrant by design — the timer, onData and onExit can
+    // all reach it. The log sits behind the same `resolved` guard as the
+    // resolve itself, so a losing racer must add nothing.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles);
+
+    const shutdownPromise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    handles.emitData("claude --resume winner\n");
+    await expect(shutdownPromise).resolves.toBe("winner");
+
+    // An exit already queued inside node-pty when the listeners were disposed.
+    handles.emitExitIgnoringDispose(0);
+
+    expect(shutdownEntries()).toHaveLength(1);
+  });
+
+  it("carries the terminal's identity and a real elapsed measurement", async () => {
+    // The issue's complaint was not being able to tell two panes of the same
+    // project apart, so every identity field has to survive the trip.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles);
+    terminal.getInfo().projectId = "proj-11591";
+
+    const shutdownPromise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+    await expect(shutdownPromise).resolves.toBeNull();
+
+    const context = contextOf(shutdownEntries()[0]);
+
+    expect(context?.terminalId).toBe(terminal.getInfo().id);
+    expect(context?.projectId).toBe(terminal.getInfo().projectId);
+    expect(context?.agentId).toBe(terminal.getInfo().launchAgentId);
+    expect(context?.captured).toBe(false);
+    // Elapsed has to be measured, not stamped. Bounded on both sides: a
+    // hardcoded 0 fails the lower bound, and a sentinel like Infinity or a raw
+    // Date.now() stamp fails the upper one.
+    expect(context?.elapsedMs).toBeGreaterThanOrEqual(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+    expect(context?.elapsedMs).toBeLessThan(GRACEFUL_SHUTDOWN_TIMEOUT_MS * 10);
+  });
+
+  it("measures elapsed from the start of the shutdown, not the whole session", async () => {
+    // A capture that lands early must report a small elapsed — that is what
+    // makes "timeout points at the 2.5s budget" actionable rather than noise.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles);
+
+    // Age the terminal well past the upper bound first. Without this the
+    // terminal is born at the same instant the shutdown starts, so an
+    // implementation measuring from spawn time instead of from the shutdown
+    // would report the same small number and pass.
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_TIMEOUT_MS * 20);
+
+    const promise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    handles.emitData("claude --resume quick\n");
+    await expect(promise).resolves.toBe("quick");
+
+    const elapsed = contextOf(shutdownEntries()[0])?.elapsedMs ?? -1;
+    expect(elapsed).toBeGreaterThanOrEqual(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    expect(elapsed).toBeLessThan(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
   });
 });

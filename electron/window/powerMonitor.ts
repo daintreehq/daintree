@@ -3,6 +3,7 @@ import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import type { ProjectStatsService } from "../services/ProjectStatsService.js";
+import type { FleetSnapshotService } from "../services/FleetSnapshotService.js";
 import type { IdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
@@ -154,7 +155,28 @@ export interface WindowFocusThrottleDeps {
   getPtyClient: () => PtyClient | null;
   getWorkspaceClient: () => WorkspaceClient | null;
   getProjectStatsService: () => ProjectStatsService | null;
+  getFleetSnapshotService?: () => FleetSnapshotService | null;
   getIdleTerminalNotificationService?: () => IdleTerminalNotificationService | null;
+}
+
+/**
+ * The services that poll `getAllTerminals*` on the project-stats cadence.
+ *
+ * Collected rather than throttled individually because they read the same
+ * source at the same rate: throttling one and not the other would leave the
+ * unthrottled poller fanning out to every shard every 5s while its sibling
+ * backed off to 125s, quietly defeating the profile's whole purpose.
+ */
+function terminalPollers(): Array<{
+  updatePollInterval: (ms: number) => void;
+  refresh: () => void;
+}> {
+  if (!focusThrottleDeps) return [];
+  const services = [
+    focusThrottleDeps.getProjectStatsService(),
+    focusThrottleDeps.getFleetSnapshotService?.() ?? null,
+  ];
+  return services.filter((s): s is NonNullable<typeof s> => s !== null);
 }
 
 const focusThrottleState = {
@@ -197,9 +219,8 @@ function applyThrottle(): void {
     workspaceClient.setPRPollCadence(false);
   }
 
-  const statsService = focusThrottleDeps.getProjectStatsService();
-  if (statsService) {
-    statsService.updatePollInterval(baseline.stats * THROTTLE_MULTIPLIER);
+  for (const poller of terminalPollers()) {
+    poller.updatePollInterval(baseline.stats * THROTTLE_MULTIPLIER);
   }
 
   const ptyClient = focusThrottleDeps.getPtyClient();
@@ -233,10 +254,9 @@ function removeThrottle(): void {
     void workspaceClient.refresh();
   }
 
-  const statsService = focusThrottleDeps.getProjectStatsService();
-  if (statsService) {
-    statsService.updatePollInterval(baseline.stats);
-    statsService.refresh();
+  for (const poller of terminalPollers()) {
+    poller.updatePollInterval(baseline.stats);
+    poller.refresh();
   }
 
   const ptyClient = focusThrottleDeps.getPtyClient();

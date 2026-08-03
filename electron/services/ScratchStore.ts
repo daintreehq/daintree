@@ -14,6 +14,21 @@ import { logError } from "../utils/logger.js";
 
 const CURRENT_SCRATCH_KEY = "currentScratchId";
 
+/**
+ * Drop the scratch's persisted panel state, which lives under the shared
+ * `projects/<id>/` state layout (#11484). Imported lazily: `ProjectStore` is a
+ * heavyweight singleton that constructs itself at module eval, and statically
+ * importing it here would drag it into every suite that touches a scratch.
+ */
+export async function removeScratchStateDir(scratchId: string): Promise<void> {
+  try {
+    const { projectStore } = await import("./ProjectStore.js");
+    await projectStore.removeWorkspaceStateDir(scratchId);
+  } catch (error) {
+    logError(`[ScratchStore] Failed to remove scratch state directory for ${scratchId}`, error);
+  }
+}
+
 function rowToScratch(row: ScratchRow): Scratch {
   return {
     id: row.id,
@@ -21,6 +36,9 @@ function rowToScratch(row: ScratchRow): Scratch {
     name: row.name,
     createdAt: row.createdAt,
     lastOpened: row.lastOpened,
+    ...(typeof row.lastCompletionSeenAt === "number"
+      ? { lastCompletionSeenAt: row.lastCompletionSeenAt }
+      : {}),
   };
 }
 
@@ -182,6 +200,54 @@ export class ScratchStore {
     return rowToScratch(row);
   }
 
+  /**
+   * Stamps the completed-agent acknowledgement watermark, mirroring
+   * `ProjectStore.updateProject({ lastCompletionSeenAt })`.
+   *
+   * Deliberately not folded into `updateScratch`: that signature is reachable
+   * from the renderer's scratch-update IPC, and the watermark is main's to set
+   * from observed dwell, never something a renderer may assert. Throws when the
+   * row is gone so the acknowledger's existing catch treats a scratch deleted
+   * mid-dwell exactly as it treats a deleted project.
+   */
+  markCompletionSeen(scratchId: string, seenUpTo: number): void {
+    if (!isValidScratchId(scratchId)) {
+      throw new Error(`Invalid scratch ID: ${scratchId}`);
+    }
+    if (!Number.isFinite(seenUpTo) || seenUpTo <= 0) {
+      throw new Error(`Invalid completion watermark for ${scratchId}: ${seenUpTo}`);
+    }
+    const db = getSharedDb();
+    const result = db
+      .update(scratchesTable)
+      .set({ lastCompletionSeenAt: seenUpTo })
+      .where(and(eq(scratchesTable.id, scratchId), isNull(scratchesTable.deletedAt)))
+      .run();
+    if (result.changes === 0) {
+      throw new Error(`Scratch not found: ${scratchId}`);
+    }
+  }
+
+  /** Acknowledgement watermarks for live scratches, keyed by id. */
+  getLastCompletionSeenMap(): Map<string, number> {
+    const db = getSharedDb();
+    const rows = db
+      .select({
+        id: scratchesTable.id,
+        lastCompletionSeenAt: scratchesTable.lastCompletionSeenAt,
+      })
+      .from(scratchesTable)
+      .where(isNull(scratchesTable.deletedAt))
+      .all();
+    const map = new Map<string, number>();
+    for (const row of rows) {
+      if (typeof row.lastCompletionSeenAt === "number" && row.lastCompletionSeenAt > 0) {
+        map.set(row.id, row.lastCompletionSeenAt);
+      }
+    }
+    return map;
+  }
+
   async removeScratch(scratchId: string): Promise<void> {
     if (!isValidScratchId(scratchId)) {
       throw new Error(`Invalid scratch ID: ${scratchId}`);
@@ -202,6 +268,7 @@ export class ScratchStore {
       }
     }
 
+    await removeScratchStateDir(scratchId);
     this.hardDeleteScratch(scratchId);
   }
 

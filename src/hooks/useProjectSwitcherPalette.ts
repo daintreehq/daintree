@@ -21,8 +21,36 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export type ProjectSwitcherMode = "modal" | "dropdown";
 
+/**
+ * The agent-activity fields a switcher row's status line is derived from —
+ * exactly the subset both kinds of workspace share.
+ *
+ * Extracted so `getWorkspaceActivityStatus` can serve projects and scratches
+ * without either widening to the other's shape: a structural parameter keeps
+ * the two view-models disjoint while letting one formatter read both (#11518).
+ */
+export interface WorkspaceRowStatusFields {
+  activeAgentCount: number;
+  waitingAgentCount: number;
+  /** Waiting agents blocked on an error — a subset of `waitingAgentCount`. */
+  blockedAgentCount: number;
+  /** Epoch ms the oldest current wait began, absent when nothing is waiting. */
+  oldestWaitingSince?: number;
+  /** Agents settled in `completed` — finished work awaiting review. */
+  completedAgentCount: number;
+  /** Completions the user hasn't seen yet — a subset of `completedAgentCount`. */
+  unacknowledgedCompletedAgentCount: number;
+  /** Earliest unseen completion, absent when everything was seen. */
+  oldestUnacknowledgedCompletionAt?: number;
+  /** Latest unseen completion, absent when everything was seen. */
+  latestUnacknowledgedCompletionAt?: number;
+  /** Latest completion regardless of acknowledgement, absent when none. */
+  latestCompletionAt?: number;
+  processCount: number;
+}
+
 /** Lightweight searchable scratch view-model for the palette section. */
-export interface SearchableScratch {
+export interface SearchableScratch extends WorkspaceRowStatusFields {
   id: string;
   name: string;
   path: string;
@@ -43,6 +71,16 @@ export interface SearchableScratch {
 export type DeleteAllScratchesSnapshot = ReadonlyArray<
   Readonly<Pick<SearchableScratch, "id" | "name">>
 >;
+
+/**
+ * Target of a pending single-scratch delete, frozen when the user opened the
+ * confirmation.
+ *
+ * Frozen for the same reason as the bulk snapshot: the row can be removed under
+ * the open dialog by a `scratch:removed` push from another window, and the run
+ * still has to name what the user agreed to.
+ */
+export type DeleteScratchTarget = Readonly<Pick<SearchableScratch, "id" | "name" | "path">>;
 
 /**
  * Band a project renders under in browse. Ordered exactly as the sections
@@ -89,7 +127,7 @@ export const PROJECT_SECTION_LABELS: Record<ProjectSectionKey, string | null> = 
  */
 export const OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS = 4;
 
-export interface SearchableProject {
+export interface SearchableProject extends WorkspaceRowStatusFields {
   id: string;
   name: string;
   path: string;
@@ -108,25 +146,11 @@ export interface SearchableProject {
    * per list build — never the raw persisted snapshot.
    */
   frecencyScore: number;
-  activeAgentCount: number;
-  waitingAgentCount: number;
-  /** Waiting agents blocked on an error — a subset of `waitingAgentCount`. */
-  blockedAgentCount: number;
-  /** Epoch ms the oldest current wait began, absent when nothing is waiting. */
-  oldestWaitingSince?: number;
-  /** Agents settled in `completed` — finished work awaiting review. */
-  completedAgentCount: number;
-  /** Completions the user hasn't seen yet — a subset of `completedAgentCount`. */
-  unacknowledgedCompletedAgentCount: number;
-  /** Earliest unseen completion, absent when everything was seen. */
-  oldestUnacknowledgedCompletionAt?: number;
-  /** Latest unseen completion, absent when everything was seen. */
-  latestUnacknowledgedCompletionAt?: number;
-  /** Latest completion regardless of acknowledgement, absent when none. */
-  latestCompletionAt?: number;
-  /** Latest transition into `working`, absent when nothing is working. */
+  /**
+   * Latest transition into `working`, absent when nothing is working. Project
+   * only: it orders rows inside the Running band, which scratches never enter.
+   */
   latestWorkingSince?: number;
-  processCount: number;
   displayPath: string;
   /** Browse band. Not meaningful while searching, where rank order wins. */
   section: ProjectSectionKey;
@@ -282,8 +306,17 @@ export interface UseProjectSwitcherPaletteReturn {
   createScratch: (name?: string) => Promise<void>;
   /** Switch to an existing scratch. Closes the palette on success. */
   selectScratch: (scratch: SearchableScratch) => Promise<void>;
-  /** Remove a scratch (deletes folder + DB row). Used by context menu. */
-  removeScratchAction: (scratchId: string) => Promise<void>;
+  /**
+   * Target of a pending single-scratch delete confirmation, frozen when the
+   * user opened it, or null when no confirm is open.
+   */
+  deleteScratchConfirm: DeleteScratchTarget | null;
+  /** Open the single-scratch delete confirmation. A no-op for an unknown id. */
+  requestDeleteScratch: (scratchId: string) => void;
+  dismissDeleteScratchConfirm: () => void;
+  /** Delete the frozen target (folder + DB row). Announces the outcome. */
+  confirmDeleteScratch: () => Promise<void>;
+  isDeletingScratch: boolean;
   /**
    * Targets of a pending "delete all scratches" confirmation, frozen when the
    * user opened it, or null when no confirm is open.
@@ -569,6 +602,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // Rapid double-Enter on the confirm button lands twice before React re-renders
   // the disabled state, so the gate has to be synchronous (lesson #4024).
   const isDeletingAllScratchesRef = useRef(false);
+  const [deleteScratchConfirm, setDeleteScratchConfirm] = useState<DeleteScratchTarget | null>(
+    null
+  );
+  const [isDeletingScratch, setIsDeletingScratch] = useState(false);
+  const isDeletingScratchRef = useRef(false);
   const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prefetchInFlightRef = useRef<Set<string>>(new Set());
   const prefetchLastAtRef = useRef<Map<string, number>>(new Map());
@@ -597,13 +635,24 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   useEffect(() => {
     if (!isOpen) return;
-    void loadScratches();
     // Pull a fresh agent-status snapshot on open so rows show live status
     // immediately instead of waiting for the next passive broadcast, which
     // would otherwise leave them falling back to a stale relative timestamp.
-    void loadProjects()
+    //
+    // Both stores are awaited because the pull covers scratch rows too (#11518)
+    // — the push channel is best-effort, so this is the only guaranteed
+    // hydration path for a view that has never received a broadcast.
+    //
+    // Settled, not `all`: the two loads are independent, and letting either
+    // rejection short-circuit the pair would mean one store's IPC failure
+    // silently costs the OTHER kind of row its status line. Whichever list did
+    // load still gets hydrated from the ids it has.
+    void Promise.allSettled([loadProjects(), loadScratches()])
       .then(() => {
-        const ids = useProjectStore.getState().projects.map((p) => p.id);
+        const ids = [
+          ...useProjectStore.getState().projects.map((p) => p.id),
+          ...useScratchStore.getState().scratches.map((s) => s.id),
+        ];
         if (ids.length === 0) return;
         return projectClient.getBulkStats(ids).then((bulk) => {
           // Seed only — never overwrite.
@@ -948,17 +997,33 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // this same list but re-ranks it against the query (#11466), so it has to be
   // built before `results` rather than beside the other scratch callbacks below.
   const scratchResults = useMemo<SearchableScratch[]>(() => {
-    const list: SearchableScratch[] = scratches.map((s: Scratch) => ({
-      id: s.id,
-      name: s.name,
-      path: s.path,
-      createdAt: s.createdAt,
-      lastOpened: s.lastOpened,
-      isActive: currentScratch?.id === s.id,
-    }));
+    const list: SearchableScratch[] = scratches.map((s: Scratch) => {
+      // Scratch terminals carry the scratch id as their `projectId`, so the one
+      // status map covers both kinds and the join is the same lookup projects
+      // do (#11518).
+      const stats = projectStats[s.id];
+      return {
+        id: s.id,
+        name: s.name,
+        path: s.path,
+        createdAt: s.createdAt,
+        lastOpened: s.lastOpened,
+        isActive: currentScratch?.id === s.id,
+        activeAgentCount: stats?.activeAgentCount ?? 0,
+        waitingAgentCount: stats?.waitingAgentCount ?? 0,
+        blockedAgentCount: stats?.blockedAgentCount ?? 0,
+        oldestWaitingSince: stats?.oldestWaitingSince,
+        completedAgentCount: stats?.completedAgentCount ?? 0,
+        unacknowledgedCompletedAgentCount: stats?.unacknowledgedCompletedAgentCount ?? 0,
+        oldestUnacknowledgedCompletionAt: stats?.oldestUnacknowledgedCompletionAt,
+        latestUnacknowledgedCompletionAt: stats?.latestUnacknowledgedCompletionAt,
+        latestCompletionAt: stats?.latestCompletionAt,
+        processCount: stats?.processCount ?? 0,
+      };
+    });
     list.sort((a, b) => b.lastOpened - a.lastOpened);
     return list;
-  }, [scratches, currentScratch?.id]);
+  }, [scratches, currentScratch?.id, projectStats]);
 
   // Clearing the box reverts to browse immediately rather than holding the
   // deferred ranking for a commit — otherwise browse would flash the stale
@@ -1553,21 +1618,98 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     [renameScratchActionStore]
   );
 
-  const removeScratchAction = useCallback(
-    async (scratchId: string) => {
-      try {
-        await removeScratchActionStore(scratchId);
-      } catch (error) {
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          title: "Couldn't remove scratch",
-          message: formatErrorMessage(error, "Couldn't remove scratch workspace"),
-        });
-      }
+  const requestDeleteScratch = useCallback(
+    (scratchId: string) => {
+      if (isDeletingScratchRef.current || deleteScratchConfirm) return;
+      const target = scratchResults.find((scratch) => scratch.id === scratchId);
+      // No fallback target: a miss means the row went away between the menu
+      // opening and the choice landing, and guessing which scratch the user
+      // meant is exactly the silent default a destructive path must not have.
+      if (!target) return;
+      setDeleteScratchConfirm({ id: target.id, name: target.name, path: target.path });
     },
-    [removeScratchActionStore]
+    [scratchResults, deleteScratchConfirm]
   );
+
+  const dismissDeleteScratchConfirm = useCallback(() => {
+    if (isDeletingScratchRef.current) return;
+    setDeleteScratchConfirm(null);
+  }, []);
+
+  // A `scratch:removed` push from another window can retire the target under an
+  // open dialog. Skipped while our own run is in flight, or the removal we just
+  // performed would tear the dialog down before the outcome is announced.
+  //
+  // Gated on the STATE, not the ref that guards re-entrancy: a ref settling in
+  // `finally` re-runs nothing. Another window deleting the target mid-run would
+  // then be consumed by a skipped pass, and if our own call went on to reject —
+  // which leaves the dialog open as its own retry surface — nothing would ever
+  // reconcile it, stranding a dialog that retries a scratch already gone.
+  useEffect(() => {
+    if (!deleteScratchConfirm || isDeletingScratch) return;
+    if (scratches.some((scratch: Scratch) => scratch.id === deleteScratchConfirm.id)) return;
+    setDeleteScratchConfirm(null);
+  }, [deleteScratchConfirm, scratches, isDeletingScratch]);
+
+  const confirmDeleteScratch = useCallback(async () => {
+    if (isDeletingScratchRef.current) return;
+    const target = deleteScratchConfirm;
+    if (!target) return;
+
+    isDeletingScratchRef.current = true;
+    setIsDeletingScratch(true);
+
+    try {
+      await removeScratchActionStore(target.id);
+      const title = `Deleted '${target.name}'`;
+      // Close before announcing: VoiceOver drops live-region updates raised from
+      // outside a focused `aria-modal` subtree (lesson #9434).
+      closeAndAnnounce(() => setDeleteScratchConfirm(null), title);
+      // Reports the terminals, not the folder: main tombstones the row and then
+      // treats `fs.rm` as best-effort, so a resolved call proves the workspace is
+      // gone from the app, not that the directory is gone from disk.
+      //
+      // A focused-window receipt, deliberately best-effort: the row leaving is
+      // only visible if the palette is still open on it, so a toast is worth
+      // raising, but a deletion that lands while the window is blurred is dropped
+      // rather than filed. `transient` is what drops it, and it stays because a
+      // routine delete is not inbox-worthy — `closeAndAnnounce` above is the
+      // guaranteed signal. No `context` for the same reason: suppression needs an
+      // inbox entry to fall back to, and a transient payload has none.
+      // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok
+      notify({
+        type: "success",
+        title,
+        message: "Its terminals were closed.",
+        transient: true,
+        priority: "high",
+      });
+    } catch (error) {
+      // Another window may have deleted this scratch while our own call was in
+      // flight, which is how ours came to fail. The user asked for it gone and it
+      // is gone, so reconcile instead of reporting a failure — and close, because
+      // the error copy below leans on the dialog surviving as its retry surface,
+      // which the stale-target effect is about to take away.
+      const isAlreadyGone = !useScratchStore
+        .getState()
+        .scratches.some((scratch: Scratch) => scratch.id === target.id);
+      if (isAlreadyGone) {
+        closeAndAnnounce(() => setDeleteScratchConfirm(null), `Deleted '${target.name}'`);
+        return;
+      }
+      // The dialog stays open and its button re-arms: that button is the retry
+      // surface, so the toast needs no action of its own.
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+      notify({
+        type: "error",
+        title: "Couldn't delete scratch",
+        message: formatErrorMessage(error, "Couldn't remove scratch workspace"),
+      });
+    } finally {
+      isDeletingScratchRef.current = false;
+      setIsDeletingScratch(false);
+    }
+  }, [deleteScratchConfirm, removeScratchActionStore]);
 
   const requestDeleteAllScratches = useCallback(() => {
     if (isDeletingAllScratchesRef.current || deleteAllScratchesConfirm) return;
@@ -1828,7 +1970,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     scratchResults,
     createScratch,
     selectScratch,
-    removeScratchAction,
+    deleteScratchConfirm,
+    requestDeleteScratch,
+    dismissDeleteScratchConfirm,
+    confirmDeleteScratch,
+    isDeletingScratch,
     deleteAllScratchesConfirm,
     requestDeleteAllScratches,
     dismissDeleteAllScratchesConfirm,

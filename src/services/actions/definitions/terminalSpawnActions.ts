@@ -26,7 +26,8 @@ export function registerTerminalSpawnActions(
   actions.set("terminal.new", () => ({
     id: "terminal.new",
     title: "New Terminal",
-    description: "Create a new terminal in the active worktree",
+    description:
+      "Open a new terminal in the active worktree, ready for commands. This creates a visible panel and starts a shell process that consumes resources until it is closed. Launch an agent instead when the intent is to start an AI CLI rather than a plain shell.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -65,6 +66,9 @@ export function registerTerminalSpawnActions(
     nonRepeatable: true,
     // Opens a modal palette — a post-dispatch hint would land on top of it
     // (ShortcutHint sits at z-toast, above z-modal). Issue #11030.
+    // Not redundant with dispatch()'s overlay-claim check (#11507): this
+    // opener is synchronous, so the continuation can beat the palette's
+    // claim effect. Keep the flag.
     suppressShortcutHint: true,
     run: async () => {
       callbacks.onOpenResumeSessionsPalette();

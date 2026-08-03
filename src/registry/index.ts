@@ -15,3 +15,4 @@ export {
   type PanelKindDefinition,
   type PanelComponentProps,
 } from "./panelKindRegistry";
+export { getSpawnablePanelKinds } from "./spawnablePanelKinds";

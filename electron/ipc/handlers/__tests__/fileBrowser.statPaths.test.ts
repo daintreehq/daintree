@@ -15,6 +15,16 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
+// Mocked even where unused: the real module opens the shared SQLite database at
+// import time, which this suite has no business booting.
+const scratchStoreMock = vi.hoisted(() => ({
+  getScratchById: vi.fn(() => null),
+}));
+
+vi.mock("../../../services/ScratchStore.js", () => ({
+  scratchStore: scratchStoreMock,
+}));
+
 import { buildFileBrowserNamespace } from "../fileBrowser.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
@@ -31,7 +41,7 @@ describe("fileBrowser statPaths", () => {
     } as unknown as HandlerDependencies;
     const spec = buildFileBrowserNamespace(deps).ops.statPaths;
     return {
-      invoke: (context: IpcContext, payload: { worktreeId: string; paths: string[] }) =>
+      invoke: (context: IpcContext, payload: { worktreeId?: string; paths: string[] }) =>
         (spec.handler as (c: IpcContext, p: unknown) => Promise<unknown>)(context, payload),
       deps,
     };
@@ -100,6 +110,38 @@ describe("fileBrowser statPaths", () => {
         }
       ).getAllStatesForProjectAsync
     ).not.toHaveBeenCalled();
+  });
+
+  it("stats against the sender's workspace root when no worktree is named", async () => {
+    // #11482: the same containment logic, rooted at the project/scratch folder
+    // the sender is bound to rather than a worktree.
+    const { invoke, deps } = makeHandler([]);
+    await expect(invoke(ctx, { paths: ["src", "src/index.ts", "nope"] })).resolves.toEqual([
+      "directory",
+      "file",
+      null,
+    ]);
+    expect(
+      (
+        deps.worktreeService as unknown as {
+          getAllStatesForProjectAsync: ReturnType<typeof vi.fn>;
+        }
+      ).getAllStatesForProjectAsync
+    ).not.toHaveBeenCalled();
+  });
+
+  it("keeps symlink containment for a workspace root", async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "fb-ws-outside-"));
+    try {
+      await fs.mkdir(path.join(outside, "secret"));
+      await fs.symlink(outside, path.join(root, "hop"));
+      const { invoke } = makeHandler([]);
+      // Realpath equality rejects the intermediate symlink, so the escape is
+      // indistinguishable from a missing path — same guarantee as a worktree.
+      await expect(invoke(ctx, { paths: ["hop/secret"] })).resolves.toEqual([null]);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
   });
 
   it("rejects a worktree the sender's project does not own", async () => {

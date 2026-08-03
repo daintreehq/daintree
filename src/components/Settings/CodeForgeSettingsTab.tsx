@@ -579,7 +579,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
               placeholder={field.placeholder}
               aria-label={field.label}
               autoComplete={field.type === "password" ? "new-password" : "off"}
-              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent transition-colors"
+              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
               disabled={isSaving}
             />
             {field.helpText && (

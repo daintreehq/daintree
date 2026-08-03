@@ -121,8 +121,11 @@ vi.mock("@/store/projectSettingsStore", () => ({
 }));
 
 vi.mock("@/store/scratchStore", () => ({
-  useScratchStore: vi.fn((selector?: (s: typeof scratchState) => unknown) =>
-    selector ? selector(scratchState) : scratchState
+  useScratchStore: Object.assign(
+    vi.fn((selector?: (s: typeof scratchState) => unknown) =>
+      selector ? selector(scratchState) : scratchState
+    ),
+    { getState: () => scratchState }
   ),
 }));
 
@@ -146,6 +149,8 @@ const { closeAndAnnounce: realCloseAndAnnounce } =
   await vi.importActual<typeof import("@/lib/accessibility")>("@/lib/accessibility");
 
 import { useProjectSwitcherPalette } from "../useProjectSwitcherPalette";
+import type { SearchableScratch } from "../useProjectSwitcherPalette";
+import { projectClient } from "@/clients";
 
 /** Pulls the "Try again" handler out of the last error notification. */
 function lastRetryAction(): () => Promise<void> {
@@ -190,18 +195,27 @@ function deletedIds(): string[] {
   return scratchState.removeScratch.mock.calls.map((call) => call[0]);
 }
 
-/** A removal that stays pending until the test releases it. */
-function deferRemovals(): { release: () => void } {
-  const resolvers: (() => void)[] = [];
+/**
+ * A removal that stays pending until the test releases it.
+ *
+ * `reject` settles the SAME pending promises `release` would: swapping the mock
+ * implementation mid-run only affects later calls, so a spec that wants the
+ * in-flight removal to fail has to reject the promise it is already waiting on.
+ */
+function deferRemovals(): { release: () => void; reject: (error: Error) => void } {
+  const settlers: { resolve: () => void; reject: (error: Error) => void }[] = [];
   scratchState.removeScratch.mockImplementation(
     () =>
-      new Promise<void>((resolve) => {
-        resolvers.push(resolve);
+      new Promise<void>((resolve, reject) => {
+        settlers.push({ resolve, reject });
       })
   );
   return {
     release: () => {
-      for (const resolve of resolvers) resolve();
+      for (const settler of settlers) settler.resolve();
+    },
+    reject: (error: Error) => {
+      for (const settler of settlers) settler.reject(error);
     },
   };
 }
@@ -496,8 +510,8 @@ describe("deleteAllScratches", () => {
     // Tied to the actual deletions: a summary that reported success without ever
     // calling the store would otherwise pass.
     expect([...deletedIds()].sort()).toEqual(seeded.map((s) => s.id).sort());
-    // One summary, not one toast per scratch — the per-item error path in
-    // `removeScratchAction` must not be reused for the fan-out.
+    // One summary, not one toast per scratch — the single-delete receipt must
+    // not be reused for the fan-out.
     expect(notifyMock).toHaveBeenCalledTimes(1);
     const payload = lastNotification();
     expect(payload.type).toBe("success");
@@ -698,6 +712,315 @@ describe("deleteAllScratches", () => {
 });
 
 /**
+ * Single-scratch delete (issue #11522).
+ *
+ * The context-menu item used to fire straight into the store, so a multi-second
+ * teardown ran with the row unchanged and still clickable. It now goes through
+ * the same request/confirm/dismiss shape as the bulk flow, which is what these
+ * specs pin: the target is frozen, the dialog survives the pushes its own run
+ * provokes, and the outcome is announced either way.
+ */
+describe("deleteScratch", () => {
+  it("opens a confirmation instead of deleting on the spot", () => {
+    const seeded = seedScratches(2);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[1]!.id));
+
+    expect(result.current.deleteScratchConfirm?.id).toBe(seeded[1]!.id);
+    // The whole point of the issue: nothing goes to the store until confirmed.
+    expect(scratchState.removeScratch).not.toHaveBeenCalled();
+  });
+
+  it("ignores a request for a scratch it can't resolve", () => {
+    seedScratches(2);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch("scratch-that-went-away"));
+
+    // No fallback target: guessing which scratch was meant is the silent default
+    // a destructive path must never have.
+    expect(result.current.deleteScratchConfirm).toBeNull();
+  });
+
+  it("freezes the name and path so the dialog can outlive the row", () => {
+    const seeded = seedScratches(2);
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[1]!.id));
+
+    // A rename landing from another window while the user reads the dialog must
+    // not rewrite what they agreed to.
+    scratchState.scratches = [
+      seeded[0]!,
+      { ...seeded[1]!, name: "Renamed elsewhere", path: "/tmp/scratches/moved" },
+    ];
+    rerender();
+
+    expect(result.current.deleteScratchConfirm?.name).toBe(seeded[1]!.name);
+    expect(result.current.deleteScratchConfirm?.path).toBe(seeded[1]!.path);
+  });
+
+  it("dismisses without deleting anything", () => {
+    const seeded = seedScratches(2);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+    act(() => result.current.dismissDeleteScratchConfirm());
+
+    expect(result.current.deleteScratchConfirm).toBeNull();
+    expect(scratchState.removeScratch).not.toHaveBeenCalled();
+  });
+
+  it("deletes only the target it froze", async () => {
+    const seeded = seedScratches(3);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[1]!.id));
+    await act(async () => {
+      await result.current.confirmDeleteScratch();
+    });
+
+    expect(deletedIds()).toEqual([seeded[1]!.id]);
+  });
+
+  it("holds the dialog open and the receipt back until the removal settles", async () => {
+    const seeded = seedScratches(2);
+    const { release } = deferRemovals();
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+
+    let run!: Promise<void>;
+    act(() => {
+      run = result.current.confirmDeleteScratch();
+    });
+
+    expect(result.current.isDeletingScratch).toBe(true);
+    expect(notifyMock).not.toHaveBeenCalled();
+
+    // The `scratch:removed` push our own run provokes lands while it is still
+    // going. Without the in-flight guard on the stale-target effect this tears
+    // the dialog down mid-progress and the user loses the outcome.
+    scratchState.scratches = seeded.slice(1);
+    rerender();
+
+    expect(result.current.deleteScratchConfirm?.id).toBe(seeded[0]!.id);
+
+    await act(async () => {
+      release();
+      await run;
+    });
+
+    expect(result.current.deleteScratchConfirm).toBeNull();
+    expect(result.current.isDeletingScratch).toBe(false);
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the frozen name in the receipt after the row is gone", async () => {
+    const seeded = seedScratches(2);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+    await act(async () => {
+      await result.current.confirmDeleteScratch();
+    });
+
+    const payload = lastNotification();
+    expect(payload.type).toBe("success");
+    expect(payload.title).toContain(seeded[0]!.name);
+  });
+
+  it("shapes the success receipt as a supported transient payload", async () => {
+    const seeded = seedScratches(2);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+    await act(async () => {
+      await result.current.confirmDeleteScratch();
+    });
+
+    const payload = lastNotification();
+    // Shape, not delivery — delivery is `notify()`'s own contract. `transient`
+    // paired with `context` is the combination notify() DEV-warns about (context
+    // suppression needs an inbox entry to fall back to, and transient has none),
+    // and paired with a passive priority it is a silent no-op. This is the one
+    // supported transient shape, and the bulk sibling above does not use it.
+    expect(payload.transient).toBe(true);
+    expect(payload.priority).toBe("high");
+    expect(payload.context).toBeUndefined();
+  });
+
+  it("announces through closeAndAnnounce rather than the announcer", async () => {
+    const seeded = seedScratches(2);
+    // Inert helper: any call reaching the announcer proves the hook announced on
+    // its own, which is the #9434 regression — VoiceOver drops live-region updates
+    // raised while the modal still holds focus.
+    closeAndAnnounceSpy.mockImplementation(() => {});
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+    await act(async () => {
+      await result.current.confirmDeleteScratch();
+    });
+
+    expect(closeAndAnnounceSpy).toHaveBeenCalledTimes(1);
+    expect(announceMock).not.toHaveBeenCalled();
+
+    // And the closer it handed over really is the dialog close, so the ordering
+    // holds rather than a separate close running after the announcement.
+    expect(result.current.deleteScratchConfirm).not.toBeNull();
+    const [closeFn] = closeAndAnnounceSpy.mock.calls[0]!;
+    act(() => closeFn());
+    expect(result.current.deleteScratchConfirm).toBeNull();
+  });
+
+  it("keeps the dialog open on failure so its button is the retry", async () => {
+    const seeded = seedScratches(2);
+    scratchState.removeScratch.mockRejectedValue(new Error("disk offline"));
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+    await act(async () => {
+      await result.current.confirmDeleteScratch();
+    });
+
+    const payload = lastNotification();
+    expect(payload.type).toBe("error");
+    expect(payload.message).toContain("disk offline");
+    // Still open and no longer busy: a stuck ref would wedge the action, and a
+    // closed dialog would leave the failure with no retry surface at all.
+    expect(result.current.deleteScratchConfirm?.id).toBe(seeded[0]!.id);
+    expect(result.current.isDeletingScratch).toBe(false);
+
+    scratchState.removeScratch.mockResolvedValue(undefined);
+    await act(async () => {
+      await result.current.confirmDeleteScratch();
+    });
+
+    expect(deletedIds()).toEqual([seeded[0]!.id, seeded[0]!.id]);
+    expect(result.current.deleteScratchConfirm).toBeNull();
+  });
+
+  it("deletes once when the confirm button is double-fired in a single tick", async () => {
+    const seeded = seedScratches(2);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+    await act(async () => {
+      // Both land before React re-renders the disabled state, so only a
+      // synchronous guard can stop the second (lesson #4024).
+      await Promise.all([
+        result.current.confirmDeleteScratch(),
+        result.current.confirmDeleteScratch(),
+      ]);
+    });
+
+    expect(scratchState.removeScratch).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("dismisses the dialog when the target vanishes from another window", () => {
+    const seeded = seedScratches(2);
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+    expect(result.current.deleteScratchConfirm).not.toBeNull();
+
+    // A `scratch:removed` push retired the target under the open dialog.
+    scratchState.scratches = seeded.slice(1);
+    rerender();
+
+    expect(result.current.deleteScratchConfirm).toBeNull();
+  });
+
+  it("reconciles rather than reporting failure when another window won the race", async () => {
+    const seeded = seedScratches(2);
+    const { reject } = deferRemovals();
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+
+    let run!: Promise<void>;
+    act(() => {
+      run = result.current.confirmDeleteScratch();
+    });
+
+    // Another window deletes the same scratch mid-run. The stale-target effect
+    // sees the push and skips it, because our own run is still in flight.
+    scratchState.scratches = seeded.slice(1);
+    rerender();
+    expect(result.current.deleteScratchConfirm).not.toBeNull();
+
+    // Then OUR in-flight call fails — losing that race is how it came to fail.
+    // Rejecting the pending promise, not swapping the mock: a new implementation
+    // would only affect the NEXT call and this run would resolve successfully,
+    // taking the success path and passing for the wrong reason.
+    await act(async () => {
+      reject(new Error("Scratch not found"));
+      await run;
+    });
+
+    // The user asked for it gone and it is gone: no failure toast, and the dialog
+    // is closed rather than left offering to retry a scratch that no longer
+    // exists — which is what the error copy's "no action needed" leans on.
+    expect(notifyMock).not.toHaveBeenCalled();
+    expect(result.current.isDeletingScratch).toBe(false);
+    expect(result.current.deleteScratchConfirm).toBeNull();
+  });
+
+  it("still reports a failure that left the scratch in place", async () => {
+    const seeded = seedScratches(2);
+    scratchState.removeScratch.mockRejectedValue(new Error("EBUSY"));
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+    await act(async () => {
+      await result.current.confirmDeleteScratch();
+    });
+
+    // Paired with the spec above: without it, reconciling every failure silently
+    // would look correct.
+    expect(lastNotification().type).toBe("error");
+    expect(result.current.deleteScratchConfirm?.id).toBe(seeded[0]!.id);
+  });
+
+  it("is still busy while the announcement is raised", async () => {
+    const seeded = seedScratches(2);
+    // Probed from inside the helper: every outcome assertion reads final batched
+    // state, so settling the busy flag BEFORE the announcement would look
+    // identical from the outside. A dismiss attempted at that instant must be
+    // refused — and the stub deliberately never calls the closer, so the dialog
+    // can only be gone if the dismiss went through.
+    closeAndAnnounceSpy.mockImplementation(() => {
+      result.current.dismissDeleteScratchConfirm();
+    });
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+    await act(async () => {
+      await result.current.confirmDeleteScratch();
+    });
+
+    expect(result.current.deleteScratchConfirm?.id).toBe(seeded[0]!.id);
+  });
+
+  it("keeps the dialog open while a different scratch vanishes", () => {
+    const seeded = seedScratches(2);
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => result.current.requestDeleteScratch(seeded[0]!.id));
+
+    // Paired with the spec above: without this, an effect that closed on ANY
+    // list change would look correct.
+    scratchState.scratches = seeded.slice(0, 1);
+    rerender();
+
+    expect(result.current.deleteScratchConfirm?.id).toBe(seeded[0]!.id);
+  });
+});
+
+/**
  * Scratches in switcher search (issue #11466).
  *
  * Browse leaves them to the pinned section; a query pulls them into the one
@@ -825,5 +1148,210 @@ describe("scratches in search results", () => {
     act(() => result.current.setQuery(scratchPath));
 
     await waitFor(() => expect(result.current.results).toEqual([]));
+  });
+});
+
+/**
+ * Scratch rows join the agent-status map (#11518).
+ *
+ * A scratch terminal already carries the scratch id as its `projectId`, so the
+ * join is the same lookup projects do — what these specs hold is that it
+ * actually happens, that it re-runs when the map moves, and that the open-time
+ * pull (the only guaranteed hydration path) asks for scratch ids too.
+ */
+describe("scratch agent-status join", () => {
+  // The stats fixture is module-scoped and shared with the suites above, so it
+  // has to be cleared per-spec or a seeded map leaks into the next assertion.
+  beforeEach(() => {
+    projectStatsState.stats = {};
+  });
+
+  const STATS_FIELDS = [
+    "activeAgentCount",
+    "waitingAgentCount",
+    "blockedAgentCount",
+    "completedAgentCount",
+    "unacknowledgedCompletedAgentCount",
+    "processCount",
+  ] as const;
+
+  function scratchRow(result: { current: { scratchResults: SearchableScratch[] } }, id: string) {
+    const row = result.current.scratchResults.find((s) => s.id === id);
+    if (!row) throw new Error(`no scratch row for ${id}`);
+    return row;
+  }
+
+  it("defaults every count when the map has no entry for the scratch", async () => {
+    seedScratches(1);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    await waitFor(() => expect(result.current.scratchResults).toHaveLength(1));
+
+    const row = scratchRow(result, "scratch-1");
+    for (const field of STATS_FIELDS) expect(row[field]).toBe(0);
+    expect(row.oldestWaitingSince).toBeUndefined();
+  });
+
+  it("carries the map's counts onto the row", async () => {
+    seedScratches(1);
+    projectStatsState.stats = {
+      "scratch-1": {
+        activeAgentCount: 1,
+        waitingAgentCount: 2,
+        blockedAgentCount: 1,
+        oldestWaitingSince: 4_000,
+        completedAgentCount: 3,
+        unacknowledgedCompletedAgentCount: 2,
+        latestCompletionAt: 9_000,
+        processCount: 5,
+      } as (typeof projectStatsState.stats)[string],
+    };
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    await waitFor(() => expect(result.current.scratchResults).toHaveLength(1));
+
+    const row = scratchRow(result, "scratch-1");
+    expect(row.waitingAgentCount).toBe(2);
+    expect(row.blockedAgentCount).toBe(1);
+    expect(row.oldestWaitingSince).toBe(4_000);
+    expect(row.unacknowledgedCompletedAgentCount).toBe(2);
+    expect(row.processCount).toBe(5);
+  });
+
+  // The memo previously depended only on the scratch list. Without the stats
+  // dependency the join reads whatever was there on first build, forever.
+  it("recomputes when only the status map moves", async () => {
+    seedScratches(1);
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+    await waitFor(() => expect(result.current.scratchResults).toHaveLength(1));
+    expect(scratchRow(result, "scratch-1").waitingAgentCount).toBe(0);
+
+    projectStatsState.stats = {
+      "scratch-1": {
+        activeAgentCount: 0,
+        waitingAgentCount: 3,
+        processCount: 0,
+      } as (typeof projectStatsState.stats)[string],
+    };
+    await act(async () => {
+      rerender();
+    });
+
+    expect(scratchRow(result, "scratch-1").waitingAgentCount).toBe(3);
+  });
+
+  it("does not let a project entry bleed into a scratch row", async () => {
+    seedScratches(1);
+    projectStatsState.stats = {
+      "project-1": {
+        activeAgentCount: 7,
+        waitingAgentCount: 7,
+        processCount: 7,
+      } as (typeof projectStatsState.stats)[string],
+    };
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    await waitFor(() => expect(result.current.scratchResults).toHaveLength(1));
+
+    expect(scratchRow(result, "scratch-1").activeAgentCount).toBe(0);
+  });
+
+  it("asks the open-time pull for scratch ids alongside project ids", async () => {
+    seedScratches(2);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => expect(projectClient.getBulkStats).toHaveBeenCalled());
+
+    const requested = vi.mocked(projectClient.getBulkStats).mock.calls.at(-1)![0];
+    expect(requested).toEqual(expect.arrayContaining(["scratch-1", "scratch-2"]));
+  });
+
+  // The pull used to bail when the project list was empty. A user whose only
+  // workspaces are scratches would never get a seeded status map at all.
+  it("still pulls when scratches are the only workspaces", async () => {
+    seedScratches(1);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => expect(projectClient.getBulkStats).toHaveBeenCalledWith(["scratch-1"]));
+  });
+
+  // Both loads are independent: `Promise.all` here would let either store's IPC
+  // failure cost the OTHER kind of row its status seed entirely.
+  it("still hydrates scratches when the project load rejects", async () => {
+    seedScratches(1);
+    useProjectStoreMock.getState().loadProjects.mockRejectedValueOnce(new Error("projects down"));
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() =>
+      expect(projectClient.getBulkStats).toHaveBeenCalledWith(expect.arrayContaining(["scratch-1"]))
+    );
+  });
+
+  it("still pulls when the scratch load rejects", async () => {
+    seedScratches(1);
+    scratchState.loadScratches.mockRejectedValueOnce(new Error("scratches down"));
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    // The rows already in the store are still worth hydrating.
+    await waitFor(() => expect(projectClient.getBulkStats).toHaveBeenCalled());
+  });
+
+  it("carries the optional completion timestamps through the join", async () => {
+    seedScratches(1);
+    projectStatsState.stats = {
+      "scratch-1": {
+        activeAgentCount: 0,
+        waitingAgentCount: 0,
+        completedAgentCount: 3,
+        unacknowledgedCompletedAgentCount: 2,
+        oldestUnacknowledgedCompletionAt: 111,
+        latestUnacknowledgedCompletionAt: 222,
+        latestCompletionAt: 333,
+        processCount: 0,
+      } as (typeof projectStatsState.stats)[string],
+    };
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    await waitFor(() => expect(result.current.scratchResults).toHaveLength(1));
+
+    // Distinct sentinels: dropping any single assignment must not be maskable
+    // by another timestamp happening to hold the same value.
+    const row = scratchRow(result, "scratch-1");
+    expect(row.oldestUnacknowledgedCompletionAt).toBe(111);
+    expect(row.latestUnacknowledgedCompletionAt).toBe(222);
+    expect(row.latestCompletionAt).toBe(333);
+  });
+
+  it("makes no request when there are neither projects nor scratches", async () => {
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => expect(scratchState.loadScratches).toHaveBeenCalled());
+    expect(projectClient.getBulkStats).not.toHaveBeenCalled();
   });
 });

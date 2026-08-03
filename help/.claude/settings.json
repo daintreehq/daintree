@@ -12,9 +12,7 @@
       "Bash(tea *)"
     ],
     "deny": [
-      "Write(**)",
       "Edit(**)",
-      "NotebookEdit(**)",
       "Bash(gh issue create*)",
       "Bash(gh pr create*)",
       "Bash(gh pr merge*)",

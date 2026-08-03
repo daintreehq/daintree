@@ -1,6 +1,7 @@
 import type { AgentState } from "../../../shared/types/agent.js";
 import type { ActivityStateMetadata } from "../ActivityMonitor.js";
 import type { AgentConfig } from "../../../shared/config/agentRegistry.js";
+import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 
 // Typed message protocol between the pty-host main thread and the analysis
 // worker_threads pool. All payloads must be structured-clone-safe.
@@ -75,9 +76,9 @@ export type HostToWorkerMessage =
 
 export interface AnalysisFinalSnapshot {
   /** Full-buffer serialize (banner included) for the preserved snapshot. */
-  snapshot: string | null;
+  snapshot: SerializedTerminalSnapshot | null;
   /** Banner-stripped serialize for on-disk session persistence. */
-  persistence: string | null;
+  persistence: SerializedTerminalSnapshot | null;
 }
 
 /**
@@ -108,7 +109,19 @@ export interface AnalysisWorkerMemorySample {
   sampledAt: number;
 }
 
-export type AnalysisRequestResult = string | null | AnalysisFinalSnapshot;
+/**
+ * Serialization results carry the grid they were produced at (#11552).
+ *
+ * The geometry cannot be inferred on the pty-host side from the last resize it
+ * posted: the worker's own `AnalysisSession` constructor replays a persisted
+ * session, which sizes the mirror to the SNAPSHOT's grid and reflows home
+ * asynchronously — with no host-posted resize to observe. A serialize landing
+ * inside that window returns capture-grid data, so only the worker can say what
+ * grid it came off. Reading `terminal.cols`/`rows` in the same synchronous step
+ * as `addon.serialize()` is the same contract the in-thread backend has always
+ * had (`terminalSerialization.withGeometry`).
+ */
+export type AnalysisRequestResult = SerializedTerminalSnapshot | null | AnalysisFinalSnapshot;
 
 export type WorkerToHostMessage =
   | { type: "ready" }

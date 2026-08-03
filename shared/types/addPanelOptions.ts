@@ -6,6 +6,8 @@ import type {
   ViewportPresetId,
   FileViewMode,
   DiffSource,
+  FileBrowserSortDirection,
+  FileBrowserSortKey,
   FileBrowserTreeSnapshot,
 } from "./panel.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
@@ -148,8 +150,10 @@ export interface AddPanelOptionsBase {
    * available (neither exact-session nor resume-latest), or resume-latest was
    * suppressed because a sibling pane owns this agent+cwd's single slot
    * (#11461) — so the prior conversation is unreachable for this pane.
-   * Drives the "Session no longer reachable" restart banner. Never persisted;
-   * cleared on the next restart. See `serializePtyPanel` (intentionally omitted).
+   * Drives the "Session no longer reachable" restart banner, and doubles as the
+   * "not yet acknowledged" gate: dismissing the banner consumes this flag
+   * (#11589), as does the next restart. Never persisted — see
+   * `serializePtyPanel` (intentionally omitted).
    */
   sessionLostOnRestore?: boolean;
   /**
@@ -277,10 +281,28 @@ export interface FileBrowserPanelOptions extends AddPanelOptionsBase {
   browserRootPath?: string;
   /** Whether the tree sidebar starts collapsed; absent or false = open */
   browserSidebarCollapsed?: boolean;
+  /** Whether the viewer column starts collapsed; absent or false = open (#11496) */
+  browserViewerCollapsed?: boolean;
   /** Last-known tree structure to paint before the first live listing (#11367) */
   browserTreeSnapshot?: FileBrowserTreeSnapshot;
   /** Tree column width in px to restore; absent or 288 = the default width */
   browserSidebarWidth?: number;
+  /**
+   * Restores a workspace-rooted panel whose `worktreeId` is grid placement
+   * only (#11489). On a fresh open it is the absence of `worktreeId` that
+   * decides this, so openers never pass it.
+   */
+  browserWorkspaceRooted?: boolean;
+  /**
+   * Order to restore the tree and folder listing in (#11620); absent = the
+   * `name`/`asc` default. Present here, not just on the panel record, because
+   * restoring a panel goes snapshot → deserializer → *these options* →
+   * `createFileBrowserDefaults`, and a field this type does not name is
+   * dropped on that last hop no matter how faithfully it was persisted.
+   */
+  browserSortKey?: FileBrowserSortKey;
+  /** Direction for `browserSortKey`; absent = `asc`. */
+  browserSortDirection?: FileBrowserSortDirection;
 }
 
 /**

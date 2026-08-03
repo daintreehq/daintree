@@ -3,6 +3,9 @@ import type { ReactNode } from "react";
 import { render, act, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitStatus } from "@shared/types/git";
+// Type-only: erased before the vi.mock factory runs, so it cannot pull the real
+// module in ahead of its own mock.
+import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
 
 // FilePane forwards a fixed prop list to ContentPanel; #10991 was a dropped
 // `showRestoreControl`, which hid the inline "Move to grid" button on a docked
@@ -38,13 +41,43 @@ const { setFileViewModeMock, setFilePanelPathMock } = vi.hoisted(() => ({
   setFileViewModeMock: vi.fn(),
   setFilePanelPathMock: vi.fn(),
 }));
+// Mutable so a dock test can make this panel the active dock panel (or not) —
+// the pane defers its reveal refresh while parked offscreen (#11588).
+const dockState = { activeDockTerminalId: null as string | null };
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: (selector: (state: unknown) => unknown) =>
     selector({
       panelsById,
       setFileViewMode: setFileViewModeMock,
       setFilePanelPath: setFilePanelPathMock,
+      activeDockTerminalId: dockState.activeDockTerminalId,
     }),
+}));
+// #11588: returning to a cached project view is the pane's only signal that the
+// file may have moved while nothing was watching. Mocked with a real listener
+// registry so unsubscribe-on-unmount is observable rather than assumed.
+//
+// `vi.hoisted`, not a plain const: a module-scope subscriber anywhere in the
+// import graph would call the factory's `subscribeProjectViewLifecycle` while a
+// plain const was still in its TDZ, throwing during collection — which vitest
+// reports as a green exit code with the file's tests silently never run.
+type LifecyclePhase = "cached" | "active" | "revealed";
+const lifecycleListeners = vi.hoisted(() => new Set<(phase: LifecyclePhase) => void>());
+// Every runtime export, not just the one this pane imports: a factory is a
+// strict surface, and a module elsewhere in the graph reaching for a missing
+// name fails the whole file at collection rather than at the call.
+vi.mock("@/lib/viewCacheState", () => ({
+  subscribeProjectViewLifecycle: (listener: (phase: LifecyclePhase) => void) => {
+    lifecycleListeners.add(listener);
+    return () => {
+      lifecycleListeners.delete(listener);
+    };
+  },
+  // The real module's own safe default — the un-demoted answer.
+  isProjectViewCached: () => false,
+  __resetProjectViewCacheStateForTests: () => {
+    lifecycleListeners.clear();
+  },
 }));
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector: (state: unknown) => unknown) => selector({ currentProject: null }),
@@ -88,6 +121,19 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 vi.mock("@/store/accessibilityAnnouncerStore", () => ({
   useAnnouncerStore: { getState: () => ({ announce: vi.fn() }) },
 }));
+// The live signal for a file no worktree contains (#11590). Mocked so a test can
+// drive the tick directly, and so the real hook's IPC poll never runs here —
+// without this the pane would depend on a `window.electron` jsdom doesn't have.
+const { externalChangeTickMock } = vi.hoisted(() => ({
+  externalChangeTickMock: vi.fn<(root: string, paths: readonly string[]) => number | undefined>(
+    () => undefined
+  ),
+}));
+vi.mock("@/hooks/useExternalChangeTick", () => ({
+  NO_WATCHED_PATHS: Object.freeze([]),
+  useExternalChangeTick: (root: string, paths: readonly string[], enabled: boolean) =>
+    enabled ? externalChangeTickMock(root, paths) : undefined,
+}));
 const { readMock, searchMock } = vi.hoisted(() => ({
   readMock: vi.fn(),
   searchMock: vi.fn(),
@@ -108,11 +154,16 @@ vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 // Captures the props FilePane hands the rendered viewer so the #11255 release
 // chain (FilePane → MarkdownViewer.onRendered → the height pin) is observable;
 // without this the wiring could be deleted with every test still green.
+// cacheBust rides along for #11587: without it a rewritten embedded image keeps
+// a byte-identical daintree-file:// src and never refetches. Picked off the real
+// prop type rather than hand-written, so renaming either prop fails here instead
+// of silently capturing undefined forever.
+type CapturedMarkdownProps = Pick<MarkdownViewerProps, "onRendered" | "cacheBust">;
 const markdownViewerProps = vi.hoisted(() => ({
-  current: null as { onRendered?: () => void } | null,
+  current: null as { onRendered?: () => void; cacheBust?: string } | null,
 }));
 vi.mock("@/components/Markdown/MarkdownViewer", () => ({
-  MarkdownViewer: (props: { onRendered?: () => void }) => {
+  MarkdownViewer: (props: CapturedMarkdownProps) => {
     markdownViewerProps.current = props;
     return <div data-testid="markdown-viewer-mock" />;
   },
@@ -176,6 +227,8 @@ beforeEach(() => {
   useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry: vi.fn() });
   worktreeState.worktrees.clear();
   worktreeState.workingTreeChangedAtById.clear();
+  externalChangeTickMock.mockReset();
+  externalChangeTickMock.mockReturnValue(undefined);
   // Reset per test so a prior test's read call can't satisfy a later
   // toHaveBeenCalledWith assertion (cross-test contamination).
   readMock.mockReset();
@@ -208,6 +261,8 @@ afterEach(() => {
   setFileViewModeMock.mockReset();
   setFilePanelPathMock.mockReset();
   markdownViewerProps.current = null;
+  lifecycleListeners.clear();
+  dockState.activeDockTerminalId = null;
 });
 
 describe("FilePane restore-control wiring", () => {
@@ -642,6 +697,212 @@ describe("FilePane reveal in file manager (#11386)", () => {
   });
 });
 
+// #11483: the file viewer's route back to the tree it was opened from. The
+// button is worktree-scoped, so its whole contract is "which worktree is this
+// file actually in" — resolved from the live list, never panel.worktreeId.
+describe("FilePane show in file browser (#11483)", () => {
+  const LABEL = "Show in file browser";
+
+  function paneElement(filePath: string) {
+    return (
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title={filePath.split("/").pop() ?? filePath}
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  function renderPane(filePath: string, panelWorktreeId?: string) {
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath,
+      ...(panelWorktreeId ? { worktreeId: panelWorktreeId } : {}),
+    };
+    return render(paneElement(filePath));
+  }
+
+  function button(container: HTMLElement, label: string): HTMLButtonElement | undefined {
+    return Array.from(container.querySelectorAll("button")).find(
+      (b) => b.getAttribute("aria-label") === label
+    );
+  }
+
+  function click(el: HTMLElement) {
+    return act(async () => {
+      el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+  }
+
+  function deferred() {
+    let resolve: (value: unknown) => void = () => {};
+    const promise = new Promise((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  it("dispatches the containing worktree, relative path and a file reveal kind", async () => {
+    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
+    const { container } = renderPane("/repo/src/index.ts");
+
+    await click(button(container, LABEL)!);
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.openFileBrowser",
+      { worktreeId: "wt-1", revealPath: "src/index.ts", revealKind: "file" },
+      { source: "user" }
+    );
+  });
+
+  // `file.openPanel` resolves an explicit rootPath but still stamps the *active*
+  // worktree id, so the panel can name a worktree the file isn't in (#11276).
+  it("ignores a stale panel worktreeId in favor of the containing worktree", async () => {
+    worktreeState.worktrees.set("wt-active", { id: "wt-active", path: "/other" });
+    worktreeState.worktrees.set("wt-real", { id: "wt-real", path: "/repo" });
+    const { container } = renderPane("/repo/src/index.ts", "wt-active");
+
+    await click(button(container, LABEL)!);
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.openFileBrowser",
+      expect.objectContaining({ worktreeId: "wt-real" }),
+      { source: "user" }
+    );
+  });
+
+  it("opens the deepest worktree when one is nested inside another", async () => {
+    worktreeState.worktrees.set("wt-outer", { id: "wt-outer", path: "/repo" });
+    worktreeState.worktrees.set("wt-inner", { id: "wt-inner", path: "/repo/nested" });
+    const { container } = renderPane("/repo/nested/src/a.ts");
+
+    await click(button(container, LABEL)!);
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.openFileBrowser",
+      { worktreeId: "wt-inner", revealPath: "src/a.ts", revealKind: "file" },
+      { source: "user" }
+    );
+  });
+
+  it("offers no button for a file outside every known worktree", async () => {
+    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
+    const { container } = renderPane("/elsewhere/a.ts");
+    await act(async () => {});
+
+    expect(button(container, LABEL)).toBeUndefined();
+    // The OS reveal still works for it — that's the whole point of that button.
+    expect(button(container, revealCopy().label)).toBeDefined();
+  });
+
+  // A sibling root that merely extends the worktree name is not inside it; a
+  // raw startsWith would open the wrong tree at the mangled path "-other/a.ts".
+  it("offers no button for a sibling directory sharing the root prefix", async () => {
+    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
+    const { container } = renderPane("/repo-other/src/a.ts");
+    await act(async () => {});
+
+    expect(button(container, LABEL)).toBeUndefined();
+  });
+
+  it("surfaces a failure inline and retries with the same structured args", async () => {
+    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "Worktree is gone" },
+    });
+    const { container } = renderPane("/repo/src/index.ts");
+    await click(button(container, LABEL)!);
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("Worktree is gone");
+    // Tier 3 is pane-local — no global toast for a failure the pane already owns.
+    expect(notifyMock).not.toHaveBeenCalled();
+
+    dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+    dispatchMock.mockClear();
+    await click(button(container, "Retry opening file browser")!);
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.openFileBrowser",
+      { worktreeId: "wt-1", revealPath: "src/index.ts", revealKind: "file" },
+      { source: "user" }
+    );
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  // toWorktreeRelative hands back its input unchanged for the root itself, so
+  // a naive pass-through would ship revealPath "/repo" — which the action trims
+  // to a bogus "repo" child instead of opening the root.
+  it("omits revealPath when the file resolves to the worktree root", async () => {
+    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
+    const { container } = renderPane("/repo");
+
+    await click(button(container, LABEL)!);
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.openFileBrowser",
+      { worktreeId: "wt-1", revealPath: undefined, revealKind: "file" },
+      { source: "user" }
+    );
+  });
+
+  // Per-target isolation: a worktree appearing or vanishing must not reset the
+  // shared external-action state and free a pending sibling for a second launch.
+  it("leaves a pending sibling target alone when the worktree list changes", async () => {
+    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
+    const gate = deferred();
+    dispatchMock.mockReturnValue(gate.promise);
+    const { container, rerender } = renderPane("/repo/src/index.ts");
+
+    act(() => {
+      button(container, "Open in editor")!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true })
+      );
+    });
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+
+    // A nested worktree appears, re-aiming the file-browser target only.
+    worktreeState.worktrees.set("wt-nested", { id: "wt-nested", path: "/repo/src" });
+    rerender(paneElement("/repo/src/index.ts"));
+
+    // The editor is still in flight, so a second click must not launch again.
+    act(() => {
+      button(container, "Open in editor")!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true })
+      );
+    });
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      gate.resolve({ ok: true, result: undefined });
+      await gate.promise;
+    });
+  });
+
+  // The reveal target is path-only; regressing the args builder into a single
+  // shape would send {path} to the worktree action (or vice versa).
+  it("keeps the path-only args for the sibling reveal target", async () => {
+    worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
+    const { container } = renderPane("/repo/src/index.ts");
+
+    await click(button(container, revealCopy().label)!);
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "file.showItemInFolder",
+      { path: "/repo/src/index.ts" },
+      { source: "user" }
+    );
+  });
+});
+
 // #11191: HTML files get the same Source/Rendered toggle as Markdown; rendered
 // HTML routes to the sandboxed-iframe HtmlViewer.
 describe("FilePane HTML Source/Rendered (#11191)", () => {
@@ -720,6 +981,50 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     renderPane("/repo/docs/spec.md", "rendered");
     expect(await screen.findByTestId("markdown-viewer-mock")).toBeTruthy();
     expect(screen.queryByTestId("html-viewer-mock")).toBeNull();
+  });
+
+  // #11587: images embedded in the document resolve to daintree-file:// URLs
+  // built from path + root alone, so a rewritten image stays invisible unless the
+  // pane advances a token. Refresh is the explicit path that has to move it.
+  it("advances the rendered document's cache token on an explicit Refresh", async () => {
+    renderPane("/repo/docs/spec.md", "rendered");
+    await screen.findByTestId("markdown-viewer-mock");
+    const before = markdownViewerProps.current?.cacheBust;
+    // Both sides must be real values: an unthreaded prop would leave them
+    // undefined, and a bare inequality would never notice.
+    expect(before).toBeDefined();
+
+    await act(async () => {
+      screen
+        .getByRole("button", { name: "Refresh" })
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    await waitFor(() => expect(markdownViewerProps.current?.cacheBust).not.toBe(before));
+    expect(markdownViewerProps.current?.cacheBust).toBeDefined();
+  });
+
+  // The failure #11587 actually reports: an agent rewrites ./img/arch.png while
+  // spec.md itself is untouched. The silent re-read sees identical markdown, so a
+  // bytes-changed gate would hold the token still and the stale image would stay
+  // on screen. Only markdown opts out of that gate — this is what pins it.
+  it("advances the token on a silent re-read even when the markdown bytes are unchanged", async () => {
+    renderPane("/repo/docs/spec.md", "rendered");
+    await screen.findByTestId("markdown-viewer-mock");
+    const before = markdownViewerProps.current?.cacheBust;
+    expect(before).toBeDefined();
+    const readsBefore = readMock.mock.calls.length;
+
+    // A loaded file reloads silently, so window focus regain re-reads it. The
+    // mocked read returns the same content both times — exactly the asset-only
+    // rewrite this has to survive.
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => expect(readMock.mock.calls.length).toBeGreaterThan(readsBefore));
+    await waitFor(() => expect(markdownViewerProps.current?.cacheBust).not.toBe(before));
+    expect(markdownViewerProps.current?.cacheBust).toBeDefined();
   });
 
   // The toolbar's open button follows the view: rendered HTML opens in the
@@ -1786,9 +2091,9 @@ describe("FilePane live disk refresh (#11451)", () => {
     expect(readMock.mock.calls.length).toBe(initialReads + 1);
   });
 
-  it("stays quiet for a file outside every known worktree", async () => {
-    // No watcher covers it, so there is no tick to resolve — it must degrade to
-    // no live signal rather than reading on every unrelated worktree update.
+  it("ignores unrelated worktree ticks for a file outside every known worktree", async () => {
+    // A worktree that doesn't contain the file says nothing about it, so its
+    // ticks must not reach this pane — the external signal below is what does.
     seedWorktree(OUTER_ID, "/repo", { git: 100 });
     readMock.mockResolvedValue({ content: "v1" });
     const { rerender } = await renderPane({ filePath: "/elsewhere/notes.txt" });
@@ -1801,6 +2106,32 @@ describe("FilePane live disk refresh (#11451)", () => {
     await commitTick(rerender);
 
     expect(readMock).not.toHaveBeenCalled();
+  });
+
+  it("re-reads a file outside every known worktree on its external tick (#11590)", async () => {
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    readMock.mockResolvedValue({ content: "v1" });
+    const { rerender } = await renderPane({ filePath: "/elsewhere/notes.txt" });
+    expect(readMock).toHaveBeenCalled();
+    // The file itself is what gets watched — its parent has no worktree, so
+    // nothing else could report a rewrite of it.
+    expect(externalChangeTickMock.mock.calls[0]?.[1]).toEqual(["/elsewhere/notes.txt"]);
+    readMock.mockClear();
+
+    externalChangeTickMock.mockReturnValue(500);
+    await commitTick(rerender);
+
+    expect(readMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a file inside a worktree on the worktree's own signal", async () => {
+    // The host's recursive watcher already covers it, so polling would be
+    // duplicate work — the hook must not even be enabled here.
+    seedWorktree(OUTER_ID, "/repo", { git: 100 });
+    readMock.mockResolvedValue({ content: "v1" });
+    await renderPane({ filePath: "/repo/src/index.ts" });
+
+    expect(externalChangeTickMock).not.toHaveBeenCalled();
   });
 
   it("re-reads once, not twice, when a tick lands together with leaving Diff", async () => {
@@ -2247,6 +2578,292 @@ describe("FilePane live disk refresh (#11451)", () => {
       await commitTick(rerender);
 
       expect(container.querySelector("iframe")).toBe(frameBefore);
+      expect(container.querySelector("iframe")?.getAttribute("src")).toBe(srcBefore);
+    });
+  });
+});
+
+// #11588: a project switch is not a page load. Caching a view is
+// `removeChildView` + `setVisible(false)`, so `document.visibilityState` never
+// moves and no `window` focus event fires; the worktree tick keeps running but
+// deliberately cannot reach video, audio or PDF. Coming back is the only moment
+// this pane can learn what happened while it was away.
+describe("FilePane re-reads when the project view is revealed (#11588)", () => {
+  const WORKTREE_ID = "wt-1";
+
+  function seedWorktree(): void {
+    worktreeState.worktrees.set(WORKTREE_ID, {
+      id: WORKTREE_ID,
+      path: "/repo",
+      worktreeChanges: { changes: [], lastUpdated: 100 },
+    });
+  }
+
+  function paneElement(options: { location?: "grid" | "dock"; fileViewMode?: string } = {}) {
+    return (
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title="index.ts"
+          isFocused={false}
+          location={options.location ?? "grid"}
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  async function renderPane(
+    options: {
+      filePath?: string;
+      fileViewMode?: string;
+      location?: "grid" | "dock";
+    } = {}
+  ) {
+    seedWorktree();
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: options.filePath ?? "/repo/src/index.ts",
+      worktreeId: WORKTREE_ID,
+      fileViewMode: options.fileViewMode,
+    };
+    const view = render(paneElement(options));
+    // Can't wait on readMock — image, media and PDF short-circuit before it.
+    await act(async () => {});
+    return view;
+  }
+
+  async function emit(phase: LifecyclePhase) {
+    await act(async () => {
+      for (const listener of Array.from(lifecycleListeners)) listener(phase);
+    });
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  it("re-reads the open file on reveal", async () => {
+    readMock.mockResolvedValue({ content: "v1" });
+    await renderPane({});
+    const readsBefore = readMock.mock.calls.length;
+
+    await emit("revealed");
+
+    expect(readMock.mock.calls.length).toBe(readsBefore + 1);
+  });
+
+  it("stays put on cached and active", async () => {
+    // `cached` is the way out, and a switch superseded mid-flight only ever
+    // reaches `active` — neither means this pane is on screen again.
+    readMock.mockResolvedValue({ content: "v1" });
+    await renderPane({});
+    const readsBefore = readMock.mock.calls.length;
+
+    await emit("cached");
+    await emit("active");
+
+    expect(readMock.mock.calls.length).toBe(readsBefore);
+  });
+
+  it("keeps the current content on screen instead of flashing the skeleton", async () => {
+    // Nobody asked for this read, so it must not look like a load in progress.
+    readMock.mockResolvedValue({ content: "v1" });
+    const { container } = await renderPane({});
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-testid="code-viewer-mock"]')?.getAttribute("data-content")
+      ).toBe("v1")
+    );
+
+    const pending = deferred<{ content: string }>();
+    readMock.mockReturnValueOnce(pending.promise);
+    await emit("revealed");
+
+    expect(container.querySelector('[role="status"][aria-label="Loading file"]')).toBeNull();
+    expect(
+      container.querySelector('[data-testid="code-viewer-mock"]')?.getAttribute("data-content")
+    ).toBe("v1");
+
+    await act(async () => {
+      pending.resolve({ content: "v2" });
+    });
+    expect(
+      container.querySelector('[data-testid="code-viewer-mock"]')?.getAttribute("data-content")
+    ).toBe("v2");
+  });
+
+  it("re-navigates rendered HTML on reveal even when the bytes are identical", async () => {
+    // The case the bytes-changed gate cannot see: the entry file is unchanged
+    // while a relative asset it pulls in was rewritten in the background.
+    const PREVIEW_URL = "daintree-html://tok/report.html";
+    readMock.mockResolvedValue({ content: "<h1>v1</h1>", htmlPreviewUrl: PREVIEW_URL });
+    const { container } = await renderPane({
+      filePath: "/repo/dist/report.html",
+      fileViewMode: "rendered",
+    });
+    const nonce = () =>
+      container
+        .querySelector('[data-testid="html-viewer-mock"]')
+        ?.getAttribute("data-reload-nonce");
+    await waitFor(() => expect(nonce()).toBeTruthy());
+    const before = nonce();
+
+    await emit("revealed");
+
+    await waitFor(() => expect(nonce()).not.toBe(before));
+  });
+
+  it("skips the re-read in diff mode", async () => {
+    // Diff owns its own freshness (it raises a stale banner) and leaving it
+    // already re-reads source, so pulling here would only move review content
+    // nobody asked to move.
+    worktreeState.worktrees.set(WORKTREE_ID, {
+      id: WORKTREE_ID,
+      path: "/repo",
+      worktreeChanges: { changes: [{ path: "/repo/src/index.ts", status: "modified" }] },
+    });
+    const retry = vi.fn();
+    useDiffContentMock.mockReturnValue({ content: "@@ diff", stale: false, retry });
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/src/index.ts",
+      worktreeId: WORKTREE_ID,
+      fileViewMode: "diff",
+    };
+    render(paneElement());
+    await act(async () => {});
+    const readsBefore = readMock.mock.calls.length;
+
+    await emit("revealed");
+
+    expect(readMock.mock.calls.length).toBe(readsBefore);
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it("stops listening once the pane unmounts", async () => {
+    readMock.mockResolvedValue({ content: "v1" });
+    const { unmount } = await renderPane({});
+
+    unmount();
+
+    expect(lifecycleListeners.size).toBe(0);
+  });
+
+  describe("dock parking", () => {
+    it("defers the re-read while parked offscreen, then runs it once on activation", async () => {
+      // A dock panel stays mounted in the offscreen parking container whether
+      // or not its popover is open, so an ungated reveal would re-read — and
+      // restart any media — for something nobody can see.
+      readMock.mockResolvedValue({ content: "v1" });
+      dockState.activeDockTerminalId = "other-panel";
+      const { rerender } = await renderPane({ location: "dock" });
+      const readsBefore = readMock.mock.calls.length;
+
+      await emit("revealed");
+      await emit("revealed");
+      expect(readMock.mock.calls.length).toBe(readsBefore);
+
+      dockState.activeDockTerminalId = "file-1";
+      await act(async () => {
+        rerender(paneElement({ location: "dock" }));
+      });
+
+      // Two missed reveals owe one catch-up: the work is "read what is on disk
+      // now", not "replay every switch".
+      expect(readMock.mock.calls.length).toBe(readsBefore + 1);
+    });
+
+    it("re-reads immediately when the dock panel is the active one", async () => {
+      readMock.mockResolvedValue({ content: "v1" });
+      dockState.activeDockTerminalId = "file-1";
+      await renderPane({ location: "dock" });
+      const readsBefore = readMock.mock.calls.length;
+
+      await emit("revealed");
+
+      expect(readMock.mock.calls.length).toBe(readsBefore + 1);
+    });
+  });
+
+  describe("media and PDF", () => {
+    // The surfaces with no other safety net: their reload key deliberately does
+    // not move on a worktree tick, so before this the only way to see new bytes
+    // was pressing Refresh.
+    const mediaFetchMock =
+      vi.fn<
+        (
+          input: string | URL | Request
+        ) => Promise<Pick<Response, "ok" | "status" | "headers" | "blob">>
+      >();
+    const realCreateObjectURL = URL.createObjectURL;
+    const realRevokeObjectURL = URL.revokeObjectURL;
+    beforeEach(() => {
+      mediaFetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        blob: () => Promise.resolve(new Blob(["x"])),
+      });
+      vi.stubGlobal("fetch", mediaFetchMock);
+      URL.createObjectURL = vi.fn(() => "blob:app://daintree/media-preview");
+      URL.revokeObjectURL = vi.fn();
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      mediaFetchMock.mockReset();
+      URL.createObjectURL = realCreateObjectURL;
+      URL.revokeObjectURL = realRevokeObjectURL;
+    });
+
+    it("re-fetches the video on reveal", async () => {
+      const { container } = await renderPane({ filePath: "/repo/media/demo.mp4" });
+      await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
+      const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+      await emit("revealed");
+
+      await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+    });
+
+    it("re-fetches the audio on reveal", async () => {
+      // Its own nonce condition, separate from video's — a regression in one
+      // would leave the other's test green.
+      const { container } = await renderPane({ filePath: "/repo/media/track.mp3" });
+      await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
+      const fetchesBefore = mediaFetchMock.mock.calls.length;
+
+      await emit("revealed");
+
+      await waitFor(() => expect(mediaFetchMock.mock.calls.length).toBe(fetchesBefore + 1));
+    });
+
+    it("re-navigates the PDF frame on reveal", async () => {
+      const { container } = await renderPane({ filePath: "/repo/docs/spec.pdf" });
+      await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+      const srcBefore = container.querySelector("iframe")?.getAttribute("src");
+
+      await emit("revealed");
+
+      await waitFor(() =>
+        expect(container.querySelector("iframe")?.getAttribute("src")).not.toBe(srcBefore)
+      );
+    });
+
+    it("leaves the PDF frame alone on active", async () => {
+      const { container } = await renderPane({ filePath: "/repo/docs/spec.pdf" });
+      await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+      const srcBefore = container.querySelector("iframe")?.getAttribute("src");
+
+      await emit("active");
+
       expect(container.querySelector("iframe")?.getAttribute("src")).toBe(srcBefore);
     });
   });

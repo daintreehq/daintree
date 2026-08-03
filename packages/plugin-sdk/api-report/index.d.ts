@@ -335,8 +335,9 @@ interface EditIssueInput {
     body?: string;
 }
 /**
- * Normalized projection of a comment created via
- * {@link ForgeProviderImpl.addIssueComment}. Mirrors the lowest common
+ * Normalized projection of an issue comment — both the one created via
+ * {@link ForgeProviderImpl.addIssueComment} and the ones read back via
+ * {@link IssueCommentCapability.listIssueComments}. Mirrors the lowest common
  * denominator across forges.
  */
 interface IssueComment {
@@ -410,6 +411,64 @@ interface ReviewThread {
     id: string;
     rawData: unknown;
 }
+/**
+ * Cross-provider review verdict. `commented` covers a review submitted without
+ * a verdict; `unknown` is the escape hatch for a state this vocabulary doesn't
+ * model, so a provider never has to lie about what the forge reported.
+ */
+type NormalizedReviewState = "approved" | "changes_requested" | "commented" | "dismissed" | "pending" | "unknown";
+/**
+ * A submitted pull-request review, returned by the review-write operations so
+ * the caller learns what verdict landed without re-fetching. `state` is the
+ * normalized verdict; `rawState` preserves the provider's own spelling, the
+ * same split {@link Issue} uses.
+ */
+interface PullRequestReview {
+    /** Provider review id, as a string so non-numeric forges fit. */
+    id: string;
+    state: NormalizedReviewState;
+    rawState: string;
+    body: string;
+    url: string;
+    author?: ForgeUser;
+    /** Epoch milliseconds, or `null` for a review that isn't submitted yet. */
+    submittedAt: number | null;
+    /** Head commit the review was submitted against, when the forge reports one. */
+    commitId: string | null;
+    rawData: unknown;
+}
+/**
+ * Acknowledgement returned by {@link ForgeProviderImpl.mergePR}. Deliberately
+ * narrow: a merge endpoint reports whether the merge landed and under which
+ * commit, not the resulting pull request. Providers must not issue a second
+ * read to enrich this — a follow-up failure would make a completed merge look
+ * like a failed one.
+ */
+interface MergePRResult {
+    prNumber: number;
+    /** Merge commit SHA, or `null` when the forge reports none. */
+    sha: string | null;
+    merged: boolean;
+    /** Provider-supplied outcome message (e.g. "Pull Request successfully merged"). */
+    message: string;
+}
+/** Draft state a pull request ended in after a draft-toggle mutation. */
+interface PRDraftStateResult {
+    prNumber: number;
+    isDraft: boolean;
+}
+/**
+ * Reviewers a pull request carries after a request. These are the resulting
+ * lists, not an echo of the request — forges canonicalize logins and retain
+ * previously-requested reviewers, so the two can differ.
+ */
+interface RequestReviewersResult {
+    prNumber: number;
+    /** Account logins with a pending review request. */
+    requestedUsers: string[];
+    /** Team identifiers (e.g. GitHub team slugs) with a pending review request. */
+    requestedTeams: string[];
+}
 interface ApprovalState {
     approved: boolean;
     required: number;
@@ -458,15 +517,42 @@ interface ReviewCapability {
      * remote review state, so the `forge.*` actions that call them carry
      * `danger: "confirm"`.
      */
-    approvePR?(repo: RepoRef, prNumber: number, body?: string): Promise<void>;
-    requestChanges?(repo: RepoRef, prNumber: number, body: string): Promise<void>;
+    approvePR?(repo: RepoRef, prNumber: number, body?: string): Promise<PullRequestReview>;
+    requestChanges?(repo: RepoRef, prNumber: number, body: string): Promise<PullRequestReview>;
     /**
-     * Dismiss a previously-submitted review. `reviewId` identifies the review to
-     * dismiss — there is no dismiss-by-PR shortcut, so callers obtain it first
-     * from a {@link ReviewThread}'s `rawData` (or the provider's review listing).
+     * Dismiss a previously-submitted review, returning the dismissed review.
+     * `reviewId` identifies the review to dismiss — there is no dismiss-by-PR
+     * shortcut, so callers obtain it first from a {@link ReviewThread}'s
+     * `rawData` (or the provider's review listing).
      */
-    dismissReview?(repo: RepoRef, prNumber: number, reviewId: number, message: string): Promise<void>;
-    requestReviewers?(repo: RepoRef, prNumber: number, reviewers: ReviewerRequest): Promise<void>;
+    dismissReview?(repo: RepoRef, prNumber: number, reviewId: number, message: string): Promise<PullRequestReview>;
+    requestReviewers?(repo: RepoRef, prNumber: number, reviewers: ReviewerRequest): Promise<RequestReviewersResult>;
+}
+/**
+ * Optional paged read of an issue's comment thread — the read half of
+ * {@link ForgeProviderImpl.addIssueComment}, which posts without any way to
+ * see the thread it posts into (#11545). Separate from `getIssue` because a
+ * thread is unbounded: `getIssue` reports `commentCount` and stays one cheap
+ * round-trip, while the comments themselves page.
+ *
+ * Comments come back oldest-first, the natural reading order of a thread and
+ * the only order either GitHub API reliably serves (its per-issue REST
+ * endpoint silently ignores `sort`/`direction`, and GraphQL's
+ * `IssueCommentOrderField` has no `CREATED_AT`). A caller wanting the newest
+ * comment must therefore page to the end and take the last item — never ask
+ * for one descending item.
+ *
+ * Throws when the issue doesn't exist, rather than returning an empty page.
+ * The consumer here is an agent deciding whether anyone replied, and "no such
+ * issue", "this provider can't read comments" and "nobody has replied yet"
+ * lead it to opposite conclusions — so only the last of the three may present
+ * as an empty page. The host applies the same rule to capability absence
+ * (`ForgeProviderImpl.issueComments` missing throws, matching `repoStats`),
+ * which is why this capability is not modeled as best-effort the way
+ * {@link TooltipCapability} is.
+ */
+interface IssueCommentCapability {
+    listIssueComments(repo: RepoRef, issueNumber: number, opts: ListOptions): Promise<Page<IssueComment>>;
 }
 interface ApprovalCapability {
     getApprovalState(repo: RepoRef, prNumber: number): Promise<ApprovalState>;
@@ -909,8 +995,15 @@ interface ForgeProviderImpl {
      * the new issue shows up in subsequent {@link listIssues} calls.
      */
     createIssue(repo: RepoRef, input: CreateIssueInput): Promise<Issue>;
-    assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
-    unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<void>;
+    /**
+     * Assign an issue, returning the issue's resulting assignee list. Forges may
+     * silently drop an assignee the account can't take (GitHub ignores users
+     * without push access), so the returned list — not the requested username —
+     * is what actually landed.
+     */
+    assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]>;
+    /** Remove an assignment, returning the issue's resulting assignee list. */
+    unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]>;
     /**
      * Open a new pull request from `input.head` into `input.base` and return the
      * normalized {@link PR}. Providers that can't create PRs throw
@@ -918,22 +1011,23 @@ interface ForgeProviderImpl {
      * so the new PR shows up in subsequent {@link listPRs} calls.
      */
     createPR(repo: RepoRef, input: CreatePRInput): Promise<PR>;
-    /** Close an open pull request without merging. */
-    closePR(repo: RepoRef, prNumber: number): Promise<void>;
-    /** Reopen a previously closed pull request. */
-    reopenPR(repo: RepoRef, prNumber: number): Promise<void>;
+    /** Close an open pull request without merging, returning the updated {@link PR}. */
+    closePR(repo: RepoRef, prNumber: number): Promise<PR>;
+    /** Reopen a previously closed pull request, returning the updated {@link PR}. */
+    reopenPR(repo: RepoRef, prNumber: number): Promise<PR>;
     /**
-     * Merge a pull request using the optional {@link MergePRInput} strategy.
-     * Irreversible. Providers surface unmergeable states (draft, conflicts,
-     * failing required checks, stale head) as errors.
+     * Merge a pull request using the optional {@link MergePRInput} strategy,
+     * returning the {@link MergePRResult} acknowledgement. Irreversible.
+     * Providers surface unmergeable states (draft, conflicts, failing required
+     * checks, stale head) as errors.
      */
-    mergePR(repo: RepoRef, prNumber: number, input?: MergePRInput): Promise<void>;
-    /** Convert an open pull request to a draft. */
-    convertPRToDraft(repo: RepoRef, prNumber: number): Promise<void>;
-    /** Mark a draft pull request ready for review. */
-    markPRReadyForReview(repo: RepoRef, prNumber: number): Promise<void>;
-    /** Post a comment on a pull request. */
-    commentOnPR(repo: RepoRef, prNumber: number, body: string): Promise<void>;
+    mergePR(repo: RepoRef, prNumber: number, input?: MergePRInput): Promise<MergePRResult>;
+    /** Convert an open pull request to a draft, returning its resulting draft state. */
+    convertPRToDraft(repo: RepoRef, prNumber: number): Promise<PRDraftStateResult>;
+    /** Mark a draft pull request ready for review, returning its resulting draft state. */
+    markPRReadyForReview(repo: RepoRef, prNumber: number): Promise<PRDraftStateResult>;
+    /** Post a comment on a pull request, returning the created {@link IssueComment}. */
+    commentOnPR(repo: RepoRef, prNumber: number, body: string): Promise<IssueComment>;
     /**
      * Edit a pull request's title and/or body and return the updated
      * normalized {@link PR}.
@@ -1019,6 +1113,7 @@ interface ForgeProviderImpl {
      */
     classifyPushError?(stderr: string): PushErrorClassification | null;
     reviews?: ReviewCapability;
+    issueComments?: IssueCommentCapability;
     approvals?: ApprovalCapability;
     releases?: ReleaseCapability;
     projectBoards?: ProjectBoardCapability;
@@ -1261,9 +1356,9 @@ type AgentKeyAction = `agent.${BuiltInAgentId}`;
  */
 type WorktreeSwitchIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 type WorktreeSwitchAction = `worktree.switch${WorktreeSwitchIndex}`;
-type BuiltInKeyAction = "nav.up" | "nav.down" | "nav.left" | "nav.right" | "nav.pageUp" | "nav.pageDown" | "nav.home" | "nav.end" | "nav.expand" | "nav.collapse" | "nav.primary" | "nav.toggleSidebar" | "nav.toggleFocusMode" | "nav.quickSwitcher" | "nav.focusRegion.next" | "nav.focusRegion.prev" | "file.open" | "file.copyPath" | "file.copyTree" | "ui.refresh" | "ui.escape" | "git.commit" | "git.push" | "git.stageAll" | "git.toggle" | "worktree.next" | "worktree.previous" | "worktree.panel" | WorktreeSwitchAction | "worktree.up" | "worktree.down" | "worktree.upVim" | "worktree.downVim" | "worktree.home" | "worktree.end" | "worktree.select" | "worktree.selectSpace" | "worktree.copyTree" | "worktree.openChanges" | "worktree.openEditor" | "worktree.openPalette" | "worktree.createDialog.open" | "worktree.overview" | "worktree.sessions.minimizeAll" | "worktree.sessions.maximizeAll" | "worktree.sessions.restartAll" | "worktree.sessions.endAll" | "worktree.sessions.closeCompleted" | "worktree.sessions.trashAll" | "worktree.sessions.resetRenderers" | "tab.next" | "tab.previous" | "terminal.close" | "terminal.closeAll" | "terminal.killAll" | "terminal.restartAll" | "terminal.toggleDock" | "terminal.toggleDockAll" | "terminal.new" | "terminal.reopenLast" | "terminal.resumeSessions" | "terminal.maximize" | "terminal.inject" | "terminal.focusNext" | "terminal.focusPrevious" | "terminal.focusAlternate" | "terminal.focusUp" | "terminal.focusDown" | "terminal.focusLeft" | "terminal.focusRight" | "terminal.focusDock" | "terminal.focusIndex1" | "terminal.focusIndex2" | "terminal.focusIndex3" | "terminal.focusIndex4" | "terminal.focusIndex5" | "terminal.focusIndex6" | "terminal.focusIndex7" | "terminal.focusIndex8" | "terminal.focusIndex9" | "terminal.moveLeft" | "terminal.moveRight" | "terminal.moveUp" | "terminal.moveDown" | "terminal.moveToDock" | "terminal.moveToGrid" | "terminal.watch" | "terminal.duplicate" | "terminal.background" | "terminal.contextMenu" | "terminal.stashInput" | "terminal.popStash" | "terminal.scrollToLastActivity" | "terminal.sendToAgent" | "terminal.bulkCommand" | "terminal.armDefault" | "terminal.disarmAll" | "terminal.kill" | "terminal.restart" | "terminal.forceResume" | "terminal.redraw" | "terminal.rename" | "fleet.accept" | "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash" | "fleet.armFocused" | "fleet.armAll" | "agent.palette" | AgentKeyAction | "agent.terminal" | "agent.browser" | "agent.focusNextWaiting" | "agent.focusNextWaitingGlobal" | "agent.focusNextWorking" | "agent.focusNextAgent" | "agent.focusPreviousAgent" | "dock.focusNextWaiting" | "find.inFocusedPanel" | "window.zoomIn" | "window.zoomOut" | "window.zoomReset" | "panel.palette" | "panel.toggleDiagnostics" | "panel.togglePortal" | "panel.diagnosticsLogs" | "panel.diagnosticsEvents" | "panel.diagnosticsMessages" | "notifications.toggle" | "portal.newTab" | "portal.closeTab" | "portal.nextTab" | "portal.prevTab" | "devPreview.reloadPreview" | "action.palette" | "action.palette.open" | "action.repeatLast" | "project.switcherPalette" | "project.mruCycleOlder" | "help.shortcuts" | "help.shortcutsAlt" | "help.launchAgent" | "help.togglePanel" | "app.settings" | "app.theme.toggle" | "app.theme.pick" | "voiceInput.toggle" | "voiceInput.toggleAssistant" | "voiceInput.togglePause" | "voiceInput.lockTarget" | "voiceInput.unlockTarget" | "voiceInput.recallRecentTarget" | "layout.undo" | "layout.redo" | "app.newWindow" | "app.quit" | "app.forceQuit" | "modal.close";
+type BuiltInKeyAction = "nav.up" | "nav.down" | "nav.left" | "nav.right" | "nav.pageUp" | "nav.pageDown" | "nav.home" | "nav.end" | "nav.expand" | "nav.collapse" | "nav.primary" | "nav.toggleSidebar" | "nav.toggleFocusMode" | "nav.quickSwitcher" | "nav.focusRegion.next" | "nav.focusRegion.prev" | "file.open" | "file.copyPath" | "file.copyTree" | "ui.refresh" | "ui.escape" | "git.commit" | "git.push" | "git.stageAll" | "git.toggle" | "worktree.next" | "worktree.previous" | "worktree.panel" | WorktreeSwitchAction | "worktree.up" | "worktree.down" | "worktree.upVim" | "worktree.downVim" | "worktree.home" | "worktree.end" | "worktree.select" | "worktree.selectSpace" | "worktree.copyTree" | "worktree.openChanges" | "worktree.openEditor" | "worktree.openFileBrowser" | "worktree.openPalette" | "worktree.createDialog.open" | "worktree.overview" | "worktree.sessions.minimizeAll" | "worktree.sessions.maximizeAll" | "worktree.sessions.restartAll" | "worktree.sessions.endAll" | "worktree.sessions.closeCompleted" | "worktree.sessions.trashAll" | "worktree.sessions.resetRenderers" | "tab.next" | "tab.previous" | "terminal.close" | "terminal.closeAll" | "terminal.killAll" | "terminal.restartAll" | "terminal.toggleDock" | "terminal.toggleDockAll" | "terminal.new" | "terminal.reopenLast" | "terminal.resumeSessions" | "terminal.maximize" | "terminal.inject" | "terminal.focusNext" | "terminal.focusPrevious" | "terminal.focusAlternate" | "terminal.focusUp" | "terminal.focusDown" | "terminal.focusLeft" | "terminal.focusRight" | "terminal.focusDock" | "terminal.focusIndex1" | "terminal.focusIndex2" | "terminal.focusIndex3" | "terminal.focusIndex4" | "terminal.focusIndex5" | "terminal.focusIndex6" | "terminal.focusIndex7" | "terminal.focusIndex8" | "terminal.focusIndex9" | "terminal.moveLeft" | "terminal.moveRight" | "terminal.moveUp" | "terminal.moveDown" | "terminal.moveToDock" | "terminal.moveToGrid" | "terminal.watch" | "terminal.duplicate" | "terminal.background" | "terminal.contextMenu" | "terminal.stashInput" | "terminal.popStash" | "terminal.scrollToLastActivity" | "terminal.sendToAgent" | "terminal.bulkCommand" | "terminal.armDefault" | "terminal.disarmAll" | "terminal.kill" | "terminal.restart" | "terminal.forceResume" | "terminal.redraw" | "terminal.rename" | "fleet.accept" | "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash" | "fleet.armFocused" | "fleet.armAll" | "agent.palette" | AgentKeyAction | "agent.terminal" | "agent.browser" | "agent.focusNextWaiting" | "agent.focusNextWaitingGlobal" | "agent.focusNextWorking" | "agent.focusNextAgent" | "agent.focusPreviousAgent" | "dock.focusNextWaiting" | "find.inFocusedPanel" | "window.zoomIn" | "window.zoomOut" | "window.zoomReset" | "panel.palette" | "panel.toggleDiagnostics" | "panel.togglePortal" | "panel.diagnosticsLogs" | "panel.diagnosticsEvents" | "panel.diagnosticsMessages" | "notifications.toggle" | "portal.newTab" | "portal.closeTab" | "portal.nextTab" | "portal.prevTab" | "devPreview.reloadPreview" | "action.palette" | "action.palette.open" | "action.repeatLast" | "pilot.toggle" | "project.switcherPalette" | "project.mruCycleOlder" | "help.shortcuts" | "help.shortcutsAlt" | "help.launchAgent" | "help.togglePanel" | "app.settings" | "app.theme.toggle" | "app.theme.pick" | "voiceInput.toggle" | "voiceInput.toggleAssistant" | "voiceInput.togglePause" | "voiceInput.lockTarget" | "voiceInput.unlockTarget" | "voiceInput.recallRecentTarget" | "layout.undo" | "layout.redo" | "app.newWindow" | "app.quit" | "app.forceQuit" | "modal.close";
 
-declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.resumeSessions", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.openFileBrowser", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "hibernation.getConfig", "hibernation.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.markSafeDirectory", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.getPR", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "project.getAll", "project.getCurrent", "project.add", "project.switch", "project.update", "project.remove", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.getStats", "project.settings.open", "project.cloneRepo", "app.pluginManager", "app.reloadConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "agent.launch", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agentSessionHistory.list", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "terminal.restart", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.trash", "terminal.kill", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.bulkCommand", "terminal.stashInput", "terminal.popStash", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.displayImage", "help.openCommandsFolder", "ui.sidebar.resetWidth", "devServer.start", "devPreview.stop", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
+declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.resumeSessions", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.openFileBrowser", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "hibernation.getConfig", "hibernation.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.markSafeDirectory", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.listIssueComments", "forge.getPR", "forge.getCIStatus", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "pilot.toggle", "pilot.openRun", "project.getAll", "project.getCurrent", "project.add", "project.switch", "project.update", "project.remove", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.runCheck", "project.getStats", "project.settings.open", "project.cloneRepo", "app.pluginManager", "app.reloadConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "agent.launch", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agentSessionHistory.list", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "mcp.surface", "terminal.restart", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.trash", "terminal.kill", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.bulkCommand", "terminal.stashInput", "terminal.popStash", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.displayImage", "help.openCommandsFolder", "ui.sidebar.resetWidth", "devServer.start", "devPreview.stop", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
 type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
 
 type ActionKind = "command" | "query";
@@ -1283,7 +1378,14 @@ interface ActionDispatchError {
     error: ActionError;
 }
 type ActionDispatchResult<Result = unknown> = ActionDispatchSuccess<Result> | ActionDispatchError;
-type ActionErrorCode = "NOT_FOUND" | "VALIDATION_ERROR" | "DISABLED" | "RESTRICTED" | "CONFIRMATION_REQUIRED" | "EXECUTION_ERROR" | "USER_REJECTED" | "CONFIRMATION_TIMEOUT" | "ELICITATION_FAILED" | "BINDING_STALE" | "PLUGIN_UNLOADED" | "TIER_NOT_PERMITTED" | "INVALID_URL";
+type ActionErrorCode = "NOT_FOUND" | "VALIDATION_ERROR"
+/**
+ * `run()` completed but its return value did not satisfy the action's own
+ * `resultSchema`. Distinct from `EXECUTION_ERROR` (which means `run()` threw)
+ * because the action's side effects DID happen — only the payload is
+ * unusable. Signals a bug in the action itself, not in the caller's request.
+ */
+ | "RESULT_VALIDATION_ERROR" | "DISABLED" | "RESTRICTED" | "CONFIRMATION_REQUIRED" | "EXECUTION_ERROR" | "USER_REJECTED" | "CONFIRMATION_TIMEOUT" | "ELICITATION_FAILED" | "BINDING_STALE" | "PLUGIN_UNLOADED" | "TIER_NOT_PERMITTED" | "INVALID_URL";
 interface ActionError {
     code: ActionErrorCode;
     message: string;
@@ -1769,6 +1871,41 @@ interface PluginAgentContribution {
     detection?: AgentDetectionConfig;
 }
 /**
+ * A plugin-contributed terminal process detection (#11613). Maps one command
+ * name to the icon a terminal tab shows while that command runs, so a plugin
+ * that ships or wraps a CLI can make it identifiable in a pane instead of
+ * falling back to the generic terminal glyph.
+ *
+ * `command` is the bare executable name the detector matches — the same key
+ * space as the built-in `PROCESS_TOOL_REGISTRY` commands (`vite`, `pytest`,
+ * `redis-cli`). Lowercase only: `ProcessDetector` lower-cases every candidate
+ * before lookup, so a mixed-case key could never match. A tool with aliases
+ * declares one entry per alias.
+ *
+ * `iconId` uses the generic plugin icon namespace ({@link PLUGIN_ICON_IDS} in
+ * `shared/config/pluginIconIds.ts`), the same one `contributes.panels[].iconId`
+ * and `contributes.toolbarButtons[].iconId` use — plugins cannot ship bundled
+ * brand marks. Advisory, like those siblings: an unrecognized id renders a
+ * fallback glyph rather than failing the load.
+ *
+ * Inert declarative data, so no capability is required. A command that collides
+ * with a built-in tool or agent is rejected at parse time; a cross-plugin
+ * collision resolves first-registered-wins with a warning.
+ *
+ * Deliberately no `label`: the renderer resolves a detected process's display
+ * label from its icon id (`deriveTerminalChrome`), and generic plugin icon ids
+ * are shared across plugins, so a plugin-supplied label could not be resolved
+ * unambiguously. A plugin-detected process labels itself with its icon id until
+ * the identity model carries a distinct process label through panel state.
+ *
+ * Registered into `shared/config/pluginProcessToolRegistry.ts` at load time and
+ * mirrored into the pty-host, where detection runs.
+ */
+interface PluginProcessToolContribution {
+    command: string;
+    iconId: string;
+}
+/**
  * Closed set of catalog categories a plugin can declare via
  * `manifest.category`. The plugin manager groups its list by these (#9554
  * successor) — a closed enum rather than free-form tags so the catalog can't
@@ -1856,6 +1993,13 @@ interface PluginManifest {
          * `agent:register` capability. Empty unless the plugin opts in.
          */
         agents: PluginAgentContribution[];
+        /**
+         * Plugin-contributed terminal process detections (#11613). Each entry maps
+         * a command name to the icon a terminal tab shows while that command runs.
+         * Inert declarative data; no capability required. Empty unless the plugin
+         * ships or wraps a CLI it wants recognized.
+         */
+        processTools: PluginProcessToolContribution[];
         /**
          * Declared plugin settings. When absent or empty, `host.settings.set()`
          * accepts any key (permissive for plugins that declare none). When non-empty,

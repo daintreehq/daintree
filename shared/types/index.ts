@@ -82,7 +82,7 @@ export type {
 export type { BrowserHistory } from "./browser.js";
 
 // Project types
-export { isGitBackedProject } from "./project.js";
+export { isGitBackedProject, pickAgentVisibleProjectSettings } from "./project.js";
 export type {
   ProjectStatus,
   Project,
@@ -99,6 +99,8 @@ export type {
   RecipeNameCollision,
   RunCommand,
   ProjectSettings,
+  AgentVisibleProjectSettings,
+  AgentVisibleProjectSettingsKey,
   ProjectTerminalSettings,
   CopyTreeSettings,
   FleetSavedScope,
@@ -243,6 +245,9 @@ export type {
   FileReadPayload,
   FileReadResult,
   FileReadErrorCode,
+  // Live-change signal for paths no worktree covers
+  FileWatchFingerprintPayload,
+  FileWatchFingerprintResult,
   // Diff media (image compare) types
   DiffMediaReadFileVersionsPayload,
   DiffMediaSide,
@@ -427,7 +432,10 @@ export type {
   TerminalActivityStatus,
   TerminalActivity,
   TerminalActivityPayload,
+  TerminalGeometry,
+  SerializedTerminalSnapshot,
 } from "./terminal.js";
+export { isValidTerminalGeometry, MAX_TERMINAL_GRID_DIMENSION } from "./terminal.js";
 
 // Pty Host types - IPC protocol for terminal management
 export type {

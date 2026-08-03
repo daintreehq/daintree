@@ -1,7 +1,7 @@
 {
   "name": "daintree",
   "productName": "Daintree",
-  "version": "0.29.0",
+  "version": "0.30.0",
   "description": "Daintree IDE - An Electron-based development environment",
   "license": "Apache-2.0",
   "sideEffects": [
@@ -88,6 +88,7 @@
     "check:help": "node scripts/build-help-prompts.mjs --check",
     "check:confirm-wiring": "node scripts/codegen/confirm-wiring.mjs",
     "check:plugin-manifests": "tsx scripts/validate-plugin-manifests.ts",
+    "check:process-tools": "tsx scripts/ci/check-process-tool-registry.ts",
     "api-surface:update": "npm run build --workspace=packages/plugin-sdk && node scripts/ci/check-api-surface.mjs",
     "check:api-surface": "npm run build --workspace=packages/plugin-sdk && node scripts/ci/check-api-surface.mjs --check",
     "compiler-budget:build": "vite build",
@@ -108,7 +109,7 @@
     "test-ratio:check": "node scripts/check-test-ratio.mjs",
     "test-ratio:update": "node scripts/check-test-ratio.mjs --update",
     "test-ratio:pr": "node scripts/check-pr-test-ratio.mjs",
-    "check": "npm run typecheck && npm run check:channels && npm run check:crash-loop-constants && npm run check:node-version && npm run check:ipc && npm run check:ipc-renderer && npm run check:ipc-handwritten && npm run check:help && npm run check:confirm-wiring && npm run check:keybindings && npm run check:plugin-manifests && npm run check:api-surface && npm run lint:ratchet && npm run format:check",
+    "check": "npm run typecheck && npm run check:channels && npm run check:crash-loop-constants && npm run check:node-version && npm run check:ipc && npm run check:ipc-renderer && npm run check:ipc-handwritten && npm run check:help && npm run check:confirm-wiring && npm run check:keybindings && npm run check:plugin-manifests && npm run check:process-tools && npm run check:api-surface && npm run lint:ratchet && npm run format:check",
     "fix": "npm run format && npm run lint:fix",
     "test:smoke": "node scripts/run-smoke.mjs",
     "test:smoke:packaged": "node scripts/run-packaged-smoke.mjs",
@@ -203,6 +204,7 @@
     "@dnd-kit/modifiers": "^9.0.0",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "@electron/asar": "^3.4.1",
     "@electron/rebuild": "^4.0.3",
     "@eslint/js": "^10.0.1",
     "@fast-check/vitest": "^0.4.1",

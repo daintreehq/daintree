@@ -150,7 +150,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
           onChange={(e) => setSearchQuery(e.target.value)}
           aria-label="Search shortcuts"
           aria-controls={resultsId}
-          className="w-full px-4 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent"
+          className="w-full px-4 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
         />
       </AppDialog.Header>
 

@@ -32,6 +32,7 @@ const m = vi.hoisted(() => ({
   renameBookmark: vi.fn(),
   deleteBookmark: vi.fn(),
   listBookmarks: vi.fn(() => []),
+  listAgentSessions: vi.fn(() => []),
   readSessionHistorySync: vi.fn<() => { sessionId: string; projectId: string | null }[]>(() => []),
   // Typed so the evicted-ledger case (mockReturnValue(undefined)) type-checks.
   currentGeneration: vi.fn<() => number | undefined>(() => 1),
@@ -40,7 +41,7 @@ const m = vi.hoisted(() => ({
 
 vi.mock("../../../../services/pty/agentSessionHistory.js", () => ({
   persistAgentSession: vi.fn().mockResolvedValue(undefined),
-  listAgentSessions: vi.fn(() => []),
+  listAgentSessions: m.listAgentSessions,
   clearAgentSessions: vi.fn().mockResolvedValue(undefined),
   pruneAgentSessions: vi.fn().mockResolvedValue(undefined),
   readSessionHistorySync: m.readSessionHistorySync,
@@ -366,5 +367,43 @@ describe("bookmark mutator handlers", () => {
 
     m.deleteBookmark.mockRejectedValueOnce(new Error("io"));
     await expect(del({}, { sessionId: "s1" })).rejects.toMatchObject({ code: "PERSIST_FAILED" });
+  });
+
+  // #11530 — the scope the action resolves has to survive the IPC hop, or the
+  // filtering silently degrades to "everything" in main.
+  it("session list forwards both scope filters to the service without losing retention", async () => {
+    register();
+    const list = handlerFor(CHANNELS.AGENT_SESSION_LIST);
+
+    await list({}, { worktreeId: "wt-1", projectId: "proj-1" });
+    expect(m.listAgentSessions).toHaveBeenLastCalledWith("wt-1", expect.any(String), 30, "proj-1");
+
+    // The ordinary worktree-scoped path: a handler that only forwarded
+    // worktreeId when projectId was also present would break this.
+    await list({}, { worktreeId: "wt-only" });
+    expect(m.listAgentSessions).toHaveBeenLastCalledWith(
+      "wt-only",
+      expect.any(String),
+      30,
+      undefined
+    );
+
+    // A project-only scope must not accidentally land in the worktree slot.
+    await list({}, { projectId: "proj-2" });
+    expect(m.listAgentSessions).toHaveBeenLastCalledWith(
+      undefined,
+      expect.any(String),
+      30,
+      "proj-2"
+    );
+
+    // No payload at all still means the unscoped read the resume palette uses.
+    await list({}, {});
+    expect(m.listAgentSessions).toHaveBeenLastCalledWith(
+      undefined,
+      expect.any(String),
+      30,
+      undefined
+    );
   });
 });

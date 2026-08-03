@@ -32,6 +32,7 @@ function manifestWith(settings: SettingDefinition[]): PluginManifest {
       forgeProviders: [],
       fileDecorationProviders: [],
       agents: [],
+      processTools: [],
       settings,
     },
   };

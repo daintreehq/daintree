@@ -4,6 +4,8 @@ import type { BrowserHistory } from "@shared/types/browser";
 import type {
   FileViewMode,
   DiffSource,
+  FileBrowserSortDirection,
+  FileBrowserSortKey,
   FileBrowserTreeSnapshot,
   PanelExitBehavior,
   PanelTitleMode,
@@ -66,8 +68,12 @@ export interface AddTerminalArgs extends AddPanelOptionsBase {
   browserHideDotfiles?: boolean;
   browserRootPath?: string;
   browserSidebarCollapsed?: boolean;
+  browserViewerCollapsed?: boolean;
   browserTreeSnapshot?: FileBrowserTreeSnapshot;
   browserSidebarWidth?: number;
+  browserWorkspaceRooted?: boolean;
+  browserSortKey?: FileBrowserSortKey;
+  browserSortDirection?: FileBrowserSortDirection;
   /**
    * Preserved user-initiated focus timestamp from the saved snapshot. The
    * post-hydration focus picker in `useAppHydration` reads this off
@@ -130,8 +136,12 @@ export interface SavedTerminalData {
   browserHideDotfiles?: unknown;
   browserRootPath?: unknown;
   browserSidebarCollapsed?: unknown;
+  browserViewerCollapsed?: unknown;
   browserTreeSnapshot?: unknown;
   browserSidebarWidth?: unknown;
+  browserWorkspaceRooted?: unknown;
+  browserSortKey?: unknown;
+  browserSortDirection?: unknown;
   exitBehavior?: PanelExitBehavior;
   agentSessionId?: string;
   agentLaunchFlags?: string[];

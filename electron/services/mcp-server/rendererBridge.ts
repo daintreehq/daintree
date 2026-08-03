@@ -5,7 +5,7 @@ import { getProjectViewManager } from "../../window/windowRef.js";
 import type { ActionContext, ActionManifestEntry } from "../../../shared/types/actions.js";
 import type { McpBearerIdentity } from "../../../shared/types/ipc/mcpServer.js";
 import { CHANNELS } from "../../ipc/channels.js";
-import type { PendingRequest, DispatchEnvelope } from "./shared.js";
+import type { PendingRequest, DispatchEnvelope, DispatchedWorkspaceRef } from "./shared.js";
 import { MCP_MANIFEST_REQUEST_TIMEOUT_MS, MCP_DISPATCH_TIMEOUT_MS } from "./shared.js";
 
 export class SessionBindingError extends Error {
@@ -71,10 +71,21 @@ export function createRendererBridge(
   // never double-register one across repeated fetches or a server restart.
   const perWebContentsEvictionWired = new Set<number>();
 
+  // One-shot latch so a persistently broken workspace lookup can't flood the
+  // log on every dispatch (#11536).
+  let warnedWorkspaceResolveFailure = false;
+
   function getActiveProjectWebContents(): Electron.WebContents {
     const registry = getRegistry();
     if (registry) {
-      for (const ctx of registry.all()) {
+      // Most-recently-focused first, not registration order (#11536). With
+      // `all()` an unpinned external/api-key client drove whichever window
+      // happened to register first, regardless of what the user was looking
+      // at. `focusOrder()` keeps never-focused windows (appended in
+      // registration order) and falls back to registration order before the
+      // first focus event, so single-window and cold-start behaviour is
+      // unchanged — only the multi-window pick moves to the focused window.
+      for (const ctx of registry.focusOrder()) {
         if (ctx.browserWindow.isDestroyed()) continue;
         const view = ctx.services.projectViewManager?.getActiveView();
         const webContents = view?.webContents;
@@ -108,6 +119,47 @@ export function createRendererBridge(
 
   function normalizeError(err: unknown, fallback: string): Error {
     return err instanceof Error ? err : new Error(fallback);
+  }
+
+  /**
+   * Resolve which workspace a dispatch landed on, for the response envelope
+   * (#11536). Routed through the owning window's own ProjectViewManager so the
+   * answer is sender-scoped — never `getCurrentProjectId()`, which reports the
+   * most-recently-switched project rather than this webContents'.
+   *
+   * The module-singleton manager is only an identity fallback for a dispatch
+   * that was already routed through it (the registry-less branch of
+   * `getActiveProjectWebContents`); it is deliberately not a routing fallback.
+   *
+   * Never throws. Identity is decoration on an already-completed action, and
+   * the caller has by now cleared the pending entry's timer, so letting an
+   * exception escape would strand the awaiting promise. Ordinary teardown is
+   * not an error — the accessor already converts a destroyed view to `null`, so
+   * only genuinely unexpected throws are logged, once, to keep a future
+   * refactor from silently degrading this to "never stamps".
+   */
+  function resolveDispatchedWorkspace(webContentsId: number): DispatchedWorkspaceRef | undefined {
+    // The whole lookup is guarded, not just the accessor call: the registry
+    // read, the window lookup and the service property access can each throw on
+    // a torn-down window, and by this point the caller has already cleared the
+    // pending entry's timer — so an escaping exception would strand the
+    // awaiting promise rather than merely lose the stamp.
+    try {
+      const registry = getRegistry();
+      const projectViewManager =
+        registry?.getByWebContentsId(webContentsId)?.services.projectViewManager ??
+        getProjectViewManager();
+      // A host whose manager predates this accessor is an expected shape, not a
+      // failure — resolve to "unknown" without logging.
+      if (typeof projectViewManager?.getWorkspaceRefForWebContents !== "function") return undefined;
+      return projectViewManager.getWorkspaceRefForWebContents(webContentsId) ?? undefined;
+    } catch (err) {
+      if (!warnedWorkspaceResolveFailure) {
+        warnedWorkspaceResolveFailure = true;
+        console.warn("[MCP] Failed to resolve the dispatched workspace for a tool result:", err);
+      }
+      return undefined;
+    }
   }
 
   function sendManifestRequest(
@@ -405,9 +457,15 @@ export function createRendererBridge(
     clearTimeout(pending.timer);
     pending.destroyedCleanup?.();
     pendingDispatches.delete(payload.requestId);
+    // Snapshot the workspace identity here, synchronously, off the sender we
+    // just validated (#11536). Resolving it later — after the awaiting caller
+    // in sessionServer resumes — would race view eviction and workspace
+    // switching, and could report a workspace the dispatch never ran against.
+    const dispatchedWorkspace = resolveDispatchedWorkspace(pending.webContentsId);
     pending.resolve({
       result: payload.result,
       confirmationDecision: payload.confirmationDecision,
+      ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}),
     });
   };
 

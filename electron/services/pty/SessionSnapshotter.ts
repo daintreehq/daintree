@@ -1,3 +1,4 @@
+import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import {
   TERMINAL_SESSION_PERSISTENCE_ENABLED,
   SESSION_SNAPSHOT_DEBOUNCE_MS,
@@ -16,12 +17,13 @@ export interface SessionSnapshotterHost {
   // capture). Read as a dirty check so an unchanged buffer is not re-serialized.
   readonly contentEpoch: number;
   hasBannerMarkers(): boolean;
-  getSerializedState(): string | null;
-  getSerializedStateAsync(): Promise<string | null>;
-  // Sync string in-thread; a Promise when the buffer lives in an analysis
+  getSerializedState(): SerializedTerminalSnapshot | null;
+  getSerializedStateAsync(): Promise<SerializedTerminalSnapshot | null>;
+  // Sync snapshot in-thread; a Promise when the buffer lives in an analysis
   // worker. The sync flush paths degrade to best-effort async persistence for
   // Promise-returning hosts.
-  serializeForPersistence(): string | null | Promise<string | null>;
+  serializeForPersistence():
+    SerializedTerminalSnapshot | null | Promise<SerializedTerminalSnapshot | null>;
 }
 
 // Narrow view of a TerminalProcess-shaped owner, sufficient to build either
@@ -34,10 +36,10 @@ export interface TerminalSessionSnapshotterFactoryHost {
   readonly launchAgentId: string | undefined;
   readonly contentEpoch: number;
   readonly hasRestoreBannerMarkers: boolean;
-  getSerializedState(): string | null;
-  getSerializedStateAsync(): Promise<string | null>;
-  serializeForPersistence(): string | null;
-  serializeForPersistenceViaAnalysis(): Promise<string | null>;
+  getSerializedState(): SerializedTerminalSnapshot | null;
+  getSerializedStateAsync(): Promise<SerializedTerminalSnapshot | null>;
+  serializeForPersistence(): SerializedTerminalSnapshot | null;
+  serializeForPersistenceViaAnalysis(): Promise<SerializedTerminalSnapshot | null>;
 }
 
 export function createTerminalSessionSnapshotter(
@@ -205,21 +207,21 @@ export class SessionSnapshotter {
 
     try {
       const state = this.host.serializeForPersistence();
-      if (typeof state === "string") {
-        persistSessionSnapshotSync(this.host.id, state);
-      } else if (state) {
+      if (state instanceof Promise) {
         // Worker-backed host: the buffer serializes off-thread, so a sync
         // flush is impossible. The serialize request is already in the
         // worker's queue ahead of the free message, so this best-effort async
         // persist still captures the pre-kill buffer.
         this.persistDeferred(state);
+      } else if (state) {
+        persistSessionSnapshotSync(this.host.id, state);
       }
     } catch {
       // best-effort only
     }
   }
 
-  private persistDeferred(state: Promise<string | null>): void {
+  private persistDeferred(state: Promise<SerializedTerminalSnapshot | null>): void {
     void state
       .then((s) => {
         if (!s) return;
@@ -243,7 +245,7 @@ export class SessionSnapshotter {
 
     try {
       const raw = this.host.serializeForPersistence();
-      if (raw !== null && typeof raw === "object") {
+      if (raw instanceof Promise) {
         this.persistDeferred(raw);
         this.dirty = false;
         return;

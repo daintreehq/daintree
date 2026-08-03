@@ -44,28 +44,14 @@ import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
+import { resolveAgentLaunchKind, sanitizeTerminalName } from "@/utils/agentLaunchValidation";
 
 export { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
+// Re-exported so the hook stays the canonical import site for launch-path
+// callers; the action layer imports the pure module directly (#11547).
+export { resolveAgentLaunchKind } from "@/utils/agentLaunchValidation";
 
 const CLIPBOARD_DIR_NAME = "daintree-clipboard";
-
-/**
- * Sanitize an assistant-supplied terminal name for use as a panel title.
- * Strips ASCII control characters (an LLM could emit newlines, tabs, or ANSI
- * escape sequences), collapses internal whitespace, and trims. Returns "" when
- * nothing printable remains, which the caller treats as "no name" (falls back
- * to the default computed title with no `titleMode` pin).
- */
-function sanitizeTerminalName(raw: string): string {
-  let out = "";
-  for (const ch of raw) {
-    const code = ch.codePointAt(0) ?? 0;
-    // Drop C0 controls (0x00–0x1f) and DEL (0x7f); replace with a space so
-    // adjacent words don't fuse, then collapse the runs below.
-    out += code <= 0x1f || code === 0x7f ? " " : ch;
-  }
-  return out.replace(/\s+/g, " ").trim();
-}
 
 /**
  * Resolve the worktree a launch should target. When a `targetWorktreeId` is
@@ -162,16 +148,60 @@ export interface LaunchAgentOptions {
   name?: string;
 }
 
+/**
+ * Where a launch landed. Resolved before the panel is created, so it
+ * accompanies every non-null launch result — a caller driving several launches
+ * at once can map a terminal back to its worktree without re-resolving the
+ * target itself and reconciling afterwards (#11547).
+ */
+export interface LaunchAgentIdentity {
+  /** Resolved target worktree, or null when the launch is outside one. */
+  worktreeId: string | null;
+  /** Absolute path of the resolved worktree; null when there is none. */
+  worktreePath: string | null;
+  /** Branch of the resolved worktree; null when detached or absent. */
+  branch: string | null;
+  /** Directory the panel was created with; null when none resolved. */
+  cwd: string | null;
+}
+
+/**
+ * Build the identity reported alongside a launch. Extracted as a pure helper so
+ * the four return points in `launchAgent` share one construction and it stays
+ * testable without mounting the hook — same reason `resolveLaunchWorktree` and
+ * `resolveAgentLaunchKind` are separate.
+ *
+ * `cwd` is normalized from `""` to null: `resolveWorkspaceCwd` returns an empty
+ * string when nothing at all resolves, and main reads a falsy cwd as "use the
+ * home dir". Reporting `""` would name a directory the process never runs in.
+ *
+ * `worktreeId` is reported even when `targetWorktree` is null (the map has not
+ * initialized yet, so the id could not be looked up) because that is the id the
+ * panel is actually created with — the path and branch stay null since neither
+ * is known.
+ */
+export function buildLaunchIdentity(
+  targetWorktreeId: string | null | undefined,
+  targetWorktree: { path?: string; branch?: string } | null,
+  cwd: string
+): LaunchAgentIdentity {
+  return {
+    worktreeId: targetWorktreeId || null,
+    worktreePath: targetWorktree?.path ?? null,
+    branch: targetWorktree?.branch ?? null,
+    cwd: cwd || null,
+  };
+}
+
+export interface LaunchAgentResult extends LaunchAgentIdentity {
+  terminalId: string;
+  location: "grid" | "dock";
+  /** Atomic launch result: no PTY was started; a setup diagnostic panel was opened. */
+  spawnStatus?: "missing-cli";
+}
+
 export interface UseAgentLauncherReturn {
-  launchAgent: (
-    agentId: string,
-    options?: LaunchAgentOptions
-  ) => Promise<{
-    terminalId: string;
-    location: "grid" | "dock";
-    /** Atomic launch result: no PTY was started; a setup diagnostic panel was opened. */
-    spawnStatus?: "missing-cli";
-  } | null>;
+  launchAgent: (agentId: string, options?: LaunchAgentOptions) => Promise<LaunchAgentResult | null>;
   availability: CliAvailability;
   isCheckingAvailability: boolean;
   agentSettings: AgentSettings | null;
@@ -251,11 +281,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
     async (
       agentId: string,
       launchOptions?: LaunchAgentOptions
-    ): Promise<{
-      terminalId: string;
-      location: "grid" | "dock";
-      spawnStatus?: "missing-cli";
-    } | null> => {
+    ): Promise<LaunchAgentResult | null> => {
       if (!isElectronAvailable()) {
         console.warn("Electron API not available");
         return null;
@@ -266,9 +292,11 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       // useRef avoids the react batching window that useState would have.
       if (launchingAgentsRef.current.has(agentId)) return null;
       launchingAgentsRef.current.add(agentId);
-      markRendererPerformance("agentlaunch.begin", { agentId });
 
       try {
+        // Inside the try: a throw between the add above and the `finally` would
+        // strand the entry and leave this agentId unlaunchable for the session.
+        markRendererPerformance("agentlaunch.begin", { agentId });
         const targetWorktreeId = launchOptions?.worktreeId ?? activeWorktreeId;
         const targetWorktree = resolveLaunchWorktree(targetWorktreeId, worktreeMap, isInitialized);
 
@@ -280,6 +308,10 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             scratchPath: currentScratch?.path,
             homeDir,
           });
+
+        // Resolved once, spread into every success return so a caller learns
+        // where the launch landed without re-deriving it.
+        const launchIdentity = buildLaunchIdentity(targetWorktreeId, targetWorktree, cwd);
 
         // Handle browser pane specially
         if (agentId === "browser") {
@@ -295,7 +327,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             if (!terminalId) return null;
             const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
             const location = rawLocation === "dock" ? "dock" : "grid";
-            return { terminalId, location };
+            return { terminalId, location, ...launchIdentity };
           } catch (error) {
             logError("Failed to launch browser pane", error);
             return null;
@@ -317,16 +349,19 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             if (!terminalId) return null;
             const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
             const location = rawLocation === "dock" ? "dock" : "grid";
-            return { terminalId, location };
+            return { terminalId, location, ...launchIdentity };
           } catch (error) {
             logError("Failed to launch dev-preview pane", error);
             return null;
           }
         }
 
-        // Get agent config from registry, fall back for "terminal" type
+        // Get agent config from registry, fall back for "terminal" type.
+        // Rejects an id that resolves to no agent before any settings init,
+        // command generation, or panel creation — inside the try so the
+        // `finally` always releases the reentrancy entry.
         const agentConfig = getAgentConfig(agentId);
-        const isAgent = isRegisteredAgent(agentId);
+        const isAgent = resolveAgentLaunchKind(agentId, isRegisteredAgent(agentId)) === "agent";
 
         let command: string | undefined;
         let launchFlags: string[] | undefined;
@@ -639,6 +674,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               terminalId: gateId,
               location: gatePanel.location === "dock" ? "dock" : "grid",
               spawnStatus: "missing-cli" as const,
+              ...launchIdentity,
             };
           }
         }
@@ -649,7 +685,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           if (!terminalId) return null;
           const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
           const location = rawLocation === "dock" ? "dock" : "grid";
-          return { terminalId, location };
+          return { terminalId, location, ...launchIdentity };
         } catch (error) {
           logError(`Failed to launch ${agentId} agent`, error);
           return null;

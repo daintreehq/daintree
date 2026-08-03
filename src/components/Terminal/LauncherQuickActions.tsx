@@ -1,8 +1,11 @@
 import { useMemo } from "react";
-import { SquareTerminal, Search } from "lucide-react";
+// `FolderTree` is the file browser's own icon, imported from lucide directly
+// the same way `FileBrowserPane` does — it has no alias in the icons index.
+import { SquareTerminal, Search, FolderTree } from "lucide-react";
 import { KbdChord } from "@/components/ui/Kbd";
 import { useEffectiveCombo, useAriaKeyshortcuts } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
+import { notify } from "@/lib/notify";
 import { getLaunchOptions, type LaunchOption } from "@/components/TerminalPalette/launchOptions";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -128,6 +131,29 @@ export function LauncherQuickActions() {
     void actionService.dispatch(actionId, args, { source: "user" });
   };
 
+  // The only chip whose action can legitimately refuse: it resolves its own
+  // target, and a workspace with nothing to browse makes it throw. `dispatch`
+  // turns that into `ok: false` rather than a rejection, so without this the
+  // press would do nothing at all — the silent failure the throw exists to end.
+  // A function declaration so the retry action can name it.
+  function openFileBrowser() {
+    void actionService
+      .dispatch("worktree.openFileBrowser", undefined, { source: "user" })
+      .then((result) => {
+        if (result.ok) return;
+        notify({
+          type: "error",
+          title: "Couldn't open the file browser",
+          // Purpose-written rather than the raw error: both refusals this can
+          // hit ("No folder to browse", a worktree that no longer exists) come
+          // down to the same thing for the user, and the recovery is the same.
+          message: "No folder resolved for this workspace. Select a worktree and try again.",
+          context: { eventKind: "uiFeedback" },
+          action: { label: "Retry", onClick: openFileBrowser },
+        });
+      });
+  }
+
   return (
     <div className="flex w-full max-w-[38rem] flex-col items-center gap-2.5">
       <div className="flex w-full flex-wrap items-center justify-center gap-2">
@@ -150,6 +176,15 @@ export function LauncherQuickActions() {
           label="New terminal"
           actionId="terminal.new"
           onClick={() => dispatch("terminal.new")}
+        />
+        {/* No args: the action resolves its own target — the focused worktree,
+            or the workspace root in a scratch or worktree-less project
+            (#11482), which is exactly where this launcher is shown. */}
+        <QuickAction
+          icon={<FolderTree className="h-4 w-4" />}
+          label="Browse files"
+          actionId="worktree.openFileBrowser"
+          onClick={openFileBrowser}
         />
       </div>
       <PaletteSearchButton />

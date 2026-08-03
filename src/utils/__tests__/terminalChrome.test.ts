@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
+import { PROCESS_TOOL_REGISTRY } from "@shared/config/processToolRegistry";
 import {
   deriveTerminalChrome,
   deriveTerminalRuntimeIdentity,
@@ -79,6 +80,19 @@ describe("deriveTerminalRuntimeIdentity", () => {
 });
 
 describe("deriveTerminalChrome", () => {
+  it("labels every process tool with the label the registry declares", () => {
+    // A missing label used to surface the raw icon id as the tab's text.
+    // Comparing against the registry checks the consumer resolves through it —
+    // a hardcoded label map here would drift the moment a tool is added.
+    const actual = Object.keys(PROCESS_TOOL_REGISTRY).map(
+      (iconId) => `${iconId}=${deriveTerminalChrome({ detectedProcessId: iconId }).label}`
+    );
+    const expected = Object.entries(PROCESS_TOOL_REGISTRY).map(
+      ([iconId, config]) => `${iconId}=${config.label}`
+    );
+    expect(actual).toEqual(expected);
+  });
+
   it("returns generic terminal chrome for empty runtime state", () => {
     expect(deriveTerminalChrome()).toMatchObject({
       iconId: null,

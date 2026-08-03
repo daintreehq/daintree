@@ -109,6 +109,56 @@ describe("panelKindSerialisers", () => {
   describe("file-browser", () => {
     const deserialize = () => getDeserializer("file-browser")!;
 
+    describe("sort fields (#11620)", () => {
+      it("restores a recognized non-default sort key", () => {
+        expect(deserialize()({ id: "fb1", browserSortKey: "modified" }).browserSortKey).toBe(
+          "modified"
+        );
+      });
+
+      it("drops an unrecognized key rather than letting it reach the comparator", () => {
+        // An unknown key would order by nothing, leaving the tree in service
+        // order while the menu claimed otherwise.
+        expect(
+          deserialize()({ id: "fb1", browserSortKey: "churn" }).browserSortKey
+        ).toBeUndefined();
+        expect(deserialize()({ id: "fb1", browserSortKey: 7 }).browserSortKey).toBeUndefined();
+        expect(deserialize()({ id: "fb1", browserSortKey: {} }).browserSortKey).toBeUndefined();
+      });
+
+      it("leaves the default key absent rather than materializing it", () => {
+        // The serializer never writes "name"; restoring it as an explicit value
+        // would make the record less sparse than it was written.
+        expect(deserialize()({ id: "fb1", browserSortKey: "name" }).browserSortKey).toBeUndefined();
+      });
+
+      it("restores only a literal desc direction", () => {
+        expect(
+          deserialize()({ id: "fb1", browserSortDirection: "desc" }).browserSortDirection
+        ).toBe("desc");
+        expect(
+          deserialize()({ id: "fb1", browserSortDirection: "asc" }).browserSortDirection
+        ).toBeUndefined();
+        expect(
+          deserialize()({ id: "fb1", browserSortDirection: "sideways" }).browserSortDirection
+        ).toBeUndefined();
+      });
+
+      it("round-trips a non-default order through serialize and back", () => {
+        const panel: FileBrowserPanelData = {
+          id: "fb1",
+          kind: "file-browser",
+          title: "Files",
+          location: "grid",
+          browserSortKey: "size",
+          browserSortDirection: "desc",
+        };
+        const restored = deserialize()({ id: "fb1", ...serializeFileBrowser(panel) });
+        expect(restored.browserSortKey).toBe("size");
+        expect(restored.browserSortDirection).toBe("desc");
+      });
+    });
+
     it("keeps safe relative paths and drops everything that could escape the root", () => {
       const result = deserialize()({
         id: "fb1",
@@ -204,6 +254,37 @@ describe("panelKindSerialisers", () => {
         deserialize()({ id: "fb1", browserSidebarCollapsed: "yes" }).browserSidebarCollapsed
       ).toBeUndefined();
       expect(deserialize()({ id: "fb1" }).browserSidebarCollapsed).toBeUndefined();
+    });
+
+    it("restores a collapsed viewer only from a literal true", () => {
+      expect(
+        deserialize()({ id: "fb1", browserViewerCollapsed: true }).browserViewerCollapsed
+      ).toBe(true);
+      expect(
+        deserialize()({ id: "fb1", browserViewerCollapsed: false }).browserViewerCollapsed
+      ).toBeUndefined();
+      expect(
+        deserialize()({ id: "fb1", browserViewerCollapsed: "yes" }).browserViewerCollapsed
+      ).toBeUndefined();
+      expect(
+        deserialize()({ id: "fb1", browserViewerCollapsed: {} }).browserViewerCollapsed
+      ).toBeUndefined();
+      expect(deserialize()({ id: "fb1" }).browserViewerCollapsed).toBeUndefined();
+    });
+
+    it("keeps the two collapse bits independent rather than resolving them here", () => {
+      // "Both collapsed" is unreachable through the UI but reachable on disk, and
+      // the pane is what resolves it at read time. The deserializer must hand
+      // both bits through untouched — silently clearing one here would make the
+      // stored record disagree with what the user last chose (#11496).
+      const restored = deserialize()({
+        id: "fb1",
+        browserSidebarCollapsed: true,
+        browserViewerCollapsed: true,
+      });
+
+      expect(restored.browserSidebarCollapsed).toBe(true);
+      expect(restored.browserViewerCollapsed).toBe(true);
     });
 
     it("ignores a legacy browserShowIgnored key instead of migrating it", () => {
@@ -460,7 +541,11 @@ describe("panelKindSerialisers", () => {
           ],
           ["src", [{ name: "app.ts", path: "src/app.ts", isDirectory: false, size: 99 }]],
         ]);
-        const captured = snapshotFromListings(live, "wt-1", "");
+        const captured = snapshotFromListings(
+          live,
+          { kind: "worktree", worktreeId: "wt-1", basePath: "/repo" },
+          ""
+        );
         expect(captured).not.toBeNull();
 
         const panel: FileBrowserPanelData = {
@@ -521,5 +606,81 @@ describe("panelKindSerialisers", () => {
       expect(getDeserializer("agent")).toBeUndefined();
       expect(getDeserializer("custom-ext")).toBeUndefined();
     });
+  });
+});
+
+describe("file-browser sort survives the whole restore path (#11620)", () => {
+  // The deserializer is only the middle of the restore chain: a restored panel
+  // is rebuilt as snapshot → deserializer → panel *options* → the creation
+  // factory. A field the factory does not copy is dropped there no matter how
+  // faithfully it was persisted, which is invisible to a test that stops at the
+  // deserializer.
+  function restore(panel: Partial<FileBrowserPanelData>): Partial<FileBrowserPanelData> {
+    const saved = serializeFileBrowser({
+      id: "fb1",
+      kind: "file-browser",
+      title: "Files",
+      location: "grid",
+      ...panel,
+    });
+    const options = getDeserializer("file-browser")!({ id: "fb1", ...saved });
+    // `options` spreads last-wins, and the deserializer types `kind` as the open
+    // `PanelKind` union — pinning the discriminant after the spread is what
+    // keeps this a file-browser options object rather than widening it.
+    return createFileBrowserDefaults({
+      ...options,
+      kind: "file-browser",
+      worktreeId: "wt-1",
+    });
+  }
+
+  const KEYS = ["name", "modified", "size", "type"] as const;
+  const DIRECTIONS = ["asc", "desc"] as const;
+
+  for (const key of KEYS) {
+    for (const direction of DIRECTIONS) {
+      it(`round-trips ${key}/${direction} through serialize → deserialize → create`, () => {
+        const restored = restore({ browserSortKey: key, browserSortDirection: direction });
+        // Read the way the pane reads it, so the sparse absence of a default is
+        // treated as the default rather than as a loss.
+        expect({
+          key: restored.browserSortKey ?? "name",
+          direction: restored.browserSortDirection ?? "asc",
+        }).toEqual({ key, direction });
+      });
+    }
+  }
+
+  it("keeps the restored record sparse for the default order", () => {
+    // Handed the defaults EXPLICITLY, bypassing the serializer that would
+    // already have stripped them — otherwise a factory that wrongly
+    // materializes "name"/"asc" would still pass this.
+    const restored = createFileBrowserDefaults({
+      kind: "file-browser",
+      worktreeId: "wt-1",
+      browserSortKey: "name",
+      browserSortDirection: "asc",
+    });
+    expect("browserSortKey" in restored).toBe(false);
+    expect("browserSortDirection" in restored).toBe(false);
+  });
+
+  it("materializes a non-default order handed straight to the factory", () => {
+    // The mirror of the above: the factory must copy what it is given, not
+    // pass everything through a filter that happens to drop it.
+    expect(
+      createFileBrowserDefaults({
+        kind: "file-browser",
+        worktreeId: "wt-1",
+        browserSortKey: "type",
+        browserSortDirection: "desc",
+      })
+    ).toMatchObject({ browserSortKey: "type", browserSortDirection: "desc" });
+  });
+
+  it("restores nothing for a panel that was never sorted", () => {
+    const restored = restore({});
+    expect(restored.browserSortKey).toBeUndefined();
+    expect(restored.browserSortDirection).toBeUndefined();
   });
 });

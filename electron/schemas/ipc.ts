@@ -320,6 +320,12 @@ export const ActionContextSchema = z.object({
   focusedTerminalType: z.string().optional(),
   focusedTerminalTitle: z.string().optional(),
   isSettingsOpen: z.boolean().optional(),
+  // The active workspace is a project OR a scratch (#11076); without these an
+  // action dispatched in a scratch sees no workspace at all. This schema is a
+  // strict object, so an unlisted field is stripped rather than passed through.
+  scratchId: z.string().optional(),
+  scratchName: z.string().optional(),
+  scratchPath: z.string().optional(),
   dispatchSource: z
     .enum(["user", "keybinding", "menu", "agent", "context-menu", "plugin"])
     .optional(),
@@ -488,6 +494,11 @@ export const CopyTreeOptionsSchema = z
 export const CopyTreeGeneratePayloadSchema = z.object({
   worktreeId: z.string().min(1),
   options: CopyTreeOptionsSchema,
+  // Response shape, not a generation setting — see CopyTreeGeneratePayload.
+  // Note there is deliberately no caller-supplied output path here or in
+  // CopyTreeOptionsSchema: the destination is chosen by the main process, so a
+  // tool call can never turn into an arbitrary file write.
+  includeContent: z.boolean().optional(),
 });
 
 export const CopyTreeGenerateAndCopyFilePayloadSchema = z.object({
@@ -545,16 +556,43 @@ export const CopyTreeGetFileTreePayloadSchema = z.object({
 
 // Both strings are capped: they cross the boundary as untrusted input and end
 // up in path joins, which should never see a megabyte-long value.
+//
+// `worktreeId` is optional but still `.min(1)` when present: absent selects the
+// sender's own workspace root (#11482), while an empty string is a malformed
+// worktree request and must fail rather than silently widen to that root.
 export const FileBrowserListDirectoryPayloadSchema = z.object({
-  worktreeId: z.string().min(1).max(4096),
+  worktreeId: z.string().min(1).max(4096).optional(),
   dirPath: z.string().max(4096).optional(),
 });
 
 // Batch-capped: one call validates the directory candidates of a single
 // hovered terminal line, which is a handful of tokens, never hundreds.
 export const FileBrowserStatPathsPayloadSchema = z.object({
-  worktreeId: z.string().min(1).max(4096),
+  worktreeId: z.string().min(1).max(4096).optional(),
   paths: z.array(z.string().min(1).max(4096)).max(32),
+});
+
+// Capped at the widest tree the file browser polls in one sample: its root plus
+// the directories it has expanded. A caller with more expanded than this sends
+// the closest ones to the root — the cap is what keeps a restored 500-directory
+// panel from turning one poll into 500 stats.
+export const FileWatchFingerprintPayloadSchema = z.object({
+  rootPath: z
+    .string()
+    .min(1)
+    .max(4096)
+    // eslint-disable-next-line no-control-regex
+    .regex(/^[^\x00]*$/, "Null bytes not allowed"),
+  paths: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(4096)
+        // eslint-disable-next-line no-control-regex
+        .regex(/^[^\x00]*$/, "Null bytes not allowed")
+    )
+    .max(32),
 });
 
 export const FileReadPayloadSchema = z.object({
