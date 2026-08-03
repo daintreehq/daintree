@@ -103,6 +103,12 @@ export function resolveLaunchWorktree<T>(
  * The id and the worktree are returned together because they must agree: a
  * caller holding the raw inherited id alongside a normalized worktree would tag
  * panels and scope presets to a worktree that does not exist.
+ *
+ * An explicit `""` normalizes to null rather than travelling as an empty
+ * string. Every consumer already reduces it the same way — `|| undefined` for
+ * panel options, `|| null` in `buildLaunchIdentity`, a falsy guard in
+ * `resolveEffectivePresetId` — so nothing observable changes, and the returned
+ * id is then always either a real id or null.
  */
 export function resolveLaunchTarget<T>(
   explicitWorktreeId: string | undefined,

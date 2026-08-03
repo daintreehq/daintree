@@ -87,6 +87,25 @@ describe("resolveLaunchTarget", () => {
     });
   });
 
+  it("drops an unknown inherited id against a populated map, not just an empty one", () => {
+    // Switching into a different git-backed project carries the previous
+    // project's id across. Keying the decision off an empty map instead of the
+    // failed lookup would leave that case throwing.
+    expect(resolveLaunchTarget(undefined, "other-project-wt", map(["new-main"]), true)).toEqual({
+      worktreeId: null,
+      worktree: null,
+    });
+  });
+
+  it("retains an unresolved explicit id before initialization instead of throwing", () => {
+    // Symmetric with the inherited pre-init case, and it must not quietly
+    // borrow the inherited id the caller declined to use.
+    expect(resolveLaunchTarget("wt-9", "wt-1", map(["wt-1"]), false)).toEqual({
+      worktreeId: "wt-9",
+      worktree: null,
+    });
+  });
+
   it("retains an unresolved inherited id until the map is authoritative", () => {
     // Pre-init the panel is still created with this id, so reporting it stays
     // accurate — only the worktree is unknown.
@@ -111,8 +130,9 @@ describe("resolveLaunchTarget", () => {
   });
 
   it("normalizes an empty explicit id to no target rather than throwing", () => {
-    // Matches the `id || undefined` the panel options apply downstream, so the
-    // reported id and the panel's own can never disagree.
+    // The MCP launch schema is `z.string().optional()`, so "" reaches here.
+    // Every consumer already reduces it to absent, and it must not fall through
+    // to the inherited id — the caller did supply a value, however useless.
     expect(resolveLaunchTarget("", "wt-1", map(["wt-1"]), true)).toEqual({
       worktreeId: null,
       worktree: null,

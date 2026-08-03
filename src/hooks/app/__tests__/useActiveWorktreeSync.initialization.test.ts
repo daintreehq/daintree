@@ -44,6 +44,13 @@ vi.mock("@/hooks/app/useHomeDir", () => ({
   useHomeDir: () => ({ homeDir: "/home" }),
 }));
 
+// Any case that starts from a live selection reaches the sync effect, which
+// pushes the active worktree over the port. jsdom aliases globalThis to window,
+// so stubbing the global satisfies the hook's `window.electron` read.
+vi.stubGlobal("electron", {
+  worktreePort: { request: vi.fn(() => Promise.resolve()) },
+});
+
 const featureWorktree = {
   id: "feature",
   name: "feature/test-branch",
@@ -156,14 +163,33 @@ describe("useActiveWorktreeSync on a worktree-less workspace", () => {
     mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: true });
 
     const { rerender } = renderHook(() => useActiveWorktreeSync());
-    // A fresh array each poll, as the store hands out: the effect re-runs even
-    // though nothing about the workspace changed.
+    // A distinct array, so the dep list changes and the effect genuinely reruns
+    // rather than being skipped.
     mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: true });
     rerender();
 
     // setActiveWorktree persists and re-runs terminal policy on every call, so
     // clearing a selection that is already null is a write for no reason.
     expect(mocks.selectionState.setActiveWorktree).not.toHaveBeenCalled();
+  });
+
+  it("clears the selection when the last live worktree disappears", () => {
+    // The other direction into empty: the workspace was authoritative and
+    // populated all along, so nothing about initialization changes here.
+    mocks.selectionState.activeWorktreeId = featureWorktree.id;
+    mocks.useWorktrees.mockReturnValue({
+      worktrees: [featureWorktree],
+      isInitialized: true,
+    });
+
+    const { rerender } = renderHook(() => useActiveWorktreeSync());
+    expect(mocks.selectionState.setActiveWorktree).not.toHaveBeenCalled();
+
+    mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: true });
+    rerender();
+
+    expect(mocks.selectionState.setActiveWorktree).toHaveBeenCalledExactlyOnceWith(null);
+    expect(mocks.selectionState.selectWorktree).not.toHaveBeenCalled();
   });
 
   it("keeps a deleted row selected when it outlives the last live worktree", () => {
