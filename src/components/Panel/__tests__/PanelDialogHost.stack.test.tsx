@@ -37,29 +37,22 @@ function StatefulPane({ id, isFocused }: { id: string; isFocused?: boolean }) {
   );
 }
 
-// `useSyncExternalStore` throws on a getSnapshot returning a fresh reference
-// each call, so the snapshot and each definition it hands back are stable. The
-// Proxy keeps the previous stub's "every kind resolves to StatefulPane"
-// behaviour without enumerating kinds. Hoisted so the mock factory — which
-// vitest lifts above the module body — cannot observe it in its TDZ.
-const definitionsSnapshot = vi.hoisted(() => {
-  const cache = new Map<string, { component: unknown }>();
-  return new Proxy({} as Record<string, { component: unknown }>, {
-    get: (_target, kind: string) => {
-      let entry = cache.get(kind);
-      if (!entry) {
-        entry = { component: StatefulPane };
-        cache.set(kind, entry);
-      }
-      return entry;
+// A real object over the shared registry's kinds rather than a Proxy, so `in`
+// and `Object.hasOwn` behave. Built once and reused: `useSyncExternalStore`
+// throws on a getSnapshot that returns a fresh reference each call.
+vi.mock("@/panels/registry", async () => {
+  const shared = await import("@shared/config/panelKindRegistry");
+  let snapshot: Record<string, { component: unknown }> | undefined;
+  return {
+    subscribeToPanelKindDefinitions: () => () => {},
+    getPanelKindDefinitionsSnapshot: () => {
+      snapshot ??= Object.fromEntries(
+        shared.getPanelKindIds().map((id) => [id, { component: StatefulPane }])
+      );
+      return snapshot;
     },
-  });
+  };
 });
-
-vi.mock("@/panels/registry", () => ({
-  subscribeToPanelKindDefinitions: () => () => {},
-  getPanelKindDefinitionsSnapshot: () => definitionsSnapshot,
-}));
 
 // The real ErrorBoundary on purpose: every frame's boundary is keyed on the
 // shared `requestSeq`, which bumps on every push. It only re-keys its children

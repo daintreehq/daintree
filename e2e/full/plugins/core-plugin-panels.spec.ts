@@ -281,14 +281,19 @@ test.describe.serial("Core: Plugin panels contribution", () => {
 
     await expect(panel.getByText("Rich panel view mounted")).toBeVisible({ timeout: T_LONG });
 
-    // Unregistering must reach the mounted panel. Pre-fix the stale cache kept
-    // the real view rendered here and this assertion failed.
-    await setPluginEnabled(ctx.window, "daintree.rich", false);
-    await expect(unavailable).toBeVisible({ timeout: T_LONG });
+    try {
+      // Unregistering must reach the mounted panel. Pre-fix the stale cache kept
+      // the real view rendered here and this assertion failed.
+      await setPluginEnabled(ctx.window, "daintree.rich", false);
+      await expect(unavailable).toBeVisible({ timeout: T_LONG });
+    } finally {
+      // Leave the plugin enabled even if the assertion above fails, so a
+      // failure here can't strand the shared context mid-toggle.
+      await setPluginEnabled(ctx.window, "daintree.rich", true);
+    }
 
     // The #11636 direction: the kind returns while the panel is already mounted
     // and showing the placeholder, and the same panel resolves to the real view.
-    await setPluginEnabled(ctx.window, "daintree.rich", true);
     await waitForRichPluginReady(ctx.app, ctx.window);
 
     await expect(panel.getByText("Rich panel view mounted")).toBeVisible({ timeout: T_LONG });
