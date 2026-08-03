@@ -179,13 +179,9 @@ describe("worktreeRevealCoordinator", () => {
   });
 
   it("does not stack parallel loops for duplicate attach notifications", async () => {
-    let releaseAttach: (() => void) | undefined;
-    waitForAttachSettledMock.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseAttach = resolve;
-        })
-    );
+    // Park every discharge on an attach wait that never resolves, so a second
+    // loop would have to show up as a second waitForAttachSettled call.
+    waitForAttachSettledMock.mockImplementation(() => new Promise<void>(() => {}));
 
     const coordinator = createWorktreeRevealCoordinator();
     coordinator.replace(1, ["a"]);

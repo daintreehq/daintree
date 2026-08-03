@@ -81,7 +81,7 @@ type MockTerminal = {
   id: string;
   kind?: "terminal" | "browser" | "dev-preview" | "notes";
   worktreeId?: string;
-  location?: "grid" | "dock" | "trash" | "background";
+  location?: "grid" | "dock" | "trash" | "background" | "overlay" | "dialog";
   hasPty?: boolean;
 };
 type MockTabGroup = {
