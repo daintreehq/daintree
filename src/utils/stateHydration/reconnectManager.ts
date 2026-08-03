@@ -7,6 +7,8 @@ export const RECONNECT_TIMEOUT_MS = 2000;
 export type ReconnectOutcome =
   | { status: "found"; terminal: NonNullable<Awaited<ReturnType<typeof terminalClient.reconnect>>> }
   | { status: "not_found" }
+  /** Alive, but owned by another workspace (#11652) — the saved id must not be reused. */
+  | { status: "conflict" }
   | { status: "timeout" }
   | { status: "error"; error: unknown };
 
@@ -21,6 +23,10 @@ export async function reconnectWithTimeout(
     if (prefetchedResult.exists && prefetchedResult.hasPty) {
       logHydrationInfo(`Reconnect prefetch hit for ${terminalId} - terminal exists in backend`);
       return { status: "found", terminal: prefetchedResult };
+    }
+    if (prefetchedResult.conflict) {
+      logWarn(`Reconnect prefetch: terminal ${terminalId} is owned by another workspace`);
+      return { status: "conflict" };
     }
     logHydrationInfo(
       `Reconnect prefetch: terminal ${terminalId} not found (exists=${prefetchedResult.exists}, hasPty=${prefetchedResult.hasPty})`
@@ -43,6 +49,11 @@ export async function reconnectWithTimeout(
         `Reconnect fallback succeeded for ${terminalId} - terminal exists in backend but was missed by getForProject`
       );
       return { status: "found", terminal: reconnectedTerminal };
+    }
+
+    if (reconnectedTerminal?.conflict) {
+      logWarn(`Reconnect fallback: terminal ${terminalId} is owned by another workspace`);
+      return { status: "conflict" };
     }
 
     logHydrationInfo(
