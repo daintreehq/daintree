@@ -717,23 +717,28 @@ export class TerminalResizeController {
     // apply atomically: resize xterm only when its grid actually drifted, and
     // always (re)assert the PTY size so the two agree.
     this.cancelPendingResize(id);
+    // Drain held ingest bytes at the OUTGOING grid before re-wrapping, the same
+    // invariant commitResize enforces at the other choke point. Bytes held by
+    // ingest backpressure were emitted for the current grid; parsing them after
+    // xterm adopts a new one lands their cursor moves and erases on the wrong
+    // rows, which no later reflow can undo. The automatic callers never met
+    // this hazard because the streaming gate above already turned them away —
+    // a forced resync (#11638) runs precisely when a backlog is most likely,
+    // so the flush has to be explicit here.
+    let heldBytesFlushed = true;
     if (managed.terminal.cols !== cols || managed.terminal.rows !== rows) {
-      // Drain held ingest bytes at the OUTGOING grid before re-wrapping, the
-      // same invariant commitResize enforces at the other choke point. Bytes
-      // held by ingest backpressure were emitted for the current grid; parsing
-      // them after xterm adopts a new one lands their cursor moves and erases
-      // on the wrong rows, which no later reflow can undo. The automatic
-      // callers never met this hazard because the streaming gate above already
-      // turned them away — a forced resync (#11638) runs precisely when a
-      // backlog is most likely, so the flush has to be explicit here.
-      if (!this.flushHeldBytesBeforeResize(id)) {
-        // Backlog exceeded the sync-flush budget and stayed queued; let it
-        // drain against the new grid rather than stall ingest behind it.
-        this.deps.dataBuffer.resumeFlush(id);
-      }
+      heldBytesFlushed = this.flushHeldBytesBeforeResize(id);
       this.resizeTerminal(managed, cols, rows);
     }
     terminalClient.resize(id, cols, rows);
+    // An over-budget backlog resumes only AFTER the resize, exactly as
+    // commitResize orders it. Resuming first would drain it inline into xterm
+    // and then let resize()'s synchronous flushSync keep consuming whatever
+    // notifyWriteComplete appends behind it — one unyielding task that defeats
+    // the sync-flush budget the over-budget branch exists to enforce.
+    if (!heldBytesFlushed) {
+      this.deps.dataBuffer.resumeFlush(id);
+    }
     this.pinToBottomAfterResize(managed);
     return true;
   }

@@ -2400,6 +2400,66 @@ describe("TerminalResizeController", () => {
       expect(managed.fitAddon.fit).not.toHaveBeenCalled();
     });
 
+    it("drains held ingest bytes at the OUTGOING grid before a forced re-wrap", () => {
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      (managed as { pendingWrites?: number }).pendingWrites = 3;
+
+      const order: string[] = [];
+      const dataBuffer = {
+        flushForTerminal: vi.fn(() => order.push("flush")),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 1024),
+        resumeFlush: vi.fn(() => order.push("resume")),
+      };
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: dataBuffer as any,
+      });
+      (managed.terminal.resize as ReturnType<typeof vi.fn>).mockImplementation(() =>
+        order.push("resize")
+      );
+
+      expect(controller.reconcileGeometryFresh("term-1", { force: true })).toBe(true);
+
+      // Bytes held by backpressure were emitted for the OLD grid. Parsing them
+      // after xterm adopts the new one puts their cursor moves and erases on
+      // the wrong rows, and no later reflow undoes that.
+      expect(order).toEqual(["flush", "resize"]);
+    });
+
+    it("resumes an over-budget backlog only AFTER the forced resize", () => {
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      (managed as { pendingWrites?: number }).pendingWrites = 3;
+
+      const order: string[] = [];
+      const dataBuffer = {
+        flushForTerminal: vi.fn(() => order.push("flush")),
+        resetForTerminal: vi.fn(),
+        // Past the sync-flush budget: the backlog stays queued rather than
+        // being drained inline.
+        getQueuedBytes: vi.fn(() => 64 * 1024 * 1024),
+        resumeFlush: vi.fn(() => order.push("resume")),
+      };
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: dataBuffer as any,
+      });
+      (managed.terminal.resize as ReturnType<typeof vi.fn>).mockImplementation(() =>
+        order.push("resize")
+      );
+
+      expect(controller.reconcileGeometryFresh("term-1", { force: true })).toBe(true);
+
+      // Never flushed inline (that is what the budget is for), and resumed only
+      // after the resize. Resuming first would drain the backlog into xterm and
+      // then let resize()'s synchronous flushSync keep consuming what
+      // notifyWriteComplete appends behind it — one unyielding task.
+      expect(dataBuffer.flushForTerminal).not.toHaveBeenCalled();
+      expect(order).toEqual(["resize", "resume"]);
+    });
+
     it("force does not reflow a live alt-screen TUI (#10805 survives the bypass)", () => {
       const managed = createManagedTerminal();
       managed.isAltBuffer = true;

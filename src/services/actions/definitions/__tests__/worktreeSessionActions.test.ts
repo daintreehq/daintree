@@ -548,4 +548,31 @@ describe("worktree.sessions.resetRenderers", () => {
 
     expect(terminalInstanceServiceMock.resetRenderer).not.toHaveBeenCalled();
   });
+
+  it("serializes overlapping sweeps instead of interleaving them", async () => {
+    setPanelState(PANES);
+    const run = setupActions();
+
+    // Two dispatches in flight at once. Each paces itself at one synchronous
+    // reflow per frame, but if their loops interleave, several land in the same
+    // frame — the pile-up the pacing exists to prevent. Queueing (not
+    // superseding) also means neither worktree is left half-repaired.
+    const first = run(
+      "worktree.sessions.resetRenderers",
+      { worktreeId: "wt-1" },
+      { dispatchSource: "menu" }
+    );
+    const second = run(
+      "worktree.sessions.resetRenderers",
+      { worktreeId: "wt-2" },
+      { dispatchSource: "menu" }
+    );
+    await Promise.all([first, second]);
+
+    const called = terminalInstanceServiceMock.resetRenderer.mock.calls.map(([id]) => id);
+    // Every target of BOTH sweeps ran, and wt-2's single pane comes after all
+    // of wt-1's rather than being spliced between them.
+    expect([...called].sort()).toEqual([...ptyTargets, "b1"].sort());
+    expect(called.indexOf("b1")).toBe(called.length - 1);
+  });
 });

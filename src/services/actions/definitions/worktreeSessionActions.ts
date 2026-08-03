@@ -16,6 +16,14 @@ const clearHistoryArgsSchema = z.object({
   confirmed: z.boolean().optional(),
 });
 
+// Serializes renderer sweeps across dispatches. Each sweep paces itself at one
+// synchronous reflow per frame, but two overlapping dispatches — a double press,
+// or two worktrees — would interleave their loops and put several back in the
+// same frame, which is the pile-up the pacing exists to prevent. Queue instead
+// of superseding: a sweep of another worktree must still finish, not be
+// abandoned half-repaired.
+let rendererSweepChain: Promise<void> = Promise.resolve();
+
 export function registerWorktreeSessionActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -143,10 +151,14 @@ export function registerWorktreeSessionActions(
       // precisely when a whole worktree looks garbled, so an unchunked loop
       // would pile every reflow into one long task. The id list is snapshotted
       // above; a pane closed mid-sweep just no-ops in the service.
-      for (const [index, id] of targets.entries()) {
-        if (index > 0) await nextFrame();
-        terminalInstanceService.resetRenderer(id, { force });
-      }
+      const sweep = rendererSweepChain.then(async () => {
+        for (const [index, id] of targets.entries()) {
+          if (index > 0) await nextFrame();
+          terminalInstanceService.resetRenderer(id, { force });
+        }
+      });
+      rendererSweepChain = sweep.catch(() => undefined);
+      await sweep;
     },
   }));
 
