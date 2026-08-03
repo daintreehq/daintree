@@ -10,18 +10,25 @@ vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
 }));
 
+const { handleBackendCrash, handleBackendRecovery } = vi.hoisted(() => ({
+  handleBackendCrash: vi.fn(),
+  handleBackendRecovery: vi.fn(),
+}));
+
 vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: {
-    handleBackendRecovery: vi.fn(),
-  },
+  terminalInstanceService: { handleBackendCrash, handleBackendRecovery },
 }));
 
 const backendReadyHandlers = vi.hoisted(() => [] as Array<() => void>);
+const backendCrashedHandlers = vi.hoisted(() => [] as Array<(details: unknown) => void>);
 vi.mock("@/controllers", () => {
   const noopSub = () => () => {};
   return {
     terminalRegistryController: {
-      onBackendCrashed: vi.fn(noopSub),
+      onBackendCrashed: vi.fn((handler: (details: unknown) => void) => {
+        backendCrashedHandlers.push(handler);
+        return () => {};
+      }),
       onBackendRecovering: vi.fn(noopSub),
       onBackendReady: vi.fn((handler: () => void) => {
         backendReadyHandlers.push(handler);
@@ -38,6 +45,14 @@ function getBackendReadyHandler(): () => void {
   setupBackendHealthListeners();
   const handler = backendReadyHandlers.at(-1);
   if (!handler) throw new Error("onBackendReady handler was not registered");
+  return handler;
+}
+
+function getBackendCrashedHandler(): (details: unknown) => void {
+  backendCrashedHandlers.length = 0;
+  setupBackendHealthListeners();
+  const handler = backendCrashedHandlers.at(-1);
+  if (!handler) throw new Error("onBackendCrashed handler was not registered");
   return handler;
 }
 
@@ -58,7 +73,21 @@ const ptyBase = {
 
 beforeEach(() => {
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  vi.clearAllMocks();
   vi.useFakeTimers();
+});
+
+describe("onBackendCrashed — stale PTY geometry echoes dropped (#11641)", () => {
+  it("invalidates every pane's echo at crash time, not at recovery", () => {
+    getBackendCrashedHandler()({ crashType: "SIGNAL_TERMINATED" });
+
+    // The renderer keeps resizing panes for the whole outage, so waiting for
+    // onBackendReady would leave a dead PTY's geometry comparable against a
+    // live xterm grid for exactly the window the logs matter in.
+    expect(handleBackendCrash).toHaveBeenCalledTimes(1);
+    expect(handleBackendRecovery).not.toHaveBeenCalled();
+    expect(usePanelStore.getState().backendStatus).toBe("disconnected");
+  });
 });
 
 describe("onBackendReady — stale flow state cleared on host recovery (#9899)", () => {

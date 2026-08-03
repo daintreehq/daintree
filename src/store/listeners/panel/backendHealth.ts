@@ -92,6 +92,11 @@ export function setupBackendHealthListeners(): DisposableStore {
           recoveryTimer = null;
         }
 
+        // The PTYs died with the host, so the geometry each pane last echoed
+        // describes a process that no longer exists. Panes keep resizing for the
+        // whole outage and no echo can arrive to correct the record (#11641).
+        terminalInstanceService.handleBackendCrash();
+
         usePanelStore.setState({
           backendStatus: "disconnected",
           lastCrashType: normalizeCrashType(details?.crashType),

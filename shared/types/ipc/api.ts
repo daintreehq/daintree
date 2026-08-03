@@ -161,6 +161,7 @@ import type {
   BroadcastWriteResultPayload,
   FdLeakWarningPayload,
   TerminalReliabilityMetricPayload,
+  TerminalResizeResult,
 } from "../pty-host.js";
 import type {
   FileSearchPayload,
@@ -304,6 +305,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     releaseWorkerIngestPort(id: string): Promise<void>;
     onStatus(callback: (data: TerminalStatusPayload) => void): () => void;
     onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
+    /**
+     * Geometry the PTY actually holds after each resize it processed. Compare
+     * against the live xterm grid to detect a split neither side can see alone.
+     */
+    onResizeResult(callback: (id: string, result: TerminalResizeResult) => void): () => void;
     onResourceMetrics(
       callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void
     ): () => void;

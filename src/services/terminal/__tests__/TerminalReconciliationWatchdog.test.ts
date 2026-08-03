@@ -18,6 +18,7 @@ import {
   type ReconciliationWatchdogDeps,
 } from "../TerminalReconciliationWatchdog";
 import type { ManagedTerminal } from "../types";
+import { MAX_TERMINAL_GRID_DIMENSION } from "@shared/types/terminal";
 
 vi.mock("@/utils/logger", () => ({
   logDebug: vi.fn(),
@@ -1129,6 +1130,41 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.resumeFlush).not.toHaveBeenCalled();
     });
 
+    it("records the PTY half of the chain alongside xterm's grid (#11641)", () => {
+      const managed = makeManaged();
+      setGrid(managed, { cols: 80, rows: 24 }, { cols: 80, rows: 24 });
+      managed.lastPtyResizeResult = {
+        launchGeneration: 2,
+        requestedCols: 120,
+        requestedRows: 40,
+        appliedCols: 120,
+        appliedRows: 40,
+        outcome: "applied",
+      };
+      managed.ptyGeometryDivergenceCount = 3;
+      instances.set("t1", managed);
+      watchdog = new TerminalReconciliationWatchdog(makeDeps(instances));
+
+      (managed.terminal.element as HTMLElement).dispatchEvent(
+        new Event("pointerdown", { bubbles: true })
+      );
+
+      // A pane wrapping at the wrong width is a broken layer like any other,
+      // and the click is the only moment both grids are captured together —
+      // `setFocused`'s wake destroys the evidence right after.
+      expect(logDebug).toHaveBeenCalledWith(
+        expect.stringContaining("pointerdown chain snapshot"),
+        expect.objectContaining({
+          xtermCols: 80,
+          xtermRows: 24,
+          ptyResizeOutcome: "applied",
+          ptyAppliedCols: 120,
+          ptyAppliedRows: 40,
+          ptyGeometryDivergenceCount: 3,
+        })
+      );
+    });
+
     it("ignores pointerdowns outside any terminal host element", () => {
       instances.set("t1", makeManaged());
       const deps = makeDeps(instances);
@@ -1532,5 +1568,260 @@ describe("TerminalReconciliationWatchdog — cached project view (#11212)", () =
     vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 5);
 
     expect(deps.setVisible).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalReconciliationWatchdog — applied-PTY geometry divergence (#11641)", () => {
+  let watchdog: TerminalReconciliationWatchdog | undefined;
+  let instances: Map<string, ManagedTerminal>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    instances = new Map();
+    setDocumentVisibility("visible");
+    __resetSidebarLayoutTransitionLockForTests();
+    __resetSidebarHydrationLockForTests();
+    unlockSidebarHydration();
+  });
+
+  afterEach(() => {
+    watchdog?.dispose();
+    watchdog = undefined;
+    document.body.innerHTML = "";
+    __resetSidebarLayoutTransitionLockForTests();
+    __resetSidebarHydrationLockForTests();
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  function ptyDivergenceWarnings() {
+    return vi
+      .mocked(logWarn)
+      .mock.calls.filter((call) => String(call[0]).includes("PTY grid disagrees with xterm"));
+  }
+
+  function makeResult(
+    overrides: Partial<ManagedTerminal["lastPtyResizeResult"] & object> = {}
+  ): NonNullable<ManagedTerminal["lastPtyResizeResult"]> {
+    return {
+      launchGeneration: 1,
+      requestedCols: 120,
+      requestedRows: 40,
+      appliedCols: 120,
+      appliedRows: 40,
+      outcome: "applied",
+      ...overrides,
+    };
+  }
+
+  it("reports a PTY grid that disagrees with the live xterm grid", () => {
+    const managed = makeManaged();
+    // The PTY wraps at 120 while xterm parses at 80 — cursor-addressed output
+    // lands on the wrong rows and nothing recovers it.
+    setGrid(managed, { cols: 80, rows: 40 }, { cols: 80, rows: 40 });
+    managed.lastPtyResizeResult = makeResult();
+    instances.set("t1", managed);
+    watchdog = new TerminalReconciliationWatchdog(makeDeps(instances));
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+    const warnings = ptyDivergenceWarnings();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.[1]).toMatchObject({ appliedCols: 120, xtermCols: 80 });
+    expect(managed.ptyGeometryDivergenceCount).toBe(1);
+  });
+
+  it("reports a persistent divergence once per episode, not once per sweep", () => {
+    const managed = makeManaged();
+    setGrid(managed, { cols: 80, rows: 40 }, { cols: 80, rows: 40 });
+    managed.lastPtyResizeResult = makeResult();
+    instances.set("t1", managed);
+    watchdog = new TerminalReconciliationWatchdog(makeDeps(instances));
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 5);
+
+    // An interval-driven sweep that logged every tick would flood the log
+    // buffer for the entire life of a split pane.
+    expect(ptyDivergenceWarnings()).toHaveLength(1);
+    expect(managed.ptyGeometryDivergenceCount).toBe(1);
+  });
+
+  it("counts a new episode when the divergence changes shape", () => {
+    const managed = makeManaged();
+    setGrid(managed, { cols: 80, rows: 40 }, { cols: 80, rows: 40 });
+    managed.lastPtyResizeResult = makeResult();
+    instances.set("t1", managed);
+    watchdog = new TerminalReconciliationWatchdog(makeDeps(instances));
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    managed.lastPtyResizeResult = makeResult({ appliedCols: 200, requestedCols: 200 });
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+    expect(ptyDivergenceWarnings()).toHaveLength(2);
+    expect(managed.ptyGeometryDivergenceCount).toBe(2);
+  });
+
+  it("re-reports a divergence that recurs after the grids agreed", () => {
+    const managed = makeManaged();
+    setGrid(managed, { cols: 80, rows: 40 }, { cols: 80, rows: 40 });
+    managed.lastPtyResizeResult = makeResult();
+    instances.set("t1", managed);
+    watchdog = new TerminalReconciliationWatchdog(makeDeps(instances));
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    // Converged: the signature must clear so a recurrence is a fresh episode
+    // rather than being swallowed as a duplicate forever.
+    managed.lastPtyResizeResult = makeResult({ appliedCols: 80, requestedCols: 80 });
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    expect(ptyDivergenceWarnings()).toHaveLength(1);
+
+    managed.lastPtyResizeResult = makeResult();
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    expect(ptyDivergenceWarnings()).toHaveLength(2);
+    expect(managed.ptyGeometryDivergenceCount).toBe(2);
+  });
+
+  it("stays silent when the PTY and xterm grids agree", () => {
+    const managed = makeManaged();
+    setGrid(managed, { cols: 120, rows: 40 }, { cols: 120, rows: 40 });
+    managed.lastPtyResizeResult = makeResult();
+    instances.set("t1", managed);
+    watchdog = new TerminalReconciliationWatchdog(makeDeps(instances));
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 3);
+
+    expect(ptyDivergenceWarnings()).toHaveLength(0);
+    expect(managed.ptyGeometryDivergenceCount).toBeUndefined();
+  });
+
+  it("stays silent when no live PTY geometry was reported", () => {
+    const managed = makeManaged();
+    setGrid(managed, { cols: 80, rows: 40 }, { cols: 80, rows: 40 });
+    // An exited/rejected resize carries no applied geometry — there is nothing
+    // to compare, so it must not be read as a divergence against 80x40.
+    managed.lastPtyResizeResult = makeResult({
+      outcome: "exited",
+      appliedCols: null,
+      appliedRows: null,
+    });
+    instances.set("t1", managed);
+    watchdog = new TerminalReconciliationWatchdog(makeDeps(instances));
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+    expect(ptyDivergenceWarnings()).toHaveLength(0);
+  });
+
+  it("compares against the live xterm grid, not a queued resize target", () => {
+    const managed = makeManaged();
+    setGrid(managed, { cols: 80, rows: 40 }, { cols: 80, rows: 40 });
+    // latestCols names the target of a resize that has not committed. Reading
+    // it as xterm's geometry would call a real split converged.
+    managed.latestCols = 120;
+    managed.latestRows = 40;
+    managed.lastPtyResizeResult = makeResult();
+    instances.set("t1", managed);
+    watchdog = new TerminalReconciliationWatchdog(makeDeps(instances));
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+    expect(ptyDivergenceWarnings()).toHaveLength(1);
+  });
+});
+
+describe("TerminalReconciliationWatchdog — fit diagnostic in production (#11641)", () => {
+  let watchdog: TerminalReconciliationWatchdog | undefined;
+  let instances: Map<string, ManagedTerminal>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // Vitest runs with import.meta.env.DEV === true, so without forcing it off
+    // these tests would pass just as happily against the old
+    // `if (!import.meta.env?.DEV) return;` gate — i.e. they would not actually
+    // prove the diagnostic was promoted.
+    vi.stubEnv("DEV", false);
+    instances = new Map();
+    setDocumentVisibility("visible");
+    __resetSidebarLayoutTransitionLockForTests();
+    __resetSidebarHydrationLockForTests();
+    unlockSidebarHydration();
+  });
+
+  afterEach(() => {
+    watchdog?.dispose();
+    watchdog = undefined;
+    document.body.innerHTML = "";
+    __resetSidebarLayoutTransitionLockForTests();
+    __resetSidebarHydrationLockForTests();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  function fitWarnings() {
+    return vi
+      .mocked(logWarn)
+      .mock.calls.filter((call) => String(call[0]).includes("disagrees with container"));
+  }
+
+  it("reports a container/xterm divergence once per episode", () => {
+    const managed = makeManaged();
+    setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+    instances.set("t1", managed);
+    watchdog = new TerminalReconciliationWatchdog(
+      makeDeps(instances, { reconcileRevealGeometry: vi.fn() })
+    );
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 4);
+
+    expect(fitWarnings()).toHaveLength(1);
+  });
+
+  it("does not treat a proposal past the shared ceiling as a divergence", () => {
+    const managed = makeManaged();
+    // xterm cannot exceed the shared ceiling, so an unbounded proposal above it
+    // would otherwise read as a permanent, unfixable disagreement.
+    setGrid(
+      managed,
+      { cols: MAX_TERMINAL_GRID_DIMENSION, rows: 40 },
+      { cols: MAX_TERMINAL_GRID_DIMENSION + 500, rows: 40 }
+    );
+    instances.set("t1", managed);
+    watchdog = new TerminalReconciliationWatchdog(makeDeps(instances));
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+    expect(fitWarnings()).toHaveLength(0);
+  });
+
+  it("keeps reporting after a measurement failure rather than treating it as convergence", () => {
+    const managed = makeManaged();
+    setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+    instances.set("t1", managed);
+    watchdog = new TerminalReconciliationWatchdog(
+      makeDeps(instances, { reconcileRevealGeometry: vi.fn() })
+    );
+
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    expect(fitWarnings()).toHaveLength(1);
+
+    // A throwing measurement proves nothing about the grid. Clearing the
+    // signature here would make the next tick re-report the same episode.
+    // Models a detached element: the proposal resolves, reading it throws.
+    setGrid(
+      managed,
+      { cols: 137, rows: 40 },
+      {
+        get cols(): number {
+          throw new Error("element detached");
+        },
+        rows: 40,
+      }
+    );
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+    setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    expect(fitWarnings()).toHaveLength(1);
   });
 });

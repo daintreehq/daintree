@@ -2,6 +2,7 @@ import { Terminal } from "@xterm/xterm";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { getEffectiveScrollbarWidth } from "@/config/xtermConfig";
 import { logError, logWarn } from "@/utils/logger";
 import type { ManagedTerminal, TerminalResyncOptions } from "./types";
@@ -95,18 +96,36 @@ function toFitPx(px: number): number {
  *
  * `Math.max(2, …)` matches FitAddon's floor and absorbs a container narrower
  * than the gutter itself.
+ *
+ * Clamped here rather than only where the number is applied: a measurement is
+ * copied into `latestCols`/`latestRows` AND handed to `resizeTerminal`, and a
+ * value that only the latter clamps leaves the target cache describing a grid
+ * xterm can never reach — every `terminal.cols === latestCols` convergence
+ * check then fails forever (#11641).
  */
 function colsForWidth(terminal: Terminal, widthPx: number, cellWidth: number): number {
   const availableWidth = toFitPx(widthPx) - getEffectiveScrollbarWidth(terminal.options);
-  return Math.max(2, Math.floor(availableWidth / cellWidth));
+  return Math.max(2, normalizeTerminalGridDimension(availableWidth / cellWidth));
 }
 
 /**
  * Rows a container of `heightPx` can hold. The scrollbar is never reserved
- * against height — FitAddon subtracts it from width alone.
+ * against height — FitAddon subtracts it from width alone. Clamped for the same
+ * reason as {@link colsForWidth}.
  */
 function rowsForHeight(heightPx: number, cellHeight: number): number {
-  return Math.max(1, Math.floor(toFitPx(heightPx) / cellHeight));
+  return normalizeTerminalGridDimension(toFitPx(heightPx) / cellHeight);
+}
+
+/** FitAddon's own measurement, clamped for the same reason {@link colsForWidth} is. */
+function normalizeProposal(proposal: { cols: number; rows: number }): {
+  cols: number;
+  rows: number;
+} {
+  return {
+    cols: normalizeTerminalGridDimension(proposal.cols),
+    rows: normalizeTerminalGridDimension(proposal.rows),
+  };
 }
 
 /**
@@ -241,7 +260,7 @@ export class TerminalResizeController {
         return null;
       }
 
-      const { cols, rows } = proposal;
+      const { cols, rows } = normalizeProposal(proposal);
       const buffer = managed.terminal.buffer.active;
       const wasAtBottom = buffer.viewportY >= buffer.baseY;
       managed.lastWidth = rect.width;
@@ -379,7 +398,7 @@ export class TerminalResizeController {
           return null;
         }
 
-        const { cols, rows } = proposal;
+        const { cols, rows } = normalizeProposal(proposal);
         managed.lastWidth = width;
         managed.lastHeight = height;
         managed.latestCols = cols;
@@ -622,11 +641,19 @@ export class TerminalResizeController {
    * agent keeps producing output sized for the grid the user can see.
    */
   resizeTerminal(managed: ManagedTerminal, cols: number, rows: number): void {
+    // Normalize here and in `terminalClient.resize` with the same function, so
+    // xterm and the PTY land on identical dimensions no matter which call site
+    // or transport carried them. Clamping per-layer instead is what let the two
+    // grids settle at different widths and never reconcile (#11641). Idempotent
+    // for the internal callers — the measurement helpers above already clamp, so
+    // this only bites geometry handed in from outside the controller.
+    const normalizedCols = normalizeTerminalGridDimension(cols);
+    const normalizedRows = normalizeTerminalGridDimension(rows);
     if (managed.isSerializedRestoreInProgress) {
-      managed.pendingRestoreGeometry = { cols, rows };
+      managed.pendingRestoreGeometry = { cols: normalizedCols, rows: normalizedRows };
       return;
     }
-    managed.terminal.resize(cols, rows);
+    managed.terminal.resize(normalizedCols, normalizedRows);
   }
 
   /**
@@ -745,8 +772,7 @@ export class TerminalResizeController {
     let rows: number;
     const proposal = managed.fitAddon.proposeDimensions?.();
     if (proposal && proposal.cols > 1 && proposal.rows > 1) {
-      cols = proposal.cols;
-      rows = proposal.rows;
+      ({ cols, rows } = normalizeProposal(proposal));
     } else {
       const cellDims = getXtermCellDimensions(managed.terminal);
       if (!cellDims) return false;

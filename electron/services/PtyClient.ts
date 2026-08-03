@@ -552,6 +552,18 @@ export class PtyClient extends EventEmitter {
             ledger.recordClose(id, generation, `spawn-failed:${result.error?.code ?? "UNKNOWN"}`);
           }
         },
+        // Resize is a live-state op: only the current incarnation's geometry is
+        // meaningful. `recordResize` rejects anything but the current
+        // generation, so an echo that crossed the kill/respawn boundary is
+        // dropped here instead of overwriting the successor's applied dims.
+        // `isCurrent` rather than `recordResize`: routing must not have a side
+        // effect. The echo now fires on every resize, and a burst after a
+        // kill/respawn would otherwise push one anomaly per rejected echo,
+        // evicting genuinely useful lifecycle anomalies from the bounded ring.
+        acceptResizeResult: (id, result) => {
+          if (result.launchGeneration === null) return false;
+          return getLifecycleLedger().isCurrent(id, result.launchGeneration);
+        },
       },
       logWarn: (message) => console.warn(message),
     };

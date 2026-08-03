@@ -26,6 +26,7 @@ import type {
   PtyHostEvent,
   PtyHostSpawnOptions,
   SpawnResult,
+  TerminalResizeResult,
   TerminalResourceBatchPayload,
   TerminalStatusPayload,
 } from "../../../shared/types/pty-host.js";
@@ -77,6 +78,14 @@ export interface PtyEventRouterCallbacks {
    * effect.
    */
   onSpawnResult?: (id: string, result: SpawnResult) => void;
+  /**
+   * Optional gate for `resize-result`. Returns false when the echo belongs to a
+   * superseded incarnation of `id`, so a resize completing after a kill/respawn
+   * never reports a dead PTY's geometry as the successor's (#10950). PtyClient
+   * implements it against the lifecycle ledger; when unwired the router forwards
+   * every result.
+   */
+  acceptResizeResult?: (id: string, result: TerminalResizeResult) => boolean;
 }
 
 export interface PtyEventRouterDeps {
@@ -320,6 +329,23 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
         }
       }
       emitter.emit("spawn-result", spawnResultEvent.id, spawnResultEvent.result);
+      return true;
+    }
+
+    case "resize-result": {
+      const resizeEvent: { id: string; result: TerminalResizeResult } = event;
+      if (callbacks.acceptResizeResult) {
+        let accepted = false;
+        try {
+          accepted = callbacks.acceptResizeResult(resizeEvent.id, resizeEvent.result);
+        } catch (err) {
+          deps.logWarn(
+            `[PtyClient] acceptResizeResult threw for ${resizeEvent.id}: ${String(err)}`
+          );
+        }
+        if (!accepted) return true;
+      }
+      emitter.emit("resize-result", resizeEvent.id, resizeEvent.result);
       return true;
     }
 

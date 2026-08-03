@@ -8,8 +8,10 @@ import serialize, { type SerializeAddon as SerializeAddonType } from "@xterm/add
 const { SerializeAddon } = serialize;
 import unicode11 from "@xterm/addon-unicode11";
 const { Unicode11Addon } = unicode11;
+import type { TerminalResizeResult } from "../../../shared/types/pty-host.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { applyXtermReflowFastpath } from "../../../shared/utils/xtermReflowFastpath.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import type { ImagePathProbe } from "./ImagePathProbe.js";
@@ -125,6 +127,20 @@ export interface TerminalProcessDependencies {
    * legacy in-thread path (the DAINTREE_DISABLE_ANALYSIS_WORKERS fallback).
    */
   analysisWorkerPool?: AnalysisWorkerPool | null;
+}
+
+/**
+ * Read one dimension node-pty holds. Returns null when the getter throws or
+ * reports nonsense (the pty can be torn down between the resize and the
+ * read-back) — an unknown geometry must never be reported as a known one.
+ */
+function readPtyDimension(read: () => number, fallback: number | null): number | null {
+  try {
+    const value = read();
+    return Number.isFinite(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export class TerminalProcess {
@@ -1099,7 +1115,29 @@ export class TerminalProcess {
     await this.inputController.performSubmit(text);
   }
 
-  resize(cols: number, rows: number): void {
+  /**
+   * Geometry node-pty holds right now, without touching it. Lets a caller that
+   * sized the PTY outside {@link resize} — spawn adopting a buffered resize as
+   * its boot geometry — report the same read-back rather than echoing back the
+   * dimensions it asked for (#11641). A dimension reads `null` when the getter
+   * throws or reports nonsense.
+   */
+  readPtyGeometry(): { cols: number | null; rows: number | null } {
+    const terminal = this.terminalInfo;
+    if (terminal.isExited) return { cols: null, rows: null };
+    return {
+      cols: readPtyDimension(() => terminal.ptyProcess.cols, null),
+      rows: readPtyDimension(() => terminal.ptyProcess.rows, null),
+    };
+  }
+
+  /**
+   * Apply a resize and report what the PTY ended up holding. Every path returns
+   * a result — including the no-op shortcut and the throwing path — because the
+   * caller cannot otherwise distinguish "the PTY is at the geometry you asked
+   * for" from "the PTY never moved" (#11641).
+   */
+  resize(cols: number, rows: number): Omit<TerminalResizeResult, "launchGeneration"> {
     if (
       !Number.isFinite(cols) ||
       !Number.isFinite(rows) ||
@@ -1109,7 +1147,13 @@ export class TerminalProcess {
       rows !== Math.floor(rows)
     ) {
       console.warn(`Invalid terminal dimensions for ${this.id}: ${cols}x${rows}`);
-      return;
+      return {
+        requestedCols: cols,
+        requestedRows: rows,
+        appliedCols: null,
+        appliedRows: null,
+        outcome: "rejected",
+      };
     }
 
     const terminal = this.terminalInfo;
@@ -1124,18 +1168,60 @@ export class TerminalProcess {
       } catch (error) {
         console.error(`Failed to resize terminal ${this.id}:`, error);
       }
-      return;
+      return {
+        requestedCols: cols,
+        requestedRows: rows,
+        appliedCols: null,
+        appliedRows: null,
+        outcome: "exited",
+      };
     }
+
+    let currentCols: number | null = null;
+    let currentRows: number | null = null;
     try {
-      const currentCols = terminal.ptyProcess.cols;
-      const currentRows = terminal.ptyProcess.rows;
+      currentCols = terminal.ptyProcess.cols;
+      currentRows = terminal.ptyProcess.rows;
 
       if (currentCols === cols && currentRows === rows) {
-        return;
+        return {
+          requestedCols: cols,
+          requestedRows: rows,
+          appliedCols: currentCols,
+          appliedRows: currentRows,
+          outcome: "unchanged",
+        };
       }
 
       terminal.ptyProcess.resize(cols, rows);
+    } catch (error) {
+      // A throw here means the PTY did NOT move — report the geometry it still
+      // holds so the renderer sees the real split rather than the request.
+      console.error(`Failed to resize terminal ${this.id}:`, error);
+      return {
+        requestedCols: cols,
+        requestedRows: rows,
+        appliedCols: currentCols,
+        appliedRows: currentRows,
+        outcome: "failed",
+        error: formatErrorMessage(error, "pty resize failed"),
+      };
+    }
 
+    // Read back before the analysis resize: a throw from analysis must not
+    // relabel a PTY resize that genuinely landed.
+    const appliedCols = readPtyDimension(() => terminal.ptyProcess.cols, null);
+    const appliedRows = readPtyDimension(() => terminal.ptyProcess.rows, null);
+    // node-pty's Windows backend QUEUES resize until ConPTY signals ready and
+    // only updates its cached dims inside that deferred callback, so a
+    // pre-ready resize leaves the getters reporting the OLD grid. Reporting
+    // that as `applied` would be a lie in the dangerous direction: the watchdog
+    // would compare a stale geometry against xterm, see agreement, and miss the
+    // split once the queued resize finally lands. Confirm the read-back matches
+    // what we asked for; when it doesn't, say we don't know rather than guess.
+    const confirmed = appliedCols === cols && appliedRows === rows;
+
+    try {
       this.analysis.resize(cols, rows);
       if (this.analysis.kind === "worker") {
         terminal.contentEpoch++;
@@ -1143,6 +1229,14 @@ export class TerminalProcess {
     } catch (error) {
       console.error(`Failed to resize terminal ${this.id}:`, error);
     }
+
+    return {
+      requestedCols: cols,
+      requestedRows: rows,
+      appliedCols: confirmed ? appliedCols : null,
+      appliedRows: confirmed ? appliedRows : null,
+      outcome: confirmed ? "applied" : "deferred",
+    };
   }
 
   gracefulShutdown(): Promise<string | null> {

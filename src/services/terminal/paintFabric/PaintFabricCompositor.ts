@@ -1023,6 +1023,10 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.planes().forEach((plane) => plane.handleBackendRecovery());
   }
 
+  handleBackendCrash(): void {
+    this.planes().forEach((plane) => plane.handleBackendCrash());
+  }
+
   // Option updates fold into the captured create-args so a later transfer
   // rebuilds the terminal with its CURRENT options, not its original ones.
   updateOptions(id: string, options: Partial<Terminal["options"]>): void {

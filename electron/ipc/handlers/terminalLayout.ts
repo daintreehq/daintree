@@ -1,4 +1,5 @@
 import { projectStore } from "../../services/ProjectStore.js";
+import { isValidTerminalGeometry } from "../../../shared/types/terminal.js";
 import {
   TerminalSnapshotSchema,
   filterValidTerminalEntries,
@@ -76,7 +77,8 @@ export function sanitizeFieldEdits(value: unknown): IdArrayFieldEdit[] | undefin
 
 /**
  * Validate and sanitize terminal size records.
- * Entries with invalid dimensions (non-finite, non-integer, out of 1–500 range) are dropped.
+ * Entries whose geometry a terminal could not actually have been captured at
+ * are dropped.
  */
 export function sanitizeTerminalSizes(
   sizes: Record<string, unknown>
@@ -92,16 +94,7 @@ export function sanitizeTerminalSizes(
       typeof (size as { rows: unknown }).rows === "number"
     ) {
       const { cols, rows } = size as { cols: number; rows: number };
-      if (
-        Number.isFinite(cols) &&
-        Number.isFinite(rows) &&
-        Number.isInteger(cols) &&
-        Number.isInteger(rows) &&
-        cols > 0 &&
-        cols <= 500 &&
-        rows > 0 &&
-        rows <= 500
-      ) {
+      if (isValidTerminalGeometry({ cols, rows })) {
         sanitized[terminalId] = { cols, rows };
       }
     }

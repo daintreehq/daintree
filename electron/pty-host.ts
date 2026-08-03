@@ -1294,6 +1294,13 @@ ptyManager.on("error", (id: string, error: string) => {
   sendEvent({ type: "error", id, error });
 });
 
+ptyManager.on(
+  "resize-result",
+  (id: string, result: import("../shared/types/pty-host.js").TerminalResizeResult) => {
+    sendEvent({ type: "resize-result", id, result });
+  }
+);
+
 // Forward internal event bus events to Main
 events.on("agent:state-changed", (payload) => {
   // Only forward if terminalId is defined

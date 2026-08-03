@@ -5,6 +5,10 @@ import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 const shared = vi.hoisted(() => ({
   terminals: new Map<string, MockTerminalProcess>(),
   created: [] as MockTerminalProcess[],
+  // Geometry the fake node-pty reports back, when it must differ from the dims
+  // it was asked for (ConPTY queues a pre-ready resize and keeps reporting the
+  // old grid). `null` = the PTY holds exactly what it was spawned with.
+  ptyGeometryOverride: null as { cols: number | null; rows: number | null } | null,
   trashCallbacks: new Map<string, (id: string) => void>(),
   eventsEmit: vi.fn(),
   computeSpawnContext: vi.fn(),
@@ -54,9 +58,21 @@ class MockTerminalProcess {
     this.info.wasKilled = true;
   });
   resize = vi.fn((cols: number, rows: number) => {
+    const unchanged = this.info.cols === cols && this.info.rows === rows;
     this.info.cols = cols;
     this.info.rows = rows;
+    return {
+      requestedCols: cols,
+      requestedRows: rows,
+      appliedCols: cols,
+      appliedRows: rows,
+      outcome: unchanged ? ("unchanged" as const) : ("applied" as const),
+    };
   });
+  readPtyGeometry = vi.fn(
+    (): { cols: number | null; rows: number | null } =>
+      shared.ptyGeometryOverride ?? { cols: this.info.cols, rows: this.info.rows }
+  );
   setSabModeEnabled = vi.fn();
   dispose = vi.fn();
   getActivityTier = vi.fn(() => "active" as const);
@@ -218,6 +234,7 @@ describe("PtyManager lifecycle ledger", () => {
     shared.terminals.clear();
     shared.created.length = 0;
     shared.trashCallbacks.clear();
+    shared.ptyGeometryOverride = null;
     shared.computeSpawnContext.mockReturnValue({
       env: {},
       shell: "/bin/zsh",
@@ -242,6 +259,109 @@ describe("PtyManager lifecycle ledger", () => {
 
     expect(shared.created[0]?.options.cols).toBe(132);
     expect(shared.created[0]?.options.rows).toBe(43);
+  });
+
+  it("stamps a resize result with the incarnation that applied it (#11641)", () => {
+    const manager = new PtyManager();
+    const results: Array<{ id: string; launchGeneration: number | null }> = [];
+    manager.on("resize-result", (id: string, result: { launchGeneration: number | null }) => {
+      results.push({ id, launchGeneration: result.launchGeneration });
+    });
+
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
+    manager.resize("t1", 120, 40);
+    manager.kill("t1");
+    shared.created[0]!.callbacks.onExit("t1", 0);
+    manager.spawn("t1", spawnOptions({ launchGeneration: 2 }));
+    manager.resize("t1", 130, 45);
+
+    // Main filters stale echoes by generation, so a result that reports the
+    // wrong incarnation would be attributed to the successor.
+    expect(results).toEqual([
+      { id: "t1", launchGeneration: 1 },
+      { id: "t1", launchGeneration: 2 },
+    ]);
+  });
+
+  it("defers a buffered resize's echo until spawn gives it an incarnation (#11641)", () => {
+    const manager = new PtyManager();
+    const results: Array<{ launchGeneration: number | null; appliedCols: number | null }> = [];
+    manager.on(
+      "resize-result",
+      (_id: string, result: { launchGeneration: number | null; appliedCols: number | null }) => {
+        results.push({
+          launchGeneration: result.launchGeneration,
+          appliedCols: result.appliedCols,
+        });
+      }
+    );
+
+    // Nothing has launched yet, so there is no incarnation to attribute the
+    // geometry to.
+    manager.resize("t1", 132, 43);
+    expect(results).toEqual([]);
+
+    // These buffered dims BECOME the PTY's boot geometry without passing
+    // through resize(). Staying silent here would leave the renderer with no
+    // applied geometry at all for a terminal whose first grid came from the
+    // buffer, so a divergence at boot would go unseen.
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
+    expect(results).toEqual([{ launchGeneration: 1, appliedCols: 132 }]);
+  });
+
+  it("reads the boot geometry back instead of echoing the request (#11641)", () => {
+    const manager = new PtyManager();
+    const results: unknown[] = [];
+    manager.on("resize-result", (_id: string, result: unknown) => results.push(result));
+
+    // The backend queued the boot geometry and still reports the old grid.
+    // Claiming `applied` here would manufacture agreement with xterm and hide
+    // the very split the echo exists to expose.
+    shared.ptyGeometryOverride = { cols: 80, rows: 24 };
+    manager.resize("t1", 132, 43);
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        outcome: "deferred",
+        requestedCols: 132,
+        requestedRows: 43,
+        appliedCols: null,
+        appliedRows: null,
+      }),
+    ]);
+  });
+
+  it("emits no echo for a spawn that did not consume a buffered resize (#11641)", () => {
+    const manager = new PtyManager();
+    const results: unknown[] = [];
+    manager.on("resize-result", (...args: unknown[]) => results.push(args));
+
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
+
+    expect(results).toEqual([]);
+  });
+
+  it("forwards the outcome and applied geometry, not just the generation (#11641)", () => {
+    const manager = new PtyManager();
+    const results: unknown[] = [];
+    manager.on("resize-result", (_id: string, result: unknown) => results.push(result));
+
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
+    manager.resize("t1", 120, 40);
+    // Re-asserting the geometry the PTY already holds must still report it —
+    // the dedup shortcut emits no SIGWINCH, so silence here is what would let a
+    // stuck PTY go undetected.
+    manager.resize("t1", 120, 40);
+    // Out of range at the trust boundary: the direct MessagePort transport
+    // reaches this method without passing through any other validation.
+    manager.resize("t1", 40.5, 10);
+
+    expect(results).toEqual([
+      expect.objectContaining({ outcome: "applied", appliedCols: 120, requestedCols: 120 }),
+      expect.objectContaining({ outcome: "unchanged", appliedCols: 120 }),
+      expect.objectContaining({ outcome: "rejected", appliedCols: null, requestedCols: 40.5 }),
+    ]);
   });
 
   it("drops a buffered resize stamped by a previous incarnation", () => {
