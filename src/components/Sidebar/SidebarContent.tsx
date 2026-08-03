@@ -1071,9 +1071,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     };
   }, []);
 
-  // Fleet-eligible terminals inside the currently visible worktrees, split so an
-  // arm/disarm elsewhere only re-walks the unarmed tally rather than re-scanning
-  // every panel. Drives the QuickStateFilterBar arm affordance.
+  // Arm-eligible agent terminals inside the currently visible worktrees, split
+  // so an arm/disarm elsewhere only re-walks the unarmed tally rather than
+  // re-scanning every panel. Drives the QuickStateFilterBar arm affordance,
+  // which is agent-scoped like the state-filter presets beside it (#11637).
   const filterArmEligibleIds = useMemo(() => {
     const worktreeIdSet = new Set(filteredWorktrees.map((w) => w.id));
     if (worktreeIdSet.size === 0) return EMPTY_ELIGIBLE_IDS;
@@ -1597,9 +1598,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   // Compact arm affordance pinned to the QuickStateFilterBar's trailing edge —
   // replaces the former full-width banner button. Enabled whenever the visible
-  // worktrees still hold unarmed fleet-eligible terminals; with "All" selected
-  // and no filters that means "arm everything". Otherwise it rests dimmed and
+  // worktrees still hold unarmed agent terminals; with "All" selected and no
+  // filters that means "arm every agent". Otherwise it rests dimmed and
   // disabled so the layout stays stable and the affordance stays discoverable.
+  // Plain shells are excluded here (#11637) — they stay armable individually
+  // and via the header fleet picker's broad "arm all".
   const filterArmEligibleCount = filterArmEligibleIds.length;
   const canArmMatching = filterArmUnarmedCount > 0;
   const armNoun = filterArmUnarmedCount === 1 ? "terminal" : "terminals";

@@ -1503,7 +1503,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Arm all eligible terminals whose worktree is in the provided set — sidebar 'Arm N matching' affordance",
+    "description": "Arm all eligible agent terminals whose worktree is in the provided set — sidebar 'Arm N matching' affordance",
     "examples": undefined,
     "id": "fleet.armMatchingFilter",
     "keywords": undefined,

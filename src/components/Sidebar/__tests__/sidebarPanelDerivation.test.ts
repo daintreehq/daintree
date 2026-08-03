@@ -106,6 +106,46 @@ describe("sidebarPanelDerivation selectors", () => {
     // A panel whose runtimeStatus has crossed into "exited" is not arm-eligible.
     expect(eligible.exited).toBeUndefined();
   });
+
+  it("fleet eligibility excludes plain shells so the sidebar arm count is agent-scoped", () => {
+    // #11637: the count behind the quick-filter arm affordance fed on the broad
+    // terminal predicate, so shells inflated "Arm all N terminals" and got armed.
+    // `agentPanel` defaults launchAgentId to "claude", so the shell must clear
+    // every identity source or it stays agent-capable and proves nothing.
+    const state = makeState({
+      agent: agentPanel({ id: "agent", worktreeId: "wt-1", runtimeStatus: "running" }),
+      shell: agentPanel({
+        id: "shell",
+        worktreeId: "wt-1",
+        runtimeStatus: "running",
+        launchAgentId: undefined,
+        detectedAgentId: undefined,
+        runtimeIdentity: undefined,
+        agentState: undefined,
+      }),
+    });
+
+    const eligible = selectSidebarFleetEligibleWorktreeById(state);
+    expect(eligible.agent).toBe("wt-1");
+    expect(eligible.shell).toBeUndefined();
+  });
+
+  it("fleet eligibility excludes ex-agent shells whose live detection was cleared", () => {
+    const state = makeState({
+      exAgent: agentPanel({
+        id: "exAgent",
+        worktreeId: "wt-1",
+        runtimeStatus: "running",
+        launchAgentId: undefined,
+        detectedAgentId: undefined,
+        runtimeIdentity: undefined,
+        agentState: undefined,
+        everDetectedAgent: true,
+      }),
+    });
+
+    expect(selectSidebarFleetEligibleWorktreeById(state).exAgent).toBeUndefined();
+  });
 });
 
 describe("computePanelStateByWorktree", () => {

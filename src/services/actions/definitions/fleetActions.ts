@@ -402,7 +402,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     id: "fleet.armMatchingFilter",
     title: "Fleet: Arm Terminals Matching Filter",
     description:
-      "Arm all eligible terminals whose worktree is in the provided set — sidebar 'Arm N matching' affordance",
+      "Arm all eligible agent terminals whose worktree is in the provided set — sidebar 'Arm N matching' affordance",
     category: "terminal",
     kind: "command",
     danger: "safe",
