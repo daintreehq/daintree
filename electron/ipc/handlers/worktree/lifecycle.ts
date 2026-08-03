@@ -7,7 +7,7 @@ import { projectStore } from "../../../services/ProjectStore.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { WorktreeDeletePayload } from "../../../types/index.js";
-import type { WorktreeState } from "../../../../shared/types/worktree.js";
+import type { WorktreeState, WorktreeListResult } from "../../../../shared/types/worktree.js";
 import { fileSearchService } from "../../../services/FileSearchService.js";
 import { gitServiceCache } from "../../../services/GitServiceCache.js";
 import { getSoundService } from "../../../services/getSoundService.js";
@@ -80,6 +80,39 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
       project.path,
       senderProjectId
     )) as WorktreeState[];
+  };
+
+  /**
+   * `get-all` plus the host's own "is there a repository here" verdict (#11650).
+   *
+   * Hydration needs both in one round trip: the list alone cannot say whether
+   * an empty answer means "folder with no repository" or "host still
+   * registering", and the project row's `gitBacked` column cannot either
+   * (NULL there means both "real repository" and "never classified"). Every
+   * unresolved case below answers `gitBacked: null` — the same "unknown, keep
+   * saved state" sentinel `[]` carries — because a `false` would tell the
+   * renderer to discard a real repository's worktree state during the very
+   * boot race these guards exist for.
+   */
+  const handleWorktreeGetAllWithStatus = async (ctx: IpcContext): Promise<WorktreeListResult> => {
+    const unknown: WorktreeListResult = { worktrees: [], gitBacked: null };
+    if (!deps.worktreeService) {
+      return unknown;
+    }
+    const senderProjectId = ctx.projectId;
+    if (senderProjectId === null) {
+      return unknown;
+    }
+    const project = projectStore.getProjectById(senderProjectId);
+    if (!project) {
+      return unknown;
+    }
+    const { states, gitBacked } =
+      await deps.worktreeService.getAllStatesWithGitBackedForProjectAsync(
+        project.path,
+        senderProjectId
+      );
+    return { worktrees: states as WorktreeState[], gitBacked };
   };
 
   const handleWorktreeRefresh = async (worktreeId?: string): Promise<void> => {
@@ -287,6 +320,9 @@ export function registerWorktreeLifecycleHandlers(deps: HandlerDependencies): ()
     name: "worktreeLifecycle",
     ops: {
       getAll: op(CHANNELS.WORKTREE_GET_ALL, handleWorktreeGetAll, { withContext: true }),
+      getAllWithStatus: op(CHANNELS.WORKTREE_GET_ALL_WITH_STATUS, handleWorktreeGetAllWithStatus, {
+        withContext: true,
+      }),
       refresh: op(CHANNELS.WORKTREE_REFRESH, handleWorktreeRefresh),
       setActive: opValidated(
         CHANNELS.WORKTREE_SET_ACTIVE,

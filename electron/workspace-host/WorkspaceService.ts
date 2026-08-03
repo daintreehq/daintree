@@ -2064,6 +2064,12 @@ export class WorkspaceService {
       epoch: this.epoch,
       seq: this.seq,
       lastAcknowledgedMutationIds: [...this.acknowledgedMutations],
+      // Rides along with the snapshot so a caller learns *why* the list is
+      // empty in the same round trip (#11650). `loadProject` sets this from a
+      // live `checkIsRepo` probe of the folder, so it stays correct for a
+      // project registered as a repository whose `.git` was since deleted —
+      // the case the persisted `gitBacked` column silently gets wrong.
+      gitBacked: this.gitBacked,
     });
   }
 

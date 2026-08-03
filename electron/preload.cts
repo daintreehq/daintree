@@ -1096,6 +1096,8 @@ function buildElectronApi(): ElectronAPI {
     worktree: {
       getAll: () => _unwrappingInvoke(CHANNELS.WORKTREE_GET_ALL),
 
+      getAllWithStatus: () => _unwrappingInvoke(CHANNELS.WORKTREE_GET_ALL_WITH_STATUS),
+
       refresh: (worktreeId?: string) => _unwrappingInvoke(CHANNELS.WORKTREE_REFRESH, worktreeId),
 
       refreshPullRequests: () => _unwrappingInvoke(CHANNELS.WORKTREE_PR_REFRESH),

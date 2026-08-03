@@ -300,8 +300,16 @@ export interface PanelRestoreContext {
    * workspace. Without this the app-global saved `activeWorktreeId` (and any
    * id a previous run persisted onto a panel) restores panels into a worktree
    * bucket the grid never renders: a live PTY with no visible panel.
+   *
+   * A promise because only the workspace host can distinguish a folder with no
+   * repository from one whose host has not reported yet, and the project row's
+   * `gitBacked` column answers NULL for both a real repository and one never
+   * classified (#11650). Awaiting costs nothing: every consumer below already
+   * sits behind an await of `worktreesPromise`, which resolves from the same
+   * fetch. Resolves `true` whenever the answer is unknown, so the boot race
+   * keeps its saved state (#11234).
    */
-  workspaceHasWorktrees: boolean;
+  workspaceHasWorktreesPromise: Promise<boolean>;
   projectRoot: string;
   agentSettings: AgentSettings | undefined;
   clipboardDirectory: string | undefined;
@@ -367,7 +375,7 @@ export async function restorePanelsPhase(
     prefetchedReconnectResults,
     terminalSizes,
     activeWorktreeId,
-    workspaceHasWorktrees,
+    workspaceHasWorktreesPromise,
     projectRoot,
     agentSettings,
     clipboardDirectory,
@@ -426,7 +434,7 @@ export async function restorePanelsPhase(
     // workspace's worktree, and a saved id could only be one a buggy earlier run
     // stamped on. Normalize to none — the worktree-less bucket the grid renders
     // when nothing is selected.
-    if (!workspaceHasWorktrees) return undefined;
+    if (!(await workspaceHasWorktreesPromise)) return undefined;
     const known = await getKnownWorktreeIds();
     // Only re-home onto the active worktree when it is itself live. With a
     // complete, authoritative list (#11387) an activeWorktreeId absent from
@@ -785,16 +793,20 @@ export async function restorePanelsPhase(
                 return;
               }
               logHydrationInfo(`Recreating ${kind} panel: ${saved.id}`);
+              const hasWorktrees = await workspaceHasWorktreesPromise;
               const nonPtyArgs = buildArgsForNonPtyRecreation(
                 saved,
                 kind,
                 projectRoot || "",
-                activeWorktreeId
+                // The builder falls back to this when the panel has no saved id
+                // of its own, so a worktree-less workspace has to withhold it
+                // here rather than only clear the result below.
+                hasWorktrees ? activeWorktreeId : null
               );
               // Same normalization the PTY paths get from
               // `resolveRestoredWorktreeId`: this builder keeps `saved.worktreeId`
               // untouched, so a worktree-less workspace needs it cleared here too.
-              if (!workspaceHasWorktrees) nonPtyArgs.worktreeId = undefined;
+              if (!hasWorktrees) nonPtyArgs.worktreeId = undefined;
               const nonPtyId = await addPanel(nonPtyArgs);
               restoredIdsByIndex.set(capturedIndex, nonPtyId);
             }
@@ -937,6 +949,7 @@ export async function restorePanelsPhase(
     // is awaited once; if it resolves to null or hasn't loaded, orphans fall
     // back to activeWorktreeId so they still appear in the grid.
     const worktreesForInfer = await worktreesPromise;
+    const workspaceHasWorktrees = await workspaceHasWorktreesPromise;
 
     const restoreOrphan = async (terminal: (typeof orphanedTerminals)[number]): Promise<void> => {
       try {

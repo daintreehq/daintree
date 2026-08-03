@@ -266,17 +266,43 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     // Whether this view's workspace can have git worktrees at all. A scratch has
     // no project row behind it, and a folder opened without git has one that is
     // explicitly not git-backed (#11405) — neither can ever enumerate a worktree.
-    // `isGitBackedProject` reads absence as git-backed (legacy rows carry no
-    // discriminator), so the null check has to be its own clause. Every use of
-    // the saved `appState.activeWorktreeId` below is gated on this: that value is
-    // one app-global field shared by every workspace, so in a worktree-less view
-    // it names whichever worktree the last git-backed project left behind.
-    const workspaceHasWorktrees = currentProject != null && isGitBackedProject(currentProject);
-
-    const worktreesPromise = worktreeClient.getAll().catch((error) => {
+    // Every use of the saved `appState.activeWorktreeId` below is gated on this:
+    // that value is one app-global field shared by every workspace, so in a
+    // worktree-less view it names whichever worktree the last git-backed project
+    // left behind.
+    //
+    // The project row alone cannot answer this. `isGitBackedProject` reads a
+    // missing discriminator as git-backed, and the column is NULL both for a
+    // real repository (a successful probe deliberately stores NULL) and for a
+    // folder that was never classified — including every row predating migration
+    // 0008, which added the column with no backfill. A folder with no `.git`
+    // behind such a row passed this check and adopted the foreign worktree
+    // anyway (#11650), which is exactly what the guard was written to prevent.
+    // So the row only supplies the fast, synchronous *negative* cases below; the
+    // authoritative answer comes from the workspace host, which probes the
+    // folder itself and is therefore also right about a project registered as a
+    // repository whose `.git` has since been deleted (#11649).
+    const statusPromise = worktreeClient.getAllWithStatus().catch((error) => {
       logWarn("Failed to prefetch worktrees during hydration", { error });
       return null;
     });
+
+    const worktreesPromise = statusPromise.then((status) => status?.worktrees ?? null);
+
+    // Resolved rather than synchronous, because the host is the only party that
+    // can distinguish "no repository" from "not reported yet". Costs nothing:
+    // every consumer already sits behind an await of the same fetch (see the
+    // call sites in panelRestorePhase and the selection block below), so this
+    // does not serialize panel restore behind worktree enumeration.
+    //
+    // Unknown stays permissive. A host that never became ready, a failed fetch
+    // and a host predating the field all answer `gitBacked: null`, and reading
+    // any of those as "no worktrees" would strip a real repository's saved
+    // selection during the boot race #11234 exists for.
+    const workspaceHasWorktreesPromise: Promise<boolean> =
+      currentProject == null || !isGitBackedProject(currentProject)
+        ? Promise.resolve(false)
+        : statusPromise.then((status) => status?.gitBacked !== false);
 
     // Each of these rides along in the batched hydrate payload when the main
     // process is new enough; the standalone IPC calls only fire as a fallback
@@ -452,11 +478,14 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         // Fetch terminal sizes for restoration
         const terminalSizes = await terminalSizesPromise;
 
-        // Withheld from a worktree-less workspace rather than merely left
-        // unselected later: restore re-homes worktree-less and stale-worktree
-        // panels onto it, so passing it through would stamp another workspace's
-        // worktree onto this one's panels.
-        const activeWorktreeId = workspaceHasWorktrees ? (appState.activeWorktreeId ?? null) : null;
+        // Passed through raw and withheld inside `restorePanelsPhase` instead of
+        // being zeroed here: whether this workspace may adopt it is only known
+        // once the host answers, and every consumer there already awaits that
+        // fetch. Withheld rather than merely left unselected, because restore
+        // re-homes worktree-less and stale-worktree panels onto it — letting it
+        // through would stamp another workspace's worktree onto this one's
+        // panels.
+        const activeWorktreeId = appState.activeWorktreeId ?? null;
         const projectPresetsByAgent = await projectPresetsPromise;
 
         // Seed the persistence cache so the first save after launch can
@@ -503,7 +532,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           prefetchedReconnectResults,
           terminalSizes,
           activeWorktreeId,
-          workspaceHasWorktrees,
+          workspaceHasWorktreesPromise,
           projectRoot: projectRoot || "",
           agentSettings,
           clipboardDirectory,
@@ -624,6 +653,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
     // Worktree fetch starts earlier to overlap with terminal restoration.
     const worktrees = await worktreesPromise;
+    const workspaceHasWorktrees = await workspaceHasWorktreesPromise;
     const savedActiveId = appState.activeWorktreeId;
     // An empty list means "unknown", not "none" — see `getKnownWorktreeIds` in
     // panelRestorePhase for why a cold boot can answer [] while the workspace
@@ -653,12 +683,14 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
 
     // A worktree-less workspace has nothing to select, now or ever, so its
     // selection stays null. The empty-list branch below reads an empty list as
-    // "the host hasn't reported yet" (#11234) — true for a project, never for a
-    // scratch — so without this gate the view adopts whichever worktree the last
-    // git-backed project left behind. Nothing then resolves it: the grid renders
-    // that foreign worktree's bucket while new panels land in the worktree-less
-    // one (invisible panels with live PTYs), and every worktree-resolving action
-    // refuses with "Worktree not found". Skipping the call — rather than clearing
+    // "the host hasn't reported yet" (#11234) — true while a project's host is
+    // still registering, never for a scratch, and never once the host has said
+    // the folder has no repository — so without this gate the view adopts
+    // whichever worktree the last git-backed project left behind. Nothing then
+    // resolves it: the grid renders that foreign worktree's bucket while new
+    // panels land in the worktree-less one (invisible panels with live PTYs),
+    // and every worktree-resolving action refuses with "Worktree not found".
+    // Skipping the call — rather than clearing
     // with `setActiveWorktree(null)` — also leaves the shared persisted restore
     // point intact for the projects that own it.
     if (!workspaceHasWorktrees) {

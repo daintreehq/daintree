@@ -1,5 +1,6 @@
 import type {
   WorktreeState,
+  WorktreeListResult,
   CreateWorktreeOptions,
   BranchInfo,
   AttachIssuePayload,
@@ -19,6 +20,20 @@ import type { WorktreeChanges } from "@shared/types/git";
 export const worktreeClient = {
   getAll: (): Promise<WorktreeState[]> => {
     return window.electron.worktree.getAll();
+  },
+
+  /**
+   * `getAll` plus the workspace host's own probe of the project root.
+   *
+   * Use this wherever an empty list would otherwise be read as "this workspace
+   * has no worktrees": on its own, `[]` also means "the host has not registered
+   * yet", and hydration races host startup by design. `gitBacked` is the host's
+   * live `checkIsRepo`, not the project row's persisted column — that column is
+   * NULL both for a real repository and for one never classified, so it cannot
+   * gate whether foreign worktree state may be adopted (#11650).
+   */
+  getAllWithStatus: (): Promise<WorktreeListResult> => {
+    return window.electron.worktree.getAllWithStatus();
   },
 
   refresh: (worktreeId?: string): Promise<void> => {

@@ -170,7 +170,7 @@ function makeContext(overrides: Partial<RawContext> = {}): MockedContext {
     activeWorktreeId: null,
     // The default is the git-backed workspace every existing case assumes; the
     // worktree-less workspace cases override it.
-    workspaceHasWorktrees: true,
+    workspaceHasWorktreesPromise: Promise.resolve(true),
     projectRoot: "/proj",
     agentSettings: undefined,
     clipboardDirectory: undefined,
@@ -511,7 +511,7 @@ describe("restorePanelsPhase — worktree re-home validation (#11387)", () => {
   describe("worktree-less workspace", () => {
     it("restores a stranded panel with no worktree instead of re-homing onto the foreign active id", async () => {
       const ctx = makeContext({
-        workspaceHasWorktrees: false,
+        workspaceHasWorktreesPromise: Promise.resolve(false),
         activeWorktreeId: "/other/project/main",
         worktreesPromise: Promise.resolve([]),
       });
@@ -526,7 +526,7 @@ describe("restorePanelsPhase — worktree re-home validation (#11387)", () => {
 
     it("strips a foreign worktreeId a previous run persisted onto a panel", async () => {
       const ctx = makeContext({
-        workspaceHasWorktrees: false,
+        workspaceHasWorktreesPromise: Promise.resolve(false),
         activeWorktreeId: null,
         worktreesPromise: Promise.resolve([]),
       });
@@ -540,7 +540,7 @@ describe("restorePanelsPhase — worktree re-home validation (#11387)", () => {
 
     it("strips a foreign worktreeId from a non-PTY panel too", async () => {
       const ctx = makeContext({
-        workspaceHasWorktrees: false,
+        workspaceHasWorktreesPromise: Promise.resolve(false),
         activeWorktreeId: "/other/project/main",
         worktreesPromise: Promise.resolve([]),
       });
@@ -552,9 +552,25 @@ describe("restorePanelsPhase — worktree re-home validation (#11387)", () => {
       expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: undefined });
     });
 
+    // The non-PTY builder falls back to `activeWorktreeId` when the panel saved
+    // none of its own, so stripping its *result* is not enough — the foreign id
+    // has to be withheld from the builder as well. Distinct from the case above,
+    // where the panel carried a saved id and the fallback never ran.
+    it("does not let a non-PTY panel with no saved worktree inherit the foreign active id", async () => {
+      const ctx = makeContext({
+        workspaceHasWorktreesPromise: Promise.resolve(false),
+        activeWorktreeId: "/other/project/main",
+        worktreesPromise: Promise.resolve([]),
+      });
+      await restorePanelsPhase([panel("b1", { kind: "browser", worktreeId: undefined })], ctx);
+      expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+      const args = ctx.addPanel.mock.calls[0]![0] as { worktreeId?: string };
+      expect(args.worktreeId).toBeUndefined();
+    });
+
     it("leaves an orphan PTY worktree-less even when a foreign worktree matches its cwd", async () => {
       const ctx = makeContext({
-        workspaceHasWorktrees: false,
+        workspaceHasWorktreesPromise: Promise.resolve(false),
         activeWorktreeId: "/other/project/main",
         // A worktree-less view should never see a list, but if a stale one leaks
         // through, cwd inference must not attribute the orphan to it either.

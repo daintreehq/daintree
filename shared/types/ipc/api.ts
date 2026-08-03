@@ -223,6 +223,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   };
   worktree: {
     getAll(): Promise<WorktreeState[]>;
+    /**
+     * `getAll` plus the workspace host's own git-backed verdict, so a caller
+     * can tell an empty list that means "no repository here" from one that
+     * means "the host has not reported yet" (#11650).
+     */
+    getAllWithStatus(): Promise<import("../worktree.js").WorktreeListResult>;
     refresh(worktreeId?: string): Promise<void>;
     refreshPullRequests(): Promise<void>;
     getPRStatus(): Promise<import("../workspace-host.js").PRServiceStatus | null>;
