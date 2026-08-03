@@ -717,24 +717,37 @@ export class WorkspaceClient extends EventEmitter {
    * repointed, so naming the true owner would buy nothing and cost a serial
    * fan-out across every loaded host on a latency-sensitive path.
    *
-   * Why a ready host's `state: null` is proof rather than a race: every
-   * worktree id in circulation is minted BY the owning host — `createWorktree`
-   * returns the id the host itself assigned, and every other id reaches a
-   * renderer through that host's snapshots. So there is no window in which a
-   * caller legitimately holds an id for a worktree its own host hasn't
-   * registered. Combined with the readiness gate (which excludes the
-   * mid-`syncMonitors` partial map, #11387), a completed "not mine" is
-   * authoritative.
+   * Absence alone is NOT proof, which is the subtle part. A worktree id is a
+   * path, but the two places that mint one disagree on how to spell it:
+   * creation stores `realpath(path)` (WorkspaceService.performCreateWorktree)
+   * while enumeration stores `pathResolve(wt.path)` off `git worktree list
+   * --porcelain` (WorktreeListService.mapToWorktrees). Those differ whenever
+   * the path crosses a symlink, and porcelain paths are relative — and
+   * explicitly untrustworthy — under Git 2.48+ `worktree.useRelativePaths`. So
+   * a host can genuinely own a worktree whose id, as the caller spells it, is
+   * missing from its map. Treating that as a disowning would drop valid ids.
+   *
+   * A `false` therefore requires CORROBORATION: the named project's ready host
+   * must not hold the id AND some other project's host must positively claim
+   * it. A positive claim is sound however the id was spelled, because it is the
+   * claimant that spelled it. If nobody claims it, the honest answer is `null`
+   * — which is exactly what the spelling mismatch produces, so the failure mode
+   * degrades to "unknown" instead of to a false accusation.
+   *
+   * The corroborating fan-out only runs when the named host has already
+   * disclaimed the id, so the common case stays a single round trip.
    *
    * `expectedProjectId` must equal the entry's immutable projectId for the same
    * reason {@link getAllStatesForProjectAsync} requires it: the project row's
    * path is mutable, so a path alone is not an authorization identity.
    *
    * Never rejects. Bounded by {@link WORKTREE_OWNERSHIP_CHECK_TIMEOUT_MS} end
-   * to end, shared between the readiness gate and the round trip so the two
+   * to end, shared across the readiness gate and every round trip so they
    * cannot compound. The remaining budget is handed to `sendWithResponse`
    * itself rather than raced against it — a race would resolve on time while
-   * leaving the host's 30s default request pending behind it.
+   * leaving the host's 30s default request pending behind it. Elapsed time is
+   * measured with `performance.now()`, so a system clock adjustment mid-check
+   * can't hand the broker an inflated timeout.
    */
   async isWorktreeOwnedByProject(
     worktreeId: string,
@@ -745,28 +758,54 @@ export class WorkspaceClient extends EventEmitter {
     const entry = this.pool.entries.get(normalized);
     if (entry === undefined || entry.projectId !== expectedProjectId) return null;
 
-    const deadline = Date.now() + WORKTREE_OWNERSHIP_CHECK_TIMEOUT_MS;
-    if (!(await this._awaitHostReady(entry, WORKTREE_OWNERSHIP_CHECK_TIMEOUT_MS))) return null;
+    const start = performance.now();
+    const remaining = () =>
+      Math.ceil(WORKTREE_OWNERSHIP_CHECK_TIMEOUT_MS - (performance.now() - start));
 
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) return null;
+    // Readiness matters only for proving ABSENCE: a partial map that already
+    // contains the id still proves containment, but one that doesn't may
+    // simply be mid-populate (#11387).
+    if (!(await this._awaitHostReady(entry, remaining()))) return null;
+    if (remaining() <= 0) return null;
 
+    const claimed = await this._hostClaimsWorktree(entry, worktreeId, remaining());
+    if (claimed === true) return true;
+    // Unknown from the project's own host stays unknown — no accusation to
+    // corroborate.
+    if (claimed === null) return null;
+
+    const others = [...this.pool.entries.values()].filter((e) => e !== entry);
+    if (others.length === 0) return null;
+
+    const budget = remaining();
+    if (budget <= 0) return null;
+
+    // In parallel, and with no readiness gate: a host that answers "mine" is
+    // authoritative about its own worktree whether or not its map is complete.
+    const claims = await Promise.all(
+      others.map((other) => this._hostClaimsWorktree(other, worktreeId, budget))
+    );
+    return claims.some((c) => c === true) ? false : null;
+  }
+
+  /**
+   * `true` the host holds this exact worktree, `false` it completed the lookup
+   * without it, `null` the question could not be answered. Never rejects.
+   */
+  private async _hostClaimsWorktree(
+    entry: ProcessEntry,
+    worktreeId: string,
+    timeoutMs: number
+  ): Promise<boolean | null> {
+    if (timeoutMs <= 0) return null;
     try {
       const requestId = entry.host.generateRequestId();
       const result = await entry.host.sendWithResponse<{
         state: WorktreeSnapshot | null;
-      }>(
-        {
-          type: "get-monitor",
-          requestId,
-          worktreeId,
-        },
-        remainingMs
-      );
-      if (result.state === null) return false;
-      // A snapshot for some *other* worktree answers a question we didn't ask;
-      // treat it as unknown rather than as either verdict.
-      return result.state?.id === worktreeId ? true : null;
+      }>({ type: "get-monitor", requestId, worktreeId }, timeoutMs);
+      if (result?.state == null) return false;
+      // A snapshot for some *other* worktree answers a question we didn't ask.
+      return result.state.id === worktreeId ? true : null;
     } catch {
       return null;
     }

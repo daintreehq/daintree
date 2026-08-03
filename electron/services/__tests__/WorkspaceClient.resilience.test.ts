@@ -39,12 +39,16 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
 
     send = vi.fn(() => true);
 
-    sendWithResponse = vi.fn(<T>(request: { requestId: string; type: string }): Promise<T> => {
-      return new Promise<T>((resolve, reject) => {
-        this.responseHandlers.set(request.requestId, resolve);
-        this.responseRejects.set(request.requestId, reject);
-      });
-    });
+    // `timeoutMs` mirrors the real WorkspaceHostProcess signature so callers
+    // that scope a request's budget can be asserted on.
+    sendWithResponse = vi.fn(
+      <T>(request: { requestId: string; type: string }, _timeoutMs?: number): Promise<T> => {
+        return new Promise<T>((resolve, reject) => {
+          this.responseHandlers.set(request.requestId, resolve);
+          this.responseRejects.set(request.requestId, reject);
+        });
+      }
+    );
 
     pauseHealthCheck = vi.fn();
     resumeHealthCheck = vi.fn();
@@ -865,11 +869,16 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(await ownedPromise).toBe(true);
     });
 
-    // The disowning that makes the whole check worth doing.
-    it("returns false when a ready host completes the lookup with no such monitor", async () => {
+    // The disowning that makes the whole check worth doing — and it takes
+    // corroboration: A disclaims the id AND B positively claims it.
+    it("returns false when the named project disclaims an id another project claims", async () => {
       const loadA = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
       await loadA;
+
+      const loadB = client.loadProject("/project-b", 2);
+      await readyAndResolveLoad(1);
+      await loadB;
 
       const ownedPromise = client.isWorktreeOwnedByProject(
         "wt-belonging-to-b",
@@ -878,10 +887,60 @@ describe("WorkspaceClient multi-process manager", () => {
       );
       await tick();
       h(0).resolveRequest(monitorReqs(0)[0].requestId, { state: null });
+      await tick();
+      h(1).resolveRequest(monitorReqs(1)[0].requestId, {
+        state: { id: "wt-belonging-to-b" },
+      });
 
       expect(await ownedPromise).toBe(false);
     });
 
+    // The heart of the soundness argument: creation spells a worktree id with
+    // `realpath` while enumeration spells it with `pathResolve`, so a project
+    // can genuinely own a worktree whose id is missing from its map. Nobody
+    // else claiming it means the spelling diverged, not that it was stolen.
+    it("returns unknown, not false, when the id is simply unclaimed everywhere", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const loadB = client.loadProject("/project-b", 2);
+      await readyAndResolveLoad(1);
+      await loadB;
+
+      const ownedPromise = client.isWorktreeOwnedByProject(
+        "/symlinked/spelling/of/wt-a",
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+      h(0).resolveRequest(monitorReqs(0)[0].requestId, { state: null });
+      await tick();
+      h(1).resolveRequest(monitorReqs(1)[0].requestId, { state: null });
+
+      expect(await ownedPromise).toBeNull();
+    });
+
+    // With nothing to corroborate against, a disclaim cannot become a verdict.
+    it("returns unknown when the named project is the only one loaded", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const ownedPromise = client.isWorktreeOwnedByProject(
+        "wt-unknown",
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+      h(0).resolveRequest(monitorReqs(0)[0].requestId, { state: null });
+
+      expect(await ownedPromise).toBeNull();
+    });
+
+    // Asks about the SECOND-loaded project on purpose: querying about the
+    // first would also pass for an implementation that just takes whichever
+    // host happens to be first in the pool.
     it("asks only the named project's host, never the others", async () => {
       const loadA = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
@@ -893,14 +952,15 @@ describe("WorkspaceClient multi-process manager", () => {
 
       const ownedPromise = client.isWorktreeOwnedByProject(
         "wt-b",
-        "/project-a",
-        idFor("/project-a")
+        "/project-b",
+        idFor("/project-b")
       );
       await tick();
 
-      expect(monitorReqs(1)).toHaveLength(0);
-      h(0).resolveRequest(monitorReqs(0)[0].requestId, { state: null });
-      expect(await ownedPromise).toBe(false);
+      expect(monitorReqs(0)).toHaveLength(0);
+      expect(monitorReqs(1)).toHaveLength(1);
+      h(1).resolveRequest(monitorReqs(1)[0].requestId, { state: { id: "wt-b" } });
+      expect(await ownedPromise).toBe(true);
     });
 
     it("returns unknown for a path no host is loaded for, without contacting any host", async () => {
@@ -953,6 +1013,42 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(await ownedPromise).toBeNull();
     });
 
+    // Only an explicit `state: null` is a disowning. A reply that merely lacks
+    // the field never reached that conclusion, so collapsing the two (`!state`
+    // instead of `=== null`) would manufacture proof out of a malformed
+    // response.
+    it("returns unknown for an absent state rather than treating it as a disowning", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const ownedPromise = client.isWorktreeOwnedByProject(
+        "wt-a",
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+      h(0).resolveRequest(monitorReqs(0)[0].requestId, { state: undefined });
+
+      expect(await ownedPromise).toBeNull();
+    });
+
+    it("returns unknown for a reply with no state field at all", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const ownedPromise = client.isWorktreeOwnedByProject(
+        "wt-a",
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+      h(0).resolveRequest(monitorReqs(0)[0].requestId, {});
+
+      expect(await ownedPromise).toBeNull();
+    });
+
     // A reply about a different worktree answers a question we didn't ask —
     // neither a confirmation nor an accusation.
     it("returns unknown when the host answers about a different worktree", async () => {
@@ -988,7 +1084,9 @@ describe("WorkspaceClient multi-process manager", () => {
       const monitorCall = h(0).sendWithResponse.mock.calls.find(
         ([req]: any) => req.type === "get-monitor"
       )!;
-      const timeoutMs = monitorCall[1];
+      // `?? 0` so a budget that was never passed at all fails the lower bound
+      // rather than blowing up the comparison.
+      const timeoutMs = monitorCall[1] ?? 0;
       expect(timeoutMs).toBeGreaterThan(0);
       expect(timeoutMs).toBeLessThan(1_000);
 
@@ -1030,6 +1128,54 @@ describe("WorkspaceClient multi-process manager", () => {
         // just because the host was still warming up (#11131, #11235).
         expect(settled).toBeNull();
         expect(monitorReqs(0)).toHaveLength(0);
+      });
+
+      // The budget is one deadline shared by the readiness gate and the round
+      // trip, not one each — time spent waiting for readiness must come out of
+      // what the request gets, or a warming host could cost double.
+      it("charges time spent waiting for readiness against the request's budget", async () => {
+        const loadA = client.loadProject("/project-a", 1);
+        h(0).simulateReady();
+        await vi.advanceTimersByTimeAsync(0);
+        h(0).resolveRequest(h(0).getLastRequest()!.requestId);
+        await loadA;
+
+        // Baseline: a check against an already-ready host spends nothing on the
+        // gate, so the request gets essentially the whole budget.
+        const baselinePromise = client.isWorktreeOwnedByProject(
+          "wt-a",
+          "/project-a",
+          idFor("/project-a")
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        const baselineCall = h(0).sendWithResponse.mock.calls.find(
+          ([req]: any) => req.type === "get-monitor"
+        )!;
+        h(0).resolveRequest(baselineCall[0].requestId, { state: { id: "wt-a" } });
+        await baselinePromise;
+
+        // Now restart the host so the next check has to wait on readiness, and
+        // burn part of the budget before the gate opens.
+        h(0).emit("restarted");
+        await vi.advanceTimersByTimeAsync(0);
+        const reloadReq = h(0).getLastRequest()!;
+
+        const delayedPromise = client.isWorktreeOwnedByProject(
+          "wt-a",
+          "/project-a",
+          idFor("/project-a")
+        );
+        await vi.advanceTimersByTimeAsync(50);
+        h(0).resolveRequest(reloadReq.requestId);
+        await vi.advanceTimersByTimeAsync(0);
+
+        const delayedCall = h(0)
+          .sendWithResponse.mock.calls.filter(([req]: any) => req.type === "get-monitor")
+          .at(-1)!;
+        expect(delayedCall[1] ?? 0).toBeLessThan(baselineCall[1] ?? 0);
+
+        h(0).resolveRequest(delayedCall[0].requestId, { state: { id: "wt-a" } });
+        await delayedPromise;
       });
 
       it("leaves no readiness timer behind once it settles", async () => {

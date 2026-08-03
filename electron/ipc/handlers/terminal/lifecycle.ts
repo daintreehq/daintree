@@ -212,7 +212,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // and leaving it unset made ownership fall back to PtyClient's global
     // `activeProjectId`, so deleting a scratch never killed its terminals (#11079).
     // Only a caller that sent no id at all falls back to the current project.
-    const explicitWorkspaceId = validatedOptions.projectId;
+    // Blank is absent, not an identity: PtyClient already substitutes its
+    // active project for a blank id, so leaving it as `""` here would let a
+    // whitespace projectId slip past checks that a missing one is subject to.
+    const explicitWorkspaceId = validatedOptions.projectId?.trim() || undefined;
     const resolvedProject = explicitWorkspaceId
       ? projectStore.getProjectById(explicitWorkspaceId)
       : projectStore.getCurrentProject();
@@ -241,17 +244,31 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // Requires the explicit id too — falling back to the current project would
     // audit a claim the caller never made. A worktreeId sent with no projectId
     // asserts no relationship and stays untouched (#5182).
-    const assertsWorktreeOwnership =
-      explicitWorkspaceId !== undefined &&
-      validatedOptions.worktreeId !== undefined &&
-      resolvedProject !== null &&
-      resolvedProject !== undefined;
+    // Truthiness, not `!== undefined`: a blank id is already treated as absent
+    // when resolving the project above (and again by PtyClient, which swaps in
+    // the active project), so it must not be taken as an assertion here either
+    // — auditing a claim against the empty string would be auditing nothing.
+    // Keyed on the pair actually about to be PERSISTED, not on the pair the
+    // caller spelled out. A request carrying only a worktreeId still gets the
+    // current project stamped beside it below, and that derived pair is
+    // journaled and can go cross-project exactly like an asserted one. Gated on
+    // a resolved Project because an explicit id is often a scratch id owning no
+    // worktrees (#11079), and a spawn with no project resolved at all stamps no
+    // pair to check (#5182).
+    const ownershipClaim =
+      resolvedProject && validatedOptions.worktreeId
+        ? {
+            projectId: resolvedProject.id,
+            worktreeId: validatedOptions.worktreeId,
+            projectPath: resolvedProject.path,
+            gitBacked: isGitBackedProject(resolvedProject),
+          }
+        : null;
 
     // A project opened without git enumerates no worktrees at all (#11405), so
     // any worktree id claimed against one is incoherent on its face — decided
     // here, with no host round trip to spend.
-    const claimsWorktreeOnLightweightProject =
-      assertsWorktreeOwnership && !isGitBackedProject(resolvedProject);
+    const claimsWorktreeOnLightweightProject = ownershipClaim !== null && !ownershipClaim.gitBacked;
 
     // Started here, awaited just before the spawn, so the round trip overlaps
     // the settings read, cwd validation and env assembly below instead of
@@ -259,12 +276,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // failure elsewhere in this handler can never surface as an unhandled
     // rejection on a floating promise.
     const worktreeOwnership: Promise<boolean | null> =
-      assertsWorktreeOwnership && !claimsWorktreeOnLightweightProject && deps.worktreeService
+      ownershipClaim && ownershipClaim.gitBacked && deps.worktreeService
         ? deps.worktreeService
             .isWorktreeOwnedByProject(
-              validatedOptions.worktreeId as string,
-              resolvedProject.path,
-              explicitWorkspaceId
+              ownershipClaim.worktreeId,
+              ownershipClaim.projectPath,
+              ownershipClaim.projectId
             )
             .catch(() => null)
         : Promise.resolve(null);
@@ -320,6 +337,40 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     } catch (_error) {
       console.warn(`Invalid cwd: ${cwd}, falling back to project root or home`);
       cwd = await getValidatedFallback();
+    }
+
+    // Resolve the ownership claim. Only a PROVEN disowning drops the id — an
+    // unknown verdict (no host, host not ready, timed out, nothing to
+    // corroborate against, service absent) forwards it exactly as before, so a
+    // cold or busy workspace host degrades to today's behaviour instead of
+    // stripping metadata on a guess.
+    //
+    // Dropping, not rejecting: the terminal still spawns, at the cwd the caller
+    // asked for, under the workspace id it claimed. Only the unverifiable
+    // worktree stamp goes, which keeps the blast radius of a wrong verdict at
+    // "this terminal contributes no resume metadata" rather than "the user
+    // can't open a terminal". Nothing above reads worktreeId, so sanitizing it
+    // here covers every consumer — the close and bookmark paths read it back
+    // off the PTY record and observe the sanitized value for free.
+    //
+    // Awaited HERE rather than at the spawn call: everything below binds
+    // resources to this terminal id (help-session token, MCP pane config), and
+    // an await between those bindings and the spawn lets a competing provision
+    // revoke them against a PTY that does not exist yet, leaving the spawn to
+    // proceed untracked.
+    let spawnWorktreeId = validatedOptions.worktreeId;
+    if (claimsWorktreeOnLightweightProject) {
+      console.warn(
+        `[TerminalSpawn] Dropping worktreeId ${spawnWorktreeId} for terminal ${id.slice(0, 8)}: ` +
+          `project ${ownershipClaim?.projectId} was opened without git and has no worktrees`
+      );
+      spawnWorktreeId = undefined;
+    } else if ((await worktreeOwnership) === false) {
+      console.warn(
+        `[TerminalSpawn] Dropping worktreeId ${spawnWorktreeId} for terminal ${id.slice(0, 8)}: ` +
+          `it belongs to another project, not ${ownershipClaim?.projectId}`
+      );
+      spawnWorktreeId = undefined;
     }
 
     // Debug: log projectId assignment
@@ -674,34 +725,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // faithfully with no postSpawnInput.
     const postSpawnInput =
       safeCommand.length > 0 && !commandLaunchShell ? `${safeCommand}\r` : undefined;
-
-    // Resolve the ownership claim. Only a PROVEN disowning drops the id — an
-    // unknown verdict (no host, host not ready, timed out, service absent)
-    // forwards it exactly as before, so a cold or busy workspace host degrades
-    // to today's behaviour instead of stripping metadata on a guess.
-    //
-    // Dropping, not rejecting: the terminal still spawns, at the cwd the caller
-    // asked for, under the workspace id it claimed. Only the unverifiable
-    // worktree stamp goes, which keeps the blast radius of a wrong verdict at
-    // "this terminal contributes no resume metadata" rather than "the user
-    // can't open a terminal". Nothing above reads worktreeId, so sanitizing it
-    // at the single point it leaves the handler is the whole fix — the close
-    // and bookmark paths read it back off the PTY record and observe the
-    // sanitized value for free.
-    let spawnWorktreeId = validatedOptions.worktreeId;
-    if (claimsWorktreeOnLightweightProject) {
-      console.warn(
-        `[TerminalSpawn] Dropping worktreeId ${spawnWorktreeId} for terminal ${id.slice(0, 8)}: ` +
-          `project ${explicitWorkspaceId} was opened without git and has no worktrees`
-      );
-      spawnWorktreeId = undefined;
-    } else if ((await worktreeOwnership) === false) {
-      console.warn(
-        `[TerminalSpawn] Dropping worktreeId ${spawnWorktreeId} for terminal ${id.slice(0, 8)}: ` +
-          `it does not belong to project ${explicitWorkspaceId}`
-      );
-      spawnWorktreeId = undefined;
-    }
 
     try {
       // Every terminal is an interactive shell. Agent launches inject their

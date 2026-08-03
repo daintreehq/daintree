@@ -525,24 +525,10 @@ describe("terminal spawn handler - worktree/project ownership (#11653)", () => {
   });
 
   // The core of the issue: project A claiming one of project B's worktrees.
-  it("drops a worktreeId the claimed project provably does not own", async () => {
-    mockGetProjectById.mockReturnValue(projectA);
-    worktreeService.isWorktreeOwnedByProject.mockResolvedValue(false);
-
-    await spawnWith({
-      projectId: "project-a-id",
-      worktreeId: "wt-belonging-to-b",
-      cwd: "/projects/b/wt",
-    });
-
-    expect(spawnArgsOf().worktreeId).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalled();
-  });
-
-  // Dropping the stamp must not become a way to fail or relocate the terminal.
-  // A real directory, because the handler validates that the cwd exists — a
-  // synthetic path would fall back to home and hide whether the drop moved it.
-  it("still spawns at the requested cwd and workspace id after dropping", async () => {
+  // Uses a real directory so the handler's cwd-existence check passes — a
+  // synthetic path would fall back to home and both hide whether the drop
+  // relocated the terminal and emit its own warning, masking this one.
+  it("drops a worktreeId the claimed project provably does not own, without relocating the terminal", async () => {
     const existingDir = process.cwd();
     mockGetProjectById.mockReturnValue(projectA);
     worktreeService.isWorktreeOwnedByProject.mockResolvedValue(false);
@@ -553,9 +539,44 @@ describe("terminal spawn handler - worktree/project ownership (#11653)", () => {
       cwd: existingDir,
     });
 
+    expect(spawnArgsOf().worktreeId).toBeUndefined();
+    // Dropping the stamp must not become a way to fail or move the terminal.
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     expect(spawnArgsOf().cwd).toBe(existingDir);
     expect(spawnArgsOf().projectId).toBe("project-a-id");
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("wt-belonging-to-b"));
+  });
+
+  // The verdict has to be settled BEFORE the spawn, not raced against it: a
+  // floating .then() that assigns a mutable variable would still pass every
+  // test whose mock resolves immediately.
+  it("waits for the verdict before spawning", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+    let settle: (owned: boolean | null) => void = () => {};
+    worktreeService.isWorktreeOwnedByProject.mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve;
+      })
+    );
+
+    const deps = { ptyClient, worktreeService } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+    const pending = getSpawnHandler()({} as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      projectId: "project-a-id",
+      worktreeId: "wt-belonging-to-b",
+    });
+
+    // Let every other await in the handler drain; the spawn must still be held.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+
+    settle(false);
+    await pending;
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(spawnArgsOf().worktreeId).toBeUndefined();
   });
 
   // `null` is "unknown", not "mismatch" — a cold or mid-sync host must not
@@ -575,6 +596,8 @@ describe("terminal spawn handler - worktree/project ownership (#11653)", () => {
 
     await spawnWith({ projectId: "project-a-id", worktreeId: "wt-a1" });
 
+    // Asserted so this can't pass merely because the lookup was skipped.
+    expect(worktreeService.isWorktreeOwnedByProject).toHaveBeenCalledTimes(1);
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     expect(spawnArgsOf().worktreeId).toBe("wt-a1");
   });
@@ -587,10 +610,28 @@ describe("terminal spawn handler - worktree/project ownership (#11653)", () => {
     expect(spawnArgsOf().worktreeId).toBe("wt-a1");
   });
 
-  // #5182 sends a worktreeId with no projectId. That asserts no relationship,
-  // so there is nothing to verify and nothing to drop.
-  it("asserts nothing, and checks nothing, when only a worktreeId is supplied", async () => {
-    mockGetCurrentProject.mockReturnValue(projectA);
+  // The pair that gets journaled is the one that matters. A caller sending only
+  // a worktreeId still gets the current project stamped beside it, so that
+  // derived pair is checked too — otherwise the identical corruption arrives by
+  // omitting a field.
+  it("checks the pair it is about to stamp, even when the project was only derived", async () => {
+    mockGetCurrentProject.mockReturnValue(projectB);
+    worktreeService.isWorktreeOwnedByProject.mockResolvedValue(true);
+
+    await spawnWith({ worktreeId: "wt-b1" });
+
+    expect(worktreeService.isWorktreeOwnedByProject).toHaveBeenCalledWith(
+      "wt-b1",
+      projectB.path,
+      projectB.id
+    );
+  });
+
+  // #5182: a worktreeId with no project resolved anywhere stamps no pair, so
+  // there is nothing to check and nothing to drop.
+  it("checks nothing when no project resolves at all", async () => {
+    mockGetCurrentProject.mockReturnValue(null);
+    mockGetProjectById.mockReturnValue(null);
 
     await spawnWith({ worktreeId: "wt-a1" });
 
@@ -598,15 +639,20 @@ describe("terminal spawn handler - worktree/project ownership (#11653)", () => {
     expect(spawnArgsOf().worktreeId).toBe("wt-a1");
   });
 
-  // The current project is not a claim the caller made — auditing against it
-  // would invent an assertion the request never contained.
-  it("does not audit against the current project when the caller named none", async () => {
-    mockGetCurrentProject.mockReturnValue(projectB);
+  // A blank id is treated as absent everywhere else in the spawn path, so it
+  // must resolve — and be audited — exactly like an omitted one rather than
+  // being audited against the empty string.
+  it("treats a blank projectId as absent rather than as a claim on nothing", async () => {
+    mockGetCurrentProject.mockReturnValue(projectA);
+    worktreeService.isWorktreeOwnedByProject.mockResolvedValue(true);
 
-    await spawnWith({ worktreeId: "wt-belonging-to-a" });
+    await spawnWith({ projectId: "   ", worktreeId: "wt-a1" });
 
-    expect(worktreeService.isWorktreeOwnedByProject).not.toHaveBeenCalled();
-    expect(spawnArgsOf().worktreeId).toBe("wt-belonging-to-a");
+    expect(worktreeService.isWorktreeOwnedByProject).toHaveBeenCalledWith(
+      "wt-a1",
+      projectA.path,
+      projectA.id
+    );
   });
 
   // A scratch id is opaque and owns no worktrees; there is no project to ask.
@@ -628,11 +674,15 @@ describe("terminal spawn handler - worktree/project ownership (#11653)", () => {
   it("drops a worktreeId claimed against a lightweight project without a host round trip", async () => {
     mockGetProjectById.mockReturnValue(lightweightProject);
 
-    await spawnWith({ projectId: "lightweight-id", worktreeId: "wt-a1" });
+    await spawnWith({
+      projectId: "lightweight-id",
+      worktreeId: "wt-a1",
+      cwd: process.cwd(),
+    });
 
     expect(worktreeService.isWorktreeOwnedByProject).not.toHaveBeenCalled();
     expect(spawnArgsOf().worktreeId).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("wt-a1"));
   });
 
   // Legacy rows predate the discriminator; absence means git-backed, so they
@@ -653,6 +703,8 @@ describe("terminal spawn handler - worktree/project ownership (#11653)", () => {
     await spawnWith({ projectId: "project-a-id" });
 
     expect(worktreeService.isWorktreeOwnedByProject).not.toHaveBeenCalled();
+    // Proves the spawn actually ran, so this can't pass via an early return.
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
   });
 });
 
