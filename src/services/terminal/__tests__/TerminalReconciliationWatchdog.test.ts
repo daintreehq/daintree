@@ -1700,6 +1700,11 @@ describe("TerminalReconciliationWatchdog — fit diagnostic in production (#1164
 
   beforeEach(() => {
     vi.useFakeTimers();
+    // Vitest runs with import.meta.env.DEV === true, so without forcing it off
+    // these tests would pass just as happily against the old
+    // `if (!import.meta.env?.DEV) return;` gate — i.e. they would not actually
+    // prove the diagnostic was promoted.
+    vi.stubEnv("DEV", false);
     instances = new Map();
     setDocumentVisibility("visible");
     __resetSidebarLayoutTransitionLockForTests();
@@ -1713,6 +1718,7 @@ describe("TerminalReconciliationWatchdog — fit diagnostic in production (#1164
     document.body.innerHTML = "";
     __resetSidebarLayoutTransitionLockForTests();
     __resetSidebarHydrationLockForTests();
+    vi.unstubAllEnvs();
     vi.useRealTimers();
     vi.clearAllMocks();
   });

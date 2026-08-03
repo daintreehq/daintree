@@ -66,8 +66,16 @@ class MockTerminalProcess {
     this.info.wasKilled = true;
   });
   resize = vi.fn((cols: number, rows: number) => {
+    const unchanged = this.info.cols === cols && this.info.rows === rows;
     this.info.cols = cols;
     this.info.rows = rows;
+    return {
+      requestedCols: cols,
+      requestedRows: rows,
+      appliedCols: cols,
+      appliedRows: rows,
+      outcome: unchanged ? ("unchanged" as const) : ("applied" as const),
+    };
   });
   setSabModeEnabled = vi.fn();
   setActivityMonitorTier = vi.fn();

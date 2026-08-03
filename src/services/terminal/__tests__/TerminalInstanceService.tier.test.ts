@@ -9,6 +9,7 @@ let capturedTierChangedCb: ((id: string, tier: "active" | "background") => void)
 const mockTerminalClient = {
   onData: vi.fn(() => vi.fn()),
   onExit: vi.fn(() => vi.fn()),
+  onResizeResult: vi.fn(() => vi.fn()),
   onTierChanged: vi.fn((cb: (id: string, tier: "active" | "background") => void) => {
     capturedTierChangedCb = cb;
     return vi.fn();

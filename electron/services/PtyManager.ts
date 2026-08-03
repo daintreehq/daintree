@@ -38,7 +38,10 @@ import { AgentTerminalLifecycleLedger } from "../../shared/utils/agentLifecycleL
 import { events } from "./events.js";
 import { getGitBranch } from "../utils/gitUtils.js";
 import type { GracefulKillResult, TerminalResizeResult } from "../../shared/types/pty-host.js";
-import type { SerializedTerminalSnapshot } from "../../shared/types/terminal.js";
+import {
+  isValidTerminalGeometry,
+  type SerializedTerminalSnapshot,
+} from "../../shared/types/terminal.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
 import { shouldTrimAnalysisSession } from "../../shared/utils/workerGovernancePolicy.js";
 
@@ -463,8 +466,25 @@ export class PtyManager extends EventEmitter {
       throw error;
     }
 
+    const consumedPendingResize = this.pendingResizes.has(id);
     this.pendingResizes.delete(id);
     this.registry.add(id, terminalProcess);
+
+    if (consumedPendingResize) {
+      // A resize that beat the spawn became this PTY's boot geometry without
+      // ever passing through `resize()`, so nothing has reported it. Without
+      // this the renderer holds no applied geometry at all for a terminal whose
+      // very first grid came from the buffer — and if that geometry disagrees
+      // with xterm, the divergence goes unseen until some later resize happens
+      // to occur (#11641).
+      this.emitResizeResult(id, {
+        requestedCols: options.cols,
+        requestedRows: options.rows,
+        appliedCols: options.cols,
+        appliedRows: options.rows,
+        outcome: "applied",
+      });
+    }
   }
 
   /**
@@ -535,12 +555,19 @@ export class PtyManager extends EventEmitter {
    * renderer's direct MessagePort — funnel through here, so this is the one
    * place that sees every resize.
    *
-   * The buffering branch emits nothing: an unlaunched id has no generation to
-   * stamp, and the spawn that consumes the buffered dims reports them itself.
+   * The buffering branch emits nothing here: an unlaunched id has no generation
+   * to stamp. `spawn()` emits the result when it consumes those buffered dims,
+   * once an incarnation exists to attribute them to.
+   *
+   * This is also the geometry trust boundary. The renderer's MessagePort talks
+   * to the host directly and its handler only checks `typeof number`, so bounds
+   * enforcement cannot live in the Main IPC handler alone — a fractional or
+   * absurd grid arriving there would otherwise be buffered as spawn dims,
+   * skipping `TerminalProcess.resize`'s own validation entirely.
    */
   resize(id: string, cols: number, rows: number): void {
     const terminal = this.registry.get(id);
-    if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) {
+    if (!isValidTerminalGeometry({ cols, rows })) {
       logWarn(`Terminal ${id} resize rejected: invalid dims ${cols}x${rows}`);
       if (terminal) {
         this.emitResizeResult(id, {

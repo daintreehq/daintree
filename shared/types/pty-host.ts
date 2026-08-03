@@ -936,8 +936,16 @@ export interface HostThrottlePayload {
  * while the renderer keeps re-asserting that same wrong geometry is exactly the
  * split this echo exists to expose (#11447, #11641), so the no-op path must
  * still report the dimensions the PTY actually holds.
+ *
+ * `deferred` means the call was accepted but the backend has not adopted it
+ * yet, so the applied geometry is genuinely unknown. node-pty's Windows backend
+ * queues resizes until ConPTY signals ready and updates its cached dimensions
+ * only inside that deferred callback — reporting the pre-resize grid as
+ * `applied` there would manufacture false agreement with xterm and hide the
+ * very split this echo exists to catch.
  */
-export type TerminalResizeOutcome = "applied" | "unchanged" | "failed" | "rejected" | "exited";
+export type TerminalResizeOutcome =
+  "applied" | "unchanged" | "deferred" | "failed" | "rejected" | "exited";
 
 /**
  * What the pty-host did with a resize request, and the geometry node-pty holds

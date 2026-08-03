@@ -6,6 +6,7 @@ vi.mock("@/clients", () => ({
     resize: vi.fn(),
     onData: vi.fn(() => vi.fn()),
     onExit: vi.fn(() => vi.fn()),
+    onResizeResult: vi.fn(() => vi.fn()),
     onTierChanged: vi.fn(() => vi.fn()),
     write: vi.fn(),
     setActivityTier: vi.fn(),

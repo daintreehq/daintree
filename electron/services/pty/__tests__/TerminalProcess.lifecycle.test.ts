@@ -1203,22 +1203,61 @@ describe("TerminalProcess — resize result echo (#11641)", () => {
     return { pty, resizeSpy };
   }
 
-  it("reports the geometry the pty ended up holding, not the geometry requested", () => {
-    // The pty accepts a narrower grid than asked for. Echoing the request would
-    // hide exactly the split the caller needs to see.
-    const { pty } = createResizablePty(80, 24, (cols, rows) => ({
-      cols: Math.min(cols, 550),
-      rows,
-    }));
+  it("reports the geometry the pty holds once it adopts the request", () => {
+    const { pty } = createResizablePty(80, 24);
     const terminal = createTerminal(pty, undefined, undefined, "t-resize-applied");
     try {
       const result = terminal.resize(700, 40);
 
       expect(result.outcome).toBe("applied");
-      expect(result.requestedCols).toBe(700);
-      expect(result.appliedCols).toBe(550);
-      expect(result.appliedCols).not.toBe(result.requestedCols);
+      expect(result.appliedCols).toBe(700);
       expect(result.appliedRows).toBe(40);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("reports no geometry when the backend has not adopted the resize yet", () => {
+    // node-pty on Windows QUEUES resize until ConPTY is ready and updates its
+    // cached dims only inside that deferred callback, so the getters still
+    // report the pre-resize grid. Claiming the OLD grid as applied is the
+    // dangerous answer: the watchdog would compare it against xterm, see
+    // agreement, and miss the split once the queued resize lands.
+    const { pty, resizeSpy } = createResizablePty(80, 24, (_cols, _rows) => ({
+      cols: 80,
+      rows: 24,
+    }));
+    const terminal = createTerminal(pty, undefined, undefined, "t-resize-deferred");
+    try {
+      const result = terminal.resize(700, 40);
+
+      expect(resizeSpy).toHaveBeenCalledWith(700, 40);
+      expect(result.outcome).toBe("deferred");
+      // Neither the request nor the stale grid — the geometry is unknown.
+      expect(result.appliedCols).toBeNull();
+      expect(result.appliedRows).toBeNull();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("reports no geometry when the dimensions cannot be read at all", () => {
+    const { pty } = createResizablePty(80, 24);
+    const terminal = createTerminal(pty, undefined, undefined, "t-resize-getter-throws");
+    try {
+      Object.defineProperty(pty, "cols", {
+        get: (): number => {
+          throw new Error("pty destroyed");
+        },
+        configurable: true,
+      });
+
+      const result = terminal.resize(120, 40);
+
+      // An unreadable grid must never fall back to the request — that would
+      // manufacture agreement with xterm out of a measurement failure.
+      expect(result.appliedCols).toBeNull();
+      expect(result.appliedCols).not.toBe(result.requestedCols);
     } finally {
       terminal.dispose();
     }

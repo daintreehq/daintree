@@ -531,8 +531,15 @@ export class TerminalReconciliationWatchdog {
     if (!managed.isAltBuffer && !inSynchronizedBlock && !resizeTransitioning) {
       const proposal = managed.fitAddon.proposeDimensions?.();
       if (proposal && proposal.cols > 1 && proposal.rows > 1) {
+        // Normalize before comparing, exactly as the diagnostic does. Both
+        // resize primitives clamp to the shared ceiling, so an above-ceiling
+        // proposal can never be reached: comparing it raw would read as a
+        // permanent divergence, burn every breaker attempt on repairs that are
+        // no-ops, and latch `geometryRepairGaveUp` for the pane's whole life.
+        const proposedCols = normalizeTerminalGridDimension(proposal.cols);
+        const proposedRows = normalizeTerminalGridDimension(proposal.rows);
         const diverged =
-          proposal.cols !== managed.terminal.cols || proposal.rows !== managed.terminal.rows;
+          proposedCols !== managed.terminal.cols || proposedRows !== managed.terminal.rows;
         if (!diverged) {
           // Converged: the grid now matches what the container can hold. Re-arm the
           // circuit breaker (#10909) so a pane that self-corrected — e.g. a resize

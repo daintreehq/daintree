@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TERMINAL_GRID_DIMENSION } from "@shared/types/terminal";
 
 // Track IPC onData subscriptions so we can simulate IPC data delivery
 const ipcOnDataHandlers: Array<{ id: string; cb: (data: string | Uint8Array) => void }> = [];
@@ -846,6 +847,13 @@ describe("terminalClient resize normalization (#11641)", () => {
 
     expect(viaPort).toHaveLength(1);
     const portDims = { cols: viaPort[0]?.cols, rows: viaPort[0]?.rows };
+    // Both transports agreeing is necessary but not sufficient — with no
+    // normalization at all they would agree on 9000. Pin them to the bound the
+    // xterm half is also normalized to, which is what makes the grids match.
+    expect(portDims).toEqual({
+      cols: MAX_TERMINAL_GRID_DIMENSION,
+      rows: MAX_TERMINAL_GRID_DIMENSION,
+    });
 
     // Drop the port so the same request takes the IPC fallback.
     mc.port1.close();

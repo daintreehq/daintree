@@ -274,16 +274,62 @@ describe("PtyManager lifecycle ledger", () => {
     ]);
   });
 
-  it("emits no resize result while the terminal is only buffered (#11641)", () => {
+  it("defers a buffered resize's echo until spawn gives it an incarnation (#11641)", () => {
+    const manager = new PtyManager();
+    const results: Array<{ launchGeneration: number | null; appliedCols: number | null }> = [];
+    manager.on(
+      "resize-result",
+      (_id: string, result: { launchGeneration: number | null; appliedCols: number | null }) => {
+        results.push({
+          launchGeneration: result.launchGeneration,
+          appliedCols: result.appliedCols,
+        });
+      }
+    );
+
+    // Nothing has launched yet, so there is no incarnation to attribute the
+    // geometry to.
+    manager.resize("t1", 132, 43);
+    expect(results).toEqual([]);
+
+    // These buffered dims BECOME the PTY's boot geometry without passing
+    // through resize(). Staying silent here would leave the renderer with no
+    // applied geometry at all for a terminal whose first grid came from the
+    // buffer, so a divergence at boot would go unseen.
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
+    expect(results).toEqual([{ launchGeneration: 1, appliedCols: 132 }]);
+  });
+
+  it("emits no echo for a spawn that did not consume a buffered resize (#11641)", () => {
     const manager = new PtyManager();
     const results: unknown[] = [];
     manager.on("resize-result", (...args: unknown[]) => results.push(args));
 
-    // Nothing has launched, so there is no incarnation to attribute geometry
-    // to — the spawn that consumes these dims reports them itself.
-    manager.resize("t1", 132, 43);
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
 
     expect(results).toEqual([]);
+  });
+
+  it("forwards the outcome and applied geometry, not just the generation (#11641)", () => {
+    const manager = new PtyManager();
+    const results: unknown[] = [];
+    manager.on("resize-result", (_id: string, result: unknown) => results.push(result));
+
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
+    manager.resize("t1", 120, 40);
+    // Re-asserting the geometry the PTY already holds must still report it —
+    // the dedup shortcut emits no SIGWINCH, so silence here is what would let a
+    // stuck PTY go undetected.
+    manager.resize("t1", 120, 40);
+    // Out of range at the trust boundary: the direct MessagePort transport
+    // reaches this method without passing through any other validation.
+    manager.resize("t1", 40.5, 10);
+
+    expect(results).toEqual([
+      expect.objectContaining({ outcome: "applied", appliedCols: 120, requestedCols: 120 }),
+      expect.objectContaining({ outcome: "unchanged", appliedCols: 120 }),
+      expect.objectContaining({ outcome: "rejected", appliedCols: null, requestedCols: 40.5 }),
+    ]);
   });
 
   it("drops a buffered resize stamped by a previous incarnation", () => {

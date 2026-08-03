@@ -130,10 +130,11 @@ export interface TerminalProcessDependencies {
 }
 
 /**
- * Read one dimension node-pty holds, falling back to `fallback` if the getter
- * throws (the pty can be torn down between the resize and the read-back).
+ * Read one dimension node-pty holds. Returns null when the getter throws or
+ * reports nonsense (the pty can be torn down between the resize and the
+ * read-back) — an unknown geometry must never be reported as a known one.
  */
-function readPtyDimension(read: () => number, fallback: number): number {
+function readPtyDimension(read: () => number, fallback: number | null): number | null {
   try {
     const value = read();
     return Number.isFinite(value) ? value : fallback;
@@ -1193,8 +1194,16 @@ export class TerminalProcess {
 
     // Read back before the analysis resize: a throw from analysis must not
     // relabel a PTY resize that genuinely landed.
-    const appliedCols = readPtyDimension(() => terminal.ptyProcess.cols, cols);
-    const appliedRows = readPtyDimension(() => terminal.ptyProcess.rows, rows);
+    const appliedCols = readPtyDimension(() => terminal.ptyProcess.cols, null);
+    const appliedRows = readPtyDimension(() => terminal.ptyProcess.rows, null);
+    // node-pty's Windows backend QUEUES resize until ConPTY signals ready and
+    // only updates its cached dims inside that deferred callback, so a
+    // pre-ready resize leaves the getters reporting the OLD grid. Reporting
+    // that as `applied` would be a lie in the dangerous direction: the watchdog
+    // would compare a stale geometry against xterm, see agreement, and miss the
+    // split once the queued resize finally lands. Confirm the read-back matches
+    // what we asked for; when it doesn't, say we don't know rather than guess.
+    const confirmed = appliedCols === cols && appliedRows === rows;
 
     try {
       this.analysis.resize(cols, rows);
@@ -1208,9 +1217,9 @@ export class TerminalProcess {
     return {
       requestedCols: cols,
       requestedRows: rows,
-      appliedCols,
-      appliedRows,
-      outcome: "applied",
+      appliedCols: confirmed ? appliedCols : null,
+      appliedRows: confirmed ? appliedRows : null,
+      outcome: confirmed ? "applied" : "deferred",
     };
   }
 
