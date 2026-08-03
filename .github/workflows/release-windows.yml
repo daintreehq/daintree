@@ -73,7 +73,10 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || inputs.smoke_artifact_run_id == ''
     name: Unit Tests (Windows)
     runs-on: windows-2022
-    timeout-minutes: 25
+    # Windows runs the same suite ~2.6x slower than macOS (25m vs 9m30s at
+    # v0.30.0), and v0.29.0 passed with under a minute of headroom twice. The
+    # macOS and Linux jobs stay at 25.
+    timeout-minutes: 60
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
