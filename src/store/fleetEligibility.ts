@@ -72,7 +72,9 @@ export function isAgentFleetActionEligible(
 }
 
 /**
- * Bulk-arming predicate for surfaces that address agents rather than terminals.
+ * Predicate for the sidebar's filter-scoped bulk arm, which addresses agents
+ * rather than terminals. (The ribbon's state presets still run on the built-in
+ * predicate below — a separate, pre-existing gap, not this one.)
  *
  * Deliberately NOT `isAgentFleetActionEligible`: that one resolves a *built-in*
  * capability id because accept/reject/interrupt/restart drive built-in agent

@@ -1509,7 +1509,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "keywords": undefined,
     "kind": "command",
     "requiresArgs": true,
-    "title": "Fleet: Arm Terminals Matching Filter",
+    "title": "Fleet: Arm Agents Matching Filter",
   },
   {
     "category": "terminal",
