@@ -480,10 +480,6 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     // Routed through the lock-exempt atomic reconcile, NOT the lock-aware fit()
     // that the default branch uses.
     expect(fit).not.toHaveBeenCalled();
-    // The explicit repair discharged the obligation the deferral armed, so the
-    // next watchdog tick doesn't spend a heavy-budget slot on a no-op.
-    expect(managed.revealPendingRepair).toBe(false);
-    expect(managed.revealPendingGeneration).toBeUndefined();
   });
 
   it("forced resetRenderer re-arms the geometry circuit breaker once the grid converges", () => {
@@ -528,6 +524,102 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(term.cols).toBe(80);
     expect(managed.geometryRepairGaveUp).toBe(true);
     expect(managed.geometryRepairAttempts).toBe(5);
+  });
+
+  it("forced resetRenderer arms the watchdog obligation when the box is unmeasurable", () => {
+    const managed = makeManaged();
+    makeDivergedPane(managed, { cols: 120, rows: 40 });
+    managed.pendingWrites = 2;
+    managed.attachGeneration = 4;
+    // Passes resetRenderer's own clientWidth/Height floor, but the LIVE rect is
+    // mid-transition — reconcileGeometryFresh can't measure it. The repair must
+    // not be silently spent: hand it to the watchdog for a later frame.
+    managed.hostElement.getBoundingClientRect = vi.fn(() => ({
+      left: 0,
+      width: 10,
+      height: 10,
+    })) as unknown as HTMLElement["getBoundingClientRect"];
+    service.instances.set("t1", managed);
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+    const fit = vi.spyOn(service.resizeController, "fit");
+
+    // Still true: the renderer repair itself ran. The #10632 suppression-clear
+    // reads this boolean to decide whether its one-shot was spent, so a failed
+    // geometry sub-step must not flip it.
+    expect(service.resetRenderer("t1", { force: true })).toBe(true);
+
+    expect(managed.revealPendingRepair).toBe(true);
+    expect(managed.revealPendingGeneration).toBe(managed.attachGeneration);
+    // No fit() fallback — every reason the fresh reconcile failed is a reason
+    // fit() would fail too, and fit() would reintroduce the lock and the
+    // settled-strategy split.
+    expect(fit).not.toHaveBeenCalled();
+    // The escape hatch still runs so a paused renderer resumes drawing.
+    expect(paddingHistory(managed)).toContain("0.01px");
+  });
+
+  it("forced resetRenderer still runs forceXtermReflow when the reconcile throws", () => {
+    const managed = makeManaged();
+    makeDivergedPane(managed, { cols: 120, rows: 40 });
+    managed.pendingWrites = 2;
+    managed.attachGeneration = 9;
+    service.instances.set("t1", managed);
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+    vi.spyOn(service.resizeController, "reconcileGeometryFresh").mockImplementation(() => {
+      throw new Error("reconcile boom");
+    });
+
+    expect(() => service.resetRenderer("t1", { force: true })).not.toThrow();
+
+    // A throw is no more converged than a false — the obligation is armed
+    // either way rather than dropped.
+    expect(managed.revealPendingRepair).toBe(true);
+    expect(managed.revealPendingGeneration).toBe(managed.attachGeneration);
+    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(managed.lastReflowAt).toBe(0);
+  });
+
+  it("forced resetRenderer never reflows a live alt-screen pane or re-arms its breaker", () => {
+    const managed = makeManaged();
+    const { resize } = makeDivergedPane(managed, { cols: 120, rows: 40 });
+    managed.pendingWrites = 2;
+    managed.isAltBuffer = true;
+    managed.geometryRepairAttempts = 5;
+    managed.geometryRepairGaveUp = true;
+    service.instances.set("t1", managed);
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+    const fit = vi.spyOn(service.resizeController, "fit");
+
+    service.resetRenderer("t1", { force: true });
+
+    // End-to-end through the action's entry point: a full-screen TUI's frame is
+    // never mangled out from under its own SIGWINCH redraw (#10805), and the
+    // alt-buffer "success" (measurable, but no geometry touched) is not
+    // evidence of convergence, so the breaker stays latched.
+    expect(resize).not.toHaveBeenCalled();
+    expect(fit).not.toHaveBeenCalled();
+    expect(managed.geometryRepairGaveUp).toBe(true);
+    expect(managed.geometryRepairAttempts).toBe(5);
+  });
+
+  it("forced resetRenderer preserves a reveal obligation it did not discharge", () => {
+    const managed = makeManaged();
+    makeDivergedPane(managed, { cols: 120, rows: 40 });
+    managed.pendingWrites = 2;
+    // Armed by the reveal controller because an open synchronized-output block
+    // blocked its atlas repair / unpause — NOT a geometry deferral. A geometry
+    // step cannot discharge it, so clearing it here would strand the pane.
+    managed.revealPendingRepair = true;
+    managed.revealPendingGeneration = 3;
+    service.instances.set("t1", managed);
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+
+    service.resetRenderer("t1", { force: true });
+
+    const term = managed.terminal as unknown as { cols: number };
+    expect(term.cols).toBe(120);
+    expect(managed.revealPendingRepair).toBe(true);
+    expect(managed.revealPendingGeneration).toBe(3);
   });
 
   it("resetRenderer leaves sibling panes untouched (#9701 isolation)", () => {
@@ -577,10 +669,12 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
       } as unknown as ManagedTerminal["terminal"],
     });
     service.instances.set("t1", managed);
-    const resetRenderer = vi.spyOn(service, "resetRenderer").mockImplementation(() => undefined);
+    const resetRenderer = vi.spyOn(service, "resetRenderer").mockImplementation(() => true);
 
     service.handleBackendRecovery();
 
+    // Automatic recovery must stay UNforced — a single-arg call is the assertion
+    // that #10863's deferral still shields this sweep (#11638).
     expect(resetRenderer).toHaveBeenCalledWith("t1");
     expect(managed.fitAddon.fit).not.toHaveBeenCalled();
     expect(write).toHaveBeenCalledTimes(2);

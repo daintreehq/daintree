@@ -3,9 +3,11 @@ import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
 import { nextFrame } from "@/services/terminal/revealUntilStable";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalPendingDestructiveActionStore } from "@/store/terminalPendingDestructiveActionStore";
 import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm";
+import { isForegroundDispatch } from "./dispatchSource";
 
 // Shared by argsSchema + run() so the worktree id is extracted via a validated
 // parse rather than an unchecked `as` cast (keeps the lint ratchet green).
@@ -13,11 +15,6 @@ const clearHistoryArgsSchema = z.object({
   worktreeId: z.string().optional(),
   confirmed: z.boolean().optional(),
 });
-
-// Forced renderer resets applied per animation frame by
-// `worktree.sessions.resetRenderers`. Each one can reflow a pane's full
-// scrollback synchronously, so they are chunked rather than run in one task.
-const RESET_RENDERERS_PER_FRAME = 2;
 
 export function registerWorktreeSessionActions(
   actions: ActionRegistry,
@@ -126,22 +123,29 @@ export function registerWorktreeSessionActions(
       const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
       if (!targetWorktreeId) return;
       const { panelsById, panelIds } = usePanelStore.getState();
-      const targets = panelIds.filter(
-        (id) => panelsById[id]?.worktreeId === targetWorktreeId
-      );
+      // PTY panels only: a browser/review/preview panel in the worktree has no
+      // renderer to reset, and letting one occupy a frame slot would delay a
+      // genuinely garbled terminal behind it.
+      const targets = panelIds.filter((id) => {
+        const panel = panelsById[id];
+        return (
+          panel?.worktreeId === targetWorktreeId &&
+          (!panel.kind || panelKindHasPty(panel.kind))
+        );
+      });
+      // Same explicit-repair intent as the per-pane Redraw, so the same
+      // foreground-only force (#11638).
+      const force = isForegroundDispatch(ctx.dispatchSource);
 
-      // Same explicit-repair intent as the per-pane Redraw, so the same force
-      // (#11638) — but spread across frames. Forcing turns each pane's geometry
-      // step into a synchronous xterm reflow of its whole scrollback, and this
-      // action is pressed precisely when a whole worktree looks garbled, so an
-      // unchunked loop would pile every reflow into one long task. Two per
-      // frame mirrors the watchdog's heavy-repair budget. The id list is
-      // snapshotted above; a pane closed mid-sweep just no-ops in the service.
-      for (let index = 0; index < targets.length; index += RESET_RENDERERS_PER_FRAME) {
+      // One pane per frame. Forcing turns each pane's geometry step into a
+      // synchronous xterm reflow of its whole scrollback — the resize-pass
+      // scheduler budgets 15-40ms for exactly that — and this action is pressed
+      // precisely when a whole worktree looks garbled, so an unchunked loop
+      // would pile every reflow into one long task. The id list is snapshotted
+      // above; a pane closed mid-sweep just no-ops in the service.
+      for (const [index, id] of targets.entries()) {
         if (index > 0) await nextFrame();
-        for (const id of targets.slice(index, index + RESET_RENDERERS_PER_FRAME)) {
-          terminalInstanceService.resetRenderer(id, { force: true });
-        }
+        terminalInstanceService.resetRenderer(id, { force });
       }
     },
   }));

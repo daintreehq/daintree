@@ -40,6 +40,7 @@ type Panel = {
   id: string;
   location: "grid" | "dock" | "trash" | "overlay" | "background" | "dialog";
   worktreeId?: string;
+  kind?: string;
   detectedAgentId?: string;
   agentState?: string;
 };
@@ -470,34 +471,58 @@ describe("worktree.sessions confirmed flag survives arg validation (schema regre
 });
 
 describe("worktree.sessions.resetRenderers", () => {
-  // Enough panes to span several chunks of the frame-spread loop, so a bug that
-  // dropped everything past the first chunk would show up as a short call list.
+  // Mixed kinds and worktrees: only the PTY panels of the target worktree may
+  // be swept. A browser/review panel has no renderer to reset, and letting one
+  // hold a frame slot would delay a genuinely garbled terminal behind it.
   const PANES: Panel[] = [
-    { id: "a1", location: "grid", worktreeId: "wt-1" },
-    { id: "b1", location: "grid", worktreeId: "wt-2" },
-    { id: "a2", location: "grid", worktreeId: "wt-1" },
-    { id: "a3", location: "dock", worktreeId: "wt-1" },
+    { id: "a1", location: "grid", worktreeId: "wt-1", kind: "terminal" },
+    { id: "b1", location: "grid", worktreeId: "wt-2", kind: "terminal" },
+    { id: "a2", location: "grid", worktreeId: "wt-1", kind: "terminal" },
+    { id: "web1", location: "grid", worktreeId: "wt-1", kind: "browser" },
+    { id: "a3", location: "dock", worktreeId: "wt-1", kind: "terminal" },
+    { id: "rev1", location: "grid", worktreeId: "wt-1", kind: "review" },
+    // A legacy panel with no recorded kind still sweeps — absence is not proof
+    // it lacks a PTY, and skipping it would silently drop a real terminal.
     { id: "a4", location: "grid", worktreeId: "wt-1" },
-    { id: "a5", location: "grid", worktreeId: "wt-1" },
   ];
 
-  it("forces every pane in the target worktree and no others", async () => {
+  const ptyTargets = ["a1", "a2", "a3", "a4"];
+
+  it("forces every PTY pane in the target worktree and no others", async () => {
     setPanelState(PANES);
     const run = setupActions();
 
-    await run("worktree.sessions.resetRenderers", { worktreeId: "wt-1" });
+    await run(
+      "worktree.sessions.resetRenderers",
+      { worktreeId: "wt-1" },
+      { dispatchSource: "menu" }
+    );
 
-    const expected = PANES.filter((p) => p.worktreeId === "wt-1").map((p) => p.id);
     const called = terminalInstanceServiceMock.resetRenderer.mock.calls.map(([id]) => id);
-    // Order-insensitive set equality: the chunking is an implementation detail,
-    // but the COVERAGE is the contract — awaiting the action must leave no pane
-    // of the worktree un-redrawn.
-    expect([...called].sort()).toEqual([...expected].sort());
+    // Order-insensitive set equality: the frame pacing is an implementation
+    // detail, but the COVERAGE is the contract — awaiting the action must leave
+    // no PTY pane of the worktree un-redrawn, and no non-PTY pane touched.
+    expect([...called].sort()).toEqual([...ptyTargets].sort());
     // Bulk Redraw is the same explicit user intent as the per-pane one, so it
-    // takes the same bypass (#11638). Without this it stays broken for exactly
-    // the busy panes it is pressed on.
+    // takes the same bypass (#11638).
     for (const call of terminalInstanceServiceMock.resetRenderer.mock.calls) {
       expect(call[1]).toEqual({ force: true });
+    }
+  });
+
+  it("withholds the bypass from non-foreground dispatch", async () => {
+    setPanelState(PANES);
+    const run = setupActions();
+
+    await run(
+      "worktree.sessions.resetRenderers",
+      { worktreeId: "wt-1" },
+      { dispatchSource: "plugin" }
+    );
+
+    expect(terminalInstanceServiceMock.resetRenderer).toHaveBeenCalled();
+    for (const call of terminalInstanceServiceMock.resetRenderer.mock.calls) {
+      expect(call[1]).toEqual({ force: false });
     }
   });
 
@@ -505,7 +530,11 @@ describe("worktree.sessions.resetRenderers", () => {
     setPanelState(PANES);
     const run = setupActions();
 
-    await run("worktree.sessions.resetRenderers", {}, { activeWorktreeId: "wt-2" });
+    await run(
+      "worktree.sessions.resetRenderers",
+      {},
+      { activeWorktreeId: "wt-2", dispatchSource: "menu" }
+    );
 
     const called = terminalInstanceServiceMock.resetRenderer.mock.calls.map(([id]) => id);
     expect(called).toEqual(["b1"]);
@@ -515,7 +544,7 @@ describe("worktree.sessions.resetRenderers", () => {
     setPanelState(PANES);
     const run = setupActions();
 
-    await run("worktree.sessions.resetRenderers", {});
+    await run("worktree.sessions.resetRenderers", {}, { dispatchSource: "menu" });
 
     expect(terminalInstanceServiceMock.resetRenderer).not.toHaveBeenCalled();
   });

@@ -2257,12 +2257,14 @@ class TerminalInstanceService {
       return;
     }
 
-    // The explicit repair discharged any obligation an earlier automatic
-    // deferral (handlePostWake / applyDeferredResize) armed. Leaving it set
-    // would spend a watchdog heavy-budget slot and stamp the repair cooldown on
-    // a reconcile that is already a no-op.
-    managed.revealPendingRepair = false;
-    managed.revealPendingGeneration = undefined;
+    // Deliberately does NOT clear `revealPendingRepair`. That flag is
+    // multiplexed: the reveal controller also arms it when an open DEC 2026
+    // synchronized-output block forced it to defer the atlas repair / refresh /
+    // unpause (TerminalRevealController, #10632), which a geometry step does
+    // not discharge. Clearing it here to save the watchdog one near-no-op tick
+    // would drop that unrelated obligation on the floor and leave the pane
+    // stale until the next click or heartbeat. The redundant tick is cheap;
+    // the lost repair is not.
 
     // Re-arm the geometry circuit breaker only on DEMONSTRATED main-buffer
     // convergence. reconcileGeometryFresh's boolean is measurability, not
@@ -2344,6 +2346,11 @@ class TerminalInstanceService {
           this.forceGeometryResync(id, managed);
         } catch (error) {
           logError(`resetRenderer forced resync failed for ${id}`, error);
+          // Same obligation the unmeasurable-box branch arms: a throw is no
+          // more converged than a false, and dropping it here would leave the
+          // pane with no path back to a correct grid.
+          managed.revealPendingRepair = true;
+          managed.revealPendingGeneration = managed.attachGeneration;
         }
       } else if (!this.deferGridChangeForStream(managed, this.proposalDivergesFromGrid(managed))) {
         try {

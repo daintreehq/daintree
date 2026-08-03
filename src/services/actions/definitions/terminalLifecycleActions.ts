@@ -16,6 +16,7 @@ import {
 } from "@/utils/destructiveSessionConfirm";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
+import { isForegroundDispatch } from "./dispatchSource";
 
 function parseConfirmed(args: unknown): boolean {
   if (!args || typeof args !== "object") return false;
@@ -229,12 +230,17 @@ export function registerTerminalLifecycleActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        // force: the user is looking at a broken pane and has asked for it to
-        // be fixed. #10863's write-quiescence deferral is for AUTOMATIC
-        // geometry writers, and a busy agent never opens the 300ms gap it waits
-        // for — leaving Redraw a no-op on exactly the terminals it exists for
-        // (#11638).
-        terminalInstanceService.resetRenderer(targetId, { force: true });
+        // Only a PERSON gets the bypass (#11638). #10863's write-quiescence
+        // deferral exists to stop an automatic out-of-band re-wrap landing
+        // under a live cursor-relative repaint, and a busy agent never opens
+        // the 300ms gap it waits for — so a human staring at a garbled pane
+        // needs to skip it, but a plugin or agent driving this action on a
+        // timer IS the automatic writer the guard was written for. Non-
+        // foreground dispatch still gets the renderer repair, just with the
+        // deferral intact.
+        terminalInstanceService.resetRenderer(targetId, {
+          force: isForegroundDispatch(ctx?.dispatchSource),
+        });
       }
     },
   }));

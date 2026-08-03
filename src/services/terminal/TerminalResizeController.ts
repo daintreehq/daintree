@@ -718,6 +718,19 @@ export class TerminalResizeController {
     // always (re)assert the PTY size so the two agree.
     this.cancelPendingResize(id);
     if (managed.terminal.cols !== cols || managed.terminal.rows !== rows) {
+      // Drain held ingest bytes at the OUTGOING grid before re-wrapping, the
+      // same invariant commitResize enforces at the other choke point. Bytes
+      // held by ingest backpressure were emitted for the current grid; parsing
+      // them after xterm adopts a new one lands their cursor moves and erases
+      // on the wrong rows, which no later reflow can undo. The automatic
+      // callers never met this hazard because the streaming gate above already
+      // turned them away — a forced resync (#11638) runs precisely when a
+      // backlog is most likely, so the flush has to be explicit here.
+      if (!this.flushHeldBytesBeforeResize(id)) {
+        // Backlog exceeded the sync-flush budget and stayed queued; let it
+        // drain against the new grid rather than stall ingest behind it.
+        this.deps.dataBuffer.resumeFlush(id);
+      }
       this.resizeTerminal(managed, cols, rows);
     }
     terminalClient.resize(id, cols, rows);

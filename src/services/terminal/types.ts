@@ -40,10 +40,21 @@ export type PostCompleteHook = (output: string) => void | Promise<void>;
  * without the bypass the one load-bearing step of Redraw is dead on exactly the
  * terminals it exists for.
  *
- * It bypasses NOTHING else: the alt-screen exclusion (#10805), host visibility,
- * the >=50px box floor, cell-metric availability, and the serialized-restore
- * parking all still apply. Deliberately absent from `TerminalRevealController`
- * and the watchdog's dep signatures so no automatic path can even ask for it.
+ * Still enforced under `force`: the alt-screen exclusion (#10805), host
+ * visibility, the >=50px box floor, cell-metric availability, the
+ * serialized-restore parking, and the pre-resize drain of held ingest bytes.
+ *
+ * Also note what `force` implies beyond the stream gate: it routes the repair
+ * through the lock-exempt atomic reconcile rather than `fit()`, so it can land
+ * during a resize lock (a divider drag, DnD, the project-switch suppression
+ * window). That is deliberate — the lock is how the pane got stale in the
+ * first place, and deferring to the end-of-transition pass is the same
+ * hand-off-to-something-that-never-runs that made Redraw a no-op.
+ *
+ * Deliberately absent from `TerminalRevealController` and the watchdog's dep
+ * signatures so no automatic path can even ask for it. The two actions that do
+ * ask gate it on `isForegroundDispatch` — an agent or plugin driving Redraw on
+ * a timer IS the automatic writer #10863 was written for.
  */
 export interface TerminalResyncOptions {
   force?: boolean;
