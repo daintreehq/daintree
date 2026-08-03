@@ -44,12 +44,15 @@ export function useActiveWorktreeSync() {
     // pending load — a non-git workspace creates no monitors. Clear the id a
     // previous project left behind rather than snapping to a main worktree that
     // does not exist, or every launch resolves against a phantom target
-    // (#11654). Guarded on a non-null id because `setActiveWorktree` persists
-    // and re-runs terminal policy on every call, and this effect re-runs on each
-    // snapshot.
+    // (#11654). Session-scoped: the persisted `activeWorktreeId` slot is
+    // app-global, so writing null through it would wipe the saved selection of
+    // the git-backed project that left this id behind — the same reasoning that
+    // makes `stateHydration` skip the write rather than clear. Guarded on a
+    // non-null id because `setActiveWorktree` re-runs terminal policy on every
+    // call, and this effect re-runs on each snapshot.
     if (worktrees.length === 0) {
       if (activeWorktreeId !== null) {
-        setActiveWorktree(null);
+        setActiveWorktree(null, { persist: false });
       }
       return;
     }

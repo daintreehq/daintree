@@ -249,7 +249,15 @@ interface WorktreeSelectionState {
   _previousRestoreWorktreeId: string | null;
   _fleetScopeToken: FleetScopeToken | null;
 
-  setActiveWorktree: (id: string | null) => void;
+  /**
+   * `persist: false` makes the activation session-scoped: the in-memory
+   * selection moves, but neither `restoreWorktreeId` nor the main-process
+   * `activeWorktreeId` slot is written. That slot is app-global — shared by
+   * every project — so a worktree-less workspace clearing it would wipe the
+   * saved selection of the git-backed project that owns it. `stateHydration`
+   * makes the same call by skipping the write outright (#11654).
+   */
+  setActiveWorktree: (id: string | null, options?: { persist?: boolean }) => void;
   setFocusedWorktree: (id: string | null) => void;
   selectWorktree: (id: string, options?: { source?: "user" | "focus" }) => void;
   setPendingWorktree: (id: string | null) => void;
@@ -644,7 +652,12 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   _previousRestoreWorktreeId: null,
   _fleetScopeToken: null,
 
-  setActiveWorktree: (id) => {
+  setActiveWorktree: (id, options) => {
+    // Both the durable slot and the persisted one ride this flag together: the
+    // restore target is the in-memory half of the same app-global selection, so
+    // a session-scoped activation that nulled it would still lose the durable
+    // pick the moment anything else re-persisted from it (#11654).
+    const persist = options?.persist ?? true;
     const previousId = get().activeWorktreeId;
     const generation = get()._policyGeneration + 1;
     const switchStartedAt = Date.now();
@@ -660,7 +673,9 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       _policyGeneration: generation,
     };
 
-    if (id !== null) {
+    if (!persist) {
+      // Leave the durable selection exactly as it was.
+    } else if (id !== null) {
       // An explicit activation is a durable selection — make it the restore
       // target so switching projects round-trips back to it (#9512).
       updates.restoreWorktreeId = id;
@@ -704,7 +719,9 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     }
     scheduleWorktreeSwitchPaintedMark(previousId ?? null, id ?? null, switchStartedAt);
 
-    persistActiveWorktree(id);
+    if (persist) {
+      persistActiveWorktree(id);
+    }
 
     applyWorktreeTerminalPolicy(get, set, id, generation, () => {
       markRendererPerformance(PERF_MARKS.WORKTREE_SWITCH_END, {

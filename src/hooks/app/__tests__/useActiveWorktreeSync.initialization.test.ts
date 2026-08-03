@@ -153,7 +153,12 @@ describe("useActiveWorktreeSync on a worktree-less workspace", () => {
     mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: true });
     rerender();
 
-    expect(mocks.selectionState.setActiveWorktree).toHaveBeenCalledExactlyOnceWith(null);
+    // `persist: false` is load-bearing: the persisted `activeWorktreeId` slot is
+    // app-global, so a plain clear here would drop the saved selection of the
+    // git-backed project that left this id behind.
+    expect(mocks.selectionState.setActiveWorktree).toHaveBeenCalledExactlyOnceWith(null, {
+      persist: false,
+    });
     // There is no worktree to snap to — reaching for one would read past the
     // end of the empty list.
     expect(mocks.selectionState.selectWorktree).not.toHaveBeenCalled();
@@ -188,7 +193,9 @@ describe("useActiveWorktreeSync on a worktree-less workspace", () => {
     mocks.useWorktrees.mockReturnValue({ worktrees: [], isInitialized: true });
     rerender();
 
-    expect(mocks.selectionState.setActiveWorktree).toHaveBeenCalledExactlyOnceWith(null);
+    expect(mocks.selectionState.setActiveWorktree).toHaveBeenCalledExactlyOnceWith(null, {
+      persist: false,
+    });
     expect(mocks.selectionState.selectWorktree).not.toHaveBeenCalled();
   });
 

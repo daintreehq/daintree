@@ -138,4 +138,44 @@ describe("resolveLaunchTarget", () => {
       worktree: null,
     });
   });
+
+  /**
+   * A ghost row (#11232) is absent from the live map yet is a legitimate active
+   * selection — `useActiveWorktreeSync` holds the selection on one while its
+   * terminals survive. Dropping the id would put the new panel in the
+   * `__none__` bucket: invisible chrome over a live PTY.
+   */
+  describe("deleted-worktree ghost rows", () => {
+    it("keeps an inherited ghost id so the panel joins the row's surviving terminals", () => {
+      expect(
+        resolveLaunchTarget(undefined, "ghost", map(["wt-1"]), true, new Set(["ghost"]))
+      ).toEqual({ worktreeId: "ghost", worktree: null });
+    });
+
+    it("accepts the store's Map of ghost rows, not just a Set", () => {
+      // The hook passes `deletedWorktrees` straight through, which is a
+      // Map<string, DeletedWorktree>.
+      const deleted = new Map([["ghost", { name: "feature" }]]);
+      expect(resolveLaunchTarget(undefined, "ghost", map([]), true, deleted)).toEqual({
+        worktreeId: "ghost",
+        worktree: null,
+      });
+    });
+
+    it("still drops an inherited id that is neither live nor a ghost row", () => {
+      expect(resolveLaunchTarget(undefined, "stale", map([]), true, new Set(["ghost"]))).toEqual({
+        worktreeId: null,
+        worktree: null,
+      });
+    });
+
+    it("does not rescue an explicit ghost id — a named target still asserts (#10812)", () => {
+      // The caller asked for this worktree by name; a ghost has no path to
+      // launch into, so the failure must surface rather than silently landing
+      // somewhere else.
+      expect(() =>
+        resolveLaunchTarget("ghost", null, map(["wt-1"]), true, new Set(["ghost"]))
+      ).toThrow("Worktree 'ghost' not found");
+    });
+  });
 });

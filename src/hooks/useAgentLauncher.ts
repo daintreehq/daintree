@@ -109,12 +109,21 @@ export function resolveLaunchWorktree<T>(
  * panel options, `|| null` in `buildLaunchIdentity`, a falsy guard in
  * `resolveEffectivePresetId` — so nothing observable changes, and the returned
  * id is then always either a real id or null.
+ *
+ * `deletedWorktreeIds` carries the ghost rows (#11232): a deleted worktree
+ * whose terminals outlived it is absent from the live map but is still a valid
+ * active selection — `useActiveWorktreeSync` deliberately holds the selection
+ * on one. Dropping it here would land the new panel in the `__none__` bucket
+ * (invisible, with a live PTY) instead of alongside the row's surviving
+ * terminals, so a ghost id survives the same way a live one does, with a null
+ * worktree because it has no path or branch left to report.
  */
 export function resolveLaunchTarget<T>(
   explicitWorktreeId: string | undefined,
   inheritedWorktreeId: string | null,
   worktreeMap: Map<string, T>,
-  isInitialized: boolean
+  isInitialized: boolean,
+  deletedWorktreeIds?: { has: (id: string) => boolean }
 ): { worktreeId: string | null; worktree: T | null } {
   if (explicitWorktreeId !== undefined) {
     return {
@@ -124,7 +133,12 @@ export function resolveLaunchTarget<T>(
   }
 
   const worktree = inheritedWorktreeId ? (worktreeMap.get(inheritedWorktreeId) ?? null) : null;
-  if (inheritedWorktreeId && !worktree && isInitialized) {
+  if (
+    inheritedWorktreeId &&
+    !worktree &&
+    isInitialized &&
+    !deletedWorktreeIds?.has(inheritedWorktreeId)
+  ) {
     return { worktreeId: null, worktree: null };
   }
   return { worktreeId: inheritedWorktreeId, worktree };
@@ -263,6 +277,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
   const addPanel = usePanelStore((state) => state.addPanel);
   const { worktreeMap, isInitialized } = useWorktrees();
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
+  const deletedWorktrees = useWorktreeSelectionStore((state) => state.deletedWorktrees);
   const currentProject = useProjectStore((state) => state.currentProject);
   const currentScratch = useScratchStore((state) => state.currentScratch);
   const { homeDir } = useHomeDir();
@@ -352,7 +367,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           launchOptions?.worktreeId,
           activeWorktreeId,
           worktreeMap,
-          isInitialized
+          isInitialized,
+          deletedWorktrees
         );
 
         const cwd =
@@ -751,6 +767,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
     },
     [
       activeWorktreeId,
+      deletedWorktrees,
       worktreeMap,
       isInitialized,
       addPanel,

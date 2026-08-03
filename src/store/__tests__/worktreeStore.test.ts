@@ -792,6 +792,30 @@ describe("worktreeStore", () => {
       expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBeNull();
     });
 
+    // A worktree-less workspace clearing its inherited selection must not touch
+    // the app-global slot, which is shared with the git-backed project that owns
+    // the saved id (#11654).
+    it("setActiveWorktree(null, { persist: false }) clears the session selection only", async () => {
+      useWorktreeSelectionStore.getState().setActiveWorktree("wt-feature");
+      // persistActiveWorktree defers its setState through a dynamic import, so
+      // the seed's write must land before the mock is cleared.
+      await vi.waitFor(() =>
+        expect(appSetStateMock).toHaveBeenCalledWith({ activeWorktreeId: "wt-feature" })
+      );
+      appSetStateMock.mockClear();
+
+      useWorktreeSelectionStore.getState().setActiveWorktree(null, { persist: false });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.activeWorktreeId).toBeNull();
+      // The durable pick and the persisted slot both survive, so returning to
+      // the project that owns it still lands on wt-feature.
+      expect(state.restoreWorktreeId).toBe("wt-feature");
+      expect(appSetStateMock).not.toHaveBeenCalled();
+    });
+
     it("reset clears the restore target", () => {
       useWorktreeSelectionStore.getState().selectWorktree("wt-x");
       expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBe("wt-x");
