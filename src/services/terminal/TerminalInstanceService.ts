@@ -46,7 +46,8 @@ import {
 import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
 import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { isPtyPanel } from "@shared/types/panel";
-import type { TerminalGeometry } from "@shared/types/terminal";
+import { isValidTerminalGeometry, type TerminalGeometry } from "@shared/types/terminal";
+import type { TerminalResizeResult } from "@shared/types/pty-host";
 import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
@@ -127,6 +128,7 @@ class TerminalInstanceService {
   private workerIngestController: TerminalWorkerIngestController;
   private revealController: TerminalRevealController;
   private unsubTierChanged: (() => void) | null = null;
+  private unsubResizeResult: (() => void) | null = null;
 
   constructor() {
     if (canAutoInitializeTerminalIngest()) {
@@ -716,20 +718,44 @@ class TerminalInstanceService {
     });
   }
 
+  /**
+   * One process-wide listener for PTY resize echoes, armed on the first
+   * terminal rather than in the constructor: the service is built at module
+   * scope, where `window.electron` does not exist yet under Node test
+   * environments.
+   */
+  private ensureResizeResultSubscription(): void {
+    if (this.unsubResizeResult) return;
+    this.unsubResizeResult = terminalClient.onResizeResult((id, result) => {
+      this.recordPtyResizeResult(id, result);
+    });
+  }
+
+  /**
+   * Store the geometry the PTY reports holding. A new PTY incarnation retires
+   * the previous one's divergence history — the counter describes one live
+   * backend process, not the pane.
+   */
+  private recordPtyResizeResult(id: string, result: TerminalResizeResult): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    if (managed.ptyGeometryDivergenceGeneration !== result.launchGeneration) {
+      managed.ptyGeometryDivergenceGeneration = result.launchGeneration ?? undefined;
+      managed.ptyGeometryDivergenceCount = 0;
+      managed.ptyGeometryDivergenceSignature = undefined;
+    }
+    managed.lastPtyResizeResult = result;
+  }
+
   setTargetSize(id: string, cols: number, rows: number): void {
     const instance = this.instances.get(id);
     if (!instance) return;
 
-    if (
-      Number.isFinite(cols) &&
-      Number.isFinite(rows) &&
-      Number.isInteger(cols) &&
-      Number.isInteger(rows) &&
-      cols > 0 &&
-      cols <= 500 &&
-      rows > 0 &&
-      rows <= 500
-    ) {
+    // Shared ceiling, not a local 500: a restored pane that legitimately
+    // exceeds it must not silently keep the previous target and boot the PTY at
+    // a geometry xterm never adopts (#11641).
+    if (isValidTerminalGeometry({ cols, rows })) {
       instance.targetCols = cols;
       instance.targetRows = rows;
     }
@@ -1051,6 +1077,7 @@ class TerminalInstanceService {
     installTerminalBoundListeners(terminal, managed, id, this.makeListenerInstallDeps());
 
     this.instances.set(id, managed);
+    this.ensureResizeResultSubscription();
 
     const initialTier = getRefreshTier ? getRefreshTier() : TerminalRefreshTier.FOCUSED;
     this.rendererPolicy.applyRendererPolicy(id, initialTier);
@@ -2723,6 +2750,8 @@ class TerminalInstanceService {
     this.stopPolling();
     this.unsubTierChanged?.();
     this.unsubTierChanged = null;
+    this.unsubResizeResult?.();
+    this.unsubResizeResult = null;
     this.workerIngestController.dispose();
     this.resizePassScheduler.dispose();
     this.reflowController.dispose();

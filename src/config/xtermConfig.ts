@@ -14,6 +14,7 @@
 import type { ITerminalOptions, ITheme } from "@xterm/xterm";
 import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
+import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 
 /**
  * Configuration for terminal appearance.
@@ -179,7 +180,13 @@ export function calculateTerminalDimensions(
   const metrics = getTerminalMetrics(fontSize);
   const availableWidth = widthPx - TERMINAL_SCROLLBAR_WIDTH;
   return {
-    cols: Math.max(20, Math.min(500, Math.floor(availableWidth / metrics.cellWidth))),
-    rows: Math.max(10, Math.min(200, Math.floor(heightPx / metrics.cellHeight))),
+    // Bounded by the shared ceiling rather than a local cap: an ultrawide
+    // display legitimately exceeds 500 columns, and booting xterm narrower than
+    // the container starts the pane already split from the PTY (#11641).
+    cols: Math.max(
+      20,
+      normalizeTerminalGridDimension(Math.floor(availableWidth / metrics.cellWidth))
+    ),
+    rows: Math.max(10, normalizeTerminalGridDimension(Math.floor(heightPx / metrics.cellHeight))),
   };
 }

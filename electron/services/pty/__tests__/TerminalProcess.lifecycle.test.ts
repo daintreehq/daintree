@@ -1172,3 +1172,124 @@ describe("TerminalProcess — agent startup instrumentation (Issue #7616)", () =
     }
   });
 });
+
+describe("TerminalProcess — resize result echo (#11641)", () => {
+  /**
+   * A pty whose `cols`/`rows` track what `resize()` accepted, and which can
+   * accept something other than what it was asked for. Real node-pty reports
+   * its own cached view rather than a kernel read-back, so the distinction the
+   * echo has to preserve is "what the pty ended up holding" vs "what we asked
+   * for" — a fake that always stores the argument can't tell those apart.
+   */
+  function createResizablePty(
+    initialCols: number,
+    initialRows: number,
+    accept: (cols: number, rows: number) => { cols: number; rows: number } = (cols, rows) => ({
+      cols,
+      rows,
+    })
+  ) {
+    const pty = createControllablePty();
+    let currentCols = initialCols;
+    let currentRows = initialRows;
+    Object.defineProperty(pty, "cols", { get: () => currentCols, configurable: true });
+    Object.defineProperty(pty, "rows", { get: () => currentRows, configurable: true });
+    const resizeSpy = vi.fn<(cols: number, rows: number) => void>((cols, rows) => {
+      const accepted = accept(cols, rows);
+      currentCols = accepted.cols;
+      currentRows = accepted.rows;
+    });
+    pty.resize = resizeSpy;
+    return { pty, resizeSpy };
+  }
+
+  it("reports the geometry the pty ended up holding, not the geometry requested", () => {
+    // The pty accepts a narrower grid than asked for. Echoing the request would
+    // hide exactly the split the caller needs to see.
+    const { pty } = createResizablePty(80, 24, (cols, rows) => ({
+      cols: Math.min(cols, 550),
+      rows,
+    }));
+    const terminal = createTerminal(pty, undefined, undefined, "t-resize-applied");
+    try {
+      const result = terminal.resize(700, 40);
+
+      expect(result.outcome).toBe("applied");
+      expect(result.requestedCols).toBe(700);
+      expect(result.appliedCols).toBe(550);
+      expect(result.appliedCols).not.toBe(result.requestedCols);
+      expect(result.appliedRows).toBe(40);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("still reports the pty's geometry when the request is a no-op", () => {
+    // The dedup shortcut skips ptyProcess.resize (and therefore SIGWINCH). A
+    // caller that learns nothing here cannot distinguish "the pty is where you
+    // asked" from "the pty never moved", which is the split this echo exists
+    // to surface.
+    const { pty, resizeSpy } = createResizablePty(120, 30);
+    const terminal = createTerminal(pty, undefined, undefined, "t-resize-noop");
+    try {
+      const result = terminal.resize(120, 30);
+
+      expect(result.outcome).toBe("unchanged");
+      expect(result.appliedCols).toBe(120);
+      expect(result.appliedRows).toBe(30);
+      expect(resizeSpy).not.toHaveBeenCalled();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("reports the pre-existing geometry when the pty rejects the resize", () => {
+    const { pty } = createResizablePty(100, 30);
+    pty.resize = () => {
+      throw new Error("ioctl failed");
+    };
+    const terminal = createTerminal(pty, undefined, undefined, "t-resize-throw");
+    try {
+      const result = terminal.resize(200, 50);
+
+      expect(result.outcome).toBe("failed");
+      expect(result.error).toContain("ioctl failed");
+      // The grid did NOT move — reporting the request here would claim a
+      // resize that never happened.
+      expect(result.appliedCols).toBe(100);
+      expect(result.appliedRows).toBe(30);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("rejects non-integral geometry without touching the pty", () => {
+    const { pty, resizeSpy } = createResizablePty(80, 24);
+    const terminal = createTerminal(pty, undefined, undefined, "t-resize-invalid");
+    try {
+      const result = terminal.resize(80.5, 24);
+
+      expect(result.outcome).toBe("rejected");
+      expect(result.appliedCols).toBeNull();
+      expect(result.appliedRows).toBeNull();
+      expect(resizeSpy).not.toHaveBeenCalled();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("reports no applied geometry once the pty has exited", () => {
+    const { pty, resizeSpy } = createResizablePty(80, 24);
+    const terminal = createTerminal(pty, undefined, undefined, "t-resize-exited");
+    try {
+      pty.emitExit(0);
+      const result = terminal.resize(120, 40);
+
+      expect(result.outcome).toBe("exited");
+      expect(result.appliedCols).toBeNull();
+      expect(resizeSpy).not.toHaveBeenCalled();
+    } finally {
+      terminal.dispose();
+    }
+  });
+});

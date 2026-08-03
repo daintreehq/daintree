@@ -3,6 +3,7 @@ import { TerminalRefreshTier } from "@/types";
 import { isSidebarMeasurementLocked } from "@/lib/layoutTransitionLock";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { logDebug, logWarn } from "@/utils/logger";
+import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { hasStreamingWrites } from "./TerminalResizeController";
 import type { ManagedTerminal } from "./types";
 
@@ -248,38 +249,95 @@ export class TerminalReconciliationWatchdog {
   }
 
   /**
-   * Dev-only diagnostic for the project-switch garble bug: an on-screen,
-   * settled terminal whose xterm grid (`terminal.cols/rows`) disagrees with the
+   * Diagnostic for the project-switch garble bug: an on-screen, settled
+   * terminal whose xterm grid (`terminal.cols/rows`) disagrees with the
    * dimensions the container can actually hold (`fitAddon.proposeDimensions()`)
    * is rendering its buffer at the wrong width — the exact "garbled line flow"
    * users see after switching back to a project. The watchdog already gated out
    * drags, layout transitions, and resize-suppressed/attaching terminals, so a
-   * divergence reaching here is real, not transient. This call itself only
-   * logs (DEV) — the actual repair is the geometry-convergence branch in
-   * {@link reconcile} (#10632) — so a silently-wrong grid is both loud during
-   * local development and reconciled on the same tick.
+   * divergence reaching here is real, not transient. This call only logs — the
+   * actual repair is the geometry-convergence branch in {@link reconcile}
+   * (#10632).
+   *
+   * Runs in production (#11641). The sweep is interval-driven, so both checks
+   * report once per divergence EPISODE rather than once per tick: a signature
+   * of the disagreeing geometries gates the warning, and only an observed
+   * agreement clears it. A missing proposal or a thrown measurement proves
+   * nothing about convergence and must leave the signature standing.
    */
   private diagnoseGeometryDivergence(id: string, managed: ManagedTerminal): void {
-    if (!import.meta.env?.DEV) return;
+    this.diagnosePtyGeometryDivergence(id, managed);
     try {
       const proposal = managed.fitAddon.proposeDimensions?.();
       if (!proposal || proposal.cols <= 1 || proposal.rows <= 1) return;
       const { cols, rows } = managed.terminal;
-      if (proposal.cols !== cols || proposal.rows !== rows) {
-        logWarn(
-          "[TerminalReconciliationWatchdog] geometry divergence: xterm grid disagrees with container (garble risk)",
-          {
-            id,
-            xtermCols: cols,
-            xtermRows: rows,
-            proposedCols: proposal.cols,
-            proposedRows: proposal.rows,
-          }
-        );
+      // Normalize before comparing: xterm is capped at the shared ceiling, so an
+      // uncapped proposal past it would read as a permanent divergence.
+      const proposedCols = normalizeTerminalGridDimension(proposal.cols);
+      const proposedRows = normalizeTerminalGridDimension(proposal.rows);
+      if (proposedCols === cols && proposedRows === rows) {
+        managed.fitGeometryDivergenceSignature = undefined;
+        return;
       }
+      const signature = `${managed.attachGeneration}:${cols}x${rows}:${proposedCols}x${proposedRows}`;
+      if (managed.fitGeometryDivergenceSignature === signature) return;
+      managed.fitGeometryDivergenceSignature = signature;
+      logWarn(
+        "[TerminalReconciliationWatchdog] geometry divergence: xterm grid disagrees with container (garble risk)",
+        {
+          id,
+          xtermCols: cols,
+          xtermRows: rows,
+          proposedCols,
+          proposedRows,
+        }
+      );
     } catch {
       // Diagnostic only — never let a measurement throw break the sweep.
     }
+  }
+
+  /**
+   * Compare the geometry the PTY reported holding against xterm's live grid.
+   * These are the two halves that must never move independently: the PTY wraps
+   * the agent's output at its width while xterm parses it at its own, and once
+   * they disagree, cursor-addressed output lands on the wrong rows with nothing
+   * to recover it (#11447).
+   *
+   * Compares `managed.terminal.cols/rows` directly — never `latestCols/Rows`,
+   * which name the target of a QUEUED resize, not the grid xterm holds.
+   */
+  private diagnosePtyGeometryDivergence(id: string, managed: ManagedTerminal): void {
+    const result = managed.lastPtyResizeResult;
+    if (!result || result.appliedCols === null || result.appliedRows === null) return;
+
+    const { cols, rows } = managed.terminal;
+    if (result.appliedCols === cols && result.appliedRows === rows) {
+      managed.ptyGeometryDivergenceSignature = undefined;
+      return;
+    }
+
+    const signature = `${result.launchGeneration ?? "none"}:${result.appliedCols}x${result.appliedRows}:${cols}x${rows}`;
+    if (managed.ptyGeometryDivergenceSignature === signature) return;
+    managed.ptyGeometryDivergenceSignature = signature;
+    managed.ptyGeometryDivergenceCount = (managed.ptyGeometryDivergenceCount ?? 0) + 1;
+
+    logWarn(
+      "[TerminalReconciliationWatchdog] geometry divergence: PTY grid disagrees with xterm (output wraps at the wrong width)",
+      {
+        id,
+        launchGeneration: result.launchGeneration,
+        outcome: result.outcome,
+        requestedCols: result.requestedCols,
+        requestedRows: result.requestedRows,
+        appliedCols: result.appliedCols,
+        appliedRows: result.appliedRows,
+        xtermCols: cols,
+        xtermRows: rows,
+        divergenceCount: managed.ptyGeometryDivergenceCount,
+        ...(result.error ? { error: result.error } : {}),
+      }
+    );
   }
 
   /**

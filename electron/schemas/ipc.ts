@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { BUILT_IN_PANEL_KINDS, panelKindHasPty } from "../../shared/config/panelKindRegistry.js";
 import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
+import { MAX_TERMINAL_GRID_DIMENSION } from "../../shared/types/terminal.js";
 import {
   ASSISTANT_HOST_PROTOCOL_VERSION,
   type AssistantHostEvent,
@@ -338,8 +339,8 @@ export const TerminalSpawnOptionsSchema = z.object({
   projectId: z.string().optional(),
   cwd: z.string().optional(),
   shell: z.string().optional(),
-  cols: z.number().int().positive().max(500),
-  rows: z.number().int().positive().max(500),
+  cols: z.number().int().positive().max(MAX_TERMINAL_GRID_DIMENSION),
+  rows: z.number().int().positive().max(MAX_TERMINAL_GRID_DIMENSION),
   // `command` is interpolated raw into a shell startup script in
   // buildCommandLaunchShell — shell metacharacters are intentional (pipes,
   // redirects, env vars), but control characters are never legitimate and

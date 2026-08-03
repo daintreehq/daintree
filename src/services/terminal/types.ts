@@ -8,6 +8,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { TerminalRefreshTier, PanelKind, AgentState } from "@/types";
 import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 import type { TerminalGeometry } from "@shared/types/terminal";
+import type { TerminalResizeResult } from "@shared/types/pty-host";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
@@ -111,6 +112,24 @@ export interface ManagedTerminal {
   // the same id must not inherit a prior instance's give-up state (mirrors the
   // revealPendingGeneration guard).
   geometryRepairGeneration?: number;
+  // Geometry the PTY reported holding after its last resize (#11641). The only
+  // view the renderer has of the backend grid — everything else here describes
+  // xterm's side.
+  lastPtyResizeResult?: TerminalResizeResult;
+  // Divergence episodes seen between the applied PTY grid and xterm's grid.
+  // Counts episodes, not watchdog ticks: it advances only when the divergence
+  // signature changes, so it stays in step with what was logged.
+  ptyGeometryDivergenceCount?: number;
+  // The PTY launchGeneration the count accrued under. Scoped to the PTY
+  // incarnation, NOT attachGeneration — detaching and reattaching a pane leaves
+  // the same PTY running, so its divergence history is still the pane's own.
+  ptyGeometryDivergenceGeneration?: number;
+  // Signature of the divergence currently being reported, so a persistently
+  // split pane logs once per episode instead of once per sweep. Cleared only on
+  // observed agreement.
+  ptyGeometryDivergenceSignature?: string;
+  // Same episode-dedup for the container-vs-xterm fit diagnostic.
+  fitGeometryDivergenceSignature?: string;
   // Visibility tracking
   isVisible: boolean;
   lastActiveTime: number;

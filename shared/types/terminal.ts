@@ -83,6 +83,17 @@ export interface SerializedTerminalSnapshot extends TerminalGeometry {
 export const MAX_TERMINAL_GRID_DIMENSION = 2000;
 
 /**
+ * Round `value` into the grid range every terminal layer agrees on. Callers that
+ * drive BOTH grids (xterm and the PTY) must normalize once and pass the same
+ * number to each — clamping independently per layer is what lets the two sides
+ * settle at different widths and never reconcile (#11641).
+ */
+export function normalizeTerminalGridDimension(value: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(1, Math.min(MAX_TERMINAL_GRID_DIMENSION, Math.floor(value)));
+}
+
+/**
  * True when `value` is a grid a terminal could actually have been captured at.
  * Replay sizes a real xterm to these numbers, so anything non-integral, zero,
  * negative or absurd must degrade to "no geometry" (replay verbatim) rather

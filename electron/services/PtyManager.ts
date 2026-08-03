@@ -37,7 +37,7 @@ import { ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { AgentTerminalLifecycleLedger } from "../../shared/utils/agentLifecycleLedger.js";
 import { events } from "./events.js";
 import { getGitBranch } from "../utils/gitUtils.js";
-import type { GracefulKillResult } from "../../shared/types/pty-host.js";
+import type { GracefulKillResult, TerminalResizeResult } from "../../shared/types/pty-host.js";
 import type { SerializedTerminalSnapshot } from "../../shared/types/terminal.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
 import { shouldTrimAnalysisSession } from "../../shared/utils/workerGovernancePolicy.js";
@@ -528,15 +528,33 @@ export class PtyManager extends EventEmitter {
 
   /**
    * Resize terminal.
+   *
+   * Emits `resize-result` for every request that reached a live terminal so the
+   * renderer can compare the geometry the PTY actually holds against its own
+   * xterm grid (#11641). Both resize transports — the Main IPC handler and the
+   * renderer's direct MessagePort — funnel through here, so this is the one
+   * place that sees every resize.
+   *
+   * The buffering branch emits nothing: an unlaunched id has no generation to
+   * stamp, and the spawn that consumes the buffered dims reports them itself.
    */
   resize(id: string, cols: number, rows: number): void {
+    const terminal = this.registry.get(id);
     if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) {
       logWarn(`Terminal ${id} resize rejected: invalid dims ${cols}x${rows}`);
+      if (terminal) {
+        this.emitResizeResult(id, {
+          requestedCols: cols,
+          requestedRows: rows,
+          appliedCols: null,
+          appliedRows: null,
+          outcome: "rejected",
+        });
+      }
       return;
     }
-    const terminal = this.registry.get(id);
     if (terminal) {
-      terminal.resize(cols, rows);
+      this.emitResizeResult(id, terminal.resize(cols, rows));
     } else {
       // Buffer the dims and apply them at spawn time. Coalesces last-write-wins.
       // Stamp the current ledger generation (null = never launched) so a
@@ -549,6 +567,21 @@ export class PtyManager extends EventEmitter {
       });
       logDebug(`Terminal ${id} not yet registered, buffering resize ${cols}x${rows}`);
     }
+  }
+
+  /**
+   * Stamp a resize outcome with the incarnation that produced it. Main drops
+   * results whose generation is no longer current, so a late echo from a killed
+   * terminal can never be attributed to a same-id successor (#10950).
+   */
+  private emitResizeResult(
+    id: string,
+    result: Omit<TerminalResizeResult, "launchGeneration">
+  ): void {
+    this.emit("resize-result", id, {
+      ...result,
+      launchGeneration: this.lifecycleLedger.currentGeneration(id) ?? null,
+    } satisfies TerminalResizeResult);
   }
 
   /**

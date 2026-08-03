@@ -2,6 +2,7 @@ import { Terminal } from "@xterm/xterm";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { getEffectiveScrollbarWidth } from "@/config/xtermConfig";
 import { logError, logWarn } from "@/utils/logger";
 import type { ManagedTerminal, TerminalResyncOptions } from "./types";
@@ -622,11 +623,17 @@ export class TerminalResizeController {
    * agent keeps producing output sized for the grid the user can see.
    */
   resizeTerminal(managed: ManagedTerminal, cols: number, rows: number): void {
+    // Normalize here and in `terminalClient.resize` with the same function, so
+    // xterm and the PTY land on identical dimensions no matter which call site
+    // or transport carried them. Clamping per-layer instead is what let the two
+    // grids settle at different widths and never reconcile (#11641).
+    const normalizedCols = normalizeTerminalGridDimension(cols);
+    const normalizedRows = normalizeTerminalGridDimension(rows);
     if (managed.isSerializedRestoreInProgress) {
-      managed.pendingRestoreGeometry = { cols, rows };
+      managed.pendingRestoreGeometry = { cols: normalizedCols, rows: normalizedRows };
       return;
     }
-    managed.terminal.resize(cols, rows);
+    managed.terminal.resize(normalizedCols, normalizedRows);
   }
 
   /**

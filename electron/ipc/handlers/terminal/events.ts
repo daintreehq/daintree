@@ -9,6 +9,7 @@ import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js"
 import { journalAgentSession } from "../../../services/pty/agentSessionJournal.js";
 import type {
   SpawnResult,
+  TerminalResizeResult,
   BroadcastWriteResultPayload,
   FdLeakWarningPayload,
 } from "../../../../shared/types/pty-host.js";
@@ -67,6 +68,18 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   };
   ptyClient.on("spawn-result", handleSpawnResult);
   handlers.push(() => ptyClient.off("spawn-result", handleSpawnResult));
+
+  // Geometry the PTY actually holds after a resize. The renderer compares it
+  // against its own xterm grid to detect a split the two sides cannot otherwise
+  // see (#11641). Already generation-filtered by the router.
+  const handleResizeResult = (id: string, result: TerminalResizeResult) => {
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      name: "terminal:resize-result",
+      payload: [id, result],
+    });
+  };
+  ptyClient.on("resize-result", handleResizeResult);
+  handlers.push(() => ptyClient.off("resize-result", handleResizeResult));
 
   // Terminal status for flow control visibility. Per-terminal pulses are
   // inherently project-scoped — only views of the owning project host panels

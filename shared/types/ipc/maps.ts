@@ -100,6 +100,7 @@ import type { GitCommitListOptions, GitCommitListResponse } from "../git.js";
 import type {
   SpawnResult,
   TerminalReliabilityMetricPayload,
+  TerminalResizeResult,
   TerminalStatusPayload,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
@@ -1391,6 +1392,7 @@ export interface IpcEventMap {
   "terminal:broadcast-write-result": BroadcastWriteResultPayload;
   "terminal:send-key": [id: string, key: string];
   "terminal:spawn-result": [id: string, result: SpawnResult];
+  "terminal:resize-result": [id: string, result: TerminalResizeResult];
   "terminal:backend-crashed": {
     crashType: string;
     code: number | null;
@@ -2076,6 +2078,7 @@ export type IpcEventBusMap = Pick<
   | "terminal:backend-ready"
   | "terminal:spawn-result"
   // Terminal observability
+  | "terminal:resize-result"
   | "terminal:reliability-metric"
   | "terminal:status"
   // Agent session journaled — resume surfaces refetch (global broadcast)

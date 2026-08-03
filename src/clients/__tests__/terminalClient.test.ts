@@ -58,6 +58,18 @@ let windowMessageListeners: Array<(e: MessageEvent) => void> = [];
 
 const typedGlobal = globalThis as unknown as Record<string, unknown>;
 
+function fireWindowMessage(data: Record<string, unknown>, ports?: MessagePort[]) {
+  const event = {
+    data,
+    ports: ports || [],
+    source: typedGlobal.window,
+    origin: "http://localhost",
+  } as unknown as MessageEvent;
+  for (const listener of windowMessageListeners) {
+    listener(event);
+  }
+}
+
 describe("terminalClient MessagePort data routing", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -99,18 +111,6 @@ describe("terminalClient MessagePort data routing", () => {
     fireWindowMessage({ type: "terminal-port", token }, [mc.port2]);
 
     return port;
-  }
-
-  function fireWindowMessage(data: Record<string, unknown>, ports?: MessagePort[]) {
-    const event = {
-      data,
-      ports: ports || [],
-      source: typedGlobal.window,
-      origin: "http://localhost",
-    } as unknown as MessageEvent;
-    for (const listener of windowMessageListeners) {
-      listener(event);
-    }
   }
 
   it("announces readiness after installing the MessagePort listener", () => {
@@ -787,5 +787,74 @@ describe("terminalClient MessagePort data routing", () => {
         resolve();
       }, 100);
     });
+  });
+});
+
+describe("terminalClient resize normalization (#11641)", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    windowMessageListeners = [];
+
+    const windowMock = {
+      top: null as unknown,
+      electron: { terminal: mockElectronTerminal },
+      location: { origin: "http://localhost", protocol: "http:" },
+      postMessage: vi.fn(),
+      addEventListener: vi.fn((type: string, handler: (e: MessageEvent) => void) => {
+        if (type === "message") windowMessageListeners.push(handler);
+      }),
+    };
+    windowMock.top = windowMock;
+    typedGlobal.window = windowMock;
+
+    vi.clearAllMocks();
+
+    const mod = await import("../terminalClient");
+    terminalClient = mod.terminalClient;
+  });
+
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  it("sends a wide grid through IPC without a legacy column cap", async () => {
+    // An ultrawide display at a small font legitimately exceeds the old 500
+    // ceiling. Capping only this transport left the PTY narrower than xterm.
+    terminalClient.resize("t1", 640, 60);
+
+    expect(mockElectronTerminal.resize).toHaveBeenCalledWith("t1", 640, 60);
+  });
+
+  it("normalizes identically on the MessagePort and IPC transports", async () => {
+    const mc = new MessageChannel();
+    const token = "resize-token";
+    fireWindowMessage({ type: "terminal-port-token", token });
+    fireWindowMessage({ type: "terminal-port", token }, [mc.port2]);
+
+    const viaPort: Array<Record<string, unknown>> = [];
+    mc.port1.addEventListener("message", (event: MessageEvent) => {
+      const msg = event.data as Record<string, unknown>;
+      if (msg?.type === "resize") viaPort.push(msg);
+    });
+    mc.port1.start();
+
+    // Far past the shared ceiling: the two transports must agree on what the
+    // PTY is told, otherwise which grid the backend adopts depends on whether a
+    // port happened to be live.
+    terminalClient.resize("t1", 9000, 9000);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(viaPort).toHaveLength(1);
+    const portDims = { cols: viaPort[0]?.cols, rows: viaPort[0]?.rows };
+
+    // Drop the port so the same request takes the IPC fallback.
+    mc.port1.close();
+    mc.port2.close();
+    vi.resetModules();
+    const mod = await import("../terminalClient");
+    mod.terminalClient.resize("t1", 9000, 9000);
+
+    const ipcCall = mockElectronTerminal.resize.mock.calls.at(-1);
+    expect({ cols: ipcCall?.[1], rows: ipcCall?.[2] }).toEqual(portDims);
   });
 });

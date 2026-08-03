@@ -29,6 +29,7 @@ import type {
   AgentSessionRetentionDays,
 } from "../../../../shared/types/ipc/agentSessionHistory.js";
 import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
+import { normalizeTerminalGridDimension } from "../../../../shared/types/terminal.js";
 import { DEFAULT_DANGEROUS_ARGS } from "../../../../shared/types/agentSettings.js";
 import {
   getAssistantWiredAgentIds,
@@ -195,8 +196,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       await waitForTerminalSpawnAdmission(validatedOptions);
     }
 
-    const cols = Math.max(1, Math.min(500, Math.floor(validatedOptions.cols) || 80));
-    const rows = Math.max(1, Math.min(500, Math.floor(validatedOptions.rows) || 30));
+    const cols = normalizeTerminalGridDimension(Math.floor(validatedOptions.cols) || 80);
+    const rows = normalizeTerminalGridDimension(Math.floor(validatedOptions.rows) || 30);
 
     const kind = "terminal";
     const launchAgentId = validatedOptions.launchAgentId;

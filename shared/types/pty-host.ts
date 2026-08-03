@@ -502,6 +502,7 @@ export type PtyHostEvent =
   | { type: "exit"; id: string; exitCode: number; signal?: number; launchGeneration?: number }
   | { type: "error"; id: string; error: string }
   | { type: "spawn-result"; id: string; result: SpawnResult }
+  | { type: "resize-result"; id: string; result: TerminalResizeResult }
   | { type: "kill-by-project-result"; requestId: string; killed: number }
   | {
       type: "project-stats";
@@ -926,6 +927,41 @@ export interface HostThrottlePayload {
 }
 
 /** Payload for terminal reliability metrics (backpressure/suspend) */
+/**
+ * How the pty-host disposed of one resize request.
+ *
+ * `unchanged` is deliberately reported rather than swallowed: `TerminalProcess`
+ * skips `IPty.resize()` when node-pty already holds the requested dimensions,
+ * and that shortcut emits no SIGWINCH. A PTY sitting at the wrong geometry
+ * while the renderer keeps re-asserting that same wrong geometry is exactly the
+ * split this echo exists to expose (#11447, #11641), so the no-op path must
+ * still report the dimensions the PTY actually holds.
+ */
+export type TerminalResizeOutcome = "applied" | "unchanged" | "failed" | "rejected" | "exited";
+
+/**
+ * What the pty-host did with a resize request, and the geometry node-pty holds
+ * afterwards.
+ *
+ * The applied dimensions are node-pty's own cached view of the request it
+ * accepted — NOT a kernel read-back. `IPty.cols`/`rows` never round-trip a query
+ * to the tty or ConPTY, so this cannot detect silent OS-level clamping. What it
+ * does detect is application-level divergence: geometry a layer of ours dropped,
+ * clamped, or failed to apply while xterm moved on without it.
+ */
+export interface TerminalResizeResult {
+  /** Incarnation the host actually touched; `null` when the id was never launched. */
+  launchGeneration: number | null;
+  requestedCols: number;
+  requestedRows: number;
+  /** Geometry node-pty holds after the attempt; `null` when no live PTY was resized. */
+  appliedCols: number | null;
+  appliedRows: number | null;
+  outcome: TerminalResizeOutcome;
+  /** Present only for `failed` — the message `IPty.resize()` threw. */
+  error?: string;
+}
+
 export interface TerminalReliabilityMetricPayload {
   terminalId: string;
   metricType:

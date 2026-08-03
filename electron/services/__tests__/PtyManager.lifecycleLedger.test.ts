@@ -54,8 +54,16 @@ class MockTerminalProcess {
     this.info.wasKilled = true;
   });
   resize = vi.fn((cols: number, rows: number) => {
+    const unchanged = this.info.cols === cols && this.info.rows === rows;
     this.info.cols = cols;
     this.info.rows = rows;
+    return {
+      requestedCols: cols,
+      requestedRows: rows,
+      appliedCols: cols,
+      appliedRows: rows,
+      outcome: unchanged ? ("unchanged" as const) : ("applied" as const),
+    };
   });
   setSabModeEnabled = vi.fn();
   dispose = vi.fn();
@@ -242,6 +250,40 @@ describe("PtyManager lifecycle ledger", () => {
 
     expect(shared.created[0]?.options.cols).toBe(132);
     expect(shared.created[0]?.options.rows).toBe(43);
+  });
+
+  it("stamps a resize result with the incarnation that applied it (#11641)", () => {
+    const manager = new PtyManager();
+    const results: Array<{ id: string; launchGeneration: number | null }> = [];
+    manager.on("resize-result", (id: string, result: { launchGeneration: number | null }) => {
+      results.push({ id, launchGeneration: result.launchGeneration });
+    });
+
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
+    manager.resize("t1", 120, 40);
+    manager.kill("t1");
+    shared.created[0]!.callbacks.onExit("t1", 0);
+    manager.spawn("t1", spawnOptions({ launchGeneration: 2 }));
+    manager.resize("t1", 130, 45);
+
+    // Main filters stale echoes by generation, so a result that reports the
+    // wrong incarnation would be attributed to the successor.
+    expect(results).toEqual([
+      { id: "t1", launchGeneration: 1 },
+      { id: "t1", launchGeneration: 2 },
+    ]);
+  });
+
+  it("emits no resize result while the terminal is only buffered (#11641)", () => {
+    const manager = new PtyManager();
+    const results: unknown[] = [];
+    manager.on("resize-result", (...args: unknown[]) => results.push(args));
+
+    // Nothing has launched, so there is no incarnation to attribute geometry
+    // to — the spawn that consumes these dims reports them itself.
+    manager.resize("t1", 132, 43);
+
+    expect(results).toEqual([]);
   });
 
   it("drops a buffered resize stamped by a previous incarnation", () => {
