@@ -1015,12 +1015,21 @@ describe("WorkspaceClient multi-process manager", () => {
 
     // Only an explicit `state: null` is a disowning. A reply that merely lacks
     // the field never reached that conclusion, so collapsing the two (`!state`
-    // instead of `=== null`) would manufacture proof out of a malformed
-    // response.
-    it("returns unknown for an absent state rather than treating it as a disowning", async () => {
+    // instead of `=== null`) would let a malformed response supply half of a
+    // `false` verdict. Project B is loaded and DOES claim the id, so a
+    // conflating implementation would return false here — without a
+    // corroborator both paths return null and the test proves nothing.
+    it.each([
+      ["a state field explicitly set to undefined", { state: undefined }],
+      ["a reply with no state field at all", {}],
+    ])("returns unknown, not false, for %s", async (_label, reply) => {
       const loadA = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
       await loadA;
+
+      const loadB = client.loadProject("/project-b", 2);
+      await readyAndResolveLoad(1);
+      await loadB;
 
       const ownedPromise = client.isWorktreeOwnedByProject(
         "wt-a",
@@ -1028,23 +1037,11 @@ describe("WorkspaceClient multi-process manager", () => {
         idFor("/project-a")
       );
       await tick();
-      h(0).resolveRequest(monitorReqs(0)[0].requestId, { state: undefined });
-
-      expect(await ownedPromise).toBeNull();
-    });
-
-    it("returns unknown for a reply with no state field at all", async () => {
-      const loadA = client.loadProject("/project-a", 1);
-      await readyAndResolveLoad(0);
-      await loadA;
-
-      const ownedPromise = client.isWorktreeOwnedByProject(
-        "wt-a",
-        "/project-a",
-        idFor("/project-a")
-      );
+      h(0).resolveRequest(monitorReqs(0)[0].requestId, reply);
       await tick();
-      h(0).resolveRequest(monitorReqs(0)[0].requestId, {});
+      if (monitorReqs(1).length > 0) {
+        h(1).resolveRequest(monitorReqs(1)[0].requestId, { state: { id: "wt-a" } });
+      }
 
       expect(await ownedPromise).toBeNull();
     });

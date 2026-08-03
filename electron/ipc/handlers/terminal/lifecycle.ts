@@ -28,7 +28,7 @@ import type {
   AgentSessionRecord,
   AgentSessionRetentionDays,
 } from "../../../../shared/types/ipc/agentSessionHistory.js";
-import { isGitBackedProject, resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
+import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
 import { normalizeTerminalGridDimension } from "../../../../shared/types/terminal.js";
 import { DEFAULT_DANGEROUS_ARGS } from "../../../../shared/types/agentSettings.js";
 import {
@@ -255,28 +255,30 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // a resolved Project because an explicit id is often a scratch id owning no
     // worktrees (#11079), and a spawn with no project resolved at all stamps no
     // pair to check (#5182).
+    // Deliberately NOT short-circuited on the project row's `gitBacked: false`
+    // flag, tempting as it is — a folder opened without git owns no worktrees,
+    // so the claim looks incoherent on its face. But the row is not the
+    // authority on that: the workspace host probes the folder on load and
+    // enumerates real worktrees if git appeared since (WorkspaceService's
+    // "the folder is the authority"), while the row is only promoted when the
+    // project is re-added. An external `git init` therefore leaves a stale
+    // `false` beside a host serving genuine ids, and trusting it would drop
+    // them. Ask the host, which knows.
     const ownershipClaim =
       resolvedProject && validatedOptions.worktreeId
         ? {
             projectId: resolvedProject.id,
             worktreeId: validatedOptions.worktreeId,
             projectPath: resolvedProject.path,
-            gitBacked: isGitBackedProject(resolvedProject),
           }
         : null;
 
-    // A project opened without git enumerates no worktrees at all (#11405), so
-    // any worktree id claimed against one is incoherent on its face — decided
-    // here, with no host round trip to spend.
-    const claimsWorktreeOnLightweightProject = ownershipClaim !== null && !ownershipClaim.gitBacked;
-
-    // Started here, awaited just before the spawn, so the round trip overlaps
-    // the settings read, cwd validation and env assembly below instead of
-    // adding to them. Settled to `null` (unknown) at creation so an early
-    // failure elsewhere in this handler can never surface as an unhandled
-    // rejection on a floating promise.
+    // Started here, awaited below, so the round trip overlaps the settings read
+    // and cwd validation instead of adding to them. Settled to `null`
+    // (unknown) at creation so an early failure elsewhere in this handler can
+    // never surface as an unhandled rejection on a floating promise.
     const worktreeOwnership: Promise<boolean | null> =
-      ownershipClaim && ownershipClaim.gitBacked && deps.worktreeService
+      ownershipClaim && deps.worktreeService
         ? deps.worktreeService
             .isWorktreeOwnedByProject(
               ownershipClaim.worktreeId,
@@ -359,13 +361,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // revoke them against a PTY that does not exist yet, leaving the spawn to
     // proceed untracked.
     let spawnWorktreeId = validatedOptions.worktreeId;
-    if (claimsWorktreeOnLightweightProject) {
-      console.warn(
-        `[TerminalSpawn] Dropping worktreeId ${spawnWorktreeId} for terminal ${id.slice(0, 8)}: ` +
-          `project ${ownershipClaim?.projectId} was opened without git and has no worktrees`
-      );
-      spawnWorktreeId = undefined;
-    } else if ((await worktreeOwnership) === false) {
+    if ((await worktreeOwnership) === false) {
       console.warn(
         `[TerminalSpawn] Dropping worktreeId ${spawnWorktreeId} for terminal ${id.slice(0, 8)}: ` +
           `it belongs to another project, not ${ownershipClaim?.projectId}`

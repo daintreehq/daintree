@@ -704,18 +704,17 @@ export class WorkspaceClient extends EventEmitter {
    * whole point:
    *
    * - `true`  — that project's host is ready and returned the monitor.
-   * - `false` — that project's host is ready and completed the lookup with
-   *             `state: null`. A PROVEN disowning.
+   * - `false` — that project's ready host disclaimed the id AND another loaded
+   *             project's host positively claimed it.
    * - `null`  — UNKNOWN. No pool entry for the path, the entry's immutable
    *             projectId doesn't match, readiness never settled, the request
-   *             timed out, the host errored, or the reply was malformed.
+   *             timed out, the host errored, the reply was malformed, or the
+   *             disclaim went uncorroborated.
    *
-   * Callers must never treat `null` as a mismatch. Only `false` is evidence,
-   * and only ever about the project that was asked about — this deliberately
-   * does not scan other hosts to discover the real owner. A caller holding a
-   * disowned id has nothing to reconcile it to (#4881): the id is dropped, not
-   * repointed, so naming the true owner would buy nothing and cost a serial
-   * fan-out across every loaded host on a latency-sensitive path.
+   * Callers must never treat `null` as a mismatch; only `false` is evidence.
+   * The verdict is deliberately not used to name the real owner — a caller
+   * holding a disowned id has nothing to reconcile it to (#4881), so the id is
+   * dropped, never repointed.
    *
    * Absence alone is NOT proof, which is the subtle part. A worktree id is a
    * path, but the two places that mint one disagree on how to spell it:
@@ -736,6 +735,17 @@ export class WorkspaceClient extends EventEmitter {
    *
    * The corroborating fan-out only runs when the named host has already
    * disclaimed the id, so the common case stays a single round trip.
+   *
+   * KNOWN LIMIT: corroboration proves membership in the claimant, not absence
+   * from the named project, and those come apart when the same repository is
+   * registered as two projects rooted at different linked worktrees. Both
+   * enumerate the shared worktree set, so if the spelling divergence above hides
+   * the id from one and not the other, this reports `false` for a worktree both
+   * legitimately contain. Closing that needs canonicalized path comparison, i.e.
+   * `realpath` per candidate on the spawn path — rejected because `realpath`
+   * blocks indefinitely on an unreachable network mount. The cost of the gap is
+   * a terminal that contributes no resume metadata, never a wrong or failed
+   * spawn, which is the same cost as the `null` path it would otherwise take.
    *
    * `expectedProjectId` must equal the entry's immutable projectId for the same
    * reason {@link getAllStatesForProjectAsync} requires it: the project row's
@@ -803,9 +813,13 @@ export class WorkspaceClient extends EventEmitter {
       const result = await entry.host.sendWithResponse<{
         state: WorktreeSnapshot | null;
       }>({ type: "get-monitor", requestId, worktreeId }, timeoutMs);
-      if (result?.state == null) return false;
+      // Strictly `null`: only an explicit "I looked, it isn't mine" is a
+      // disclaim. A missing field or an absent reply never reached that
+      // conclusion, and since a disclaim is half of a `false` verdict,
+      // conflating them would let a malformed response help condemn a valid id.
+      if (result?.state === null) return false;
       // A snapshot for some *other* worktree answers a question we didn't ask.
-      return result.state.id === worktreeId ? true : null;
+      return result?.state?.id === worktreeId ? true : null;
     } catch {
       return null;
     }

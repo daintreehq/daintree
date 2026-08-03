@@ -669,31 +669,21 @@ describe("terminal spawn handler - worktree/project ownership (#11653)", () => {
     expect(spawnArgsOf().worktreeId).toBe("wt-a1");
   });
 
-  // A folder opened without git enumerates no worktrees at all (#11405), so the
-  // claim is incoherent without asking anyone.
-  it("drops a worktreeId claimed against a lightweight project without a host round trip", async () => {
+  // A folder opened without git owns no worktrees, but the project row is not
+  // the authority on whether it is git-backed — the host probes the folder, so
+  // an external `git init` leaves a stale `gitBacked: false` beside a host
+  // serving real ids. The row must not short-circuit the lookup.
+  it("still asks the host about a project whose row says it is not git-backed", async () => {
     mockGetProjectById.mockReturnValue(lightweightProject);
-
-    await spawnWith({
-      projectId: "lightweight-id",
-      worktreeId: "wt-a1",
-      cwd: process.cwd(),
-    });
-
-    expect(worktreeService.isWorktreeOwnedByProject).not.toHaveBeenCalled();
-    expect(spawnArgsOf().worktreeId).toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("wt-a1"));
-  });
-
-  // Legacy rows predate the discriminator; absence means git-backed, so they
-  // must still take the normal verification path rather than be dropped.
-  it("treats a project with no gitBacked discriminator as git-backed", async () => {
-    mockGetProjectById.mockReturnValue(projectA);
     worktreeService.isWorktreeOwnedByProject.mockResolvedValue(true);
 
-    await spawnWith({ projectId: "project-a-id", worktreeId: "wt-a1" });
+    await spawnWith({ projectId: "lightweight-id", worktreeId: "wt-a1" });
 
-    expect(worktreeService.isWorktreeOwnedByProject).toHaveBeenCalledTimes(1);
+    expect(worktreeService.isWorktreeOwnedByProject).toHaveBeenCalledWith(
+      "wt-a1",
+      lightweightProject.path,
+      lightweightProject.id
+    );
     expect(spawnArgsOf().worktreeId).toBe("wt-a1");
   });
 
