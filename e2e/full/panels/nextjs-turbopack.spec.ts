@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { writeFileSync, mkdirSync, chmodSync } from "fs";
+import { writeFileSync, mkdirSync } from "fs";
+import { createServer } from "http";
 import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
@@ -10,6 +11,7 @@ import { T_SHORT } from "../../helpers/timeouts";
 
 let ctx: AppContext;
 let fixtureRepoPath: string;
+let devServerPort: number;
 let fixtureCleanup: (() => void) | undefined;
 const PROJECT_NAME = "Next.js Turbopack Test";
 const DEV_SERVER_TIMEOUT = process.env.CI ? 60_000 : 30_000;
@@ -28,6 +30,17 @@ const DEV_SERVER_TIMEOUT = process.env.CI ? 60_000 : 30_000;
  */
 test.describe("Next.js Turbopack Normalization (#4557)", () => {
   test.beforeAll(async () => {
+    const portProbe = createServer();
+    await new Promise<void>((resolve, reject) => {
+      portProbe.once("error", reject);
+      portProbe.listen(0, "127.0.0.1", resolve);
+    });
+    const probeAddress = portProbe.address();
+    devServerPort = typeof probeAddress === "object" && probeAddress ? probeAddress.port : 0;
+    await new Promise<void>((resolve, reject) => {
+      portProbe.close((error) => (error ? reject(error) : resolve()));
+    });
+
     ({ dir: fixtureRepoPath, cleanup: fixtureCleanup } = createFixtureRepo({
       name: "nextjs-turbopack",
     }));
@@ -49,12 +62,9 @@ test.describe("Next.js Turbopack Normalization (#4557)", () => {
       )
     );
 
-    // Create a fake `next` binary in node_modules/.bin/ that:
+    // Create a fake Next.js launcher that:
     // 1. Prints the received arguments (for verification)
     // 2. Starts a minimal HTTP server with inline CSS (for webview rendering test)
-    const binDir = path.join(fixtureRepoPath, "node_modules", ".bin");
-    mkdirSync(binDir, { recursive: true });
-
     // resolveNextMajorVersion reads node_modules/next/package.json first — the
     // auto-turbopack path only triggers when next's major version is >= 15.
     // Drop a stub package.json there so the fixture reports a compatible major.
@@ -89,19 +99,12 @@ const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/html' });
   res.end(html);
 });
-server.listen(0, '127.0.0.1', () => {
+server.listen(${devServerPort}, '127.0.0.1', () => {
   const port = server.address().port;
   console.log('ready - started server on 0.0.0.0:' + port + ', url: http://localhost:' + port);
 });
 `;
-    writeFileSync(path.join(binDir, "next"), fakeNextScript);
-    chmodSync(path.join(binDir, "next"), 0o755);
-    if (process.platform === "win32") {
-      writeFileSync(
-        path.join(binDir, "next.cmd"),
-        ["@echo off", 'node "%~dp0next" %*', ""].join("\r\n")
-      );
-    }
+    writeFileSync(path.join(fixtureRepoPath, "fake-next.cjs"), fakeNextScript);
 
     ctx = await launchApp();
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureRepoPath, PROJECT_NAME);
@@ -116,7 +119,9 @@ server.listen(0, '127.0.0.1', () => {
     const { window } = ctx;
 
     // Configure dev server command, then open dev preview via action dispatch
-    await saveCurrentProjectSettings(window, { devServerCommand: "npm run dev" });
+    await saveCurrentProjectSettings(window, {
+      devServerCommand: `node fake-next.cjs next dev --port ${devServerPort}`,
+    });
 
     // Open dev preview panel via the exposed E2E action dispatcher
     await window.evaluate(async () => {
@@ -131,7 +136,17 @@ server.listen(0, '127.0.0.1', () => {
     // Wait for Running status
     const consoleBar = window.locator('[aria-controls^="console-drawer-"]').locator("..");
     const statusBadge = consoleBar.locator('[role="status"]');
-    await expect(statusBadge).toContainText("Running", { timeout: DEV_SERVER_TIMEOUT });
+    await expect(statusBadge).toContainText(/Running|Error/, { timeout: DEV_SERVER_TIMEOUT });
+    const startupStatus = await statusBadge.textContent();
+    if (startupStatus?.includes("Error")) {
+      const drawerId = await window.locator('[id^="console-drawer-"]').first().getAttribute("id");
+      const terminalId = drawerId?.replace("console-drawer-", "") ?? "";
+      const terminalBuffer = await window.evaluate((id) => {
+        const reader = (window as unknown as Record<string, unknown>).__daintreeReadTerminalBuffer;
+        return typeof reader === "function" ? (reader(id) as string) : "";
+      }, terminalId);
+      throw new Error(`Dev server failed to start:\n${terminalBuffer}`);
+    }
 
     // Verify address bar contains a localhost URL
     const addressBar = window.locator(SEL.browser.addressBar);

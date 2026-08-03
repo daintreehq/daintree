@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { closeApp, type AppContext } from "../../helpers/launch";
 import { launchWithSamplePlugin, waitForRichPluginReady } from "../../helpers/plugins";
 import { T_LONG } from "../../helpers/timeouts";
+import type { ActionDispatchResult } from "../../../shared/types/actions";
 
 /** Toggle a loaded plugin's enabled state; re-enabling re-registers its contributions. */
 async function setPluginEnabled(page: Page, pluginId: string, enabled: boolean): Promise<void> {
@@ -17,7 +18,11 @@ async function setPluginEnabled(page: Page, pluginId: string, enabled: boolean):
 }
 
 /** Dispatch a renderer action through the E2E-only bridge. */
-async function dispatchAction(page: Page, actionId: string, args?: unknown): Promise<unknown> {
+async function dispatchAction<Result = unknown>(
+  page: Page,
+  actionId: string,
+  args?: unknown
+): Promise<ActionDispatchResult<Result>> {
   return page.evaluate(
     async (payload) => {
       const dispatch = (
@@ -26,7 +31,7 @@ async function dispatchAction(page: Page, actionId: string, args?: unknown): Pro
             id: string,
             a?: unknown,
             opts?: { source: string }
-          ) => Promise<unknown>;
+          ) => Promise<ActionDispatchResult<Result>>;
         }
       ).__daintreeDispatchAction;
       if (typeof dispatch !== "function") {
@@ -272,11 +277,12 @@ test.describe.serial("Core: Plugin panels contribution", () => {
   test("hot-swaps a live panel when its plugin kind is unregistered and registered again", async () => {
     // Default `reuseExisting` returns the panel opened by the earlier test
     // rather than spawning a second one.
-    const opened = (await dispatchAction(ctx.window, "panel.openPluginPanel", {
+    const opened = await dispatchAction<{ panelId: string }>(ctx.window, "panel.openPluginPanel", {
       kind: "daintree.rich.rich-panel",
-    })) as { panelId: string };
+    });
+    if (!opened.ok) throw new Error(`Failed to open rich panel: ${opened.error.message}`);
 
-    const panel = ctx.window.locator(`[data-panel-id="${opened.panelId}"]`);
+    const panel = ctx.window.locator(`[data-panel-id="${opened.result.panelId}"]`);
     const unavailable = panel.getByRole("region", { name: "Plugin unavailable" });
 
     await expect(panel.getByText("Rich panel view mounted")).toBeVisible({ timeout: T_LONG });
