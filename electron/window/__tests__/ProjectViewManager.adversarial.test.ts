@@ -217,6 +217,10 @@ describe("ProjectViewManager adversarial", () => {
   beforeEach(() => {
     nextWebContentsId = 300;
     wcQueue.length = 0;
+    // Switch-ordering suite, not paint-gate policy: release every gate with a
+    // signal so the zero-length gate can't read as the hard timeout that now
+    // abandons a cold switch (#11635).
+    vi.spyOn(ProjectViewManager.prototype, "waitForPaint").mockResolvedValue("signal");
   });
 
   afterEach(() => {

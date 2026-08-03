@@ -23,12 +23,15 @@ type Handler = (...args: unknown[]) => void;
 interface MockWebContentsOptions {
   autoFinishLoad?: boolean;
   bootstrapProjectId?: string;
+  /** `false` models a committed non-application document (the app:// 404). */
+  hasAppRoot?: boolean;
 }
 
 function createMockWebContents(options?: MockWebContentsOptions) {
   const id = nextWebContentsId++;
   const autoFinishLoad = options?.autoFinishLoad ?? true;
   const bootstrapProjectId = options?.bootstrapProjectId;
+  const hasAppRoot = options?.hasAppRoot ?? true;
   const handlers = new Map<string, Handler[]>();
   const onceHandlers = new Map<string, Handler[]>();
   const ipcOnceHandlers = new Map<string, Handler[]>();
@@ -42,7 +45,14 @@ function createMockWebContents(options?: MockWebContentsOptions) {
     isDestroyed: vi.fn(() => destroyed),
     executeJavaScript: vi.fn((code: string) => {
       if (typeof code === "string" && code.includes("__DAINTREE_INITIAL_PROJECT__")) {
-        return Promise.resolve(bootstrapProjectId);
+        // Undefined when no bootstrap id is configured: that is the probe's
+        // legacy-mock escape hatch, and most of this suite relies on it to keep
+        // the bootstrap check neutral.
+        return Promise.resolve(
+          bootstrapProjectId === undefined
+            ? undefined
+            : { projectId: bootstrapProjectId, hasAppRoot }
+        );
       }
       return Promise.resolve();
     }),
@@ -307,7 +317,11 @@ interface ManagerSetup {
   onViewCached: ReturnType<typeof vi.fn>;
   onViewReady: ReturnType<typeof vi.fn>;
   initialWc: MockWc;
-  initialView: { webContents: MockWc; setBounds: ReturnType<typeof vi.fn> };
+  initialView: {
+    webContents: MockWc;
+    setBounds: ReturnType<typeof vi.fn>;
+    setVisible: ReturnType<typeof vi.fn>;
+  };
 }
 
 /**
@@ -583,6 +597,35 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       // (PTY port, worktree port re-broker) re-binds to what is on screen.
       expect(onViewReady).toHaveBeenCalledTimes(1);
       expect(onViewReady).toHaveBeenCalledWith(initialWc);
+      assertLifecycleInvariants(manager as never, win as never);
+      setup.ledger.assertNoPortsForDeadViews(manager as never);
+    });
+
+    it("rollback re-attaches a previous view that was already detached when the failure landed", async () => {
+      const setup = createManager();
+      const { manager, win, initialView } = setup;
+
+      // Model the state deactivateEntry leaves behind — removed from the view
+      // tree, not merely marked hidden. The old rollback restored only the
+      // app-view registration and the visibility flag, and setVisible(true) on
+      // a view that is no longer in the tree composites nothing, so recovery
+      // landed on a window with no attached view at all (#11635).
+      win.contentView.removeChildView(initialView);
+      expect(win.contentView.children).not.toContain(initialView);
+
+      const failWc = createMockWebContents({ autoFinishLoad: false });
+      wcQueue.push(failWc);
+      const switchPromise = manager.switchTo("proj-b", "/b");
+      await flushMicrotasks();
+      failWc._fire("did-fail-load", {}, -6, "ERR_FILE_NOT_FOUND");
+      await expect(switchPromise).rejects.toThrow("ERR_FILE_NOT_FOUND");
+      await flushImmediates();
+
+      expect(manager.getActiveProjectId()).toBe("proj-a");
+      // Back in the tree, and exactly once — the failed view is gone and the
+      // restored one is not stacked twice.
+      expect(win.contentView.children).toEqual([initialView]);
+      expect(initialView.setVisible).toHaveBeenCalledWith(true);
       assertLifecycleInvariants(manager as never, win as never);
       setup.ledger.assertNoPortsForDeadViews(manager as never);
     });
