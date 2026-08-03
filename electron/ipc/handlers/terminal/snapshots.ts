@@ -4,15 +4,39 @@
 
 import { z } from "zod";
 import { CHANNELS } from "../../channels.js";
-import type { HandlerDependencies } from "../../types.js";
+import type { HandlerDependencies, IpcContext } from "../../types.js";
 import { TerminalReplayHistoryPayloadSchema } from "../../../schemas/index.js";
 import { logDebug, logInfo, logWarn } from "../../../utils/logger.js";
 import { getAgentAvailabilityStore } from "../../../services/AgentAvailabilityStore.js";
+import { getProjectIdFromSenderUrl } from "../../senderIdentity.js";
 import { defineIpcNamespace, op, opValidated } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
 
 type ValidatedReplayHistoryPayload = z.output<typeof TerminalReplayHistoryPayloadSchema>;
+
+/**
+ * The workspace a reconnect request speaks for, resolved from the sender alone.
+ *
+ * `ctx.projectId` — the webContents→project registry, which spans every window
+ * — is authoritative once the view is bound. But reconnect runs during cold-boot
+ * hydration, and the startup-restore renderer issues it while `registerInitialView`
+ * may not have bound the view yet: main dispatches `loadURL` without awaiting it,
+ * then yields several times (PATH refresh, PTY readiness, store init) before
+ * binding, and the renderer mounts and hydrates inside that gap. `?projectId=`
+ * on that renderer's URL is the only sender-local identity there, and it is the
+ * same fallback `app:boot` already resolves hydration's own workspace id through,
+ * so the two agree by construction rather than by timing.
+ *
+ * Registry first: a bound view must never be overridden by a stale query string.
+ *
+ * Must be called before the first `await` — the context is a snapshot of the
+ * sender at invoke time, and re-resolving after a PTY round-trip would race the
+ * very binding this works around.
+ */
+function resolveSenderWorkspaceId(ctx: IpcContext): string | null {
+  return ctx.projectId ?? getProjectIdFromSenderUrl(ctx.event.sender);
+}
 
 export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -370,7 +394,14 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     }
   };
 
-  const handleTerminalReconnect = async (
+  /**
+   * Probe one terminal on behalf of an already-resolved sender workspace.
+   *
+   * Split out so the bulk variant resolves the sender's identity once, up front,
+   * instead of re-deriving it per id after an await has already elapsed.
+   */
+  const probeTerminalForWorkspace = async (
+    senderWorkspaceId: string | null,
     terminalId: string
   ): Promise<import("../../../../shared/types/ipc.js").TerminalReconnectResult> => {
     try {
@@ -382,6 +413,27 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
 
       if (!terminal) {
         logWarn(`terminal:reconnect: Terminal ${terminalId} not found`);
+        return { exists: false };
+      }
+
+      // Ownership gate (#11652). Terminal ids are globally unique, so an id
+      // alone resolved a terminal in ANY project — and the result carries the
+      // live `projectId`/`cwd`, which the renderer trusts over its own saved
+      // snapshot. A foreign id in a project's saved state (#11651) therefore
+      // let that project adopt another's running terminal.
+      //
+      // Null is an identity here, not a wildcard: an unbound window (Cmd+N,
+      // project picker) still reconnects its own projectless terminal, but it
+      // cannot reach a project-owned one, and a project-bound sender cannot
+      // reach an unowned one. Refusing looks exactly like "not found", so
+      // restore falls through to its normal respawn path instead of attaching.
+      const ownerWorkspaceId = terminal.projectId ?? null;
+      if (ownerWorkspaceId !== senderWorkspaceId) {
+        logWarn(`terminal:reconnect: refusing ${terminalId} — owned by another workspace`, {
+          terminalId,
+          ownerWorkspaceId,
+          senderWorkspaceId,
+        });
         return { exists: false };
       }
 
@@ -424,13 +476,24 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     }
   };
 
+  const handleTerminalReconnect = async (
+    ctx: IpcContext,
+    terminalId: string
+  ): Promise<import("../../../../shared/types/ipc.js").TerminalReconnectResult> =>
+    probeTerminalForWorkspace(resolveSenderWorkspaceId(ctx), terminalId);
+
   // Bulk variant for the cold-boot panel-restore prefetch (#10390): one IPC
   // round-trip probes every saved panel id instead of N serialized probes
   // inside the spawn queue. Mirrors getSerializedStates' batch contract —
   // per-id failures degrade to { exists: false } rather than failing the batch.
   const handleTerminalReconnectBulk = async (
+    ctx: IpcContext,
     terminalIds: string[]
   ): Promise<Record<string, import("../../../../shared/types/ipc.js").TerminalReconnectResult>> => {
+    // Resolved once, before any await: every id in this batch is judged against
+    // the sender as it was at invoke time.
+    const senderWorkspaceId = resolveSenderWorkspaceId(ctx);
+
     if (!Array.isArray(terminalIds)) {
       throw new Error("Invalid terminal IDs: must be an array");
     }
@@ -453,7 +516,10 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     const results = await Promise.all(
       normalizedIds.map(async (terminalId) => {
         try {
-          return [terminalId, await handleTerminalReconnect(terminalId)] as const;
+          return [
+            terminalId,
+            await probeTerminalForWorkspace(senderWorkspaceId, terminalId),
+          ] as const;
         } catch (error) {
           logWarn(`terminal:reconnect-bulk(${terminalId}) failed`, { error });
           return [terminalId, { exists: false as const }] as const;
@@ -491,8 +557,10 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
         handleTerminalSearchSemanticBuffers
       ),
-      reconnect: op(CHANNELS.TERMINAL_RECONNECT, handleTerminalReconnect),
-      reconnectBulk: op(CHANNELS.TERMINAL_RECONNECT_BULK, handleTerminalReconnectBulk),
+      reconnect: op(CHANNELS.TERMINAL_RECONNECT, handleTerminalReconnect, { withContext: true }),
+      reconnectBulk: op(CHANNELS.TERMINAL_RECONNECT_BULK, handleTerminalReconnectBulk, {
+        withContext: true,
+      }),
     },
   });
 
