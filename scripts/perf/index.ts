@@ -201,6 +201,10 @@ const REGISTRY: Record<string, Command> = {
   ci: { summary: "CI validation matrix (scheduled + manual dispatch)", runner: harness("ci") },
   nightly: { summary: "Full matrix + soak coverage", runner: harness("nightly") },
   soak: { summary: "Long-run stress matrix", runner: harness("soak") },
+  "verify-baselines": {
+    summary: "Assert all four committed baselines are fresh, complete, and non-degenerate",
+    runner: tsxScript("verify-baselines.ts"),
+  },
   "cold-start": {
     summary: "Manual cold-start sampler (needs a packaged binary under release/)",
     runner: tsxScript("cold-start.ts"),

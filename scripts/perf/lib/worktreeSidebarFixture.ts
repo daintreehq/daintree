@@ -598,7 +598,7 @@ export interface WorktreeStoreModule {
 
 const PANEL_STORE_STUB = `
 export const usePanelStore = {
-  getState: () => ({ panelIdsByWorktreeId: {}, panelsById: {}, removePanel() {} }),
+  getState: () => ({ panelIds: [], panelIdsByWorktreeId: {}, panelsById: {}, removePanel() {} }),
   setState() {},
   subscribe() { return () => {}; },
 };
@@ -614,19 +614,29 @@ export const watchdogClient = asyncNoop;
 export default asyncNoop;
 `;
 
-const DELETE_HELPER_STUB = `export async function closeTerminalsForWorktree() {}`;
+const DELETE_HELPER_STUB = `
+export function captureWorktreeTerminalSnapshot() { return []; }
+export async function closeTerminalsForWorktree() {}
+export async function restoreClosedTerminals() {}
+`;
 
 const NOTIFY_STUB = `export function notify() {} export default notify;`;
 
 let storeModulePromise: Promise<WorktreeStoreModule> | null = null;
 
 /**
- * Bundle the real createWorktreeStore for plain Node. The store's hot paths
- * (applySnapshot/applyUpdate/applyRemove) never call the renderer-only
- * imports — panelStore, the IPC clients, terminal-close helper, and notify
- * are only reached from the async delete/issue mutation runners — so those
- * four leaves are stubbed and everything else (snapshotsEqual,
- * mergeIssueState, the statusCheckedAt side-map) is the production code.
+ * Bundle the real createWorktreeStore for plain Node. The benchmarked entry
+ * points (applySnapshot/applyUpdate, plus applyRemove) never call the
+ * renderer-only imports — panelStore, the IPC clients, terminal-close helper,
+ * and notify — so those four leaves are stubbed and everything else
+ * (snapshotsEqual, mergeIssueState, the statusCheckedAt side-map) is the
+ * production code.
+ *
+ * esbuild links every static import regardless of reachability, so each stub
+ * must export the full set of names the store imports and return shapes the
+ * caller can use (see the `.finally()` on restoreClosedTerminals). Unmeasured
+ * exports do reach the stubs — cleanupOrphanedTerminals reads panelStore's
+ * panelIds — so keep the stubbed state shape complete, not just non-throwing.
  */
 export function loadWorktreeStoreModule(): Promise<WorktreeStoreModule> {
   if (!storeModulePromise) {
