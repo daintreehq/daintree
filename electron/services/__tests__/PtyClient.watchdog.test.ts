@@ -71,7 +71,6 @@ describe("PtyClient watchdog", () => {
   let killSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
     vi.resetModules();
     vi.clearAllMocks();
     shared.appMock.removeAllListeners();
@@ -80,6 +79,9 @@ describe("PtyClient watchdog", () => {
     killSpy = vi.spyOn(process, "kill").mockImplementation((() => true) as typeof process.kill);
 
     ({ PtyClient: PtyClientClass } = await import("../PtyClient.js"));
+
+    // Install after imports: fake timers can stall module re-execution (#11661).
+    vi.useFakeTimers();
   });
 
   afterEach(() => {

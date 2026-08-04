@@ -29,8 +29,6 @@ describe("PtyClient projectId assignment", () => {
   let PtyClientClass: typeof import("../PtyClient.js").PtyClient;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
-
     mockChild = Object.assign(new EventEmitter(), {
       postMessage: vi.fn(),
       kill: vi.fn(),
@@ -57,6 +55,9 @@ describe("PtyClient projectId assignment", () => {
 
     const module = await import("../PtyClient.js");
     PtyClientClass = module.PtyClient;
+
+    // Install after imports: fake timers can stall module re-execution (#11661).
+    vi.useFakeTimers();
   });
 
   afterEach(() => {

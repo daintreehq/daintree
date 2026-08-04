@@ -35,8 +35,6 @@ describe("PtyClient Handshake Protocol", () => {
   let logBuffer: LogBuffer;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
-
     // Create mock utility process
     mockChild = Object.assign(new EventEmitter(), {
       postMessage: vi.fn(),
@@ -68,6 +66,9 @@ describe("PtyClient Handshake Protocol", () => {
     forkMock = (await import("electron")).utilityProcess.fork as unknown as Mock;
     logBuffer = (await import("../LogBuffer.js")).logBuffer;
     logBuffer.clear();
+
+    // Install after imports: fake timers can stall module re-execution (#11661).
+    vi.useFakeTimers();
   });
 
   afterEach(() => {

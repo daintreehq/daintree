@@ -37,8 +37,6 @@ describe("PtyClient multi-port support", () => {
   let forkMock: Mock;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
-
     mockChild = Object.assign(new EventEmitter(), {
       postMessage: vi.fn(),
       kill: vi.fn(),
@@ -64,6 +62,9 @@ describe("PtyClient multi-port support", () => {
     const module = await import("../PtyClient.js");
     PtyClientClass = module.PtyClient;
     forkMock = (await import("electron")).utilityProcess.fork as unknown as Mock;
+
+    // Install after imports: fake timers can stall module re-execution (#11661).
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
