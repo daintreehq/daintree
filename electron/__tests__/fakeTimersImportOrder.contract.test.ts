@@ -167,10 +167,11 @@ function hookName(call: ts.CallExpression): string | undefined {
 
 /**
  * Function-like declarations by name, so `beforeEach(setup)` resolves to
- * `setup`'s body. Scope-blind, so every declaration sharing a name is kept and
- * all of them are inspected: picking one would let a later clean `setup` shadow
- * an earlier offending one and blind the scan. Over-reporting is the safe
- * direction here.
+ * `setup`'s body. Scope-blind: every declaration sharing a name is kept, and
+ * an ambiguous name is only reported when EVERY candidate offends, which holds
+ * whichever one actually binds. Picking one would let a clean `setup` shadow an
+ * offending one; reporting on any match would blame a hook whose real body is
+ * fine.
  */
 function collectNamedFunctions(source: ts.SourceFile): Map<string, ts.Node[]> {
   const named = new Map<string, ts.Node[]>();
@@ -211,8 +212,8 @@ export function findViolations(relativePath: string, text: string): Violation[] 
   const namedFunctions = collectNamedFunctions(source);
   const violations: Violation[] = [];
 
-  /** Reports the offending pair in one hook body, if any. */
-  const inspect = (hook: string, callback: ts.Node): void => {
+  /** The offending pair in one hook body, if any. */
+  const inspect = (hook: string, callback: ts.Node): Violation | undefined => {
     // First clock install vs LAST awaited import: a hook that imports, installs
     // the clock, then imports again still runs that second import frozen, so
     // pairing against the first import would miss it.
@@ -220,7 +221,8 @@ export function findViolations(relativePath: string, text: string): Violation[] 
     let lastImport: ts.Node | undefined;
     walkOwnScope(callback, (inner) => {
       if (!fakeTimers && isUseFakeTimersCall(inner)) fakeTimers = inner;
-      if (ts.isAwaitExpression(inner)) {
+      // A returned import is awaited by the runner just like an inline `await`.
+      if (ts.isAwaitExpression(inner) || ts.isReturnStatement(inner)) {
         // Compare the import call itself, not the enclosing `await`, so
         // `await (vi.useFakeTimers(), import(...))` still orders correctly.
         const importCall = findLastDynamicImportCall(inner, source);
@@ -233,13 +235,14 @@ export function findViolations(relativePath: string, text: string): Violation[] 
       }
     });
     if (fakeTimers && lastImport && fakeTimers.getStart(source) < lastImport.getStart(source)) {
-      violations.push({
+      return {
         file: relativePath,
         hook,
         fakeTimersLine: lineOf(fakeTimers),
         importLine: lineOf(lastImport),
-      });
+      };
     }
+    return undefined;
   };
 
   const visitAll = (node: ts.Node): void => {
@@ -247,11 +250,18 @@ export function findViolations(relativePath: string, text: string): Violation[] 
       const hook = hookName(node);
       const arg = node.arguments[0];
       if (hook && arg) {
+        // At most ONE violation per hook call site: the allowlist counts hooks,
+        // so reporting every same-named candidate would inflate a file's count.
+        let found: Violation | undefined;
         if (isFunctionLike(arg)) {
-          inspect(hook, arg);
+          found = inspect(hook, arg);
         } else if (ts.isIdentifier(arg)) {
-          for (const candidate of namedFunctions.get(arg.text) ?? []) inspect(hook, candidate);
+          const candidates = namedFunctions.get(arg.text) ?? [];
+          const results = candidates.map((candidate) => inspect(hook, candidate));
+          // Only certain when every candidate offends — see collectNamedFunctions.
+          if (results.length > 0 && results.every(Boolean)) found = results[0];
         }
+        if (found) violations.push(found);
       }
     }
     node.forEachChild(visitAll);
@@ -266,6 +276,18 @@ interface ScanResult {
   unparsed: string[];
 }
 
+/**
+ * Syntax errors in a parsed file. `parseDiagnostics` is internal to the
+ * compiler API, but the public route needs a full `Program`, which is far too
+ * slow for a couple of thousand files when all this asks is "did it parse".
+ */
+export function parseErrorCount(relativePath: string, text: string): number {
+  const internal = parse(relativePath, text) as unknown as {
+    parseDiagnostics?: readonly unknown[];
+  };
+  return internal.parseDiagnostics?.length ?? 0;
+}
+
 function scanRepo(): ScanResult {
   const files = TEST_ROOTS.flatMap((root) => collectTestFiles(path.join(REPO_ROOT, root))).sort();
   const violations: Violation[] = [];
@@ -275,7 +297,7 @@ function scanRepo(): ScanResult {
     const relative = path.relative(REPO_ROOT, absolute).split(path.sep).join("/");
     const text = fs.readFileSync(absolute, "utf8");
     // A file this scan cannot parse is a file it cannot police.
-    if (parse(relative, text).parseDiagnostics.length > 0) {
+    if (parseErrorCount(relative, text) > 0) {
       unparsed.push(relative);
       continue;
     }
@@ -336,6 +358,22 @@ describe("fake timers must not precede an awaited dynamic import", () => {
 
 describe("detector", () => {
   const wrap = (body: string) => `import { beforeEach, vi } from "vitest";\n${body}\n`;
+
+  // `parseErrorCount` reads an internal compiler field. If a TypeScript upgrade
+  // renames it the optional chain would return 0 forever, silently turning the
+  // "parses every test file" assertion into a no-op.
+  it("still detects syntax errors through the internal parse diagnostics", () => {
+    expect(parseErrorCount("broken.test.ts", "function ( {")).toBeGreaterThan(0);
+    expect(parseErrorCount("fine.test.ts", "export const x = 1;\n")).toBe(0);
+  });
+
+  // A `.ts` file parsed as TSX reports errors on a generic arrow; the derived
+  // ScriptKind must not.
+  it("parses a generic arrow in .ts but flags it as JSX in .tsx", () => {
+    const generic = "const id = <T>(value: T): T => value;\n";
+    expect(parseErrorCount("fixture.test.ts", generic)).toBe(0);
+    expect(parseErrorCount("fixture.test.tsx", generic)).toBeGreaterThan(0);
+  });
 
   it("flags fake timers installed before an awaited dynamic import", () => {
     const found = findViolations(
@@ -399,8 +437,9 @@ describe("detector", () => {
     expect(found).toHaveLength(1);
   });
 
-  // A clean same-named declaration must not shadow an offending one away.
-  it("inspects every declaration sharing a hook callback name", () => {
+  // Ambiguous name, only one candidate offending: which one binds is unknown, so
+  // blaming the hook would be a false positive.
+  it("stays silent when only one same-named candidate offends", () => {
     const found = findViolations(
       "fixture.test.ts",
       wrap(`async function setup() {
@@ -411,6 +450,37 @@ describe("detector", () => {
         async function setup() {
           await import("./mod.js");
           vi.useFakeTimers();
+        }
+        beforeEach(setup);
+      });`)
+    );
+    expect(found).toEqual([]);
+  });
+
+  it("flags a dynamic import returned from a hook", () => {
+    const found = findViolations(
+      "fixture.test.ts",
+      wrap(`beforeEach(() => {
+        vi.useFakeTimers();
+        return import("./mod.js");
+      });`)
+    );
+    expect(found).toHaveLength(1);
+  });
+
+  // Two offending declarations resolve to one hook site; counting both would
+  // inflate the per-file total the allowlist tracks.
+  it("reports one violation per hook site when candidates both offend", () => {
+    const found = findViolations(
+      "fixture.test.ts",
+      wrap(`async function setup() {
+        vi.useFakeTimers();
+        await import("./a.js");
+      }
+      describe("other", () => {
+        async function setup() {
+          vi.useFakeTimers();
+          await import("./b.js");
         }
         beforeEach(setup);
       });`)
