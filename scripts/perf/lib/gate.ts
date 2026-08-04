@@ -10,12 +10,21 @@ export const MIN_REGRESSION_BASELINE_MS = 5;
 
 /**
  * Absolute p95 increase (in ms) that fails a critical scenario whose baseline
- * sits below {@link MIN_REGRESSION_BASELINE_MS}. Calibrated for this suite's
- * async/IPC scenarios on shared CI runners: large enough to tolerate scheduler
- * jitter (~0.3–0.8ms), small enough that a real regression (e.g. 0.15ms → 1.15ms)
- * is caught.
+ * sits below {@link MIN_REGRESSION_BASELINE_MS}.
+ *
+ * The original 1ms was calibrated against jitter of ~0.3–0.8ms, but that
+ * understated PERF-001, which measures 1.096–2.932ms across ubuntu-22.04 runs
+ * — a spread wider than the tolerance itself. Whether the gate passed then
+ * depended on where in that band the baseline happened to be captured (the
+ * 2026-02-11 baseline caught its high end at 2.932ms and always passed; a
+ * regenerated 1.36ms caught the low end and failed on the next run), which
+ * makes it a coin flip rather than a signal.
+ *
+ * 3ms is ~2x the widest observed delta. The other two critical scenarios sit
+ * at 0.3ms and 0.7ms, so a real regression in any of them is an
+ * order-of-magnitude blowup and still trips this comfortably.
  */
-export const ABSOLUTE_REGRESSION_MS_FLOOR = 1;
+export const ABSOLUTE_REGRESSION_MS_FLOOR = 3;
 
 export interface GateParams {
   scenarioId: string;
