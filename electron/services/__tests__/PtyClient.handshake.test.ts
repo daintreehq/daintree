@@ -35,8 +35,6 @@ describe("PtyClient Handshake Protocol", () => {
   let logBuffer: LogBuffer;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
-
     // Create mock utility process
     mockChild = Object.assign(new EventEmitter(), {
       postMessage: vi.fn(),
@@ -68,6 +66,10 @@ describe("PtyClient Handshake Protocol", () => {
     forkMock = (await import("electron")).utilityProcess.fork as unknown as Mock;
     logBuffer = (await import("../LogBuffer.js")).logBuffer;
     logBuffer.clear();
+
+    // Installed only after the dynamic imports resolve: a faked clock during
+    // module re-execution can starve the import path and hang the hook (#11661).
+    vi.useFakeTimers();
   });
 
   afterEach(() => {

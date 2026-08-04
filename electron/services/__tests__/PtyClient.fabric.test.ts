@@ -78,7 +78,6 @@ describe("PtyClient fabric", () => {
   let fabricConfig: typeof import("../pty/fabricConfig.js");
 
   beforeEach(async () => {
-    vi.useFakeTimers();
     forks = [];
     failNextFork = false;
 
@@ -123,6 +122,10 @@ describe("PtyClient fabric", () => {
     // would be a different module instance than the one PtyClient reads, so
     // registrations here would be invisible to the code under test.
     pluginProcessTools = await import("../../../shared/config/pluginProcessToolRegistry.js");
+
+    // Installed only after the dynamic imports resolve: a faked clock during
+    // module re-execution can starve the import path and hang the hook (#11661).
+    vi.useFakeTimers();
   });
 
   afterEach(() => {

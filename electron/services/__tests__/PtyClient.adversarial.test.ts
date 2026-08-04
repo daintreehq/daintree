@@ -98,7 +98,6 @@ describe("PtyClient adversarial", () => {
   let PtyClientClass: typeof import("../PtyClient.js").PtyClient;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
     vi.resetModules();
     vi.clearAllMocks();
     shared.appMock.removeAllListeners();
@@ -106,6 +105,10 @@ describe("PtyClient adversarial", () => {
     shared.forkMock.mockReturnValue(mockChild);
 
     ({ PtyClient: PtyClientClass } = await import("../PtyClient.js"));
+
+    // Installed only after the dynamic import resolves: a faked clock during
+    // module re-execution can starve the import path and hang the hook (#11661).
+    vi.useFakeTimers();
   });
 
   afterEach(() => {

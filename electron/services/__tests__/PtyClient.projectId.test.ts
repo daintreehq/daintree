@@ -29,8 +29,6 @@ describe("PtyClient projectId assignment", () => {
   let PtyClientClass: typeof import("../PtyClient.js").PtyClient;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
-
     mockChild = Object.assign(new EventEmitter(), {
       postMessage: vi.fn(),
       kill: vi.fn(),
@@ -57,6 +55,10 @@ describe("PtyClient projectId assignment", () => {
 
     const module = await import("../PtyClient.js");
     PtyClientClass = module.PtyClient;
+
+    // Installed only after the dynamic import resolves: a faked clock during
+    // module re-execution can starve the import path and hang the hook (#11661).
+    vi.useFakeTimers();
   });
 
   afterEach(() => {

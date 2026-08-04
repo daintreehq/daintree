@@ -37,8 +37,6 @@ describe("PtyClient multi-port support", () => {
   let forkMock: Mock;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
-
     mockChild = Object.assign(new EventEmitter(), {
       postMessage: vi.fn(),
       kill: vi.fn(),
@@ -64,6 +62,10 @@ describe("PtyClient multi-port support", () => {
     const module = await import("../PtyClient.js");
     PtyClientClass = module.PtyClient;
     forkMock = (await import("electron")).utilityProcess.fork as unknown as Mock;
+
+    // Installed only after the dynamic imports resolve: a faked clock during
+    // module re-execution can starve the import path and hang the hook (#11661).
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
