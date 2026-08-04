@@ -97,9 +97,7 @@ describe("PtyClient lifecycle ledger", () => {
     ({ PtyClient: PtyClientClass } = await import("../PtyClient.js"));
     ({ getLifecycleLedger, disposeLifecycleLedger } = await import("../pty/lifecycleLedger.js"));
 
-    // Installed only after the dynamic imports resolve: a faked clock during
-    // module re-execution can starve the import path and hang the hook (#11661).
-    // Still ahead of the dispose below, which ran under the fake clock before.
+    // Install after imports: fake timers can stall module re-execution (#11661).
     vi.useFakeTimers();
     disposeLifecycleLedger();
   });

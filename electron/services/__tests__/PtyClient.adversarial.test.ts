@@ -106,8 +106,7 @@ describe("PtyClient adversarial", () => {
 
     ({ PtyClient: PtyClientClass } = await import("../PtyClient.js"));
 
-    // Installed only after the dynamic import resolves: a faked clock during
-    // module re-execution can starve the import path and hang the hook (#11661).
+    // Install after imports: fake timers can stall module re-execution (#11661).
     vi.useFakeTimers();
   });
 

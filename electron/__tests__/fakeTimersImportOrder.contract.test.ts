@@ -17,14 +17,20 @@ const REPO_ROOT = path.resolve(TEST_DIR, "../..");
 //
 // The fix is ordering: resolve every dynamic import first, then install the
 // clock. This contract keeps the pattern from being copy-pasted back in.
-//
-// The allowlist is exact rather than permissive — an entry whose count no longer
-// matches fails the test. A stale entry would otherwise silently re-permit a
-// regression in a file that had already been fixed.
 
 const HOOKS = new Set(["beforeEach", "beforeAll", "afterEach", "afterAll"]);
-const TEST_ROOTS = ["electron", "src", "shared", "scripts", "plugins", "packages"];
 const SKIP_DIRS = new Set(["node_modules", "dist", "dist-electron", "build", "release"]);
+
+/** Mirrors the test-discovery roots in `vitest.config.ts`'s `include`. */
+const TEST_ROOTS = [
+  "electron",
+  "src",
+  "shared",
+  "scripts",
+  "plugins",
+  "packages",
+  "e2e/helpers/__tests__",
+];
 
 /**
  * Hooks that still install fake timers before an awaited dynamic import, keyed
@@ -37,8 +43,17 @@ const SKIP_DIRS = new Set(["node_modules", "dist", "dist-electron", "build", "re
  * suites assert on. Reordering them needs a test-factory redesign, not a line
  * move.
  *
- * The rest are untriaged: each one needs its own check for load-time timer
- * scheduling before the ordering can be flipped.
+ * The rest are untriaged: each needs its own check for load-time timer
+ * scheduling before the ordering can be flipped. Two carry extra traps:
+ * `DiagnosticsCollector.adversarial` has no `afterEach` restoring real timers,
+ * so a naive reorder leaves the next hook importing under the previous test's
+ * frozen clock; `SoundService` also calls `resetModules()` + `import()` inside
+ * test bodies, which this hook-scoped scan does not see.
+ *
+ * Counts, not identities: fixing one hook in a listed file while introducing
+ * another in the same file keeps the count equal and would pass. Per-hook
+ * identity needs a stable fingerprint (line numbers churn, titles repeat), so
+ * this trades that residual gap for an allowlist that cannot silently rot.
  */
 const KNOWN_VIOLATIONS = new Map<string, number>([
   // Load-time timer scheduling — ordering is load-bearing here.
@@ -94,6 +109,8 @@ function isFunctionLike(node: ts.Node): boolean {
     ts.isFunctionExpression(node) ||
     ts.isArrowFunction(node) ||
     ts.isMethodDeclaration(node) ||
+    ts.isGetAccessorDeclaration(node) ||
+    ts.isSetAccessorDeclaration(node) ||
     ts.isClassDeclaration(node) ||
     ts.isClassExpression(node)
   );
@@ -108,22 +125,35 @@ function walkOwnScope(node: ts.Node, visit: (node: ts.Node) => void): void {
   });
 }
 
-function containsDynamicImport(node: ts.Node): boolean {
-  if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
-    return true;
-  let found = false;
-  node.forEachChild((child) => {
-    if (!found && containsDynamicImport(child)) found = true;
-  });
-  return found;
+/**
+ * The LAST dynamic `import()` call inside `node`, by source position. Returning
+ * the first would accept `await (import("./a"), vi.useFakeTimers(),
+ * import("./b"))`, where the second import still runs frozen.
+ */
+function findLastDynamicImportCall(node: ts.Node, source: ts.SourceFile): ts.Node | undefined {
+  let last: ts.Node | undefined;
+  const visit = (inner: ts.Node): void => {
+    if (ts.isCallExpression(inner) && inner.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      if (!last || inner.getStart(source) > last.getStart(source)) last = inner;
+    }
+    inner.forEachChild(visit);
+  };
+  visit(node);
+  return last;
 }
 
+/** Matches `vi.useFakeTimers(...)` and `vi["useFakeTimers"](...)`. */
 function isUseFakeTimersCall(node: ts.Node): boolean {
-  return (
-    ts.isCallExpression(node) &&
-    ts.isPropertyAccessExpression(node.expression) &&
-    node.expression.name.text === "useFakeTimers"
-  );
+  if (!ts.isCallExpression(node)) return false;
+  const { expression } = node;
+  if (ts.isPropertyAccessExpression(expression)) {
+    return expression.name.text === "useFakeTimers";
+  }
+  if (ts.isElementAccessExpression(expression)) {
+    const arg = expression.argumentExpression;
+    return ts.isStringLiteralLike(arg) && arg.text === "useFakeTimers";
+  }
+  return false;
 }
 
 function hookName(call: ts.CallExpression): string | undefined {
@@ -135,43 +165,92 @@ function hookName(call: ts.CallExpression): string | undefined {
   return undefined;
 }
 
+/**
+ * Function-like declarations by name, so `beforeEach(setup)` resolves to
+ * `setup`'s body. Scope-blind, so every declaration sharing a name is kept and
+ * all of them are inspected: picking one would let a later clean `setup` shadow
+ * an earlier offending one and blind the scan. Over-reporting is the safe
+ * direction here.
+ */
+function collectNamedFunctions(source: ts.SourceFile): Map<string, ts.Node[]> {
+  const named = new Map<string, ts.Node[]>();
+  const add = (name: string, fn: ts.Node): void => {
+    const existing = named.get(name);
+    if (existing) existing.push(fn);
+    else named.set(name, [fn]);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name) {
+      add(node.name.text, node);
+    } else if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+    ) {
+      add(node.name.text, node.initializer);
+    }
+    node.forEachChild(visit);
+  };
+  visit(source);
+  return named;
+}
+
+function parse(relativePath: string, text: string): ts.SourceFile {
+  // ScriptKind is derived from the file name, never forced: parsing a `.ts` file
+  // as TSX turns every generic arrow (`vi.fn(<T>(x: T) => x)`) into malformed
+  // JSX, and the resulting parse errors made whole suites invisible to the scan.
+  return ts.createSourceFile(relativePath, text, ts.ScriptTarget.Latest, true);
+}
+
 export function findViolations(relativePath: string, text: string): Violation[] {
-  const source = ts.createSourceFile(
-    relativePath,
-    text,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX
-  );
+  const source = parse(relativePath, text);
   const lineOf = (node: ts.Node): number =>
     source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
 
+  const namedFunctions = collectNamedFunctions(source);
   const violations: Violation[] = [];
+
+  /** Reports the offending pair in one hook body, if any. */
+  const inspect = (hook: string, callback: ts.Node): void => {
+    // First clock install vs LAST awaited import: a hook that imports, installs
+    // the clock, then imports again still runs that second import frozen, so
+    // pairing against the first import would miss it.
+    let fakeTimers: ts.Node | undefined;
+    let lastImport: ts.Node | undefined;
+    walkOwnScope(callback, (inner) => {
+      if (!fakeTimers && isUseFakeTimersCall(inner)) fakeTimers = inner;
+      if (ts.isAwaitExpression(inner)) {
+        // Compare the import call itself, not the enclosing `await`, so
+        // `await (vi.useFakeTimers(), import(...))` still orders correctly.
+        const importCall = findLastDynamicImportCall(inner, source);
+        if (
+          importCall &&
+          (!lastImport || importCall.getStart(source) > lastImport.getStart(source))
+        ) {
+          lastImport = importCall;
+        }
+      }
+    });
+    if (fakeTimers && lastImport && fakeTimers.getStart(source) < lastImport.getStart(source)) {
+      violations.push({
+        file: relativePath,
+        hook,
+        fakeTimersLine: lineOf(fakeTimers),
+        importLine: lineOf(lastImport),
+      });
+    }
+  };
 
   const visitAll = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
       const hook = hookName(node);
-      const callback = node.arguments[0];
-      if (hook && callback && isFunctionLike(callback)) {
-        let fakeTimers: ts.Node | undefined;
-        let awaitedImport: ts.Node | undefined;
-        walkOwnScope(callback, (inner) => {
-          if (!fakeTimers && isUseFakeTimersCall(inner)) fakeTimers = inner;
-          if (!awaitedImport && ts.isAwaitExpression(inner) && containsDynamicImport(inner)) {
-            awaitedImport = inner;
-          }
-        });
-        if (
-          fakeTimers &&
-          awaitedImport &&
-          fakeTimers.getStart(source) < awaitedImport.getStart(source)
-        ) {
-          violations.push({
-            file: relativePath,
-            hook,
-            fakeTimersLine: lineOf(fakeTimers),
-            importLine: lineOf(awaitedImport),
-          });
+      const arg = node.arguments[0];
+      if (hook && arg) {
+        if (isFunctionLike(arg)) {
+          inspect(hook, arg);
+        } else if (ts.isIdentifier(arg)) {
+          for (const candidate of namedFunctions.get(arg.text) ?? []) inspect(hook, candidate);
         }
       }
     }
@@ -182,27 +261,49 @@ export function findViolations(relativePath: string, text: string): Violation[] 
   return violations;
 }
 
-function scanRepo(): Violation[] {
-  const files = TEST_ROOTS.flatMap((root) => collectTestFiles(path.join(REPO_ROOT, root)));
-  return files.flatMap((absolute) =>
-    findViolations(
-      path.relative(REPO_ROOT, absolute).split(path.sep).join("/"),
-      fs.readFileSync(absolute, "utf8")
-    )
-  );
+interface ScanResult {
+  violations: Violation[];
+  unparsed: string[];
+}
+
+function scanRepo(): ScanResult {
+  const files = TEST_ROOTS.flatMap((root) => collectTestFiles(path.join(REPO_ROOT, root))).sort();
+  const violations: Violation[] = [];
+  const unparsed: string[] = [];
+
+  for (const absolute of files) {
+    const relative = path.relative(REPO_ROOT, absolute).split(path.sep).join("/");
+    const text = fs.readFileSync(absolute, "utf8");
+    // A file this scan cannot parse is a file it cannot police.
+    if (parse(relative, text).parseDiagnostics.length > 0) {
+      unparsed.push(relative);
+      continue;
+    }
+    violations.push(...findViolations(relative, text));
+  }
+
+  return { violations, unparsed };
 }
 
 function describeViolation(v: Violation): string {
-  return `${v.file}:${v.fakeTimersLine} [${v.hook}] installs fake timers before the awaited dynamic import at :${v.importLine}`;
+  return `${v.file}:${v.fakeTimersLine} [${v.hook}] installs fake timers before the awaited dynamic import at line ${v.importLine}`;
+}
+
+function countByFile(violations: Violation[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const v of violations) counts.set(v.file, (counts.get(v.file) ?? 0) + 1);
+  return counts;
 }
 
 describe("fake timers must not precede an awaited dynamic import", () => {
-  const violations = scanRepo();
+  const { violations, unparsed } = scanRepo();
+
+  it("parses every test file it scans", () => {
+    expect(unparsed).toEqual([]);
+  });
 
   it("reports no new offending hooks", () => {
-    const counts = new Map<string, number>();
-    for (const v of violations) counts.set(v.file, (counts.get(v.file) ?? 0) + 1);
-
+    const counts = countByFile(violations);
     const unexpected = violations
       .filter((v) => (counts.get(v.file) ?? 0) > (KNOWN_VIOLATIONS.get(v.file) ?? 0))
       .map(describeViolation);
@@ -210,10 +311,8 @@ describe("fake timers must not precede an awaited dynamic import", () => {
     expect(unexpected).toEqual([]);
   });
 
-  it("keeps the allowlist exact", () => {
-    const counts = new Map<string, number>();
-    for (const v of violations) counts.set(v.file, (counts.get(v.file) ?? 0) + 1);
-
+  it("keeps allowlist counts exact", () => {
+    const counts = countByFile(violations);
     const stale: string[] = [];
     for (const [file, expected] of KNOWN_VIOLATIONS) {
       const actual = counts.get(file) ?? 0;
@@ -261,12 +360,91 @@ describe("detector", () => {
     expect(found).toEqual([]);
   });
 
+  it("flags a second awaited import that follows the clock install", () => {
+    const found = findViolations(
+      "fixture.test.ts",
+      wrap(`beforeEach(async () => {
+        await import("./first.js");
+        vi.useFakeTimers();
+        await import("./second.js");
+      });`)
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0].importLine).toBeGreaterThan(found[0].fakeTimersLine);
+  });
+
+  // A `.ts` file parsed as TSX turns this generic arrow into malformed JSX and
+  // the whole suite silently stops being scanned.
+  it("scans a .ts file containing a generic arrow function", () => {
+    const found = findViolations(
+      "fixture.test.ts",
+      wrap(`const send = vi.fn(<T>(value: T): T => value);
+      beforeEach(async () => {
+        vi.useFakeTimers();
+        await import("./mod.js");
+      });`)
+    );
+    expect(found).toHaveLength(1);
+  });
+
+  it("resolves a hook callback passed by identifier", () => {
+    const found = findViolations(
+      "fixture.test.ts",
+      wrap(`async function setup() {
+        vi.useFakeTimers();
+        await import("./mod.js");
+      }
+      beforeEach(setup);`)
+    );
+    expect(found).toHaveLength(1);
+  });
+
+  // A clean same-named declaration must not shadow an offending one away.
+  it("inspects every declaration sharing a hook callback name", () => {
+    const found = findViolations(
+      "fixture.test.ts",
+      wrap(`async function setup() {
+        vi.useFakeTimers();
+        await import("./mod.js");
+      }
+      describe("other", () => {
+        async function setup() {
+          await import("./mod.js");
+          vi.useFakeTimers();
+        }
+        beforeEach(setup);
+      });`)
+    );
+    expect(found).toHaveLength(1);
+  });
+
+  it("flags a later import inside the same awaited expression", () => {
+    const found = findViolations(
+      "fixture.test.ts",
+      wrap(`beforeEach(async () => {
+        await (import("./a.js"), vi.useFakeTimers(), import("./b.js"));
+      });`)
+    );
+    expect(found).toHaveLength(1);
+  });
+
   it("sees through an import nested in a property access", () => {
     const found = findViolations(
       "fixture.test.ts",
       wrap(`beforeEach(async () => {
         vi.useFakeTimers();
         const fork = (await import("electron")).utilityProcess.fork;
+      });`)
+    );
+    expect(found).toHaveLength(1);
+  });
+
+  it("matches an element-access fake-timers call", () => {
+    const found = findViolations(
+      "fixture.test.ts",
+      wrap(`beforeEach(async () => {
+        vi["useFakeTimers"]();
+        await import("./mod.js");
       });`)
     );
     expect(found).toHaveLength(1);

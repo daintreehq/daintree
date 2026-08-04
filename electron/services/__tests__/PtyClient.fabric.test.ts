@@ -123,8 +123,7 @@ describe("PtyClient fabric", () => {
     // registrations here would be invisible to the code under test.
     pluginProcessTools = await import("../../../shared/config/pluginProcessToolRegistry.js");
 
-    // Installed only after the dynamic imports resolve: a faked clock during
-    // module re-execution can starve the import path and hang the hook (#11661).
+    // Install after imports: fake timers can stall module re-execution (#11661).
     vi.useFakeTimers();
   });
 
