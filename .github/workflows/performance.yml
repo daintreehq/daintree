@@ -214,6 +214,19 @@ jobs:
       - name: Verify regenerated baselines
         run: npm run perf verify-baselines
 
+      # Upload before the PR step, which is the step most likely to fail for
+      # reasons unrelated to the baselines themselves (org policy on Actions
+      # opening PRs, a missing token, branch protection). An hour of runner
+      # time should not be thrown away because the delivery mechanism is
+      # blocked — the verified files stay downloadable and can be committed by
+      # hand. Runs on failure too, so a rejected PR step still leaves them.
+      - name: Upload regenerated baselines
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-baselines
+          path: scripts/perf/config/baseline.*.json
+
       # Falls back to the default GITHUB_TOKEN, which only works once the
       # daintreehq org allows Actions to create pull requests. Until then set a
       # PERF_BASELINE_TOKEN repo secret (fine-grained PAT, contents +
