@@ -120,9 +120,10 @@ jobs:
 
   perf-update-baselines:
     # Regenerate the committed baselines and open a PR rather than committing
-    # directly to the protected base branch. Scheduled-only on develop so feature
-    # branches never spawn baseline PRs.
-    if: github.event_name == 'schedule' && github.ref == 'refs/heads/develop'
+    # directly to the protected base branch. develop-only so feature branches
+    # never spawn baseline PRs; manual dispatch is allowed so a stale baseline
+    # can be refreshed without waiting for the 07:00 cron.
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/develop'
     runs-on: ubuntu-22.04
     timeout-minutes: 120
     permissions:
@@ -141,6 +142,48 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The nightly matrix contains PERF-004, which launches a real packaged
+      # binary and hard-fails when one is missing. Without these steps the
+      # nightly regen aborts before writing anything, so baseline.nightly.json
+      # can never gain the scenarios the perf-nightly gate requires — the job
+      # meant to heal a stale baseline was structurally unable to produce one.
+      # Mirrors the perf-nightly job.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libarchive-tools \
+            libxss-dev \
+            libsecret-1-dev \
+            libnss3-dev \
+            libnotify-dev \
+            libxkbfile-dev
+
+      - name: Build
+        run: npm run build
+
+      - name: Package Linux binary (dir target)
+        run: npx electron-builder --config electron-builder.config.cjs --linux --dir --publish never
+
+      - name: Verify packaged binary exists
+        run: test -f release/linux-unpacked/daintree && test -x release/linux-unpacked/daintree
+
+      - name: Install Linux runtime dependencies
+        run: |
+          sudo apt-get install -y \
+            libgbm1 \
+            libgtk-3-0 \
+            libnss3 \
+            libasound2 \
+            libxss1 \
+            libxtst6 \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libdrm2 \
+            libnotify4 \
+            xvfb
+
       # A regenerated baseline is still written even when a scenario regresses
       # against the old values (run.ts exits 1 in that case), so don't let the
       # non-zero exit abort the job before the PR step runs.
@@ -153,16 +196,45 @@ jobs:
         continue-on-error: true
 
       - name: Regenerate nightly baseline
-        run: npm run perf -- nightly --update-baseline
+        env:
+          DBUS_SESSION_BUS_ADDRESS: /dev/null
+        run: xvfb-run --auto-servernum npm run perf -- nightly --update-baseline
         continue-on-error: true
 
       - name: Regenerate soak baseline
         run: npm run perf -- soak --update-baseline
         continue-on-error: true
 
+      # Every regen step above is continue-on-error (a budget regression still
+      # writes a valid baseline, then exits 1), so a step that died from a
+      # harness exception and wrote nothing looks identical to a healthy one.
+      # Without this gate the job opens a PR staging the modes that succeeded
+      # next to the modes left stale — which is how the existing automation
+      # branch ended up carrying a soak-only baseline commit.
+      - name: Verify regenerated baselines
+        run: npm run perf verify-baselines
+
+      # Upload before the PR step, which is the step most likely to fail for
+      # reasons unrelated to the baselines themselves (org policy on Actions
+      # opening PRs, a missing token, branch protection). An hour of runner
+      # time should not be thrown away because the delivery mechanism is
+      # blocked — the verified files stay downloadable and can be committed by
+      # hand. Runs on failure too, so a rejected PR step still leaves them.
+      - name: Upload regenerated baselines
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-baselines
+          path: scripts/perf/config/baseline.*.json
+
+      # Falls back to the default GITHUB_TOKEN, which only works once the
+      # daintreehq org allows Actions to create pull requests. Until then set a
+      # PERF_BASELINE_TOKEN repo secret (fine-grained PAT, contents +
+      # pull_requests write) and this step picks it up automatically.
       - name: Open baseline update PR
         uses: peter-evans/create-pull-request@v8
         with:
+          token: ${{ secrets.PERF_BASELINE_TOKEN || github.token }}
           add-paths: scripts/perf/config/baseline.*.json
           branch: perf/update-baselines-automated
           delete-branch: true
