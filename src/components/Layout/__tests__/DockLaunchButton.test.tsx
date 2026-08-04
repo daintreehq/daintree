@@ -1007,6 +1007,81 @@ describe("DockLaunchButton", () => {
     expect(resetPreventDefault).not.toHaveBeenCalled();
   });
 
+  describe("focus return after activation (#11664)", () => {
+    /** Radix's restore runs after the close; this is what would cancel it. */
+    function fireCloseAutoFocus() {
+      const preventDefault = vi.fn();
+      act(() => popoverCloseAutoFocusSpy!({ preventDefault }));
+      return preventDefault;
+    }
+
+    it("cancels the return when a clicked row launches an agent", () => {
+      const { getByText } = renderButton();
+
+      fireEvent.click(getByText("Claude"));
+
+      // Without this the trigger takes focus back once the content's exit
+      // animation ends — after the new panel already had it.
+      expect(fireCloseAutoFocus()).toHaveBeenCalledTimes(1);
+    });
+
+    it("cancels the return when a clicked row creates a panel", () => {
+      const { getByText } = renderButton({ activeWorktreeId: "wt-1" });
+
+      fireEvent.click(getByText("Review"));
+
+      expect(fireCloseAutoFocus()).toHaveBeenCalledTimes(1);
+    });
+
+    it("cancels the return when Enter launches the top result", () => {
+      const { container } = renderButton();
+      const input = searchInput(container);
+
+      fireEvent.change(input, { target: { value: "claude" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(fireCloseAutoFocus()).toHaveBeenCalledTimes(1);
+    });
+
+    it("spends the suppression on a single close", () => {
+      const { getByText } = renderButton();
+
+      fireEvent.click(getByText("Claude"));
+      fireCloseAutoFocus();
+
+      // A later Escape has to get its focus return back, or the launcher
+      // strands the keyboard every time it is dismissed without launching.
+      expect(fireCloseAutoFocus()).not.toHaveBeenCalled();
+    });
+
+    it("keeps the return when a row routes to settings instead of launching", () => {
+      const onLaunchAgent = vi.fn();
+      const { getByText } = renderButton({ onLaunchAgent });
+
+      fireEvent.click(getByText("Gemini"));
+
+      expect(onLaunchAgent).not.toHaveBeenCalled();
+      expect(fireCloseAutoFocus()).not.toHaveBeenCalled();
+    });
+
+    it("keeps the return for the Create a recipe cue", () => {
+      mockRecipes = [];
+      const { getByText } = renderButton({ activeWorktreeId: "wt-1" });
+
+      fireEvent.click(getByText("Create a recipe"));
+
+      expect(fireCloseAutoFocus()).not.toHaveBeenCalled();
+    });
+
+    it("keeps the return when the launcher is dismissed without activating a row", () => {
+      renderButton();
+
+      act(() => popoverOpenChangeSpy!(false));
+
+      expect(fireCloseAutoFocus()).not.toHaveBeenCalled();
+    });
+  });
+
   it("invokes runRecipeWithResults with cwd, worktreeId, and recipe context when a recipe is selected", async () => {
     mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
 

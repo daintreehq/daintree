@@ -155,6 +155,20 @@ export interface AppPalettePopoverContentProps extends Omit<
    */
   restoreFocusOnPointerDismiss?: boolean;
   /**
+   * Asked once per close whether this particular close must not bounce focus
+   * back to the trigger. Activating a row is an inside close, so Radix has no
+   * event that tells it apart from Escape — the palette that just launched
+   * something is the only thing that knows focus is already travelling.
+   *
+   * Separate from `restoreFocusOnPointerDismiss` rather than folded into it:
+   * that flag is a standing policy about how pointer dismissals should look,
+   * this is one close that must not bounce. Named for the side effect — the
+   * shell calls it exactly once per close, including closes it was going to
+   * suppress anyway, so the consumer can disarm on the same call and never
+   * carry a stale answer into the next dismissal.
+   */
+  consumeCloseAutoFocusSuppression?: () => boolean;
+  /**
    * Fired before Radix restores focus, for triggers that have to suppress
    * something on the way out (a tooltip that would re-open on focus). The shell
    * keeps ownership of the Radix event itself.
@@ -167,6 +181,7 @@ function AppPalettePopoverContent({
   inputRef,
   onClearQuery,
   restoreFocusOnPointerDismiss = false,
+  consumeCloseAutoFocusSuppression,
   onCloseAutoFocus,
   onEscapeKeyDown,
   onInteractOutside,
@@ -194,6 +209,11 @@ function AppPalettePopoverContent({
     if (!isOpen) return;
     // A dismissal that got vetoed, or one reversed mid-exit, can leave the
     // pointer flag armed with no close-autofocus to consume it.
+    //
+    // Only this flag. The consumer's own suppression is armed on the way out,
+    // and the content survives its exit animation, so disarming anything here
+    // on a reopen inside that window would strip the pending close of the
+    // answer it is still about to ask for.
     wasPointerCloseRef.current = false;
     const frame = requestAnimationFrame(focusInput);
     return () => cancelAnimationFrame(frame);
@@ -231,8 +251,13 @@ function AppPalettePopoverContent({
 
   const handleCloseAutoFocus = useCallback(
     (event: Event) => {
+      // Unconditional, and ahead of everything else: the answer is a one-shot
+      // the consumer disarms as it hands it over, so skipping the call on a
+      // close the pointer branch would have suppressed anyway would leave it
+      // armed for the next one.
+      const suppressRequested = consumeCloseAutoFocusSuppression?.() === true;
       onCloseAutoFocus?.();
-      if (!restoreFocusOnPointerDismiss && wasPointerCloseRef.current) {
+      if (suppressRequested || (!restoreFocusOnPointerDismiss && wasPointerCloseRef.current)) {
         event.preventDefault();
       }
       // Cleared on every close, not just the suppressed ones: a palette that
@@ -240,7 +265,7 @@ function AppPalettePopoverContent({
       // pointer dismissal and taint the next keyboard close.
       wasPointerCloseRef.current = false;
     },
-    [onCloseAutoFocus, restoreFocusOnPointerDismiss]
+    [consumeCloseAutoFocusSuppression, onCloseAutoFocus, restoreFocusOnPointerDismiss]
   );
 
   const handleEscapeKeyDown = useCallback(

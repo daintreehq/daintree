@@ -62,6 +62,9 @@ export function DockLaunchButton({
   const [tooltipOpen, setTooltipOpen] = useState(false);
   const isRestoringFocusRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Armed on the way out of a launch, spent by the shell's close-autofocus.
+  // See activateRow.
+  const suppressCloseAutoFocusRef = useRef(false);
   const listboxId = useId();
   const getOptionId = useCallback((rowKey: string) => `${listboxId}-${rowKey}`, [listboxId]);
 
@@ -128,6 +131,15 @@ export function DockLaunchButton({
     isRestoringFocusRef.current = true;
   }, []);
 
+  // Read-and-disarm in one step, so a close the shell suppressed for its own
+  // reasons still spends the flag rather than leaving it to fire on the next
+  // Escape.
+  const consumeCloseAutoFocusSuppression = useCallback(() => {
+    const suppress = suppressCloseAutoFocusRef.current;
+    suppressCloseAutoFocusRef.current = false;
+    return suppress;
+  }, []);
+
   // Re-anchor the selection each time the launcher opens. Closing only clears
   // the query, so the hook's follow-anchor still points wherever browsing
   // ended, while the reopened popover mounts its scroller at the top and the
@@ -179,12 +191,27 @@ export function DockLaunchButton({
 
   const activateRow = useCallback(
     (row: DockLaunchRow) => {
+      const { item } = row;
+      // Everything closes through `closeLauncher`, so Radix cannot tell a
+      // launch from an Escape and restores focus to the trigger either way —
+      // landing a beat after the new panel took it, once the content's exit
+      // animation ends (#11664). Cancel that return, but only for rows that
+      // genuinely launch: the two branches below navigate instead, into
+      // dialogs that manage their own focus, and their dispatch can fail — the
+      // WAI-ARIA return is what keeps the keyboard somewhere useful if it does.
+      const launches =
+        item !== undefined &&
+        // Mirrors the redirect in activateDockLaunchItem: an agent that isn't
+        // launchable opens its settings subtab rather than a panel.
+        (item.category !== "agent" || isAgentLaunchable(item.agent.availability));
+      if (launches) suppressCloseAutoFocusRef.current = true;
+
       closeLauncher();
-      if (!row.item) {
+      if (!item) {
         activateCreateRecipeCue(activeWorktreeId, "menu");
         return;
       }
-      activateDockLaunchItem(row.item, {
+      activateDockLaunchItem(item, {
         cwd,
         activeWorktreeId,
         recipeContext,
@@ -288,6 +315,7 @@ export function DockLaunchButton({
         inputRef={inputRef}
         onClearQuery={clearQuery}
         onCloseAutoFocus={suppressTooltipDuringFocusRestore}
+        consumeCloseAutoFocusSuppression={consumeCloseAutoFocusSuppression}
         side="top"
         align="start"
         sideOffset={4}

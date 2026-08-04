@@ -80,6 +80,7 @@ interface HarnessProps {
   modal?: boolean;
   dismissOnForeignOverlay?: boolean;
   restoreFocusOnPointerDismiss?: boolean;
+  consumeCloseAutoFocusSuppression?: () => boolean;
   initialOpen?: boolean;
   /** Drives the open state from the test, overriding the harness's own. */
   open?: boolean;
@@ -580,6 +581,48 @@ describe("AppPalettePopover", () => {
       fireCloseAutoFocus();
 
       expect(onCloseAutoFocus).toHaveBeenCalledTimes(1);
+    });
+
+    it("suppresses the return when the consumer claims the close", () => {
+      // Opted into pointer restoration, so only the consumer's answer can be
+      // producing the suppression — the two policies are independent.
+      render(
+        <Harness
+          restoreFocusOnPointerDismiss={true}
+          consumeCloseAutoFocusSuppression={() => true}
+        />
+      );
+
+      expect(fireCloseAutoFocus().preventDefault).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the return alone when the consumer declines", () => {
+      render(<Harness consumeCloseAutoFocusSuppression={() => false} />);
+
+      expect(fireCloseAutoFocus().preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("asks the consumer exactly once per close", () => {
+      const consume = vi.fn(() => false);
+      render(<Harness consumeCloseAutoFocusSuppression={consume} />);
+
+      fireCloseAutoFocus();
+      fireCloseAutoFocus();
+
+      // The consumer disarms itself on the call, so a second ask per close
+      // would spend an answer that belongs to the next one.
+      expect(consume).toHaveBeenCalledTimes(2);
+    });
+
+    it("still asks when a pointer dismissal already decided the outcome", () => {
+      // The pointer branch would short-circuit an `||`, leaving the consumer
+      // armed to fire on the following keyboard close.
+      const consume = vi.fn(() => false);
+      render(<Harness consumeCloseAutoFocusSuppression={consume} />);
+      act(() => contentProps.onPointerDownOutside?.());
+
+      expect(fireCloseAutoFocus().preventDefault).toHaveBeenCalledTimes(1);
+      expect(consume).toHaveBeenCalledTimes(1);
     });
   });
 
