@@ -511,7 +511,12 @@ export function buildArgsForRespawn(
   kind: PanelKind,
   projectRoot: string,
   agentSettings: AgentSettingsData | undefined,
-  reconnectTimedOut: boolean,
+  /**
+   * The saved id must not be reused — the original may still be live. True for a
+   * timed-out reconnect, and for one refused because the id belongs to another
+   * workspace (#11652).
+   */
+  mintFreshTerminalId: boolean,
   clipboardDirectory: string | undefined,
   projectPresetsByAgent?: Record<string, AgentPreset[]>,
   options?: BuildArgsForRespawnOptions
@@ -713,7 +718,7 @@ export function buildArgsForRespawn(
     cwd: saved.cwd || projectRoot || "",
     worktreeId: saved.worktreeId,
     location,
-    requestedId: reconnectTimedOut ? undefined : saved.id,
+    requestedId: mintFreshTerminalId ? undefined : saved.id,
     command: isAgentPanel ? command : saved.command?.trim() || undefined,
     isInputLocked: saved.isInputLocked,
     devCommand: isDevPreview ? command : undefined,

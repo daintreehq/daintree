@@ -86,6 +86,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:archive-install-intent": "external",
   "terminal:exit": "external",
   "terminal:spawn-result": "external",
+  "terminal:resize-result": "external",
 } as const satisfies Record<keyof IpcEventBusMap, "bus" | "external">;
 
 const EVENT_BUS_RELAYED_EVENTS = (

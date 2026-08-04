@@ -1172,3 +1172,163 @@ describe("TerminalProcess — agent startup instrumentation (Issue #7616)", () =
     }
   });
 });
+
+describe("TerminalProcess — resize result echo (#11641)", () => {
+  /**
+   * A pty whose `cols`/`rows` track what `resize()` accepted, and which can
+   * accept something other than what it was asked for. Real node-pty reports
+   * its own cached view rather than a kernel read-back, so the distinction the
+   * echo has to preserve is "what the pty ended up holding" vs "what we asked
+   * for" — a fake that always stores the argument can't tell those apart.
+   */
+  function createResizablePty(
+    initialCols: number,
+    initialRows: number,
+    accept: (cols: number, rows: number) => { cols: number; rows: number } = (cols, rows) => ({
+      cols,
+      rows,
+    })
+  ) {
+    const pty = createControllablePty();
+    let currentCols = initialCols;
+    let currentRows = initialRows;
+    Object.defineProperty(pty, "cols", { get: () => currentCols, configurable: true });
+    Object.defineProperty(pty, "rows", { get: () => currentRows, configurable: true });
+    const resizeSpy = vi.fn<(cols: number, rows: number) => void>((cols, rows) => {
+      const accepted = accept(cols, rows);
+      currentCols = accepted.cols;
+      currentRows = accepted.rows;
+    });
+    pty.resize = resizeSpy;
+    return { pty, resizeSpy };
+  }
+
+  it("reports the geometry the pty holds once it adopts the request", () => {
+    const { pty } = createResizablePty(80, 24);
+    const terminal = createTerminal(pty, undefined, undefined, "t-resize-applied");
+    try {
+      const result = terminal.resize(700, 40);
+
+      expect(result.outcome).toBe("applied");
+      expect(result.appliedCols).toBe(700);
+      expect(result.appliedRows).toBe(40);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("reports no geometry when the backend has not adopted the resize yet", () => {
+    // node-pty on Windows QUEUES resize until ConPTY is ready and updates its
+    // cached dims only inside that deferred callback, so the getters still
+    // report the pre-resize grid. Claiming the OLD grid as applied is the
+    // dangerous answer: the watchdog would compare it against xterm, see
+    // agreement, and miss the split once the queued resize lands.
+    const { pty, resizeSpy } = createResizablePty(80, 24, (_cols, _rows) => ({
+      cols: 80,
+      rows: 24,
+    }));
+    const terminal = createTerminal(pty, undefined, undefined, "t-resize-deferred");
+    try {
+      const result = terminal.resize(700, 40);
+
+      expect(resizeSpy).toHaveBeenCalledWith(700, 40);
+      expect(result.outcome).toBe("deferred");
+      // Neither the request nor the stale grid — the geometry is unknown.
+      expect(result.appliedCols).toBeNull();
+      expect(result.appliedRows).toBeNull();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("reports no geometry when the dimensions cannot be read at all", () => {
+    const { pty } = createResizablePty(80, 24);
+    const terminal = createTerminal(pty, undefined, undefined, "t-resize-getter-throws");
+    try {
+      Object.defineProperty(pty, "cols", {
+        get: (): number => {
+          throw new Error("pty destroyed");
+        },
+        configurable: true,
+      });
+
+      const result = terminal.resize(120, 40);
+
+      // An unreadable grid must never fall back to the request — that would
+      // manufacture agreement with xterm out of a measurement failure.
+      expect(result.appliedCols).toBeNull();
+      expect(result.appliedCols).not.toBe(result.requestedCols);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("still reports the pty's geometry when the request is a no-op", () => {
+    // The dedup shortcut skips ptyProcess.resize (and therefore SIGWINCH). A
+    // caller that learns nothing here cannot distinguish "the pty is where you
+    // asked" from "the pty never moved", which is the split this echo exists
+    // to surface.
+    const { pty, resizeSpy } = createResizablePty(120, 30);
+    const terminal = createTerminal(pty, undefined, undefined, "t-resize-noop");
+    try {
+      const result = terminal.resize(120, 30);
+
+      expect(result.outcome).toBe("unchanged");
+      expect(result.appliedCols).toBe(120);
+      expect(result.appliedRows).toBe(30);
+      expect(resizeSpy).not.toHaveBeenCalled();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("reports the pre-existing geometry when the pty rejects the resize", () => {
+    const { pty } = createResizablePty(100, 30);
+    pty.resize = () => {
+      throw new Error("ioctl failed");
+    };
+    const terminal = createTerminal(pty, undefined, undefined, "t-resize-throw");
+    try {
+      const result = terminal.resize(200, 50);
+
+      expect(result.outcome).toBe("failed");
+      expect(result.error).toContain("ioctl failed");
+      // The grid did NOT move — reporting the request here would claim a
+      // resize that never happened.
+      expect(result.appliedCols).toBe(100);
+      expect(result.appliedRows).toBe(30);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("rejects non-integral geometry without touching the pty", () => {
+    const { pty, resizeSpy } = createResizablePty(80, 24);
+    const terminal = createTerminal(pty, undefined, undefined, "t-resize-invalid");
+    try {
+      const result = terminal.resize(80.5, 24);
+
+      expect(result.outcome).toBe("rejected");
+      expect(result.appliedCols).toBeNull();
+      expect(result.appliedRows).toBeNull();
+      expect(resizeSpy).not.toHaveBeenCalled();
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("reports no applied geometry once the pty has exited", () => {
+    const { pty, resizeSpy } = createResizablePty(80, 24);
+    const terminal = createTerminal(pty, undefined, undefined, "t-resize-exited");
+    try {
+      pty.emitExit(0);
+      const result = terminal.resize(120, 40);
+
+      expect(result.outcome).toBe("exited");
+      expect(result.appliedCols).toBeNull();
+      expect(resizeSpy).not.toHaveBeenCalled();
+    } finally {
+      terminal.dispose();
+    }
+  });
+});

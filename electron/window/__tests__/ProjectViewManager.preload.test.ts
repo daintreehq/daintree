@@ -206,6 +206,10 @@ describe("ProjectViewManager — preload eval cost (#9770)", () => {
     vi.clearAllMocks();
     mockGetAppMetrics.mockReset();
     mockGetAppMetrics.mockReturnValue([]);
+    // Preload-cost suite, not paint-gate policy: release every gate with a
+    // signal so the zero-length gate can't read as the hard timeout that now
+    // abandons a cold switch (#11635).
+    vi.spyOn(ProjectViewManager.prototype, "waitForPaint").mockResolvedValue("signal");
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",

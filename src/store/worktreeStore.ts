@@ -1,5 +1,9 @@
 import { create, type StateCreator } from "zustand";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import {
+  clearWorktreeRevealObligations,
+  replaceWorktreeRevealObligations,
+} from "@/services/terminal/worktreeRevealCoordinator";
 import { TerminalRefreshTier, isGridPanelLocation, isPtyPanel } from "@shared/types/panel";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { Issue, PR } from "@shared/types/forge";
@@ -245,7 +249,15 @@ interface WorktreeSelectionState {
   _previousRestoreWorktreeId: string | null;
   _fleetScopeToken: FleetScopeToken | null;
 
-  setActiveWorktree: (id: string | null) => void;
+  /**
+   * `persist: false` makes the activation session-scoped: the in-memory
+   * selection moves, but neither `restoreWorktreeId` nor the main-process
+   * `activeWorktreeId` slot is written. That slot is app-global — shared by
+   * every project — so a worktree-less workspace clearing it would wipe the
+   * saved selection of the git-backed project that owns it. `stateHydration`
+   * makes the same call by skipping the write outright (#11654).
+   */
+  setActiveWorktree: (id: string | null, options?: { persist?: boolean }) => void;
   setFocusedWorktree: (id: string | null) => void;
   selectWorktree: (id: string, options?: { source?: "user" | "focus" }) => void;
   setPendingWorktree: (id: string | null) => void;
@@ -640,7 +652,12 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   _previousRestoreWorktreeId: null,
   _fleetScopeToken: null,
 
-  setActiveWorktree: (id) => {
+  setActiveWorktree: (id, options) => {
+    // Both the durable slot and the persisted one ride this flag together: the
+    // restore target is the in-memory half of the same app-global selection, so
+    // a session-scoped activation that nulled it would still lose the durable
+    // pick the moment anything else re-persisted from it (#11654).
+    const persist = options?.persist ?? true;
     const previousId = get().activeWorktreeId;
     const generation = get()._policyGeneration + 1;
     const switchStartedAt = Date.now();
@@ -656,7 +673,9 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       _policyGeneration: generation,
     };
 
-    if (id !== null) {
+    if (!persist) {
+      // Leave the durable selection exactly as it was.
+    } else if (id !== null) {
       // An explicit activation is a durable selection — make it the restore
       // target so switching projects round-trips back to it (#9512).
       updates.restoreWorktreeId = id;
@@ -700,7 +719,9 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     }
     scheduleWorktreeSwitchPaintedMark(previousId ?? null, id ?? null, switchStartedAt);
 
-    persistActiveWorktree(id);
+    if (persist) {
+      persistActiveWorktree(id);
+    }
 
     applyWorktreeTerminalPolicy(get, set, id, generation, () => {
       markRendererPerformance(PERF_MARKS.WORKTREE_SWITCH_END, {
@@ -1281,7 +1302,10 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     applyWorktreeTerminalPolicy(get, set, restoreId, generation);
   },
 
-  reset: () =>
+  reset: () => {
+    // Reveal obligations are keyed by policy generation but held outside the
+    // store, so the generation bump below cannot invalidate them on its own.
+    clearWorktreeRevealObligations();
     set({
       activeWorktreeId: null,
       restoreWorktreeId: null,
@@ -1321,7 +1345,8 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       // post-reset token is null and the exit-side guard compares against
       // null.
       _policyGeneration: get()._policyGeneration + 1,
-    }),
+    });
+  },
 });
 
 export const useWorktreeSelectionStore = create<WorktreeSelectionState>()(
@@ -1358,6 +1383,12 @@ function applyWorktreeTerminalPolicy(
   const fleetActive = get().isFleetScopeActive;
   const armedIds = fleetActive ? getFleetArmedIds() : null;
 
+  // Terminals whose wake could not paint because this runs BEFORE React
+  // re-renders — their hosts are still parked in the offscreen container under
+  // `content-visibility: hidden`. Handed to the reveal coordinator, which
+  // discharges each one from its XtermAdapter mount (#11640).
+  const revealObligations: string[] = [];
+
   for (const id of panelIds) {
     const terminal = panelsById[id];
     if (!terminal) continue;
@@ -1391,9 +1422,19 @@ function applyWorktreeTerminalPolicy(
       (!isPtyPanel(terminal) || terminal.hasPty !== false) &&
       panelKindHasPty(terminal.kind ?? "terminal")
     ) {
+      // The wake still runs first: for a terminal that IS already mounted and
+      // paintable (fleet-scope re-entry, a re-selected worktree) it is the
+      // cheapest correct correction and settles in-tick.
+      //
+      // Only an EXPLICIT false (or a throw) becomes an obligation. `wake` is
+      // typed boolean, so in production this is identical to `!wake(...)` — but
+      // a bare `vi.fn()` service mock returns `undefined`, and the loose test
+      // would arm the coordinator across every suite that stubs the service.
+      let wakeVerdict: boolean | undefined;
       try {
-        terminalInstanceService.wake(terminal.id);
+        wakeVerdict = terminalInstanceService.wake(terminal.id);
       } catch (error) {
+        wakeVerdict = false;
         logErrorWithContext(error, {
           operation: "wake_visible_worktree_terminal",
           component: "worktreeStore",
@@ -1401,8 +1442,21 @@ function applyWorktreeTerminalPolicy(
           details: { terminalId: terminal.id, targetWorktreeId, generation },
         });
       }
+      // Only grid-owned panels are tracked. Dock/trash manage their own
+      // visibility, and the overlay-hosted Assistant already has a dedicated
+      // reveal owner (createAssistantRevealCoordinator) that must not be
+      // double-driven — neither surface routes through TerminalPane's
+      // `onAttached`, so an obligation for one could never be discharged.
+      if (wakeVerdict === false && isGridPanelLocation(location)) {
+        revealObligations.push(terminal.id);
+      }
     }
   }
+
+  // Replace wholesale, even when empty: this is what drops a previous
+  // generation's obligations for terminals that never mounted, so the tracked
+  // set can never outgrow the last policy pass's targets.
+  replaceWorktreeRevealObligations(generation, revealObligations);
 
   onComplete?.();
 }

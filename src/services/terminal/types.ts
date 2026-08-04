@@ -8,6 +8,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { TerminalRefreshTier, PanelKind, AgentState } from "@/types";
 import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 import type { TerminalGeometry } from "@shared/types/terminal";
+import type { TerminalResizeResult } from "@shared/types/pty-host";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
 
@@ -28,6 +29,37 @@ export interface TerminalLink extends ILink {
 export type AgentStateCallback = (state: AgentState) => void;
 
 export type PostCompleteHook = (output: string) => void | Promise<void>;
+
+/**
+ * Intent marker for a renderer/geometry resync (#11638). `force` means the user
+ * explicitly asked for this repair — the Redraw action or its bulk per-worktree
+ * variant — and it bypasses EXACTLY ONE guard: #10863's write-quiescence
+ * deferral ({@link https://github.com/daintreehq/daintree/issues/10863}), which
+ * exists to stop an AUTOMATIC out-of-band re-wrap from landing under a live
+ * cursor-relative repaint. A user staring at a garbled pane has already made
+ * that call, and a busy agent never opens the 300ms gap the guard waits for, so
+ * without the bypass the one load-bearing step of Redraw is dead on exactly the
+ * terminals it exists for.
+ *
+ * Still enforced under `force`: the alt-screen exclusion (#10805), host
+ * visibility, the >=50px box floor, cell-metric availability, the
+ * serialized-restore parking, and the pre-resize drain of held ingest bytes.
+ *
+ * Also note what `force` implies beyond the stream gate: it routes the repair
+ * through the lock-exempt atomic reconcile rather than `fit()`, so it can land
+ * during a resize lock (a divider drag, DnD, the project-switch suppression
+ * window). That is deliberate — the lock is how the pane got stale in the
+ * first place, and deferring to the end-of-transition pass is the same
+ * hand-off-to-something-that-never-runs that made Redraw a no-op.
+ *
+ * Deliberately absent from `TerminalRevealController` and the watchdog's dep
+ * signatures so no automatic path can even ask for it. The two actions that do
+ * ask gate it on `isForegroundDispatch` — an agent or plugin driving Redraw on
+ * a timer IS the automatic writer #10863 was written for.
+ */
+export interface TerminalResyncOptions {
+  force?: boolean;
+}
 
 export interface ManagedTerminal {
   /** Stable terminal id — the key this instance is registered under. */
@@ -80,6 +112,24 @@ export interface ManagedTerminal {
   // the same id must not inherit a prior instance's give-up state (mirrors the
   // revealPendingGeneration guard).
   geometryRepairGeneration?: number;
+  // Geometry the PTY reported holding after its last resize (#11641). The only
+  // view the renderer has of the backend grid — everything else here describes
+  // xterm's side.
+  lastPtyResizeResult?: TerminalResizeResult;
+  // Divergence episodes seen between the applied PTY grid and xterm's grid.
+  // Counts episodes, not watchdog ticks: it advances only when the divergence
+  // signature changes, so it stays in step with what was logged.
+  ptyGeometryDivergenceCount?: number;
+  // The PTY launchGeneration the count accrued under. Scoped to the PTY
+  // incarnation, NOT attachGeneration — detaching and reattaching a pane leaves
+  // the same PTY running, so its divergence history is still the pane's own.
+  ptyGeometryDivergenceGeneration?: number;
+  // Signature of the divergence currently being reported, so a persistently
+  // split pane logs once per episode instead of once per sweep. Cleared only on
+  // observed agreement.
+  ptyGeometryDivergenceSignature?: string;
+  // Same episode-dedup for the container-vs-xterm fit diagnostic.
+  fitGeometryDivergenceSignature?: string;
   // Visibility tracking
   isVisible: boolean;
   lastActiveTime: number;

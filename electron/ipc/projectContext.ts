@@ -1,7 +1,10 @@
 import type { Project } from "../types/index.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { getWindowForWebContents } from "../window/webContentsRegistry.js";
+import { getProjectIdFromSenderUrl } from "./senderIdentity.js";
 import type { HandlerDependencies, IpcContext } from "./types.js";
+
+export { getProjectIdFromSenderUrl };
 
 export interface ScopedProjectResolution {
   project: Project | null;
@@ -28,24 +31,6 @@ function resolveWorkspaceById(workspaceId: string): ScopedProjectResolution {
   const project = projectStore.getProjectById(workspaceId);
   if (project?.status === "closed") return { project: null, workspaceId: null };
   return { project: project ?? null, workspaceId };
-}
-
-/**
- * Project id carried on a view's document URL. Only the initial (startup-restore)
- * renderer gets a `?projectId=` query string; ProjectViewManager's cold switch
- * views load a static URL. So this is the sole per-sender identity during the
- * startup window where the restored view is already live but `registerInitialView`
- * has not bound it in the project maps yet.
- */
-export function getProjectIdFromSenderUrl(sender: Electron.WebContents): string | null {
-  const senderWithUrl = sender as Electron.WebContents & { getURL?: () => string };
-  if (typeof senderWithUrl.getURL !== "function") return null;
-
-  try {
-    return new URL(senderWithUrl.getURL()).searchParams.get("projectId");
-  } catch {
-    return null;
-  }
 }
 
 /**

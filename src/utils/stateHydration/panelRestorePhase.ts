@@ -291,6 +291,13 @@ export interface PanelRestoreContext {
    */
   prefetchedReconnectResults?: Record<string, TerminalReconnectResult>;
   terminalSizes: Record<string, { cols: number; rows: number }>;
+  /**
+   * The saved selection exactly as persisted — one app-global field shared by
+   * every workspace, so in a worktree-less view it names another project's
+   * worktree. Read `effectiveActiveWorktreeId` inside the phase, never this:
+   * that local folds in {@link workspaceHasWorktreesPromise} once, so no
+   * consumer can forget the gate.
+   */
   activeWorktreeId: string | null;
   /**
    * Whether the workspace being restored can have git worktrees at all. `false`
@@ -300,8 +307,16 @@ export interface PanelRestoreContext {
    * workspace. Without this the app-global saved `activeWorktreeId` (and any
    * id a previous run persisted onto a panel) restores panels into a worktree
    * bucket the grid never renders: a live PTY with no visible panel.
+   *
+   * A promise because only the workspace host can distinguish a folder with no
+   * repository from one whose host has not reported yet, and the project row's
+   * `gitBacked` column answers NULL for both a real repository and one never
+   * classified (#11650). Awaiting costs nothing: every consumer below already
+   * sits behind an await of `worktreesPromise`, which resolves from the same
+   * fetch. Resolves `true` whenever the answer is unknown, so the boot race
+   * keeps its saved state (#11234).
    */
-  workspaceHasWorktrees: boolean;
+  workspaceHasWorktreesPromise: Promise<boolean>;
   projectRoot: string;
   agentSettings: AgentSettings | undefined;
   clipboardDirectory: string | undefined;
@@ -367,7 +382,7 @@ export async function restorePanelsPhase(
     prefetchedReconnectResults,
     terminalSizes,
     activeWorktreeId,
-    workspaceHasWorktrees,
+    workspaceHasWorktreesPromise,
     projectRoot,
     agentSettings,
     clipboardDirectory,
@@ -379,6 +394,24 @@ export async function restorePanelsPhase(
     resourceProfile,
     logHydrationInfo,
   } = ctx;
+
+  // Resolved once, up front, and folded straight into the active id every
+  // consumer below reads. Per-consumer gating was the alternative and it is a
+  // trap: the raw app-global id also feeds the restore-ordering comparison at
+  // `isActiveWorktree`, where forgetting the gate silently changes which panels
+  // restore first rather than failing loudly. One derived value cannot be
+  // read past.
+  //
+  // Near-free rather than free: the PTY paths (through
+  // `resolveRestoredWorktreeId`) and the orphan phase already await
+  // `worktreesPromise`, which settles from the same fetch, so the usual restore
+  // already carried this wait. What it does add is a wait for a workspace whose
+  // panels are ALL non-PTY, which previously recreated without touching the
+  // list. Accepted: those panels are cheap to recreate, hydration awaits the
+  // same fetch before it finishes regardless, and the alternative is attributing
+  // them to another project's worktree.
+  const workspaceHasWorktrees = await workspaceHasWorktreesPromise;
+  const effectiveActiveWorktreeId = workspaceHasWorktrees ? activeWorktreeId : null;
 
   const restoreTasks: TerminalRestoreTask[] = [];
   const savedIdToRestoredId = new Map<string, string>();
@@ -437,8 +470,8 @@ export async function restorePanelsPhase(
     // against, so preserve the prior behavior of trusting activeWorktreeId
     // (#11234). This closes PR #11235's own unaddressed follow-up.
     const rehomeTarget =
-      activeWorktreeId !== null && (known === null || known.has(activeWorktreeId))
-        ? activeWorktreeId
+      effectiveActiveWorktreeId !== null && (known === null || known.has(effectiveActiveWorktreeId))
+        ? effectiveActiveWorktreeId
         : undefined;
     // No saved worktree (undefined, or a corrupt empty string): fall to the
     // validated active worktree, or leave it unset rather than guess onto a
@@ -535,7 +568,7 @@ export async function restorePanelsPhase(
       }
 
       const savedWorktreeId = saved.worktreeId ?? null;
-      const isActiveWorktree = savedWorktreeId === activeWorktreeId;
+      const isActiveWorktree = savedWorktreeId === effectiveActiveWorktreeId;
       // A non-active worktree's last-focused panel earns priority restore so
       // each worktree's last active panel reactivates quickly on return.
       const isMostRecentInOtherWorktree =
@@ -652,7 +685,12 @@ export async function restorePanelsPhase(
                 logHydrationInfo,
                 prefetchedReconnectResults?.[saved.id]
               );
-              const reconnectTimedOut = reconnectOutcome.status === "timeout";
+              // Both statuses mean "do not respawn under the saved id". A timeout
+              // may have left the original alive; a conflict definitely did, and
+              // it belongs to another workspace (#11652) — reusing the id would
+              // re-place that terminal's PTY under this project.
+              const mintFreshTerminalId =
+                reconnectOutcome.status === "timeout" || reconnectOutcome.status === "conflict";
               const reconnectedTerminal =
                 reconnectOutcome.status === "found" ? reconnectOutcome.terminal : null;
 
@@ -719,7 +757,7 @@ export async function restorePanelsPhase(
                   kind,
                   projectRoot || "",
                   agentSettings,
-                  reconnectTimedOut,
+                  mintFreshTerminalId,
                   clipboardDirectory,
                   projectPresetsByAgent,
                   {
@@ -789,7 +827,11 @@ export async function restorePanelsPhase(
                 saved,
                 kind,
                 projectRoot || "",
-                activeWorktreeId
+                // The builder falls back to this when rescuing a non-dockable
+                // dock panel that saved no worktree of its own. The clear below
+                // already covers that today; passing the gated id keeps the two
+                // from having to agree.
+                effectiveActiveWorktreeId
               );
               // Same normalization the PTY paths get from
               // `resolveRestoredWorktreeId`: this builder keeps `saved.worktreeId`
@@ -958,8 +1000,8 @@ export async function restorePanelsPhase(
         if (inferred) {
           orphanArgs.worktreeId = inferred;
           orphanArgs.worktreeIdSource = "inferred";
-        } else if (workspaceHasWorktrees && activeWorktreeId) {
-          orphanArgs.worktreeId = activeWorktreeId;
+        } else if (effectiveActiveWorktreeId) {
+          orphanArgs.worktreeId = effectiveActiveWorktreeId;
           orphanArgs.worktreeIdSource = "inferred";
         }
         const restoredTerminalId = await addPanel(orphanArgs);

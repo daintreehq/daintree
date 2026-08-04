@@ -161,6 +161,7 @@ import type {
   BroadcastWriteResultPayload,
   FdLeakWarningPayload,
   TerminalReliabilityMetricPayload,
+  TerminalResizeResult,
 } from "../pty-host.js";
 import type {
   FileSearchPayload,
@@ -222,6 +223,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   };
   worktree: {
     getAll(): Promise<WorktreeState[]>;
+    /**
+     * `getAll` plus the workspace host's own git-backed verdict, so a caller
+     * can tell an empty list that means "no repository here" from one that
+     * means "the host has not reported yet" (#11650).
+     */
+    getAllWithStatus(): Promise<import("../worktree.js").WorktreeListResult>;
     refresh(worktreeId?: string): Promise<void>;
     refreshPullRequests(): Promise<void>;
     getPRStatus(): Promise<import("../workspace-host.js").PRServiceStatus | null>;
@@ -304,6 +311,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     releaseWorkerIngestPort(id: string): Promise<void>;
     onStatus(callback: (data: TerminalStatusPayload) => void): () => void;
     onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
+    /**
+     * Geometry the PTY actually holds after each resize it processed. Compare
+     * against the live xterm grid to detect a split neither side can see alone.
+     */
+    onResizeResult(callback: (id: string, result: TerminalResizeResult) => void): () => void;
     onResourceMetrics(
       callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void
     ): () => void;

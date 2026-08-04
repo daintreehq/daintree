@@ -5,6 +5,7 @@ import type {
   RefreshTierProvider,
   AgentStateCallback,
   PostCompleteHook,
+  TerminalResyncOptions,
 } from "../types";
 import { GRID_RESIZE_COALESCE_MS } from "../types";
 import type { UnseenOutputSnapshot } from "../TerminalUnseenOutputTracker";
@@ -661,8 +662,8 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.plane(id).clearResizeSuppression(id);
   }
 
-  wake(id: string): void {
-    this.plane(id).wake(id);
+  wake(id: string): boolean {
+    return this.plane(id).wake(id);
   }
 
   wakeForFocus(id: string): void {
@@ -1014,12 +1015,16 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.plane(id).focus(id);
   }
 
-  resetRenderer(id: string): boolean {
-    return this.plane(id).resetRenderer(id);
+  resetRenderer(id: string, options: TerminalResyncOptions = {}): boolean {
+    return this.plane(id).resetRenderer(id, options);
   }
 
   handleBackendRecovery(): void {
     this.planes().forEach((plane) => plane.handleBackendRecovery());
+  }
+
+  handleBackendCrash(): void {
+    this.planes().forEach((plane) => plane.handleBackendCrash());
   }
 
   // Option updates fold into the captured create-args so a later transfer

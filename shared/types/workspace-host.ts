@@ -603,6 +603,16 @@ export type WorkspaceHostEvent =
       // that predate this field; the port `get-all-states` response always
       // includes it.
       lastAcknowledgedMutationIds?: string[];
+      // The host's own probe of the project root, not a persisted flag: `false`
+      // once `load-project` found no repository, `true` once it found one,
+      // `null` before it has classified (or on a host that predates this
+      // field). `states` alone cannot carry this — an empty list means "no
+      // repository", "host not registered yet" and "readiness gate timed out"
+      // all at once, and the renderer needs to tell the first from the other
+      // two before it lets a workspace adopt the app-global active worktree
+      // (#11650). The project row's `gitBacked` column can't answer it either:
+      // NULL there means both "real repository" and "never classified".
+      gitBacked?: boolean | null;
     }
   | { type: "monitor"; requestId: string; state: WorktreeSnapshot | null }
   // Worktree operation responses

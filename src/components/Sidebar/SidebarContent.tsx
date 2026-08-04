@@ -1071,9 +1071,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     };
   }, []);
 
-  // Fleet-eligible terminals inside the currently visible worktrees, split so an
-  // arm/disarm elsewhere only re-walks the unarmed tally rather than re-scanning
-  // every panel. Drives the QuickStateFilterBar arm affordance.
+  // Arm-eligible agent terminals inside the currently visible worktrees, split
+  // so an arm/disarm elsewhere only re-walks the unarmed tally rather than
+  // re-scanning every panel. Drives the QuickStateFilterBar arm affordance,
+  // which is agent-scoped like the state-filter presets beside it (#11637).
   const filterArmEligibleIds = useMemo(() => {
     const worktreeIdSet = new Set(filteredWorktrees.map((w) => w.id));
     if (worktreeIdSet.size === 0) return EMPTY_ELIGIBLE_IDS;
@@ -1597,12 +1598,17 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   // Compact arm affordance pinned to the QuickStateFilterBar's trailing edge —
   // replaces the former full-width banner button. Enabled whenever the visible
-  // worktrees still hold unarmed fleet-eligible terminals; with "All" selected
-  // and no filters that means "arm everything". Otherwise it rests dimmed and
+  // worktrees still hold unarmed agent terminals; with "All" selected and no
+  // filters that means "arm every agent". Otherwise it rests dimmed and
   // disabled so the layout stays stable and the affordance stays discoverable.
+  // Plain shells are excluded here (#11637) — they stay armable individually
+  // and via the header fleet picker's broad "arm all".
   const filterArmEligibleCount = filterArmEligibleIds.length;
   const canArmMatching = filterArmUnarmedCount > 0;
-  const armNoun = filterArmUnarmedCount === 1 ? "terminal" : "terminals";
+  // Agent-scoped nouns: this affordance no longer addresses plain shells, so
+  // "terminals" would overstate what a click arms and the exhausted states
+  // would read as false whenever an unarmed shell is in scope (#11637).
+  const armNoun = filterArmUnarmedCount === 1 ? "agent" : "agents";
   const armMatchingLabel = canArmMatching
     ? hasFilters
       ? armedSize > 0
@@ -1613,11 +1619,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         : `Arm all ${filterArmUnarmedCount} ${armNoun}`
     : filterArmEligibleCount === 0
       ? hasFilters
-        ? "No arm-eligible terminals match the filter"
-        : "No arm-eligible terminals"
+        ? "No agents match the filter"
+        : "No agents to arm"
       : hasFilters
-        ? "All matching terminals are armed"
-        : "All terminals are armed";
+        ? "All matching agents are armed"
+        : "All agents are armed";
   const armMatchingButton = (
     <Tooltip>
       <TooltipTrigger asChild>

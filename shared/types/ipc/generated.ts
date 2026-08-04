@@ -1767,6 +1767,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: Record<string, import("./worktree.js").IssueAssociation>;
   };
+  "worktree:get-all-with-status": {
+    args: [];
+    result: import("../worktree.js").WorktreeListResult;
+  };
   "worktree:get-available-branch": {
     args: [payload: { rootPath: string; branchName: string }];
     result: string;

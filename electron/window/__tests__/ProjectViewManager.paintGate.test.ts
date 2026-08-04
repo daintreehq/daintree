@@ -233,6 +233,11 @@ function createMockWindow() {
     contentView: {
       children,
       addChildView: vi.fn((view: unknown, index?: number) => {
+        // Re-adding a view whose parent is unchanged reorders it rather than
+        // duplicating it. Modelled because the rollback path now re-attaches
+        // through activateView, which can land on a still-attached view.
+        const existing = children.indexOf(view);
+        if (existing >= 0) children.splice(existing, 1);
         if (typeof index === "number") {
           children.splice(index, 0, view);
         } else {
@@ -247,6 +252,20 @@ function createMockWindow() {
     webContents: createMockWebContents(),
   };
   return win;
+}
+
+/**
+ * Attach the rejection handler in the same tick the switch is started, so a
+ * fake-timer test can advance past the gate without tripping an unhandled
+ * rejection.
+ */
+function expectRejection(promise: Promise<unknown>): Promise<Error> {
+  return promise.then(
+    () => {
+      throw new Error("Expected the switch to reject");
+    },
+    (err: unknown) => err as Error
+  );
 }
 
 describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
@@ -271,6 +290,10 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       dirname: "/test",
       paintGateTimeoutMs: 50,
       paintGateHardTimeoutMs: 150,
+      // Compressed onto the same scale: the focus-intent (`painted`) channel
+      // stretches its hard bound to this value, and the hard-timeout tests
+      // below are written against the 150 ms bound.
+      viewLoadTimeoutMs: 100,
       cachedProjectViews: 3,
     });
 
@@ -350,13 +373,18 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     }
   });
 
-  it("falls through paint gate at hard timeout when signal never arrives", async () => {
+  it("abandons the switch at hard timeout when the signal never arrives", async () => {
+    // Both release signals are document-owned, so exhausting the budget means
+    // the incoming view produced no evidence it can render — including having
+    // committed the wrong document entirely (#11635). Committing here is what
+    // stranded users on a bare "Not Found" frame with no in-app recovery.
     vi.useFakeTimers();
     try {
       const slowWc = createMockWebContents();
       wcQueue.push(slowWc);
 
       const switchPromise = manager.switchTo("proj-b", "/path/b");
+      const rejection = expectRejection(switchPromise);
 
       // Flush microtasks so did-finish-load fires and waitForPaint is armed.
       await vi.advanceTimersByTimeAsync(0);
@@ -365,12 +393,27 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       await vi.advanceTimersByTimeAsync(60);
       expect(win.contentView.removeChildView).not.toHaveBeenCalled();
 
-      // Cross the hard bound (150 ms total) — outgoing now detached.
+      // Cross the hard bound (150 ms total) — switch abandoned, not committed.
       await vi.advanceTimersByTimeAsync(100);
-      await switchPromise;
+      const err = await rejection;
 
-      expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
-      expect(manager.getActiveProjectId()).toBe("proj-b");
+      expect(err.message).toContain("View never painted");
+      expect((err as { context?: Record<string, unknown> }).context).toMatchObject({
+        phase: "paint",
+        projectId: "proj-b",
+      });
+      // The healthy outgoing view is still the attached, active one — and it
+      // was never detached in the first place. Asserting only that it ends up
+      // attached would also pass if the branch detached it and the rollback put
+      // it back, which still fires the cache/throttle/freeze side effects and
+      // flashes the blank frame this whole path exists to prevent.
+      expect(manager.getActiveProjectId()).toBe("proj-a");
+      const outgoing = manager.getActiveView();
+      expect(win.contentView.removeChildView).not.toHaveBeenCalledWith(outgoing);
+      expect(initialWc.send).not.toHaveBeenCalledWith(CHANNELS.APP_VIEW_CACHED);
+      // The failed view is gone rather than left stacked behind the outgoing one.
+      expect(win.contentView.children).toEqual([outgoing]);
+      expect(slowWc.close).toHaveBeenCalled();
       expect(
         vi
           .mocked(logWarn)
@@ -381,6 +424,20 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
           .mocked(logWarn)
           .mock.calls.filter(([event]) => event === "projectview.paintgate.hardtimeout")
       ).toHaveLength(1);
+      // Telemetry must not go dark on the failure the gate exists to measure.
+      const rejected = vi
+        .mocked(logInfo)
+        .mock.calls.filter(([event]) => event === "projectview.coldstart.rejected");
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]?.[1]).toMatchObject({
+        projectId: "proj-b",
+        paintGateOutcome: "hard-timeout",
+        rollbackProjectId: "proj-a",
+      });
+      // ...and the success event must not also claim this switch landed.
+      expect(
+        vi.mocked(logInfo).mock.calls.filter(([event]) => event === "projectview.coldstart")
+      ).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
@@ -395,12 +452,61 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
 
       const switchPromise = manager.switchTo("proj-b", "/path/b");
+      const rejection = expectRejection(switchPromise);
       await vi.advanceTimersByTimeAsync(0);
-      // Past hard bound — fall-through, intent dropped.
+      // Past hard bound — switch abandoned, intent dropped rather than
+      // delivered into a view that never proved it could render.
       await vi.advanceTimersByTimeAsync(200);
-      await switchPromise;
+      await rejection;
 
       expect(slowWc.send).not.toHaveBeenCalledWith("project:focus-on-activate", expect.anything());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds the focus-intent gate past the skeleton bound for a slow-but-correct cold boot", async () => {
+    // The `"painted"` channel waits for the full React cold boot, not the
+    // parse-time skeleton, so its budget must outlast a boot that would blow
+    // the skeleton channel's bound — otherwise a cold focus-next-waiting
+    // (agentActions) or focus-panel (projectActions) rejects the whole switch
+    // and shows an error toast. Slow is not the same failure as wrong document;
+    // the abandon tests above still hold for the skeleton channel, whose signal
+    // lands during the load rather than after it.
+    vi.useFakeTimers();
+    try {
+      const slowWc = createMockWebContents();
+      wcQueue.push(slowWc);
+
+      manager.setViewLoadTimeoutMs(1_000);
+      manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
+
+      const switchPromise = manager.switchTo("proj-b", "/path/b");
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Well past the skeleton channel's hard bound: this gate is still open
+      // and the outgoing view is still bridging.
+      await vi.advanceTimersByTimeAsync(400);
+      expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+      // React finally commits — the switch lands and the intent is delivered.
+      manager.signalViewPainted(slowWc.id);
+      await switchPromise;
+
+      expect(manager.getActiveProjectId()).toBe("proj-b");
+      expect(slowWc.send).toHaveBeenCalledWith(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, {
+        intent: "focus-next-waiting",
+      });
+      expect(
+        vi
+          .mocked(logWarn)
+          .mock.calls.filter(([event]) => event === "projectview.paintgate.hardtimeout")
+      ).toHaveLength(0);
+      expect(
+        vi
+          .mocked(logInfo)
+          .mock.calls.filter(([event]) => event === "projectview.coldstart.rejected")
+      ).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
@@ -449,6 +555,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       wcQueue.push(slowWc);
 
       const switchPromise = manager.switchTo("proj-b", "/path/b");
+      const rejection = expectRejection(switchPromise);
       await vi.advanceTimersByTimeAsync(0);
 
       // Bump both bounds way up mid-flight — must NOT delay the active gate
@@ -465,10 +572,15 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
           .mock.calls.filter(([event]) => event === "projectview.paintgate.softtimeout")
       ).toHaveLength(1);
 
-      // Cross the original hard bound — fall-through fires using captured value.
+      // Cross the original hard bound — the gate settles on the captured value
+      // rather than the bumped one, so the switch is abandoned here.
       await vi.advanceTimersByTimeAsync(100);
-      await switchPromise;
-      expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
+      await rejection;
+      expect(
+        vi
+          .mocked(logWarn)
+          .mock.calls.filter(([event]) => event === "projectview.paintgate.hardtimeout")
+      ).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }
@@ -1120,6 +1232,47 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     const registerCalls = vi.mocked(registerAppView).mock.calls;
     const lastCall = registerCalls[registerCalls.length - 1];
     expect(lastCall?.[1]).toBe(welcomeView);
+  });
+
+  it("keeps the unbound welcome view when the first project view never paints", async () => {
+    // Same abandon policy on the first-run window, where the outgoing view is
+    // the welcome view rather than a project entry: it is closed for good once
+    // detached, so committing a view that never painted would leave the window
+    // with nothing recoverable on screen.
+    manager.dispose();
+    vi.useFakeTimers();
+    try {
+      win = createMockWindow();
+      manager = new ProjectViewManager(win as never, {
+        dirname: "/test",
+        paintGateTimeoutMs: 50,
+        paintGateHardTimeoutMs: 150,
+        cachedProjectViews: 3,
+      });
+
+      const welcomeWc = createMockWebContents();
+      const welcomeView = { webContents: welcomeWc, setBounds: vi.fn() };
+      win.contentView.addChildView(welcomeView);
+
+      const slowWc = createMockWebContents();
+      wcQueue.push(slowWc);
+      vi.mocked(registerAppView).mockClear();
+
+      const rejection = expectRejection(manager.switchTo("proj-first", "/path/first"));
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(200);
+      await rejection;
+
+      expect(win.contentView.removeChildView).not.toHaveBeenCalledWith(welcomeView);
+      expect(welcomeWc.close).not.toHaveBeenCalled();
+      expect(slowWc.close).toHaveBeenCalled();
+      expect(manager.getActiveProjectId()).toBeNull();
+
+      const registerCalls = vi.mocked(registerAppView).mock.calls;
+      expect(registerCalls[registerCalls.length - 1]?.[1]).toBe(welcomeView);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("dispose() while paint gate is pending settles the wait without throwing", async () => {

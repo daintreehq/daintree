@@ -462,6 +462,18 @@ export class CrashRecoveryService {
     this.pendingPanelFilter = panelIds;
   }
 
+  /**
+   * Non-destructive companion to `consumePanelFilter`. The filter is a one-shot
+   * whose ids come from the crash snapshot's global panel list, so only the
+   * workspace that owns that record can act on it. A workspace that would
+   * discard it must be able to ask whether one is pending without eating it,
+   * or the owner's next hydrate finds nothing and silently restores the very
+   * panels the user deselected (#11651).
+   */
+  hasPendingPanelFilter(): boolean {
+    return this.pendingPanelFilter !== null;
+  }
+
   consumePanelFilter(): string[] | null {
     const filter = this.pendingPanelFilter;
     this.pendingPanelFilter = null;

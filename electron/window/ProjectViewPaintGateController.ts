@@ -20,7 +20,9 @@ import type { PaintGate, PaintGateOutcome } from "./ProjectViewManagerTypes.js";
  *   - Soft (`paintGateTimeoutMs`): fires `onSoftTimeout` for observability.
  *     The gate stays open and the outgoing view stays attached.
  *   - Hard (`paintGateHardTimeoutMs`): resolves the gate as
- *     `"hard-timeout"`, prompting the caller to detach the outgoing view.
+ *     `"hard-timeout"`. The caller owns the policy: cold starts abandon the
+ *     switch and roll back (#11635), warm reactivations fall through and
+ *     detach the bridge.
  *
  * Both timer values are captured at gate creation. A later
  * `setPaintGateTimeoutMs` / `setPaintGateHardTimeoutMs` call updates the

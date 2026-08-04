@@ -447,6 +447,257 @@ describe("terminal spawn handler - projectId resolution", () => {
   });
 });
 
+// A request naming both a projectId and a worktreeId asserts a relationship
+// between them, and main used to forward it unchecked — so a terminal could be
+// stamped with another project's worktree and journal a cross-project resume
+// record on close. Main verifies the claim; the renderer still chooses.
+describe("terminal spawn handler - worktree/project ownership (#11653)", () => {
+  const projectA = { id: "project-a-id", name: "Project A", path: "/projects/a" };
+  const projectB = { id: "project-b-id", name: "Project B", path: "/projects/b" };
+  const lightweightProject = {
+    id: "lightweight-id",
+    name: "Notes",
+    path: "/folders/notes",
+    gitBacked: false as const,
+  };
+
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+  let worktreeService: { isWorktreeOwnedByProject: ReturnType<typeof vi.fn> };
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  const spawnArgsOf = () => ptyClient.spawn.mock.calls[0][1];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ptyClient = {
+      spawn: vi.fn(),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    worktreeService = { isWorktreeOwnedByProject: vi.fn() };
+    mockGetCurrentProject.mockReturnValue(null);
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  // Pass `null` to model "no workspace client wired up" — an explicit
+  // `undefined` would trigger the default parameter and silently hand the test
+  // the mock service instead.
+  const spawnWith = async (
+    options: Record<string, unknown>,
+    svc: unknown = worktreeService
+  ): Promise<void> => {
+    const deps = { ptyClient, worktreeService: svc } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+    const handler = getSpawnHandler();
+    await handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24, ...options });
+  };
+
+  it("checks the claim against the resolved project's own path and id", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+    worktreeService.isWorktreeOwnedByProject.mockResolvedValue(true);
+
+    await spawnWith({ projectId: "project-a-id", worktreeId: "wt-a1" });
+
+    expect(worktreeService.isWorktreeOwnedByProject).toHaveBeenCalledWith(
+      "wt-a1",
+      projectA.path,
+      "project-a-id"
+    );
+  });
+
+  it("forwards the worktreeId when the owning project confirms it", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+    worktreeService.isWorktreeOwnedByProject.mockResolvedValue(true);
+
+    await spawnWith({ projectId: "project-a-id", worktreeId: "wt-a1" });
+
+    expect(spawnArgsOf().worktreeId).toBe("wt-a1");
+  });
+
+  // The core of the issue: project A claiming one of project B's worktrees.
+  // Uses a real directory so the handler's cwd-existence check passes — a
+  // synthetic path would fall back to home and both hide whether the drop
+  // relocated the terminal and emit its own warning, masking this one.
+  it("drops a worktreeId the claimed project provably does not own, without relocating the terminal", async () => {
+    const existingDir = process.cwd();
+    mockGetProjectById.mockReturnValue(projectA);
+    worktreeService.isWorktreeOwnedByProject.mockResolvedValue(false);
+
+    await spawnWith({
+      projectId: "project-a-id",
+      worktreeId: "wt-belonging-to-b",
+      cwd: existingDir,
+    });
+
+    expect(spawnArgsOf().worktreeId).toBeUndefined();
+    // Dropping the stamp must not become a way to fail or move the terminal.
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(spawnArgsOf().cwd).toBe(existingDir);
+    expect(spawnArgsOf().projectId).toBe("project-a-id");
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("wt-belonging-to-b"));
+  });
+
+  // The verdict has to be settled BEFORE the spawn, not raced against it: a
+  // floating .then() that assigns a mutable variable would still pass every
+  // test whose mock resolves immediately.
+  it("waits for the verdict before spawning", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+    let settle: (owned: boolean | null) => void = () => {};
+    worktreeService.isWorktreeOwnedByProject.mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve;
+      })
+    );
+
+    const deps = { ptyClient, worktreeService } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+    const pending = getSpawnHandler()({} as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      projectId: "project-a-id",
+      worktreeId: "wt-belonging-to-b",
+    });
+
+    // Let every other await in the handler drain; the spawn must still be held.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+
+    settle(false);
+    await pending;
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(spawnArgsOf().worktreeId).toBeUndefined();
+  });
+
+  // `null` is "unknown", not "mismatch" — a cold or mid-sync host must not
+  // strip metadata on a guess (#11131, #11235).
+  it("forwards the worktreeId when ownership is unknown", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+    worktreeService.isWorktreeOwnedByProject.mockResolvedValue(null);
+
+    await spawnWith({ projectId: "project-a-id", worktreeId: "wt-a1" });
+
+    expect(spawnArgsOf().worktreeId).toBe("wt-a1");
+  });
+
+  it("fails open when the ownership lookup rejects", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+    worktreeService.isWorktreeOwnedByProject.mockRejectedValue(new Error("host exited"));
+
+    await spawnWith({ projectId: "project-a-id", worktreeId: "wt-a1" });
+
+    // Asserted so this can't pass merely because the lookup was skipped.
+    expect(worktreeService.isWorktreeOwnedByProject).toHaveBeenCalledTimes(1);
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(spawnArgsOf().worktreeId).toBe("wt-a1");
+  });
+
+  it("forwards the worktreeId when no workspace client is wired up", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+
+    await spawnWith({ projectId: "project-a-id", worktreeId: "wt-a1" }, null);
+
+    expect(spawnArgsOf().worktreeId).toBe("wt-a1");
+  });
+
+  // The pair that gets journaled is the one that matters. A caller sending only
+  // a worktreeId still gets the current project stamped beside it, so that
+  // derived pair is checked too — otherwise the identical corruption arrives by
+  // omitting a field.
+  it("checks the pair it is about to stamp, even when the project was only derived", async () => {
+    mockGetCurrentProject.mockReturnValue(projectB);
+    worktreeService.isWorktreeOwnedByProject.mockResolvedValue(true);
+
+    await spawnWith({ worktreeId: "wt-b1" });
+
+    expect(worktreeService.isWorktreeOwnedByProject).toHaveBeenCalledWith(
+      "wt-b1",
+      projectB.path,
+      projectB.id
+    );
+  });
+
+  // #5182: a worktreeId with no project resolved anywhere stamps no pair, so
+  // there is nothing to check and nothing to drop.
+  it("checks nothing when no project resolves at all", async () => {
+    mockGetCurrentProject.mockReturnValue(null);
+    mockGetProjectById.mockReturnValue(null);
+
+    await spawnWith({ worktreeId: "wt-a1" });
+
+    expect(worktreeService.isWorktreeOwnedByProject).not.toHaveBeenCalled();
+    expect(spawnArgsOf().worktreeId).toBe("wt-a1");
+  });
+
+  // A blank id is treated as absent everywhere else in the spawn path, so it
+  // must resolve — and be audited — exactly like an omitted one rather than
+  // being audited against the empty string.
+  it("treats a blank projectId as absent rather than as a claim on nothing", async () => {
+    mockGetCurrentProject.mockReturnValue(projectA);
+    worktreeService.isWorktreeOwnedByProject.mockResolvedValue(true);
+
+    await spawnWith({ projectId: "   ", worktreeId: "wt-a1" });
+
+    expect(worktreeService.isWorktreeOwnedByProject).toHaveBeenCalledWith(
+      "wt-a1",
+      projectA.path,
+      projectA.id
+    );
+  });
+
+  // A scratch id is opaque and owns no worktrees; there is no project to ask.
+  it("skips the check for an explicit workspace id that resolves to no project", async () => {
+    mockGetProjectById.mockReturnValue(null);
+
+    await spawnWith({
+      projectId: "scratch-uuid",
+      worktreeId: "wt-a1",
+      cwd: "/tmp/scratches/scratch-uuid",
+    });
+
+    expect(worktreeService.isWorktreeOwnedByProject).not.toHaveBeenCalled();
+    expect(spawnArgsOf().worktreeId).toBe("wt-a1");
+  });
+
+  // A folder opened without git owns no worktrees, but the project row is not
+  // the authority on whether it is git-backed — the host probes the folder, so
+  // an external `git init` leaves a stale `gitBacked: false` beside a host
+  // serving real ids. The row must not short-circuit the lookup.
+  it("still asks the host about a project whose row says it is not git-backed", async () => {
+    mockGetProjectById.mockReturnValue(lightweightProject);
+    worktreeService.isWorktreeOwnedByProject.mockResolvedValue(true);
+
+    await spawnWith({ projectId: "lightweight-id", worktreeId: "wt-a1" });
+
+    expect(worktreeService.isWorktreeOwnedByProject).toHaveBeenCalledWith(
+      "wt-a1",
+      lightweightProject.path,
+      lightweightProject.id
+    );
+    expect(spawnArgsOf().worktreeId).toBe("wt-a1");
+  });
+
+  it("does not check ownership when no worktreeId is claimed", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+
+    await spawnWith({ projectId: "project-a-id" });
+
+    expect(worktreeService.isWorktreeOwnedByProject).not.toHaveBeenCalled();
+    // Proves the spawn actually ran, so this can't pass via an early return.
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("terminal spawn handler - PTY pool eligibility (#7945 regression guard)", () => {
   let ptyClient: {
     spawn: ReturnType<typeof vi.fn>;

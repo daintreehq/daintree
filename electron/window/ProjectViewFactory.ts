@@ -313,15 +313,44 @@ export function loadView(
   });
 }
 
+/**
+ * `__DAINTREE_INITIAL_PROJECT__` is contextBridge-exposed by the preload, which
+ * attaches to whatever document the navigation committed — so on its own it
+ * proves the right preload ran, never that the right document rendered. A
+ * `Response` with `status: 404` from the app:// handler is a transport-complete
+ * navigation: it commits, fires did-finish-load, never fires did-fail-load, and
+ * carries the preload intact, so the id probe passed on a bare "Not Found" body
+ * and the switch was accepted (#11635).
+ *
+ * `#root` is the document-owned half of the answer: static markup in
+ * index.html that no other document can produce. It stays in the DOM for the
+ * life of the page, unlike `#startup-skeleton`, which main.tsx removes once
+ * React mounts — probing for that would reject a healthy view whenever React
+ * won the race to did-finish-load.
+ */
+const BOOTSTRAP_PROBE = `({
+  projectId: globalThis.__DAINTREE_INITIAL_PROJECT__?.id ?? null,
+  hasAppRoot: document.getElementById("root") !== null,
+})`;
+
 async function verifyProjectBootstrap(wc: Electron.WebContents, projectId: string): Promise<void> {
-  const loadedProjectId = await wc.executeJavaScript(
-    "globalThis.__DAINTREE_INITIAL_PROJECT__?.id ?? null"
-  );
-  // The production expression above always returns a string or null. Some
-  // unit-test WebContents mocks return undefined for unmodelled scripts;
-  // leave those legacy mocks neutral while still rejecting real missing
-  // bootstrap state (null) and wrong-project bootstraps.
-  if (loadedProjectId === undefined) return;
+  const probe = await wc.executeJavaScript(BOOTSTRAP_PROBE);
+  // The production expression above always returns an object. Some unit-test
+  // WebContents mocks return undefined for unmodelled scripts; leave those
+  // legacy mocks neutral while still rejecting real missing bootstrap state.
+  if (probe === undefined) return;
+  const { projectId: loadedProjectId, hasAppRoot } = (probe ?? {}) as {
+    projectId?: string | null;
+    hasAppRoot?: boolean;
+  };
+  // Checked before the id: a wrong document can still carry the right id, and
+  // reporting it as a bootstrap mismatch would point diagnosis at the project
+  // plumbing instead of at the failed asset read that actually caused it.
+  if (hasAppRoot !== true) {
+    throw new Error(
+      `Project view loaded a non-application document for ${projectId}; app root missing`
+    );
+  }
   if (loadedProjectId !== projectId) {
     throw new Error(
       `Project view loaded without project bootstrap for ${projectId}; got ${String(loadedProjectId)}`

@@ -10,6 +10,7 @@ export function useActiveWorktreeSync() {
   const { worktrees, isInitialized } = useWorktrees();
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
+  const setActiveWorktree = useWorktreeSelectionStore((s) => s.setActiveWorktree);
   const deletedWorktrees = useWorktreeSelectionStore((s) => s.deletedWorktrees);
   const currentProject = useProjectStore((s) => s.currentProject);
   const currentScratch = useScratchStore((s) => s.currentScratch);
@@ -26,20 +27,46 @@ export function useActiveWorktreeSync() {
   );
 
   useEffect(() => {
-    if (!isInitialized || worktrees.length === 0) return;
+    if (!isInitialized) return;
 
     // A deleted-worktree row (directory gone, terminals surviving) is a valid
     // active selection — the user clicked it to view its terminals. Only snap
     // back to main once the id is neither live nor a deleted row (e.g. its
-    // last terminal closed and the row was pruned).
-    const worktreeExists =
-      activeWorktreeId &&
+    // last terminal closed and the row was pruned). Checked before the empty
+    // branch: a deleted row outlives the last live worktree while it still owns
+    // a terminal, so an empty list does not invalidate it.
+    const activeSelectionIsValid =
+      activeWorktreeId !== null &&
       (worktrees.some((w) => w.id === activeWorktreeId) || deletedWorktrees.has(activeWorktreeId));
-    if (!worktreeExists) {
-      const mainWorktree = worktrees.find((w) => w.isMainWorktree) ?? worktrees[0]!;
-      selectWorktree(mainWorktree.id);
+    if (activeSelectionIsValid) return;
+
+    // Past `isInitialized`, an empty list is the workspace's real answer, not a
+    // pending load — a non-git workspace creates no monitors. Clear the id a
+    // previous project left behind rather than snapping to a main worktree that
+    // does not exist, or every launch resolves against a phantom target
+    // (#11654). Session-scoped: the persisted `activeWorktreeId` slot is
+    // app-global, so writing null through it would wipe the saved selection of
+    // the git-backed project that left this id behind — the same reasoning that
+    // makes `stateHydration` skip the write rather than clear. Guarded on a
+    // non-null id because `setActiveWorktree` re-runs terminal policy on every
+    // call, and this effect re-runs on each snapshot.
+    if (worktrees.length === 0) {
+      if (activeWorktreeId !== null) {
+        setActiveWorktree(null, { persist: false });
+      }
+      return;
     }
-  }, [worktrees, activeWorktreeId, isInitialized, selectWorktree, deletedWorktrees]);
+
+    const mainWorktree = worktrees.find((w) => w.isMainWorktree) ?? worktrees[0]!;
+    selectWorktree(mainWorktree.id);
+  }, [
+    worktrees,
+    activeWorktreeId,
+    isInitialized,
+    selectWorktree,
+    setActiveWorktree,
+    deletedWorktrees,
+  ]);
 
   useEffect(() => {
     const projectId = currentProject?.id ?? null;

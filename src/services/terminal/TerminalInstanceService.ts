@@ -10,6 +10,7 @@ import {
   AgentStateCallback,
   PostCompleteHook,
   TerminalLink,
+  TerminalResyncOptions,
 } from "./types";
 import { tallyScrollbackRestoreStates } from "./scrollbackRestoreAggregate";
 import {
@@ -45,7 +46,8 @@ import {
 import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
 import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { isPtyPanel } from "@shared/types/panel";
-import type { TerminalGeometry } from "@shared/types/terminal";
+import { isValidTerminalGeometry, type TerminalGeometry } from "@shared/types/terminal";
+import type { TerminalResizeResult } from "@shared/types/pty-host";
 import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
@@ -126,6 +128,7 @@ class TerminalInstanceService {
   private workerIngestController: TerminalWorkerIngestController;
   private revealController: TerminalRevealController;
   private unsubTierChanged: (() => void) | null = null;
+  private unsubResizeResult: (() => void) | null = null;
 
   constructor() {
     if (canAutoInitializeTerminalIngest()) {
@@ -715,20 +718,68 @@ class TerminalInstanceService {
     });
   }
 
+  /**
+   * One process-wide listener for PTY resize echoes, armed on the first
+   * terminal rather than in the constructor: the service is built at module
+   * scope, where `window.electron` does not exist yet under Node test
+   * environments.
+   */
+  private ensureResizeResultSubscription(): void {
+    if (this.unsubResizeResult) return;
+    this.unsubResizeResult = terminalClient.onResizeResult((id, result) => {
+      this.recordPtyResizeResult(id, result);
+    });
+  }
+
+  /**
+   * Store the geometry the PTY reports holding. A new PTY incarnation retires
+   * the previous one's divergence history — the counter describes one live
+   * backend process, not the pane.
+   */
+  private recordPtyResizeResult(id: string, result: TerminalResizeResult): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    if (managed.ptyGeometryDivergenceGeneration !== result.launchGeneration) {
+      managed.ptyGeometryDivergenceGeneration = result.launchGeneration ?? undefined;
+      managed.ptyGeometryDivergenceCount = 0;
+      managed.ptyGeometryDivergenceSignature = undefined;
+    }
+    managed.lastPtyResizeResult = result;
+  }
+
+  /**
+   * Drop the echo when the backend that produced it is gone. The renderer keeps
+   * resizing a pane whose PTY has exited (or whose host has crashed) and no new
+   * echo can arrive to correct the record, so the watchdog would otherwise
+   * compare a dead process's geometry against a live xterm grid and blame the
+   * split on a PTY that no longer exists — precisely when the log is the
+   * diagnostic surface. Unknown geometry, not stale geometry.
+   */
+  private clearPtyGeometryEcho(managed: ManagedTerminal): void {
+    managed.lastPtyResizeResult = undefined;
+    managed.ptyGeometryDivergenceSignature = undefined;
+  }
+
+  /**
+   * Every live pane loses its geometry echo when the pty-host dies: no PTY
+   * survives the crash, and the recovered host re-spawns under fresh launch
+   * generations. Called on the crash, not on recovery — the renderer keeps
+   * resizing panes for the whole outage, which is the window the stale echo
+   * would be misread in.
+   */
+  handleBackendCrash(): void {
+    this.instances.forEach((managed) => this.clearPtyGeometryEcho(managed));
+  }
+
   setTargetSize(id: string, cols: number, rows: number): void {
     const instance = this.instances.get(id);
     if (!instance) return;
 
-    if (
-      Number.isFinite(cols) &&
-      Number.isFinite(rows) &&
-      Number.isInteger(cols) &&
-      Number.isInteger(rows) &&
-      cols > 0 &&
-      cols <= 500 &&
-      rows > 0 &&
-      rows <= 500
-    ) {
+    // Shared ceiling, not a local 500: a restored pane that legitimately
+    // exceeds it must not silently keep the previous target and boot the PTY at
+    // a geometry xterm never adopts (#11641).
+    if (isValidTerminalGeometry({ cols, rows })) {
       instance.targetCols = cols;
       instance.targetRows = rows;
     }
@@ -748,8 +799,8 @@ class TerminalInstanceService {
     this.resizeController.lockResize(id, false);
   }
 
-  wake(id: string): void {
-    this.revealController.wake(id);
+  wake(id: string): boolean {
+    return this.revealController.wake(id);
   }
 
   wakeForFocus(id: string): void {
@@ -983,10 +1034,16 @@ class TerminalInstanceService {
 
     const unsubExit = terminalClient.onExit((termId, exitCode) => {
       if (termId !== id) return;
+      const current = this.instances.get(id);
+      // Ahead of the suppression gate: the PTY is gone either way, and a
+      // suppressed exit (trash/restore churn) is exactly the case where the pane
+      // outlives its backend long enough for the stale echo to be compared.
+      if (current) {
+        this.clearPtyGeometryEcho(current);
+      }
       if (this.shouldSuppressExit(id)) {
         return;
       }
-      const current = this.instances.get(id);
       if (current) {
         current.terminal.write(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
       }
@@ -1050,6 +1107,7 @@ class TerminalInstanceService {
     installTerminalBoundListeners(terminal, managed, id, this.makeListenerInstallDeps());
 
     this.instances.set(id, managed);
+    this.ensureResizeResultSubscription();
 
     const initialTier = getRefreshTier ? getRefreshTier() : TerminalRefreshTier.FOCUSED;
     this.rendererPolicy.applyRendererPolicy(id, initialTier);
@@ -2196,13 +2254,6 @@ class TerminalInstanceService {
   }
 
   /**
-   * Recover a terminal's renderer the way the manual "Redraw" action does.
-   * Returns whether the repair ACTUALLY ran: false when it self-skipped on its
-   * own guards (gone/hibernated/disconnected/sub-50px box). Callers that must
-   * guarantee a redraw (the project-switch suppression-clear, #10632) use the
-   * return value to know whether the obligation still needs to be carried.
-   */
-  /**
    * True when the container proposes a grid DIFFERENT from the live xterm grid
    * — i.e. a fit() here would actually re-wrap the buffer, not just re-assert.
    * Shared divergence probe for the out-of-band geometry writers below.
@@ -2228,6 +2279,11 @@ class TerminalInstanceService {
    * and returns true so the caller skips its geometry step. The
    * ResizeObserver-driven applyResize path is NOT gated here — user-visible
    * layout changes must keep flowing to the PTY.
+   *
+   * An explicitly-forced `resetRenderer` (#11638) does not consult this at all
+   * — it takes {@link forceGeometryResync} instead. The hazard this guards is
+   * the AUTOMATIC out-of-band re-wrap; a user who pressed Redraw has already
+   * decided the pane is broken.
    */
   private deferGridChangeForStream(managed: ManagedTerminal, gridWouldChange: boolean): boolean {
     if (!gridWouldChange || managed.isAltBuffer || !hasStreamingWrites(managed, Date.now())) {
@@ -2238,7 +2294,66 @@ class TerminalInstanceService {
     return true;
   }
 
-  resetRenderer(id: string): boolean {
+  /**
+   * The explicit-Redraw geometry step (#11638). Runs INSTEAD of the guarded
+   * `fit()` below, never in addition to it: `reconcileGeometryFresh` is
+   * lock-exempt, measures fresh from the live DOM box, and moves xterm and the
+   * PTY together in one synchronous step — `fit()` would re-introduce the
+   * resize lock and, for a settled-strategy agent, split the two grids across
+   * ~500ms. There is deliberately no `fit()` fallback when this returns false:
+   * every reason it can fail (occluded host, sub-50px box, no cell metrics) is
+   * a reason `fit()` would fail too.
+   */
+  private forceGeometryResync(id: string, managed: ManagedTerminal): void {
+    if (!this.resizeController.reconcileGeometryFresh(id, { force: true })) {
+      // Unmeasurable/transitional box — hand the obligation to the watchdog
+      // exactly as the suppression-clear path does, so a pane that becomes
+      // measurable later still converges.
+      managed.revealPendingRepair = true;
+      managed.revealPendingGeneration = managed.attachGeneration;
+      return;
+    }
+
+    // Deliberately does NOT clear `revealPendingRepair`. That flag is
+    // multiplexed: the reveal controller also arms it when an open DEC 2026
+    // synchronized-output block forced it to defer the atlas repair / refresh /
+    // unpause (TerminalRevealController, #10632), which a geometry step does
+    // not discharge. Clearing it here to save the watchdog one near-no-op tick
+    // would drop that unrelated obligation on the floor and leave the pane
+    // stale until the next click or heartbeat. The redundant tick is cheap;
+    // the lost repair is not.
+
+    // Re-arm the geometry circuit breaker only on DEMONSTRATED main-buffer
+    // convergence. reconcileGeometryFresh's boolean is measurability, not
+    // convergence: an alt-buffer pane returns true without touching geometry,
+    // and `resizeTerminal` parks the xterm resize during a serialized restore.
+    // Comparing the live grid against the geometry just measured is the only
+    // real signal, and it mirrors what the watchdog's converged branch does.
+    if (
+      !managed.isAltBuffer &&
+      managed.terminal.cols === managed.latestCols &&
+      managed.terminal.rows === managed.latestRows
+    ) {
+      managed.geometryRepairAttempts = 0;
+      managed.geometryRepairGaveUp = false;
+      managed.geometryRepairGeneration = managed.attachGeneration;
+    }
+  }
+
+  /**
+   * Recover a terminal's renderer the way the manual "Redraw" action does.
+   * Returns whether the repair ACTUALLY ran: false when it self-skipped on its
+   * own guards (gone/hibernated/disconnected/sub-50px box). Callers that must
+   * guarantee a redraw (the project-switch suppression-clear, #10632) use the
+   * return value to know whether the obligation still needs to be carried — a
+   * geometry sub-step that could not converge does NOT flip it, since the
+   * renderer repair itself still ran.
+   *
+   * `options.force` (#11638) marks an explicit user Redraw and takes the
+   * ungated atomic geometry path; every automatic caller omits it and keeps
+   * #10863's streaming deferral.
+   */
+  resetRenderer(id: string, options: TerminalResyncOptions = {}): boolean {
     const managed = this.instances.get(id);
     if (!managed) return false;
 
@@ -2267,12 +2382,34 @@ class TerminalInstanceService {
         managed.terminal.refresh(0, managed.terminal.rows - 1);
       }
 
-      // Same #10863 guard as handlePostWake: never fit-rewrap a streaming
-      // main-buffer pane. The suppression-clear timer that drives this on
-      // project switch-back lands exactly in the assistant's cold-resume boot
-      // window; the atlas/refresh recovery above already ran, and the armed
-      // watchdog obligation converges the grid once the stream quiesces.
-      if (!this.deferGridChangeForStream(managed, this.proposalDivergesFromGrid(managed))) {
+      // The geometry step. Two exclusive branches (#11638):
+      //
+      // force — an explicit user Redraw. Runs the lock-exempt atomic reconcile
+      // unconditionally. The stream gate below can never open for a busy agent
+      // (Claude Code repaints several times a second, so `lastWriteAt` is never
+      // 300ms stale), and the watchdog backstop the gate defers to tests the
+      // same predicate — so without this branch the ONLY step that can correct
+      // a wrong grid is dead on exactly the panes Redraw exists for.
+      //
+      // default — every automatic caller (handleBackendRecovery, the
+      // project-switch suppression clear, the post-drag reparent). Same #10863
+      // guard as handlePostWake: never fit-rewrap a streaming main-buffer pane.
+      // The suppression-clear timer that drives this on project switch-back
+      // lands exactly in the assistant's cold-resume boot window; the
+      // atlas/refresh recovery above already ran, and the armed watchdog
+      // obligation converges the grid once the stream quiesces.
+      if (options.force) {
+        try {
+          this.forceGeometryResync(id, managed);
+        } catch (error) {
+          logError(`resetRenderer forced resync failed for ${id}`, error);
+          // Same obligation the unmeasurable-box branch arms: a throw is no
+          // more converged than a false, and dropping it here would leave the
+          // pane with no path back to a correct grid.
+          managed.revealPendingRepair = true;
+          managed.revealPendingGeneration = managed.attachGeneration;
+        }
+      } else if (!this.deferGridChangeForStream(managed, this.proposalDivergesFromGrid(managed))) {
         try {
           this.resizeController.fit(id);
         } catch (error) {
@@ -2643,6 +2780,8 @@ class TerminalInstanceService {
     this.stopPolling();
     this.unsubTierChanged?.();
     this.unsubTierChanged = null;
+    this.unsubResizeResult?.();
+    this.unsubResizeResult = null;
     this.workerIngestController.dispose();
     this.resizePassScheduler.dispose();
     this.reflowController.dispose();

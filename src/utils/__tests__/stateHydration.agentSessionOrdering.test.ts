@@ -16,6 +16,7 @@ const terminalClientMock = {
 
 const worktreeClientMock = {
   getAll: vi.fn(),
+  getAllWithStatus: vi.fn(),
 };
 
 const projectClientMock = {
@@ -182,7 +183,7 @@ describe("hydrateAppState", () => {
     terminalClientMock.getSerializedStates.mockRejectedValue(
       new Error("Batch serialized state endpoint unavailable")
     );
-    worktreeClientMock.getAll.mockResolvedValue([]);
+    worktreeClientMock.getAllWithStatus.mockResolvedValue({ worktrees: [], gitBacked: null });
     projectClientMock.getTabGroups.mockResolvedValue([]);
     projectClientMock.getTerminalSizes.mockResolvedValue({});
     projectClientMock.getDraftInputs.mockResolvedValue({});

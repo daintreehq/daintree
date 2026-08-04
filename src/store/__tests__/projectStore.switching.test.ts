@@ -766,6 +766,147 @@ describe("worktreeLoadError surfacing (#8400)", () => {
   });
 });
 
+describe("switching to a project whose repository is gone (#11649)", () => {
+  /**
+   * How main reports it. The `[AppError|CODE]` prefix is what survives the
+   * contextBridge — `code` as an own property does not — so a fixture that only
+   * set `.code` would pass while the real thing fell through to the toast.
+   */
+  function notAGitRepoRejection(): Error {
+    return new Error("[AppError|NOT_A_GIT_REPO] Not a git repository");
+  }
+
+  /** Settle the fire-and-forget IPC's `.catch()`. */
+  async function flushCatch(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  const TRANSITIONS = [
+    ["switchProject", "switch"],
+    ["reopenProject", "reopen"],
+  ] as const;
+
+  describe.each(TRANSITIONS)("%s", (action, clientMethod) => {
+    async function runRejectedTransition() {
+      projectClientMock[clientMethod].mockRejectedValueOnce(notAGitRepoRejection());
+      const { useProjectStore } = await import("../projectStore");
+      useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+      await useProjectStore.getState()[action](projectB.id);
+      await flushCatch();
+      return useProjectStore;
+    }
+
+    it("opens the choice dialog instead of a dead-end error toast", async () => {
+      const { notify } = await import("@/lib/notify");
+      const useProjectStore = await runRejectedTransition();
+
+      expect(useProjectStore.getState().gitInitDialogOpen).toBe(true);
+      expect(useProjectStore.getState().gitInitDialogStep).toBe("choice");
+      // The dialog IS the recovery, so a toast offering "Try again" would only
+      // re-run the transition that just failed the same way.
+      expect(notify).not.toHaveBeenCalled();
+    });
+
+    it("names the folder from the stored row rather than the error", async () => {
+      // A packaged build strips the error's context and scrubs absolute paths
+      // out of its message, so a path read from the error works in dev and
+      // silently breaks in the builds users run.
+      const useProjectStore = await runRejectedTransition();
+
+      expect(useProjectStore.getState().gitInitDirectoryPath).toBe(projectB.path);
+    });
+
+    it("leaves the sender on its current project with the transition settled", async () => {
+      const useProjectStore = await runRejectedTransition();
+
+      // Main rejected before the swap, so cancelling the dialog has to be a
+      // no-op rather than a half-finished switch.
+      expect(useProjectStore.getState().currentProject).toEqual(projectA);
+      expect(useProjectStore.getState().isSwitching).toBe(false);
+      expect(useProjectStore.getState().switchingToProjectId).toBeNull();
+      expect(useProjectStore.getState().isLoading).toBe(false);
+      // The dialog carries the message; a banner underneath it would be noise.
+      expect(useProjectStore.getState().error).toBeNull();
+    });
+
+    it("still toasts for every other failure", async () => {
+      const { notify } = await import("@/lib/notify");
+      projectClientMock[clientMethod].mockRejectedValueOnce(
+        new Error("[AppError|PERMISSION] Permission denied")
+      );
+      const { useProjectStore } = await import("../projectStore");
+      useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+      await useProjectStore.getState()[action](projectB.id);
+      await flushCatch();
+
+      expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
+      expect(notify).toHaveBeenCalled();
+    });
+
+    it("falls back to the toast when the row is not in the list", async () => {
+      // Nothing to name in the dialog, and the path can't be recovered from the
+      // sanitized error — so the generic surface is the honest one.
+      const { notify } = await import("@/lib/notify");
+      projectClientMock[clientMethod].mockRejectedValueOnce(notAGitRepoRejection());
+      const { useProjectStore } = await import("../projectStore");
+      useProjectStore.setState({ projects: [projectA], currentProject: projectA });
+
+      await useProjectStore.getState()[action](projectB.id);
+      await flushCatch();
+
+      expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
+      expect(notify).toHaveBeenCalled();
+    });
+
+    it("lets a superseded transition's rejection pass without stealing the screen", async () => {
+      // The staleness guard runs first, so a losing transition can't pop a modal
+      // over whichever transition actually owns the renderer now.
+      //
+      // The rejection has to be deferred rather than pre-settled: a already-
+      // rejected mock runs its `.catch` on the first await inside the transition
+      // that registered it, so nothing would ever still be in flight to supersede.
+      let rejectFirst: (error: Error) => void = () => {};
+      projectClientMock[clientMethod].mockReturnValueOnce(
+        new Promise((_resolve, reject) => {
+          rejectFirst = reject;
+        })
+      );
+      const { useProjectStore } = await import("../projectStore");
+      useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+      await useProjectStore.getState()[action](projectB.id);
+      // A second click while the first IPC is still open. It targets a project
+      // that isn't the current one, so it really does claim the transition id —
+      // superseding via the *current* project would early-return and supersede
+      // nothing.
+      await useProjectStore.getState().switchProject(projectB.id);
+      rejectFirst(notAGitRepoRejection());
+      await flushCatch();
+
+      expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
+    });
+  });
+
+  it("adopts the folder without git when the user chooses that", async () => {
+    // The end-to-end point of routing here: the row finally gets demoted, which
+    // is what stops a repository-less folder claiming worktree capability.
+    projectClientMock.switch.mockRejectedValueOnce(notAGitRepoRejection());
+    projectClientMock.add.mockResolvedValue({ ...projectB, gitBacked: false });
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    await flushCatch();
+    await useProjectStore.getState().openWithoutGit();
+
+    expect(projectClientMock.add).toHaveBeenCalledWith(projectB.path, { gitBacked: false });
+    expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
+  });
+});
+
 describe("switch busy indication (#10736)", () => {
   it("flags isSwitching and the target project id when a switch starts", async () => {
     const { useProjectStore } = await import("../projectStore");

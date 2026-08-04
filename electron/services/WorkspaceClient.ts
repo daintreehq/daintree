@@ -66,6 +66,19 @@ const REFRESH_PRS_TIMEOUT_MS = 45_000;
 // job in every non-pathological case.
 const STATES_READY_GATE_TIMEOUT_MS = 5_000;
 
+// Total budget for one worktree-ownership check — readiness gate AND the
+// monitor round trip share it, they do not each get their own.
+//
+// Sized against terminal spawn, the only caller: the check is a coherence
+// assertion on metadata the request already supplied, never something the
+// spawn needs in order to proceed, so it must not become a latency floor.
+// Matches resolveBranchForMain's bound (terminal/lifecycle.ts), the other
+// best-effort WorkspaceClient lookup on a terminal's critical path. Exceeding
+// it reports "unknown" (null), which forwards the caller's worktreeId
+// untouched — the pre-existing behaviour — so a slow host costs nothing but
+// the check itself.
+const WORKTREE_OWNERSHIP_CHECK_TIMEOUT_MS = 200;
+
 export type CopyTreeProgressCallback = (progress: CopyTreeProgress) => void;
 
 function dedupeSnapshotsById(states: WorktreeSnapshot[]): WorktreeSnapshot[] {
@@ -79,6 +92,16 @@ function dedupeSnapshotsById(states: WorktreeSnapshot[]): WorktreeSnapshot[] {
   return deduped;
 }
 
+/**
+ * A host's worktree snapshot read plus its own "is there a repository here"
+ * verdict. `gitBacked: null` is "not classified" — never read it as `false`
+ * (#11650). Main-process shape; the renderer sees `WorktreeListResult`.
+ */
+export interface HostWorktreeStates {
+  states: WorktreeSnapshot[];
+  gitBacked: boolean | null;
+}
+
 export class WorkspaceClient extends EventEmitter {
   private isDisposed = false;
   private pool: WorkspaceHostPool;
@@ -86,6 +109,7 @@ export class WorkspaceClient extends EventEmitter {
   private copyTree: WorkspaceCopyTreeClient;
 
   private readonly _statesInflight = new Map<string, Promise<WorktreeSnapshot[]>>();
+  private readonly _statesWithGitBackedInflight = new Map<string, Promise<HostWorktreeStates>>();
 
   constructor(config: WorkspaceClientConfig = {}) {
     super();
@@ -482,6 +506,55 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   /**
+   * The project-scoped read of {@link getAllStatesForProjectAsync}, but keeping
+   * the host's `gitBacked` verdict alongside the states instead of discarding
+   * it (#11650).
+   *
+   * Coalesced through its own map rather than sharing `_statesInflight`:
+   * callers of the array-shaped method rely on getting the *same promise
+   * object* back for concurrent equivalent calls, which deriving one from the
+   * other with `.then()` would break. The extra `get-all-states` round trip in
+   * the rare overlap is a snapshot read off an already-ready host's in-memory
+   * monitor map, not a git spawn.
+   */
+  getAllStatesWithGitBackedForProjectAsync(
+    projectPath: string,
+    expectedProjectId: string
+  ): Promise<HostWorktreeStates> {
+    const normalized = this.pool.normalizeProjectPath(projectPath);
+    const key = `p:${expectedProjectId}:${normalized}`;
+    const existing = this._statesWithGitBackedInflight.get(key);
+    if (existing) return existing;
+
+    const entry = this.pool.entries.get(normalized);
+    const matchedEntry =
+      entry !== undefined && entry.projectId === expectedProjectId ? entry : undefined;
+    const promise = (
+      matchedEntry === undefined
+        ? // No host for this project yet. `gitBacked: null` rather than `false`
+          // — nothing has probed the folder, so this is "unknown", and a caller
+          // that read it as "not a repository" would strip a real repo's saved
+          // worktree state during the boot race this sentinel exists for.
+          Promise.resolve({ states: [], gitBacked: null } satisfies HostWorktreeStates)
+        : this._readStatesWithGitBackedWhenReady(matchedEntry)
+    ).then(
+      (result) => {
+        setTimeout(
+          () => this._statesWithGitBackedInflight.delete(key),
+          STATES_INFLIGHT_COALESCE_WINDOW_MS
+        );
+        return result;
+      },
+      (error) => {
+        this._statesWithGitBackedInflight.delete(key);
+        throw error;
+      }
+    );
+    this._statesWithGitBackedInflight.set(key, promise);
+    return promise;
+  }
+
+  /**
    * States for one project's host, keyed by project path rather than window.
    * `windowToProject` is repointed to the incoming project the moment a switch
    * starts, so window-scoped lookups from a backgrounded view resolve against
@@ -555,27 +628,48 @@ export class WorkspaceClient extends EventEmitter {
    * steady-state reads are unaffected.
    */
   private async _readStatesWhenReady(entry: ProcessEntry): Promise<WorktreeSnapshot[]> {
-    if (!(await this._awaitHostReady(entry))) return [];
+    return (await this._readStatesWithGitBackedWhenReady(entry)).states;
+  }
+
+  /**
+   * The same readiness-gated read, keeping the host's `gitBacked` verdict.
+   *
+   * A host that never became ready answers `gitBacked: null`, matching the `[]`
+   * states sentinel: both mean "unknown", and a caller must not read either as
+   * "this folder has no repository" (#11650). A host that predates the field
+   * also answers `null` via the `?? null`, so an older host degrades to today's
+   * permissive behavior rather than to a wrong `false`.
+   */
+  private async _readStatesWithGitBackedWhenReady(
+    entry: ProcessEntry
+  ): Promise<HostWorktreeStates> {
+    if (!(await this._awaitHostReady(entry))) return { states: [], gitBacked: null };
     const requestId = entry.host.generateRequestId();
     const result = await entry.host.sendWithResponse<{
       states: WorktreeSnapshot[];
+      gitBacked?: boolean | null;
     }>({
       type: "get-all-states",
       requestId,
     });
-    return result.states;
+    return { states: result.states, gitBacked: result.gitBacked ?? null };
   }
 
   /**
    * Resolves `true` when the host's monitor populate completed, `false` if it
-   * failed or did not settle within {@link STATES_READY_GATE_TIMEOUT_MS}.
-   * Callers must treat `false` as "unknown" and return `[]` rather than reading
-   * a possibly-partial map. Never rejects.
+   * failed or did not settle within `timeoutMs` (default
+   * {@link STATES_READY_GATE_TIMEOUT_MS}). Callers must treat `false` as
+   * "unknown" — state reads return `[]` rather than a possibly-partial map;
+   * the ownership check returns `null` rather than a false accusation. Never
+   * rejects.
    */
-  private _awaitHostReady(entry: ProcessEntry): Promise<boolean> {
+  private _awaitHostReady(
+    entry: ProcessEntry,
+    timeoutMs: number = STATES_READY_GATE_TIMEOUT_MS
+  ): Promise<boolean> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), STATES_READY_GATE_TIMEOUT_MS);
+      timer = setTimeout(() => resolve(false), timeoutMs);
     });
     const settled = entry.currentReadyPromise.then(
       () => true,
@@ -602,6 +696,133 @@ export class WorkspaceClient extends EventEmitter {
         .filter((r): r is PromiseFulfilledResult<WorktreeSnapshot[]> => r.status === "fulfilled")
         .flatMap((r) => r.value)
     );
+  }
+
+  /**
+   * Does `worktreeId` belong to the project identified by
+   * `projectPath` + `expectedProjectId`? Tri-state, and the third state is the
+   * whole point:
+   *
+   * - `true`  — that project's host is ready and returned the monitor.
+   * - `false` — that project's ready host disclaimed the id AND another loaded
+   *             project's host positively claimed it.
+   * - `null`  — UNKNOWN. No pool entry for the path, the entry's immutable
+   *             projectId doesn't match, readiness never settled, the request
+   *             timed out, the host errored, the reply was malformed, or the
+   *             disclaim went uncorroborated.
+   *
+   * Callers must never treat `null` as a mismatch; only `false` is evidence.
+   * The verdict is deliberately not used to name the real owner — a caller
+   * holding a disowned id has nothing to reconcile it to (#4881), so the id is
+   * dropped, never repointed.
+   *
+   * Absence alone is NOT proof, which is the subtle part. A worktree id is a
+   * path, but the two places that mint one disagree on how to spell it:
+   * creation stores `realpath(path)` (WorkspaceService.performCreateWorktree)
+   * while enumeration stores `pathResolve(wt.path)` off `git worktree list
+   * --porcelain` (WorktreeListService.mapToWorktrees). Those differ whenever
+   * the path crosses a symlink, and porcelain paths are relative — and
+   * explicitly untrustworthy — under Git 2.48+ `worktree.useRelativePaths`. So
+   * a host can genuinely own a worktree whose id, as the caller spells it, is
+   * missing from its map. Treating that as a disowning would drop valid ids.
+   *
+   * A `false` therefore requires CORROBORATION: the named project's ready host
+   * must not hold the id AND some other project's host must positively claim
+   * it. A positive claim is sound however the id was spelled, because it is the
+   * claimant that spelled it. If nobody claims it, the honest answer is `null`
+   * — which is exactly what the spelling mismatch produces, so the failure mode
+   * degrades to "unknown" instead of to a false accusation.
+   *
+   * The corroborating fan-out only runs when the named host has already
+   * disclaimed the id, so the common case stays a single round trip.
+   *
+   * KNOWN LIMIT: corroboration proves membership in the claimant, not absence
+   * from the named project, and those come apart when the same repository is
+   * registered as two projects rooted at different linked worktrees. Both
+   * enumerate the shared worktree set, so if the spelling divergence above hides
+   * the id from one and not the other, this reports `false` for a worktree both
+   * legitimately contain. Closing that needs canonicalized path comparison, i.e.
+   * `realpath` per candidate on the spawn path — rejected because `realpath`
+   * blocks indefinitely on an unreachable network mount. The cost of the gap is
+   * a terminal that contributes no resume metadata, never a wrong or failed
+   * spawn, which is the same cost as the `null` path it would otherwise take.
+   *
+   * `expectedProjectId` must equal the entry's immutable projectId for the same
+   * reason {@link getAllStatesForProjectAsync} requires it: the project row's
+   * path is mutable, so a path alone is not an authorization identity.
+   *
+   * Never rejects. Bounded by {@link WORKTREE_OWNERSHIP_CHECK_TIMEOUT_MS} end
+   * to end, shared across the readiness gate and every round trip so they
+   * cannot compound. The remaining budget is handed to `sendWithResponse`
+   * itself rather than raced against it — a race would resolve on time while
+   * leaving the host's 30s default request pending behind it. Elapsed time is
+   * measured with `performance.now()`, so a system clock adjustment mid-check
+   * can't hand the broker an inflated timeout.
+   */
+  async isWorktreeOwnedByProject(
+    worktreeId: string,
+    projectPath: string,
+    expectedProjectId: string
+  ): Promise<boolean | null> {
+    const normalized = this.pool.normalizeProjectPath(projectPath);
+    const entry = this.pool.entries.get(normalized);
+    if (entry === undefined || entry.projectId !== expectedProjectId) return null;
+
+    const start = performance.now();
+    const remaining = () =>
+      Math.ceil(WORKTREE_OWNERSHIP_CHECK_TIMEOUT_MS - (performance.now() - start));
+
+    // Readiness matters only for proving ABSENCE: a partial map that already
+    // contains the id still proves containment, but one that doesn't may
+    // simply be mid-populate (#11387).
+    if (!(await this._awaitHostReady(entry, remaining()))) return null;
+    if (remaining() <= 0) return null;
+
+    const claimed = await this._hostClaimsWorktree(entry, worktreeId, remaining());
+    if (claimed === true) return true;
+    // Unknown from the project's own host stays unknown — no accusation to
+    // corroborate.
+    if (claimed === null) return null;
+
+    const others = [...this.pool.entries.values()].filter((e) => e !== entry);
+    if (others.length === 0) return null;
+
+    const budget = remaining();
+    if (budget <= 0) return null;
+
+    // In parallel, and with no readiness gate: a host that answers "mine" is
+    // authoritative about its own worktree whether or not its map is complete.
+    const claims = await Promise.all(
+      others.map((other) => this._hostClaimsWorktree(other, worktreeId, budget))
+    );
+    return claims.some((c) => c === true) ? false : null;
+  }
+
+  /**
+   * `true` the host holds this exact worktree, `false` it completed the lookup
+   * without it, `null` the question could not be answered. Never rejects.
+   */
+  private async _hostClaimsWorktree(
+    entry: ProcessEntry,
+    worktreeId: string,
+    timeoutMs: number
+  ): Promise<boolean | null> {
+    if (timeoutMs <= 0) return null;
+    try {
+      const requestId = entry.host.generateRequestId();
+      const result = await entry.host.sendWithResponse<{
+        state: WorktreeSnapshot | null;
+      }>({ type: "get-monitor", requestId, worktreeId }, timeoutMs);
+      // Strictly `null`: only an explicit "I looked, it isn't mine" is a
+      // disclaim. A missing field or an absent reply never reached that
+      // conclusion, and since a disclaim is half of a `false` verdict,
+      // conflating them would let a malformed response help condemn a valid id.
+      if (result?.state === null) return false;
+      // A snapshot for some *other* worktree answers a question we didn't ask.
+      return result?.state?.id === worktreeId ? true : null;
+    } catch {
+      return null;
+    }
   }
 
   async getMonitorAsync(worktreeId: string): Promise<WorktreeSnapshot | null> {
@@ -911,6 +1132,7 @@ export class WorkspaceClient extends EventEmitter {
     this.copyTree.dispose();
     this.pool.dispose();
     this._statesInflight.clear();
+    this._statesWithGitBackedInflight.clear();
     this.removeAllListeners();
   }
 }

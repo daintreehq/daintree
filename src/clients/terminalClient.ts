@@ -15,7 +15,9 @@ import type {
 import type {
   PtyHostToRendererMessage,
   TerminalReliabilityMetricPayload,
+  TerminalResizeResult,
 } from "@shared/types/pty-host";
+import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
 import { isRendererPerfCaptureEnabled, markRendererPerformance } from "@/utils/performance";
@@ -400,18 +402,36 @@ export const terminalClient = {
     return window.electron.terminal.onBroadcastWriteResult(callback);
   },
 
+  /**
+   * Geometry the PTY actually holds after each resize.
+   */
+  onResizeResult: (callback: (id: string, result: TerminalResizeResult) => void): (() => void) => {
+    return window.electron.terminal.onResizeResult(callback);
+  },
+
   resize: (id: string, cols: number, rows: number): void => {
+    // Normalized here rather than downstream: the MessagePort path reaches the
+    // pty-host without passing through Main, so a clamp applied only in the IPC
+    // handler would bound the fallback transport and not the primary one —
+    // leaving the PTY at a width xterm never adopts (#11641).
+    const normalizedCols = normalizeTerminalGridDimension(cols);
+    const normalizedRows = normalizeTerminalGridDimension(rows);
     if (messagePort) {
       try {
-        messagePort.postMessage({ type: "resize", id, cols, rows });
+        messagePort.postMessage({
+          type: "resize",
+          id,
+          cols: normalizedCols,
+          rows: normalizedRows,
+        });
       } catch (error) {
         logWarn("[TerminalClient] MessagePort resize failed, clearing port", { error });
         messagePort = null;
 
-        window.electron.terminal.resize(id, cols, rows);
+        window.electron.terminal.resize(id, normalizedCols, normalizedRows);
       }
     } else {
-      window.electron.terminal.resize(id, cols, rows);
+      window.electron.terminal.resize(id, normalizedCols, normalizedRows);
     }
   },
 

@@ -5,7 +5,7 @@ import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/a
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 import type { PanelKind, PanelTitleMode } from "../../../shared/types/panel.js";
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
-import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
+import type { PtyHostSpawnOptions, TerminalResizeResult } from "../../../shared/types/pty-host.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
 
@@ -204,6 +204,7 @@ export interface PtyManagerEvents {
   data: (id: string, data: string | Uint8Array) => void;
   exit: (id: string, exitCode: number, signal?: number, launchGeneration?: number) => void;
   error: (id: string, error: string) => void;
+  "resize-result": (id: string, result: TerminalResizeResult) => void;
 }
 
 /**

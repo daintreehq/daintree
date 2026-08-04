@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   selectionState: {
     activeWorktreeId: null as string | null,
     selectWorktree: vi.fn(),
+    setActiveWorktree: vi.fn(),
     // Only unread today because every active id here is also a live worktree,
     // which short-circuits the `||`. One absent-worktree fixture away from a
     // TypeError without it.

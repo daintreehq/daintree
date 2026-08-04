@@ -2,7 +2,7 @@ import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import type { AgentState } from "@shared/types/agent";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
-import { isFleetArmEligible } from "@/store/fleetArmingStore";
+import { isAgentTerminalFleetEligible } from "@/store/fleetEligibility";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 
 // Per-worktree rollups consumed by the sidebar (terminal counts + agent-state
@@ -75,10 +75,21 @@ export function selectSidebarAgentStateByPanelId(
 }
 
 /**
- * Fleet-arm-eligible panels → their worktree id. `isFleetArmEligible` reads
- * `runtimeStatus`, which the buffer writes, but only its exited/error transition
- * flips eligibility and the buffer never sets those on the flow path
- * (`panelStatusBuffer.ts`) — so the eligible set is stable across flushes.
+ * Agent panels eligible for the sidebar's filter-scoped bulk arm → their
+ * worktree id. Agent-scoped rather than terminal-scoped so the quick-filter
+ * arm affordance addresses the same terminals as the state filters beside it;
+ * plain shells stay armable individually (#11637). `collectFilterArmEligibleIds`
+ * applies the same predicate at dispatch time.
+ *
+ * Shares `isAgentTerminal` with `selectSidebarAgentStateByPanelId` above, so the
+ * arm count and the working/waiting chips agree on what counts as an agent —
+ * including plugin-contributed ones.
+ *
+ * `isAgentTerminalFleetEligible` reads `runtimeStatus`, which the buffer writes,
+ * but only its exited/error transition flips eligibility and the buffer never
+ * sets those on the flow path (`panelStatusBuffer.ts`) — so the eligible set is
+ * stable across flushes. The agent-identity fields it adds are not buffer-written
+ * either, so the churn-safety invariant above still holds.
  */
 export function selectSidebarFleetEligibleWorktreeById(
   state: SidebarPanelDerivationState
@@ -86,7 +97,7 @@ export function selectSidebarFleetEligibleWorktreeById(
   const result: Record<string, string> = {};
   for (const id of state.panelIds) {
     const panel = getNarrowPanel(state.panelsById, id);
-    if (!isFleetArmEligible(panel)) continue;
+    if (!isAgentTerminalFleetEligible(panel)) continue;
     result[id] = panel.worktreeId ?? "";
   }
   return result;

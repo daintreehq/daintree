@@ -326,4 +326,53 @@ describe("PtyClient lifecycle ledger", () => {
     });
     expect(getLifecycleLedger().getEntry("t1")?.spawnOk).toBe(true);
   });
+
+  describe("resize-result generation filtering (#11641)", () => {
+    function emitResizeResult(
+      client: import("../PtyClient.js").PtyClient,
+      launchGeneration: number | null
+    ): Array<[string, unknown]> {
+      const seen: Array<[string, unknown]> = [];
+      client.on("resize-result", (id: string, result: unknown) => seen.push([id, result]));
+      mockChild.emit("message", {
+        type: "resize-result",
+        id: "t1",
+        result: {
+          launchGeneration,
+          requestedCols: 120,
+          requestedRows: 40,
+          appliedCols: 120,
+          appliedRows: 40,
+          outcome: "applied",
+        },
+      });
+      return seen;
+    }
+
+    it("forwards a result stamped with the live incarnation", () => {
+      const client = createReadyClient();
+      client.spawn("t1", baseOptions);
+
+      expect(emitResizeResult(client, 1)).toHaveLength(1);
+    });
+
+    it("drops a result from an incarnation that was already replaced", () => {
+      const client = createReadyClient();
+      client.spawn("t1", baseOptions);
+      client.kill("t1");
+      client.spawn("t1", baseOptions);
+
+      // Generation 1's echo lands after the same id respawned. Applying it
+      // would report the dead PTY's geometry as the successor's.
+      expect(emitResizeResult(client, 1)).toHaveLength(0);
+      expect(emitResizeResult(client, 2)).toHaveLength(1);
+    });
+
+    it("drops a result that carries no incarnation at all", () => {
+      const client = createReadyClient();
+      client.spawn("t1", baseOptions);
+
+      expect(emitResizeResult(client, null)).toHaveLength(0);
+    });
+  });
 });

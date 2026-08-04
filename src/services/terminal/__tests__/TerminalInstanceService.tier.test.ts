@@ -9,6 +9,7 @@ let capturedTierChangedCb: ((id: string, tier: "active" | "background") => void)
 const mockTerminalClient = {
   onData: vi.fn(() => vi.fn()),
   onExit: vi.fn(() => vi.fn()),
+  onResizeResult: vi.fn(() => vi.fn()),
   onTierChanged: vi.fn((cb: (id: string, tier: "active" | "background") => void) => {
     capturedTierChangedCb = cb;
     return vi.fn();
@@ -664,7 +665,7 @@ describe("TerminalInstanceService - Activity Tier", () => {
 type InputWakeService = {
   instances: Map<string, Record<string, unknown>>;
   onUserInput: (id: string, data: string) => void;
-  wake: (id: string) => void;
+  wake: (id: string) => boolean;
 };
 
 type PanelStoreModule = {
@@ -691,10 +692,11 @@ describe("TerminalInstanceService - onUserInput wake for paused-backpressure", (
     ({ usePanelStore: panelStore } =
       (await import("@/store/panelStore")) as unknown as PanelStoreModule);
 
-    // wake() is now a plain repaint (no host snapshot wake). Spy it as a no-op so
-    // these tests assert the onUserInput ROUTING decision (which panes get an
-    // unstick reveal on type) without driving the real geometry/repaint path.
-    wakeSpy = vi.spyOn(service, "wake").mockImplementation(() => {});
+    // wake() is now a plain repaint (no host snapshot wake) reporting whether it
+    // painted. Stub it as a landed repaint so these tests assert the onUserInput
+    // ROUTING decision (which panes get an unstick reveal on type) without
+    // driving the real geometry/repaint path.
+    wakeSpy = vi.spyOn(service, "wake").mockImplementation(() => true);
 
     service.instances.clear();
   });

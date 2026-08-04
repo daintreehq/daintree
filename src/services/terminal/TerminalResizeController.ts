@@ -2,9 +2,10 @@ import { Terminal } from "@xterm/xterm";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { getEffectiveScrollbarWidth } from "@/config/xtermConfig";
 import { logError, logWarn } from "@/utils/logger";
-import type { ManagedTerminal } from "./types";
+import type { ManagedTerminal, TerminalResyncOptions } from "./types";
 import type { TerminalOutputIngestService } from "./TerminalOutputIngestService";
 
 const START_DEBOUNCING_THRESHOLD = 200;
@@ -95,18 +96,36 @@ function toFitPx(px: number): number {
  *
  * `Math.max(2, …)` matches FitAddon's floor and absorbs a container narrower
  * than the gutter itself.
+ *
+ * Clamped here rather than only where the number is applied: a measurement is
+ * copied into `latestCols`/`latestRows` AND handed to `resizeTerminal`, and a
+ * value that only the latter clamps leaves the target cache describing a grid
+ * xterm can never reach — every `terminal.cols === latestCols` convergence
+ * check then fails forever (#11641).
  */
 function colsForWidth(terminal: Terminal, widthPx: number, cellWidth: number): number {
   const availableWidth = toFitPx(widthPx) - getEffectiveScrollbarWidth(terminal.options);
-  return Math.max(2, Math.floor(availableWidth / cellWidth));
+  return Math.max(2, normalizeTerminalGridDimension(availableWidth / cellWidth));
 }
 
 /**
  * Rows a container of `heightPx` can hold. The scrollbar is never reserved
- * against height — FitAddon subtracts it from width alone.
+ * against height — FitAddon subtracts it from width alone. Clamped for the same
+ * reason as {@link colsForWidth}.
  */
 function rowsForHeight(heightPx: number, cellHeight: number): number {
-  return Math.max(1, Math.floor(toFitPx(heightPx) / cellHeight));
+  return normalizeTerminalGridDimension(toFitPx(heightPx) / cellHeight);
+}
+
+/** FitAddon's own measurement, clamped for the same reason {@link colsForWidth} is. */
+function normalizeProposal(proposal: { cols: number; rows: number }): {
+  cols: number;
+  rows: number;
+} {
+  return {
+    cols: normalizeTerminalGridDimension(proposal.cols),
+    rows: normalizeTerminalGridDimension(proposal.rows),
+  };
 }
 
 /**
@@ -163,6 +182,22 @@ interface SettledResizeRequest {
   timer: number;
   cols: number;
   rows: number;
+}
+
+/**
+ * A grid derived from cached cell metrics, plus what the caller needs to decide
+ * how much of it to commit. `null` from
+ * {@link TerminalResizeController.resizeGridFromCachedCellMetrics} means the
+ * metrics were unavailable and nothing was computed — it never means "no work",
+ * which is what `converged` says.
+ */
+interface CachedMetricGrid {
+  cols: number;
+  rows: number;
+  /** xterm already holds this grid, so there is no reflow to apply. */
+  converged: boolean;
+  /** The target cache pointed elsewhere before this call re-pointed it. */
+  cacheWasStale: boolean;
 }
 
 export class TerminalResizeController {
@@ -225,7 +260,7 @@ export class TerminalResizeController {
         return null;
       }
 
-      const { cols, rows } = proposal;
+      const { cols, rows } = normalizeProposal(proposal);
       const buffer = managed.terminal.buffer.active;
       const wasAtBottom = buffer.viewportY >= buffer.baseY;
       managed.lastWidth = rect.width;
@@ -325,11 +360,24 @@ export class TerminalResizeController {
       // app kept emitting cursor-addressed output sized for the new width into
       // a parser still holding the old grid, and nothing recovered those rows
       // (#11628). This is the same split #11447 closed for backgrounded views.
-      const dims = this.resizeGridFromCachedCellMetrics(managed, width, height, wasAtBottom);
-      if (dims) {
-        this.applyResize(id, dims.cols, dims.rows);
+      const grid = this.resizeGridFromCachedCellMetrics(managed, width, height, wasAtBottom);
+      if (!grid) return null;
+      if (grid.converged) {
+        // xterm is already on this grid, so nothing reflows — but the branch
+        // that used to handle this case ran through `applyResize`, which
+        // cancels older queued work on the way past. Returning early drops
+        // that, so supersede explicitly or a debounce/idle/settled job holding
+        // an older box fires later and drags BOTH grids to it (#11095). The
+        // same send re-asserts the PTY when the cache ran ahead of the grid:
+        // it was told that other target and nothing else here will correct it.
+        if (grid.cacheWasStale || this.hasPendingResize(id)) {
+          this.clearResizeJob(managed);
+          this.sendPtyResize(id, grid.cols, grid.rows);
+        }
+        return null;
       }
-      return dims;
+      this.applyResize(id, grid.cols, grid.rows);
+      return { cols: grid.cols, rows: grid.rows };
     }
 
     try {
@@ -350,7 +398,7 @@ export class TerminalResizeController {
           return null;
         }
 
-        const { cols, rows } = proposal;
+        const { cols, rows } = normalizeProposal(proposal);
         managed.lastWidth = width;
         managed.lastHeight = height;
         managed.latestCols = cols;
@@ -488,16 +536,29 @@ export class TerminalResizeController {
     }
     const buffer = managed.terminal.buffer.active;
     const wasAtBottom = buffer.viewportY >= buffer.baseY;
-    const dims = this.resizeGridFromCachedCellMetrics(managed, width, height, wasAtBottom);
-    if (dims) {
-      this.clearSettledTimer(id);
-      // xterm first, then the PTY: the app must never receive SIGWINCH for a
-      // grid the parser has not adopted yet.
-      this.resizeTerminal(managed, dims.cols, dims.rows);
-      terminalClient.resize(id, dims.cols, dims.rows);
-      this.pinToBottomAfterResize(managed);
+    const grid = this.resizeGridFromCachedCellMetrics(managed, width, height, wasAtBottom);
+    if (!grid) return null;
+    if (grid.converged) {
+      // Nothing to reflow, but a cache that ran ahead means the PTY was told a
+      // different grid — panel spawn sizes it directly, before xterm has ever
+      // been fit — and the pixel box is stamped processed on the way out of the
+      // helper, so no later resize revisits it. Re-assert the truth to the PTY
+      // alone: xterm is already correct, and routing through `sendPtyResize`
+      // here would hand a settled-strategy agent's commit to a timer that
+      // reflows a hidden, possibly frozen renderer — the delivery this path
+      // exists to bypass. Queued work was already cancelled above.
+      if (grid.cacheWasStale) {
+        terminalClient.resize(id, grid.cols, grid.rows);
+      }
+      return null;
     }
-    return dims;
+    this.clearSettledTimer(id);
+    // xterm first, then the PTY: the app must never receive SIGWINCH for a
+    // grid the parser has not adopted yet.
+    this.resizeTerminal(managed, grid.cols, grid.rows);
+    terminalClient.resize(id, grid.cols, grid.rows);
+    this.pinToBottomAfterResize(managed);
+    return { cols: grid.cols, rows: grid.rows };
   }
 
   // Computes cols/rows from cached cell metrics with no DOM reads — a hidden or
@@ -514,24 +575,55 @@ export class TerminalResizeController {
     width: number,
     height: number,
     wasAtBottom: boolean
-  ): { cols: number; rows: number } | null {
+  ): CachedMetricGrid | null {
     const cellDims = getXtermCellDimensions(managed.terminal);
     if (!cellDims) {
       return null;
     }
     const cols = colsForWidth(managed.terminal, width, cellDims.width);
     const rows = rowsForHeight(height, cellDims.height);
-    if (managed.latestCols === cols && managed.latestRows === rows) {
-      managed.lastWidth = width;
-      managed.lastHeight = height;
-      return null;
-    }
+    // Convergence is a claim about the grid xterm actually holds, never about
+    // the target cache. `latestCols`/`latestRows` are written AHEAD of the
+    // commit — by `applyResize`'s settled branch, by `sendPtyResize`, and by the
+    // PTY-only sizing panel spawn does before xterm has ever been fit — so a box
+    // that computes to the cached target proves nothing about the parser. Trust
+    // it and a target stranded ahead of the grid (a settled timer dropped by
+    // `lockResize`, a spawn-time PTY resize xterm never adopted) reads as
+    // "already resolved": this returns null, stamps the pixel box as processed,
+    // and `isRedundantResize` then skips that box for good — leaving xterm
+    // narrower than the PTY until something forces a full re-measure (#11639).
+    // Same distinction `isRedundantResize` and `resize`'s own dedup draw:
+    // redundant and stale are not the same, and only redundant is safe to drop
+    // (#7762, #11095).
+    //
+    // A serialized restore never converges. xterm is parked at the snapshot's
+    // CAPTURE grid while the payload replays, so `terminal.cols` describes the
+    // replay, not the pane; the box has to reach `resizeTerminal` to be recorded
+    // into `pendingRestoreGeometry`, which is what the replay normalizes to when
+    // it closes. Calling the capture grid "converged" drops the box on the floor
+    // AND stamps it redundant — the very stranding above, one layer down
+    // (#11552).
+    const converged =
+      !managed.isSerializedRestoreInProgress &&
+      managed.terminal.cols === cols &&
+      managed.terminal.rows === rows;
+    // Whether the target the PTY was last told differs from the grid xterm
+    // holds. Only meaningful alongside `converged`: there is no reflow to apply,
+    // but the PTY is still sized for that other target, so a caller that just
+    // returns leaves the two halves split.
+    const cacheWasStale = managed.latestCols !== cols || managed.latestRows !== rows;
+
     managed.lastWidth = width;
     managed.lastHeight = height;
+    // Re-point the target at the truth either way. Left alone, a stale
+    // ahead-of-grid target is what `applyDeferredResize`, `forceImmediateResize`
+    // and `TerminalRevealController` push to the PTY later (#11095).
     managed.latestCols = cols;
     managed.latestRows = rows;
-    managed.latestWasAtBottom = wasAtBottom;
-    return { cols, rows };
+    if (!converged) {
+      managed.latestWasAtBottom = wasAtBottom;
+    }
+    return { cols, rows, converged, cacheWasStale };
   }
 
   /**
@@ -549,11 +641,19 @@ export class TerminalResizeController {
    * agent keeps producing output sized for the grid the user can see.
    */
   resizeTerminal(managed: ManagedTerminal, cols: number, rows: number): void {
+    // Normalize here and in `terminalClient.resize` with the same function, so
+    // xterm and the PTY land on identical dimensions no matter which call site
+    // or transport carried them. Clamping per-layer instead is what let the two
+    // grids settle at different widths and never reconcile (#11641). Idempotent
+    // for the internal callers — the measurement helpers above already clamp, so
+    // this only bites geometry handed in from outside the controller.
+    const normalizedCols = normalizeTerminalGridDimension(cols);
+    const normalizedRows = normalizeTerminalGridDimension(rows);
     if (managed.isSerializedRestoreInProgress) {
-      managed.pendingRestoreGeometry = { cols, rows };
+      managed.pendingRestoreGeometry = { cols: normalizedCols, rows: normalizedRows };
       return;
     }
-    managed.terminal.resize(cols, rows);
+    managed.terminal.resize(normalizedCols, normalizedRows);
   }
 
   /**
@@ -633,14 +733,18 @@ export class TerminalResizeController {
    * cached dims can equal the now-stale xterm grid), which applyDeferredResize's
    * cache==current early-return would miss.
    *
+   * @param options `force: true` skips ONLY the streaming-quiescence gate below
+   * (#11638) — the explicit user Redraw path. Every other guard here still
+   * applies. Automatic callers must omit it.
+   *
    * @returns true once a fresh measurement landed (whether or not a resize was
    * needed); false when the box is not measurable yet (zero/occluded/transitional
    * layout) so the reveal sweep retries on a later frame. The boolean is
    * measurability, NOT convergence — an alt-buffer pane reports true without
-   * touching geometry at all, so no caller may treat it as proof the grid now
-   * matches the container.
+   * touching geometry at all, and a serialized restore parks the xterm resize,
+   * so no caller may treat it as proof the grid now matches the container.
    */
-  reconcileGeometryFresh(id: string): boolean {
+  reconcileGeometryFresh(id: string, options: TerminalResyncOptions = {}): boolean {
     const managed = this.deps.getInstance(id);
     if (!managed) return false;
     if (!managed.hostElement.checkVisibility()) return false;
@@ -668,8 +772,7 @@ export class TerminalResizeController {
     let rows: number;
     const proposal = managed.fitAddon.proposeDimensions?.();
     if (proposal && proposal.cols > 1 && proposal.rows > 1) {
-      cols = proposal.cols;
-      rows = proposal.rows;
+      ({ cols, rows } = normalizeProposal(proposal));
     } else {
       const cellDims = getXtermCellDimensions(managed.terminal);
       if (!cellDims) return false;
@@ -687,7 +790,17 @@ export class TerminalResizeController {
     // watchdog picks up a pane that outlasts the sweep at its first quiet
     // tick. A no-drift pass falls through: the PTY re-assert below is
     // dedupe-safe and never re-wraps.
+    //
+    // `force` (#11638) is the one exemption: an explicit user Redraw. A busy
+    // agent repaints its status line several times a second and never opens the
+    // 300ms window this gate waits for, so deferring an explicitly-requested
+    // repair defers it forever — and the watchdog backstop tests the same
+    // predicate, so nothing converges the pane either. The re-wrap hazard the
+    // gate protects against is real but it is the AUTOMATIC case; a user who
+    // pressed Redraw has already judged the pane broken and accepts a frame of
+    // churn to fix it.
     if (
+      !options.force &&
       (managed.terminal.cols !== cols || managed.terminal.rows !== rows) &&
       hasStreamingWrites(managed, Date.now())
     ) {
@@ -703,10 +816,28 @@ export class TerminalResizeController {
     // apply atomically: resize xterm only when its grid actually drifted, and
     // always (re)assert the PTY size so the two agree.
     this.cancelPendingResize(id);
+    // Drain held ingest bytes at the OUTGOING grid before re-wrapping, the same
+    // invariant commitResize enforces at the other choke point. Bytes held by
+    // ingest backpressure were emitted for the current grid; parsing them after
+    // xterm adopts a new one lands their cursor moves and erases on the wrong
+    // rows, which no later reflow can undo. The automatic callers never met
+    // this hazard because the streaming gate above already turned them away —
+    // a forced resync (#11638) runs precisely when a backlog is most likely,
+    // so the flush has to be explicit here.
+    let heldBytesFlushed = true;
     if (managed.terminal.cols !== cols || managed.terminal.rows !== rows) {
+      heldBytesFlushed = this.flushHeldBytesBeforeResize(id);
       this.resizeTerminal(managed, cols, rows);
     }
     terminalClient.resize(id, cols, rows);
+    // An over-budget backlog resumes only AFTER the resize, exactly as
+    // commitResize orders it. Resuming first would drain it inline into xterm
+    // and then let resize()'s synchronous flushSync keep consuming whatever
+    // notifyWriteComplete appends behind it — one unyielding task that defeats
+    // the sync-flush budget the over-budget branch exists to enforce.
+    if (!heldBytesFlushed) {
+      this.deps.dataBuffer.resumeFlush(id);
+    }
     this.pinToBottomAfterResize(managed);
     return true;
   }

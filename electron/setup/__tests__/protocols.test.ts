@@ -43,6 +43,12 @@ vi.mock("electron", () => ({
   },
 }));
 
+vi.mock("../../utils/logger.js", () => ({
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
+}));
+
 vi.mock("../../utils/webviewCsp.js", () => ({
   classifyPartition: vi.fn((partition: string) =>
     partition === "persist:daintree" ? "project" : "browser"
@@ -3257,6 +3263,99 @@ describe("createAppProtocolHandler — direct disk read", () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("ok");
     expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
+  describe("404 diagnostics (#11635)", () => {
+    // Every app:// URL is an application-owned dist asset, so a 404 always
+    // means the packaged tree is damaged. All the branches returned the same
+    // bare body with nothing in the log, so a production report could not say
+    // which read actually failed — and losing index.html this way still
+    // commits a document that looks like a successful navigation.
+    /**
+     * The single diagnostic for the request just served. Asserting there is
+     * exactly one keeps a later branch from quietly adding a second,
+     * contradictory line for the same 404.
+     */
+    async function notFoundLog(): Promise<Record<string, unknown> | undefined> {
+      const { logWarn } = await import("../../utils/logger.js");
+      const calls = vi
+        .mocked(logWarn)
+        .mock.calls.filter(([event]) => event === "app.protocol.not-found");
+      expect(calls).toHaveLength(1);
+      return calls[0]?.[1] as Record<string, unknown> | undefined;
+    }
+
+    it("distinguishes the stat failure from the other 404 branches", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.stat).mockRejectedValue(
+        Object.assign(new Error("nope"), { code: "ENOENT", errno: -2 })
+      );
+
+      const handler = await captureHandler();
+      await handler(makeRequest("/assets/vanished.js"));
+
+      expect(await notFoundLog()).toMatchObject({
+        stage: "stat",
+        // The requested URL and the path it resolved to are both needed: the
+        // report has to name the asset that went missing, not just the stage.
+        url: "app://daintree/assets/vanished.js",
+        filePath: "/tmp/dist/assets/index-abc123.js",
+        code: "ENOENT",
+        errno: -2,
+      });
+    });
+
+    it("reports a directory hit as its own stage rather than an error code", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.stat).mockResolvedValue({
+        mtime: new Date(0),
+        isFile: () => false,
+      } as Awaited<ReturnType<typeof fs.stat>>);
+
+      const handler = await captureHandler();
+      await handler(makeRequest("/assets/"));
+
+      const logged = await notFoundLog();
+      expect(logged).toMatchObject({ stage: "not-a-file" });
+      // Nothing threw, so there is no errno to invent.
+      expect(logged).not.toHaveProperty("code");
+    });
+
+    it("separates an open failure from a read failure", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("nope"), { code: "EISDIR" }));
+
+      const handler = await captureHandler();
+      await handler(makeRequest());
+      expect(await notFoundLog()).toMatchObject({ stage: "open", code: "EISDIR" });
+
+      vi.mocked(await import("../../utils/logger.js")).logWarn.mockClear();
+      vi.mocked(fs.open).mockResolvedValue({
+        readFile: vi.fn().mockRejectedValue(Object.assign(new Error("nope"), { code: "EISDIR" })),
+        close: vi.fn().mockResolvedValue(undefined),
+      } as unknown as Awaited<ReturnType<typeof fs.open>>);
+
+      await handler(makeRequest());
+      expect(await notFoundLog()).toMatchObject({ stage: "read", code: "EISDIR" });
+    });
+
+    it("logs the resolver rejection with its reason and never touches disk", async () => {
+      const fs = await import("fs/promises");
+      const appProtocol = await import("../../utils/appProtocol.js");
+      vi.mocked(appProtocol.resolveAppUrlToDistPath).mockReturnValue({
+        filePath: "",
+        error: "path traversal",
+      } as ReturnType<typeof appProtocol.resolveAppUrlToDistPath>);
+
+      const handler = await captureHandler();
+      await handler(makeRequest("/../../etc/passwd"));
+
+      expect(await notFoundLog()).toMatchObject({
+        stage: "resolve",
+        reason: "path traversal",
+      });
+      expect(fs.stat).not.toHaveBeenCalled();
+    });
   });
 });
 

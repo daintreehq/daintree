@@ -4,7 +4,11 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import type { AgentState } from "@/types";
-import { isAgentFleetActionEligible, isTerminalFleetEligible } from "./fleetEligibility";
+import {
+  isAgentFleetActionEligible,
+  isAgentTerminalFleetEligible,
+  isTerminalFleetEligible,
+} from "./fleetEligibility";
 
 // Carrier shape sourced from `getNarrowPanel`'s parameter so this file doesn't
 // have to name the legacy carrier type directly — auto-tracks the carrier flip
@@ -127,12 +131,20 @@ export function computeArmByStateIds(
 }
 
 /**
- * Pure collector: arm-eligible terminal ids whose worktree is in `worktreeIds`,
- * in panelIds (sidebar) order. Shared by `armMatchingFilter` (the store
- * mutation) and the sidebar's arm-matching affordance, which needs the same
- * set to decide whether anything is still unarmed. Takes `panelIds`/`panelsById`
- * explicitly so callers can pass reactive selector values rather than reaching
- * into `usePanelStore.getState()`.
+ * Pure collector: agent terminal ids whose worktree is in `worktreeIds`, in
+ * panelIds (sidebar) order. Backs `armMatchingFilter` (the store mutation)
+ * behind the sidebar's arm-matching affordance. Agent-scoped, not
+ * terminal-scoped, so bulk arming from the quick-filter bar addresses the same
+ * terminals as the state filters beside it and leaves plain shells alone
+ * (#11637) — shells stay armable one at a time, and `armAll` still takes
+ * everything live. Uses the `isAgentTerminal`-based predicate rather than the
+ * built-in-capability one so plugin-contributed agents are not dropped.
+ *
+ * The sidebar derives its own count reactively via
+ * `selectSidebarFleetEligibleWorktreeById` rather than calling this; the two
+ * must apply the same predicate or the tooltip count drifts from what a click
+ * actually arms. Takes `panelIds`/`panelsById` explicitly so callers can pass
+ * reactive selector values rather than reaching into `usePanelStore.getState()`.
  */
 export function collectFilterArmEligibleIds(
   worktreeIds: readonly string[],
@@ -144,7 +156,7 @@ export function collectFilterArmEligibleIds(
   const ids: string[] = [];
   for (const id of panelIds) {
     const t = getNarrowPanel(panelsById, id);
-    if (!isFleetArmEligible(t)) continue;
+    if (!isAgentTerminalFleetEligible(t)) continue;
     if (!t.worktreeId || !worktreeIdSet.has(t.worktreeId)) continue;
     ids.push(id);
   }

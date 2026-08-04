@@ -296,6 +296,26 @@ describe("XtermAdapter lifecycle", () => {
     expect(attachedOrder).toBeGreaterThan(visibleOrder);
   });
 
+  it("announces the attach before it has settled, so consumers must gate on settle (#11640)", async () => {
+    // attach() defers clearing isAttaching into a rAF for a reparented terminal,
+    // so onAttached can land while the attach is still in flight. The worktree
+    // reveal coordinator relies on this being a re-arm signal rather than a
+    // paint trigger: repaintForReveal has no isAttaching guard, so painting
+    // straight from this callback would race the terminal's own post-attach fit.
+    mocks.terminalInstanceService.attach.mockImplementation(() => {
+      mocks.managed.isAttaching = true;
+    });
+    let attachingAtAnnounce: boolean | undefined;
+    const onAttached = vi.fn(() => {
+      attachingAtAnnounce = mocks.managed.isAttaching;
+    });
+
+    renderAdapter({ onAttached });
+
+    await waitFor(() => expect(onAttached).toHaveBeenCalledTimes(1));
+    expect(attachingAtAnnounce).toBe(true);
+  });
+
   it("does not re-announce an attach when only hot callbacks change (#11445)", async () => {
     const onAttached = vi.fn();
 

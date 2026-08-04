@@ -13,6 +13,7 @@ import {
 import type { TerminalResizePayload } from "../../../types/index.js";
 import { TerminalResizePayloadSchema } from "../../../schemas/ipc.js";
 import type { PtyHostActivityTier } from "../../../../shared/types/pty-host.js";
+import { normalizeTerminalGridDimension } from "../../../../shared/types/terminal.js";
 import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.js";
 import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
@@ -153,10 +154,15 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       }
 
       const { id, cols, rows } = parseResult.data;
-      const clampedCols = Math.max(1, Math.min(500, Math.floor(cols)));
-      const clampedRows = Math.max(1, Math.min(500, Math.floor(rows)));
-
-      ptyClient.resize(id, clampedCols, clampedRows);
+      // Defensive backstop at the shared ceiling. The renderer already
+      // normalized to the same bound before choosing a transport, so this
+      // agrees with what the MessagePort path (which bypasses Main entirely)
+      // delivers rather than imposing a second, lower limit.
+      ptyClient.resize(
+        id,
+        normalizeTerminalGridDimension(cols),
+        normalizeTerminalGridDimension(rows)
+      );
     } catch (error) {
       console.error("Error resizing terminal:", error);
     }
