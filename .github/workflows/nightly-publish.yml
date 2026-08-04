@@ -122,6 +122,10 @@ jobs:
           echo "Stamped version: ${NIGHTLY_VERSION}"
 
       - name: Build
+        env:
+          # tsc's type graph exceeds node's default old-space on macos-14
+          # (~2 GB), aborting the build. Matches the release workflows.
+          NODE_OPTIONS: "--max-old-space-size=6144"
         run: npm run build
 
       - name: Smoke test (Linux)
@@ -180,6 +184,7 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           DEBUG: electron-builder,electron-notarize*,electron-osx-sign*
+          NODE_OPTIONS: "--max-old-space-size=6144"
           npm_config_build_from_source: "true"
         run: |
           npx electron-builder --config electron-builder.config.cjs --publish always \
