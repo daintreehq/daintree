@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.30.1] - 2026-08-04
+
+A correctness patch on 0.30.0. Most of it closes routes by which one project's state reached another's — a new project inheriting the legacy global terminal list, reconnect and spawn resolving across the project boundary, a non-git folder adopting a foreign worktree — alongside a round of terminal geometry repairs and a cold project switch that could land on a blank Not Found page.
+
+### Bug Fixes
+
+**Project isolation**
+
+- A new project no longer inherits the legacy pre-multi-project terminal list, so it can't be minted with another project's panels, cwd and worktree (#11651)
+- `terminal:reconnect` refuses a terminal belonging to another project instead of adopting it (#11652)
+- Terminal spawn drops a `worktreeId` it can't prove belongs to the project stamped beside it, so resumable-session history stops crossing projects (#11653)
+- A workspace with no repository stops adopting whichever worktree the last git-backed project left behind (#11650)
+
+**Project & window switching**
+
+- Switching to a project that needed a cold view could replace the workspace with a Not Found page, recoverable only by restarting (#11635)
+- A project recorded as git-backed that has lost its `.git` can reach the demotion dialog from the switcher and from back/forward, not just from path-based entry points (#11649)
+
+**Terminal**
+
+- A background grid resize dedupes against the grid the terminal actually holds, not a queued target, so a stale target stops leaving the grid permanently narrower than its PTY (#11639)
+- Redraw forces a full geometry resync, so it does something on a busy agent terminal instead of skipping the only step that corrects the grid (#11638)
+- A worktree switch retries the repaint once the terminals mount, instead of discarding it while they're still offscreen (#11640)
+- The pty-host reports the dimensions it applied, so a PTY grid drifting from the terminal's is detected rather than silent (#11641)
+
+**Worktrees & panels**
+
+- A worktree-less workspace clears an inherited worktree selection once its empty snapshot is authoritative, so agent launches stop failing with nothing shown (#11654)
+- A restored panel backed by a plugin panel kind recovers when the plugin activates, instead of staying "Plugin unavailable" until it's closed and reopened (#11636)
+- The worktree sidebar's bulk arm addresses only agent terminals, matching the state filters beside it, and counts them the same way (#11637)
+
 ## [0.30.0] - 2026-08-03
 
 The MCP control surface gets a full overhaul — the external tool surface drops from 100 tools to 23 so real clients stop silently truncating it, results are bounded and versioned, and forge actions grow enough reach for an agent to run a whole work loop without leaving Daintree. Alongside that: Pilot, a cross-project view of every agent run at once; a file browser that feeds files straight into an agent; and a relaunch that brings back all your project windows instead of one.
