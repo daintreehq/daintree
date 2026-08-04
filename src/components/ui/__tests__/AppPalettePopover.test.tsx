@@ -624,6 +624,27 @@ describe("AppPalettePopover", () => {
       expect(fireCloseAutoFocus().preventDefault).toHaveBeenCalledTimes(1);
       expect(consume).toHaveBeenCalledTimes(1);
     });
+
+    it("asks the consumer before telling it the close is happening", () => {
+      // All three policies live at once — a pointer dismissal the palette opted
+      // to restore from, plus a consumer claiming the close. The claim still
+      // wins, and the notification still fires on a suppressed close.
+      const calls: string[] = [];
+      render(
+        <Harness
+          restoreFocusOnPointerDismiss={true}
+          consumeCloseAutoFocusSuppression={() => {
+            calls.push("consume");
+            return true;
+          }}
+          onCloseAutoFocus={() => calls.push("notify")}
+        />
+      );
+      act(() => contentProps.onPointerDownOutside?.());
+
+      expect(fireCloseAutoFocus().preventDefault).toHaveBeenCalledTimes(1);
+      expect(calls).toEqual(["consume", "notify"]);
+    });
   });
 
   describe("foreign overlay dismissal", () => {

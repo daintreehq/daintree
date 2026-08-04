@@ -163,9 +163,13 @@ export interface AppPalettePopoverContentProps extends Omit<
    * Separate from `restoreFocusOnPointerDismiss` rather than folded into it:
    * that flag is a standing policy about how pointer dismissals should look,
    * this is one close that must not bounce. Named for the side effect — the
-   * shell calls it exactly once per close, including closes it was going to
-   * suppress anyway, so the consumer can disarm on the same call and never
-   * carry a stale answer into the next dismissal.
+   * shell asks exactly once per close, including closes the pointer branch was
+   * going to suppress anyway, so the answer can be disarmed on the same call.
+   *
+   * Decide per close rather than arming and waiting to be asked: reopening
+   * inside the content's exit animation cancels Radix's unmount, so that close
+   * never reaches close-autofocus and an armed answer would survive to be spent
+   * on the next dismissal.
    */
   consumeCloseAutoFocusSuppression?: () => boolean;
   /**
@@ -210,10 +214,9 @@ function AppPalettePopoverContent({
     // A dismissal that got vetoed, or one reversed mid-exit, can leave the
     // pointer flag armed with no close-autofocus to consume it.
     //
-    // Only this flag. The consumer's own suppression is armed on the way out,
-    // and the content survives its exit animation, so disarming anything here
-    // on a reopen inside that window would strip the pending close of the
-    // answer it is still about to ask for.
+    // Only this flag: `consumeCloseAutoFocusSuppression` is the consumer's to
+    // keep current, and reopening inside the exit animation cancels the unmount
+    // outright rather than leaving a close-autofocus in flight.
     wasPointerCloseRef.current = false;
     const frame = requestAnimationFrame(focusInput);
     return () => cancelAnimationFrame(frame);

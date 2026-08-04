@@ -988,8 +988,10 @@ describe("DockLaunchButton", () => {
     expect(popoverCloseAutoFocusSpy).toBeTruthy();
     expect(popoverPointerDownOutsideSpy).toBeTruthy();
 
-    // Keyboard close (no prior pointer-down-outside) must NOT preventDefault
-    // — focus restoration is required for WAI-ARIA Escape/Enter.
+    // Keyboard close with nothing launched (no prior pointer-down-outside) must
+    // NOT preventDefault — WAI-ARIA requires the return on a bare dismissal.
+    // Enter that activates a launch row is the deliberate exception, covered by
+    // the #11664 block below.
     const keyboardPreventDefault = vi.fn();
     popoverCloseAutoFocusSpy!({ preventDefault: keyboardPreventDefault });
     expect(keyboardPreventDefault).not.toHaveBeenCalled();
@@ -1043,14 +1045,54 @@ describe("DockLaunchButton", () => {
       expect(fireCloseAutoFocus()).toHaveBeenCalledTimes(1);
     });
 
-    it("spends the suppression on a single close", () => {
+    it("cancels the return when a clicked row launches a terminal", () => {
+      // Terminal routes through onLaunchAgent rather than addPanel — the exact
+      // path the issue was reported against.
+      const onLaunchAgent = vi.fn();
+      const { getByText } = renderButton({ onLaunchAgent });
+
+      fireEvent.click(getByText("Terminal"));
+
+      expect(onLaunchAgent).toHaveBeenCalledWith("terminal");
+      expect(fireCloseAutoFocus()).toHaveBeenCalledTimes(1);
+    });
+
+    it("cancels the return when a clicked row runs a recipe", async () => {
+      mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+      const { getByText } = renderButton();
+
+      fireEvent.click(getByText("My recipe"));
+
+      // Decided on intent: the spawn is still in flight when the close lands.
+      expect(fireCloseAutoFocus()).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(notifySpawnFailuresMock).toHaveBeenCalled());
+    });
+
+    it("decides afresh on every close instead of staying suppressed", () => {
       const { getByText } = renderButton();
 
       fireEvent.click(getByText("Claude"));
-      fireCloseAutoFocus();
+      expect(fireCloseAutoFocus()).toHaveBeenCalledTimes(1);
 
-      // A later Escape has to get its focus return back, or the launcher
-      // strands the keyboard every time it is dismissed without launching.
+      // Dismissed without launching: the WAI-ARIA return has to come back, or
+      // the launcher strands the keyboard on every later Escape.
+      act(() => popoverOpenChangeSpy!(false));
+      expect(fireCloseAutoFocus()).not.toHaveBeenCalled();
+
+      fireEvent.click(getByText("Claude"));
+      expect(fireCloseAutoFocus()).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not carry a launch's suppression into a later dismissal", () => {
+      // Reopening inside the content's exit animation makes Radix cancel the
+      // unmount, so that launch's close never reaches close-autofocus and its
+      // answer is never spent. The next dismissal must still get its return.
+      const { getByText } = renderButton();
+
+      fireEvent.click(getByText("Claude"));
+      act(() => popoverOpenChangeSpy!(true));
+      act(() => popoverOpenChangeSpy!(false));
+
       expect(fireCloseAutoFocus()).not.toHaveBeenCalled();
     });
 
@@ -1073,9 +1115,10 @@ describe("DockLaunchButton", () => {
       expect(fireCloseAutoFocus()).not.toHaveBeenCalled();
     });
 
-    it("keeps the return when the launcher is dismissed without activating a row", () => {
+    it("keeps the return when an opened launcher is dismissed without activating a row", () => {
       renderButton();
 
+      act(() => popoverOpenChangeSpy!(true));
       act(() => popoverOpenChangeSpy!(false));
 
       expect(fireCloseAutoFocus()).not.toHaveBeenCalled();
