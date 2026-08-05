@@ -1,33 +1,59 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AddPanelOptions } from "@shared/types/addPanelOptions";
-import type { PanelInstance } from "@shared/types/panel";
+import type { PanelInstance, TabGroup } from "@shared/types/panel";
 import type { WorktreeState } from "@/types";
 
 const addPanelMock = vi.hoisted(() => vi.fn<(o: AddPanelOptions) => Promise<string | null>>());
 const activateTerminalMock = vi.hoisted(() => vi.fn<(id: string) => void>());
+const setActiveTabMock = vi.hoisted(() => vi.fn<(groupId: string, panelId: string) => void>());
+const getPanelGroupMock = vi.hoisted(() => vi.fn<(id: string) => TabGroup | undefined>());
 const setFileBrowserViewMock = vi.hoisted(() =>
   vi.fn<(id: string, patch: Record<string, unknown>) => void>()
 );
-const panelsMock = vi.hoisted(() => ({ current: [] as PanelInstance[] }));
+const openPanelDialogMock = vi.hoisted(() => vi.fn<() => Promise<string | null>>());
+const selectWorktreeMock = vi.hoisted(() =>
+  vi.fn<(id: string, options?: { source?: string }) => void>()
+);
+const activeWorktreeIdMock = vi.hoisted(() => ({ current: null as string | null }));
+// `panelIds` and `panelsById` are seeded independently, not derived from one
+// list: a spawn or hydration batch commits the map first and defers the id
+// append, and a fixture that ties them together cannot express that state.
+const panelsMock = vi.hoisted(() => ({
+  byId: [] as PanelInstance[],
+  /** `null` = mirror `byId` (the committed, non-batched case). */
+  ids: null as string[] | null,
+}));
 const worktreesMock = vi.hoisted(() => ({ current: new Map<string, Partial<WorktreeState>>() }));
 
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
     getState: () => ({
-      panelIds: panelsMock.current.map((panel) => panel.id),
-      panelsById: Object.fromEntries(panelsMock.current.map((panel) => [panel.id, panel])),
+      panelIds: panelsMock.ids ?? panelsMock.byId.map((panel) => panel.id),
+      panelsById: Object.fromEntries(panelsMock.byId.map((panel) => [panel.id, panel])),
       addPanel: addPanelMock,
       activateTerminal: activateTerminalMock,
+      setActiveTab: setActiveTabMock,
+      getPanelGroup: getPanelGroupMock,
       setFileBrowserView: setFileBrowserViewMock,
     }),
   },
 }));
 
-// The dialog sibling shares this module's registration call, so its lazy import
-// must resolve even though nothing here exercises it.
+vi.mock("@/store/worktreeStore", () => ({
+  useWorktreeSelectionStore: {
+    getState: () => ({
+      activeWorktreeId: activeWorktreeIdMock.current,
+      selectWorktree: selectWorktreeMock,
+    }),
+  },
+}));
+
+// Reachable, not a black hole: the panel action must never present a dialog,
+// and an inaccessible `vi.fn()` here would let it do so silently — `await
+// undefined` is harmless, so every assertion would still pass.
 vi.mock("@/store/panelDialogStore", () => ({
-  usePanelDialogStore: { getState: () => ({ openPanelDialog: vi.fn() }) },
+  usePanelDialogStore: { getState: () => ({ openPanelDialog: openPanelDialogMock }) },
 }));
 
 vi.mock("@/store/createWorktreeStore", () => ({
@@ -81,8 +107,18 @@ function addPanelOptions() {
 beforeEach(() => {
   vi.clearAllMocks();
   worktreesMock.current = new Map();
-  panelsMock.current = [];
+  panelsMock.byId = [];
+  panelsMock.ids = null;
+  activeWorktreeIdMock.current = null;
+  getPanelGroupMock.mockReturnValue(undefined);
   addPanelMock.mockResolvedValue("fb-panel-1");
+});
+
+afterEach(() => {
+  // A suite-wide invariant rather than one test: this action opens a grid
+  // panel, and the whole point of the split is that it never presents the
+  // ephemeral dialog its sibling owns — on any path, including the failures.
+  expect(openPanelDialogMock).not.toHaveBeenCalled();
 });
 
 describe("worktree.openFileBrowserPanel", () => {
@@ -91,12 +127,19 @@ describe("worktree.openFileBrowserPanel", () => {
       seedWorktree("wt-1", { branch: "feature/x" });
       const result = await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
 
-      expect(addPanelOptions()).toMatchObject({
+      const options = addPanelOptions();
+      expect(options).toMatchObject({
         kind: "file-browser",
         worktreeId: "wt-1",
         title: "Files — feature/x",
         location: "grid",
       });
+      // The marker's absence is what makes this a WORKTREE browser: the
+      // defaults factory treats either the marker or a missing worktreeId as
+      // workspace-rooted, and the pane then ignores the worktreeId entirely —
+      // so stamping it here would browse the workspace root while every other
+      // assertion above still passed (#11489).
+      expect(options).not.toHaveProperty("browserWorkspaceRooted");
       expect(result).toEqual({ panelId: "fb-panel-1" });
     });
 
@@ -181,7 +224,7 @@ describe("worktree.openFileBrowserPanel", () => {
   describe("reuse", () => {
     it("focuses the existing browser for the same worktree instead of opening a second", async () => {
       seedWorktree("wt-1");
-      panelsMock.current = [browserPanel("fb-existing", { worktreeId: "wt-1" })];
+      panelsMock.byId = [browserPanel("fb-existing", { worktreeId: "wt-1" })];
 
       const result = await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
 
@@ -191,7 +234,7 @@ describe("worktree.openFileBrowserPanel", () => {
     });
 
     it("reuses a workspace-rooted browser for a workspace-rooted request", async () => {
-      panelsMock.current = [browserPanel("fb-workspace", { browserWorkspaceRooted: true })];
+      panelsMock.byId = [browserPanel("fb-workspace", { browserWorkspaceRooted: true })];
 
       const result = await getAction().run(undefined, {
         projectPath: "/folders/notes",
@@ -206,7 +249,7 @@ describe("worktree.openFileBrowserPanel", () => {
       // it lands in a rendered index bucket (#11489). Matching on that id would
       // hand a worktree request the workspace browser — a different folder.
       seedWorktree("wt-1");
-      panelsMock.current = [
+      panelsMock.byId = [
         browserPanel("fb-workspace", { worktreeId: "wt-1", browserWorkspaceRooted: true }),
       ];
 
@@ -216,14 +259,67 @@ describe("worktree.openFileBrowserPanel", () => {
       expect(activateTerminalMock).not.toHaveBeenCalled();
     });
 
+    it("reuses a workspace-rooted browser that carries a placement worktreeId", async () => {
+      // The mirror of the case above: once promotion stamps a worktreeId on it,
+      // the marker is the only thing still identifying it as the workspace
+      // browser, so a workspace request must follow the marker, not the id.
+      panelsMock.byId = [
+        browserPanel("fb-workspace", { worktreeId: "wt-1", browserWorkspaceRooted: true }),
+      ];
+
+      const result = await getAction().run(undefined, {
+        projectPath: "/folders/notes",
+      } as ActionContext);
+
+      expect(addPanelMock).not.toHaveBeenCalled();
+      expect(result).toEqual({ panelId: "fb-workspace" });
+    });
+
+    it("does not hand a workspace request a worktree browser", async () => {
+      panelsMock.byId = [browserPanel("fb-worktree", { worktreeId: "wt-1" })];
+
+      await getAction().run(undefined, { projectPath: "/folders/notes" } as ActionContext);
+
+      expect(addPanelOptions()).not.toHaveProperty("worktreeId");
+      expect(activateTerminalMock).not.toHaveBeenCalled();
+    });
+
     it("does not reuse a browser for a different worktree", async () => {
       seedWorktree("wt-1");
       seedWorktree("wt-2");
-      panelsMock.current = [browserPanel("fb-other", { worktreeId: "wt-2" })];
+      panelsMock.byId = [browserPanel("fb-other", { worktreeId: "wt-2" })];
 
       await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
 
       expect(addPanelOptions()).toMatchObject({ worktreeId: "wt-1" });
+    });
+
+    it("finds a browser still pending a spawn batch's id append", async () => {
+      // A spawn or hydration batch commits `panelsById` immediately and defers
+      // the `panelIds` append to its flush. Scanning the committed list alone
+      // would miss a browser opened moments earlier and duplicate it.
+      seedWorktree("wt-1");
+      panelsMock.byId = [browserPanel("fb-pending", { worktreeId: "wt-1" })];
+      panelsMock.ids = [];
+
+      const result = await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
+
+      expect(addPanelMock).not.toHaveBeenCalled();
+      expect(result).toEqual({ panelId: "fb-pending" });
+    });
+
+    it("surfaces a reused browser that sits behind a sibling tab", async () => {
+      // Activation moves `focusedId`, but a group renders its own stored active
+      // tab in preference to it — so without this the browser stays hidden
+      // behind whatever tab the group was showing.
+      seedWorktree("wt-1");
+      panelsMock.byId = [browserPanel("fb-tabbed", { worktreeId: "wt-1" })];
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: only the id is read
+      getPanelGroupMock.mockReturnValue({ id: "group-1", activeTabId: "other" } as TabGroup);
+
+      await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
+
+      expect(setActiveTabMock).toHaveBeenCalledWith("group-1", "fb-tabbed");
     });
 
     it.each(["dialog", "trash", "background", "dock", "overlay"] as const)(
@@ -233,7 +329,7 @@ describe("worktree.openFileBrowserPanel", () => {
         // record in particular would hand the grid an uncounted, unpersisted
         // panel instead of opening a real one.
         seedWorktree("wt-1");
-        panelsMock.current = [browserPanel("fb-hidden", { worktreeId: "wt-1", location })];
+        panelsMock.byId = [browserPanel("fb-hidden", { worktreeId: "wt-1", location })];
 
         await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
 
@@ -245,7 +341,7 @@ describe("worktree.openFileBrowserPanel", () => {
     it("does not reuse a panel of another kind", async () => {
       seedWorktree("wt-1");
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture
-      panelsMock.current = [
+      panelsMock.byId = [
         { id: "file-1", kind: "file", location: "grid", worktreeId: "wt-1" } as PanelInstance,
       ];
 
@@ -283,7 +379,7 @@ describe("worktree.openFileBrowserPanel", () => {
 
     it("applies a reveal to a reused panel rather than dropping it", async () => {
       seedWorktree("wt-1");
-      panelsMock.current = [
+      panelsMock.byId = [
         browserPanel("fb-existing", {
           worktreeId: "wt-1",
           browserExpandedPaths: ["docs"],
@@ -300,16 +396,48 @@ describe("worktree.openFileBrowserPanel", () => {
         browserSelectedPath: "src/lib/app.ts",
         // The user's own expansion survives — a reveal adds to what is open.
         browserExpandedPaths: ["docs", "src", "src/lib"],
-        // A reveal path is resolved from the worktree root, so a re-rooted tree
-        // would select a row that is not in it.
+        // The target is outside the scoped root, so the scope has to go or the
+        // selection would name a row the tree does not contain.
         browserRootPath: "",
       });
       expect(activateTerminalMock).toHaveBeenCalledWith("fb-existing");
     });
 
+    it("keeps a scoped root when the revealed path is already inside it", async () => {
+      // Dropping a scope the user chose is not part of revealing something they
+      // can already see.
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserRootPath: "packages/app" }),
+      ];
+
+      await getAction().run(
+        { worktreeId: "wt-1", revealPath: "packages/app/src/main.ts" },
+        {} as ActionContext
+      );
+
+      expect(setFileBrowserViewMock.mock.calls[0]![1]).not.toHaveProperty("browserRootPath");
+    });
+
+    it("does not mistake a sibling directory for a child of the scoped root", async () => {
+      // A prefix comparison would call `packages/apply/x.ts` a child of
+      // `packages/app` and leave the tree scoped where the row cannot appear.
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserRootPath: "packages/app" }),
+      ];
+
+      await getAction().run(
+        { worktreeId: "wt-1", revealPath: "packages/apply/x.ts" },
+        {} as ActionContext
+      );
+
+      expect(setFileBrowserViewMock.mock.calls[0]![1]).toMatchObject({ browserRootPath: "" });
+    });
+
     it("leaves a reused panel's view untouched when nothing is revealed", async () => {
       seedWorktree("wt-1");
-      panelsMock.current = [
+      panelsMock.byId = [
         browserPanel("fb-existing", { worktreeId: "wt-1", browserRootPath: "packages/app" }),
       ];
 
@@ -342,18 +470,59 @@ describe("worktree.openFileBrowserPanel", () => {
     });
   });
 
-  describe("panel ceiling", () => {
-    it("throws when the grid refuses the panel", async () => {
-      // A bare return would report ok from dispatch with nothing on screen.
-      seedWorktree("wt-1");
-      addPanelMock.mockResolvedValue(null);
+  describe("visibility of the target worktree", () => {
+    it("follows a person to the worktree they asked to browse", async () => {
+      // The grid renders only the active worktree's bucket, so a panel created
+      // for any other worktree is backgrounded on arrival — dispatch would
+      // report ok with nothing on screen.
+      seedWorktree("wt-other");
+      activeWorktreeIdMock.current = "wt-active";
 
-      await expect(getAction().run({ worktreeId: "wt-1" }, {} as ActionContext)).rejects.toThrow(
-        /panel limit reached/
-      );
+      await getAction().run({ worktreeId: "wt-other" }, {
+        dispatchSource: "context-menu",
+      } as ActionContext);
+
+      expect(selectWorktreeMock).toHaveBeenCalledWith("wt-other", { source: "user" });
     });
 
-    it("throws a message the callers can recognise as the already-reported refusal", async () => {
+    it("does not move the user for an agent dispatch", async () => {
+      seedWorktree("wt-other");
+      activeWorktreeIdMock.current = "wt-active";
+
+      await getAction().run({ worktreeId: "wt-other" }, {
+        dispatchSource: "agent",
+      } as ActionContext);
+
+      expect(selectWorktreeMock).not.toHaveBeenCalled();
+    });
+
+    it("does not re-select the worktree already showing", async () => {
+      // Selecting re-persists the restore target and touches the MRU; browsing
+      // the worktree you are already in is not a navigation worth recording.
+      seedWorktree("wt-1");
+      activeWorktreeIdMock.current = "wt-1";
+
+      await getAction().run({ worktreeId: "wt-1" }, { dispatchSource: "user" } as ActionContext);
+
+      expect(selectWorktreeMock).not.toHaveBeenCalled();
+    });
+
+    it("has no worktree to select for a workspace-rooted open", async () => {
+      await getAction().run(undefined, {
+        dispatchSource: "user",
+        projectPath: "/folders/notes",
+      } as ActionContext);
+
+      expect(selectWorktreeMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("panel ceiling", () => {
+    it("throws a refusal the callers can recognise as already reported", async () => {
+      // Thrown, not a bare return: a silent refusal reports ok from dispatch
+      // with nothing on screen. Asserted through the classifier the callers
+      // actually use, so the two cannot drift apart into a message that is
+      // raised but no longer suppresses the misleading follow-up toast.
       seedWorktree("wt-1");
       addPanelMock.mockResolvedValue(null);
       const { isPanelLimitError } = await import("../panelLimitError");
@@ -362,6 +531,7 @@ describe("worktree.openFileBrowserPanel", () => {
         .run({ worktreeId: "wt-1" }, {} as ActionContext)
         .catch((e: unknown) => e);
 
+      expect(error).toBeInstanceOf(Error);
       expect(isPanelLimitError(error instanceof Error ? error.message : undefined)).toBe(true);
     });
   });

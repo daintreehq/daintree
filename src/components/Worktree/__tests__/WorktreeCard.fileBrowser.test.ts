@@ -15,14 +15,25 @@ import { fileURLToPath } from "node:url";
  */
 const source = readFileSync(fileURLToPath(new URL("../WorktreeCard.tsx", import.meta.url)), "utf8");
 
-/** The body of `openFileBrowserForThisWorktree`, comments stripped. */
+/**
+ * The body of `openFileBrowserForThisWorktree`, comments stripped.
+ *
+ * Bounded by the next top-level `const` rather than a literal closing brace so
+ * reformatting the handler doesn't silently truncate it to nothing — and every
+ * assertion below runs against a non-empty slice for the same reason.
+ */
 function handlerBody(): string {
   const start = source.indexOf("const openFileBrowserForThisWorktree");
   expect(start, "openFileBrowserForThisWorktree is gone or was renamed").toBeGreaterThan(-1);
-  const end = source.indexOf("\n  };", start);
-  expect(end).toBeGreaterThan(start);
-  // Stripped so a commented-out call can never satisfy the assertions below.
-  return source.slice(start, end).replace(/\/\/[^\n]*/g, "");
+  const rest = source.slice(start);
+  const next = rest.indexOf("\n  const ", 1);
+  const body = (next === -1 ? rest : rest.slice(0, next))
+    // Both comment forms: a `//` strip alone would let a block-commented call
+    // satisfy the assertions below.
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*/g, "");
+  expect(body).toContain("actionService.dispatch");
+  return body;
 }
 
 describe("WorktreeCard — Browse Files (#11666)", () => {
@@ -34,10 +45,16 @@ describe("WorktreeCard — Browse Files (#11666)", () => {
 
   it("selects an inactive card before dispatching, so the panel isn't backgrounded", () => {
     const body = handlerBody();
-    expect(body).toMatch(/if \(!isActive\) onSelect\(\);/);
+    const select = body.indexOf("onSelect()");
+    expect(select, "the card no longer selects itself before opening the browser").toBeGreaterThan(
+      -1
+    );
+    // Guarded, matching `handleTerminalSelect`: re-selecting the active card
+    // would re-persist the restore target and touch the MRU for nothing.
+    expect(body).toMatch(/!isActive/);
     // Ordering is the whole point: selecting after the dispatch would leave
     // `addPanel` reading the outgoing worktree and backgrounding the panel.
-    expect(body.indexOf("onSelect()")).toBeLessThan(body.indexOf("actionService.dispatch"));
+    expect(select).toBeLessThan(body.indexOf("actionService.dispatch"));
   });
 
   it("names a foreground source so the panel takes focus", () => {

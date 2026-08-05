@@ -71,6 +71,10 @@ vi.mock("@/components/ui/Kbd", () => ({
 }));
 
 import { LauncherQuickActions } from "../LauncherQuickActions";
+// Imported rather than spelled out: the suffix is the protocol between the
+// action that throws and the chip that stays quiet, so a copy of it here could
+// drift from the one both sides actually use.
+import { PANEL_LIMIT_ERROR_SUFFIX } from "@/services/actions/definitions/panelLimitError";
 import {
   basePressTreatment,
   reduceMotionSelectors,
@@ -237,17 +241,29 @@ describe("LauncherQuickActions", () => {
     // by the time this refusal arrives. The chip's own message names a
     // different cause entirely, so adding it would contradict the accurate one
     // the user is already looking at (#11666).
+    //
+    // Paired with an ordinary refusal in the same test, flushed identically:
+    // a lone negative assertion would also pass if the handler never ran at
+    // all, or if the whole `.then()` branch were deleted.
+    render(<LauncherQuickActions />);
+    const browse = () => fireEvent.click(screen.getByRole("button", { name: /Browse files/i }));
+    const settle = async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+
     h.dispatch.mockResolvedValue({
       ok: false,
-      error: new Error("Could not open file browser panel: panel limit reached"),
+      error: new Error(`Could not open file browser panel: ${PANEL_LIMIT_ERROR_SUFFIX}`),
     });
-    render(<LauncherQuickActions />);
-
-    fireEvent.click(screen.getByRole("button", { name: /Browse files/i }));
-    await Promise.resolve();
-    await Promise.resolve();
-
+    browse();
+    await settle();
     expect(h.notify).not.toHaveBeenCalled();
+
+    h.dispatch.mockResolvedValue({ ok: false, error: new Error("No folder to browse") });
+    browse();
+    await settle();
+    expect(h.notify).toHaveBeenCalledTimes(1);
   });
 
   // Shortcut-hint teardown around the palette open is now global — the

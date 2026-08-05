@@ -162,7 +162,13 @@ const fileBrowserArgsSchema = z
     // harmless falsy worktree — it would slip past the unknown-worktree
     // guard and open the workspace root instead of failing.
     worktreeId: z.string().min(1).optional(),
-    /** Path relative to the browser root, to select and scroll into view on open. */
+    /**
+     * Path to select and scroll into view on open, relative to the worktree or
+     * workspace root — the same base `browserSelectedPath` is stored against,
+     * not the tree's current scoped root. Every caller computes it that way,
+     * and a path relative to a scope the caller cannot see would be
+     * unresolvable from outside the panel.
+     */
     revealPath: z.string().optional(),
     /**
      * What `revealPath` points at. A directory is also expanded so its
@@ -249,6 +255,18 @@ function resolveFileBrowserTarget(
     worktreeId: undefined,
     title: `Files — ${ctx.projectName ?? ctx.scratchName ?? (workspacePath ? basename(workspacePath) : "workspace")}`,
   };
+}
+
+/**
+ * Whether a base-relative path is visible in a tree scoped to `root`.
+ *
+ * Segment-wise rather than a bare `startsWith`, which would call `srcx/a.ts` a
+ * child of `src`. An absent or empty root is the base itself, which contains
+ * everything.
+ */
+function isWithinBrowserRoot(path: string, root: string | undefined): boolean {
+  if (!root) return true;
+  return path === root || path.startsWith(`${root}/`);
 }
 
 /** Selection and expansion state for a requested reveal, or nothing to reveal. */
@@ -580,14 +598,36 @@ export function registerWorktreeContextActions(
       run: async (args, ctx: ActionContext) => {
         const { worktreeId, title } = resolveFileBrowserTarget(args, ctx);
         const reveal = await resolveFileBrowserReveal(args);
+        const foreground = isForegroundDispatch(ctx.dispatchSource);
+
+        // The grid renders only the active worktree's bucket, so a panel opened
+        // for any other worktree is created `background` and never appears —
+        // `dispatch` would report ok with nothing on screen. A person who just
+        // asked to browse a named worktree means to go there, so follow them;
+        // an agent or plugin naming another worktree does not move the user,
+        // and keeps today's silent-background behavior.
+        if (foreground && worktreeId !== undefined) {
+          const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
+          const selection = useWorktreeSelectionStore.getState();
+          // Guarded rather than unconditional: `selectWorktree` is a no-op for
+          // the already-active worktree, but it still re-persists the restore
+          // target and touches the MRU, and browsing is not a navigation the
+          // user asked to record twice.
+          if (selection.activeWorktreeId !== worktreeId) {
+            selection.selectWorktree(worktreeId, { source: "user" });
+          }
+        }
 
         // Lazily imported for the same reason the dialog store is above.
         const { usePanelStore } = await import("@/store/panelStore");
 
         const store = usePanelStore.getState();
-        const existing = store.panelIds
-          .map((id) => store.panelsById[id])
-          .find((panel): panel is FileBrowserPanelData => {
+        // Every panel, not `panelIds`: a spawn or hydration batch commits
+        // `panelsById` immediately and defers the `panelIds` append to its
+        // flush, so scanning the committed list alone would miss a browser
+        // opened moments earlier and duplicate it (`hydrationBatch.ts`).
+        const existing = Object.values(store.panelsById).find(
+          (panel): panel is FileBrowserPanelData => {
             if (panel === undefined || !isFileBrowserPanel(panel)) return false;
             // Grid members only. A dialog browser is ephemeral modal content
             // and reusing one would hand the grid an uncounted, unpersisted
@@ -604,26 +644,38 @@ export function registerWorktreeContextActions(
             return worktreeId === undefined
               ? panelIsWorkspaceRooted
               : !panelIsWorkspaceRooted && panel.worktreeId === worktreeId;
-          });
+          }
+        );
 
         if (existing) {
           if (reveal) {
-            // Merged, not replaced: the user's own expansions are theirs to
-            // keep, and a reveal only adds the path to what is already open.
-            // `browserRootPath: ""` alongside them because a reveal path is
-            // resolved from the worktree root — leaving a re-rooted tree in
-            // place would select a row that is not in it.
             store.setFileBrowserView(existing.id, {
-              browserSelectedPath: reveal.browserSelectedPath,
+              // Merged, not replaced: the user's own expansions are theirs to
+              // keep, and a reveal only adds the path to what is already open.
               browserExpandedPaths: [
                 ...new Set([
                   ...(existing.browserExpandedPaths ?? []),
                   ...reveal.browserExpandedPaths,
                 ]),
               ].sort(),
-              browserRootPath: "",
+              browserSelectedPath: reveal.browserSelectedPath,
+              // Reveal paths are base-relative, so a tree scoped to a subfolder
+              // can only show one that lives under it. Cleared when the target
+              // is outside — otherwise the selection would name a row the tree
+              // does not contain — and left alone when it is already inside,
+              // since dropping a scope the user chose is not part of revealing
+              // something they can already see.
+              ...(!isWithinBrowserRoot(reveal.browserSelectedPath, existing.browserRootPath) && {
+                browserRootPath: "",
+              }),
             });
           }
+          // Activation focuses the panel but leaves a tab group showing
+          // whatever tab it had; the group's stored active tab wins over
+          // `focusedId` in the grid, so a browser sharing a group would stay
+          // hidden behind its sibling. Mirrors `panelStore`'s own focus path.
+          const group = store.getPanelGroup(existing.id);
+          if (group) store.setActiveTab(group.id, existing.id);
           store.activateTerminal(existing.id);
           return { panelId: existing.id };
         }
@@ -640,7 +692,7 @@ export function registerWorktreeContextActions(
           ...(worktreeId !== undefined && { worktreeId }),
           ...reveal,
           location: "grid",
-          ...(isForegroundDispatch(ctx.dispatchSource) && { focusPolicy: "take" as const }),
+          ...(foreground && { focusPolicy: "take" as const }),
         });
         if (!panelId) {
           throw new Error(`Could not open file browser panel: ${PANEL_LIMIT_ERROR_SUFFIX}`);

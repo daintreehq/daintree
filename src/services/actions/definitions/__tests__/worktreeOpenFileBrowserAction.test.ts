@@ -188,20 +188,18 @@ describe("worktree.openFileBrowser", () => {
   });
 
   describe("palette", () => {
-    it("keeps its row out of the palette so only the panel opener is offered", () => {
-      // Both openers are titled "Browse files"; listing them side by side would
-      // make which one you get — a throwaway dialog or a panel that stays —
-      // a coin toss the user cannot see from the row (#11666). The palette-gate
-      // coverage moved with the row, to the panel action's own suite.
-      expect(getAction().palette).toEqual({ mode: "hidden" });
-    });
-
-    it("still dispatches normally while hidden", async () => {
-      // Hiding is a listing decision only: the path-targeted callers that want
-      // a throwaway reveal name this action directly and must keep working.
+    it("still dispatches while unlisted", () => {
+      // Whether it is listed is an invariant over the whole registry — one
+      // "Browse files" row, asserted in `actionPaletteBehavior`. What matters
+      // here is the other half: hiding is a listing decision only, and the
+      // path-targeted callers that want a throwaway reveal name this action
+      // directly and must keep working.
       seedWorktree("wt-1");
-      await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
-      expect(dialogOptions()).toMatchObject({ worktreeId: "wt-1" });
+      return getAction()
+        .run({ worktreeId: "wt-1" }, {} as ActionContext)
+        .then(() => {
+          expect(dialogOptions()).toMatchObject({ worktreeId: "wt-1" });
+        });
     });
   });
 

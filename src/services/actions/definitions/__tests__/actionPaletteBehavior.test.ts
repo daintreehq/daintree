@@ -132,6 +132,42 @@ describe("action palette behavior", () => {
     }
   });
 
+  it("offers no two palette commands the user cannot tell apart", () => {
+    // Two rows with the same title in the same category are a coin toss at the
+    // point of choosing. The file browser had exactly this shape — a dialog
+    // opener and a panel opener, both "Browse files" — so only one is listed
+    // (#11666). Mirrors `useActionPalette`'s own filter for which definitions
+    // reach a row at all.
+    //
+    // The pairs below predate that work and are left as found: each is a real
+    // duplicate title, but resolving them means renaming or merging actions
+    // that have nothing to do with the file browser. Listed so a NEW collision
+    // fails here rather than joining them.
+    const KNOWN_DUPLICATE_TITLES = [
+      "terminal / Set Grid Layout Strategy: panel.gridLayout.setStrategy, terminal.gridLayout.setStrategy",
+      "terminal / Set Grid Layout Value: panel.gridLayout.setValue, terminal.gridLayout.setValue",
+      "project / Close Project: project.close, project.closeActive",
+    ];
+
+    const seen = new Map<string, string[]>();
+    for (const def of definitions.values()) {
+      if (def.kind !== "command") continue;
+      const palette = def.palette as PaletteBehavior | undefined;
+      if (palette?.mode === "hidden") continue;
+      const key = `${def.category ?? "General"} / ${def.title}`;
+      seen.set(key, [...(seen.get(key) ?? []), String(def.id)]);
+    }
+
+    const collisions = [...seen.entries()]
+      .filter(([, ids]) => ids.length > 1)
+      .map(([key, ids]) => `${key}: ${ids.join(", ")}`);
+
+    expect(collisions.filter((c) => !KNOWN_DUPLICATE_TITLES.includes(c))).toEqual([]);
+    // The allowlist decays rather than rots: a pair that gets resolved must be
+    // removed from it, not left standing as permission for a future collision.
+    expect(KNOWN_DUPLICATE_TITLES.filter((c) => !collisions.includes(c))).toEqual([]);
+  });
+
   it("every palette redirect points at a registered, palette-runnable command", () => {
     const failures: string[] = [];
     for (const def of definitions.values()) {

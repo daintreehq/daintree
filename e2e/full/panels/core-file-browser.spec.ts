@@ -320,7 +320,8 @@ test.describe.serial("Core: File browser preview", () => {
       ctx.window.locator(`${SEL.panel.gridPanel}:has([data-testid="file-browser-sidebar-toggle"])`)
     ).toHaveCount(1);
 
-    // Closed so the serial suite's later dialog tests start from a clean grid.
+    // Closed rather than left behind: the panel now persists, so anything added
+    // to this serial suite after it would inherit a populated grid.
     await panel.locator(SEL.panel.close).first().click();
     await expect(panel).toHaveCount(0, { timeout: T_SHORT });
   });

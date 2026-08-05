@@ -9,6 +9,7 @@ import { useActionMruStore } from "@/store/actionMruStore";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { createActionRanker, extractAcronym, rankActionMatches } from "@/lib/actionPaletteSearch";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
 import { useSearchablePalette } from "./useSearchablePalette";
 
 export interface ActionPaletteItem {
@@ -281,6 +282,12 @@ export function useActionPalette(): UseActionPaletteReturn {
           ) {
             return;
           }
+          // A refusal for a full grid is reported by `addPanel` itself, with the
+          // count and the actual recovery, before the action throws — so it is
+          // already on screen for every panel-opening action rather than one
+          // that opted in. Restating it as "Couldn't run X" adds a vaguer
+          // duplicate of a message the user is looking at (#11666).
+          if (isPanelLimitError(result.error.message)) return;
           // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
           notify({
             type: "error",
