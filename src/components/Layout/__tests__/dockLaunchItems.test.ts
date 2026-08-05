@@ -430,16 +430,15 @@ describe("activateDockLaunchItem", () => {
     activateDockLaunchItem(panelItem("file-browser"), ctx);
     await vi.waitFor(() => expect(notifyMock).toHaveBeenCalled());
 
-    const payload = notifyMock.mock.calls[0]![0] as {
-      type: string;
-      priority?: string;
-      action?: { label: string };
-    };
-    expect(payload.type).toBe("error");
-    // `uiFeedback` is passive, so without an explicit high priority this
-    // refusal would be an inbox row the closed menu never surfaces.
-    expect(payload.priority).toBe("high");
-    expect(payload.action?.label).toBe("Retry");
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        // `uiFeedback` is passive, so without an explicit high priority this
+        // refusal would be an inbox row the closed menu never surfaces.
+        priority: "high",
+        action: expect.objectContaining({ label: "Retry" }),
+      })
+    );
   });
 
   it("stays quiet when addPanel already reported a full grid", async () => {
