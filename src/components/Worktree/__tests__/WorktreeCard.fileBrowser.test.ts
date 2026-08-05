@@ -58,8 +58,9 @@ describe("WorktreeCard — Browse Files (#11666)", () => {
   });
 
   it("names a foreground source so the panel takes focus", () => {
-    // Without it the store's ambient guards can resolve `focusPolicy` to
-    // "preserve", leaving the panel behind a maximized cell.
-    expect(handlerBody()).toMatch(/source: "context-menu"/);
+    // Without one the store's ambient guards can resolve `focusPolicy` to
+    // "preserve", leaving the panel behind a maximized cell. Which foreground
+    // source is not the point — that it is one of them is.
+    expect(handlerBody()).toMatch(/source: "(user|keybinding|menu|context-menu)"/);
   });
 });

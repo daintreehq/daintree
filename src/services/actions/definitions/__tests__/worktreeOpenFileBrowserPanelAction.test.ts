@@ -75,6 +75,7 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 import type { ActionContext } from "@shared/types/actions";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionRegistry, ActionCallbacks } from "../../actionTypes";
 import { registerWorktreeContextActions } from "../worktreeContextActions";
 
@@ -342,8 +343,8 @@ describe("worktree.openFileBrowserPanel", () => {
 
     it("does not reuse a panel of another kind", async () => {
       seedWorktree("wt-1");
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture
       panelsMock.byId = [
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: only the fields the dedup scan reads
         { id: "file-1", kind: "file", location: "grid", worktreeId: "wt-1" } as PanelInstance,
       ];
 
@@ -534,7 +535,7 @@ describe("worktree.openFileBrowserPanel", () => {
         .catch((e: unknown) => e);
 
       expect(error).toBeInstanceOf(Error);
-      expect(isPanelLimitError(error instanceof Error ? error.message : undefined)).toBe(true);
+      expect(isPanelLimitError(formatErrorMessage(error, "not an error"))).toBe(true);
     });
   });
 

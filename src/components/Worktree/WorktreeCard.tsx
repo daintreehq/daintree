@@ -525,12 +525,17 @@ export function WorktreeCard({
   // backgrounded on arrival: counted, persisted, and invisible (#11666). Select
   // first, exactly as `handleTerminalSelect` below does before focusing a
   // terminal on an inactive card.
+  // `"user"`, not the menu source: the handler is defined in the card body,
+  // outside any menu Root, so `useMenuActionSource()` would fall back to
+  // exactly this and warn on the way. Naming a foreground source at all is what
+  // matters — it is what lets the panel take focus instead of deferring to the
+  // store's ambient spawn guards.
   const openFileBrowserForThisWorktree = () => {
     if (!isActive) onSelect();
     void actionService.dispatch(
       "worktree.openFileBrowserPanel",
       { worktreeId: worktree.id },
-      { source: "context-menu" }
+      { source: "user" }
     );
   };
 

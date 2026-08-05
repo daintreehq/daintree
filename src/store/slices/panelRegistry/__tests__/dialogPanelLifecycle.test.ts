@@ -249,7 +249,7 @@ describe("dialog panel ephemeral lifecycle", () => {
       usePanelLimitStore.setState({ hardLimit: 1 });
       seed([
         makeFilePanel("grid-1"),
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: only location and kind are read here
+
         {
           id: "dialog-review",
           kind: "review",
@@ -262,8 +262,9 @@ describe("dialog panel ephemeral lifecycle", () => {
       expect(usePanelStore.getState().promoteDialogPanelToGrid("dialog-review")).toBe(false);
 
       expect(notifyMock).toHaveBeenCalledTimes(1);
-      const warning = notifyMock.mock.calls[0]![0] as { message?: string };
-      expect(warning.message).not.toMatch(/\bthis file\b/i);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.not.stringMatching(/\bthis file\b/i) })
+      );
     });
 
     it("refuses panels that are not dialog-presented", () => {
