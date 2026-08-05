@@ -71,6 +71,8 @@ type WebGLVisibilityService = {
 };
 
 function makeMockManaged(overrides: Record<string, unknown> = {}) {
+  // Normal screen: one buffer reported through both handles.
+  const normalScreenBuffer = { length: 24 };
   const terminal = {
     rows: 24,
     cols: 80,
@@ -79,7 +81,7 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     dispose: vi.fn(),
     hasSelection: vi.fn(() => false),
     options: { scrollback: 1000 },
-    buffer: { active: { length: 24 } },
+    buffer: { active: normalScreenBuffer, normal: normalScreenBuffer },
     element: document.createElement("div"),
   };
 
