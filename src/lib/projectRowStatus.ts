@@ -11,10 +11,11 @@ export type ProjectRowTone = "blocked" | "waiting" | "review" | "working" | "run
 /**
  * Text colour for a status line, by tone.
  *
- * Lives here rather than in the switcher that first used it because the fleet
- * overview renders the same sentences about the same states. Two surfaces
- * colouring "blocked" differently would be a worse bug than either colour being
- * individually wrong.
+ * Lives here rather than in the switcher that first used it so any surface
+ * drawing a status sentence draws it in one vocabulary. The fleet overview no
+ * longer prints a status word at all — its rows say the state with a glyph and
+ * in their accessible name — so the switcher is the caller that keeps this
+ * honest today.
  */
 export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   blocked: "text-status-danger/80",

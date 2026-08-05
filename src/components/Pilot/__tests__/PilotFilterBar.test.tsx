@@ -95,7 +95,7 @@ describe("PilotFilterBar", () => {
 
     expect(segmentNames()).toEqual([
       "All, 7 agents",
-      "Needs you, 2 agents",
+      "Waiting, 2 agents",
       "Working, 4 agents",
       "Finished, 1 agent",
     ]);
@@ -104,7 +104,7 @@ describe("PilotFilterBar", () => {
   it("selects a segment on click", () => {
     const { onChange } = renderBar();
 
-    fireEvent.click(screen.getByRole("radio", { name: /Needs you/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /Waiting/ }));
 
     expect(onChange).toHaveBeenCalledWith("needs-you");
   });
@@ -142,9 +142,9 @@ describe("PilotFilterBar", () => {
 
       press("ArrowLeft");
       expect(liveState()).toEqual({
-        checked: "Needs you",
-        tabbable: "Needs you",
-        focused: "Needs you",
+        checked: "Waiting",
+        tabbable: "Waiting",
+        focused: "Waiting",
       });
     });
 
@@ -220,8 +220,8 @@ describe("PilotFilterBar", () => {
       // fleet moved, and take away the control that proves the bucket is empty.
       const { onChange } = renderBar("all", counts({ all: 2, working: 2 }));
 
-      const empty = screen.getByRole("radio", { name: /Needs you/ });
-      expect(empty.getAttribute("aria-label")).toBe("Needs you, 0 agents");
+      const empty = screen.getByRole("radio", { name: /Waiting/ });
+      expect(empty.getAttribute("aria-label")).toBe("Waiting, 0 agents");
 
       fireEvent.click(empty);
       expect(onChange).toHaveBeenCalledWith("needs-you");
@@ -232,12 +232,12 @@ describe("PilotFilterBar", () => {
       // proved nothing — their base tones already differ, so deleting the fade
       // rule entirely would still have passed.
       renderBar("all", counts({ all: 0 }), bands());
-      const empty = glyphOf(/Needs you/)?.getAttribute("class") ?? "";
+      const empty = glyphOf(/Waiting/)?.getAttribute("class") ?? "";
 
       cleanup();
 
       renderBar("all", counts({ all: 1, "needs-you": 1 }), bands({ "needs-you": 1 }));
-      const populated = glyphOf(/Needs you/)?.getAttribute("class") ?? "";
+      const populated = glyphOf(/Waiting/)?.getAttribute("class") ?? "";
 
       expect(empty).not.toBe("");
       expect(empty).not.toBe(populated);
@@ -271,6 +271,68 @@ describe("PilotFilterBar", () => {
 
       renderBar("all", counts({ all: 1, working: 1 }));
       expect(glyphOf(/Working/)?.getAttribute("class")).toContain("animate-spin");
+    });
+  });
+
+  describe("segment hue", () => {
+    /**
+     * Only the colour utilities on a segment's glyph.
+     *
+     * The whole class string would have let the spinner's `animate-spin-slow`
+     * stand in for a hue difference, so a Working segment that had lost its
+     * colour entirely would still have compared as different.
+     */
+    function toneOf(name: RegExp): string {
+      const cls =
+        screen.getByRole("radio", { name }).querySelector("svg")?.getAttribute("class") ?? "";
+      return cls
+        .split(/\s+/)
+        .filter((token) => token.startsWith("text-"))
+        .sort()
+        .join(" ");
+    }
+
+    it("hues Working even though a working agent is not a demand", () => {
+      // Two segments, neither holding anything to act on. `bandFilterHasDemand`
+      // reports false for both — correctly, since `running` is not a demand and
+      // an acknowledged `done` is not either. Working is hued anyway, because
+      // green for working is the vocabulary the rest of the app speaks; Finished
+      // is not. If the demand test alone decided the hue these would match.
+      renderBar("all", counts({ all: 4, working: 2, finished: 2 }), bands({ running: 2, done: 2 }));
+
+      expect(toneOf(/Working/)).not.toBe("");
+      expect(toneOf(/Working/)).not.toBe(toneOf(/Finished/));
+    });
+
+    it("does not let a demand elsewhere in the fleet decide Working's hue", () => {
+      renderBar("all", counts({ all: 2, working: 2 }), bands({ running: 2 }));
+      const quietFleet = toneOf(/Working/);
+
+      cleanup();
+
+      renderBar(
+        "all",
+        counts({ all: 3, "needs-you": 1, working: 2 }),
+        bands({
+          "needs-you": 1,
+          running: 2,
+        })
+      );
+
+      expect(toneOf(/Working/)).toBe(quietFleet);
+    });
+
+    it("separates work in flight from work handed back", () => {
+      // The row glyphs make this distinction and the segments filter to them,
+      // so the two have to agree — a Finished segment sharing Working's colour
+      // would file "ready for review" under "still going".
+      renderBar(
+        "all",
+        counts({ all: 4, working: 2, finished: 2 }),
+        bands({ running: 2, review: 2 })
+      );
+
+      expect(toneOf(/Finished/)).not.toBe(toneOf(/Working/));
     });
   });
 

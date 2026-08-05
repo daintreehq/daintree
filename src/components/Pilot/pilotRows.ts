@@ -3,13 +3,12 @@ import type { FleetBand, FleetBandCounts } from "@/lib/fleetAttention";
 import {
   bandForRun,
   bandLabel,
-  BAND_TONE,
   compareWithinBand,
   emptyBandCounts,
   FLEET_BANDS,
   isDemandBand,
 } from "@/lib/fleetAttention";
-import { formatWaitAge, type ProjectRowTone } from "@/lib/projectRowStatus";
+import { formatWaitAge } from "@/lib/projectRowStatus";
 import { isFilterMatch } from "@/lib/projectSwitcherSearch";
 import { composeTitledPanel } from "@/utils/terminalTitleDisplay";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -26,11 +25,20 @@ export interface PilotRow {
   chrome: TerminalChromeDescriptor;
   /** Preset colour when the user picked one, which `BrandMark` treats as deliberate. */
   presetColor: string | undefined;
-  /** What the run is doing, in the same words the switcher uses for the same state. */
+  /**
+   * What the run is doing, in the same words the switcher uses for the same
+   * state. Not drawn — the glyph says this now — but it carries the state into
+   * the row's accessible name, which is where it may never stop being text.
+   */
   statusLabel: string;
-  /** Status colour for {@link statusLabel}. Always a status token, never the accent. */
-  tone: ProjectRowTone;
-  /** Worktree label, or null when it would only repeat the project name. */
+  /**
+   * Worktree label, or null when it would only repeat the project name.
+   *
+   * Not drawn either: a scratch project's directory is a UUID, and the title
+   * was truncating to make room for a string nobody can read. It stays on the
+   * row because {@link filterPilotGroups} matches on it — typing a branch name
+   * to find a run is useful whether or not the label is on screen.
+   */
   worktreeLabel: string | null;
   /** Compact age of the current state, or null when the run never recorded one. */
   age: string | null;
@@ -105,11 +113,10 @@ function rank(band: FleetBand): number {
  * recomputed rather than inherited.
  *
  * `topBand` is found by RANK across the survivors rather than read off
- * `rows[0]`. Rows reaching a filter have already been through `frozenOrder`,
- * which pins the order captured when the dialog opened — so once a run changes
- * state the first row is no longer guaranteed to be the worst one present.
- * Inheriting either field would put a header's summary and its collapsed pip
- * cluster at odds with the rows directly underneath it.
+ * `rows[0]`. Rows reaching a filter may have been re-sorted into an order the
+ * fleet overview is holding still under a pointer, so the first row is not
+ * guaranteed to be the worst one present. Inheriting either field would put a
+ * group's derived facts at odds with the rows directly underneath it.
  */
 function narrowGroup(group: PilotProjectGroup, rows: PilotRow[]): PilotProjectGroup {
   let topBand: FleetBand = "idle";
@@ -241,7 +248,6 @@ export function buildPilotGroups(
         chrome,
         presetColor: run.agentPresetColor,
         statusLabel: bandLabel(band, run),
-        tone: BAND_TONE[band],
         worktreeLabel: disambiguatingLabel(directoryLabel(run.cwd), name),
         age: run.since !== undefined ? formatWaitAge(run.since, ctx.nowMs) : null,
       };
@@ -376,10 +382,14 @@ export const PILOT_BAND_FILTERS: readonly Exclude<PilotBandFilter, "all">[] = [
  * A segment's name, declared here rather than in the bar because two surfaces
  * say it: the segment itself, and the empty state that has to name which filter
  * produced no rows.
+ *
+ * "Waiting", not "Needs you", so the four segments read the same here as they
+ * do in the sidebar's `QuickStateFilterBar`. The key stays `needs-you` — it
+ * names the band set, which has not changed.
  */
 export const PILOT_BAND_FILTER_LABEL: Record<PilotBandFilter, string> = {
   all: "All",
-  "needs-you": "Needs you",
+  "needs-you": "Waiting",
   working: "Working",
   finished: "Finished",
 };

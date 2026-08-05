@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   bandForRun,
   bandLabel,
-  BAND_TONE,
   compareWithinBand,
   emptyBandCounts,
   FLEET_BANDS,
@@ -107,10 +106,9 @@ describe("bandLabel", () => {
 });
 
 describe("band presentation", () => {
-  it("gives every band a tone and a count slot, so neither can miss one", () => {
+  it("gives every band a count slot, so a band cannot go uncounted", () => {
     const counts = emptyBandCounts();
     for (const band of FLEET_BANDS) {
-      expect(BAND_TONE[band]).toBeDefined();
       expect(counts[band]).toBe(0);
     }
   });

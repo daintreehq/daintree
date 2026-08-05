@@ -6,10 +6,17 @@ import {
   filterPilotBands,
   filterPilotGroups,
   summarizePilotGroups,
+  PILOT_BAND_FILTER_LABEL,
   type PilotRowContext,
 } from "../pilotRows";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
-import { emptyBandCounts, FLEET_BANDS, type FleetBand } from "@/lib/fleetAttention";
+import {
+  bandForRun,
+  bandLabel,
+  emptyBandCounts,
+  FLEET_BANDS,
+  type FleetBand,
+} from "@/lib/fleetAttention";
 
 const NOW = 1_700_000_000_000;
 
@@ -802,10 +809,23 @@ describe("bandFilterHasDemand", () => {
   });
 
   it("never reports a demand for Working or All", () => {
-    // Working holds none by definition; All is the null option and colouring it
-    // would hue the bar whenever the fleet held anything at all.
+    // Working holds none by definition; All is the null option and reporting a
+    // demand for it would make the answer "the fleet holds anything at all".
+    // The bar hues Working anyway, deliberately and around this function —
+    // see `segmentIsHued` in `PilotFilterBar`.
     expect(bandFilterHasDemand(bands({ running: 5 }), "working")).toBe(false);
     expect(bandFilterHasDemand(bands({ blocked: 5 }), "all")).toBe(false);
+  });
+});
+
+describe("state vocabulary", () => {
+  it("calls a waiting run the same thing on the row as on the segment that filters to it", () => {
+    // The segment and the row's status word are two surfaces naming one state.
+    // They drifted once — "Needs you" here against the sidebar's "Waiting" —
+    // and one state with two names is a vocabulary the user has to learn twice.
+    const waiting = run({ agentState: "waiting", waitingReason: "question" });
+
+    expect(bandLabel(bandForRun(waiting), waiting)).toBe(PILOT_BAND_FILTER_LABEL["needs-you"]);
   });
 });
 

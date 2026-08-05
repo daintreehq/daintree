@@ -5,6 +5,7 @@ import {
   InteractingCircle,
   ExitedCircle,
   CircleCheck,
+  CircleSlash,
 } from "@/components/icons";
 import type { FleetBand } from "@/lib/fleetAttention";
 import type { AgentState } from "@shared/types/agent";
@@ -15,10 +16,10 @@ interface PilotRunStateProps {
 }
 
 /**
- * The neutral tone every non-demand state now carries.
+ * The neutral tone the quiet states carry.
  *
- * Colour is spent only where there is a demand, so `running`, `done` and `idle`
- * give theirs up and read as ordinary text. Deliberately `text-text-secondary`
+ * `done` and `idle` are finished business: nothing is in flight and nothing is
+ * being asked, so they read as ordinary text. Deliberately `text-text-secondary`
  * rather than `text-muted`: muted sits below the contrast floor against the
  * palette's raised surface in the dark themes, and a state glyph nobody can see
  * is worse than a loud one.
@@ -28,17 +29,22 @@ const NEUTRAL_TONE = "text-text-secondary";
 /**
  * One glyph per band, shared by every surface that speaks about bands.
  *
- * The filter bar's segments and a collapsed group's pip cluster both draw from
- * here, so "the amber hollow circle" means the same thing in the list, in the
- * header and in the control that filters on it. A second set for any one of
- * them would teach the reader two vocabularies for one fact.
+ * The filter bar's segments draw from here too, so "the amber hollow circle"
+ * means the same thing in the list as in the control that filters on it. A
+ * second set for either would teach the reader two vocabularies for one fact.
  *
  * These are the BAND's representative shapes. `PilotRunState` refines two of
  * them where the row knows more than the band does — directing inside
  * `running`, and exited inside `idle`.
+ *
+ * `blocked` gets the prohibition sign rather than the hollow circle it used to
+ * share with `needs-you`. The row's visible status word was the only non-colour
+ * channel separating "the agent errored" from "the agent asked you a question";
+ * with that word gone, the shapes have to carry it. Same circle family as every
+ * other glyph here, so it still reads as one of the set.
  */
 export const BAND_GLYPH: Record<FleetBand, ComponentType<{ className?: string }>> = {
-  blocked: HollowCircle,
+  blocked: CircleSlash,
   "needs-you": HollowCircle,
   review: CircleCheck,
   running: SpinnerCircle,
@@ -47,18 +53,33 @@ export const BAND_GLYPH: Record<FleetBand, ComponentType<{ className?: string }>
 };
 
 /**
- * Colour per band, and the one place the "only a demand is hued" rule lives.
+ * Colour per band, and the one place this surface's hue rule lives.
  *
- * Exported alongside the glyphs so a collapsed group's pips and a run's own
- * state mark cannot end up differently coloured for the same band — the two
- * read as one signal only if they agree by construction rather than by two
- * lists someone has to keep in step.
+ * A band is hued when it is a live fact about the fleet — something needs you,
+ * or something is happening. Green for `running` is the app's own vocabulary:
+ * the sidebar's quick filters, the assistant header, the dock and the panel
+ * chrome all already say working in green, and the overview reading it grey was
+ * the one surface speaking a second language.
+ *
+ * `review` is blue rather than the completed token because that token is unset
+ * in every built-in theme and falls back to `status-success` — the same hex as
+ * `activity-working` in five of them. Green working beside green ready-for-
+ * review would leave spinner-vs-check as the only difference between two states
+ * an operator has to tell apart at a glance. Blue is also what the sidebar's
+ * `QuickStateFilterBar` already gives Finished.
+ *
+ * `done` and `idle` stay neutral: an acknowledged completion and an exited
+ * shell are not news.
+ *
+ * Module-private: the collapsed-group pip cluster that used to draw from it is
+ * gone, and the filter bar spells its own segment tones out in full because
+ * Tailwind's scanner cannot see an assembled `${tone}/40`.
  */
-export const BAND_GLYPH_TONE: Record<FleetBand, string> = {
+const BAND_GLYPH_TONE: Record<FleetBand, string> = {
   blocked: "text-status-danger",
   "needs-you": "text-state-waiting",
-  review: "text-activity-completed",
-  running: NEUTRAL_TONE,
+  review: "text-category-blue",
+  running: "text-state-working",
   done: NEUTRAL_TONE,
   idle: NEUTRAL_TONE,
 };
@@ -75,11 +96,11 @@ export const BAND_GLYPH_TONE: Record<FleetBand, string> = {
  * ordering beside it: an acknowledged completion has to stop looking like a
  * hand-back at the same moment it stops being counted as one.
  *
- * Only the three demand bands are hued. Shape still carries the state as a
- * second channel for all six — spinner, hollow circle, check and exited stay
- * distinct — and the row keeps the state in text either way, visibly for a
- * demand and in its accessible name otherwise. Never colour alone, and now
- * never colour where there is nothing to act on.
+ * The three demand bands and `running` are hued; the two quiet ones are not.
+ * Shape still carries the state as a second channel for all six — spinner,
+ * hollow circle, prohibition, check and exited stay distinct — and the row
+ * keeps the state in text in its accessible name either way. Never colour
+ * alone, and never colour where there is nothing happening.
  */
 export function PilotRunState({ band, agentState }: PilotRunStateProps) {
   const className = `size-3.5 shrink-0 ${BAND_GLYPH_TONE[band]}`;

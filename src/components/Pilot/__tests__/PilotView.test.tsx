@@ -99,7 +99,7 @@ beforeEach(() => {
   dispatchMock.mockClear();
   seedViewWorkspace(null);
   seed(null);
-  usePilotStore.setState({ isOpen: true, collapsedWorkspaceIds: [] });
+  usePilotStore.setState({ isOpen: true });
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: only id/name are read
   useProjectStore.setState({ projects: [{ id: "p1", name: "daintree" }] } as Partial<
     ReturnType<typeof useProjectStore.getState>
@@ -193,17 +193,18 @@ describe("PilotView", () => {
     ]);
     render(<PilotView />);
 
-    expect(screen.getByRole("option", { name: /Needs you/ }).textContent).toContain("one");
+    expect(screen.getByRole("option", { name: /Waiting/ }).textContent).toContain("one");
     expect(screen.getByRole("option", { name: /Idle/ }).textContent).toContain("two");
   });
 
   it("names a row as a sentence rather than a run of jammed-together facts", () => {
-    // Left to the name-from-content computation these inline spans concatenate
-    // with no separators — "Fix authWorkingfeature-x2m". Naming the parts is
-    // what keeps the row a phrase, and what lets the age be read as an age.
+    // Left to the name-from-content computation the row's inline spans
+    // concatenate with no separators — "Fix auth2m". Naming the parts is what
+    // keeps the row a phrase, and what lets the age be read as an age.
     seed([
       run({
         runId: "a",
+        agentId: "claude",
         agentState: "waiting",
         title: "Fix auth",
         cwd: "/repo/feature-x",
@@ -213,24 +214,71 @@ describe("PilotView", () => {
     render(<PilotView />);
 
     expect(screen.getByTestId("pilot-row").getAttribute("aria-label")).toBe(
-      "Fix auth, Needs you, feature-x, 2m ago"
+      "Fix auth, Claude, Waiting, 2m ago"
     );
   });
 
   it("leaves no dangling separator when a run has no age to report", () => {
-    seed([run({ runId: "a", agentState: "working", title: "Fix auth", cwd: "/repo/feature-x" })]);
+    seed([
+      run({
+        runId: "a",
+        agentId: "claude",
+        agentState: "working",
+        title: "Fix auth",
+        cwd: "/repo/feature-x",
+      }),
+    ]);
     render(<PilotView />);
 
     expect(screen.getByTestId("pilot-row").getAttribute("aria-label")).toBe(
-      "Fix auth, Working, feature-x"
+      "Fix auth, Claude, Working"
     );
   });
 
-  it("spends colour only on the agents that are actually asking for something", () => {
-    // The whole point of the surface. One blocked agent among six working ones
-    // has to be the only status word on screen — six green labels beside one
-    // amber one is the wall this replaced, where nothing stood out because
-    // everything was shouting.
+  it("tells two identically-titled runs apart by the agent behind them", () => {
+    // The brand is on the row as an icon only, so without it in the name the
+    // two are one string to a screen reader — and search already matches on it,
+    // because "codex" is a plausible thing to type when looking for one.
+    seed([
+      run({ runId: "a", agentId: "claude", agentState: "working", title: "same", since: NOW }),
+      run({ runId: "b", agentId: "codex", agentState: "working", title: "same", since: NOW }),
+    ]);
+    render(<PilotView />);
+
+    const names = screen.getAllByTestId("pilot-row").map((r) => r.getAttribute("aria-label"));
+    expect(names).toHaveLength(2);
+    expect(new Set(names).size).toBe(2);
+  });
+
+  it("does not repeat the agent's name when the title already is it", () => {
+    // An untitled run falls back to its agent's name for the title, and
+    // "Claude, Claude" is a separator promising a second fact and
+    // then not delivering one.
+    seed([run({ runId: "a", agentId: "claude", agentState: "working", since: NOW })]);
+    render(<PilotView />);
+
+    const name = screen.getByTestId("pilot-row").getAttribute("aria-label") ?? "";
+    expect(name).toContain("Claude");
+    expect(name.match(/Claude/g)).toHaveLength(1);
+  });
+
+  it("treats a differently-cased title as the same identity, not a second fact", () => {
+    // Titles come from terminal output, which does not agree with the agent
+    // registry about capitalisation. A case-sensitive comparison would let
+    // "CLAUDE, Claude, Working" through as though the two said different things.
+    seed([
+      run({ runId: "a", agentId: "claude", agentState: "working", title: "CLAUDE", since: NOW }),
+    ]);
+    render(<PilotView />);
+
+    const name = screen.getByTestId("pilot-row").getAttribute("aria-label") ?? "";
+    expect(name.match(/claude/gi)).toHaveLength(1);
+  });
+
+  it("stops spending row width on a status word the glyph already carries", () => {
+    // Seven rows, seven states, and not one of them prints what it is doing.
+    // The word cost width beside a title that was already truncating, and the
+    // glyph two columns to its left had said the same thing.
     seed([
       run({
         runId: "blocked",
@@ -247,17 +295,31 @@ describe("PilotView", () => {
 
     const rows = screen.getAllByTestId("pilot-row");
     expect(rows).toHaveLength(7);
-
-    // Rendered text is what the eye sees, and only the demand row spends a
-    // word on its state — the six working rows say nothing visible about
-    // theirs.
-    const withVisibleStatus = rows.filter((row) => /Blocked|Working/.test(row.textContent ?? ""));
-    expect(withVisibleStatus).toHaveLength(1);
-    expect(withVisibleStatus[0]!.textContent).toContain("Blocked");
+    expect(rows.filter((row) => /Blocked|Working/.test(row.textContent ?? ""))).toHaveLength(0);
 
     // ...and every one of the seven still says what it is doing, in text.
     expect(screen.getAllByRole("option", { name: /Working/ })).toHaveLength(6);
     expect(screen.getAllByRole("option", { name: /Blocked/ })).toHaveLength(1);
+  });
+
+  it("keeps the worktree searchable after it stops being drawn", () => {
+    // A scratch project's directory is a UUID, so the label was charging the
+    // title for width to say nothing readable. Typing a branch name to find a
+    // run is still useful, which is why the field stays on the row.
+    seed([
+      run({ runId: "a", agentState: "working", title: "one", cwd: "/repo/feature-x", since: NOW }),
+      run({ runId: "b", agentState: "working", title: "two", cwd: "/repo/main-line", since: NOW }),
+    ]);
+    render(<PilotView />);
+
+    const first = screen.getAllByTestId("pilot-row")[0]!;
+    expect(first.textContent).not.toContain("feature-x");
+    expect(first.getAttribute("aria-label")).not.toContain("feature-x");
+
+    fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "feature-x" } });
+
+    expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
+    expect(screen.getByText("one")).toBeTruthy();
   });
 
   it("marks the workspace this view already owns", () => {
@@ -297,6 +359,43 @@ describe("PilotView", () => {
     // ticking ages must not make a dead feed look actively maintained.
     expect(screen.getByTestId("pilot-row")).toBeTruthy();
     expect(screen.getByTestId("pilot-stale").textContent).toContain("12m");
+  });
+
+  it("qualifies the summary as last-known while the feed is stale", () => {
+    // The stale banner sits directly above this sentence. An unqualified
+    // "Nothing needs you" underneath it is the surface making a live all-clear
+    // claim out of data it cannot currently see.
+    //
+    // The live sentence is CAPTURED rather than written out: asserting the
+    // literal would copy the summary copy into the test, and the claim here is
+    // about the transformation, not the wording.
+    const runs = [run({ agentState: "working", title: "one", since: NOW - 60_000 })];
+    seed(runs);
+    const view = render(<PilotView />);
+    const liveSummary = screen.getByTestId("pilot-summary").textContent ?? "";
+    expect(liveSummary).not.toBe("");
+
+    act(() => {
+      seed(runs, { degraded: true, lastSuccessfulAt: NOW - 12 * 60_000 });
+    });
+    view.rerender(<PilotView />);
+
+    // The qualifier LEADS. Appended, the reader still meets the all-clear
+    // first and the correction only after it has landed.
+    const stale = screen.getByTestId("pilot-summary").textContent ?? "";
+    expect(stale).toMatch(/^last known/i);
+    expect(stale).toContain(liveSummary);
+  });
+
+  it("does not offer the zero-data prompt over a retained empty fleet", () => {
+    // "Start an agent in any project" over a feed that stopped answering an
+    // hour ago presents an unknown as an all-clear. The banner is the only
+    // honest thing this state can say.
+    seed([], { degraded: true, lastSuccessfulAt: NOW - 12 * 60_000 });
+    render(<PilotView />);
+
+    expect(screen.getByTestId("pilot-stale")).toBeTruthy();
+    expect(screen.queryByText(EMPTY_FLEET_COPY)).toBeNull();
   });
 
   it("leads with the demand count when agents need the user", () => {
@@ -350,29 +449,6 @@ describe("PilotView", () => {
     expect(screen.getByText("Rebuild the fleet snapshot")).toBeTruthy();
   });
 
-  it("collapses a project's rows while keeping its header", () => {
-    seed([run({ agentState: "working", since: NOW - 10_000 })]);
-    render(<PilotView />);
-    expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
-
-    const toggle = screen.getByTestId("pilot-group-toggle");
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    fireEvent.click(toggle);
-
-    expect(screen.queryByTestId("pilot-row")).toBeNull();
-    expect(screen.getByTestId("pilot-group-header")).toBeTruthy();
-    expect(screen.getByTestId("pilot-group-toggle").getAttribute("aria-expanded")).toBe("false");
-  });
-
-  it("keeps the project out of the tab order", () => {
-    // The search box owns the keyboard. A focusable disclosure inside the list
-    // would put a tab stop between the query and the results.
-    seed([run({ agentState: "working", since: NOW - 10_000 })]);
-    render(<PilotView />);
-
-    expect(screen.getByTestId("pilot-group-toggle").getAttribute("tabindex")).toBe("-1");
-  });
-
   it("filters rows by title and drops projects left with nothing", () => {
     seed([
       run({ runId: "a", workspaceId: "p1", agentState: "working", title: "auth refactor" }),
@@ -386,55 +462,6 @@ describe("PilotView", () => {
     expect(screen.getAllByTestId("pilot-group-header")).toHaveLength(1);
     expect(screen.getByText("auth refactor")).toBeTruthy();
     expect(screen.queryByText("docs pass")).toBeNull();
-  });
-
-  it("reveals matches inside a collapsed project rather than hiding them", () => {
-    seed([run({ agentState: "working", title: "auth refactor" })]);
-    usePilotStore.setState({ isOpen: true, collapsedWorkspaceIds: ["p1"] });
-    render(<PilotView />);
-    expect(screen.queryByTestId("pilot-row")).toBeNull();
-
-    fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
-
-    // Making someone click to reveal what they just searched for is the search
-    // failing to do its job.
-    expect(screen.getByText("auth refactor")).toBeTruthy();
-  });
-
-  it("restores the collapsed state when the search is cleared", () => {
-    seed([run({ agentState: "working", title: "auth refactor" })]);
-    usePilotStore.setState({ isOpen: true, collapsedWorkspaceIds: ["p1"] });
-    render(<PilotView />);
-
-    const search = screen.getByTestId("pilot-search");
-    fireEvent.change(search, { target: { value: "auth" } });
-    expect(screen.getByText("auth refactor")).toBeTruthy();
-
-    fireEvent.change(search, { target: { value: "" } });
-    expect(screen.queryByTestId("pilot-row")).toBeNull();
-  });
-
-  it("keeps the collapse toggle live during a search without editing the saved set", () => {
-    seed([
-      run({ runId: "a", workspaceId: "p1", agentState: "working", title: "auth one" }),
-      run({ runId: "b", workspaceId: "p1", agentState: "working", title: "auth two" }),
-    ]);
-    render(<PilotView />);
-
-    fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
-    expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
-
-    // Collapsing during a search must actually collapse — a header whose
-    // aria-expanded never moves is a dead control.
-    fireEvent.click(screen.getByTestId("pilot-group-toggle"));
-    expect(screen.queryByTestId("pilot-row")).toBeNull();
-
-    // ...and it must not leak into the persisted set, or the group would
-    // mysteriously stay collapsed long after the search ended.
-    expect(usePilotStore.getState().collapsedWorkspaceIds).toEqual([]);
-
-    fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "" } });
-    expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
   });
 
   describe("Escape", () => {
@@ -478,26 +505,6 @@ describe("PilotView", () => {
       fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Escape" });
 
       expect(usePilotStore.getState().isOpen).toBe(false);
-    });
-
-    it("starts the next search fully expanded", () => {
-      seed([
-        run({ runId: "a", workspaceId: "p1", agentState: "working", title: "auth one" }),
-        run({ runId: "b", workspaceId: "p1", agentState: "working", title: "auth two" }),
-      ]);
-      renderWithEscape();
-
-      const search = screen.getByTestId("pilot-search");
-      fireEvent.change(search, { target: { value: "auth" } });
-      fireEvent.click(screen.getByTestId("pilot-group-toggle"));
-      expect(screen.queryByTestId("pilot-row")).toBeNull();
-
-      // A collapse made during one search is scoped to it. Carrying it forward
-      // would hide matches the next search went looking for.
-      fireEvent.change(search, { target: { value: "" } });
-      fireEvent.change(search, { target: { value: "auth" } });
-
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
     });
   });
 
@@ -556,19 +563,17 @@ describe("PilotView", () => {
     expect(age()).toContain("3m");
   });
 
-  it("re-pins the order on reopen rather than serving the previous session's", async () => {
+  it("does not carry a pointer's hold across a reopen", async () => {
     seed([
       run({ runId: "a", agentState: "working", title: "a", since: NOW - 10_000 }),
       run({ runId: "b", agentState: "working", title: "b", since: NOW - 5_000 }),
     ]);
     const view = render(<PilotView />);
-    expect(screen.getAllByTestId("pilot-row").map((r) => r.textContent)).toEqual([
-      expect.stringContaining("a"),
-      expect.stringContaining("b"),
-    ]);
+    fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
 
-    // Close, let the fleet change, reopen. The new order must reflect the fleet
-    // as it is NOW — a stale pin would keep serving the closed session's order.
+    // Close with the hold still taken, let the fleet change, reopen. The new
+    // order must reflect the fleet as it is NOW — a hold that survived would
+    // serve the ranking of a fleet that has moved on.
     usePilotStore.setState({ isOpen: false });
     view.rerender(<PilotView />);
     seed([
@@ -679,8 +684,7 @@ describe("PilotView", () => {
       seedTwoProjects();
       render(<PilotView />);
 
-      // Every selectable row is an agent, so Enter has exactly one meaning —
-      // it can no longer land on a project and collapse it by accident.
+      // Every selectable row is an agent, so Enter has exactly one meaning.
       press("Enter");
 
       expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", {
@@ -689,86 +693,36 @@ describe("PilotView", () => {
       });
     });
 
-    it("collapses with Left and expands with Right, acting on the selected agent's project", () => {
-      seedTwoProjects();
-      render(<PilotView />);
-      expect(selected().text).toContain("alpha");
-
-      // No project is ever selected, so the disclosure keys act on the group
-      // holding the current agent rather than on a highlighted header.
-      press("ArrowLeft");
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
-      expect(screen.getAllByTestId("pilot-group-toggle")[0]!.getAttribute("aria-expanded")).toBe(
-        "false"
-      );
-
-      // Selection followed the collapse out to a still-visible agent.
-      expect(selected().text).toContain("charlie");
-
-      press("ArrowRight");
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(3);
-    });
-
-    it("can reopen a project after collapsing every one of them", () => {
-      // Collapsing the last expanded project empties the list. The disclosures
-      // are not tab stops, so if Right bailed on an empty list the keyboard
-      // user would be shut out of their own fleet with no way back.
-      seedTwoProjects();
-      render(<PilotView />);
-
-      press("ArrowLeft");
-      press("ArrowLeft");
-      expect(screen.queryByTestId("pilot-row")).toBeNull();
-
-      press("ArrowRight");
-      expect(screen.getAllByTestId("pilot-row").length).toBeGreaterThan(0);
-    });
-
-    it("moves the highlight out of a group it collapses", () => {
-      seedTwoProjects();
-      render(<PilotView />);
-      expect(selected().text).toContain("alpha");
-
-      fireEvent.click(screen.getAllByTestId("pilot-group-toggle")[0]!);
-
-      // "alpha" has left the list. A highlight still pointing at it would leave
-      // Enter committing a row that isn't on screen.
-      expect(selected()).toMatchObject({
-        role: "option",
-        text: expect.stringContaining("charlie"),
-      });
-    });
-
     it("leaves the caret alone while there is a query to edit", () => {
       seedTwoProjects();
       render(<PilotView />);
 
       fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "a" } });
-      const before = screen.getAllByTestId("pilot-row").length;
 
-      // Left/Right are the tree's structural keys AND the search box's editing
-      // keys, and the box owns focus. With text in it, the caret wins.
-      press("ArrowLeft");
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(before);
+      // Home/End are the list's structural keys AND the search box's editing
+      // keys, and the box owns focus. With text in it, the caret wins, so the
+      // highlight must not jump to the last row.
+      press("End");
+      expect(selected().text).toContain("alpha");
       // ...but Up/Down never belong to a single-line caret.
       press("ArrowDown");
       expect(selected().text).not.toContain("alpha");
     });
 
-    it("still collapses from the results region after Tab moves focus there", () => {
+    it("hands the horizontal arrows to the caret outright", () => {
+      // With no disclosure the list has no horizontal axis, so neither the
+      // input nor the results region may cancel these — a palette that eats a
+      // key it does nothing with is a palette the browser can't work around.
       seedTwoProjects();
       render(<PilotView />);
 
-      // Tab moves focus off the input onto the scroll region, which forwards a
-      // fixed key set to the palette. Vertical movement survived that move
-      // already; the disclosure half has to as well, or the region is half a
-      // keyboard.
-      const region = screen.getByRole("group", { name: "Agents" });
-      fireEvent.keyDown(region, { key: "ArrowLeft" });
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
+      const search = screen.getByTestId("pilot-search");
+      expect(fireEvent.keyDown(search, { key: "ArrowLeft" })).toBe(true);
+      expect(fireEvent.keyDown(search, { key: "ArrowRight" })).toBe(true);
 
-      fireEvent.keyDown(region, { key: "ArrowRight" });
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(3);
+      const region = screen.getByRole("group", { name: "Agents" });
+      expect(fireEvent.keyDown(region, { key: "ArrowLeft" })).toBe(true);
+      expect(fireEvent.keyDown(region, { key: "ArrowRight" })).toBe(true);
     });
 
     it("leaves the keys alone when there is nothing listed to navigate", () => {
@@ -852,7 +806,7 @@ describe("PilotView", () => {
       render(<PilotView />);
       expect(rowTitles()).toHaveLength(4);
 
-      fireEvent.click(segment(/Needs you/));
+      fireEvent.click(segment(/Waiting/));
 
       expect(rowTitles()).toHaveLength(2);
       expect(rowTitles().join(" ")).toContain("auth blocked");
@@ -867,7 +821,7 @@ describe("PilotView", () => {
       fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
       expect(rowTitles()).toHaveLength(2);
 
-      fireEvent.click(segment(/Needs you/));
+      fireEvent.click(segment(/Waiting/));
 
       expect(rowTitles()).toHaveLength(1);
       expect(rowTitles()[0]).toContain("auth blocked");
@@ -883,7 +837,7 @@ describe("PilotView", () => {
       fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
 
       expect(segment(/^All/).getAttribute("aria-label")).toBe("All, 2 agents");
-      expect(segment(/Needs you/).getAttribute("aria-label")).toBe("Needs you, 1 agent");
+      expect(segment(/Waiting/).getAttribute("aria-label")).toBe("Waiting, 1 agent");
       expect(segment(/Working/).getAttribute("aria-label")).toBe("Working, 1 agent");
     });
 
@@ -894,14 +848,14 @@ describe("PilotView", () => {
       render(<PilotView />);
       const before = screen.getAllByRole("radio").map((el) => el.getAttribute("aria-label"));
 
-      fireEvent.click(segment(/Needs you/));
+      fireEvent.click(segment(/Waiting/));
 
       expect(screen.getAllByRole("radio").map((el) => el.getAttribute("aria-label"))).toEqual(
         before
       );
     });
 
-    it("sorts review into Finished and out of Needs you", () => {
+    it("sorts review into Finished and out of Waiting", () => {
       // The asymmetry worth pinning: `review` IS a demand band, so it counts
       // toward `demandCount`, but the Needs-you segment is blocked + needs-you
       // only. A review row must land in exactly one of the two segments.
@@ -911,7 +865,7 @@ describe("PilotView", () => {
       ]);
       render(<PilotView />);
 
-      expect(segment(/Needs you/).getAttribute("aria-label")).toBe("Needs you, 1 agent");
+      expect(segment(/Waiting/).getAttribute("aria-label")).toBe("Waiting, 1 agent");
       expect(segment(/Finished/).getAttribute("aria-label")).toBe("Finished, 1 agent");
 
       fireEvent.click(segment(/Finished/));
@@ -941,34 +895,6 @@ describe("PilotView", () => {
       // Enter committing a row that is no longer listed is the bug this guards.
       const selected = document.querySelector('[aria-selected="true"]');
       expect(selected?.textContent).toContain("auth working");
-    });
-
-    it("opens a persistently collapsed group that the filter matches", () => {
-      seedMixedFleet();
-      usePilotStore.setState({ isOpen: true, collapsedWorkspaceIds: ["p1"] });
-      render(<PilotView />);
-      expect(rowTitles().join(" ")).not.toContain("auth blocked");
-
-      fireEvent.click(segment(/Needs you/));
-
-      // Same rule the query already follows: making someone click to reveal
-      // what they just filtered for is the narrowing failing to do its job.
-      expect(rowTitles().join(" ")).toContain("auth blocked");
-    });
-
-    it("scopes a collapse made under a filter to that filter", () => {
-      seedMixedFleet();
-      render(<PilotView />);
-      fireEvent.click(segment(/Needs you/));
-
-      fireEvent.click(screen.getAllByTestId("pilot-group-toggle")[0]!);
-      expect(rowTitles()).toHaveLength(0);
-      // It must not leak into the persisted set, or the group would stay
-      // collapsed long after the filter was cleared.
-      expect(usePilotStore.getState().collapsedWorkspaceIds).toEqual([]);
-
-      fireEvent.click(segment(/^All/));
-      expect(rowTitles()).toHaveLength(4);
     });
 
     it("keeps the bar reachable when the narrowing leaves nothing", () => {
@@ -1097,19 +1023,20 @@ describe("PilotView", () => {
       expect(document.activeElement).toBe(screen.getByTestId("pilot-search"));
     });
 
-    it("holds the opening order while a filter comes and goes", () => {
-      // `frozenOrder` pins position for the whole opening. A filter must narrow
-      // that order, never re-derive one — every row here is a click target.
+    it("holds a pointer's order through a filter coming and going", () => {
+      // A filter must narrow the order the pointer is holding, never re-derive
+      // one underneath it — every row here is a click target.
       seed([
         run({ runId: "a", agentState: "waiting", title: "alpha", since: NOW - 10_000 }),
         run({ runId: "b", agentState: "waiting", title: "bravo", since: NOW - 5_000 }),
       ]);
       render(<PilotView />);
-      // Titles, not full text: "bravo" changes band below, so its visible
-      // status word legitimately changes. Position is what must not.
+      // Titles, not full text: "bravo" changes band below, so its glyph
+      // legitimately changes. Position is what must not.
       const titles = () =>
         screen.getAllByTestId("pilot-row").map((r) => r.getAttribute("aria-label")?.split(",")[0]);
-      const opening = titles();
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+      const held = titles();
 
       // "bravo" becomes the more urgent of the two, which would reorder them
       // on a fresh sort.
@@ -1125,14 +1052,14 @@ describe("PilotView", () => {
           }),
         ]);
       });
-      fireEvent.click(screen.getByRole("radio", { name: /Needs you/ }));
+      fireEvent.click(screen.getByRole("radio", { name: /Waiting/ }));
       // Asserted WHILE narrowed, not only after returning to All: a filter that
       // re-derived the order would be invisible if the check waited until the
-      // pinned order had been restored anyway.
-      expect(titles()).toEqual(opening);
+      // held order had been restored anyway.
+      expect(titles()).toEqual(held);
 
       fireEvent.click(screen.getByRole("radio", { name: /^All/ }));
-      expect(titles()).toEqual(opening);
+      expect(titles()).toEqual(held);
     });
 
     it("clears the filter without discarding the query", () => {
@@ -1153,7 +1080,7 @@ describe("PilotView", () => {
     it("starts every opening back at All", () => {
       seedMixedFleet();
       const view = render(<PilotView />);
-      fireEvent.click(segment(/Needs you/));
+      fireEvent.click(segment(/Waiting/));
       expect(rowTitles()).toHaveLength(2);
 
       usePilotStore.setState({ isOpen: false });
@@ -1192,23 +1119,26 @@ describe("PilotView", () => {
       expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
     });
 
-    it("delivers its count even when its filter is already the active one", () => {
-      // With the filter already on Needs you, setting it again is a no-op, so
-      // nothing clears a collapse the user made — and the button would go on
-      // advertising agents while showing none of them.
+    it("hands focus back to the search box after applying its filter", () => {
+      // The footer goes on advertising "↑↓ Navigate" while focus sits on the
+      // button, where the body's handler bails on events that did not come from
+      // the scroller — so the arrows it names do nothing at all.
       seed([
         run({ runId: "a", agentState: "waiting", title: "one", since: NOW - 60_000 }),
         run({ runId: "b", agentState: "waiting", title: "two", since: NOW - 30_000 }),
       ]);
       render(<PilotView />);
 
-      fireEvent.click(screen.getByRole("radio", { name: /Needs you/ }));
-      fireEvent.click(screen.getByTestId("pilot-group-toggle"));
-      expect(screen.queryAllByTestId("pilot-row")).toHaveLength(0);
+      // Focus has to START on the button, or this passes on whatever the
+      // palette's autofocus happened to leave behind and would go on passing
+      // with the handoff deleted.
+      const action = screen.getByTestId("pilot-demand-action");
+      act(() => action.focus());
+      expect(document.activeElement).toBe(action);
 
-      fireEvent.click(screen.getByTestId("pilot-demand-action"));
+      fireEvent.click(action);
 
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
+      expect(document.activeElement).toBe(screen.getByTestId("pilot-search"));
     });
 
     it("does not count work awaiting review as a demand it can isolate", () => {
@@ -1261,85 +1191,334 @@ describe("PilotView", () => {
   });
 
   describe("group headers", () => {
-    it("summarises a project only once its rows are gone", () => {
-      // Expanded, the rows ARE the summary; a sentence restating them is a
-      // third thing to read for facts already on screen.
+    it("carries the project's name to every option filed under it", () => {
+      // The header is not an item, so a screen reader learns which project a
+      // run belongs to from the enclosing group's name and nowhere else.
       seed([
-        run({
-          runId: "a",
-          agentState: "waiting",
-          waitingReason: "error",
-          title: "one",
-          since: NOW - 60_000,
-        }),
-        run({ runId: "b", agentState: "working", title: "two", since: NOW - 60_000 }),
+        run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW - 60_000 }),
+        run({ runId: "b", workspaceId: "s1", agentState: "working", since: NOW - 60_000 }),
       ]);
       render(<PilotView />);
 
-      const header = () => screen.getByTestId("pilot-group-header").textContent ?? "";
-      // Expanded, the header is structure and nothing else — no prose summary,
-      // no counts.
-      expect(header()).not.toContain("Agent blocked");
-      expect(header()).not.toMatch(/\d/);
-
-      fireEvent.click(screen.getByTestId("pilot-group-toggle"));
-
-      // Collapsed, something has to stop a project hiding a blocked agent
-      // behind a chevron — one pip per band present, each with its count.
-      expect(header()).toMatch(/\d/);
+      const names = screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"));
+      expect(names).toContain("daintree");
+      expect(names).toContain("spike");
     });
 
-    it("reports a collapsed project's blocked agent through the toggle's name", () => {
+    it("names the current workspace in the group's own label, not just on screen", () => {
+      // Which workspace you are already in decides whether opening a run is
+      // instant or swaps the whole view. The header renders that as a word and
+      // then hides it, so without this the fact is visual-only.
+      seedViewWorkspace("p1");
       seed([
-        run({
-          runId: "a",
-          agentState: "waiting",
-          waitingReason: "error",
-          title: "one",
-          since: NOW - 60_000,
-        }),
-        run({ runId: "b", agentState: "working", title: "two", since: NOW - 60_000 }),
+        run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW - 60_000 }),
+        run({ runId: "b", workspaceId: "s1", agentState: "working", since: NOW - 60_000 }),
       ]);
-      usePilotStore.setState({ isOpen: true, collapsedWorkspaceIds: ["p1"] });
       render(<PilotView />);
 
-      // The pips are decorative; the accessible account is the toggle's label,
-      // and it has to carry the demand in both states.
-      const label = screen.getByTestId("pilot-group-toggle").getAttribute("aria-label") ?? "";
-      expect(label).toContain("daintree");
-      expect(label).toContain("Agent blocked");
+      const labelled = screen
+        .getAllByRole("group")
+        .map((g) => g.getAttribute("aria-label") ?? "")
+        .filter((label) => label.includes("current workspace"));
+
+      expect(labelled).toHaveLength(1);
+      expect(labelled[0]).toContain("daintree");
+    });
+
+    it("is not a control, so the list holds nothing but options", () => {
+      // A `<button>` inside a `role="group"` inside a `role="listbox"` was
+      // never structurally right: a listbox's children are options. The
+      // disclosure it served is gone with it.
+      seed([run({ agentState: "working", since: NOW - 10_000 })]);
+      render(<PilotView />);
+
+      expect(screen.getByTestId("pilot-group-header")).toBeTruthy();
+      expect(screen.queryByTestId("pilot-group-toggle")).toBeNull();
+      expect(screen.getByRole("listbox").querySelector("button")).toBeNull();
     });
   });
 
-  it("keeps a row in place when its state changes while the dialog is open", async () => {
-    seed([
-      run({ runId: "first", agentState: "working", title: "first", since: NOW - 10_000 }),
-      run({ runId: "second", agentState: "working", title: "second", since: NOW - 5_000 }),
-    ]);
-    render(<PilotView />);
-    expect(screen.getAllByTestId("pilot-row").map((r) => r.textContent)).toEqual([
-      expect.stringContaining("first"),
-      expect.stringContaining("second"),
-    ]);
+  describe("ordering", () => {
+    /** Row titles in rendered order, read off the name so a glyph change can't confuse it. */
+    function order(): (string | undefined)[] {
+      return screen
+        .getAllByTestId("pilot-row")
+        .map((r) => r.getAttribute("aria-label")?.split(",")[0]);
+    }
 
-    // "second" becomes the most urgent run. Its badge must update, but the row
-    // must NOT jump above "first" — every row here is a click target, and
-    // reordering under the cursor is how a misclick happens.
-    seed([
-      run({ runId: "first", agentState: "working", title: "first", since: NOW - 10_000 }),
-      run({
-        runId: "second",
-        agentState: "waiting",
-        waitingReason: "error",
-        title: "second",
-        since: NOW,
-      }),
-    ]);
-    await vi.advanceTimersByTimeAsync(0);
+    function seedTwo(secondBlocked: boolean) {
+      seed([
+        run({ runId: "first", agentState: "working", title: "first", since: NOW - 10_000 }),
+        secondBlocked
+          ? run({
+              runId: "second",
+              agentState: "waiting",
+              waitingReason: "error",
+              title: "second",
+              since: NOW,
+            })
+          : run({ runId: "second", agentState: "working", title: "second", since: NOW - 5_000 }),
+      ]);
+    }
 
-    expect(screen.getAllByTestId("pilot-row").map((r) => r.textContent)).toEqual([
-      expect.stringContaining("first"),
-      expect.stringContaining("second"),
-    ]);
+    it("re-ranks a run that blocks while the list is being read", async () => {
+      // The ranking IS the answer this surface gives. An agent that blocks
+      // while you are looking at the list sitting below every working one until
+      // you close and reopen is the ranking lying.
+      seedTwo(false);
+      render(<PilotView />);
+      expect(order()).toEqual(["first", "second"]);
+
+      act(() => seedTwo(true));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(order()).toEqual(["second", "first"]);
+    });
+
+    it("lands a newly-spawned run at its real rank rather than the end", async () => {
+      seedTwo(false);
+      render(<PilotView />);
+
+      act(() => {
+        seed([
+          run({ runId: "first", agentState: "working", title: "first", since: NOW - 10_000 }),
+          run({ runId: "second", agentState: "working", title: "second", since: NOW - 5_000 }),
+          run({
+            runId: "third",
+            agentState: "waiting",
+            waitingReason: "error",
+            title: "third",
+            since: NOW,
+          }),
+        ]);
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Appending it would bury a blocked agent under two working ones for the
+      // rest of the opening.
+      expect(order()[0]).toBe("third");
+    });
+
+    it("holds the order still while a pointer is working the list", async () => {
+      seedTwo(false);
+      render(<PilotView />);
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+
+      act(() => seedTwo(true));
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Every row is a click target, and a row that moves out from under an
+      // aimed cursor is how a misclick happens.
+      expect(order()).toEqual(["first", "second"]);
+    });
+
+    it("selects the row the pointer is aimed at", () => {
+      seedTwo(false);
+      render(<PilotView />);
+
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[1]!);
+
+      // Hover and the Enter target were two different lit rows before this.
+      expect(
+        document.querySelector('[aria-selected="true"]')?.getAttribute("aria-label")
+      ).toContain("second");
+    });
+
+    it("re-ranks the moment the pointer leaves the list", async () => {
+      seedTwo(false);
+      render(<PilotView />);
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+      act(() => seedTwo(true));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(order()).toEqual(["first", "second"]);
+
+      fireEvent.pointerLeave(document.getElementById("pilot-agent-list")!);
+
+      expect(order()).toEqual(["second", "first"]);
+    });
+
+    it("gives the list back to the keyboard on the next arrow, from what was on screen", async () => {
+      // Three rows, and the one that blocks is the MIDDLE one. Two rows would
+      // prove nothing: whichever order they are in, the row after the first is
+      // the other one, so this would pass against an arrow that walked the live
+      // ranking instead of the held one.
+      const seedThree = (middleBlocked: boolean) => {
+        seed([
+          run({ runId: "a", agentState: "working", title: "aaa", since: NOW - 30_000 }),
+          middleBlocked
+            ? run({
+                runId: "b",
+                agentState: "waiting",
+                waitingReason: "error",
+                title: "bbb",
+                since: NOW,
+              })
+            : run({ runId: "b", agentState: "working", title: "bbb", since: NOW - 20_000 }),
+          run({ runId: "c", agentState: "working", title: "ccc", since: NOW - 10_000 }),
+        ]);
+      };
+      seedThree(false);
+      render(<PilotView />);
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+      act(() => seedThree(true));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(order()).toEqual(["aaa", "bbb", "ccc"]);
+
+      // Stepping happens against the held order, where "bbb" is still the row
+      // below "aaa"; against the live order it would be "ccc". Only then does
+      // the hold release, and the id-keyed selection survives the re-rank.
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "ArrowDown" });
+
+      expect(
+        document.querySelector('[aria-selected="true"]')?.getAttribute("aria-label")
+      ).toContain("bbb");
+      expect(order()).toEqual(["bbb", "aaa", "ccc"]);
+    });
+
+    it("holds whole projects still, not just the rows inside them", async () => {
+      // The group half of the re-sort has its own branch, so a hold that kept
+      // rows in place while letting entire projects jump under the pointer
+      // would otherwise pass everything above.
+      const seedProjects = (spikeBlocked: boolean) => {
+        seed([
+          run({ runId: "a", workspaceId: "p1", agentState: "working", title: "in daintree" }),
+          spikeBlocked
+            ? run({
+                runId: "b",
+                workspaceId: "s1",
+                agentState: "waiting",
+                waitingReason: "error",
+                title: "in spike",
+                since: NOW,
+              })
+            : run({ runId: "b", workspaceId: "s1", agentState: "working", title: "in spike" }),
+        ]);
+      };
+      // Read through the rows rather than the header text: one row per project
+      // means row order IS group order, and the workspace-name lookup does not
+      // survive the microtask flush this test needs (the name loaders resolve
+      // against no IPC host and empty their stores).
+      seedProjects(false);
+      render(<PilotView />);
+      expect(order()).toEqual(["in daintree", "in spike"]);
+
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+      act(() => seedProjects(true));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(order()).toEqual(["in daintree", "in spike"]);
+
+      fireEvent.pointerLeave(document.getElementById("pilot-agent-list")!);
+
+      // The project holding the blocked agent leads the moment the pointer
+      // stops protecting the position it was aimed at.
+      expect(order()).toEqual(["in spike", "in daintree"]);
+    });
+
+    it("does not re-take the hold at a newer rank on every pointer move", async () => {
+      // Capture-once. Re-capturing on each move would make the hold track the
+      // live ranking rather than the screen, so a row could still shift under a
+      // cursor that had never left the list.
+      seedTwo(false);
+      render(<PilotView />);
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+      act(() => seedTwo(true));
+      await vi.advanceTimersByTimeAsync(0);
+
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+
+      expect(order()).toEqual(["first", "second"]);
+    });
+
+    it("parks a run that arrives during a hold, then ranks it on release", async () => {
+      seedTwo(false);
+      render(<PilotView />);
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+
+      act(() => {
+        seed([
+          run({ runId: "first", agentState: "working", title: "first", since: NOW - 10_000 }),
+          run({ runId: "second", agentState: "working", title: "second", since: NOW - 5_000 }),
+          run({
+            runId: "third",
+            agentState: "waiting",
+            waitingReason: "error",
+            title: "third",
+            since: NOW,
+          }),
+        ]);
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Nothing the capture never saw may displace a row the cursor is aimed
+      // at, so it waits at the tail...
+      expect(order()).toEqual(["first", "second", "third"]);
+
+      fireEvent.pointerLeave(document.getElementById("pilot-agent-list")!);
+
+      // ...and takes its real rank immediately, rather than being stranded at
+      // the end for the rest of the opening the way the old freeze left it.
+      expect(order()).toEqual(["third", "first", "second"]);
+    });
+
+    it("releases on a key consumed from the results region, not just from the input", async () => {
+      // After Tab the scroller owns the keyboard and forwards a fixed key set.
+      // A release wired only to the input path would leave the order held for
+      // anyone driving the list from there.
+      seedTwo(false);
+      render(<PilotView />);
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+      act(() => seedTwo(true));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(order()).toEqual(["first", "second"]);
+
+      fireEvent.keyDown(screen.getByRole("group", { name: "Agents" }), { key: "ArrowDown" });
+
+      expect(order()).toEqual(["second", "first"]);
+    });
+
+    it("releases the hold when the app goes to the background", async () => {
+      // Nothing else can: the cursor never moves while another app is focused,
+      // so no boundary event fires, and coming back to a ranking frozen since
+      // before you left is the staleness this replaced.
+      seedTwo(false);
+      render(<PilotView />);
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+      act(() => seedTwo(true));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(order()).toEqual(["first", "second"]);
+
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+
+      expect(order()).toEqual(["second", "first"]);
+    });
+
+    it("leaves the hold alone for a key the list never acted on", async () => {
+      seedTwo(false);
+      render(<PilotView />);
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "s" } });
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+
+      // End belongs to the caret while there is a query to edit, so the list
+      // never moves — and a hold released by a key that did nothing would let
+      // the rows shift under a cursor that had not been given up.
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "End" });
+      act(() => {
+        seed([
+          run({ runId: "first", agentState: "working", title: "first s", since: NOW - 10_000 }),
+          run({
+            runId: "second",
+            agentState: "waiting",
+            waitingReason: "error",
+            title: "second s",
+            since: NOW,
+          }),
+        ]);
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(order()).toEqual(["first s", "second s"]);
+    });
   });
 });

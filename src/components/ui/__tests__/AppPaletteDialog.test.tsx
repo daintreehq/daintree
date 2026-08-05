@@ -452,7 +452,7 @@ describe("AppPaletteDialog.Body results region (#11431)", () => {
     expect(document.getElementById(activeDescendant!)).not.toBeNull();
   });
 
-  it.each(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Enter"])(
+  it.each(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", "Enter"])(
     "forwards %s to the palette's navigation handler",
     (key) => {
       const onNavigationKeyDown = vi.fn();
@@ -466,8 +466,10 @@ describe("AppPaletteDialog.Body results region (#11431)", () => {
   it.each([
     ["Tab", false],
     ["Tab", true],
-    ["PageDown", false],
-    ["PageUp", false],
+    // No list on this shell has a horizontal axis since the one palette with
+    // collapsible groups dropped its disclosure.
+    ["ArrowLeft", false],
+    ["ArrowRight", false],
     [" ", false],
     ["Escape", false],
   ])("leaves %s (shift: %s) to its native behaviour", (key, shiftKey) => {
@@ -475,8 +477,8 @@ describe("AppPaletteDialog.Body results region (#11431)", () => {
     const notCancelled = fireEvent.keyDown(renderBody(onNavigationKeyDown), { key, shiftKey });
 
     expect(onNavigationKeyDown).not.toHaveBeenCalled();
-    // Not merely unhandled — uncancelled, so Tab still traverses and
-    // Page/Space still scroll the region.
+    // Not merely unhandled — uncancelled, so Tab still traverses and Space
+    // still scrolls the region.
     expect(notCancelled).toBe(true);
   });
 

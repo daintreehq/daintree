@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight } from "lucide-react";
+import type { KeyboardEvent, KeyboardEventHandler } from "react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -9,10 +9,9 @@ import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { actionService } from "@/services/ActionService";
-import { FLEET_BANDS, isDemandBand, type FleetBand } from "@/lib/fleetAttention";
-import { UI_ANIMATION_DURATION, UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { agoPhrase, formatWaitAge, ROW_TONE_CLASS } from "@/lib/projectRowStatus";
+import { agoPhrase, formatWaitAge } from "@/lib/projectRowStatus";
 import {
   buildPilotGroups,
   countPilotBands,
@@ -25,7 +24,7 @@ import {
   type PilotRow,
   type PilotWorkspaceMeta,
 } from "./pilotRows";
-import { BAND_GLYPH, BAND_GLYPH_TONE, PilotRunState } from "./PilotRunState";
+import { PilotRunState } from "./PilotRunState";
 import { PilotFilterBar } from "./PilotFilterBar";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
@@ -48,15 +47,65 @@ const AGE_TICK_MS = 30_000;
 /** The loading rule's ">5s says something" threshold. */
 const LOADING_HINT_MS = 5_000;
 
-/**
- * Id of a project's run container, which its disclosure button `aria-controls`.
- */
+/** Id of a project's group container. */
 function groupDomId(workspaceId: string): string {
   return `pilot-option-group-${workspaceId}`;
 }
 
 function runDomId(runId: string): string {
   return `pilot-option-run-${runId}`;
+}
+
+/**
+ * A snapshot of where things were, by id.
+ *
+ * Ids rather than rows, so a held order cannot also freeze a glyph or an age:
+ * position is the only thing worth holding still under a pointer.
+ */
+interface PilotOrder {
+  groups: string[];
+  rows: Map<string, string[]>;
+}
+
+function capturePilotOrder(groups: readonly PilotProjectGroup[]): PilotOrder {
+  return {
+    groups: groups.map((group) => group.workspaceId),
+    rows: new Map(groups.map((group) => [group.workspaceId, group.rows.map((r) => r.run.runId)])),
+  };
+}
+
+/**
+ * The live fleet, re-sorted back into a captured order.
+ *
+ * Anything the capture never saw compares equal to its fellow newcomers and,
+ * `Array.sort` being stable, keeps its live relative rank at the tail — for as
+ * long as the hold lasts. Nothing is written back into the snapshot, so
+ * releasing puts every newcomer straight at its real position rather than
+ * leaving it stranded at the end of the list for the rest of the opening.
+ */
+function applyPilotOrder(
+  groups: readonly PilotProjectGroup[],
+  order: PilotOrder
+): PilotProjectGroup[] {
+  const groupIndex = new Map(order.groups.map((id, i) => [id, i]));
+  const rankOf = (index: Map<string, number>, id: string) =>
+    index.get(id) ?? Number.MAX_SAFE_INTEGER;
+
+  const ordered = [...groups].sort(
+    (a, b) => rankOf(groupIndex, a.workspaceId) - rankOf(groupIndex, b.workspaceId)
+  );
+
+  return ordered.map((group) => {
+    const rowOrder = order.rows.get(group.workspaceId);
+    if (!rowOrder) return group;
+    const rowIndex = new Map(rowOrder.map((id, i) => [id, i]));
+    return {
+      ...group,
+      rows: [...group.rows].sort(
+        (a, b) => rankOf(rowIndex, a.run.runId) - rankOf(rowIndex, b.run.runId)
+      ),
+    };
+  });
 }
 
 /** Layout only; the selected treatment comes from the shared row class. */
@@ -80,41 +129,9 @@ function agentCount(count: number): string {
   return count === 1 ? "1 agent" : `${count} agents`;
 }
 
-/** The worst band's own sentence, plural-aware. */
-function bandPhrase(band: FleetBand, count: number): string {
-  switch (band) {
-    case "blocked":
-      return count === 1 ? "Agent blocked" : `${count} agents blocked`;
-    case "needs-you":
-      return demandPhrase(count);
-    case "review":
-      return count === 1 ? "Ready for review" : `${count} agents ready for review`;
-    case "running":
-      return count === 1 ? "Agent working" : `${count} agents working`;
-    case "done":
-      return count === 1 ? "Agent finished" : `${count} agents finished`;
-    default:
-      return agentCount(count);
-  }
-}
-
-/**
- * A group's one status sentence, in the switcher's shape: what the worst thing
- * in it is, then how much else is there.
- *
- * Named rather than left to the tone: "blocked" and "needs input" are both
- * demands and would otherwise differ only in hue, which is the colour-only
- * encoding the switcher's own status line exists to avoid.
- *
- * The remainder is "N more" rather than a repeated total — "2 agents blocked ·
- * 3 agents" states the same population twice and reads as a contradiction, and
- * naming that remainder "running" would be false for an exited or idle run.
- */
-function groupSummary(group: PilotProjectGroup): string {
-  const inTopBand = group.rows.filter((row) => row.band === group.topBand).length;
-  const rest = group.rows.length - inTopBand;
-  const lead = bandPhrase(group.topBand, inTopBand);
-  return rest > 0 ? `${lead} · ${rest} more` : lead;
+/** Work handed back, plural-aware. The footer's sentence when nothing is asking. */
+function reviewPhrase(count: number): string {
+  return count === 1 ? "Ready for review" : `${count} agents ready for review`;
 }
 
 /** The resting tone. Selected is the shared row class's to own, off the attribute. */
@@ -167,98 +184,25 @@ function WorkspaceTile({ group }: { group: PilotProjectGroup }) {
 }
 
 /**
- * What a collapsed project is still holding, as one pip per band present.
- *
- * Expanded, the rows ARE the summary and a sentence restating them in prose is
- * a third thing to read for facts already on screen. Collapsed, the rows are
- * gone and something has to stop a project hiding a blocked agent behind a
- * chevron — so the summary earns its place at exactly the moment the rows stop
- * being visible, and nowhere else.
- *
- * Glyphs, not words, and the same glyphs the filter bar uses, so the cluster
- * reads as a compressed version of the list rather than a new notation.
- * `aria-hidden` throughout: the toggle's own label already carries
- * `groupSummary()` in both states, and announcing four glyph-count fragments
- * beside it would be the same fact twice, less intelligibly the second time.
- */
-function CollapsedBandPips({ group }: { group: PilotProjectGroup }) {
-  const counts = new Map<FleetBand, number>();
-  for (const row of group.rows) counts.set(row.band, (counts.get(row.band) ?? 0) + 1);
-
-  return (
-    <span aria-hidden="true" className="flex shrink-0 items-center gap-2">
-      {FLEET_BANDS.filter((band) => counts.has(band)).map((band) => {
-        const Glyph = BAND_GLYPH[band];
-        return (
-          <span key={band} className="flex items-center gap-1">
-            <Glyph className={cn("size-2.5 shrink-0", BAND_GLYPH_TONE[band])} />
-            <span className="text-[10px] leading-none tabular-nums text-daintree-text/50">
-              {counts.get(band)}
-            </span>
-          </span>
-        );
-      })}
-    </span>
-  );
-}
-
-/**
- * A project, as a heading — never a row.
+ * A project, as a heading — never a row, and never a control.
  *
  * Deliberately outside the selection domain. The arrow keys walk agents,
  * because agents are what this surface is for; stopping on a project on the way
  * past made the common case (compare what is working against what is waiting)
- * cost an extra keystroke per project, and put Enter one mistake away from
- * collapsing the group instead of opening the run you were aiming at.
+ * cost an extra keystroke per project.
  *
- * The disclosure is a real button rather than a click handler on the row, so it
- * announces its state and its target. `tabIndex={-1}` keeps it out of the tab
- * order — the search box owns the keyboard — matching the switcher's own
- * in-header sort control.
+ * It used to carry a disclosure, which is gone (#11669). A durable collapse set
+ * meant a project shut last week could hide an agent that blocked today, on the
+ * one surface that exists to show every agent — and a `<button>` inside a
+ * `role="group"` inside a `role="listbox"` was never structurally right either.
+ * The header's whole job now is to file the rows underneath it.
  */
-function GroupHeader({
-  group,
-  isCollapsed,
-  groupId,
-  className,
-  onToggle,
-}: {
-  group: PilotProjectGroup;
-  isCollapsed: boolean;
-  groupId: string;
-  className?: string;
-  onToggle: () => void;
-}) {
-  const summary = groupSummary(group);
-
+function GroupHeader({ group, className }: { group: PilotProjectGroup; className?: string }) {
   return (
     <div
       data-testid="pilot-group-header"
       className={cn("flex w-full items-center gap-2 py-1 pr-3 pl-3 select-none", className)}
     >
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-expanded={!isCollapsed}
-        aria-controls={groupId}
-        // The summary rides the label in BOTH states. Collapsed it is the only
-        // account of what is inside; expanded it saves a screen-reader user
-        // walking the rows to learn what walking them would cost.
-        aria-label={`${group.name}, ${summary}`}
-        data-testid="pilot-group-toggle"
-        onClick={onToggle}
-        className="flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-daintree-text/40 transition-colors hover:text-daintree-text"
-      >
-        <ChevronRight
-          aria-hidden="true"
-          className={cn(
-            "size-3 transition-transform ease-out motion-reduce:transition-none",
-            !isCollapsed && "rotate-90"
-          )}
-          style={{ transitionDuration: `${UI_ANIMATION_DURATION}ms` }}
-        />
-      </button>
-
       <WorkspaceTile group={group} />
 
       {/*
@@ -268,8 +212,9 @@ function GroupHeader({
         semibold name plus a second coloured line outweighed the very rows it
         was meant to be filing.
 
-        The toggle's label already carries the name and the summary, so this is
-        hidden rather than announced a second time.
+        The enclosing `role="group"` already carries the name as the label for
+        every option inside it, so this is hidden rather than announced a second
+        time on the way past.
       */}
       <div aria-hidden="true" className="flex min-w-0 flex-1 items-center gap-1.5">
         <span className={cn(PALETTE_SECTION_LABEL_CLASS, "truncate")}>{group.name}</span>
@@ -282,8 +227,6 @@ function GroupHeader({
           <span className="shrink-0 text-[10px] leading-none text-daintree-text/30">Current</span>
         )}
       </div>
-
-      {isCollapsed && <CollapsedBandPips group={group} />}
     </div>
   );
 }
@@ -293,31 +236,51 @@ function RunRow({
   isSelected,
   domId,
   onActivate,
+  onPointerMove,
 }: {
   row: PilotRow;
   isSelected: boolean;
   domId: string;
   onActivate: () => void;
+  /**
+   * `onPointerMove`, never `onMouseEnter`.
+   *
+   * `SearchablePalette` documents the reason and this surface is exactly the
+   * case it describes: keyboard scrolling under a stationary cursor drags rows
+   * past the pointer, and `mouseenter` would read that as the user choosing
+   * each one on the way. Movement is what says a pointer is being aimed.
+   */
+  onPointerMove: () => void;
 }) {
-  // Only a demand gets a visible word. The other three states are neutral by
-  // design now, and a status word for each of them was half of what made every
-  // row look equally important — but the state still has to be readable as
-  // text, so it moves into the option's accessible name instead of vanishing.
-  const isDemand = isDemandBand(row.band);
+  /**
+   * The agent's brand, unless the title already is it.
+   *
+   * The brand is on the row as an icon only, and search matches on it precisely
+   * because "codex" is a plausible thing to type — so two identically-titled
+   * runs on different agents were one string to a screen reader. An untitled
+   * run falls back to its agent's name for the title, though, and "Claude,
+   * Claude" is a separator promising a second fact and then not delivering one.
+   */
+  const agentLabel =
+    row.chrome.label.toLowerCase() === row.title.toLowerCase() ? null : row.chrome.label;
 
   /**
    * Spelled out rather than left to the name-from-content computation.
    *
-   * Those spans are inline, so a computed name concatenates them with no
-   * separators at all: "Fix authWorkingfeature-x2m". Naming the parts here is
-   * what turns the row back into a sentence, and it lets the age be announced
-   * as an age ("2m ago") instead of a bare token a screen reader reads as
-   * "two em".
+   * The row's own spans are inline, so a computed name concatenates them with
+   * no separators at all: "Fix auth2m". Naming the parts here is what turns the
+   * row back into a sentence, and it lets the age be announced as an age
+   * ("2m ago") instead of a bare token a screen reader reads as "two em".
+   *
+   * The state is here and nowhere else on the row now. The worktree is neither:
+   * it is a scratch project's UUID as often as it is a branch, and dropping it
+   * from the drawn row without dropping it from the name would have left the
+   * noise exactly where it is least escapable.
    */
   const accessibleName = [
     row.title,
+    agentLabel,
     row.statusLabel,
-    row.worktreeLabel,
     row.age !== null ? agoPhrase(row.age) : null,
   ]
     .filter((part): part is string => part !== null)
@@ -331,15 +294,15 @@ function RunRow({
       aria-label={accessibleName}
       data-testid="pilot-row"
       onClick={onActivate}
+      onPointerMove={onPointerMove}
       // One line, ~32px. Two-line rows made 8 agents into 16 lines of identical
-      // shape with nothing to scan down; the trailing group below puts the
-      // facts into columns instead.
+      // shape with nothing to scan down; columns are what give it a grain.
       className={cn(ROW_BASE, ROW_TONE, "gap-2 py-1 pr-3 pl-3")}
     >
       {/*
-        State rides the chevron column, so every agent's mark sits in one
-        vertical line down the left edge and the fleet's working-vs-waiting
-        split reads in a single glance without tracking across each row.
+        State leads the row, so every agent's mark sits in one vertical line
+        down the left edge and the fleet's working-vs-waiting split reads in a
+        single glance without tracking across each row.
       */}
       <span className="flex size-3.5 shrink-0 items-center justify-center">
         <PilotRunState band={row.band} agentState={row.run.agentState} />
@@ -370,34 +333,28 @@ function RunRow({
       </span>
 
       {/*
-        The scan column. Everything here is `aria-hidden` — the row's own label
-        above says all of it, in order and with separators, so announcing these
-        as well would read each row's facts twice.
+        The scan column, now a single fact wide.
 
-        The group may shrink, but only into the worktree: the status word and
-        the age are short and bounded, while an untruncatable 10rem worktree
-        beside a 3.5rem age floor could push the title out of a narrow palette
-        entirely and give the list a horizontal scrollbar.
+        `aria-hidden` — the row's own label above says this in order and with
+        separators, so announcing it here would read the age twice. Right-
+        aligned, tabular, and given a floor width so "just now" and "2h 15m"
+        start at the same x: without that the ages sit at eight different
+        offsets and "how long has this been stuck" goes back to being eight
+        separate reads instead of one scan.
+
+        The status word and the worktree used to sit to its left. The glyph in
+        the chevron column already says the state, and the worktree was as often
+        a scratch project's UUID as a branch name — both were charging the
+        truncating title for width to say nothing it needed.
       */}
-      <span aria-hidden="true" className="flex min-w-0 items-center gap-2 text-[11px] leading-none">
-        {isDemand && (
-          <span className={cn("shrink-0", ROW_TONE_CLASS[row.tone])}>{row.statusLabel}</span>
-        )}
-        {row.worktreeLabel !== null && (
-          <span className="max-w-[8rem] truncate text-daintree-text/40">{row.worktreeLabel}</span>
-        )}
-        {/*
-          Right-aligned, tabular, and given a floor width so "just now" and
-          "2h 15m" start at the same x. Without that the ages sit at eight
-          different offsets and "how long has this been stuck" goes back to
-          being eight separate reads instead of one scan.
-        */}
-        {row.age !== null && (
-          <span className="min-w-[3.5rem] shrink-0 text-right tabular-nums text-daintree-text/50">
-            {row.age}
-          </span>
-        )}
-      </span>
+      {row.age !== null && (
+        <span
+          aria-hidden="true"
+          className="min-w-[3.5rem] shrink-0 text-right text-[11px] leading-none tabular-nums text-daintree-text/50"
+        >
+          {row.age}
+        </span>
+      )}
     </div>
   );
 }
@@ -472,8 +429,6 @@ function PilotFooter({
 export function PilotView() {
   const isOpen = usePilotStore((s) => s.isOpen);
   const close = usePilotStore((s) => s.close);
-  const collapsedIds = usePilotStore((s) => s.collapsedWorkspaceIds);
-  const toggleCollapsed = usePilotStore((s) => s.toggleWorkspaceCollapsed);
   const snapshot = useFleetSnapshotStore((s) => s.snapshot);
   const projects = useProjectStore((s) => s.projects);
   const scratches = useScratchStore((s) => s.scratches);
@@ -487,21 +442,10 @@ export function PilotView() {
    * `pilotStore`.
    *
    * Both are narrowing state for one opening of the dialog and both reset when
-   * it closes. `collapsedWorkspaceIds` lives in the store because it is the
-   * opposite thing — a durable preference about a project that should survive
-   * closing — and a filter that persisted would reopen the surface already
-   * hiding agents, with the reason two openings in the past.
+   * it closes. A filter that persisted would reopen the surface already hiding
+   * agents, with the reason two openings in the past.
    */
   const [bandFilter, setBandFilter] = useState<PilotBandFilter>("all");
-  /**
-   * Collapse overrides that apply only while the list is narrowed.
-   *
-   * Narrowing force-expands every matching group, so without a separate set the
-   * header toggle would be a dead control: `aria-expanded` pinned open while the
-   * click silently edited the persisted set, collapsing the group minutes later
-   * when the query cleared.
-   */
-  const [narrowingCollapsed, setNarrowingCollapsed] = useState<readonly string[]>([]);
   /**
    * True while real focus sits on a filter segment.
    *
@@ -585,98 +529,31 @@ export function PilotView() {
   }, [snapshot, workspaces, nowMs]);
 
   /**
-   * Position, pinned for as long as the dialog stays open.
+   * Position, held only while the pointer is genuinely working the list.
    *
-   * Ordering is derived from live agent state, so without this a run changing
-   * state reorders the list under the cursor — the classic sort-thrash misclick,
-   * and the one that matters most here because every row is a navigation target.
-   * The ORDER is pinned; the rows keep updating in place, so a state glyph or
-   * an age still moves the instant it changes.
+   * Ordering is derived from live agent state and the ranking IS the answer
+   * this surface exists to give, so it has to stay true: an agent that blocks
+   * while you are looking at the list has to rise to where the ranking says it
+   * belongs, not sit below every idle agent until you close and reopen.
    *
-   * Held in state rather than a ref so every mutation is a declared input of the
-   * memo below. A ref read during render is invisible to memoization and would
-   * serve a stale order for a frame after reopening.
+   * The misclick this used to guard against is real but pointer-only. Selection
+   * is keyed by `rowId` (#11071), so a re-rank cannot make Enter commit a row
+   * the user did not choose — only a mouse aimed at a row that moves out from
+   * under it can go wrong. So the order is held from the first pointer movement
+   * over the list, and released the moment the pointer leaves or the keyboard
+   * takes over. Ids only: the rows themselves keep updating in place, so a
+   * glyph or an age still moves the instant it changes.
+   *
+   * Held in state rather than a ref so every mutation is a declared input of
+   * the memo below. A ref read during render is invisible to memoization and
+   * would serve a stale order for a frame.
    */
-  const [frozenOrder, setFrozenOrder] = useState<{
-    groups: string[];
-    rows: Map<string, string[]>;
-  } | null>(null);
+  const [pointerOrder, setPointerOrder] = useState<PilotOrder | null>(null);
 
-  useEffect(() => {
-    if (!isOpen) {
-      setFrozenOrder(null);
-      return;
-    }
-    // Pin on the FIRST non-empty fleet after opening, not on open itself: the
-    // snapshot can still be null when the dialog mounts.
-    if (liveGroups.length === 0) return;
-
-    setFrozenOrder((prev) => {
-      if (prev === null) {
-        return {
-          groups: liveGroups.map((g) => g.workspaceId),
-          rows: new Map(liveGroups.map((g) => [g.workspaceId, g.rows.map((r) => r.run.runId)])),
-        };
-      }
-
-      // Anything that appears while the dialog is open takes a permanent place
-      // at the end, assigned once. Leaving new ids unranked would let them keep
-      // sorting against each other on every snapshot — reintroducing exactly
-      // the movement this exists to prevent, just among the newcomers.
-      let changed = false;
-      const groups = [...prev.groups];
-      const seenGroups = new Set(groups);
-      const rows = new Map(prev.rows);
-
-      for (const group of liveGroups) {
-        if (!seenGroups.has(group.workspaceId)) {
-          groups.push(group.workspaceId);
-          seenGroups.add(group.workspaceId);
-          changed = true;
-        }
-        const known = rows.get(group.workspaceId);
-        const next = known ? [...known] : [];
-        const seenRows = new Set(next);
-        for (const row of group.rows) {
-          if (!seenRows.has(row.run.runId)) {
-            next.push(row.run.runId);
-            seenRows.add(row.run.runId);
-            changed = true;
-          }
-        }
-        if (!known || next.length !== known.length) rows.set(group.workspaceId, next);
-      }
-
-      // Returning the previous object when nothing moved is what stops this
-      // effect from re-rendering itself on every snapshot.
-      return changed ? { groups, rows } : prev;
-    });
-  }, [isOpen, liveGroups]);
-
-  const stableGroups = useMemo(() => {
-    if (!frozenOrder) return liveGroups;
-
-    const groupIndex = new Map(frozenOrder.groups.map((id, i) => [id, i]));
-    const ordered = [...liveGroups].sort((a, b) => {
-      const ai = groupIndex.get(a.workspaceId) ?? Number.MAX_SAFE_INTEGER;
-      const bi = groupIndex.get(b.workspaceId) ?? Number.MAX_SAFE_INTEGER;
-      return ai - bi;
-    });
-
-    return ordered.map((group) => {
-      const rowOrder = frozenOrder.rows.get(group.workspaceId);
-      if (!rowOrder) return group;
-      const rowIndex = new Map(rowOrder.map((id, i) => [id, i]));
-      return {
-        ...group,
-        rows: [...group.rows].sort((a, b) => {
-          const ai = rowIndex.get(a.run.runId) ?? Number.MAX_SAFE_INTEGER;
-          const bi = rowIndex.get(b.run.runId) ?? Number.MAX_SAFE_INTEGER;
-          return ai - bi;
-        }),
-      };
-    });
-  }, [liveGroups, frozenOrder]);
+  const orderedGroups = useMemo(
+    () => (pointerOrder === null ? liveGroups : applyPilotOrder(liveGroups, pointerOrder)),
+    [liveGroups, pointerOrder]
+  );
 
   /**
    * The narrowing pipeline, in the one order that makes the counts honest.
@@ -688,7 +565,10 @@ export function PilotView() {
    * user nothing. The two narrowings intersect with AND, so "the blocked agents
    * in this repo" is one question.
    */
-  const queryGroups = useMemo(() => filterPilotGroups(stableGroups, query), [stableGroups, query]);
+  const queryGroups = useMemo(
+    () => filterPilotGroups(orderedGroups, query),
+    [orderedGroups, query]
+  );
 
   const filterCounts = useMemo(() => countPilotBands(queryGroups), [queryGroups]);
 
@@ -698,22 +578,12 @@ export function PilotView() {
   );
 
   /**
-   * Either narrowing is in play, so a group holding a match must open itself.
-   *
-   * The filter has exactly the same claim on this as the query does: finding
-   * the blocked agent you filtered for still collapsed behind a chevron is the
-   * same "narrowing failing to do its job" the query path already solves.
-   */
-  const isNarrowing = query.trim().length > 0 || bandFilter !== "all";
-
-  /**
    * The tree, in the shared model's shape.
    *
    * A project is structure, not content: its header is `navigable: false`, so
    * the arrow keys walk agents and never stop on a heading on the way past.
-   * That kept the common case — compare what is working against what is waiting
-   * — from costing an extra keystroke per project, and kept Enter from sitting
-   * one mistake away from collapsing a group instead of opening the run.
+   * That keeps the common case — compare what is working against what is
+   * waiting — from costing an extra keystroke per project.
    */
   const paletteGroups = useMemo<PaletteTreeGroupInput<PilotProjectGroup, PilotRow>[]>(
     () =>
@@ -722,21 +592,14 @@ export function PilotView() {
         group,
         header: {
           rowId: `group:${group.workspaceId}`,
-          // The runs container's id, which is what the disclosure button
-          // `aria-controls`. Safe only because the header is not navigable, so
-          // this id never reaches `aria-activedescendant`. Making headers
-          // navigable here would first have to give the header element an id
-          // of its own — pointing the active descendant at a role-less
-          // container is the dangling reference #11071 was about.
+          // The group container's id. Safe only because the header is not
+          // navigable, so this id never reaches `aria-activedescendant`.
+          // Making headers navigable here would first have to give the header
+          // element an id of its own — pointing the active descendant at a
+          // role-less container is the dangling reference #11071 was about.
           domId: groupDomId(group.workspaceId),
           navigable: false,
         },
-        // A collapsed group that contains a match opens itself — making someone
-        // click to reveal the thing they just narrowed to is the narrowing
-        // failing to do its job.
-        isCollapsed: isNarrowing
-          ? narrowingCollapsed.includes(group.workspaceId)
-          : collapsedIds.includes(group.workspaceId),
         items: group.rows.map((row) => ({
           rowId: row.run.runId,
           domId: runDomId(row.run.runId),
@@ -744,17 +607,8 @@ export function PilotView() {
           item: row,
         })),
       })),
-    [visibleGroups, isNarrowing, narrowingCollapsed, collapsedIds]
+    [visibleGroups]
   );
-
-  // The narrowing-scoped collapses belong to the query AND the filter that
-  // produced them — a collapse made while looking at blocked agents has no
-  // claim on the list once the segment changes. Closing drops them too, so a
-  // reopen doesn't restore state from a fleet that has moved on. The selection
-  // resets alongside, inside the navigation model.
-  useEffect(() => {
-    setNarrowingCollapsed([]);
-  }, [query, bandFilter, isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -764,21 +618,6 @@ export function PilotView() {
       setIsFilterFocused(false);
     }
   }, [isOpen]);
-
-  const setGroupCollapsed = useCallback(
-    (workspaceId: string, collapsed: boolean) => {
-      if (isNarrowing) {
-        setNarrowingCollapsed((ids) => {
-          const has = ids.includes(workspaceId);
-          if (collapsed === has) return ids;
-          return collapsed ? [...ids, workspaceId] : ids.filter((id) => id !== workspaceId);
-        });
-      } else if (collapsedIds.includes(workspaceId) !== collapsed) {
-        toggleCollapsed(workspaceId);
-      }
-    },
-    [isNarrowing, collapsedIds, toggleCollapsed]
-  );
 
   const activate = useCallback((row: NavigablePaletteTreeRow<PilotProjectGroup, PilotRow>) => {
     if (row.kind !== "item") return;
@@ -792,17 +631,17 @@ export function PilotView() {
    * `shouldPreserveInputCaretKey` is true where a caret exists to protect, and
    * the list's structural keys stand down for it.
    *
-   * Home/End/←/→ are structural keys, but they are also the search box's
-   * editing keys, and the box owns focus by default. While the query is
-   * non-empty they stay with the caret; an empty box has nothing to edit, so
-   * they navigate. Search force-expands every matching group anyway, which is
-   * where collapse would matter least.
+   * Home/End are structural keys, but they are also the search box's editing
+   * keys, and the box owns focus by default. While the query is non-empty they
+   * stay with the caret; an empty box has nothing to edit, so they jump to the
+   * first and last row. The horizontal arrows are no longer contested at all —
+   * with the disclosure gone the list has no horizontal axis, so they are the
+   * caret's outright.
    *
    * Deliberately keyed on the query alone and not on the band filter: an active
-   * filter with an empty box still leaves nothing to edit, and handing the
-   * caret keys over then would take collapse and expand away from a keyboard
-   * user for no gain. The filter bar binds its own arrows, but only while it
-   * physically holds focus, so the two never contend.
+   * filter with an empty box still leaves nothing to edit. The filter bar binds
+   * its own arrows, but only while it physically holds focus, so the two never
+   * contend.
    */
   const navigation = usePaletteTreeNavigation<PilotProjectGroup, PilotRow>({
     groups: paletteGroups,
@@ -811,11 +650,84 @@ export function PilotView() {
     // highlight would survive on a row the filter had just removed.
     selectionScopeKey: `${query}|${bandFilter}`,
     onActivate: activate,
-    onGroupCollapsedChange: setGroupCollapsed,
     shouldPreserveInputCaretKey: () => query.length > 0,
   });
 
-  const { selectedRow, activeDescendantId, renderGroups } = navigation;
+  const { selectedRow, activeDescendantId, renderGroups, selectRow } = navigation;
+
+  /**
+   * A pointer aimed at a row selects it, and takes the order still while it is
+   * being aimed.
+   *
+   * Both halves in one handler because they are one gesture: the hold exists to
+   * keep the row under the cursor from moving before the click lands, so it has
+   * to start at the same moment the cursor starts choosing.
+   */
+  const handleRowPointerMove = useCallback(
+    (rowId: string) => {
+      // Captured from what this render DREW, not from the live ranking. The two
+      // are the same whenever there is no hold, but they part company in one
+      // real sequence: pointer-leave queues the release, a fast re-entry queues
+      // this updater from the same still-committed render, and the updater then
+      // sees `held === null` while the screen the pointer came back to was
+      // still showing the held order. Capturing `liveGroups` there would take a
+      // snapshot of an order the user never saw and move rows under the cursor
+      // on the next commit — the exact misclick this guards against.
+      setPointerOrder((held) => (held === null ? capturePilotOrder(orderedGroups) : held));
+      selectRow(rowId);
+    },
+    [orderedGroups, selectRow]
+  );
+
+  const releasePointerOrder = useCallback(() => setPointerOrder(null), []);
+
+  /**
+   * The two ways a hold outlives the pointer that took it.
+   *
+   * Backgrounding the app is the dangerous one: the cursor never moves, so no
+   * boundary event fires, and coming back after ten minutes to a ranking frozen
+   * since before you left is precisely the staleness this replaced. An emptied
+   * list is the quieter one — there is no row left under the cursor to protect,
+   * and whether removing the element the pointer was over fires a leave is not
+   * something to depend on.
+   */
+  useEffect(() => {
+    if (!isOpen || renderGroups.length === 0) {
+      setPointerOrder(null);
+      return;
+    }
+    window.addEventListener("blur", releasePointerOrder);
+    return () => window.removeEventListener("blur", releasePointerOrder);
+  }, [isOpen, renderGroups.length, releasePointerOrder]);
+
+  /**
+   * The keyboard takes the list back, and the pointer's hold with it.
+   *
+   * Released AFTER delegating, never before: the arrow has to act on the order
+   * the user can currently see, and the resulting `rowId` then survives the
+   * re-rank because selection was never index-keyed. `defaultPrevented` is the
+   * signal because the model cancels exactly the keys it acted on — a Home the
+   * search caret kept, or an arrow over an empty list, leaves the hold alone.
+   */
+  const releaseOnConsumedKey = useCallback((event: KeyboardEvent<HTMLElement>) => {
+    if (event.defaultPrevented) setPointerOrder(null);
+  }, []);
+
+  const handleInputKeyDown = useCallback<KeyboardEventHandler<HTMLInputElement>>(
+    (event) => {
+      navigation.handleInputKeyDown(event);
+      releaseOnConsumedKey(event);
+    },
+    [navigation, releaseOnConsumedKey]
+  );
+
+  const handleBodyKeyDown = useCallback<KeyboardEventHandler<HTMLElement>>(
+    (event) => {
+      navigation.handleBodyKeyDown(event);
+      releaseOnConsumedKey(event);
+    },
+    [navigation, releaseOnConsumedKey]
+  );
 
   /**
    * What the surface can honestly claim right now.
@@ -857,26 +769,51 @@ export function PilotView() {
   // Counted by band, never off the raw row total: a fleet holding two working
   // agents and six exited ones is not "8 agents running".
   const live = fleet.bands.running;
-  const summary =
+  const fleetPhrase =
     status.kind === "loading" || status.kind === "unavailable"
       ? ""
       : needsYou > 0
         ? demandPhrase(needsYou)
         : review > 0
-          ? bandPhrase("review", review)
+          ? reviewPhrase(review)
           : live > 0
             ? `Nothing needs you · ${live} ${live === 1 ? "agent" : "agents"} working`
             : fleet.total > 0
               ? `Nothing needs you · ${agentCount(fleet.total)}`
               : "";
 
+  /**
+   * The same sentence, qualified when the feed is dead.
+   *
+   * "Nothing needs you" over retained runs is the surface making a live
+   * all-clear claim out of data it cannot currently see — the exact thing the
+   * stale rule forbids, printed directly under the banner that contradicts it.
+   * The sentence stays whole rather than being rewritten, because what changed
+   * is how current it is, not what it says.
+   */
+  const summary =
+    status.kind === "stale" && fleetPhrase !== "" ? `Last known: ${fleetPhrase}` : fleetPhrase;
+
   const hasTree = renderGroups.length > 0;
-  // Stale counts as well as live: retained runs are real rows, so a query that
-  // matches none of them is a true statement about the query rather than a claim
-  // that the fleet is clear. `loading` and `unavailable` stay out — they already
-  // render the skeleton and the can't-reach-host message.
+
+  /**
+   * Whether either narrowing is in play, which is what an empty list means.
+   *
+   * A query or a filter turning up nothing is a true statement about the
+   * narrowing. A fleet with nothing in it at all is a statement about the
+   * fleet, and only live data can make that one.
+   */
+  const hasNarrowing = query.trim().length > 0 || bandFilter !== "all";
+
+  // Stale narrows honestly — retained runs are real rows, so a query matching
+  // none of them says something true — but a retained EMPTY fleet may not
+  // render the zero-data prompt: "Start an agent in any project" over a feed
+  // that stopped answering an hour ago presents an unknown as an all-clear.
+  // `loading` and `unavailable` stay out entirely; they already render the
+  // skeleton and the can't-reach-host message.
   const showEmpty =
-    (status.kind === "live" || status.kind === "stale") && renderGroups.length === 0;
+    renderGroups.length === 0 &&
+    (status.kind === "live" || (status.kind === "stale" && hasNarrowing));
   const showSkeleton = useDeferredLoading(status.kind === "loading", UI_DOHERTY_THRESHOLD);
 
   /**
@@ -889,7 +826,7 @@ export function PilotView() {
    * leave nothing on screen — that is precisely when it is the way back.
    */
   const showFilterBar =
-    (status.kind === "live" || status.kind === "stale") && stableGroups.length > 0;
+    (status.kind === "live" || status.kind === "stale") && orderedGroups.length > 0;
 
   // Removing a focused element does not reliably fire a blur, so a bar that
   // vanishes under the cursor — the fleet drains, or the host stops answering
@@ -915,7 +852,7 @@ export function PilotView() {
           inputRef={searchRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={navigation.handleInputKeyDown}
+          onKeyDown={handleInputKeyDown}
           placeholder="Search agents…"
           aria-label="Search agents"
           // The role is constant, not conditional on there being results. A
@@ -955,7 +892,7 @@ export function PilotView() {
         className="p-0"
         ariaLabel="Agents"
         activeDescendant={activeDescendantId}
-        onNavigationKeyDown={navigation.handleBodyKeyDown}
+        onNavigationKeyDown={handleBodyKeyDown}
       >
         {showSkeleton && (
           /*
@@ -1061,39 +998,46 @@ export function PilotView() {
         <div
           id={LIST_ID}
           {...(hasTree ? { role: "listbox", "aria-label": "Agents by project" } : {})}
+          // The pointer stops working the list the moment it leaves it, so the
+          // ranking goes back to being true. On the container rather than the
+          // rows: moving between two rows leaves one and enters the next, and a
+          // per-row handler would release and re-take the hold on the way past.
+          onPointerLeave={releasePointerOrder}
         >
           {renderGroups.map(({ header, items }, groupIndex) => (
             // `role="group"` is a permitted listbox child and carries the
             // project's name as the label for every option inside it, which
             // is how a screen reader still hears which project a run belongs
             // to now that the header itself is not an item.
+            //
+            // Being in the current workspace decides whether opening a run is
+            // instant or swaps the whole view, and the header renders that as a
+            // word it then hides — so it rides the label rather than being
+            // visual-only. Short on purpose: this name is re-announced as
+            // context for every option inside, and the group's own contents are
+            // those options, so a prose summary here would be read once per row.
             <div
               key={header.domId}
+              id={header.domId}
               role="group"
-              aria-label={header.group.name}
+              aria-label={`${header.group.name}${header.group.isCurrent ? ", current workspace" : ""}`}
               // The scroller spaces siblings equally, so after a long run list
               // the next project arrives with no more separation than one more
               // agent. Only between groups — a leading gap would push the list
               // off its own top edge.
               className={groupIndex > 0 ? "mt-2" : undefined}
             >
-              <GroupHeader
-                group={header.group}
-                isCollapsed={header.isCollapsed}
-                groupId={header.domId}
-                onToggle={() => setGroupCollapsed(header.groupId, !header.isCollapsed)}
-              />
-              <div id={header.domId}>
-                {items.map((row) => (
-                  <RunRow
-                    key={row.domId}
-                    row={row.item}
-                    isSelected={row.rowId === selectedRow?.rowId}
-                    domId={row.domId}
-                    onActivate={() => navigation.activateRow(row.rowId)}
-                  />
-                ))}
-              </div>
+              <GroupHeader group={header.group} />
+              {items.map((row) => (
+                <RunRow
+                  key={row.domId}
+                  row={row.item}
+                  isSelected={row.rowId === selectedRow?.rowId}
+                  domId={row.domId}
+                  onActivate={() => navigation.activateRow(row.rowId)}
+                  onPointerMove={() => handleRowPointerMove(row.rowId)}
+                />
+              ))}
             </div>
           ))}
         </div>
@@ -1113,12 +1057,12 @@ export function PilotView() {
             demandCount={needsYou}
             onShowDemand={() => {
               setBandFilter("needs-you");
-              // Cleared explicitly, not left to the narrowing effect. With the
-              // filter ALREADY on needs-you the state set is a no-op, the
-              // effect never re-runs, and a group the user had collapsed stays
-              // collapsed — leaving the button advertising agents it then
-              // failed to put on screen.
-              setNarrowingCollapsed([]);
+              // The footer advertises the list's keys, and this button leaves
+              // focus on itself — where the body's handler bails on events that
+              // did not come from the scroller, so the arrows it is advertising
+              // do nothing. The Clear-filter button in the empty state already
+              // makes exactly this handoff.
+              searchRef.current?.focus();
             }}
           />
         </AppPaletteDialog.Footer>
