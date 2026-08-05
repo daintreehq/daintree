@@ -32,11 +32,15 @@ function getWrittenData(managed: ManagedTerminal): string[] {
 
 function makeMockManaged(overrides: Record<string, unknown> = {}): ManagedTerminal {
   const writtenData: string[] = [];
+  // On the normal screen xterm reports the same buffer through both handles.
+  // Shared here so setBufferLength keeps active and normal in agreement; the
+  // alt-buffer cases below deliberately split them.
+  const buffer = { length: 3000 };
   return {
     terminal: {
       options: { scrollback: 5000 },
       rows: 24,
-      buffer: { active: { length: 3000 } },
+      buffer: { active: buffer, normal: buffer },
       write: (data: string) => writtenData.push(data),
       hasSelection: vi.fn(() => false),
     },
@@ -48,6 +52,32 @@ function makeMockManaged(overrides: Record<string, unknown> = {}): ManagedTermin
     writtenData,
     ...overrides,
   } as unknown as ManagedTerminal;
+}
+
+// Shared by the #11673 blocks. Derived, not copied: the plain-terminal target
+// is whatever the policy computes for the mocked global setting, and a "large
+// current" above it stands in for a pre-downshift agent ceiling.
+const plainTarget = getScrollbackForType(false, 5000);
+const largeCurrent = plainTarget * 3;
+
+function setBufferLength(managed: ManagedTerminal, length: number): void {
+  Object.defineProperty(managed.terminal.buffer.active, "length", {
+    value: length,
+    writable: true,
+  });
+}
+
+function retained(managed: ManagedTerminal): number {
+  return managed.terminal.buffer.normal.length - managed.terminal.rows;
+}
+
+// Break the shared normal-screen buffer apart so the two handles can report
+// different lengths, as they do while the alternate screen is up.
+function splitBuffers(managed: ManagedTerminal, activeLength: number, normalLength: number): void {
+  (managed.terminal as unknown as { buffer: unknown }).buffer = {
+    active: { length: activeLength },
+    normal: { length: normalLength },
+  };
 }
 
 describe("TerminalScrollbackController", () => {
@@ -277,19 +307,6 @@ describe("TerminalScrollbackController", () => {
     // xterm, so it must respect the same protections as reduceScrollback when
     // history would actually be dropped. Growth must stay unguarded.
     describe("destructive shrink guard (#10911)", () => {
-      // Derived, not copied: the plain-terminal target is whatever the policy
-      // computes for the current global setting. A "large current" above that
-      // target stands in for the pre-demotion agent-era scrollback.
-      const plainTarget = getScrollbackForType(false, 5000);
-      const largeCurrent = plainTarget * 3;
-
-      function setBufferLength(managed: ManagedTerminal, length: number): void {
-        Object.defineProperty(managed.terminal.buffer.active, "length", {
-          value: length,
-          writable: true,
-        });
-      }
-
       it("skips a demotion shrink for a focused terminal (preserves history)", () => {
         const managed = makeMockManaged({ isFocused: true });
         managed.terminal.options.scrollback = largeCurrent; // was an agent
@@ -371,6 +388,193 @@ describe("TerminalScrollbackController", () => {
         const managed = makeMockManaged({ isFocused: true });
         managed.terminal.options.scrollback = Math.floor(plainTarget / 3); // below target ⇒ grow
         setBufferLength(managed, largeCurrent);
+
+        restoreScrollback(managed);
+        expect(managed.terminal.options.scrollback).toBe(plainTarget);
+      });
+    });
+
+    // #11673 — a resource-profile downshift lowers the agent ceiling and
+    // re-derives every foreground pane. Only one of them can be focused, so
+    // the guards above leave every other on-screen pane exposed to a
+    // destructive write.
+    describe("visible-pane shrink clamp (#11673)", () => {
+      it("clamps to retained history instead of evicting on a visible unfocused pane", () => {
+        const managed = makeMockManaged({ isVisible: true });
+        managed.terminal.options.scrollback = largeCurrent;
+        setBufferLength(managed, largeCurrent);
+
+        restoreScrollback(managed);
+
+        // Ceiling comes down, but only as far as the lines already held.
+        expect(managed.terminal.options.scrollback).toBe(retained(managed));
+        expect(managed.terminal.options.scrollback).toBeGreaterThan(plainTarget);
+        expect(managed.terminal.options.scrollback).toBeLessThan(largeCurrent);
+      });
+
+      it("keeps every retained line when it clamps", () => {
+        const managed = makeMockManaged({ isVisible: true });
+        managed.terminal.options.scrollback = largeCurrent;
+        setBufferLength(managed, largeCurrent);
+
+        restoreScrollback(managed);
+
+        // The applied ceiling still holds everything the buffer had.
+        expect(managed.terminal.options.scrollback).toBeGreaterThanOrEqual(retained(managed));
+      });
+
+      it("is idempotent — a second pass on a clamped buffer writes nothing", () => {
+        const managed = makeMockManaged({ isVisible: true });
+        managed.terminal.options.scrollback = largeCurrent;
+        setBufferLength(managed, largeCurrent);
+
+        restoreScrollback(managed);
+        const afterFirst = managed.terminal.options.scrollback;
+        // Buffer now sits at the clamped capacity.
+        setBufferLength(managed, afterFirst + managed.terminal.rows);
+
+        restoreScrollback(managed);
+        expect(managed.terminal.options.scrollback).toBe(afterFirst);
+      });
+
+      it("does not stamp the reduce cooldown for a clamp", () => {
+        const managed = makeMockManaged({ isVisible: true });
+        managed.terminal.options.scrollback = largeCurrent;
+        setBufferLength(managed, largeCurrent);
+
+        restoreScrollback(managed);
+        expect(managed.lastScrollbackReduceAt).toBeUndefined();
+      });
+
+      it("clamps regardless of a live reduce cooldown", () => {
+        const nowSpy = vi.spyOn(Date, "now");
+        try {
+          const managed = makeMockManaged({ isVisible: true });
+          managed.lastScrollbackReduceAt = 10_000;
+          managed.terminal.options.scrollback = largeCurrent;
+          setBufferLength(managed, largeCurrent);
+
+          nowSpy.mockReturnValue(10_000 + SCROLLBACK_REDUCE_COOLDOWN_MS - 1);
+          restoreScrollback(managed);
+
+          // The cooldown exists to rate-limit destructive reduces; a clamp
+          // evicts nothing, so it must not be gated by one.
+          expect(managed.terminal.options.scrollback).toBe(retained(managed));
+          expect(managed.lastScrollbackReduceAt).toBe(10_000);
+        } finally {
+          nowSpy.mockRestore();
+        }
+      });
+
+      it("still evicts on a hidden pane", () => {
+        const managed = makeMockManaged({ isVisible: false });
+        managed.terminal.options.scrollback = largeCurrent;
+        setBufferLength(managed, largeCurrent);
+
+        restoreScrollback(managed);
+        expect(managed.terminal.options.scrollback).toBe(plainTarget);
+        expect(managed.lastScrollbackReduceAt).toBeDefined();
+      });
+
+      it("logs the eviction on a hidden pane so the clip is not silent", () => {
+        const managed = makeMockManaged({ isVisible: false });
+        managed.terminal.options.scrollback = largeCurrent;
+        setBufferLength(managed, largeCurrent);
+
+        restoreScrollback(managed);
+        expect(logInfo).toHaveBeenCalledWith(
+          "Terminal scrollback ceiling lowered, evicting history",
+          expect.objectContaining({
+            targetLines: plainTarget,
+            previousScrollback: largeCurrent,
+            rows: managed.terminal.rows,
+          })
+        );
+      });
+
+      it("applies the full target on a visible pane when nothing would be evicted", () => {
+        const managed = makeMockManaged({ isVisible: true });
+        managed.terminal.options.scrollback = largeCurrent;
+        setBufferLength(managed, managed.terminal.rows + 10);
+
+        restoreScrollback(managed);
+        expect(managed.terminal.options.scrollback).toBe(plainTarget);
+      });
+
+      it("never clamps a growth restore on a visible pane", () => {
+        const managed = makeMockManaged({ isVisible: true });
+        managed.terminal.options.scrollback = Math.floor(plainTarget / 3);
+        setBufferLength(managed, largeCurrent);
+
+        restoreScrollback(managed);
+        expect(managed.terminal.options.scrollback).toBe(plainTarget);
+      });
+
+      it("leaves the focused bare-return ahead of the clamp", () => {
+        const managed = makeMockManaged({ isVisible: true, isFocused: true });
+        managed.terminal.options.scrollback = largeCurrent;
+        setBufferLength(managed, largeCurrent);
+
+        // Interaction guards win: no write at all, not even a lossless one.
+        restoreScrollback(managed);
+        expect(managed.terminal.options.scrollback).toBe(largeCurrent);
+      });
+
+      it("leaves the selection bare-return ahead of the clamp", () => {
+        const managed = makeMockManaged({ isVisible: true });
+        managed.terminal.hasSelection = vi.fn(() => true);
+        managed.terminal.options.scrollback = largeCurrent;
+        setBufferLength(managed, largeCurrent);
+
+        restoreScrollback(managed);
+        expect(managed.terminal.options.scrollback).toBe(largeCurrent);
+      });
+    });
+
+    // #11673 — while the alternate screen is up, buffer.active is only `rows`
+    // tall. Measuring eviction on it reported zero, so the isAltBuffer guard
+    // sat inside a branch that could not be entered and xterm trimmed the
+    // normal buffer underneath a visible TUI.
+    describe("alt-buffer eviction accounting (#11673)", () => {
+      function makeAltBufferManaged(overrides: Record<string, unknown> = {}): ManagedTerminal {
+        const managed = makeMockManaged({ isAltBuffer: true, ...overrides });
+        // Alternate screen active: the visible buffer holds a viewport only,
+        // while the normal buffer still carries the session's history.
+        splitBuffers(managed, managed.terminal.rows, largeCurrent);
+        managed.terminal.options.scrollback = largeCurrent;
+        return managed;
+      }
+
+      it("skips the shrink for an alt-buffer pane holding normal-buffer history", () => {
+        const managed = makeAltBufferManaged();
+
+        restoreScrollback(managed);
+
+        expect(managed.terminal.options.scrollback).toBe(largeCurrent);
+        expect(managed.lastScrollbackReduceAt).toBeUndefined();
+      });
+
+      it("skips it for a hidden alt-buffer pane too", () => {
+        const managed = makeAltBufferManaged({ isVisible: false });
+
+        restoreScrollback(managed);
+        expect(managed.terminal.options.scrollback).toBe(largeCurrent);
+      });
+
+      it("would have shrunk under viewport-only accounting", () => {
+        const managed = makeAltBufferManaged();
+
+        // Pins the regression: active.length is a bare viewport, so measuring
+        // eviction on it yields zero and lets the write through.
+        expect(managed.terminal.buffer.active.length - managed.terminal.rows).toBe(0);
+        expect(managed.terminal.buffer.normal.length - managed.terminal.rows).toBeGreaterThan(
+          plainTarget
+        );
+      });
+
+      it("applies the shrink when the normal buffer holds nothing to lose", () => {
+        const managed = makeAltBufferManaged();
+        splitBuffers(managed, managed.terminal.rows, managed.terminal.rows + 5);
 
         restoreScrollback(managed);
         expect(managed.terminal.options.scrollback).toBe(plainTarget);

@@ -120,4 +120,37 @@ describe("@xterm/headless options.scrollback active truncation (issue #6215)", (
 
     expect(lengthAfterRepeat).toBe(lengthAfterFirstTrim);
   });
+
+  // #11673 — the renderer decides whether a shrink is destructive by measuring
+  // how much scrollback is retained. Measuring buffer.active gets that wrong
+  // under a TUI: the alternate screen is a bare viewport, so it reports zero
+  // retained lines while the setter still trims the normal buffer underneath.
+  it("trims the normal buffer while the alternate screen is active", async () => {
+    terminal = new Terminal({
+      cols: COLS,
+      rows: ROWS,
+      scrollback: INITIAL_SCROLLBACK,
+      allowProposedApi: true,
+    });
+
+    await writeAll(terminal, buildLines(LINES_TO_WRITE));
+    // Enter the alternate screen, as a full-screen TUI does.
+    await writeAll(terminal, "\x1b[?1049h");
+
+    expect(terminal.buffer.active.type).toBe("alternate");
+    const activeLengthBefore = terminal.buffer.active.length;
+    const normalLengthBefore = terminal.buffer.normal.length;
+
+    // The visible buffer is a viewport only — measuring it would report no
+    // retained scrollback and wave the destructive write through.
+    expect(activeLengthBefore - ROWS).toBeLessThanOrEqual(0);
+    expect(normalLengthBefore - ROWS).toBeGreaterThan(REDUCED_SCROLLBACK);
+
+    terminal.options.scrollback = REDUCED_SCROLLBACK;
+
+    expect(terminal.buffer.normal.length).toBeLessThan(normalLengthBefore);
+    expect(terminal.buffer.normal.length).toBeLessThanOrEqual(REDUCED_SCROLLBACK + ROWS);
+    // The alternate screen itself never carried the history that was lost.
+    expect(terminal.buffer.active.length).toBe(activeLengthBefore);
+  });
 });
