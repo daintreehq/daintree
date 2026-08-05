@@ -56,11 +56,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
-import {
-  TOOLBAR_CUSTOMIZE_LABEL,
-  TOOLBAR_PIN_LABEL,
-  TOOLBAR_UNPIN_LABEL,
-} from "./toolbarMenuStrings";
+import { TOOLBAR_PIN_LABEL, TOOLBAR_UNPIN_LABEL } from "./toolbarMenuStrings";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 import { useKeybindingDisplay } from "@/hooks";
@@ -1017,7 +1013,7 @@ export function LauncherMenuButton({
           {needsSetup.length > 0 && (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuLabel>Needs Setup</DropdownMenuLabel>
+              <DropdownMenuLabel>Needs setup</DropdownMenuLabel>
               {needsSetup.map((row) => (
                 <DropdownMenuItem
                   key={`setup-${row.id}`}
@@ -1039,7 +1035,7 @@ export function LauncherMenuButton({
           {showFallback && (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuLabel>Available Agents</DropdownMenuLabel>
+              <DropdownMenuLabel>Available agents</DropdownMenuLabel>
               {fallbackSetup.map((row) => (
                 <DropdownMenuItem
                   key={`fallback-${row.id}`}
@@ -1056,29 +1052,33 @@ export function LauncherMenuButton({
                   </span>
                 </DropdownMenuItem>
               ))}
+              {/*
+                Setup belongs to the empty state, not the footer (#11681). It
+                only helps when nothing is installed, and as a permanent third
+                row it was a second exit competing with `Manage agents` — which
+                already reaches the same settings.
+              */}
+              <DropdownMenuItem onSelect={handleOpenAgentSetupWizard} className="h-7">
+                <Plug className="mr-2 h-3.5 w-3.5" />
+                Set up agents
+              </DropdownMenuItem>
             </>
           )}
 
+          {/*
+            `Customize toolbar…` used to sit here too, sharing the `Settings2`
+            glyph with `Manage agents` so the two read as the same destination —
+            and `ToolbarContextMenuItems` already offers it on this button's
+            right click, where a global toolbar control belongs.
+          */}
           <DropdownMenuSeparator />
           <DropdownMenuActionItem actionId="panel.palette" className="h-7">
             <SquareMenu className="mr-2 h-3.5 w-3.5 text-text-secondary" />
             More panels…
           </DropdownMenuActionItem>
           <DropdownMenuItem onSelect={handleManageAgents} className="h-7">
-            <Settings2 className="mr-2 h-3.5 w-3.5 text-text-muted" />
-            Manage Agents
-          </DropdownMenuItem>
-          <DropdownMenuActionItem
-            actionId="app.settings.openTab"
-            args={{ tab: "toolbar" }}
-            className="h-7"
-          >
-            <Settings2 className="mr-2 h-3.5 w-3.5 text-text-muted" />
-            {TOOLBAR_CUSTOMIZE_LABEL}
-          </DropdownMenuActionItem>
-          <DropdownMenuItem onSelect={handleOpenAgentSetupWizard} className="h-7">
-            <Plug className="mr-2 h-3.5 w-3.5" />
-            Set Up Agents
+            <Settings2 className="mr-2 h-3.5 w-3.5 text-text-secondary" />
+            Manage agents
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

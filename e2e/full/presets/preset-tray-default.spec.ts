@@ -75,10 +75,10 @@ function launchEnv(): Record<string, string> {
 
 test.describe.serial("Presets: Tray Default Launch (101–106)", () => {
   // The open tray is the top-level role=menu that carries the always-present
-  // "Manage Agents" item (the nested preset SubContent never has it). Radix's
+  // "Manage agents" item (the nested preset SubContent never has it). Radix's
   // DropdownMenuContent has no accessible name, so identify it by that item
   // rather than by role+name.
-  const trayMenu = () => ctx.window.locator('[role="menu"]').filter({ hasText: "Manage Agents" });
+  const trayMenu = () => ctx.window.locator('[role="menu"]').filter({ hasText: "Manage agents" });
   const submenuContent = () => ctx.window.locator('[data-testid="submenu-content"]');
   const claudeSubmenuTrigger = () =>
     trayMenu().locator('[data-testid="submenu-trigger"]', { hasText: "Claude" });

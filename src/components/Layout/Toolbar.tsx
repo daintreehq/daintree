@@ -30,7 +30,12 @@ import {
 import { Spinner } from "@/components/ui/Spinner";
 import { FolderTree, Folders } from "@/components/icons";
 import { buildPluginToolbarMeta } from "./pluginToolbarMeta";
-import { TOOLBAR_BUTTON_METADATA, isToolbarButtonVisible } from "./toolbarButtonMetadata";
+import {
+  TOOLBAR_BUTTON_METADATA,
+  getToolbarButtonGroup,
+  isToolbarButtonVisible,
+} from "./toolbarButtonMetadata";
+import { getToolbarDividerAfterIds, orderToolbarButtonsByGroup } from "./toolbarButtonGrouping";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { cn } from "@/lib/utils";
 import { shortcutHintStore } from "@/store/shortcutHintStore";
@@ -87,7 +92,7 @@ import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentit
 import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
-import type { ToolbarButtonId, AnyToolbarButtonId } from "@/../../shared/types/toolbar";
+import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -125,16 +130,6 @@ import {
   isBuiltInAgentId,
   type BuiltInAgentId,
 } from "@shared/config/agentIds";
-
-// Carries `agent-tray`'s old membership forward under the merged id, so the
-// divider between the agent and non-agent runs lands exactly where it does
-// today. The launcher now holds panels too, which makes that grouping only
-// approximately right — #11681 replaces this predicate flip with declared group
-// data and owns the fix.
-const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
-  "launcher",
-  ...(LAUNCHABLE_AGENT_IDS as unknown as ToolbarButtonId[]),
-]);
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
@@ -1388,6 +1383,13 @@ export function Toolbar({
     toolbarLayout.rightButtons.includes("launcher") &&
     !toolbarLayout.leftButtons.includes("launcher");
 
+  // Declared group per button, resolved against the live plugin registry so a
+  // contribution is classified by membership rather than by parsing its id.
+  const resolveToolbarGroup = useCallback(
+    (id: AnyToolbarButtonId) => getToolbarButtonGroup(id, pluginConfigs.has(id)),
+    [pluginConfigs]
+  );
+
   const effectiveLeftButtons = useMemo(() => {
     // Dedupe defensively so a persisted list holding a repeated id never
     // renders duplicate pills (#10937) — the store also heals this, this is
@@ -1395,8 +1397,10 @@ export function Toolbar({
     const positioned = Array.from(new Set(toolbarLayout.leftButtons));
 
     if (!launcherOnRight && unpositionedAgentPins.length > 0) {
-      // Beside the launcher they were pinned out of, in registry order, so the
-      // brand marks stay contiguous rather than scattering to the end of the row.
+      // Right after the launcher they were pinned out of, so they lead the
+      // agent run in registry order rather than trailing the positioned ones.
+      // Grouping below is what keeps the brand marks contiguous; this only
+      // decides their order within that group.
       const launcherIndex = positioned.indexOf("launcher");
       positioned.splice(
         launcherIndex === -1 ? positioned.length : launcherIndex + 1,
@@ -1405,14 +1409,21 @@ export function Toolbar({
       );
     }
 
-    return positioned.filter((id) =>
-      isToolbarButtonVisible(
-        id,
-        pinnedButtons,
-        effectiveAgentSettings,
-        agentAvailability,
-        pluginConfigs.has(id)
-      )
+    // Grouped, not persisted order (#11681): the divider marks a group
+    // boundary, so the groups have to actually be contiguous. Ordering here
+    // rather than at the render loop means overflow, keyboard roving, and the
+    // DOM all see the same canonical sequence.
+    return orderToolbarButtonsByGroup(
+      positioned.filter((id) =>
+        isToolbarButtonVisible(
+          id,
+          pinnedButtons,
+          effectiveAgentSettings,
+          agentAvailability,
+          pluginConfigs.has(id)
+        )
+      ),
+      resolveToolbarGroup
     );
   }, [
     toolbarLayout.leftButtons,
@@ -1422,6 +1433,7 @@ export function Toolbar({
     effectiveAgentSettings,
     agentAvailability,
     pluginConfigs,
+    resolveToolbarGroup,
   ]);
 
   const effectiveRightButtons = useMemo(() => {
@@ -1558,10 +1570,17 @@ export function Toolbar({
     visibleSet: Set<AnyToolbarButtonId>
   ) => {
     const available = buttonIds.filter((id) => buttonRegistry[id]?.isAvailable);
-    const visible = available.filter((id) => visibleSet.has(id));
-    const elements: React.ReactNode[] = [];
+    // `buttonIds` arrives already grouped, so a divider belongs after every
+    // visible button whose declared group differs from the next visible one
+    // (#11681). Overflow-hidden buttons stay mounted for measurement but are
+    // excluded, so an evicted button never strands a divider.
+    const dividerAfter = getToolbarDividerAfterIds(
+      available,
+      (id) => visibleSet.has(id),
+      resolveToolbarGroup
+    );
 
-    // Render all available items (visible + hidden for measurement)
+    const elements: React.ReactNode[] = [];
     for (const id of available) {
       const isVisible = visibleSet.has(id);
       elements.push(
@@ -1577,32 +1596,13 @@ export function Toolbar({
           {buttonRegistry[id]!.render()}
         </div>
       );
-    }
-
-    // Insert group dividers between agent and non-agent visible items
-    const withDividers: React.ReactNode[] = [];
-    let visibleIdx = 0;
-    for (const el of elements) {
-      withDividers.push(el);
-      const key = (el as React.ReactElement).key as string;
-      if (visibleSet.has(key as AnyToolbarButtonId)) {
-        if (
-          visibleIdx < visible.length - 1 &&
-          AGENT_TOOLBAR_IDS.has(visible[visibleIdx] as ToolbarButtonId) !==
-            AGENT_TOOLBAR_IDS.has(visible[visibleIdx + 1] as ToolbarButtonId)
-        ) {
-          withDividers.push(
-            <div
-              key={`group-divider-${visibleIdx}`}
-              className={toolbarDividerClass}
-              aria-hidden="true"
-            />
-          );
-        }
-        visibleIdx++;
+      if (isVisible && dividerAfter.has(id)) {
+        elements.push(
+          <div key={`group-divider-${id}`} className={toolbarDividerClass} aria-hidden="true" />
+        );
       }
     }
-    return withDividers;
+    return elements;
   };
 
   const pluginTrayGroups = useMemo(
