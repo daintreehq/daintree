@@ -380,10 +380,12 @@ AppPaletteDialog.Header = function AppPaletteHeader({
  * palette with collapsible groups and left with it (#11669); no list on this
  * shell has a horizontal axis now.
  *
- * The page keys are NOT left to native scrolling, which is what they used to
- * be: scrolling the viewport without moving the selection walks the highlighted
- * row off screen and leaves Enter committing something the user can no longer
- * see. Palettes move the selection by a page instead.
+ * The page keys are forwarded rather than left to native scrolling, so a
+ * palette CAN bind them: scrolling the viewport without moving the selection
+ * walks the highlighted row off screen and leaves Enter committing something
+ * the user can no longer see. Forwarding alone changes nothing for a palette
+ * that ignores them — the shell never cancels a key itself, so a handler with
+ * no case for these leaves them to the browser exactly as before.
  */
 const BODY_NAVIGATION_KEYS = new Set([
   "ArrowUp",

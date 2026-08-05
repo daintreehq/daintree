@@ -296,14 +296,13 @@ function RunRow({
       onClick={onActivate}
       onPointerMove={onPointerMove}
       // One line, ~32px. Two-line rows made 8 agents into 16 lines of identical
-      // shape with nothing to scan down; the trailing group below puts the
-      // facts into columns instead.
+      // shape with nothing to scan down; columns are what give it a grain.
       className={cn(ROW_BASE, ROW_TONE, "gap-2 py-1 pr-3 pl-3")}
     >
       {/*
-        State rides the chevron column, so every agent's mark sits in one
-        vertical line down the left edge and the fleet's working-vs-waiting
-        split reads in a single glance without tracking across each row.
+        State leads the row, so every agent's mark sits in one vertical line
+        down the left edge and the fleet's working-vs-waiting split reads in a
+        single glance without tracking across each row.
       */}
       <span className="flex size-3.5 shrink-0 items-center justify-center">
         <PilotRunState band={row.band} agentState={row.run.agentState} />
@@ -617,10 +616,6 @@ export function PilotView() {
       setBandFilter("all");
       // Closing takes focus with it without a blur ever reaching the bar.
       setIsFilterFocused(false);
-      // A hold belongs to one pointer over one list. Carrying it across a close
-      // would reopen the surface serving the ranking of a fleet that has moved
-      // on, which is the staleness this stopped doing in the first place.
-      setPointerOrder(null);
     }
   }, [isOpen]);
 
@@ -670,13 +665,40 @@ export function PilotView() {
    */
   const handleRowPointerMove = useCallback(
     (rowId: string) => {
-      setPointerOrder((held) => (held === null ? capturePilotOrder(liveGroups) : held));
+      // Captured from what this render DREW, not from the live ranking. The two
+      // are the same whenever there is no hold, but they part company in one
+      // real sequence: pointer-leave queues the release, a fast re-entry queues
+      // this updater from the same still-committed render, and the updater then
+      // sees `held === null` while the screen the pointer came back to was
+      // still showing the held order. Capturing `liveGroups` there would take a
+      // snapshot of an order the user never saw and move rows under the cursor
+      // on the next commit — the exact misclick this guards against.
+      setPointerOrder((held) => (held === null ? capturePilotOrder(orderedGroups) : held));
       selectRow(rowId);
     },
-    [liveGroups, selectRow]
+    [orderedGroups, selectRow]
   );
 
   const releasePointerOrder = useCallback(() => setPointerOrder(null), []);
+
+  /**
+   * The two ways a hold outlives the pointer that took it.
+   *
+   * Backgrounding the app is the dangerous one: the cursor never moves, so no
+   * boundary event fires, and coming back after ten minutes to a ranking frozen
+   * since before you left is precisely the staleness this replaced. An emptied
+   * list is the quieter one — there is no row left under the cursor to protect,
+   * and whether removing the element the pointer was over fires a leave is not
+   * something to depend on.
+   */
+  useEffect(() => {
+    if (!isOpen || renderGroups.length === 0) {
+      setPointerOrder(null);
+      return;
+    }
+    window.addEventListener("blur", releasePointerOrder);
+    return () => window.removeEventListener("blur", releasePointerOrder);
+  }, [isOpen, renderGroups.length, releasePointerOrder]);
 
   /**
    * The keyboard takes the list back, and the pointer's hold with it.

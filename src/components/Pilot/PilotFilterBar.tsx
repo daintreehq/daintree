@@ -101,7 +101,7 @@ export interface PilotFilterBarProps {
  * `aria-activedescendant`; Tab hands real focus to this bar, and from that
  * moment the input's virtual focus is simply inert rather than contradicted.
  * Arrow keys are bound HERE and nowhere else — `usePaletteTreeNavigation` owns
- * Home/End/←/→ as structural keys, but only while focus is physically in the
+ * Home/End as structural keys, but only while focus is physically in the
  * input, so the two never contend.
  *
  * Selection follows focus, per the radiogroup pattern: the filter is instant

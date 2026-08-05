@@ -352,32 +352,58 @@ describe("usePaletteTreeNavigation", () => {
     });
 
     it("lands on the first row rather than wrapping past the start", () => {
-      const { result } = setup([["a", ["a1", "a2", "a3"]]]);
+      // Every non-first starting position, because a single one can agree with
+      // wrapping by coincidence: over a three-row list a wrapping PageUp from
+      // row 2 also lands on row 1, so that fixture alone proves nothing.
+      for (const from of ["i:a2", "i:a3"]) {
+        const { result, unmount } = setup([["a", ["a1", "a2", "a3"]]]);
 
-      act(() => result.current.selectRow("i:a2"));
-      act(() => result.current.handleBodyKeyDown(keyEvent("PageUp").event));
+        act(() => result.current.selectRow(from));
+        act(() => result.current.handleBodyKeyDown(keyEvent("PageUp").event));
 
-      expect(result.current.selectedRowId).toBe("i:a1");
+        expect(result.current.selectedRowId, `PageUp from ${from}`).toBe("i:a1");
+        unmount();
+      }
     });
 
-    it("keeps the page keys off the browser's own scrolling of the region", () => {
-      const { result } = setup(longList());
+    it.each(["PageUp", "PageDown"])(
+      "keeps %s off the browser's own scrolling of the region",
+      (key) => {
+        const { result } = setup(longList());
+        act(() => result.current.selectRow("i:a12"));
 
-      const pageDown = keyEvent("PageDown");
-      act(() => result.current.handleBodyKeyDown(pageDown.event));
+        const handle = keyEvent(key);
+        act(() => result.current.handleBodyKeyDown(handle.event));
 
-      // Native scrolling walks the viewport while the selection sits still,
-      // which is how the highlight ends up off screen with Enter still on it.
-      expectConsumed(pageDown, true, "PageDown must not also scroll natively");
-    });
+        // Native scrolling walks the viewport while the selection sits still,
+        // which is how the highlight ends up off screen with Enter still on it.
+        expectConsumed(handle, true, `${key} must not also scroll natively`);
+      }
+    );
 
-    it("leaves the page keys to the browser when nothing is navigable", () => {
+    it.each(["PageUp", "PageDown"])("leaves %s to the browser when nothing is navigable", (key) => {
       const { result } = setup([["a", []]]);
 
-      const pageDown = keyEvent("PageDown");
-      act(() => result.current.handleBodyKeyDown(pageDown.event));
+      const handle = keyEvent(key);
+      act(() => result.current.handleBodyKeyDown(handle.event));
 
-      expectConsumed(pageDown, false, "PageDown over an empty list");
+      expectConsumed(handle, false, `${key} over an empty list`);
+    });
+
+    it.each(["PageUp", "PageDown"])("takes %s from the input, where focus actually sits", (key) => {
+      // The body region is only reachable after Tab. The search box owns the
+      // keyboard by default, so a page key misclassified as a caret key would
+      // leave the main path broken with every body-path test still green.
+      const { result } = setup(longList(), {
+        shouldPreserveInputCaretKey: (event) => event.currentTarget.value.length > 0,
+      });
+      act(() => result.current.selectRow("i:a12"));
+
+      const handle = keyEvent(key, { value: "typed" });
+      act(() => result.current.handleInputKeyDown(handle.event));
+
+      expectConsumed(handle, true, `${key} on the input, caret keys preserved`);
+      expect(result.current.selectedRowId).not.toBe("i:a12");
     });
   });
 
@@ -568,6 +594,33 @@ describe("usePaletteTreeNavigation", () => {
       setup([["a", ["a1"]]], { isActive: false });
 
       expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it("re-scrolls when the selected row keeps its id but changes position", () => {
+      // A list that re-ranks under an open palette moves the selected row
+      // without touching its id, so an effect watching the active descendant
+      // alone never fires: the highlight walks off screen while Enter still
+      // commits it. This is the whole reason position is a dependency.
+      //
+      // The effect resolves the row through `getElementById`, so the rows this
+      // case walks past need elements of their own — the shared setup only
+      // stands up the first one.
+      for (const id of ["dom-i-a2", "dom-i-a3"]) {
+        const node = document.createElement("div");
+        node.id = id;
+        document.body.append(node);
+      }
+
+      const { result, rerender } = setup([["a", ["a1", "a2", "a3"]]]);
+      act(() => result.current.selectRow("i:a3"));
+      scrollIntoView.mockClear();
+
+      // Same three rows, same selected id — re-ranked so it now leads.
+      rerender({ groups: buildGroups([["a", ["a3", "a1", "a2"]]]), scope: undefined });
+
+      expect(result.current.selectedRowId).toBe("i:a3");
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
     });
   });
 });

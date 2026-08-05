@@ -29,10 +29,9 @@ const NEUTRAL_TONE = "text-text-secondary";
 /**
  * One glyph per band, shared by every surface that speaks about bands.
  *
- * The filter bar's segments and a collapsed group's pip cluster both draw from
- * here, so "the amber hollow circle" means the same thing in the list, in the
- * header and in the control that filters on it. A second set for any one of
- * them would teach the reader two vocabularies for one fact.
+ * The filter bar's segments draw from here too, so "the amber hollow circle"
+ * means the same thing in the list as in the control that filters on it. A
+ * second set for either would teach the reader two vocabularies for one fact.
  *
  * These are the BAND's representative shapes. `PilotRunState` refines two of
  * them where the row knows more than the band does — directing inside
