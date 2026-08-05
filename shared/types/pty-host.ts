@@ -312,7 +312,7 @@ export type PtyHostRequest =
       requestId: string;
       preserveSession?: boolean;
     }
-  | { type: "trim-state"; targetLines: number; requestId: string }
+  | { type: "trim-state"; targetLines: number; requestId: string; scope: TrimStateScope }
   | { type: "set-resource-monitoring"; enabled: boolean }
   | { type: "set-session-persist-suppressed"; suppressed: boolean }
   | { type: "set-resource-profile"; profile: ResourceProfile }
@@ -741,6 +741,23 @@ export type PtyHostResponseEvent = Extract<PtyHostEvent, { requestId: string }>;
 export interface GracefulKillResult {
   sessionId: string | null;
 }
+
+/**
+ * Who a `trim-state` pass is allowed to touch.
+ *
+ * `idle-only` applies the governance policy — a terminal with a live agent
+ * keeps its scrollback (which is also its serialize/restore source). This is
+ * for graduated pressure levers like ProcessMemoryMonitor tier 1, which are
+ * redundant with the host's own governor and must not cost more than they
+ * reclaim (#11674).
+ *
+ * `all` exempts nothing. Reserved for the post-pause emergency: once the
+ * governor has already paused every PTY, active agents are the dominant
+ * consumer, and sparing them leaves nothing to reclaim — the self-defeating
+ * shape that got the equivalent exemption reverted from `performPrePauseTrim`
+ * (#10948).
+ */
+export type TrimStateScope = "idle-only" | "all";
 
 /**
  * Outcome of one shard's `trim-state` pass. Trimming scrollback only drops JS

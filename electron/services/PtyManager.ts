@@ -145,18 +145,33 @@ export class PtyManager extends EventEmitter {
   /**
    * Uniform, unguarded flatten of every terminal's analysis scrollback.
    *
-   * Deliberately exempts nothing. Its only caller is the resource governor's
-   * `trimBuffers` fallback (`electron/pty-host.ts`), which runs on the host's
-   * fixed heap budget as the last step before an actual PTY pause — there,
-   * active agents are the dominant consumer, so exempting them leaves nothing
-   * to reclaim and self-defeats into the visible pause it exists to avoid
-   * (#10948, reverted). Pressure levers that are *not* the last line of
-   * defense must use {@link trimIdleAnalysisSessions} instead (#11674).
+   * Deliberately exempts nothing, and both its callers are emergencies: the
+   * resource governor's `trimBuffers` fallback (`electron/pty-host.ts`) and the
+   * `"all"`-scoped `trim-state` main sends after the governor has already
+   * paused every PTY. On the host's fixed heap budget active agents ARE the
+   * dominant consumer, so sparing them leaves nothing to reclaim and
+   * self-defeats into the visible pause this exists to avoid (#10948,
+   * reverted). Graduated pressure levers — which are redundant with the
+   * governor and must not cost more than they reclaim — use
+   * {@link trimIdleAnalysisSessions} instead (#11674).
+   *
+   * Counts are reported for the same reason they are on the guarded pass: the
+   * caller cannot observe this trim any other way. `skipped` here means "was
+   * already at or below the target", never "was protected".
    */
-  trimScrollback(targetLines: number): void {
+  trimScrollback(targetLines: number): { trimmed: number; skipped: number } {
+    let trimmed = 0;
+    let skipped = 0;
     for (const terminal of this.registry.getAll()) {
+      const before = terminal.getCurrentScrollback();
       terminal.trimScrollback(targetLines);
+      if (terminal.getCurrentScrollback() < before) {
+        trimmed++;
+      } else {
+        skipped++;
+      }
     }
+    return { trimmed, skipped };
   }
 
   /**

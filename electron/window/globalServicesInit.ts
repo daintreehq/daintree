@@ -459,7 +459,8 @@ export async function initGlobalServices(
           trimPtyHostState: async () => {
             const client = getPtyClient();
             if (!client) return { trimmed: 0, skipped: 0, shardsTotal: 0, shardsFailed: 0 };
-            return client.trimState(SCROLLBACK_BACKGROUND);
+            // Graduated lever: never at the cost of a working agent's history.
+            return client.trimState(SCROLLBACK_BACKGROUND, "idle-only");
           },
           sampleBlinkMemory: () => {
             if (!windowRegistry) return;

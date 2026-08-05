@@ -114,6 +114,27 @@ describe("PtyManager.trimIdleAnalysisSessions", () => {
     expect(result).toEqual({ trimmed: 0, skipped: 1 });
   });
 
+  it("leaves trimScrollback exempting nothing, agents included (#10948)", () => {
+    // The unguarded flatten backs two emergencies: the governor's last lever
+    // before a PTY pause, and the "all"-scoped trim main sends once the host
+    // has already paused. On a fixed heap the active agents ARE the memory, so
+    // adding a governance exemption here reclaims nothing and self-defeats into
+    // the visible pause — the shape that got reverted. This must never grow a
+    // guard just because its guarded sibling did.
+    const working = makeTerminal("working", { agentState: "working" });
+    const waiting = makeTerminal("waiting", { agentState: "waiting" });
+    const busy = makeTerminal("busy", { agentState: "working", idleMs: 0 });
+    const manager = managerWith([working, waiting, busy]);
+
+    const result = manager.trimScrollback(SCROLLBACK_MIN);
+
+    expect(result).toEqual({ trimmed: 3, skipped: 0 });
+    for (const terminal of [working, waiting, busy]) {
+      expect(terminal.trimScrollback).toHaveBeenCalledWith(SCROLLBACK_MIN);
+      expect(terminal.getCurrentScrollback()).toBe(SCROLLBACK_MIN);
+    }
+  });
+
   it("reports every terminal as skipped when agents hold them all", () => {
     // The tier-1 shape from #11674: a machine full of working agents. The pass
     // must be a no-op that says so, so a zero delta upstream is attributable to

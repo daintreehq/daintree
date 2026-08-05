@@ -294,10 +294,15 @@ export async function initPerWindowServices(
           }
         }
       }
-      // Fire-and-forget: unlike tier 1 this path makes no escalation decision,
-      // so the trim counts have no consumer here. `.catch()` rather than
-      // try/catch — trimState is async, so a rejection would escape the block.
-      void ptyClient!.trimState(SCROLLBACK_BACKGROUND).catch(() => {
+      // Scope "all": the host only throttles after the governor has paused
+      // every PTY, and at critical utilization it skips its own pre-pause trim
+      // to pause immediately — so this is the last buffer reclaim available,
+      // and sparing the active agents holding the memory would leave nothing
+      // to reclaim (#10948). Fire-and-forget: unlike tier 1 this path makes no
+      // escalation decision, so the counts have no consumer here. `.catch()`
+      // rather than try/catch — trimState is async, so a rejection would
+      // escape the block.
+      void ptyClient!.trimState(SCROLLBACK_BACKGROUND, "all").catch(() => {
         /* non-critical */
       });
     });

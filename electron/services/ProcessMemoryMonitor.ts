@@ -64,6 +64,33 @@ export const TIER1_MITIGATION_COOLDOWN_MS = 5 * 60 * 1000;
  */
 export const RECLAIM_SETTLE_MS = 3_000;
 
+/**
+ * Reclaim, in MB, that tier 1 must show to earn a reprieve from escalation
+ * while pressure persists but system memory is healthy.
+ *
+ * This is a suppressor, never an authorizer. Failing to clear it is not
+ * evidence tier 1 failed — only levers whose effect the sampler can attribute
+ * can clear it at all, in practice the hidden-portal-tab teardown that kills a
+ * renderer. The pty-host scrollback trim never can (see
+ * {@link RECLAIM_SETTLE_MS}), which is why the old gate — where a sub-threshold
+ * delta was one of the two conditions *permitting* escalation — rubber-stamped
+ * the tier-2 eviction tier 1 exists to prevent (#11674).
+ */
+export const MIN_RECLAIMED_MB = 50;
+
+/**
+ * How long a measured tier-1 reclaim stays evidence about current pressure.
+ *
+ * The tiers run on independent cooldowns (5 min vs 10 min), so the escalation
+ * poll is usually not the poll tier 1 acted on. A recent reclaim still says
+ * something about the pressure being judged — memory came back moments ago,
+ * give it a beat before destroying user state — but an old one does not, and
+ * the previous gate consulted it with no expiry at all. Three poll intervals
+ * spans the usual "tier 1 acts, tier 2 becomes eligible two polls later"
+ * sequence and expires long before tier 1 could run again.
+ */
+export const TIER1_REPRIEVE_MS = 3 * POLL_INTERVAL_MS;
+
 interface PidTrendState {
   startedAt: number;
   tickInBucket: number;
@@ -372,6 +399,8 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
   let pollCount = 0;
   let consecutivePressureCount = 0;
   let lastTier1At = 0;
+  /** Paired with {@link lastTier1At}: only read while that stamp is fresh. */
+  let lastTier1ReclaimMb = 0;
   let lastTier2At = 0;
   let mitigationInFlight = false;
   const thresholdExceededPids = new Set<number>();
@@ -537,6 +566,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       } else {
         consecutivePressureCount = 0;
         lastTier1At = 0;
+        lastTier1ReclaimMb = 0;
         return;
       }
 
@@ -652,6 +682,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
 
           const deltaMb = resampleFailed ? 0 : Math.max(0, beforeMb - afterMb);
           if (shouldRunTier1) {
+            lastTier1ReclaimMb = deltaMb;
             logInfo("memory-pressure-tier1-reclaim", {
               beforeMb: Math.round(beforeMb),
               afterMb: Math.round(afterMb),
@@ -678,20 +709,25 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             });
           }
 
-          // Pressure measured *after* tier 1 settled is the whole test. The gate
-          // used to also require `lastTier1ReclaimMb < MIN_RECLAIMED_MB`, which
-          // was unsound twice over: the pty-host trim can never move that number
-          // inside the settle window, so the term was true by construction and
-          // rubber-stamped every escalation; and because the two tiers run on
-          // out-of-phase cooldowns (5 min vs 10 min), the delta being consulted
-          // was usually a *stale* reading from an earlier poll, gating a
-          // present-tense decision on a past one. A footprint still over
-          // threshold after the settle is the honest signal, and it is the one
-          // that survives whether or not any lever's effect was observable
-          // (#11674).
+          // The reclaim can suppress escalation, but only while it is still
+          // evidence about the pressure being judged. Two things were wrong
+          // before: the delta is blind to tier 1's dominant lever, so
+          // "reclaimed < MIN" read as "tier 1 failed" by construction and
+          // *permitted* the escalation tier 1 exists to prevent; and it was
+          // consulted with no expiry, so a reading from an earlier poll gated a
+          // present-tense decision. Inverting it to a bounded suppressor keeps
+          // the half worth keeping — memory demonstrably came back moments ago,
+          // so wait a beat before destroying user state — while a lever whose
+          // effect is unobservable simply earns nothing rather than authorizing
+          // anything (#11674). System-level pressure overrides any reprieve:
+          // that floor is about the machine, not about whether we helped.
+          const tier1ReclaimIsFresh =
+            lastTier1At !== 0 && Date.now() - lastTier1At <= TIER1_REPRIEVE_MS;
+          const tier1EarnedReprieve = tier1ReclaimIsFresh && lastTier1ReclaimMb >= MIN_RECLAIMED_MB;
           if (
             shouldCheckTier2 &&
             pressureRemains &&
+            (systemPressureRemains || !tier1EarnedReprieve) &&
             Date.now() - lastTier2At >= MITIGATION_COOLDOWN_MS
           ) {
             // Stamp the cooldown BEFORE the tier-2 actions so a thrown
@@ -820,6 +856,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       trendWarnedPids.clear();
       consecutivePressureCount = 0;
       lastTier1At = 0;
+      lastTier1ReclaimMb = 0;
       lastTier2At = 0;
       mitigationInFlight = false;
     });

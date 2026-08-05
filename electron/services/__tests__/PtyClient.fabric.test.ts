@@ -784,15 +784,19 @@ describe("PtyClient fabric", () => {
 
       client.pauseAll();
       client.resumeAll();
-      void client.trimState(1000).catch(() => {});
+      void client.trimState(1000, "idle-only").catch(() => {});
 
       for (const child of [defaultShard().child, shardA.child]) {
         expect(messagesOfType(child, "pause-all")).toHaveLength(1);
         expect(messagesOfType(child, "resume-all")).toHaveLength(1);
         const trims = messagesOfType(child, "trim-state");
         expect(trims).toHaveLength(1);
-        expect(trims[0]).toMatchObject({ type: "trim-state", targetLines: 1000 });
-        expect(typeof trims[0].requestId).toBe("string");
+        expect(trims[0]).toEqual({
+          type: "trim-state",
+          targetLines: 1000,
+          scope: "idle-only",
+          requestId: expect.any(String),
+        });
       }
       client.dispose();
     });
@@ -803,7 +807,7 @@ describe("PtyClient fabric", () => {
       const shardA = projectShard("project-a");
       shardA.child.emit("message", { type: "ready" });
 
-      const promise = client.trimState(500);
+      const promise = client.trimState(500, "idle-only");
       const defaultReq = messagesOfType(defaultShard().child, "trim-state")[0];
       const shardAReq = messagesOfType(shardA.child, "trim-state")[0];
       defaultShard().child.emit("message", {
@@ -835,7 +839,7 @@ describe("PtyClient fabric", () => {
       const shardA = projectShard("project-a");
       shardA.child.emit("message", { type: "ready" });
 
-      const promise = client.trimState(500);
+      const promise = client.trimState(500, "idle-only");
       const defaultReq = messagesOfType(defaultShard().child, "trim-state")[0];
       defaultShard().child.emit("message", {
         type: "trim-state-result",
@@ -843,12 +847,39 @@ describe("PtyClient fabric", () => {
         result: { trimmed: 5, skipped: 1 },
       });
 
-      // Let the surviving shard's request time out in the broker.
-      await vi.advanceTimersByTimeAsync(120_000);
+      // Just past the shard broker's 5s default request deadline — advancing
+      // further would drive unrelated shard timers for no added coverage.
+      await vi.advanceTimersByTimeAsync(6_000);
 
       expect(await promise).toEqual({
         trimmed: 5,
         skipped: 1,
+        shardsTotal: 2,
+        shardsFailed: 1,
+      });
+      client.dispose();
+    });
+
+    it("counts an unreachable shard against the total instead of dropping it", async () => {
+      // A shard still booting cannot be sent to, but excluding it from the
+      // denominator would report a complete fan-out that never happened.
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      // Deliberately never ready.
+
+      const promise = client.trimState(500, "idle-only");
+      const defaultReq = messagesOfType(defaultShard().child, "trim-state")[0];
+      defaultShard().child.emit("message", {
+        type: "trim-state-result",
+        requestId: defaultReq.requestId,
+        result: { trimmed: 2, skipped: 0 },
+      });
+
+      expect(messagesOfType(shardA.child, "trim-state")).toHaveLength(0);
+      expect(await promise).toEqual({
+        trimmed: 2,
+        skipped: 0,
         shardsTotal: 2,
         shardsFailed: 1,
       });
