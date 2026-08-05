@@ -1041,11 +1041,11 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   // into a surprise panel; Cmd+Shift+F folds onto terminal.maximize's
   // Ctrl+Shift+F off-Mac.
   {
-    actionId: "worktree.openFileBrowser",
+    actionId: "worktree.openFileBrowserPanel",
     combo: "Cmd+Alt+F",
     scope: "global",
     priority: 0,
-    description: "Open file browser for focused worktree",
+    description: "Open file browser panel for focused worktree",
     category: "Worktrees",
   },
   {

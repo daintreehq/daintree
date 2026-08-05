@@ -5,6 +5,7 @@ import { SquareTerminal, Search, FolderTree } from "lucide-react";
 import { KbdChord } from "@/components/ui/Kbd";
 import { useEffectiveCombo, useAriaKeyshortcuts } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
+import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
 import { notify } from "@/lib/notify";
 import { getLaunchOptions, type LaunchOption } from "@/components/TerminalPalette/launchOptions";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -138,9 +139,13 @@ export function LauncherQuickActions() {
   // A function declaration so the retry action can name it.
   function openFileBrowser() {
     void actionService
-      .dispatch("worktree.openFileBrowser", undefined, { source: "user" })
+      .dispatch("worktree.openFileBrowserPanel", undefined, { source: "user" })
       .then((result) => {
         if (result.ok) return;
+        // A full grid is the one refusal `addPanel` has already reported, with
+        // an accurate message and the actual recovery. Saying "no folder
+        // resolved" on top of it would name the wrong cause (#11666).
+        if (isPanelLimitError(result.error.message)) return;
         notify({
           type: "error",
           title: "Couldn't open the file browser",
@@ -183,7 +188,7 @@ export function LauncherQuickActions() {
         <QuickAction
           icon={<FolderTree className="h-4 w-4" />}
           label="Browse files"
-          actionId="worktree.openFileBrowser"
+          actionId="worktree.openFileBrowserPanel"
           onClick={openFileBrowser}
         />
       </div>

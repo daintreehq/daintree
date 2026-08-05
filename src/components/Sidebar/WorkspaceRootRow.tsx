@@ -104,7 +104,7 @@ export function WorkspaceRootRow({
                     <button
                       type="button"
                       onClick={() => {
-                        void actionService.dispatch("worktree.openFileBrowser", undefined, {
+                        void actionService.dispatch("worktree.openFileBrowserPanel", undefined, {
                           source: "user",
                         });
                       }}
@@ -132,7 +132,7 @@ export function WorkspaceRootRow({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuActionItem actionId="worktree.openFileBrowser">
+          <ContextMenuActionItem actionId="worktree.openFileBrowserPanel">
             <FolderTree className={ICON_CLASS} />
             Browse files
           </ContextMenuActionItem>

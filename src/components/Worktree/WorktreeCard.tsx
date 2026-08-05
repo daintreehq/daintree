@@ -519,11 +519,24 @@ export function WorktreeCard({
     void actionService.dispatch("worktree.openChanges", { worktreeId: worktree.id });
   };
 
-  // Same shape as the Review Hub entry point: the action owns which surface the
-  // browser is presented on (dialog first, promotable to the grid), so the card
-  // only names the worktree.
+  // Unlike the Review Hub and Changes entry points above, this one opens a real
+  // grid panel rather than a dialog — and the grid renders only the active
+  // worktree's bucket, so a panel created for an inactive card would be
+  // backgrounded on arrival: counted, persisted, and invisible (#11666). Select
+  // first, exactly as `handleTerminalSelect` below does before focusing a
+  // terminal on an inactive card.
+  // `"user"`, not the menu source: the handler is defined in the card body,
+  // outside any menu Root, so `useMenuActionSource()` would fall back to
+  // exactly this and warn on the way. Naming a foreground source at all is what
+  // matters — it is what lets the panel take focus instead of deferring to the
+  // store's ambient spawn guards.
   const openFileBrowserForThisWorktree = () => {
-    void actionService.dispatch("worktree.openFileBrowser", { worktreeId: worktree.id });
+    if (!isActive) onSelect();
+    void actionService.dispatch(
+      "worktree.openFileBrowserPanel",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
   };
 
   // Route attach/detach through the resilient mutation outbox (#9163) instead

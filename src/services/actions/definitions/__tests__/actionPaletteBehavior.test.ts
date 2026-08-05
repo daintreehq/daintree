@@ -132,6 +132,31 @@ describe("action palette behavior", () => {
     }
   });
 
+  it("offers no two palette commands the user cannot tell apart", () => {
+    // Two rows with the same title in the same category are a coin toss at the
+    // point of choosing. The file browser had exactly this shape — a dialog
+    // opener and a panel opener, both "Browse files" — so only one is listed
+    // (#11666). Mirrors `useActionPalette`'s own filter for which definitions
+    // reach a row at all.
+    //
+    // Scored through `isPaletteRunnable`, not `kind`/`hidden` alone: an action
+    // the palette filters out for requiring args never renders a row, so it
+    // cannot collide with anything. Counting those would allowlist phantom
+    // pairs and let a real one slip in behind them.
+    const seen = new Map<string, string[]>();
+    for (const def of definitions.values()) {
+      if (!isPaletteRunnable(def)) continue;
+      const key = `${def.category ?? "General"} / ${def.title}`;
+      seen.set(key, [...(seen.get(key) ?? []), String(def.id)]);
+    }
+
+    const collisions = [...seen.entries()]
+      .filter(([, ids]) => ids.length > 1)
+      .map(([key, ids]) => `${key}: ${ids.join(", ")}`);
+
+    expect(collisions).toEqual([]);
+  });
+
   it("every palette redirect points at a registered, palette-runnable command", () => {
     const failures: string[] = [];
     for (const def of definitions.values()) {
