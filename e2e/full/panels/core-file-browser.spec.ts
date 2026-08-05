@@ -58,11 +58,6 @@ const BROWSER_DIALOG =
   ` [data-testid="file-browser-viewer-toggle"])`;
 
 /**
- * Opens the browser through the real action rather than driving the
- * virtualized tree: `revealPath` seeds the selection, so the preview renders
- * the file without a click that depends on row virtualization.
- */
-/**
  * The main worktree's id, polled rather than read once: the project's worktree
  * readiness gate is best-effort, so a loaded runner can briefly answer with an
  * empty list.
@@ -82,6 +77,11 @@ async function mainWorktreeId(page: Page): Promise<string> {
   return worktreeId!;
 }
 
+/**
+ * Opens the browser through the real action rather than driving the
+ * virtualized tree: `revealPath` seeds the selection, so the preview renders
+ * the file without a click that depends on row virtualization.
+ */
 async function openFileBrowser(page: Page, revealPath: string) {
   const worktreeId = await mainWorktreeId(page);
 
