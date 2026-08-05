@@ -58,7 +58,12 @@ export interface PilotProjectGroup {
   rows: PilotRow[];
   /** Runs in this project that constitute a demand on the user. */
   demandCount: number;
-  /** Worst band present, which is what orders the group against its siblings. */
+  /**
+   * Worst band among the rows below, recomputed rather than inherited whenever
+   * the group is narrowed. A derived summary of the group's contents only —
+   * group ORDER is workspace recency, and the header draws identity, not
+   * severity.
+   */
   topBand: FleetBand;
 }
 
@@ -93,6 +98,14 @@ export interface PilotWorkspaceMeta {
    * seen and stop counting as a hand-back — see `bandForRun`.
    */
   lastCompletionSeenAt?: number;
+  /**
+   * When the workspace was last switched to, which is what orders the groups.
+   * A project-to-project switch also stamps the project being LEFT, a
+   * millisecond behind, so that pair stays adjacent at the top; switches
+   * involving a scratch stamp only the one being entered. Anything but a
+   * finite positive number sorts as undateable.
+   */
+  lastOpened?: number;
 }
 
 export interface PilotRowContext {
@@ -136,53 +149,43 @@ function narrowGroup(group: PilotProjectGroup, rows: PilotRow[]): PilotProjectGr
 }
 
 /**
- * Oldest still-outstanding demand in a project, or undefined when it has none.
+ * An opening time reduced to something the comparator can total-order on.
  *
- * The group-level counterpart of {@link compareWithinBand}'s anti-starvation
- * rule, which is the point: a project whose block has been standing for forty
- * minutes stops being displaced by one that only just started asking.
- *
- * Not identical to it, deliberately. `compareWithinBand` ranks rows inside ONE
- * band; this takes the oldest demand of ANY kind, so a long-unread completion
- * can date a project whose worst band is a fresh question. That is the right
- * reading of "oldest outstanding demand" — a review nobody has looked at in two
- * hours is outstanding — but it does mean the two are not the same function.
- *
- * A demand with no `since` contributes nothing rather than counting as
- * infinitely old — an unknown age is not evidence of urgency.
+ * Anything that is not a finite positive number — absent metadata, a corrupt
+ * row, an infinity that would subtract to `NaN` — collapses to 0 and ranks as
+ * undateable. A `NaN` reaching the comparator is the reason this exists: it
+ * compares equal to every timestamp it meets, so the sort would silently stop
+ * being transitive and the same fleet could open two different ways.
  */
-function oldestDemand(rows: readonly PilotRow[]): number | undefined {
-  let oldest: number | undefined;
-  for (const row of rows) {
-    if (!isDemandBand(row.band)) continue;
-    const since = row.run.since;
-    if (since === undefined) continue;
-    if (oldest === undefined || since < oldest) oldest = since;
-  }
-  return oldest;
+function openedAt(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 /**
  * Group every run under the project that owns it.
  *
- * Project is the primary axis because that is the unit the user thinks in.
- * Ordering is by SEVERITY, never by how many agents a project holds: a project
- * running eight idle agents would otherwise bury one holding a single blocked
- * agent, which is the documented failure mode of count-based ranking in
- * operator tools. Volume is reported as a count on the header instead, where it
- * informs without competing for position.
+ * Project is the primary axis because that is the unit the user thinks in, and
+ * groups read in workspace MRU order: newest `lastOpened` first, then name and
+ * id to settle the rest. Severity never lifts one project above another — a
+ * blocked agent in a project left an hour ago does not outrank the one being
+ * worked in now (#11678).
  *
- * Ties break on the oldest outstanding demand, NOT on recency. Recency changed
- * between every single opening, so the group order was never the same twice and
- * spatial memory never formed — and it inverted the anti-starvation rule the
- * rows themselves already follow. Quiet projects, which have no demand to date,
- * fall back to the workspace this view already owns and then to name, so their
- * order is fixed for as long as they stay quiet and only genuinely demanding
- * projects float.
+ * This is not the recency #11626 rejected. That ordering read `latestActivity`,
+ * which moves while the palette is open, so groups reshuffled between openings
+ * the user had not caused and spatial memory never formed. `lastOpened` moves
+ * only when the user switches workspace, so the order holds still across
+ * openings and changes only where they changed it themselves.
  *
- * The current workspace is deliberately NOT pinned above severity: putting
- * context first would bury a blocked agent in another project, which is the
- * exact failure the band ordering exists to prevent.
+ * A workspace this view cannot date sorts LAST, not first. Ranking an anomaly
+ * above everything is the worse failure here: the two name stores hydrate on
+ * separate promises, so a half-loaded palette would open with its unresolved
+ * groups on top and watch them drop as the names land — the unstable order
+ * again, through the back door. An undateable group still renders and still
+ * filters; it just does not outrank a workspace with a real history.
+ *
+ * Severity and anti-starvation stay the ROW rule inside each group: worst band
+ * first, then oldest `since`. A project's demands still surface at the top of
+ * its own rows — they just no longer move the project itself.
  */
 export function buildPilotGroups(
   runs: readonly FleetRunRow[],
@@ -195,7 +198,7 @@ export function buildPilotGroups(
     else byWorkspace.set(run.workspaceId, [run]);
   }
 
-  const groups: Array<PilotProjectGroup & { oldestDemand: number | undefined }> = [];
+  const groups: Array<PilotProjectGroup & { lastOpened: number }> = [];
   for (const [workspaceId, workspaceRuns] of byWorkspace) {
     const meta = ctx.workspaces.get(workspaceId);
     // A run whose workspace has been removed from the store still has to render
@@ -263,28 +266,17 @@ export function buildPilotGroups(
       rows,
       demandCount: rows.filter((r) => isDemandBand(r.band)).length,
       topBand: rows[0]?.band ?? "idle",
-      oldestDemand: oldestDemand(rows),
+      lastOpened: openedAt(meta?.lastOpened),
     });
   }
 
   groups.sort((a, b) => {
-    const byBand = rank(a.topBand) - rank(b.topBand);
-    if (byBand !== 0) return byBand;
+    const byRecency = b.lastOpened - a.lastOpened;
+    if (byRecency !== 0) return byRecency;
 
-    // Both sides share a top band here, so testing either one answers for the
-    // pair. A demand band ranks by how long it has been outstanding; anything
-    // else has no urgency to compare and gives primacy to the workspace this
-    // view is already in, where opening a run costs no switch.
-    if (isDemandBand(a.topBand)) {
-      const ao = a.oldestDemand;
-      const bo = b.oldestDemand;
-      if (ao !== undefined && bo !== undefined && ao !== bo) return ao - bo;
-      if (ao === undefined && bo !== undefined) return 1;
-      if (bo === undefined && ao !== undefined) return -1;
-    } else if (a.isCurrent !== b.isCurrent) {
-      return a.isCurrent ? -1 : 1;
-    }
-
+    // Equal recency means MRU has nothing left to say, so what settles the pair
+    // is stable identity rather than agent state — a group must not change
+    // place because a run inside it started or blocked.
     const byName = a.name.localeCompare(b.name);
     if (byName !== 0) return byName;
     // Workspace id last, so the comparator is a TRUE total order. Two projects
@@ -295,7 +287,7 @@ export function buildPilotGroups(
     return a.workspaceId < b.workspaceId ? -1 : 1;
   });
 
-  return groups.map(({ oldestDemand: _oldest, ...group }) => group);
+  return groups.map(({ lastOpened: _lastOpened, ...group }) => group);
 }
 
 /**
