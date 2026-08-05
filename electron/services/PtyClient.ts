@@ -2323,7 +2323,8 @@ export class PtyClient extends EventEmitter {
    * Resolves with the summed counts rather than void because the trim's effect
    * is invisible to a footprint re-sample: it drops JS references, and nothing
    * returns to the OS inside any settle window main can afford to wait. The
-   * counts are the only evidence it ran.
+   * counts are the only account of what it did — a record of the shrink each
+   * host applied and dispatched, not of a worker confirming it landed.
    *
    * `shardsTotal` counts every live shard, not just the ones that could be
    * reached — a shard still booting or mid-restart is counted as failed rather

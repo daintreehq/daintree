@@ -316,9 +316,9 @@ export interface MemoryPressureActions {
   /**
    * Asks the pty-host to trim the scrollback of terminals its governance policy
    * clears — never one with a live agent. Resolves with the trimmed/skipped
-   * counts, which are the only observable evidence it ran: the trim drops JS
-   * references, and no footprint re-sample within a settle window can see that
-   * (#11674). The counts are logged, never used to gate escalation.
+   * counts, which are the only observable account of what it did: the trim
+   * drops JS references, and no footprint re-sample within a settle window can
+   * see that (#11674). The counts are logged, never used to gate escalation.
    */
   trimPtyHostState?: () => Promise<TrimStateSummary>;
   /**
@@ -641,6 +641,12 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           let tier1TrimFailed = false;
           if (shouldRunTier1) {
             lastTier1At = Date.now();
+            // Retire the previous reclaim as the stamp it is paired with moves.
+            // Without this, a lever throwing before the measurement below (an
+            // un-caught destroyHiddenWebviews) would leave an old figure sitting
+            // behind a fresh timestamp — stale evidence reading as current, the
+            // exact failure the expiry exists to prevent.
+            lastTier1ReclaimMb = 0;
             logInfo("memory-pressure-tier1-mitigation", {
               pollCount,
               consecutivePressureCount,
@@ -649,9 +655,12 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
 
             tier1TabsEvicted = await actions.destroyHiddenWebviews(1);
 
-            // Awaited so the settle window below brackets a *completed* trim.
-            // Fire-and-forget left the host still processing the message while
-            // the sampler was already reading the "after" footprint.
+            // Awaited so the host has at least accepted and applied the request
+            // before the settle window opens; fire-and-forget left it still
+            // parsing the message while the sampler read the "after" footprint.
+            // Not a completion barrier — the worker-backed path posts the
+            // resize onward without waiting — which is precisely why the gate
+            // below does not treat this lever as measurable.
             try {
               tier1Trim = (await actions.trimPtyHostState?.()) ?? null;
             } catch {
@@ -721,9 +730,13 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           // effect is unobservable simply earns nothing rather than authorizing
           // anything (#11674). System-level pressure overrides any reprieve:
           // that floor is about the machine, not about whether we helped.
+          // A failed re-sample voids the reprieve outright: we cannot see
+          // current pressure, so an earlier reclaim is not grounds to wait.
+          // Fail toward escalation, matching the catch above.
           const tier1ReclaimIsFresh =
             lastTier1At !== 0 && Date.now() - lastTier1At <= TIER1_REPRIEVE_MS;
-          const tier1EarnedReprieve = tier1ReclaimIsFresh && lastTier1ReclaimMb >= MIN_RECLAIMED_MB;
+          const tier1EarnedReprieve =
+            !resampleFailed && tier1ReclaimIsFresh && lastTier1ReclaimMb >= MIN_RECLAIMED_MB;
           if (
             shouldCheckTier2 &&
             pressureRemains &&

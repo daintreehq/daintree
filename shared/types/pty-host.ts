@@ -762,12 +762,17 @@ export type TrimStateScope = "idle-only" | "all";
 /**
  * Outcome of one shard's `trim-state` pass. Trimming scrollback only drops JS
  * references, so the caller's footprint re-sample cannot attribute a delta to it
- * within any practical settle window (#11674). These counts are the only
- * evidence the trim ran, and they separate "every terminal was deliberately
- * protected" from "there was nothing left to trim".
+ * within any practical settle window (#11674). These counts are what the pass
+ * decided to do, and they separate "every terminal was deliberately protected"
+ * from "there was nothing left to trim".
+ *
+ * They are a record of intent, not of completion: on the worker-backed analysis
+ * path the host lowers its own cap and posts the resize to the worker without
+ * waiting for it, so `trimmed` means the shrink was applied and dispatched, not
+ * that the worker's buffer has already released the lines.
  */
 export interface TrimStateResult {
-  /** Terminals whose scrollback cap actually moved down. */
+  /** Terminals whose scrollback cap moved down. */
   trimmed: number;
   /** Terminals the per-session policy protected, or that were already at the floor. */
   skipped: number;

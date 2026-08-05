@@ -1145,6 +1145,38 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
     });
 
+    it("voids a live reprieve when the tier-2 re-sample fails", async () => {
+      // Earn a reprieve, then blind the next poll's re-sample while it is still
+      // fresh. Not seeing current pressure is not a reason to keep waiting on
+      // an earlier reclaim — the failure path has to fall toward escalation,
+      // not inherit the suppression.
+      let postMitigation = false;
+      // The poll's own read must still succeed — blinding it too would abort
+      // the poll before the gate, testing nothing. Allow that one read, then
+      // fail the pre-sample and the post-settle re-sample behind it.
+      let readsBeforeBlinding = Infinity;
+      mockGetAppMetrics.mockImplementation(() => {
+        if (readsBeforeBlinding <= 0) throw new Error("metrics unavailable");
+        readsBeforeBlinding--;
+        const mb = postMitigation ? 400 - MIN_RECLAIMED_MB : 400;
+        return [makeMetric("Browser", mb * 1024, 100, mb * 1024)];
+      });
+      mockActions.destroyHiddenWebviews = vi.fn().mockImplementation(async (tier) => {
+        if (tier === 1) postMitigation = true;
+        return 0;
+      });
+      stop = startAppMetricsMonitor(mockActions);
+
+      // Stop one poll short of tier-2 eligibility, with the reprieve earned.
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 - 1);
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+
+      readsBeforeBlinding = 1;
+      await advancePolls(1);
+
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+    });
+
     it("never lets the unobservable trim earn a reprieve it cannot demonstrate", async () => {
       // The reported bug: a scrollback trim cannot move deltaMb inside the
       // settle window, so tier 1 shows ~0 reclaim however much it did. That
@@ -1342,8 +1374,9 @@ describe("ProcessMemoryMonitor", () => {
 
       expect(mitigation).toBeDefined();
       expect(mitigation?.[1]).not.toHaveProperty("deltaMb");
-      // `tier1ReclaimMb` is gone with the delta gate it fed (#11674) — it
-      // reported a number tier 1's dominant lever could never move.
+      // The tier-2 line no longer republishes tier 1's reclaim (#11674). The
+      // figure still exists as a bounded suppressor, but reporting it here
+      // implied it described this tier, which it never did.
       expect(mitigation?.[1]).not.toHaveProperty("tier1ReclaimMb");
       expect(mitigation?.[1]).toMatchObject({
         systemPressureRemains: false,

@@ -230,18 +230,20 @@ export class PtyManager extends EventEmitter {
    * (ACTIVE_AGENT_STATES — the same set that protects against eviction and
    * hibernation).
    *
-   * Two callers, both of which reach it through a host handler: the
-   * profile-driven efficiency entry, and main's memory-pressure `trim-state`
-   * fan-out (tier 1 and `host-throttled`). Neither is a last-resort lever — the
-   * governor's own ranked reclaim has already run or been skipped by the time
-   * `trim-state` lands — so the per-session policy is the only thing between
-   * either of them and a working agent, and it must stay conservative. The
-   * buffer this shrinks is also what `getSerializedStateAsync()` serializes, so
-   * an over-eager trim costs restore fidelity, not just live scrollback.
+   * Two callers, both reaching it through a host handler: the profile-driven
+   * efficiency entry, and the `idle-only` scope of main's memory-pressure
+   * `trim-state`. Neither is a last-resort lever, so the per-session policy is
+   * the only thing between either of them and a working agent and it must stay
+   * conservative. The post-pause emergency (`trim-state` scope `all`) and the
+   * governor's own fallback deliberately bypass this and use
+   * {@link trimScrollback}. The buffer this shrinks is also what
+   * `getSerializedStateAsync()` serializes, so an over-eager trim costs restore
+   * fidelity, not just live scrollback.
    *
-   * `trimmed` counts only terminals whose cap actually moved: the analysis
-   * backend can refuse a resize, and a count that reported those as trimmed
-   * would be exactly the unfalsifiable telemetry #11674 is about.
+   * `trimmed` counts only terminals whose cap moved: the analysis backend can
+   * refuse a resize, and reporting those as trimmed would be exactly the
+   * unfalsifiable telemetry #11674 is about. It still describes the shrink this
+   * process applied and dispatched, not a worker's confirmation of it.
    */
   trimIdleAnalysisSessions(opts?: { now?: number; targetLines?: number; idleTrimMs?: number }): {
     trimmed: number;
