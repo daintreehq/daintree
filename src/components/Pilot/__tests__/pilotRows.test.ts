@@ -216,21 +216,21 @@ describe("buildPilotGroups", () => {
   it("orders projects by last opened, not by worst band", () => {
     const groups = buildPilotGroups(
       [
-        run({ runId: "w", workspaceId: "fresh", agentState: "working", since: NOW }),
         run({
           runId: "b",
-          workspaceId: "stale",
+          workspaceId: "aa-stale",
           agentState: "waiting",
           waitingReason: "error",
           since: NOW,
         }),
+        run({ runId: "w", workspaceId: "zz-fresh", agentState: "working", since: NOW }),
       ],
       ctx({
         workspaces: new Map([
-          // Named so that the old band rule and a bare name fallback would BOTH
-          // put "aaa" first. Only recency lifts the just-opened project over it.
-          ["fresh", { kind: "project", name: "zzz", lastOpened: NOW }],
-          ["stale", { kind: "project", name: "aaa", lastOpened: NOW - 3_600_000 }],
+          // Name, band, arrival order and workspace id would ALL put the stale
+          // project first. Only recency lifts the just-opened one over it.
+          ["aa-stale", { kind: "project", name: "aaa", lastOpened: NOW - 3_600_000 }],
+          ["zz-fresh", { kind: "project", name: "zzz", lastOpened: NOW }],
         ]),
       })
     );
@@ -299,8 +299,10 @@ describe("buildPilotGroups", () => {
   it("breaks an equal last-opened tie by name", () => {
     const groups = buildPilotGroups(
       [
-        run({ runId: "b", workspaceId: "p2", agentState: "working", since: NOW }),
+        // Arrival order and workspace id both favour "beta", so only the name
+        // tiebreak can produce the expected order.
         run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW }),
+        run({ runId: "b", workspaceId: "p2", agentState: "working", since: NOW }),
       ],
       ctx({
         workspaces: new Map([
@@ -335,16 +337,18 @@ describe("buildPilotGroups", () => {
   it("does not let run activity times reorder project groups", () => {
     // Group order is workspace recency, which only a switch advances. An agent
     // starting or blocking must not reshuffle the projects under the cursor.
-    const quiet = (aSince: number, bSince: number) =>
+    // Name, arrival order and workspace id all favour "alpha", so only recency
+    // can put "beta" first — and it has to do so whichever way the runs age.
+    const quiet = (betaSince: number, alphaSince: number) =>
       buildPilotGroups(
         [
-          run({ runId: "a", workspaceId: "p1", agentState: "working", since: aSince }),
-          run({ runId: "b", workspaceId: "p2", agentState: "working", since: bSince }),
+          run({ runId: "b", workspaceId: "a-quiet", agentState: "working", since: alphaSince }),
+          run({ runId: "a", workspaceId: "z-busy", agentState: "working", since: betaSince }),
         ],
         ctx({
           workspaces: new Map([
-            ["p1", { kind: "project", name: "beta", lastOpened: NOW }],
-            ["p2", { kind: "project", name: "alpha", lastOpened: NOW - 600_000 }],
+            ["z-busy", { kind: "project", name: "beta", lastOpened: NOW }],
+            ["a-quiet", { kind: "project", name: "alpha", lastOpened: NOW - 600_000 }],
           ]),
         })
       ).map((g) => g.name);
@@ -353,20 +357,50 @@ describe("buildPilotGroups", () => {
     expect(quiet(NOW, NOW - 600_000)).toEqual(["beta", "alpha"]);
   });
 
+  it("treats an unusable opening time as undateable instead of breaking the order", () => {
+    // `Infinity - Infinity` is NaN, and a NaN comparator result reads as "these
+    // two are equal" against everything it touches, so the sort quietly stops
+    // being transitive and the same fleet opens two different ways.
+    const fleet = (runs: Parameters<typeof buildPilotGroups>[0]) =>
+      buildPilotGroups(
+        runs,
+        ctx({
+          workspaces: new Map([
+            ["w-inf", { kind: "project", name: "aaa", lastOpened: Number.POSITIVE_INFINITY }],
+            ["w-nan", { kind: "project", name: "bbb", lastOpened: Number.NaN }],
+            ["w-real", { kind: "project", name: "zzz", lastOpened: NOW }],
+          ]),
+        })
+      ).map((g) => g.name);
+
+    const runs = [
+      run({ runId: "a", workspaceId: "w-inf", agentState: "working", since: NOW }),
+      run({ runId: "b", workspaceId: "w-nan", agentState: "working", since: NOW }),
+      run({ runId: "c", workspaceId: "w-real", agentState: "working", since: NOW }),
+    ];
+
+    // The one real timestamp leads despite sorting last by name, and the two
+    // unusable ones settle by name the same way whichever order they arrive in.
+    expect(fleet(runs)).toEqual(["zzz", "aaa", "bbb"]);
+    expect(fleet([...runs].reverse())).toEqual(["zzz", "aaa", "bbb"]);
+  });
+
   it("does not use the current workspace to break an equal-recency tie", () => {
     // Being the workspace asking is not evidence of recency — `lastOpened`
     // already carries that, and under write suppression a switch can leave it
     // unmoved, so context must not buy a position the timestamp does not.
     const groups = buildPilotGroups(
       [
-        run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW }),
-        run({ runId: "b", workspaceId: "p2", agentState: "working", since: NOW }),
+        // Being current, arriving first and holding the lower workspace id all
+        // point at "zeta", so only the name tiebreak explains the result.
+        run({ runId: "b", workspaceId: "a-here", agentState: "working", since: NOW }),
+        run({ runId: "a", workspaceId: "z-there", agentState: "working", since: NOW }),
       ],
       ctx({
-        currentWorkspaceId: "p2",
+        currentWorkspaceId: "a-here",
         workspaces: new Map([
-          ["p1", { kind: "project", name: "alpha", lastOpened: NOW }],
-          ["p2", { kind: "project", name: "zeta", lastOpened: NOW }],
+          ["z-there", { kind: "project", name: "alpha", lastOpened: NOW }],
+          ["a-here", { kind: "project", name: "zeta", lastOpened: NOW }],
         ]),
       })
     );

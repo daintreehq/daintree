@@ -94,8 +94,10 @@ export interface PilotWorkspaceMeta {
    */
   lastCompletionSeenAt?: number;
   /**
-   * When the workspace was last switched to, which is what orders the groups.
-   * Absent means no opening was ever recorded, which sorts last.
+   * When the workspace was last switched to or away from, which is what orders
+   * the groups. Leaving a project stamps it too, a millisecond behind the one
+   * being entered, so the pair either side of a switch stays adjacent at the
+   * top. Anything but a finite positive number sorts as undateable.
    */
   lastOpened?: number;
 }
@@ -141,21 +143,39 @@ function narrowGroup(group: PilotProjectGroup, rows: PilotRow[]): PilotProjectGr
 }
 
 /**
+ * An opening time reduced to something the comparator can total-order on.
+ *
+ * Anything that is not a finite positive number — absent metadata, a corrupt
+ * row, an infinity that would subtract to `NaN` — collapses to 0 and ranks as
+ * undateable. A `NaN` reaching the comparator is the reason this exists: it
+ * compares equal to every timestamp it meets, so the sort would silently stop
+ * being transitive and the same fleet could open two different ways.
+ */
+function openedAt(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
  * Group every run under the project that owns it.
  *
  * Project is the primary axis because that is the unit the user thinks in, and
- * groups read in workspace MRU order: newest `lastOpened` first, a workspace
- * with no recorded opening last, then name and id to settle the rest. Severity
- * never lifts one project above another — a blocked agent in a project left an
- * hour ago does not outrank the one being worked in now. Worst band and volume
- * are reported on the header instead, where they inform without competing for
- * position.
+ * groups read in workspace MRU order: newest `lastOpened` first, then name and
+ * id to settle the rest. Severity never lifts one project above another — a
+ * blocked agent in a project left an hour ago does not outrank the one being
+ * worked in now (#11678).
  *
  * This is not the recency #11626 rejected. That ordering read `latestActivity`,
  * which moves while the palette is open, so groups reshuffled between openings
- * the user had not caused and spatial memory never formed. `lastOpened` only
- * advances when a workspace is actually switched to, so the order holds still
- * until the user is the one who changed it.
+ * the user had not caused and spatial memory never formed. `lastOpened` moves
+ * only when the user switches workspace, so the order holds still across
+ * openings and changes only where they changed it themselves.
+ *
+ * A workspace this view cannot date sorts LAST, not first. Ranking an anomaly
+ * above everything is the worse failure here: the two name stores hydrate on
+ * separate promises, so a half-loaded palette would open with its unresolved
+ * groups on top and watch them drop as the names land — the unstable order
+ * again, through the back door. An undateable group still renders and still
+ * filters; it just does not outrank a workspace with a real history.
  *
  * Severity and anti-starvation stay the ROW rule inside each group: worst band
  * first, then oldest `since`. A project's demands still surface at the top of
@@ -240,7 +260,7 @@ export function buildPilotGroups(
       rows,
       demandCount: rows.filter((r) => isDemandBand(r.band)).length,
       topBand: rows[0]?.band ?? "idle",
-      lastOpened: meta?.lastOpened ?? 0,
+      lastOpened: openedAt(meta?.lastOpened),
     });
   }
 

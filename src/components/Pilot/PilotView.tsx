@@ -539,8 +539,8 @@ export function PilotView() {
    * this surface exists to give, so it has to stay true: an agent that blocks
    * while you are looking at the list has to rise to where the ranking says it
    * belongs, not sit below every idle agent until you close and reopen. Group
-   * order follows workspace recency and holds still on its own, so what moves
-   * under the pointer is a row within its project.
+   * order is workspace recency, which no amount of agent state can move — but a
+   * switch elsewhere can, which is why the hold has to cover whole groups too.
    *
    * The misclick this used to guard against is real but pointer-only. Selection
    * is keyed by `rowId` (#11071), so a re-rank cannot make Enter commit a row
