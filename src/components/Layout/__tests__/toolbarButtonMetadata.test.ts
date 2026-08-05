@@ -1,8 +1,17 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
-import { TOOLBAR_BUTTON_METADATA, isToolbarButtonVisible } from "../toolbarButtonMetadata";
-import { TOOLBAR_BUTTON_PRIORITIES, type AnyToolbarButtonId } from "@shared/types/toolbar";
+import {
+  TOOLBAR_BUTTON_GROUP_ORDER,
+  TOOLBAR_BUTTON_METADATA,
+  getToolbarButtonGroup,
+  isToolbarButtonVisible,
+} from "../toolbarButtonMetadata";
+import {
+  LAUNCHER_PANEL_BUTTON_IDS,
+  TOOLBAR_BUTTON_PRIORITIES,
+  type AnyToolbarButtonId,
+} from "@shared/types/toolbar";
 
 // IDs that intentionally have no entry in TOOLBAR_BUTTON_METADATA. The fixed
 // titlebar buttons (sidebar-toggle, assistant-toggle, portal-toggle) are
@@ -136,5 +145,50 @@ describe("isToolbarButtonVisible", () => {
         { "daintree-assistant": "ready" } as never
       )
     ).toBe(false);
+  });
+});
+
+describe("getToolbarButtonGroup (#11681)", () => {
+  it("puts every built-in agent in the agents group", () => {
+    for (const id of BUILT_IN_AGENT_IDS) {
+      expect(getToolbarButtonGroup(id as AnyToolbarButtonId)).toBe("agents");
+    }
+  });
+
+  it("classifies the launcher and every launcher panel button", () => {
+    expect(getToolbarButtonGroup("launcher")).toBe("launcher");
+    // Read off the launcher's own list rather than a copy, so a panel button
+    // added there can't silently fall through to `utilities`.
+    for (const id of LAUNCHER_PANEL_BUTTON_IDS) {
+      expect(getToolbarButtonGroup(id)).toBe("panels");
+    }
+  });
+
+  it("trails unclassified built-ins into utilities rather than calling them panels", () => {
+    for (const id of ["plugin-tray", "settings", "notification-center", "copy-tree"] as const) {
+      expect(getToolbarButtonGroup(id)).toBe("utilities");
+    }
+  });
+
+  it("routes a registered plugin contribution to utilities by registry membership", () => {
+    const pluginId = "my-plugin.action" as AnyToolbarButtonId;
+    expect(getToolbarButtonGroup(pluginId, true)).toBe("utilities");
+    // Agent classification wins over the plugin flag — a contribution can't
+    // impersonate an agent by claiming an agent id.
+    expect(getToolbarButtonGroup(BUILT_IN_AGENT_IDS[0] as AnyToolbarButtonId, true)).toBe("agents");
+  });
+
+  it("does not inherit a group from Object.prototype for a prototype-shaped id", () => {
+    // The lookup is a Map, so these resolve to the fallback instead of picking
+    // up an inherited member.
+    for (const id of ["constructor", "__proto__", "toString"] as unknown as AnyToolbarButtonId[]) {
+      expect(getToolbarButtonGroup(id)).toBe("utilities");
+    }
+  });
+
+  it("declares a group for every id the metadata registry knows", () => {
+    for (const id of Object.keys(TOOLBAR_BUTTON_METADATA) as AnyToolbarButtonId[]) {
+      expect(TOOLBAR_BUTTON_GROUP_ORDER).toContain(getToolbarButtonGroup(id));
+    }
   });
 });

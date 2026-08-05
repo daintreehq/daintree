@@ -45,9 +45,14 @@ import { LAUNCHABLE_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds"
 import { isAgentButtonOnToolbar } from "../../../shared/utils/agentPinned";
 import {
   TOOLBAR_BUTTON_METADATA,
+  getToolbarButtonGroup,
   isToolbarButtonVisible,
   type ToolbarButtonMetadata,
 } from "@/components/Layout/toolbarButtonMetadata";
+import {
+  getGroupedInsertionIndex,
+  orderToolbarButtonsByGroup,
+} from "@/components/Layout/toolbarButtonGrouping";
 import { getAgentConfig } from "@/config/agents";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { DEFAULT_PLUGIN_ICON } from "@/components/icons/pluginIconRegistry";
@@ -323,7 +328,6 @@ export function ToolbarSettingsTab() {
   const [dragState, setDragState] = useState<SideLists | null>(null);
   const [activeId, setActiveId] = useState<AnyToolbarButtonId | null>(null);
 
-  const liveLeft = dragState?.left ?? layout.leftButtons;
   const liveRight = dragState?.right ?? layout.rightButtons;
 
   const sensors = useSensors(
@@ -334,6 +338,22 @@ export function ToolbarSettingsTab() {
   );
 
   const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
+
+  const resolveGroup = useCallback(
+    (id: AnyToolbarButtonId) => getToolbarButtonGroup(id, pluginConfigs.has(id)),
+    [pluginConfigs]
+  );
+
+  // The left toolbar renders its buttons grouped (#11681), so this column has
+  // to show the same order — otherwise it would invite the user to arrange a
+  // row the toolbar will never draw. The right side has no groups and stays in
+  // persisted order.
+  const groupedLeft = useMemo(
+    () => orderToolbarButtonsByGroup(layout.leftButtons, resolveGroup),
+    [layout.leftButtons, resolveGroup]
+  );
+
+  const liveLeft = dragState?.left ?? groupedLeft;
 
   const allMetadata = useMemo(
     () =>
@@ -410,7 +430,7 @@ export function ToolbarSettingsTab() {
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveId(toButtonId(event.active.id));
-    setDragState({ left: layout.leftButtons, right: layout.rightButtons });
+    setDragState({ left: groupedLeft, right: layout.rightButtons });
   };
 
   // Speculatively relocate the dragged button across columns so the target's
@@ -422,7 +442,7 @@ export function ToolbarSettingsTab() {
     const activeButtonId = toButtonId(active.id);
 
     setDragState((prev) => {
-      const base = prev ?? { left: layout.leftButtons, right: layout.rightButtons };
+      const base = prev ?? { left: groupedLeft, right: layout.rightButtons };
       const activeContainer = findContainer(active.id, base);
       const overContainer = findContainer(over.id, base);
       if (!activeContainer || !overContainer || activeContainer === overContainer) {
@@ -442,14 +462,22 @@ export function ToolbarSettingsTab() {
         newIndex = overIndex >= 0 ? overIndex + (isAfterOver ? 1 : 0) : overItems.length;
       }
 
+      const relocated = [
+        ...overItems.slice(0, newIndex),
+        activeButtonId,
+        ...overItems.slice(newIndex),
+      ];
+
       return {
         ...base,
         [activeContainer]: base[activeContainer].filter((id) => id !== activeButtonId),
-        [overContainer]: [
-          ...overItems.slice(0, newIndex),
-          activeButtonId,
-          ...overItems.slice(newIndex),
-        ],
+        // Regroup the left column live so the gap opens where the button will
+        // actually land — dropping a panel among the agents snaps it into the
+        // panel block during the drag rather than jumping after the release.
+        [overContainer]:
+          overContainer === "left"
+            ? orderToolbarButtonsByGroup(relocated, resolveGroup)
+            : relocated,
       };
     });
   };
@@ -468,7 +496,7 @@ export function ToolbarSettingsTab() {
       return;
     }
 
-    const live = dragState ?? { left: layout.leftButtons, right: layout.rightButtons };
+    const live = dragState ?? { left: groupedLeft, right: layout.rightButtons };
     const overContainer = findContainer(over.id, live);
     const originalContainer: ToolbarSide | null = layout.leftButtons.includes(activeButtonId)
       ? "left"
@@ -495,7 +523,13 @@ export function ToolbarSettingsTab() {
       }
       const reordered = arrayMove(items, oldIndex, newIndex);
       if (overContainer === "left") {
-        setLeftButtons(reordered);
+        // Regroup before writing: a drag across a group boundary snaps back
+        // into the button's own group, and a drop that only crossed a boundary
+        // therefore changes nothing — skip the write rather than churn persist.
+        const grouped = orderToolbarButtonsByGroup(reordered, resolveGroup);
+        if (grouped.some((id, i) => id !== groupedLeft[i])) {
+          setLeftButtons(grouped);
+        }
       } else {
         setRightButtons(reordered);
       }
@@ -503,11 +537,17 @@ export function ToolbarSettingsTab() {
       // Cross-side move — `onDragOver` already relocated the item into the
       // target list at its drop position, so its index in `dragState` IS the
       // final target index. Re-running `arrayMove` here would invert it.
-      const toIndex = live[overContainer].indexOf(activeButtonId);
-      if (toIndex === -1) {
+      if (live[overContainer].indexOf(activeButtonId) === -1) {
         clearDrag();
         return;
       }
+      // `moveButton` splices into the stored array, which may still be
+      // interleaved, so a grouped index can't be handed over directly —
+      // translate it into one that survives grouping (#11681).
+      const toIndex =
+        overContainer === "left"
+          ? getGroupedInsertionIndex(layout.leftButtons, live.left, activeButtonId, resolveGroup)
+          : live[overContainer].indexOf(activeButtonId);
       moveButton(activeButtonId, originalContainer, overContainer, toIndex);
     }
 
@@ -565,7 +605,7 @@ export function ToolbarSettingsTab() {
       <SettingsSection
         icon={LayoutGrid}
         title="Toolbar buttons"
-        description="Drag to reorder within a side or move a button between the left and right groups. Toggle to show or hide."
+        description="Drag to reorder within a side or move a button between the left and right groups. Left-side buttons stay grouped as launcher, agents, then panels, so dragging one across a boundary snaps it back into its own group. Toggle to show or hide."
       >
         <DndContext
           sensors={sensors}

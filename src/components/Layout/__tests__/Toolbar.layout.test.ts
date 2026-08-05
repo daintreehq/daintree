@@ -84,9 +84,26 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
   });
 
-  describe("Agent/tool button group divider — issue #2879", () => {
-    it("defines AGENT_TOOLBAR_IDS constant for group boundary detection", () => {
-      expect(source).toContain("AGENT_TOOLBAR_IDS");
+  describe("Agent/tool button group divider — issues #2879, #11681", () => {
+    // The divider positions themselves are covered for real in
+    // toolbarButtonGrouping.test.ts — these only assert that Toolbar.tsx is
+    // still wired to that declared-group algorithm rather than deriving
+    // boundaries locally, which this file (a source scan) is the only place
+    // that can check.
+    it("resolves each button's group from the declared resolver", () => {
+      expect(source).toContain("getToolbarButtonGroup");
+    });
+
+    it("no longer derives boundaries from an agent/non-agent predicate", () => {
+      expect(source).not.toContain("AGENT_TOOLBAR_IDS");
+    });
+
+    it("orders the left buttons by declared group before rendering", () => {
+      expect(source).toContain("orderToolbarButtonsByGroup");
+    });
+
+    it("places dividers via the pure grouping helper", () => {
+      expect(source).toContain("getToolbarDividerAfterIds");
     });
 
     it("has renderLeftButtons helper that inserts group dividers", () => {

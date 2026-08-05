@@ -592,9 +592,9 @@ describe("LauncherMenuButton", () => {
 
   it("renders the plus trigger with accessible label", () => {
     // Scoped to the trigger, not the whole tree: a bare `getAllByTestId` also
-    // matches the footer's "Set Up Agents" Plug glyph, so it stayed green with
-    // the trigger icon removed entirely. The plus is the point of #11680 — a
-    // plug reads as connections, not as "make me a new thing".
+    // matches the "Set up agents" Plug glyph, so it stayed green with the
+    // trigger icon removed entirely. The plus is the point of #11680 — a plug
+    // reads as connections, not as "make me a new thing".
     const { getByLabelText } = render(<LauncherMenuButton />);
     const trigger = getByLabelText("Launcher");
     expect(trigger).toBeTruthy();
@@ -801,7 +801,7 @@ describe("LauncherMenuButton", () => {
     expect(getByTestId("launcher-pin-claude").getAttribute("data-pinned")).toBe("false");
   });
 
-  it("only puts installed-but-unauth agents in Needs Setup (missing agents are hidden)", () => {
+  it("only puts installed-but-unauth agents in Needs setup (missing agents are hidden)", () => {
     const availability = {
       claude: "ready",
       gemini: "missing",
@@ -814,7 +814,7 @@ describe("LauncherMenuButton", () => {
     );
 
     const labels = getAllByTestId("menu-label").map((el) => el.textContent);
-    expect(labels).toContain("Needs Setup");
+    expect(labels).toContain("Needs setup");
 
     const setupItems = Array.from(container.querySelectorAll('[role="menuitem"]')).filter(
       (el) =>
@@ -822,11 +822,11 @@ describe("LauncherMenuButton", () => {
         !el.textContent.includes("Manage") &&
         !el.textContent.includes("Customize")
     );
-    // Only codex (installed) belongs in Needs Setup. Gemini (missing) must NOT appear.
+    // Only codex (installed) belongs in Needs setup. Gemini (missing) must NOT appear.
     expect(setupItems.length).toBe(1);
     expect(setupItems[0]!.textContent).toContain("Codex");
     const allText = container.textContent ?? "";
-    expect(allText).not.toMatch(/Needs Setup[\s\S]*Gemini/);
+    expect(allText).not.toMatch(/Needs setup[\s\S]*Gemini/);
   });
 
   it("dispatches settings with subtab when a Needs-Setup row is clicked", () => {
@@ -841,7 +841,7 @@ describe("LauncherMenuButton", () => {
     );
     // Sanity check: this must be the Needs-Setup branch, not the fallback.
     const labels = getAllByTestId("menu-label").map((el) => el.textContent);
-    expect(labels).toContain("Needs Setup");
+    expect(labels).toContain("Needs setup");
 
     const setupItem = Array.from(container.querySelectorAll('[role="menuitem"]')).find((el) =>
       el.textContent?.includes("Gemini")
@@ -855,24 +855,24 @@ describe("LauncherMenuButton", () => {
     );
   });
 
-  it("shows Customize Toolbar footer", () => {
+  // #11681: the customize entry left this menu — it duplicated the right-click
+  // `ToolbarContextMenuItems` entry on this same button, and shared the
+  // `Settings2` glyph with `Manage agents` so the two read as one destination.
+  it("does not duplicate the right-click Customize toolbar entry in the menu", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
 
-    const { container } = render(<LauncherMenuButton agentAvailability={availability} />);
-    const footer = Array.from(container.querySelectorAll('[role="menuitem"]')).find((el) =>
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+
+    const dropdown = getByTestId("dropdown-content");
+    const inDropdown = Array.from(dropdown.querySelectorAll('[role="menuitem"]')).find((el) =>
       el.textContent?.includes(TOOLBAR_CUSTOMIZE_LABEL)
     );
-    expect(footer).toBeTruthy();
-    fireEvent.click(footer!);
-    // The Customize entry routes through DropdownMenuActionItem, so the
-    // source is whatever the wrapping DropdownMenu provides ("menu" when
-    // Radix primitives load, "user" when the fallback path is taken).
-    const calls = dispatchMock.mock.calls.filter(
-      ([id, args]: unknown[]) =>
-        id === "app.settings.openTab" && JSON.stringify(args) === JSON.stringify({ tab: "toolbar" })
-    );
-    expect(calls.length).toBeGreaterThan(0);
+    expect(inDropdown).toBeUndefined();
+
+    // Still reachable on the right click of this same button, which is the
+    // single home the entry keeps.
+    expect(getByTestId("context-menu-content").textContent).toContain(TOOLBAR_CUSTOMIZE_LABEL);
   });
 
   it("shows loading placeholder when availability is undefined", () => {
@@ -909,7 +909,7 @@ describe("LauncherMenuButton", () => {
     expect(getByTestId("launcher-fallback-gemini")).toBeTruthy();
     expect(getByTestId("launcher-fallback-codex")).toBeTruthy();
     const labels = getAllByTestId("menu-label").map((el) => el.textContent);
-    expect(labels).toContain("Available Agents");
+    expect(labels).toContain("Available agents");
   });
 
   it("triggers a refresh when the dropdown opens", () => {
@@ -955,13 +955,13 @@ describe("LauncherMenuButton", () => {
     expect(refreshAvailabilityMock).toHaveBeenCalledTimes(1);
   });
 
-  it("renders a Manage Agents… footer that opens the agents settings tab", () => {
+  it("renders a Manage agents footer that opens the agents settings tab", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
 
     const { container } = render(<LauncherMenuButton agentAvailability={availability} />);
     const manage = Array.from(container.querySelectorAll('[role="menuitem"]')).find((el) =>
-      el.textContent?.includes("Manage Agents")
+      el.textContent?.includes("Manage agents")
     );
     expect(manage).toBeTruthy();
     fireEvent.click(manage!);
@@ -972,14 +972,33 @@ describe("LauncherMenuButton", () => {
     );
   });
 
-  it("renders a Set Up Agents footer that dispatches the wizard custom event", () => {
+  it("leaves Manage agents as the footer's only settings exit", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
+
+    const { container } = render(<LauncherMenuButton agentAvailability={availability} />);
+    const items = Array.from(container.querySelectorAll('[role="menuitem"]')).map(
+      (el) => el.textContent ?? ""
+    );
+
+    // The two other exits are gone: customize lives on the right click, and
+    // setup only appears when nothing is installed (#11681).
+    expect(items.filter((text) => text.includes("Manage agents"))).toHaveLength(1);
+    expect(items.some((text) => text.includes("Set up agents"))).toBe(false);
+  });
+
+  it("renders Set up agents only in the nothing-installed empty state", () => {
+    mockHasRealData = true;
+    const availability = {
+      claude: "missing",
+      gemini: "missing",
+      codex: "missing",
+    } as unknown as CliAvailability;
 
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
     const { container } = render(<LauncherMenuButton agentAvailability={availability} />);
     const setup = Array.from(container.querySelectorAll('[role="menuitem"]')).find((el) =>
-      el.textContent?.includes("Set Up Agents")
+      el.textContent?.includes("Set up agents")
     );
     expect(setup).toBeTruthy();
     fireEvent.click(setup!);

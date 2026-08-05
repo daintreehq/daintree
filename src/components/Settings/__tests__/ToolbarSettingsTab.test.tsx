@@ -445,12 +445,71 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
   it("commits a same-side reorder via setLeftButtons (not moveButton)", () => {
     render(<ToolbarSettingsTab />);
 
-    // Drag "launcher" (index 0) onto "terminal" (index 3) within the left side.
-    fire("onDragEnd", { active: { id: "launcher" }, over: { id: "terminal" } });
+    // Drag "claude" onto "gemini" — both agents, so the reorder is legal.
+    fire("onDragEnd", { active: { id: "claude" }, over: { id: "gemini" } });
 
     expect(setLeftButtonsMock).toHaveBeenCalledTimes(1);
-    expect(setLeftButtonsMock).toHaveBeenCalledWith(["claude", "gemini", "terminal", "launcher"]);
+    expect(setLeftButtonsMock).toHaveBeenCalledWith(["launcher", "gemini", "claude", "terminal"]);
     expect(moveButtonMock).not.toHaveBeenCalled();
+  });
+
+  // #11681
+  it("shows the left column in canonical group order for a legacy interleaved array", () => {
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["terminal", "claude", "launcher", "gemini"],
+      rightButtons: [],
+      pinnedButtons: {},
+    });
+
+    const { container } = render(<ToolbarSettingsTab />);
+    // Only the side-column switches — the panel section below renders its own
+    // "Show … in toolbar" switches regardless of array membership.
+    const order = Array.from(container.querySelectorAll('[role="switch"]'))
+      .map((el) => el.getAttribute("aria-label"))
+      .filter((label) => label?.startsWith("Toggle "));
+
+    expect(order).toEqual([
+      "Toggle Launcher visibility",
+      "Toggle Claude agent visibility",
+      "Toggle Gemini agent visibility",
+      "Toggle Terminal visibility",
+    ]);
+  });
+
+  it("snaps a cross-group drag back into its own group, writing nothing", () => {
+    render(<ToolbarSettingsTab />);
+
+    // Drag the launcher past the agents onto "terminal". Grouping puts it back
+    // at the head, so the effective order is unchanged and no write is needed.
+    fire("onDragEnd", { active: { id: "launcher" }, over: { id: "terminal" } });
+
+    expect(setLeftButtonsMock).not.toHaveBeenCalled();
+    expect(moveButtonMock).not.toHaveBeenCalled();
+  });
+
+  it("translates a right-to-left drop into an index that survives grouping", () => {
+    mockToolbarState = makeToolbarState({
+      // Stored interleaved: the panel sits ahead of the agent.
+      leftButtons: ["terminal", "claude"],
+      rightButtons: ["codex"],
+      pinnedButtons: {},
+    });
+
+    render(<ToolbarSettingsTab />);
+
+    // The column shows ["claude", "terminal"]; drop codex onto terminal's
+    // leading half, i.e. between claude and terminal in the grouped view.
+    fire("onDragStart", { active: { id: "codex" } });
+    fire("onDragOver", {
+      active: { id: "codex", rect: { current: { translated: { right: 0 } } } },
+      over: { id: "terminal", rect: { left: 0, width: 100 } },
+    });
+    fire("onDragEnd", { active: { id: "codex" }, over: { id: "terminal" } });
+
+    // Index 2 in the *stored* array — right after its group peer `claude` —
+    // which grouping renders as claude → codex → terminal. The projected
+    // index (1) would have landed it before claude.
+    expect(moveButtonMock).toHaveBeenCalledWith("codex", "right", "left", 2);
   });
 
   it("commits a cross-side move after the hovered item (right edge past midpoint)", () => {
