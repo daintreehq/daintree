@@ -58,7 +58,12 @@ export interface PilotProjectGroup {
   rows: PilotRow[];
   /** Runs in this project that constitute a demand on the user. */
   demandCount: number;
-  /** Worst band present, which headlines the group. Group ORDER is workspace recency. */
+  /**
+   * Worst band among the rows below, recomputed rather than inherited whenever
+   * the group is narrowed. A derived summary of the group's contents only —
+   * group ORDER is workspace recency, and the header draws identity, not
+   * severity.
+   */
   topBand: FleetBand;
 }
 
@@ -94,10 +99,11 @@ export interface PilotWorkspaceMeta {
    */
   lastCompletionSeenAt?: number;
   /**
-   * When the workspace was last switched to or away from, which is what orders
-   * the groups. Leaving a project stamps it too, a millisecond behind the one
-   * being entered, so the pair either side of a switch stays adjacent at the
-   * top. Anything but a finite positive number sorts as undateable.
+   * When the workspace was last switched to, which is what orders the groups.
+   * A project-to-project switch also stamps the project being LEFT, a
+   * millisecond behind, so that pair stays adjacent at the top; switches
+   * involving a scratch stamp only the one being entered. Anything but a
+   * finite positive number sorts as undateable.
    */
   lastOpened?: number;
 }
