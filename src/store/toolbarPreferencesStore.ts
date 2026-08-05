@@ -184,18 +184,24 @@ function mergeButtonList(
  *
  * `panel-tray` can only be missing from a hand-edited profile; the left side is
  * where these buttons have always lived (`LEFT_HOME_BUTTON_IDS`), so that is the
- * fallback. Returns the single side it touched, for spreading over `layout`.
+ * fallback. Returns both sides — the untouched one passed straight through —
+ * rather than a computed-key object for the side it changed: the latter needs a
+ * type assertion to describe, and the lint ratchet scores
+ * `no-unsafe-type-assertion` per rule, so one more costs a baseline bump the
+ * ratchet exists to prevent.
  */
 function positionPanelButton(
   layout: ToolbarLayoutState,
   buttonId: AnyToolbarButtonId
-): { leftButtons: AnyToolbarButtonId[] } | { rightButtons: AnyToolbarButtonId[] } {
-  const side = layout.rightButtons.includes("panel-tray") ? "rightButtons" : "leftButtons";
-  const target = [...layout[side]];
+): { leftButtons: AnyToolbarButtonId[]; rightButtons: AnyToolbarButtonId[] } {
+  const trayOnRight = layout.rightButtons.includes("panel-tray");
+  const target = [...(trayOnRight ? layout.rightButtons : layout.leftButtons)];
   const trayIndex = target.indexOf("panel-tray");
   target.splice(trayIndex === -1 ? target.length : trayIndex, 0, buttonId);
-  return { [side]: sanitizeButtonList(target) } as
-    { leftButtons: AnyToolbarButtonId[] } | { rightButtons: AnyToolbarButtonId[] };
+  const positioned = sanitizeButtonList(target);
+  return trayOnRight
+    ? { leftButtons: layout.leftButtons, rightButtons: positioned }
+    : { leftButtons: positioned, rightButtons: layout.rightButtons };
 }
 
 type ToolbarLayoutState = ToolbarPreferences["layout"];
