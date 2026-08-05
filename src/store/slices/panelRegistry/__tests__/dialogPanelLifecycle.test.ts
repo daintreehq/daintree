@@ -239,6 +239,31 @@ describe("dialog panel ephemeral lifecycle", () => {
       );
     });
 
+    it("refuses a non-file dialog without calling it a file (#11666)", () => {
+      // Promotion serves file, diff, review and file-browser dialogs alike, so
+      // a message naming "this file" told most of them the wrong thing about
+      // what they were opening. Asserted as the absence of the wrong noun
+      // rather than the presence of the new sentence — the copy is free to be
+      // reworded, but it can never re-acquire a kind it doesn't know.
+      usePanelLimitStore.setState({ hardLimit: 1 });
+      seed([
+        makeFilePanel("grid-1"),
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: only location and kind are read here
+        {
+          id: "dialog-browser",
+          kind: "file-browser",
+          title: "Files",
+          location: "dialog",
+          excludeFromPersistence: true,
+        } as PanelInstance,
+      ]);
+
+      expect(usePanelStore.getState().promoteDialogPanelToGrid("dialog-browser")).toBe(false);
+
+      const message = notifyMock.mock.calls.at(-1)?.[0] as { message?: string };
+      expect(message.message).not.toMatch(/\bfile\b/i);
+    });
+
     it("refuses panels that are not dialog-presented", () => {
       seed([makeFilePanel("grid-1")]);
 

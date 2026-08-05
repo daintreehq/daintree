@@ -198,7 +198,7 @@ describe("LauncherQuickActions", () => {
     // workspace root in a scratch or worktree-less project (#11482).
     render(<LauncherQuickActions />);
     fireEvent.click(screen.getByRole("button", { name: /Browse files/i }));
-    expect(h.dispatch).toHaveBeenCalledWith("worktree.openFileBrowser", undefined, {
+    expect(h.dispatch).toHaveBeenCalledWith("worktree.openFileBrowserPanel", undefined, {
       source: "user",
     });
   });
@@ -229,6 +229,24 @@ describe("LauncherQuickActions", () => {
     render(<LauncherQuickActions />);
     fireEvent.click(screen.getByRole("button", { name: /Browse files/i }));
     await Promise.resolve();
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
+  it("leaves a full grid to report itself instead of blaming the workspace", async () => {
+    // `addPanel` has already shown "Panel limit reached" with the real recovery
+    // by the time this refusal arrives. The chip's own message names a
+    // different cause entirely, so adding it would contradict the accurate one
+    // the user is already looking at (#11666).
+    h.dispatch.mockResolvedValue({
+      ok: false,
+      error: new Error("Could not open file browser panel: panel limit reached"),
+    });
+    render(<LauncherQuickActions />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Browse files/i }));
+    await Promise.resolve();
+    await Promise.resolve();
+
     expect(h.notify).not.toHaveBeenCalled();
   });
 

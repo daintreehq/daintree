@@ -69,8 +69,8 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(source).toContain('useKeybindingDisplay("devServer.start")');
     });
 
-    it("uses dynamic hook for worktree.openFileBrowser", () => {
-      expect(source).toContain('useKeybindingDisplay("worktree.openFileBrowser")');
+    it("uses dynamic hook for worktree.openFileBrowserPanel", () => {
+      expect(source).toContain('useKeybindingDisplay("worktree.openFileBrowserPanel")');
     });
   });
 
@@ -79,8 +79,8 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       // The three-hook set every shortcut-bearing toolbar button carries: the
       // tooltip display string, the aria-keyshortcuts value for screen readers,
       // and the press-and-hold hover hint.
-      expect(source).toContain('useAriaKeyshortcuts("worktree.openFileBrowser")');
-      expect(source).toContain('useShortcutHintHover("worktree.openFileBrowser")');
+      expect(source).toContain('useAriaKeyshortcuts("worktree.openFileBrowserPanel")');
+      expect(source).toContain('useShortcutHintHover("worktree.openFileBrowserPanel")');
       expect(source).toContain("aria-keyshortcuts={fileBrowserAriaShortcut}");
       // Spread conditionally since #11499: with no workspace the action can
       // resolve no folder, so the button degrades to aria-disabled and the

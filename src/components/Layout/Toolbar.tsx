@@ -98,6 +98,7 @@ import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
+import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
 import { LazyProjectSwitcherPalette } from "@/lazyPanels";
 import { ProjectIdentityEditor } from "@/components/Project/ProjectIdentityEditor";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
@@ -606,15 +607,15 @@ export function Toolbar({
   const problemsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
   const terminalShortcut = useKeybindingDisplay("agent.terminal");
   const browserShortcut = useKeybindingDisplay("agent.browser");
-  const fileBrowserShortcut = useKeybindingDisplay("worktree.openFileBrowser");
+  const fileBrowserShortcut = useKeybindingDisplay("worktree.openFileBrowserPanel");
   const sidebarAriaShortcut = useAriaKeyshortcuts("nav.toggleSidebar");
   const copyTreeAriaShortcut = useAriaKeyshortcuts("worktree.copyTree");
-  const fileBrowserAriaShortcut = useAriaKeyshortcuts("worktree.openFileBrowser");
+  const fileBrowserAriaShortcut = useAriaKeyshortcuts("worktree.openFileBrowserPanel");
 
   const sidebarHintHover = useShortcutHintHover("nav.toggleSidebar");
   const devServerHintHover = useShortcutHintHover("devServer.start");
   const copyTreeHintHover = useShortcutHintHover("worktree.copyTree");
-  const fileBrowserHintHover = useShortcutHintHover("worktree.openFileBrowser");
+  const fileBrowserHintHover = useShortcutHintHover("worktree.openFileBrowserPanel");
 
   // The one launcher button whose action can legitimately refuse: it resolves
   // its own target (focused worktree, else the project or scratch root), and a
@@ -624,9 +625,13 @@ export function Toolbar({
   // A named function expression so the retry action can name itself.
   const openFileBrowser = useCallback(function openFileBrowser() {
     void actionService
-      .dispatch("worktree.openFileBrowser", undefined, { source: "user" })
+      .dispatch("worktree.openFileBrowserPanel", undefined, { source: "user" })
       .then((result) => {
         if (result.ok) return;
+        // A full grid is the one refusal `addPanel` has already reported, with
+        // an accurate message and the actual recovery. Saying "no folder
+        // resolved" on top of it would name the wrong cause (#11666).
+        if (isPanelLimitError(result.error.message)) return;
         notify({
           type: "error",
           title: "Couldn't open the file browser",

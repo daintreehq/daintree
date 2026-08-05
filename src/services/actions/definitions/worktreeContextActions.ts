@@ -11,6 +11,15 @@ import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
 import { basename } from "@shared/utils/path";
+// Static, unlike the stores below: this module carries the panel types plus a
+// handful of pure predicates over them, so it drags in no client or store graph.
+import {
+  isFileBrowserPanel,
+  isGridPanelLocation,
+  type FileBrowserPanelData,
+} from "@shared/types/panel";
+import { isForegroundDispatch } from "./dispatchSource";
+import { PANEL_LIMIT_ERROR_SUFFIX } from "./panelLimitError";
 import { paginate } from "@shared/utils/boundedOutput";
 import { GIT_PAGE_LIMIT_DEFAULT, GIT_PAGE_LIMIT_MAX } from "@shared/config/gitReadLimits";
 import {
@@ -138,6 +147,124 @@ function toReadinessResultItem(
     ...(item.detail !== undefined ? { detail: item.detail } : {}),
     ...(item.action !== undefined ? toReadinessActionSuggestion(item.action, target) : {}),
   };
+}
+
+/**
+ * Args shared by both file-browser openers. The two actions differ only in the
+ * surface they present on, so a caller that knows what it wants to browse
+ * names it identically either way — and `revealPath` in particular must not
+ * become the thing that picks a surface, since revealing the root passes no
+ * path while still carrying a `revealKind` (#11666).
+ */
+const fileBrowserArgsSchema = z
+  .object({
+    // `.min(1)`, unlike the siblings above: an empty string here is not a
+    // harmless falsy worktree — it would slip past the unknown-worktree
+    // guard and open the workspace root instead of failing.
+    worktreeId: z.string().min(1).optional(),
+    /** Path relative to the browser root, to select and scroll into view on open. */
+    revealPath: z.string().optional(),
+    /**
+     * What `revealPath` points at. A directory is also expanded so its
+     * children are visible; the caller knows (it validated the path),
+     * and re-statting here would be a second round-trip for one bit.
+     */
+    revealKind: z.enum(["file", "directory"]).optional(),
+  })
+  .optional();
+
+type FileBrowserArgs = z.infer<typeof fileBrowserArgsSchema>;
+
+/**
+ * A palette gate rather than `isEnabled`, for the same reason
+ * `worktree.openChanges` above spells out: `isEnabled` never sees args, so on
+ * an explicit `worktreeId` it would answer for the focused worktree instead.
+ * Readiness is broader than a worktree now — a scratch or worktree-less
+ * project can open its own root (#11482).
+ */
+function fileBrowserIsReady(ctx: ActionContext): boolean {
+  // Resolvability, not mere presence: a stale id whose worktree is gone
+  // now makes `run` throw, so a readiness check that only tested for a
+  // non-empty string would enable a row that cannot open anything.
+  const contextWorktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+  if (contextWorktreeId !== undefined) {
+    // `OrNull`, not `getCurrentViewStore`: that one throws before the
+    // worktree provider mounts, and the action manifest is listed in
+    // exactly that window — the throw would disable the row rather than
+    // answer it.
+    const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
+    return worktrees ? worktrees.has(contextWorktreeId) : false;
+  }
+  return Boolean(ctx.projectPath ?? ctx.scratchPath);
+}
+
+/**
+ * The folder both openers browse, resolved once from explicit arg, focus, then
+ * ambient context — and the title that names it.
+ *
+ * `worktreeId` comes back only for a resolved worktree: its absence is what
+ * tells the create path to resolve the view's own workspace folder, which
+ * nothing ever names explicitly. `createFileBrowserDefaults` records that as
+ * `browserWorkspaceRooted`, since grid placement later stamps a worktreeId onto
+ * the panel (#11489) — so neither opener may pass that flag itself.
+ */
+function resolveFileBrowserTarget(
+  args: FileBrowserArgs,
+  ctx: ActionContext
+): { worktreeId: string | undefined; title: string | undefined } {
+  const targetWorktreeId = args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
+  const worktree = targetWorktreeId
+    ? getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
+    : undefined;
+
+  // One rule for every source of the id, explicit arg or ambient context:
+  // a named worktree that doesn't resolve is an error, never a cue to
+  // browse something else. Falling through to the workspace root would
+  // open the folder *above* the one named — the wrong folder, not a
+  // degraded one — and a stale `focusedWorktreeId` outliving its deleted
+  // worktree is exactly how that would happen unnoticed.
+  if (targetWorktreeId !== undefined && !worktree) {
+    throw new Error(`Worktree not found: ${targetWorktreeId}`);
+  }
+
+  // No worktree id at all is the normal state in a scratch or a
+  // worktree-less project (#11482) — browse the workspace root instead of
+  // silently doing nothing. The context provider resolves both pointers
+  // from one view-scoped lookup, so only one of them is ever set and this
+  // names the folder `useWorkspaceRootPath` opens; the project-first
+  // tie-break is a defensive echo of `resolveWorkspaceCwd`, not a choice
+  // this action is expected to have to make.
+  const workspacePath = ctx.projectPath ?? ctx.scratchPath;
+  if (!worktree && !workspacePath) {
+    // Thrown, not a bare return: a silent no-op still reports ok from
+    // dispatch, so the palette and quick action would look like they
+    // worked.
+    throw new Error("No folder to browse");
+  }
+
+  if (worktree) {
+    return { worktreeId: targetWorktreeId, title: `Files — ${worktree.branch ?? worktree.name}` };
+  }
+  return {
+    worktreeId: undefined,
+    title: `Files — ${ctx.projectName ?? ctx.scratchName ?? (workspacePath ? basename(workspacePath) : "workspace")}`,
+  };
+}
+
+/** Selection and expansion state for a requested reveal, or nothing to reveal. */
+async function resolveFileBrowserReveal(
+  args: FileBrowserArgs
+): Promise<{ browserSelectedPath: string; browserExpandedPaths: string[] } | undefined> {
+  // Normalized to "/" regardless of caller: the tree's row keys and
+  // `ancestorDirectories` both speak forward slashes, and a
+  // Windows-shaped reveal path would otherwise select nothing.
+  const revealPath = args?.revealPath?.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (!revealPath) return undefined;
+
+  const { ancestorDirectories } = await import("@/panels/file-browser/fileBrowserTree");
+  const expanded = new Set(ancestorDirectories(revealPath));
+  if (args?.revealKind === "directory") expanded.add(revealPath);
+  return { browserSelectedPath: revealPath, browserExpandedPaths: [...expanded].sort() };
 }
 
 export function registerWorktreeContextActions(
@@ -401,84 +528,21 @@ export function registerWorktreeContextActions(
       id: "worktree.openFileBrowser",
       title: "Browse files",
       description:
-        "Open a read-only file browser for a worktree, or for the current project or scratch folder when no worktree is selected",
+        "Show a folder in a temporary read-only file browser dialog, optionally revealing one path inside it. The dialog is deliberately ephemeral — it never counts toward the panel limit and is never restored on restart. Open the persistent grid browser instead when it should stay put.",
       category: "worktree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      // A palette gate rather than `isEnabled`, for the same reason
-      // `worktree.openChanges` above spells out: `isEnabled` never sees args,
-      // so on an explicit `worktreeId` it would answer for the focused
-      // worktree instead. Readiness is broader than a worktree now — a scratch
-      // or worktree-less project can open its own root (#11482).
-      palette: {
-        mode: "requireContext",
-        isReady: (ctx: ActionContext) => {
-          // Resolvability, not mere presence: a stale id whose worktree is gone
-          // now makes `run` throw, so a readiness check that only tested for a
-          // non-empty string would enable a row that cannot open anything.
-          const contextWorktreeId = ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-          if (contextWorktreeId !== undefined) {
-            // `OrNull`, not `getCurrentViewStore`: that one throws before the
-            // worktree provider mounts, and the action manifest is listed in
-            // exactly that window — the throw would disable the row rather than
-            // answer it.
-            const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
-            return worktrees ? worktrees.has(contextWorktreeId) : false;
-          }
-          return Boolean(ctx.projectPath ?? ctx.scratchPath);
-        },
-        reason: "No folder to browse",
-      },
-      argsSchema: z
-        .object({
-          // `.min(1)`, unlike the siblings above: an empty string here is not a
-          // harmless falsy worktree — it would slip past the unknown-worktree
-          // guard and open the workspace root instead of failing.
-          worktreeId: z.string().min(1).optional(),
-          /** Path relative to the browser root, to select and scroll into view on open. */
-          revealPath: z.string().optional(),
-          /**
-           * What `revealPath` points at. A directory is also expanded so its
-           * children are visible; the caller knows (it validated the path),
-           * and re-statting here would be a second round-trip for one bit.
-           */
-          revealKind: z.enum(["file", "directory"]).optional(),
-        })
-        .optional(),
+      // Hidden rather than gated: the persistent sibling below carries the same
+      // title, and two indistinguishable "Browse files" rows differing only in
+      // how long the result survives is a coin toss the user cannot see (#11666).
+      // The action stays registered and dispatchable — the path-targeted
+      // callers that want a throwaway reveal still name it directly.
+      palette: { mode: "hidden" },
+      argsSchema: fileBrowserArgsSchema,
       run: async (args, ctx: ActionContext) => {
-        const targetWorktreeId = args?.worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
-        const worktree = targetWorktreeId
-          ? getCurrentViewStore().getState().worktrees.get(targetWorktreeId)
-          : undefined;
-
-        // One rule for every source of the id, explicit arg or ambient context:
-        // a named worktree that doesn't resolve is an error, never a cue to
-        // browse something else. Falling through to the workspace root would
-        // open the folder *above* the one named — the wrong folder, not a
-        // degraded one — and a stale `focusedWorktreeId` outliving its deleted
-        // worktree is exactly how that would happen unnoticed.
-        if (targetWorktreeId !== undefined && !worktree) {
-          throw new Error(`Worktree not found: ${targetWorktreeId}`);
-        }
-
-        // No worktree id at all is the normal state in a scratch or a
-        // worktree-less project (#11482) — browse the workspace root instead of
-        // silently doing nothing. The context provider resolves both pointers
-        // from one view-scoped lookup, so only one of them is ever set and this
-        // names the folder `useWorkspaceRootPath` opens; the project-first
-        // tie-break is a defensive echo of `resolveWorkspaceCwd`, not a choice
-        // this action is expected to have to make.
-        const workspacePath = ctx.projectPath ?? ctx.scratchPath;
-        if (!worktree && !workspacePath) {
-          // Thrown, not a bare return: a silent no-op still reports ok from
-          // dispatch, so the palette and quick action would look like they
-          // worked.
-          throw new Error("No folder to browse");
-        }
-        const workspaceTitle = worktree
-          ? undefined
-          : `Files — ${ctx.projectName ?? ctx.scratchName ?? (workspacePath ? basename(workspacePath) : "workspace")}`;
+        const { worktreeId, title } = resolveFileBrowserTarget(args, ctx);
+        const reveal = await resolveFileBrowserReveal(args);
 
         // Lazily imported for the same reason as the review hub above: a static
         // import drags panelStore -> panelPersistence in, which reads
@@ -486,32 +550,102 @@ export function registerWorktreeContextActions(
         // action test that mocks `@/clients` without it.
         const { usePanelDialogStore } = await import("@/store/panelDialogStore");
 
-        // Normalized to "/" regardless of caller: the tree's row keys and
-        // `ancestorDirectories` both speak forward slashes, and a
-        // Windows-shaped reveal path would otherwise select nothing.
-        const revealPath = args?.revealPath?.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
-        let reveal: { browserSelectedPath: string; browserExpandedPaths: string[] } | undefined;
-        if (revealPath) {
-          const { ancestorDirectories } = await import("@/panels/file-browser/fileBrowserTree");
-          const expanded = new Set(ancestorDirectories(revealPath));
-          if (args?.revealKind === "directory") expanded.add(revealPath);
-          reveal = {
-            browserSelectedPath: revealPath,
-            browserExpandedPaths: [...expanded].sort(),
-          };
-        }
-
-        // No `worktreeId` for a workspace root: its absence is what tells the
-        // create path to resolve the view's own workspace folder, which nothing
-        // ever names explicitly. `createFileBrowserDefaults` records that as
-        // `browserWorkspaceRooted`, since grid promotion later stamps a
-        // placement worktreeId onto the panel (#11489).
         await usePanelDialogStore.getState().openPanelDialog({
           kind: "file-browser",
-          title: worktree ? `Files — ${worktree.branch ?? worktree.name}` : workspaceTitle,
-          ...(worktree && { worktreeId: targetWorktreeId }),
+          title,
+          ...(worktreeId !== undefined && { worktreeId }),
           ...reveal,
         });
+      },
+    })
+  );
+
+  actions.set("worktree.openFileBrowserPanel", () =>
+    defineAction({
+      id: "worktree.openFileBrowserPanel",
+      title: "Browse files",
+      description:
+        "Show a folder in a persistent read-only file browser panel in the grid, for a worktree or for the current project or scratch folder when no worktree is selected. It focuses the existing grid browser for the same folder rather than opening a second one, and applies an optional reveal path to it.",
+      category: "worktree",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      keywords: ["files", "browse", "explorer", "tree", "folder", "finder", "assets", "panel"],
+      palette: {
+        mode: "requireContext",
+        isReady: fileBrowserIsReady,
+        reason: "No folder to browse",
+      },
+      argsSchema: fileBrowserArgsSchema,
+      run: async (args, ctx: ActionContext) => {
+        const { worktreeId, title } = resolveFileBrowserTarget(args, ctx);
+        const reveal = await resolveFileBrowserReveal(args);
+
+        // Lazily imported for the same reason the dialog store is above.
+        const { usePanelStore } = await import("@/store/panelStore");
+
+        const store = usePanelStore.getState();
+        const existing = store.panelIds
+          .map((id) => store.panelsById[id])
+          .find((panel): panel is FileBrowserPanelData => {
+            if (panel === undefined || !isFileBrowserPanel(panel)) return false;
+            // Grid members only. A dialog browser is ephemeral modal content
+            // and reusing one would hand the grid an uncounted, unpersisted
+            // record; trashed and backgrounded panels surface nothing when
+            // activated. `isGridPanelLocation` is the one place that answer
+            // lives, so dock and overlay come along for free.
+            if (!isGridPanelLocation(panel.location)) return false;
+            // Identity is the folder the tree is rooted at, not the placement
+            // worktree: a workspace-rooted panel carries a worktreeId purely so
+            // it lands in a rendered index bucket (#11489), and matching on
+            // that id would hand a worktree request the workspace browser.
+            const panelIsWorkspaceRooted =
+              panel.browserWorkspaceRooted === true || panel.worktreeId === undefined;
+            return worktreeId === undefined
+              ? panelIsWorkspaceRooted
+              : !panelIsWorkspaceRooted && panel.worktreeId === worktreeId;
+          });
+
+        if (existing) {
+          if (reveal) {
+            // Merged, not replaced: the user's own expansions are theirs to
+            // keep, and a reveal only adds the path to what is already open.
+            // `browserRootPath: ""` alongside them because a reveal path is
+            // resolved from the worktree root — leaving a re-rooted tree in
+            // place would select a row that is not in it.
+            store.setFileBrowserView(existing.id, {
+              browserSelectedPath: reveal.browserSelectedPath,
+              browserExpandedPaths: [
+                ...new Set([
+                  ...(existing.browserExpandedPaths ?? []),
+                  ...reveal.browserExpandedPaths,
+                ]),
+              ].sort(),
+              browserRootPath: "",
+            });
+          }
+          store.activateTerminal(existing.id);
+          return { panelId: existing.id };
+        }
+
+        // A person asking to browse expects to see it, so a foreground dispatch
+        // takes focus outright — that policy is also the one that leaves
+        // fullscreen, so the panel can't land buried behind a maximized cell.
+        // Agent/plugin dispatches omit focusPolicy entirely and keep the
+        // store's "auto" vs "preserve" resolution, so a background open still
+        // never steals focus from a typing user.
+        const panelId = await store.addPanel({
+          kind: "file-browser",
+          title,
+          ...(worktreeId !== undefined && { worktreeId }),
+          ...reveal,
+          location: "grid",
+          ...(isForegroundDispatch(ctx.dispatchSource) && { focusPolicy: "take" as const }),
+        });
+        if (!panelId) {
+          throw new Error(`Could not open file browser panel: ${PANEL_LIMIT_ERROR_SUFFIX}`);
+        }
+        return { panelId };
       },
     })
   );

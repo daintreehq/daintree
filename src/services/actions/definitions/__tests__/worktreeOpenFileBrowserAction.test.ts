@@ -187,42 +187,21 @@ describe("worktree.openFileBrowser", () => {
     });
   });
 
-  describe("palette gate", () => {
-    // `PaletteBehavior` is a union; only the requireContext arm carries
-    // `isReady`, so narrow on the mode rather than casting.
-    const isReady = (ctx: ActionContext) => {
-      const palette = getAction().palette;
-      return palette?.mode === "requireContext" ? palette.isReady(ctx) : false;
-    };
-
-    it("is ready for a worktree, a project or a scratch", () => {
-      seedWorktree("wt-1");
-      expect(isReady({ focusedWorktreeId: "wt-1" } as ActionContext)).toBe(true);
-      expect(isReady({ activeWorktreeId: "wt-1" } as ActionContext)).toBe(true);
-      expect(isReady({ projectPath: "/folders/notes" } as ActionContext)).toBe(true);
-      expect(isReady({ scratchPath: "/scratches/one" } as ActionContext)).toBe(true);
+  describe("palette", () => {
+    it("keeps its row out of the palette so only the panel opener is offered", () => {
+      // Both openers are titled "Browse files"; listing them side by side would
+      // make which one you get — a throwaway dialog or a panel that stays —
+      // a coin toss the user cannot see from the row (#11666). The palette-gate
+      // coverage moved with the row, to the panel action's own suite.
+      expect(getAction().palette).toEqual({ mode: "hidden" });
     });
 
-    it("is not ready with no workspace at all", () => {
-      expect(isReady({} as ActionContext)).toBe(false);
-    });
-
-    it("gates the palette row rather than dispatch, so an explicit arg still runs", async () => {
-      // `isEnabled` would gate dispatch from ActionContext alone and never see
-      // args, refusing an explicit worktree while an empty context held focus.
-      // Asserted behaviorally: empty context is not palette-ready, yet the same
-      // empty context still dispatches an explicit worktree successfully.
+    it("still dispatches normally while hidden", async () => {
+      // Hiding is a listing decision only: the path-targeted callers that want
+      // a throwaway reveal name this action directly and must keep working.
       seedWorktree("wt-1");
-      expect(isReady({} as ActionContext)).toBe(false);
-
       await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
       expect(dialogOptions()).toMatchObject({ worktreeId: "wt-1" });
-    });
-
-    it("is not ready for a focused worktree that no longer exists", () => {
-      // A stale id now makes `run` throw, so a readiness check that only tested
-      // for a non-empty string would enable a row that cannot open anything.
-      expect(isReady({ focusedWorktreeId: "wt-gone" } as ActionContext)).toBe(false);
     });
   });
 
