@@ -102,10 +102,9 @@ describe("Toolbar — agent registry zero-touch guarantee (issue #5070)", () => 
       // A rendered-but-unpositioned button is absent from Settings' sortable
       // columns and inert to `moveButton`, which reads the arrays — so the
       // first-run seeding would strand up to five agents that can never be
-      // reordered. The splice is a bridge; the write is the repair.
-      expect(source).toMatch(
-        /for \(const id of unpositionedAgentPins\) positionAgentButton\(id\);/
-      );
+      // reordered. The splice is a bridge; the write is the repair. Batched, so
+      // the persisted order matches the order they rendered in.
+      expect(source).toMatch(/positionAgentButton\(unpositionedAgentPins\)/);
     });
 
     it("puts the repair on whichever side the launcher is on", () => {

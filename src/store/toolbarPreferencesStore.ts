@@ -452,8 +452,12 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
    * window (a stale cross-view write dropping the array, or the first-run pin
    * seeding in `buildInitialAgentPinUpdates`) is covered at the render boundary
    * in `Toolbar.tsx`, which reads the authoritative pin from `agentSettingsStore`.
+   *
+   * Takes a batch as well as a single id: positioning several agents one call at
+   * a time reverses them, since every insert lands at the same index — see
+   * `positionLauncherButton`.
    */
-  positionAgentButton: (buttonId: AnyToolbarButtonId) => void;
+  positionAgentButton: (buttonIds: AnyToolbarButtonId | AnyToolbarButtonId[]) => void;
   /**
    * Prune `pinnedButtons` entries for plugin buttons that are no longer in
    * the loaded plugin set. `pinnedButtons` is renderer-local persisted state
@@ -558,16 +562,15 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             },
           };
         }),
-      positionAgentButton: (buttonId) =>
+      positionAgentButton: (buttonIds) =>
         set((state) => {
-          if (
-            state.layout.leftButtons.includes(buttonId) ||
-            state.layout.rightButtons.includes(buttonId)
-          ) {
-            return state;
-          }
+          const positioned = new Set([...state.layout.leftButtons, ...state.layout.rightButtons]);
+          const missing = (Array.isArray(buttonIds) ? buttonIds : [buttonIds]).filter(
+            (id) => !positioned.has(id)
+          );
+          if (missing.length === 0) return state;
           return {
-            layout: { ...state.layout, ...positionLauncherButton(state.layout, [buttonId]) },
+            layout: { ...state.layout, ...positionLauncherButton(state.layout, missing) },
           };
         }),
       setPluginButtonPromoted: (buttonId, promoted) =>

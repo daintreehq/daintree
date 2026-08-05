@@ -1373,9 +1373,12 @@ export function Toolbar({
   // `moveButton`, which reads the arrays — the first-run seeding above would
   // otherwise leave up to five agents that can never be reordered. The action
   // no-ops when the id already holds a position, writes nothing to
-  // `pinnedButtons`, and converges under a concurrent sibling view.
+  // `pinnedButtons`, and converges under a concurrent sibling view. One batched
+  // call, not a call per id: every insert lands at the same index, so repairing
+  // the first-run seeding one agent at a time would persist them reversed
+  // against the order they just rendered in.
   useEffect(() => {
-    for (const id of unpositionedAgentPins) positionAgentButton(id);
+    if (unpositionedAgentPins.length > 0) positionAgentButton(unpositionedAgentPins);
   }, [unpositionedAgentPins, positionAgentButton]);
 
   // Whichever side the launcher is on — that is where the things pinned out of

@@ -2140,4 +2140,54 @@ describe("toolbarPreferencesStore", () => {
       expect(rightButtons.indexOf("dev-server")).toBe(rightButtons.indexOf("launcher") + 1);
     });
   });
+
+  describe("positionAgentButton (#11680)", () => {
+    it("keeps a batch in the caller's order instead of reversing it", async () => {
+      // The live caller is the first-run repair in `Toolbar.tsx`, where
+      // `buildInitialAgentPinUpdates` pins several agents at once. Every insert
+      // lands immediately after the launcher and the launcher does not move, so
+      // one call per id emits the batch backwards — a visible post-paint reorder
+      // that then persists.
+      const store = await loadStore();
+
+      store.getState().positionAgentButton(["claude", "codex", "gemini"]);
+
+      const { leftButtons } = store.getState().layout;
+      const at = (id: AnyToolbarButtonId) => leftButtons.indexOf(id);
+      expect(at("launcher")).toBeLessThan(at("claude"));
+      expect(at("claude")).toBeLessThan(at("codex"));
+      expect(at("codex")).toBeLessThan(at("gemini"));
+    });
+
+    it("positions only the ids that hold no slot, leaving the rest where they are", async () => {
+      const store = await loadStore();
+      store.getState().positionAgentButton("codex");
+      const codexIndex = store.getState().layout.leftButtons.indexOf("codex");
+
+      store.getState().positionAgentButton(["claude", "codex"]);
+
+      const { leftButtons, rightButtons } = store.getState().layout;
+      expect([...leftButtons, ...rightButtons].filter((id) => id === "codex")).toHaveLength(1);
+      expect(leftButtons.indexOf("claude")).toBe(leftButtons.indexOf("launcher") + 1);
+      // `codex` was already placed, so the new insert goes in front of it rather
+      // than displacing it to a fresh slot.
+      expect(leftButtons.indexOf("codex")).toBe(codexIndex + 1);
+    });
+
+    it("is a no-op (preserves the layout reference) when every id already has a slot", async () => {
+      const store = await loadStore();
+      store.getState().positionAgentButton(["claude", "codex"]);
+      const before = store.getState().layout;
+
+      store.getState().positionAgentButton(["claude", "codex"]);
+
+      expect(store.getState().layout).toBe(before);
+    });
+
+    it("writes no pinnedButtons entry, since the agent pin lives in agentSettingsStore", async () => {
+      const store = await loadStore();
+      store.getState().positionAgentButton(["claude", "codex"]);
+      expect(store.getState().layout.pinnedButtons).toEqual({});
+    });
+  });
 });
