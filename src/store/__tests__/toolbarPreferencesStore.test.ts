@@ -473,11 +473,17 @@ describe("toolbarPreferencesStore", () => {
 
       const store = await loadStore();
       const { leftButtons, pinnedButtons } = store.getState().layout;
-      expect(leftButtons).toContain("browser");
-      expect(leftButtons).toContain("dev-server");
-      // Untouched pin state — no `false` stamped onto either.
-      expect(pinnedButtons["browser"]).toBeUndefined();
-      expect(pinnedButtons["dev-server"]).toBeUndefined();
+      // Relative order preserved, not merely membership: `mergeButtonList` takes
+      // the persisted list verbatim and only inserts what's missing, so an
+      // existing toolbar must come through with its own arrangement intact.
+      // Filtered to the carried ids rather than compared whole — hydration also
+      // inserts `agent-tray`, the agent buttons and `panel-tray`, none of which
+      // this case is about.
+      const carried = ["terminal", "browser", "file-browser", "dev-server"];
+      expect(leftButtons.filter((id) => carried.includes(id))).toEqual(carried);
+      // The whole map, not two lookups: nothing at all may be written for a
+      // profile that expressed no overrides.
+      expect(pinnedButtons).toEqual({});
     });
   });
 
@@ -1768,7 +1774,7 @@ describe("toolbarPreferencesStore", () => {
   });
 
   describe("setPanelButtonOnToolbar (#11667)", () => {
-    it("gives an unpositioned button a slot before the tray without writing a pin", async () => {
+    it("gives an unpositioned button a slot before the tray and records the promotion", async () => {
       // The case `toggleButtonVisibility` cannot handle: on a fresh profile
       // `browser` is in neither side array, so clearing a pin alone would leave
       // it with nowhere to render.
@@ -1780,10 +1786,11 @@ describe("toolbarPreferencesStore", () => {
       const { leftButtons, pinnedButtons } = store.getState().layout;
       expect(leftButtons).toContain("browser");
       expect(leftButtons.indexOf("browser")).toBe(leftButtons.indexOf("panel-tray") - 1);
-      // No `true` written: a positioned built-in with no entry is already
-      // visible, so recording one would put a value in the map the user's own
-      // action didn't require — the seeding habit v13 exists to end.
-      expect(pinnedButtons["browser"]).toBeUndefined();
+      // An explicit `true`, unlike `toggleButtonVisibility`. `browser` is not a
+      // default, so the promotion is a real choice with nothing else recording
+      // it — and it's the only part that survives a stale sibling view
+      // overwriting the position arrays.
+      expect(pinnedButtons["browser"]).toBe(true);
     });
 
     it("hides by writing false and keeps the position for a later re-show", async () => {
@@ -1798,8 +1805,58 @@ describe("toolbarPreferencesStore", () => {
       expect(store.getState().layout.leftButtons.indexOf("browser")).toBe(promotedIndex);
 
       store.getState().setPanelButtonOnToolbar("browser", true);
-      expect(store.getState().layout.pinnedButtons["browser"]).toBeUndefined();
+      expect(store.getState().layout.pinnedButtons["browser"]).toBe(true);
       expect(store.getState().layout.leftButtons.indexOf("browser")).toBe(promotedIndex);
+    });
+
+    it("rebuilds a promoted button's position when hydration finds it missing", async () => {
+      // The cross-view repair. Orderings reconcile last-writer-wins, so a stale
+      // sibling view writing any toolbar preference replaces the arrays wholesale
+      // and drops a promotion this view just made. `pinnedButtons` merges per id
+      // and survives, so the explicit `true` is what the position is rebuilt from
+      // — otherwise the button would silently un-promote itself.
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["terminal", "file-browser", "panel-tray"],
+              rightButtons: ["settings"],
+              pinnedButtons: { browser: true },
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 13,
+        })
+      );
+
+      const store = await loadStore();
+      const { leftButtons, rightButtons } = store.getState().layout;
+      expect(leftButtons).toContain("browser");
+      expect(leftButtons.indexOf("browser")).toBe(leftButtons.indexOf("panel-tray") - 1);
+      expect([...leftButtons, ...rightButtons].filter((id) => id === "browser")).toHaveLength(1);
+    });
+
+    it("does not rebuild a position for a button the user hid", async () => {
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["terminal", "file-browser", "panel-tray"],
+              rightButtons: ["settings"],
+              pinnedButtons: { browser: false, "dev-server": false },
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 13,
+        })
+      );
+
+      const store = await loadStore();
+      const { leftButtons, rightButtons } = store.getState().layout;
+      expect([...leftButtons, ...rightButtons]).not.toContain("browser");
+      expect([...leftButtons, ...rightButtons]).not.toContain("dev-server");
     });
 
     it("never positions the same id twice", async () => {
@@ -1832,7 +1889,7 @@ describe("toolbarPreferencesStore", () => {
 
       store.getState().setPanelButtonOnToolbar("browser", true);
 
-      expect(store.getState().layout.pinnedButtons["browser"]).toBeUndefined();
+      expect(store.getState().layout.pinnedButtons["browser"]).toBe(true);
       expect(store.getState().layout.leftButtons.indexOf("browser")).toBe(before);
     });
 

@@ -65,10 +65,12 @@ export type ToolbarButtonId =
  * permanently converted an implicit default into an explicit choice and made a
  * deliberate hide indistinguishable from a seed. v13 deletes that stamp. Seeding
  * a default here again would forfeit the same option a second time, so a
- * built-in's pin entry stays absent until the user acts on it. Note that
- * `true` is never written for a built-in: a positioned built-in with no entry is
- * already visible, so an explicit `true` would carry no information the array
- * doesn't. (Plugin contributions are the sole exception — see below.)
+ * built-in's pin entry stays absent until the user acts on it.
+ *
+ * A `true` therefore only ever appears where the user asked for a button whose
+ * default is *off* the toolbar — a promoted plugin contribution, or a
+ * `panel-tray` button the user pinned. For a button that is already a default,
+ * `true` would say nothing its array membership doesn't, so nothing writes one.
  *
  * Plugin contributions default to tray-only (#11304) — they always appear in
  * the plugin tray, and `true` additionally promotes one to its own top-level

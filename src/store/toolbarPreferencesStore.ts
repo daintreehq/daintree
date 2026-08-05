@@ -173,6 +173,59 @@ function mergeButtonList(
   return sanitizeButtonList(result);
 }
 
+/** Panel-tray buttons, in the order the tray lists them. */
+const PANEL_TRAY_BUTTON_IDS: PanelTrayButtonId[] = ["file-browser", "browser", "dev-server"];
+
+/**
+ * Give a panel button a slot next to the tray it was promoted from, so the panel
+ * buttons stay grouped rather than landing at whichever end of the row a bare
+ * append would put them.
+ *
+ * `panel-tray` can only be missing from a hand-edited profile; the left side is
+ * where these buttons have always lived (`LEFT_HOME_BUTTON_IDS`), so that is the
+ * fallback. Returns the single side it touched, for spreading over `layout`.
+ */
+function positionPanelButton(
+  layout: ToolbarLayoutState,
+  buttonId: AnyToolbarButtonId
+): { leftButtons: AnyToolbarButtonId[] } | { rightButtons: AnyToolbarButtonId[] } {
+  const side = layout.rightButtons.includes("panel-tray") ? "rightButtons" : "leftButtons";
+  const target = [...layout[side]];
+  const trayIndex = target.indexOf("panel-tray");
+  target.splice(trayIndex === -1 ? target.length : trayIndex, 0, buttonId);
+  return { [side]: sanitizeButtonList(target) } as
+    { leftButtons: AnyToolbarButtonId[] } | { rightButtons: AnyToolbarButtonId[] };
+}
+
+type ToolbarLayoutState = ToolbarPreferences["layout"];
+
+/**
+ * Re-materialize a position for a panel button the user explicitly promoted but
+ * that no longer has one.
+ *
+ * Runs on every hydration rather than in a migration, which is where this store
+ * puts durable invariants (`migrate` runs once, `merge` runs every load). The
+ * case it repairs is cross-view: button orderings are reconciled last-writer-wins
+ * — two divergent orders can't be merged — so a stale sibling view writing any
+ * toolbar preference replaces the arrays wholesale and drops a promotion another
+ * view just made. Before #11667 that only cost ordering, because every built-in
+ * was in an array regardless; now array membership carries visibility for
+ * `browser`/`dev-server`, so the same overwrite would silently un-promote them.
+ *
+ * `pinnedButtons` survives that overwrite (it merges per id, #11351), so the
+ * explicit `true` is the durable record of intent and the position is rebuilt
+ * from it here.
+ */
+function restorePromotedPanelButtons(layout: ToolbarLayoutState): ToolbarLayoutState {
+  let next = layout;
+  for (const buttonId of PANEL_TRAY_BUTTON_IDS) {
+    if (next.pinnedButtons[buttonId] !== true) continue;
+    if (next.leftButtons.includes(buttonId) || next.rightButtons.includes(buttonId)) continue;
+    next = { ...next, ...positionPanelButton(next, buttonId) };
+  }
+  return next;
+}
+
 /**
  * The exact subset persisted by `partialize` (note: the launcher's `defaultAgent`
  * is deliberately not persisted). The write merge (#11351) reconciles against
@@ -335,11 +388,13 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
    * `DEFAULT_LEFT_BUTTONS` — so on a fresh profile they sit in neither side
    * array and clearing a pin alone would leave them with nowhere to render.
    *
-   * Showing deletes any hide entry and, only when the id is positioned on
-   * neither side, gives it one; it never writes `true`. A positioned built-in
-   * with no pin entry is already visible, so a `true` would record nothing the
-   * arrays don't already say — and seeding this map with values the user did not
-   * choose is the v12 mistake (see `ToolbarPinnedState`).
+   * Showing writes an explicit `true` and, only when the id is positioned on
+   * neither side, gives it a position. The `true` is not a seeded default — it
+   * records a choice the user made, the same way `setPluginButtonPromoted` does
+   * for a plugin contribution whose default is also "not on the toolbar". It is
+   * load-bearing across project views: orderings reconcile last-writer-wins, so
+   * a stale sibling's write drops the new position, and `restorePromotedPanelButtons`
+   * rebuilds it from this flag on the next hydration.
    *
    * Hiding writes `false` and leaves the position alone, exactly like
    * `toggleButtonVisibility`, so re-showing restores the button where the user
@@ -433,27 +488,21 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             return { layout: { ...state.layout, pinnedButtons: pinned } };
           }
 
-          delete pinned[buttonId];
+          if (state.layout.pinnedButtons[buttonId] === true) return state;
+          pinned[buttonId] = true;
           const isPositioned =
             state.layout.leftButtons.includes(buttonId) ||
             state.layout.rightButtons.includes(buttonId);
           if (isPositioned) {
-            if (state.layout.pinnedButtons[buttonId] === undefined) return state;
             return { layout: { ...state.layout, pinnedButtons: pinned } };
           }
 
-          // Unpositioned: land it next to the tray it was promoted from, so the
-          // panel buttons stay grouped instead of the id appearing at whichever
-          // end of the row a bare append would put it. `panel-tray` can only be
-          // missing from a hand-edited profile, in which case the left side is
-          // where these buttons have always lived (`LEFT_HOME_BUTTON_IDS`).
-          const trayOnRight = state.layout.rightButtons.includes("panel-tray");
-          const side = trayOnRight ? "rightButtons" : "leftButtons";
-          const target = [...state.layout[side]];
-          const trayIndex = target.indexOf("panel-tray");
-          target.splice(trayIndex === -1 ? target.length : trayIndex, 0, buttonId);
           return {
-            layout: { ...state.layout, pinnedButtons: pinned, [side]: sanitizeButtonList(target) },
+            layout: {
+              ...state.layout,
+              pinnedButtons: pinned,
+              ...positionPanelButton(state.layout, buttonId),
+            },
           };
         }),
       setPluginButtonPromoted: (buttonId, promoted) =>
@@ -748,10 +797,13 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           // and the `false` v12 wrote onto every profile was never user intent —
           // removing it repairs a bad write rather than overriding a preference.
           //
-          // Only a literal `false` is removed. A `true` is left alone: nothing
-          // writes `true` for a built-in, so one can only have arrived from a
-          // hand-edited profile, and deleting it would be the same overreach v12
-          // committed.
+          // Only a literal `false` is removed. A `true` is left alone — it means
+          // an explicit promotion (`setPanelButtonOnToolbar`), which is a real
+          // choice and not this step's to revoke. Note the v12 step above
+          // overwrites a pre-v12 `true` with `false` before this runs, so a
+          // profile entering below v12 loses it; that only reaches hand-edited
+          // or early-development blobs, since `file-browser` was not a shipped
+          // built-in before v12.
           //
           // One reset is unavoidable and is NOT a bug: a user who deliberately
           // hid `file-browser` after v12 carries the identical `false` as the
@@ -821,7 +873,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
         return {
           ...currentState,
           ...persisted,
-          layout: {
+          layout: restorePromotedPanelButtons({
             leftButtons: mergeButtonList(
               healed.leftButtons,
               currentState.layout.leftButtons,
@@ -840,7 +892,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             // pins has expressed no overrides, and every built-in it positions
             // is therefore visible.
             pinnedButtons: persisted.layout?.pinnedButtons ?? {},
-          },
+          }),
         };
       },
     }

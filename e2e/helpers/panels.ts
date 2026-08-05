@@ -268,8 +268,11 @@ async function clickPanelTrayItem(
   const tray = toolbar.locator('[data-toolbar-button-id="panel-tray"] button');
   if (!(await clickFirstVisible(tray, 1000, 500))) return false;
 
+  // The caller's timeout, not a fixed second: the dropdown primitives are
+  // lazy-loaded, so the first tray open on a cold release runner can be slower
+  // than any menu this suite has already warmed.
   const row = page.locator(`[data-testid="panel-tray-row-${itemId}"]`);
-  if (!(await row.isVisible({ timeout: 1000 }).catch(() => false))) {
+  if (!(await row.isVisible({ timeout }).catch(() => false))) {
     await page.keyboard.press("Escape").catch(() => undefined);
     return false;
   }
@@ -449,6 +452,39 @@ export async function openTerminal(page: Page): Promise<void> {
  */
 export async function openBrowser(page: Page): Promise<void> {
   await clickToolbarButton(page, SEL.toolbar.openBrowser);
+}
+
+/**
+ * Open the dev preview panel.
+ *
+ * Always route through here rather than clicking `SEL.toolbar.openDevPreview`
+ * directly: since #11667 `dev-server` is not a default toolbar button, so on a
+ * fresh profile — which every e2e profile is — that locator matches nothing and
+ * the panel is reached through the panel tray instead. A direct click would
+ * fail, and a direct `isVisible()` probe guarding a `test.skip()` would skip
+ * forever while still reporting green.
+ */
+export async function openDevPreview(page: Page): Promise<void> {
+  await clickToolbarButton(page, SEL.toolbar.openDevPreview);
+}
+
+/**
+ * Whether a toolbar command can be reached at all — as a direct button, an
+ * overflow row, or a panel-tray row. The boolean sibling of
+ * `expectToolbarButtonReachable`, for specs that legitimately skip when an entry
+ * point is absent in a given launch state rather than failing.
+ */
+export async function isToolbarButtonReachable(
+  page: Page,
+  selector: string,
+  timeout = 5000
+): Promise<boolean> {
+  try {
+    await expectToolbarButtonReachable(page, selector, timeout);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function getFirstGridPanel(page: Page): Locator {

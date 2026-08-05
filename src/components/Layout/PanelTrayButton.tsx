@@ -66,11 +66,13 @@ export const PANEL_TRAY_ITEMS: readonly PanelTrayItem[] = [
 /**
  * Whether a tray item currently has its own top-level toolbar button.
  *
- * Two factors, not one: since v13 `browser` and `dev-server` are absent from
- * `DEFAULT_LEFT_BUTTONS`, so a fresh profile has no position for them at all and
- * an unhidden pin state alone doesn't put them on the toolbar. A legacy profile
- * that carries the position with no pin entry reads as promoted, which is what
- * keeps an existing user's toolbar looking untouched.
+ * Three states, in priority order. An explicit `false` is a hide and wins over
+ * any position. An explicit `true` is a promotion the user made, and reads as on
+ * even in the window between a stale cross-view write dropping the position and
+ * `restorePromotedPanelButtons` rebuilding it. Otherwise the position decides:
+ * that is the legacy profile, which carries `browser`/`dev-server` in its arrays
+ * with no pin entry at all and must keep reading as promoted so an existing
+ * user's toolbar looks untouched.
  */
 export function isPanelButtonOnToolbar(
   id: PanelTrayButtonId,
@@ -79,6 +81,7 @@ export function isPanelButtonOnToolbar(
   rightButtons: AnyToolbarButtonId[]
 ): boolean {
   if (pinnedButtons[id] === false) return false;
+  if (pinnedButtons[id] === true) return true;
   return leftButtons.includes(id) || rightButtons.includes(id);
 }
 
@@ -110,13 +113,22 @@ function PanelTrayRow({
 
   return (
     <DropdownMenuItem
-      onSelect={() => {
-        if (!disabled) onSelect(item);
+      onSelect={(e) => {
+        if (disabled) {
+          // Radix does not read `aria-disabled` as its own `disabled` prop, so
+          // selection still fires and would close the menu on a row that opens
+          // nothing. Guarding the dispatch alone isn't enough — the menu has to
+          // stay put too.
+          e.preventDefault();
+          return;
+        }
+        onSelect(item);
       }}
       onKeyDown={handleKeyDown}
       // `aria-disabled` rather than `disabled`: a disabled Radix item is skipped
       // by type-ahead and arrow keys, which would also make its pin affordance
-      // unreachable from the keyboard. The row still explains why it can't open.
+      // unreachable from the keyboard — and pinning a panel you haven't opened a
+      // project for yet is a reasonable thing to want.
       aria-disabled={disabled || undefined}
       className={cn("group h-7", disabled && "opacity-50")}
       data-testid={`panel-tray-row-${item.id}`}
@@ -125,7 +137,17 @@ function PanelTrayRow({
         <Icon className="h-3.5 w-3.5 text-text-muted" />
       </span>
 
-      <span className="flex-1">{disabled && disabledReason ? disabledReason : item.label}</span>
+      {/*
+        The label never changes with state — the reason rides alongside it. A
+        command whose visible name mutates re-announces as a different item to a
+        screen reader and stops matching its own name under type-ahead. Same
+        shape as the `copy-tree` overflow item, which keeps its label and
+        surfaces unavailability separately.
+      */}
+      <span className="flex-1">{item.label}</span>
+      {disabled && disabledReason && (
+        <span className="ml-2 text-xs text-text-muted">{disabledReason}</span>
+      )}
 
       {displayCombo && <DropdownMenuShortcut>{displayCombo}</DropdownMenuShortcut>}
 
@@ -210,8 +232,8 @@ export function PanelTrayButton({
     (id === "file-browser" && !hasWorkspace) || (id === "dev-server" && !hasProject);
 
   const disabledReasonFor = (id: PanelTrayButtonId) => {
-    if (id === "file-browser") return "Open a project or scratch to browse files";
-    if (id === "dev-server") return "Open a project to run a dev preview";
+    if (id === "file-browser") return "Needs a workspace";
+    if (id === "dev-server") return "Needs a project";
     return null;
   };
 

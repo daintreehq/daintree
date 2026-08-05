@@ -33,6 +33,7 @@ import {
 } from "../helpers/launch";
 import { dismissTelemetryConsent } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
+import { isToolbarButtonReachable, openDevPreview } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { configureClaudeAuthEnv, hasClaudeApiKey } from "../helpers/claudeAuth";
 import { writeTerminalInput, getTerminalText } from "../helpers/terminal";
@@ -436,10 +437,13 @@ test.describe.serial("Marketing Screenshots — Daintree Store Reel", () => {
       });
       annotateAgentResponse(devResponded, "Claude (dev preview)", 240_000);
 
-      // Open the dev preview panel.
-      const devBtn = page.locator(SEL.toolbar.openDevPreview);
-      if (await devBtn.isVisible({ timeout: T_MEDIUM }).catch(() => false)) {
-        await devBtn.click();
+      // Open the dev preview panel. Reachability rather than a direct locator:
+      // since #11667 `dev-server` is not a default toolbar button, so on this
+      // scene's fresh profile it is reached through the panel tray — a direct
+      // probe would silently skip the panel and produce a screenshot of the
+      // wrong scene.
+      if (await isToolbarButtonReachable(page, SEL.toolbar.openDevPreview, T_MEDIUM)) {
+        await openDevPreview(page);
       }
 
       // Wait for the panel to reach a "Running" state if possible — gracefully

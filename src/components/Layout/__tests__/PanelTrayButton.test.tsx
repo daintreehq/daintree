@@ -142,14 +142,22 @@ beforeEach(() => {
 });
 
 describe("PanelTrayButton (#11667)", () => {
-  it("lists every non-agent panel button, promoted ones included", () => {
+  it("renders a row for every inventory item, promoted ones included", () => {
     // The plugin tray's rule: promotion adds an access point, it never moves the
-    // button out of the tray. `file-browser` has its own slot and still appears.
-    const { getByTestId } = renderTray();
-    for (const item of PANEL_TRAY_ITEMS) {
-      expect(getByTestId(`panel-tray-row-${item.id}`)).toBeTruthy();
-    }
-    expect(PANEL_TRAY_ITEMS.map((i) => i.id)).toEqual(["file-browser", "browser", "dev-server"]);
+    // button out of the tray. `file-browser` is positioned (see beforeEach) and
+    // still gets a row.
+    //
+    // Read from the DOM and compare to the inventory, rather than iterating the
+    // inventory to look each row up — the latter can't notice a row that failed
+    // to render, and comparing the exported constant to a hard-coded list would
+    // just restate the source of truth.
+    const { container } = renderTray();
+    const renderedIds = Array.from(container.querySelectorAll("[data-testid^='panel-tray-row-']"))
+      .map((el) => el.getAttribute("data-testid")?.replace("panel-tray-row-", ""))
+      .filter(Boolean);
+
+    expect(renderedIds).toEqual(PANEL_TRAY_ITEMS.map((i) => i.id));
+    expect(renderedIds).toContain("file-browser");
   });
 
   it("routes the file browser through the toolbar's own handler, not a bare dispatch", () => {
@@ -185,14 +193,22 @@ describe("PanelTrayButton (#11667)", () => {
     expect(getByTestId("panel-tray-row-dev-server").getAttribute("aria-disabled")).toBe("true");
   });
 
-  it("keeps a disabled row focusable so its pin stays reachable", () => {
-    // `aria-disabled` rather than `disabled`: Radix skips a disabled item in
-    // arrow-key and type-ahead navigation, which would strand the pin control on
-    // a row the user may well want to promote before opening a project.
+  it("keeps a disabled row's label stable and its pin still operable", () => {
+    // The label must not swap to the unavailability reason: a command whose
+    // visible name changes with state re-announces as a different item and stops
+    // matching itself under type-ahead. The reason rides alongside instead.
+    //
+    // And the row stays `aria-disabled` rather than `disabled` so Radix keeps it
+    // in arrow-key and type-ahead order — which is what leaves the pin reachable
+    // on a panel the user hasn't opened a project for yet.
     const { getByTestId } = renderTray({ hasProject: false });
     const row = getByTestId("panel-tray-row-dev-server");
-    expect(row.getAttribute("disabled")).toBeNull();
-    expect(row.getAttribute("tabindex")).toBe("0");
+
+    expect(row.textContent).toContain("Dev preview");
+    expect(row.textContent).toContain("Needs a project");
+
+    fireEvent.click(getByTestId("panel-tray-pin-dev-server"));
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("dev-server", true);
   });
 
   it("promotes an unpositioned button when its pin is clicked", () => {

@@ -4,7 +4,7 @@ import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { getGridPanelCount } from "../../helpers/panels";
+import { getGridPanelCount, isToolbarButtonReachable, openDevPreview } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
@@ -48,11 +48,13 @@ server.listen(0, '127.0.0.1', () => {
   test("captures guest console errors into the Console tab", async () => {
     const { window } = ctx;
 
-    const devBtn = window.locator(SEL.toolbar.openDevPreview);
-    if (!(await devBtn.isVisible().catch(() => false))) {
+    // Reachability, not direct button visibility: since #11667 `dev-server` is
+    // not a default toolbar button, so probing the locator would fail on every
+    // fresh profile and skip this test permanently while still reporting green.
+    if (!(await isToolbarButtonReachable(window, SEL.toolbar.openDevPreview))) {
       test.info().annotations.push({
         type: "conditional-skip",
-        description: "Dev preview toolbar button not visible in this launch state",
+        description: "Dev preview entry point not reachable in this launch state",
       });
 
       test.skip();
@@ -60,7 +62,7 @@ server.listen(0, '127.0.0.1', () => {
     }
 
     const before = await getGridPanelCount(window);
-    await devBtn.click();
+    await openDevPreview(window);
     await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
 
     await expect(window.getByRole("heading", { name: "Set a dev command" })).toBeVisible({

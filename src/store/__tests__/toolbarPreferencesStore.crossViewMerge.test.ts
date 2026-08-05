@@ -133,11 +133,13 @@ describe("toolbarPreferencesStore cross-view write merge (#11351)", () => {
     const backing = installLocalStorage({});
     const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
 
-    // A sibling view enabled the file browser — the toggle deletes the key.
+    // The sibling made a real edit this view has never seen: an explicit hide.
+    // Asserting against `{}` on both sides would pass even under a wholesale
+    // overwrite, so the sibling has to hold something distinguishable.
     backing.set(
       STORAGE_KEY,
       siblingBlob({
-        layout: { leftButtons: [], rightButtons: [], pinnedButtons: {} },
+        layout: { leftButtons: [], rightButtons: [], pinnedButtons: { "copy-tree": false } },
       })
     );
 
@@ -146,6 +148,35 @@ describe("toolbarPreferencesStore cross-view write merge (#11351)", () => {
 
     const written = readBlob(backing);
     expect(written.state.layout.pinnedButtons["file-browser"]).toBeUndefined();
+    // The sibling's untouched edit survives this view's unrelated write.
+    expect(written.state.layout.pinnedButtons["copy-tree"]).toBe(false);
+    expect(written.state.launcher.alwaysShowDevServer).toBe(true);
+  });
+
+  it("preserves a sibling's panel promotion when a stale view writes something unrelated (#11667)", async () => {
+    // Array orderings reconcile last-writer-wins, so this view's write DOES
+    // replace the sibling's side arrays and drop the promoted position. The
+    // explicit `true` is what has to survive — `restorePromotedPanelButtons`
+    // rebuilds the position from it on the next hydration. Without the pin entry
+    // the promotion would be gone with nothing left to reconstruct it from.
+    const backing = installLocalStorage({});
+    const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
+
+    backing.set(
+      STORAGE_KEY,
+      siblingBlob({
+        layout: {
+          leftButtons: ["terminal", "browser", "panel-tray"],
+          rightButtons: [],
+          pinnedButtons: { browser: true },
+        },
+      })
+    );
+
+    store.getState().setAlwaysShowDevServer(true);
+
+    const written = readBlob(backing);
+    expect(written.state.layout.pinnedButtons["browser"]).toBe(true);
     expect(written.state.launcher.alwaysShowDevServer).toBe(true);
   });
 

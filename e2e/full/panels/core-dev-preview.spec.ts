@@ -5,7 +5,11 @@ import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { getGridPanelCount } from "../../helpers/panels";
+import {
+  expectToolbarButtonReachable,
+  getGridPanelCount,
+  openDevPreview,
+} from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
@@ -34,10 +38,12 @@ test.describe.serial("Core: Dev Preview", () => {
     ctx = await launchApp();
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureRepoPath, PROJECT_NAME);
 
-    // Fail fast if the dev preview entry point is missing — the button renders
-    // for any onboarded project, so its absence is a real regression, not a
-    // launch-state quirk to silently skip past.
-    await expect(ctx.window.locator(SEL.toolbar.openDevPreview)).toBeVisible({ timeout: T_LONG });
+    // Fail fast if the dev preview entry point is missing — it is reachable for
+    // any onboarded project, so its absence is a real regression, not a
+    // launch-state quirk to silently skip past. Reachability rather than direct
+    // visibility since #11667: `dev-server` is no longer a default toolbar
+    // button, so on a fresh profile it lives in the panel tray.
+    await expectToolbarButtonReachable(ctx.window, SEL.toolbar.openDevPreview, T_LONG);
   });
 
   test.afterAll(async () => {
@@ -50,9 +56,8 @@ test.describe.serial("Core: Dev Preview", () => {
     test("opening dev preview panel adds to grid", async () => {
       const { window } = ctx;
 
-      const devBtn = window.locator(SEL.toolbar.openDevPreview);
       const before = await getGridPanelCount(window);
-      await devBtn.click();
+      await openDevPreview(window);
 
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
     });
@@ -165,9 +170,8 @@ server.listen(0, '127.0.0.1', () => {
       const { window } = ctx;
 
       // Open dev preview panel
-      const devBtn = window.locator(SEL.toolbar.openDevPreview);
       const before = await getGridPanelCount(window);
-      await devBtn.click();
+      await openDevPreview(window);
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
 
       // Confirm unconfigured state
