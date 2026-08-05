@@ -45,7 +45,7 @@ describe("TOOLBAR_BUTTON_METADATA — registry coverage", () => {
   });
 
   it("uses the canonical agent display name for built-in agent labels", () => {
-    // Drift guard for the original issue (#7668): the agent-tray icon and
+    // Drift guard for the original issue (#7668): the launcher icon and
     // labels must come from the same source the AgentButton renders so the
     // Settings list and the overflow dropdown stay in sync. Sentence-cased
     // per #9825 (lowercase "agent" suffix).

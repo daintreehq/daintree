@@ -5,14 +5,14 @@ import type {
   ToolbarPreferences,
   ToolbarButtonId,
   AnyToolbarButtonId,
-  PanelTrayButtonId,
+  LauncherPanelButtonId,
   PluginToolbarButtonId,
   ToolbarPinnedState,
 } from "@/../../shared/types/toolbar";
 // `@shared/...`, not the `@/../../shared/...` spelling the type-only import
 // above uses: that path is erased at compile time and never has to resolve at
 // runtime, but a value import does.
-import { PANEL_TRAY_BUTTON_IDS } from "@shared/types/toolbar";
+import { LAUNCHER_PANEL_BUTTON_IDS } from "@shared/types/toolbar";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import {
   mergeRecordByWriterDelta,
@@ -23,25 +23,31 @@ import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { BUILT_IN_AGENT_IDS, LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 
 /**
- * `browser` and `dev-server` are deliberately absent (#11667). Both assume web
- * development; the file browser assumes only that the project has files, so it
- * takes the first-class slot and the other two move into the panel tray.
+ * `browser` and `dev-server` are deliberately absent (#11667), and so is every
+ * agent id (#11680). `browser`/`dev-server` both assume web development; the
+ * agents were spread in from `LAUNCHABLE_AGENT_IDS`, which made the row grow on
+ * its own every time someone installed another CLI. An unset agent pin now means
+ * "listed in the launcher", not "on the toolbar".
  *
  * Absence from this array — not a seeded `pinnedButtons` entry — is what makes
  * them ship hidden. `mergeButtonList` only ever *adds* defaults a profile is
  * missing and never removes an id a profile carries, so an existing toolbar
- * keeps both buttons untouched while a fresh one never grows them. That
- * per-profile discriminator is the whole reason no migration has to stamp
+ * keeps every agent button it already had while a fresh one never grows them.
+ * That per-profile discriminator is the whole reason no migration has to stamp
  * anything: see the `ToolbarPinnedState` doc comment on why stamping a default
  * would forfeit the ability to ever change it again.
+ *
+ * The consequence is deliberate and worth naming: a profile that predates
+ * #11680 still carries every agent id, so installing a new CLI still grows *its*
+ * row. Telling that array entry apart from a deliberate pin is exactly the
+ * distinction stamping destroys, so the grandfathered profile keeps the old
+ * behavior rather than having a default backfilled over it.
+ *
+ * `launcher` leads: a permanent category container belongs at the start of the
+ * group it owns, so the row reads verb-then-nouns — launcher, then the things
+ * pinned out of it.
  */
-const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
-  "agent-tray",
-  ...(LAUNCHABLE_AGENT_IDS as unknown as ToolbarButtonId[]),
-  "terminal",
-  "file-browser",
-  "panel-tray",
-];
+const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = ["launcher", "terminal", "file-browser"];
 
 const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "voice-recording",
@@ -77,15 +83,21 @@ const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "assistant-toggle
 /**
  * Home side lookup, used *only* to pick the survivor when an id sits on both
  * sides. Deliberately not `DEFAULT_LEFT_BUTTONS` itself: `browser` and
- * `dev-server` left the defaults in v13 (#11667) but a profile old enough to
- * carry a cross-side duplicate of one still had it as a left-side button when
- * the duplicate formed. Reading the live defaults here would flip the repair for
- * exactly those profiles and keep the copy the user dragged *away* from.
+ * `dev-server` left the defaults in v13 (#11667) and every agent id left in
+ * #11680, but a profile old enough to carry a cross-side duplicate of one still
+ * had it as a left-side button when the duplicate formed. Reading the live
+ * defaults here would flip the repair for exactly those profiles and keep the
+ * copy the user dragged *away* from.
  *
  * Membership here never causes a button to be inserted anywhere — that is
  * `mergeButtonList`'s job, and it reads the defaults, not this set.
  */
-const LEFT_HOME_BUTTON_IDS: ToolbarButtonId[] = [...DEFAULT_LEFT_BUTTONS, "browser", "dev-server"];
+const LEFT_HOME_BUTTON_IDS: ToolbarButtonId[] = [
+  ...DEFAULT_LEFT_BUTTONS,
+  ...(LAUNCHABLE_AGENT_IDS as unknown as ToolbarButtonId[]),
+  "browser",
+  "dev-server",
+];
 const DEFAULT_LEFT_BUTTON_SET = new Set<AnyToolbarButtonId>(LEFT_HOME_BUTTON_IDS);
 
 function sanitizeButtonList(buttons: AnyToolbarButtonId[]): AnyToolbarButtonId[] {
@@ -178,11 +190,16 @@ function mergeButtonList(
 }
 
 /**
- * Give a panel button a slot next to the tray it was promoted from, so the panel
- * buttons stay grouped rather than landing at whichever end of the row a bare
- * append would put them.
+ * Give a promoted button a slot next to the launcher it was promoted from, so
+ * the things pinned out of the launcher stay grouped beside it rather than
+ * landing at whichever end of the row a bare append would put them.
  *
- * `panel-tray` can only be missing from a hand-edited profile; the left side is
+ * Inserts *after* the launcher, not at its index: the launcher leads its group
+ * (#11680), so splicing at its index would push it off the leading edge one
+ * promotion at a time. `panel-tray` used to sit mid-row, where inserting before
+ * it was what kept the panel buttons grouped.
+ *
+ * `launcher` can only be missing from a hand-edited profile; the left side is
  * where these buttons have always lived (`LEFT_HOME_BUTTON_IDS`), so that is the
  * fallback. Returns both sides — the untouched one passed straight through —
  * rather than a computed-key object for the side it changed: the latter needs a
@@ -190,16 +207,20 @@ function mergeButtonList(
  * `no-unsafe-type-assertion` per rule, so one more costs a baseline bump the
  * ratchet exists to prevent.
  */
-function positionPanelButton(
+function positionLauncherButton(
   layout: ToolbarLayoutState,
-  buttonId: AnyToolbarButtonId
+  buttonIds: AnyToolbarButtonId[]
 ): { leftButtons: AnyToolbarButtonId[]; rightButtons: AnyToolbarButtonId[] } {
-  const trayOnRight = layout.rightButtons.includes("panel-tray");
-  const target = [...(trayOnRight ? layout.rightButtons : layout.leftButtons)];
-  const trayIndex = target.indexOf("panel-tray");
-  target.splice(trayIndex === -1 ? target.length : trayIndex, 0, buttonId);
+  const launcherOnRight = layout.rightButtons.includes("launcher");
+  const target = [...(launcherOnRight ? layout.rightButtons : layout.leftButtons)];
+  const launcherIndex = target.indexOf("launcher");
+  // One splice for the whole batch rather than one per id: repeated single
+  // inserts all land at the same index (the launcher does not move) or all
+  // append (when there is no launcher), and those two produce OPPOSITE
+  // orderings. Inserting the batch keeps the caller's order either way.
+  target.splice(launcherIndex === -1 ? target.length : launcherIndex + 1, 0, ...buttonIds);
   const positioned = sanitizeButtonList(target);
-  return trayOnRight
+  return launcherOnRight
     ? { leftButtons: layout.leftButtons, rightButtons: positioned }
     : { leftButtons: positioned, rightButtons: layout.rightButtons };
 }
@@ -224,12 +245,16 @@ type ToolbarLayoutState = ToolbarPreferences["layout"];
  * from it here.
  */
 function restorePromotedPanelButtons(layout: ToolbarLayoutState): ToolbarLayoutState {
-  let next = layout;
-  for (const buttonId of PANEL_TRAY_BUTTON_IDS) {
-    if (next.pinnedButtons[buttonId] !== true) continue;
-    if (next.leftButtons.includes(buttonId) || next.rightButtons.includes(buttonId)) continue;
-    next = { ...next, ...positionPanelButton(next, buttonId) };
-  }
+  const missing = LAUNCHER_PANEL_BUTTON_IDS.filter(
+    (buttonId) =>
+      layout.pinnedButtons[buttonId] === true &&
+      !layout.leftButtons.includes(buttonId) &&
+      !layout.rightButtons.includes(buttonId)
+  );
+  if (missing.length === 0) return layout;
+  // One batched insert, in list order — see `positionLauncherButton` on why
+  // restoring them one at a time reverses the group.
+  const next: ToolbarLayoutState = { ...layout, ...positionLauncherButton(layout, [...missing]) };
   return next;
 }
 
@@ -304,7 +329,7 @@ function toToolbarPersisted(
  * merged, so they're taken verbatim (last-writer-wins).
  *
  * Migration coexistence: `onDisk` is read raw (no `migrate`), so the reconciler
- * must never diff against a foreign schema version — the 12-step migrate chain
+ * must never diff against a foreign schema version — the 14-step migrate chain
  * reshapes the persisted blob (e.g. v7 `hiddenButtons` array → v8 `pinnedButtons`
  * map, v10 `github-stats` → `forge-stats`). Two guards cover the app-upgrade
  * window: a foreign on-disk version skips the merge outright; a foreign
@@ -387,8 +412,8 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
    */
   setPluginButtonPromoted: (buttonId: PluginToolbarButtonId, promoted: boolean) => void;
   /**
-   * Give a panel-tray button its own top-level toolbar slot, or take it away
-   * (#11667).
+   * Give a launcher panel button its own top-level toolbar slot, or take it
+   * away (#11667).
    *
    * Distinct from `toggleButtonVisibility` because that only ever touches
    * `pinnedButtons`, and since v13 `browser`/`dev-server` are absent from
@@ -407,7 +432,32 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
    * `toggleButtonVisibility`, so re-showing restores the button where the user
    * had it rather than appending it somewhere new.
    */
-  setPanelButtonOnToolbar: (buttonId: PanelTrayButtonId, onToolbar: boolean) => void;
+  setPanelButtonOnToolbar: (buttonId: LauncherPanelButtonId, onToolbar: boolean) => void;
+  /**
+   * Give an agent button a position next to the launcher, if it has none
+   * (#11680).
+   *
+   * Agents are the one launcher row whose pin does NOT live here — it is the
+   * tri-state `pinned` in `agentSettingsStore`, IPC-persisted in main (#7673),
+   * and this store must not mirror it (a second copy is a second thing that can
+   * disagree). But since #11680 removed the `LAUNCHABLE_AGENT_IDS` spread from
+   * `DEFAULT_LEFT_BUTTONS`, a fresh profile's agent ids sit in neither side
+   * array, so an explicit pin alone leaves the button with nowhere to render —
+   * the same gap `setPanelButtonOnToolbar` closes for `browser`/`dev-server`.
+   *
+   * Position only: writes no `pinnedButtons` entry, so nothing here can be
+   * mistaken for a seeded default. Unpinning deliberately leaves the position
+   * behind, matching `setPanelButtonOnToolbar`'s hide branch, so re-pinning
+   * restores the button where the user had it. The rendered-but-unpositioned
+   * window (a stale cross-view write dropping the array, or the first-run pin
+   * seeding in `buildInitialAgentPinUpdates`) is covered at the render boundary
+   * in `Toolbar.tsx`, which reads the authoritative pin from `agentSettingsStore`.
+   *
+   * Takes a batch as well as a single id: positioning several agents one call at
+   * a time reverses them, since every insert lands at the same index — see
+   * `positionLauncherButton`.
+   */
+  positionAgentButton: (buttonIds: AnyToolbarButtonId | AnyToolbarButtonId[]) => void;
   /**
    * Prune `pinnedButtons` entries for plugin buttons that are no longer in
    * the loaded plugin set. `pinnedButtons` is renderer-local persisted state
@@ -508,8 +558,19 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             layout: {
               ...state.layout,
               pinnedButtons: pinned,
-              ...positionPanelButton(state.layout, buttonId),
+              ...positionLauncherButton(state.layout, [buttonId]),
             },
+          };
+        }),
+      positionAgentButton: (buttonIds) =>
+        set((state) => {
+          const positioned = new Set([...state.layout.leftButtons, ...state.layout.rightButtons]);
+          const missing = (Array.isArray(buttonIds) ? buttonIds : [buttonIds]).filter(
+            (id) => !positioned.has(id)
+          );
+          if (missing.length === 0) return state;
+          return {
+            layout: { ...state.layout, ...positionLauncherButton(state.layout, missing) },
           };
         }),
       setPluginButtonPromoted: (buttonId, promoted) =>
@@ -568,7 +629,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }),
     {
       name: "daintree-toolbar-preferences",
-      version: 13,
+      version: 14,
       storage: createSafeJSONStorage<ToolbarPreferencesPersistedState>({
         mergeOnWrite: mergeToolbarPreferencesPersistedWrite,
       }),
@@ -855,6 +916,86 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             ...(hasLayout ? layout : {}),
             pinnedButtons: repairedPins,
           };
+        }
+        if (version < 14) {
+          // The agent tray and the panel tray merged into one `launcher`
+          // (#11680). Both old ids are persisted literals in the position arrays
+          // and the pin map of every existing profile, so leaving them would
+          // strand two dead references: `buttonRegistry` no longer renders
+          // either, and `positionLauncherButton`'s anchor would find nothing.
+          //
+          // `agent-tray` is *renamed* rather than dropped-and-re-added, so the
+          // launcher inherits its exact index and a user who dragged the tray
+          // somewhere keeps it there. `panel-tray` is filtered out, because only
+          // one id survives the merge. Follows the v10 `renameForgeStats` shape
+          // for the rename and the v6/v7 shape for the drop, with v3's dedupe so
+          // a profile carrying both trays doesn't yield a duplicate `launcher`.
+          //
+          // The pin entries merge by UNION, not by rename. Hiding one tray must
+          // not hide the combined access point: a user who hid `agent-tray` but
+          // kept `panel-tray` still reaches panels through the launcher, and a
+          // bare rename would take that away. So the launcher reads hidden only
+          // when BOTH old trays were explicitly hidden.
+          //
+          // Nothing is stamped in the other direction. A visible tray leaves no
+          // key at all rather than an explicit `true`: for a built-in, `true`
+          // says nothing its array membership doesn't, and seeding one here is
+          // the v12 mistake the `ToolbarPinnedState` doc comment exists to
+          // prevent. Sibling entries — including the `file-browser`/`browser`/
+          // `dev-server` promotions `restorePromotedPanelButtons` rebuilds from
+          // — are copied through untouched.
+          //
+          // Narrowed rather than asserted, matching v12/v13: `state` is already
+          // `Record<string, unknown>`, so `in`/`typeof` guards reach the same
+          // place without a type assertion, and the lint ratchet scores
+          // `no-unsafe-type-assertion` per rule.
+          const layout = state.layout;
+          const hasLayout = typeof layout === "object" && layout !== null && !Array.isArray(layout);
+
+          const mergeTrayIds = (value: unknown): unknown => {
+            if (!Array.isArray(value)) return value;
+            const renamed = value.map((id) => (id === "agent-tray" ? "launcher" : id));
+            return Array.from(new Set(renamed.filter((id) => id !== "panel-tray")));
+          };
+
+          const mergeTrayPins = (value: unknown): unknown => {
+            // A malformed map normalizes to `{}` rather than passing through, so
+            // an array-shaped blob doesn't get re-persisted at v14 — the v12/v13
+            // steps narrow the same way.
+            if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+            const carried: Record<string, unknown> = {};
+            let agentTrayHidden = false;
+            let panelTrayHidden = false;
+            for (const [key, entry] of Object.entries(value)) {
+              if (key === "agent-tray") {
+                agentTrayHidden = entry === false;
+                continue;
+              }
+              if (key === "panel-tray") {
+                panelTrayHidden = entry === false;
+                continue;
+              }
+              carried[key] = entry;
+            }
+            // Both explicitly hidden, and only then: the merged button carries
+            // the hide forward. Any other combination leaves no key, which is
+            // what "visible" already means for a built-in.
+            if (agentTrayHidden && panelTrayHidden) carried.launcher = false;
+            return carried;
+          };
+
+          if (hasLayout) {
+            state.layout = {
+              ...layout,
+              ...("leftButtons" in layout ? { leftButtons: mergeTrayIds(layout.leftButtons) } : {}),
+              ...("rightButtons" in layout
+                ? { rightButtons: mergeTrayIds(layout.rightButtons) }
+                : {}),
+              ...("pinnedButtons" in layout
+                ? { pinnedButtons: mergeTrayPins(layout.pinnedButtons) }
+                : {}),
+            };
+          }
         }
         return state as unknown as ToolbarPreferencesState;
       },

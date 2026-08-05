@@ -109,7 +109,7 @@ export function LauncherQuickActions() {
     // Walk the toolbar's own left→right order (deduped defensively, #10937) and
     // keep the built-in agents whose toolbar button is currently visible. The
     // `isBuiltInAgentId` gate is what makes this an exact toolbar mirror: it
-    // drops every non-agent button (terminal, browser, agent-tray, settings, …)
+    // drops every non-agent button (terminal, browser, launcher, settings, …)
     // so a plugin/user agent whose id happens to collide with a toolbar button
     // id can never sneak in — only built-in agents are ever toolbar buttons.
     const order = Array.from(

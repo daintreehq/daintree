@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyToolbarButtonId, PluginToolbarButtonId } from "@/../../shared/types/toolbar";
+import { TOOLBAR_BUTTON_PRIORITIES } from "@shared/types/toolbar";
+import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 
 // Mirror the production agent IDs so the v5 migration is exercised against
 // the real set, not a subset. Keeping the mock in sync guards against
@@ -477,8 +479,7 @@ describe("toolbarPreferencesStore", () => {
       // the persisted list verbatim and only inserts what's missing, so an
       // existing toolbar must come through with its own arrangement intact.
       // Filtered to the carried ids rather than compared whole — hydration also
-      // inserts `agent-tray`, the agent buttons and `panel-tray`, none of which
-      // this case is about.
+      // inserts `launcher`, which this case is not about.
       const carried = ["terminal", "browser", "file-browser", "dev-server"];
       expect(leftButtons.filter((id) => carried.includes(id))).toEqual(carried);
       // The whole map, not two lookups: nothing at all may be written for a
@@ -510,14 +511,36 @@ describe("toolbarPreferencesStore", () => {
     it("omits browser and dev-server from default left buttons but keeps the ids valid", async () => {
       const store = await loadStore();
       const { leftButtons, rightButtons } = store.getState().layout;
-      // Both moved into the panel tray for fresh profiles (#11667). They are not
+      // Both moved into the launcher for fresh profiles (#11667). They are not
       // deleted ids — `TOOLBAR_BUTTON_PRIORITIES` and the metadata registry
       // still carry them — they simply aren't defaults any more.
       expect(leftButtons).not.toContain("browser");
       expect(leftButtons).not.toContain("dev-server");
       expect(rightButtons).not.toContain("browser");
       expect(rightButtons).not.toContain("dev-server");
-      expect(leftButtons).toContain("panel-tray");
+      expect(leftButtons).toContain("launcher");
+    });
+
+    it("omits every agent id from default left buttons but keeps the ids valid", async () => {
+      // The other half of #11680: an unset agent pin means "listed in the
+      // launcher", not "on the toolbar", so a fresh row grows nothing when the
+      // user installs another CLI. Same shape as browser/dev-server above —
+      // absence from the defaults, never a seeded pin.
+      const store = await loadStore();
+      const { leftButtons, rightButtons, pinnedButtons } = store.getState().layout;
+      const positioned = new Set([...leftButtons, ...rightButtons]);
+      for (const id of LAUNCHABLE_AGENT_IDS) {
+        expect(positioned.has(id)).toBe(false);
+        expect(pinnedButtons[id]).toBeUndefined();
+      }
+      expect(TOOLBAR_BUTTON_PRIORITIES[LAUNCHABLE_AGENT_IDS[0]!]).toBeDefined();
+    });
+
+    it("leads the left group with the launcher", async () => {
+      // A permanent category container belongs at the start of the group it
+      // owns, so the row reads verb-then-nouns.
+      const store = await loadStore();
+      expect(store.getState().layout.leftButtons[0]).toBe("launcher");
     });
 
     it("includes command-palette in default right buttons before settings", async () => {
@@ -616,7 +639,7 @@ describe("toolbarPreferencesStore", () => {
       expect(store.getState().layout.leftButtons).not.toContain("dev-server");
     });
 
-    it("v2→v3 renames 'agent-setup' to 'agent-tray' across all button arrays", async () => {
+    it("v2→v3 renames 'agent-setup' to the tray id, which v14 carries onto the launcher", async () => {
       storageMock.setItem(
         STORAGE_KEY,
         JSON.stringify({
@@ -634,17 +657,22 @@ describe("toolbarPreferencesStore", () => {
 
       const store = await loadStore();
       const { layout } = store.getState();
-      expect(layout.leftButtons).toContain("agent-tray");
+      expect(layout.leftButtons).toContain("launcher");
       expect(layout.leftButtons).not.toContain("agent-setup");
-      // The v3 rename moved agent-setup → agent-tray inside hiddenButtons; the
-      // v8 migration then translates that to a pinnedButtons entry.
-      expect(layout.pinnedButtons["agent-tray"]).toBe(false);
+      expect(layout.leftButtons).not.toContain("agent-tray");
+      // The v3 rename moved agent-setup → agent-tray inside hiddenButtons and v8
+      // translated that to a `false`. v14 then merges the two tray pins by union:
+      // this profile never hid a panel tray, so the combined launcher stays
+      // visible and no key survives. Hiding one of two access points must not
+      // hide the one button that replaced both.
+      expect(layout.pinnedButtons["launcher"]).toBeUndefined();
+      expect((layout.pinnedButtons as Record<string, boolean>)["agent-tray"]).toBeUndefined();
       expect((layout.pinnedButtons as Record<string, boolean>)["agent-setup"]).toBeUndefined();
-      // Position preserved (first) — agent-tray should be at index 0.
-      expect(layout.leftButtons[0]).toBe("agent-tray");
+      // Position preserved through both renames — still index 0.
+      expect(layout.leftButtons[0]).toBe("launcher");
     });
 
-    it("v2→v3 rename dedupes when both 'agent-setup' and 'agent-tray' coexist", async () => {
+    it("v2→v3 rename dedupes when both 'agent-setup' and the tray id coexist", async () => {
       storageMock.setItem(
         STORAGE_KEY,
         JSON.stringify({
@@ -663,7 +691,7 @@ describe("toolbarPreferencesStore", () => {
       const store = await loadStore();
       const trayCount = store
         .getState()
-        .layout.leftButtons.filter((id) => id === "agent-tray").length;
+        .layout.leftButtons.filter((id) => id === "launcher").length;
       expect(trayCount).toBe(1);
     });
 
@@ -680,7 +708,7 @@ describe("toolbarPreferencesStore", () => {
 
       const store = await loadStore();
       // Should hydrate with defaults.
-      expect(store.getState().layout.leftButtons).toContain("agent-tray");
+      expect(store.getState().layout.leftButtons).toContain("launcher");
     });
 
     it("v3→v4 drops 'panel-palette' from all button arrays", async () => {
@@ -707,7 +735,7 @@ describe("toolbarPreferencesStore", () => {
       // pinnedButtons entry should be created for it.
       expect((layout.pinnedButtons as Record<string, boolean>)["panel-palette"]).toBeUndefined();
       // Order of remaining items preserved
-      expect(layout.leftButtons).toContain("agent-tray");
+      expect(layout.leftButtons).toContain("launcher");
       expect(layout.leftButtons).toContain("terminal");
       expect(layout.leftButtons).toContain("browser");
     });
@@ -1500,7 +1528,7 @@ describe("toolbarPreferencesStore", () => {
         expect(leftButtons).toContain("dev-server");
       });
 
-      it("adds panel-tray through the hydration merge, not a migration step", async () => {
+      it("adds the launcher through the hydration merge, not a migration step", async () => {
         storageMock.setItem(
           STORAGE_KEY,
           JSON.stringify({
@@ -1520,27 +1548,27 @@ describe("toolbarPreferencesStore", () => {
         const { leftButtons, rightButtons } = store.getState().layout;
         // Exactly once — pushing a newly-defaulted id into the arrays from a
         // migration as well is how a profile ends up carrying it twice (#10938).
-        expect([...leftButtons, ...rightButtons].filter((id) => id === "panel-tray")).toHaveLength(
-          1
-        );
-        expect(leftButtons).toContain("panel-tray");
+        expect([...leftButtons, ...rightButtons].filter((id) => id === "launcher")).toHaveLength(1);
+        expect(leftButtons).toContain("launcher");
       });
 
       it("leaves a profile already at v13 alone", async () => {
         // `migrate` doesn't run for a current-version blob, so a user who hid
         // file-browser after v13 must not have that choice reverted on launch.
+        // Pinned at the current version on purpose — the point is the untouched
+        // path, so this fixture has to move up with every bump.
         storageMock.setItem(
           STORAGE_KEY,
           JSON.stringify({
             state: {
               layout: {
-                leftButtons: ["terminal", "file-browser", "panel-tray"],
+                leftButtons: ["launcher", "terminal", "file-browser"],
                 rightButtons: ["settings"],
                 pinnedButtons: { "file-browser": false },
               },
               launcher: { alwaysShowDevServer: false },
             },
-            version: 13,
+            version: 14,
           })
         );
 
@@ -1548,10 +1576,154 @@ describe("toolbarPreferencesStore", () => {
         expect(store.getState().layout.pinnedButtons["file-browser"]).toBe(false);
       });
     });
+
+    describe("v13→v14 merges both trays into one launcher (#11680)", () => {
+      const v13 = (layout: Record<string, unknown>) =>
+        storageMock.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            state: { layout, launcher: { alwaysShowDevServer: false } },
+            version: 13,
+          })
+        );
+
+      it("renames agent-tray in place and drops panel-tray", async () => {
+        // Rename, not drop-and-re-add: the launcher has to inherit the exact
+        // index the user dragged the agent tray to, and `mergeButtonList` would
+        // only ever re-insert it at the default position.
+        v13({
+          leftButtons: ["terminal", "agent-tray", "file-browser", "panel-tray"],
+          rightButtons: ["settings"],
+          pinnedButtons: {},
+        });
+
+        const { leftButtons, rightButtons } = (await loadStore()).getState().layout;
+        expect(leftButtons).toEqual(["terminal", "launcher", "file-browser"]);
+        expect(rightButtons).not.toContain("launcher");
+        expect([...leftButtons, ...rightButtons]).not.toContain("agent-tray");
+        expect([...leftButtons, ...rightButtons]).not.toContain("panel-tray");
+      });
+
+      it("carries the rename across the side the tray was moved to", async () => {
+        v13({
+          leftButtons: ["terminal", "panel-tray"],
+          rightButtons: ["agent-tray", "settings"],
+          pinnedButtons: {},
+        });
+
+        const { leftButtons, rightButtons } = (await loadStore()).getState().layout;
+        // On the right, ahead of what it was ahead of. Not index 0: `launcher`
+        // is a left-side default, so `mergeButtonList` inserts the right side's
+        // own missing defaults around it — what has to survive is the side and
+        // the relative order, which is what the user actually arranged.
+        expect(rightButtons).toContain("launcher");
+        expect(rightButtons.indexOf("launcher")).toBeLessThan(rightButtons.indexOf("settings"));
+        expect(leftButtons).not.toContain("launcher");
+      });
+
+      it("does not duplicate the launcher when a profile carries both trays", async () => {
+        // The v3 rename precedent: two ids collapsing onto one has to dedupe, or
+        // the merged id renders twice and React warns on the duplicate key.
+        v13({
+          leftButtons: ["agent-tray", "panel-tray", "terminal"],
+          rightButtons: [],
+          pinnedButtons: {},
+        });
+
+        const { leftButtons, rightButtons } = (await loadStore()).getState().layout;
+        expect([...leftButtons, ...rightButtons].filter((id) => id === "launcher")).toHaveLength(1);
+      });
+
+      it("keeps the launcher visible unless BOTH trays were explicitly hidden", async () => {
+        // Union, not rename. Hiding one of two access points must not hide the
+        // single button that replaced both — the user who hid the agent tray
+        // still reached panels through the panel tray, and still has to.
+        v13({
+          leftButtons: ["agent-tray", "terminal", "panel-tray"],
+          rightButtons: ["settings"],
+          pinnedButtons: { "agent-tray": false },
+        });
+
+        const { pinnedButtons } = (await loadStore()).getState().layout;
+        expect(pinnedButtons["launcher"]).toBeUndefined();
+      });
+
+      it("carries the hide forward when both trays were explicitly hidden", async () => {
+        v13({
+          leftButtons: ["agent-tray", "terminal", "panel-tray"],
+          rightButtons: ["settings"],
+          pinnedButtons: { "agent-tray": false, "panel-tray": false },
+        });
+
+        const { pinnedButtons } = (await loadStore()).getState().layout;
+        expect(pinnedButtons["launcher"]).toBe(false);
+      });
+
+      it("writes no pin entry for a profile that hid neither tray", async () => {
+        // The #11667 invariant this issue was told not to repeat: the map records
+        // user intent only, so a merge that nobody expressed anything about must
+        // leave it exactly as empty as it found it.
+        v13({
+          leftButtons: ["agent-tray", "terminal", "panel-tray"],
+          rightButtons: ["settings"],
+          pinnedButtons: {},
+        });
+
+        expect((await loadStore()).getState().layout.pinnedButtons).toEqual({});
+      });
+
+      it("leaves promoted panel pins untouched", async () => {
+        // `restorePromotedPanelButtons` rebuilds a dropped position from these,
+        // so losing one silently un-promotes a button the user asked for.
+        v13({
+          leftButtons: ["agent-tray", "terminal", "browser", "panel-tray"],
+          rightButtons: ["settings"],
+          pinnedButtons: { browser: true, "dev-server": false, "some-plugin.btn": true },
+        });
+
+        const { pinnedButtons } = (await loadStore()).getState().layout;
+        expect(pinnedButtons["browser"]).toBe(true);
+        expect(pinnedButtons["dev-server"]).toBe(false);
+        expect(pinnedButtons["some-plugin.btn" as AnyToolbarButtonId]).toBe(true);
+      });
+
+      it("leaves a grandfathered profile's agent buttons in place", async () => {
+        // The whole grandfathering contract: array membership alone preserves an
+        // existing toolbar, and nothing is stamped into `pinnedButtons` to do it.
+        v13({
+          leftButtons: ["agent-tray", "claude", "gemini", "terminal", "panel-tray"],
+          rightButtons: ["settings"],
+          pinnedButtons: {},
+        });
+
+        const { leftButtons, pinnedButtons } = (await loadStore()).getState().layout;
+        // `file-browser` is appended by the ordinary default merge, not by this
+        // step — the point is that both agent ids survive with their positions
+        // and that nothing was written to record it.
+        expect(leftButtons.filter((id) => id !== "file-browser")).toEqual([
+          "launcher",
+          "claude",
+          "gemini",
+          "terminal",
+        ]);
+        expect(pinnedButtons).toEqual({});
+      });
+
+      it("normalizes an array-shaped pinnedButtons rather than re-persisting it", async () => {
+        v13({ leftButtons: ["agent-tray"], rightButtons: [], pinnedButtons: [] });
+        expect((await loadStore()).getState().layout.pinnedButtons).toEqual({});
+      });
+
+      it("survives a layout with no button arrays at all", async () => {
+        v13({ pinnedButtons: { "agent-tray": false } });
+        const store = await loadStore();
+        expect(store.getState().layout.leftButtons).toContain("launcher");
+      });
+    });
   });
 
   describe("panel button defaults (#11495, #11667)", () => {
-    it("ships file-browser visible and the panel tray after it", async () => {
+    it("ships file-browser visible and the launcher ahead of it", async () => {
       // No stored state on purpose: a fresh install never runs `migrate`, so the
       // store's own defaults are the only source of truth for a new user.
       const store = await loadStore();
@@ -1559,7 +1731,7 @@ describe("toolbarPreferencesStore", () => {
 
       expect(pinnedButtons["file-browser"]).toBeUndefined();
       expect(leftButtons).toContain("file-browser");
-      expect(leftButtons.indexOf("file-browser")).toBeLessThan(leftButtons.indexOf("panel-tray"));
+      expect(leftButtons.indexOf("launcher")).toBeLessThan(leftButtons.indexOf("file-browser"));
     });
 
     it("synthesizes no pin entries at all for a fresh profile", async () => {
@@ -1785,7 +1957,7 @@ describe("toolbarPreferencesStore", () => {
 
       const { leftButtons, pinnedButtons } = store.getState().layout;
       expect(leftButtons).toContain("browser");
-      expect(leftButtons.indexOf("browser")).toBe(leftButtons.indexOf("panel-tray") - 1);
+      expect(leftButtons.indexOf("browser")).toBe(leftButtons.indexOf("launcher") + 1);
       // An explicit `true`, unlike `toggleButtonVisibility`. `browser` is not a
       // default, so the promotion is a real choice with nothing else recording
       // it — and it's the only part that survives a stale sibling view
@@ -1833,7 +2005,7 @@ describe("toolbarPreferencesStore", () => {
       const store = await loadStore();
       const { leftButtons, rightButtons } = store.getState().layout;
       expect(leftButtons).toContain("browser");
-      expect(leftButtons.indexOf("browser")).toBe(leftButtons.indexOf("panel-tray") - 1);
+      expect(leftButtons.indexOf("browser")).toBe(leftButtons.indexOf("launcher") + 1);
       expect([...leftButtons, ...rightButtons].filter((id) => id === "browser")).toHaveLength(1);
     });
 
@@ -1893,14 +2065,64 @@ describe("toolbarPreferencesStore", () => {
       expect(store.getState().layout.leftButtons.indexOf("browser")).toBe(before);
     });
 
-    it("follows the tray to the right side when the user moved it there", async () => {
+    it("rebuilds several dropped promotions in list order, not reversed", async () => {
+      // Every restore inserts immediately after the launcher, and the launcher
+      // does not move — so walking the id list forwards emits it backwards. (The
+      // old mid-row anchor hid this: inserting *at* the tray's index pushed the
+      // tray right, so the next insert landed after the previous one.)
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["launcher", "terminal"],
+              rightButtons: ["settings"],
+              pinnedButtons: { browser: true, "dev-server": true },
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 14,
+        })
+      );
+
+      const { leftButtons } = (await loadStore()).getState().layout;
+      expect(leftButtons.indexOf("browser")).toBeLessThan(leftButtons.indexOf("dev-server"));
+      expect(leftButtons.indexOf("launcher")).toBeLessThan(leftButtons.indexOf("browser"));
+    });
+
+    it("rebuilds several dropped promotions in list order with no launcher to anchor to", async () => {
+      // The fallback appends instead of splicing at a fixed index, so a
+      // per-id loop orders this case the OPPOSITE way round from the anchored
+      // one. Batching is what makes both agree.
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["terminal"],
+              rightButtons: ["settings"],
+              pinnedButtons: { launcher: false, browser: true, "dev-server": true },
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 14,
+        })
+      );
+
+      const { leftButtons } = (await loadStore()).getState().layout;
+      expect(leftButtons.indexOf("browser")).toBeLessThan(leftButtons.indexOf("dev-server"));
+    });
+
+    it("follows the launcher to the right side when the user moved it there", async () => {
+      // `agent-tray`, not `panel-tray`: only one of the two survives v14, so the
+      // side the launcher ends up on is the side the *renamed* id was parked on.
       storageMock.setItem(
         STORAGE_KEY,
         JSON.stringify({
           state: {
             layout: {
               leftButtons: ["terminal", "file-browser"],
-              rightButtons: ["panel-tray", "settings"],
+              rightButtons: ["agent-tray", "settings"],
               pinnedButtons: {},
             },
             launcher: { alwaysShowDevServer: false },
@@ -1915,7 +2137,57 @@ describe("toolbarPreferencesStore", () => {
       const { leftButtons, rightButtons } = store.getState().layout;
       expect(rightButtons).toContain("dev-server");
       expect(leftButtons).not.toContain("dev-server");
-      expect(rightButtons.indexOf("dev-server")).toBe(rightButtons.indexOf("panel-tray") - 1);
+      expect(rightButtons.indexOf("dev-server")).toBe(rightButtons.indexOf("launcher") + 1);
+    });
+  });
+
+  describe("positionAgentButton (#11680)", () => {
+    it("keeps a batch in the caller's order instead of reversing it", async () => {
+      // The live caller is the first-run repair in `Toolbar.tsx`, where
+      // `buildInitialAgentPinUpdates` pins several agents at once. Every insert
+      // lands immediately after the launcher and the launcher does not move, so
+      // one call per id emits the batch backwards — a visible post-paint reorder
+      // that then persists.
+      const store = await loadStore();
+
+      store.getState().positionAgentButton(["claude", "codex", "gemini"]);
+
+      const { leftButtons } = store.getState().layout;
+      const at = (id: AnyToolbarButtonId) => leftButtons.indexOf(id);
+      expect(at("launcher")).toBeLessThan(at("claude"));
+      expect(at("claude")).toBeLessThan(at("codex"));
+      expect(at("codex")).toBeLessThan(at("gemini"));
+    });
+
+    it("positions only the ids that hold no slot, leaving the rest where they are", async () => {
+      const store = await loadStore();
+      store.getState().positionAgentButton("codex");
+      const codexIndex = store.getState().layout.leftButtons.indexOf("codex");
+
+      store.getState().positionAgentButton(["claude", "codex"]);
+
+      const { leftButtons, rightButtons } = store.getState().layout;
+      expect([...leftButtons, ...rightButtons].filter((id) => id === "codex")).toHaveLength(1);
+      expect(leftButtons.indexOf("claude")).toBe(leftButtons.indexOf("launcher") + 1);
+      // `codex` was already placed, so the new insert goes in front of it rather
+      // than displacing it to a fresh slot.
+      expect(leftButtons.indexOf("codex")).toBe(codexIndex + 1);
+    });
+
+    it("is a no-op (preserves the layout reference) when every id already has a slot", async () => {
+      const store = await loadStore();
+      store.getState().positionAgentButton(["claude", "codex"]);
+      const before = store.getState().layout;
+
+      store.getState().positionAgentButton(["claude", "codex"]);
+
+      expect(store.getState().layout).toBe(before);
+    });
+
+    it("writes no pinnedButtons entry, since the agent pin lives in agentSettingsStore", async () => {
+      const store = await loadStore();
+      store.getState().positionAgentButton(["claude", "codex"]);
+      expect(store.getState().layout.pinnedButtons).toEqual({});
     });
   });
 });

@@ -371,7 +371,7 @@ export function useDockLaunchModel(options: {
   // Subscribe to the stable getter (not its result) so the selector returns a
   // constant reference — calling getSortedActionMruList() inside the selector
   // would mint a new array every render and trip Zustand 5's infinite-loop
-  // guard. Mirrors AgentTrayButton's pattern.
+  // guard. Mirrors LauncherMenuButton's pattern.
   const getSortedActionMruList = useActionMruStore((s) => s.getSortedActionMruList);
 
   const stable = useMemo(

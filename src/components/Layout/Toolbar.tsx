@@ -37,14 +37,17 @@ import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isMac, isLinux, isWindows } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
-import { AgentTrayButton, deriveAgentDominantStates } from "./AgentTrayButton";
 import {
   PluginToolbarButton,
   PluginTrayButton,
   groupPluginToolbarButtons,
   type PluginTrayGroup,
 } from "./PluginTrayButton";
-import { PANEL_TRAY_ITEMS, PanelTrayButton } from "./PanelTrayButton";
+import {
+  LAUNCHER_PANEL_ITEMS,
+  LauncherMenuButton,
+  deriveAgentDominantStates,
+} from "./LauncherMenuButton";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -96,7 +99,8 @@ import { notify } from "@/lib/notify";
 import type { CliAvailability, AgentSettings, AgentState } from "@shared/types";
 import { isGitBackedProject } from "@shared/types";
 import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
-import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
+import { isAgentPinned, isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
+import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
@@ -116,10 +120,19 @@ import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
 import { useOverflowBadgeSeverity, type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
 
-import { LAUNCHABLE_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
+import {
+  LAUNCHABLE_AGENT_IDS,
+  isBuiltInAgentId,
+  type BuiltInAgentId,
+} from "@shared/config/agentIds";
 
+// Carries `agent-tray`'s old membership forward under the merged id, so the
+// divider between the agent and non-agent runs lands exactly where it does
+// today. The launcher now holds panels too, which makes that grouping only
+// approximately right — #11681 replaces this predicate flip with declared group
+// data and owns the fix.
 const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
-  "agent-tray",
+  "launcher",
   ...(LAUNCHABLE_AGENT_IDS as unknown as ToolbarButtonId[]),
 ]);
 
@@ -191,8 +204,13 @@ interface OverflowMenuProps {
   // overflows, its dropdown is unreachable, so the overflow menu inlines these
   // groups instead — an un-promoted contribution has no other toolbar route.
   pluginTrayGroups: PluginTrayGroup[];
-  // Per-item availability for the inlined `panel-tray` rows, mirroring the gates
-  // the tray applies to its own rows.
+  // Launchable agent ids, in the launcher's own order. When `launcher` itself
+  // overflows its dropdown is unreachable, so the overflow menu inlines these
+  // alongside the panels — since #11680 an unpinned agent has no other toolbar
+  // route.
+  launcherAgentIds: BuiltInAgentId[];
+  // Per-item availability for the inlined launcher panel rows, mirroring the
+  // gates the launcher applies to its own rows.
   panelTrayDisabled: Partial<Record<string, boolean>>;
   // Shortcut display strings keyed by toolbar button id, so each overflow item
   // shows the same hint its visible button does (issue #9821).
@@ -218,6 +236,7 @@ function OverflowMenu({
   overflowActions,
   pluginOverflowMeta,
   pluginTrayGroups,
+  launcherAgentIds,
   panelTrayDisabled,
   shortcutById,
 }: OverflowMenuProps) {
@@ -393,28 +412,51 @@ function OverflowMenu({
               ...(isLast ? [] : [<DropdownMenuSeparator key="plugin-tray-sep" />]),
             ];
           }
-          if (id === "panel-tray") {
-            // Same reason as `plugin-tray` above: the tray's dropdown can't be
-            // opened from inside this menu, and since v13 `browser` and
-            // `dev-server` have no top-level button of their own on a fresh
-            // profile — so a bare row here would dismiss the menu and open
-            // nothing. Pins are omitted: promoting a button while the toolbar
-            // is too narrow to show it has nothing to reveal.
+          if (id === "launcher") {
+            // Same reason as `plugin-tray` above: the launcher's dropdown can't
+            // be opened from inside this menu, and since #11680 neither the
+            // agents nor `browser`/`dev-server` have a top-level button of their
+            // own on a fresh profile — so a bare row here would dismiss the menu
+            // and open nothing. That is what `agent-tray` did before the merge:
+            // it had no case at all and no `overflowActions` entry, leaving a
+            // silently dead row. Pins and shortcut editing are omitted:
+            // promoting a button while the toolbar is too narrow to show it has
+            // nothing to reveal.
             //
-            // Items that already carry their own overflow row are skipped: an
-            // existing profile keeps its `browser`/`dev-server` buttons, and
-            // when those overflow alongside the tray the generic rows below
-            // already offer them. Inlining anyway would put two identically
-            // labelled rows in one menu.
-            const inlined = PANEL_TRAY_ITEMS.filter((item) => !overflowIds.includes(item.id));
-            if (inlined.length === 0) return [];
+            // Items that already carry their own overflow row are skipped: a
+            // grandfathered profile keeps its agent and `browser`/`dev-server`
+            // buttons, and when those overflow alongside the launcher the
+            // generic rows below already offer them. Inlining anyway would put
+            // two identically labelled rows in one menu.
+            const inlinedAgents = launcherAgentIds.filter(
+              (agentId) => !overflowIds.includes(agentId) && OVERFLOW_MENU_META[agentId]
+            );
+            const inlinedPanels = LAUNCHER_PANEL_ITEMS.filter(
+              (item) => !overflowIds.includes(item.id)
+            );
+            if (inlinedAgents.length === 0 && inlinedPanels.length === 0) return [];
             const isLast = idx === overflowIds.length - 1;
             return [
-              ...inlined.map((item) => {
+              ...inlinedAgents.map((agentId) => {
+                const agentMeta = OVERFLOW_MENU_META[agentId]!;
+                const dominantState = agentDominantStates.get(agentId) ?? null;
+                const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
+                return (
+                  <AgentOverflowItem
+                    key={`launcher-${agentId}`}
+                    id={agentId}
+                    label={agentMeta.label}
+                    Icon={agentMeta.icon}
+                    dotColor={dotColor}
+                    onSelect={() => overflowActions[agentId]?.()}
+                  />
+                );
+              }),
+              ...inlinedPanels.map((item) => {
                 const Icon = item.icon;
                 return (
                   <DropdownMenuItem
-                    key={`panel-tray-${item.id}`}
+                    key={`launcher-${item.id}`}
                     disabled={panelTrayDisabled[item.id]}
                     onClick={() => overflowActions[item.id]?.()}
                   >
@@ -426,7 +468,7 @@ function OverflowMenu({
                   </DropdownMenuItem>
                 );
               }),
-              ...(isLast ? [] : [<DropdownMenuSeparator key="panel-tray-sep" />]),
+              ...(isLast ? [] : [<DropdownMenuSeparator key="launcher-sep" />]),
             ];
           }
           const meta = OVERFLOW_MENU_META[id] ?? pluginOverflowMeta[id];
@@ -561,7 +603,7 @@ export function Toolbar({
   // composite map (would risk the selector-identity churn of lesson #3730).
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
   // Per-agent dominant state across panels in the active worktree, used to draw
-  // the agent-state dot on overflow menu items. Shares AgentTrayButton's
+  // the agent-state dot on overflow menu items. Shares LauncherMenuButton's
   // derivation so the overflow dot matches the visible agent button; computed
   // inside useShallow so agent ticks that don't change a dominant state don't
   // re-render the whole toolbar (issue #7451 pattern).
@@ -601,7 +643,8 @@ export function Toolbar({
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
-  // Live subscription so pin/unpin toggles from the AgentTrayButton immediately
+  const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
+  // Live subscription so pin/unpin toggles from the launcher immediately
   // update per-agent toolbar button visibility. The `agentSettings` prop is
   // sourced from `useAgentLauncher()`'s local useState which does not react to
   // store mutations, so we prefer the store value when available.
@@ -968,11 +1011,16 @@ export function Toolbar({
         ),
         isAvailable: true,
       },
-      "agent-tray": {
+      launcher: {
+        // Always available, unlike the plugin tray: its inventory is fixed, so
+        // there is no empty state. Individual rows gate themselves instead.
         render: () => (
-          <AgentTrayButton
-            key="agent-tray"
+          <LauncherMenuButton
+            key="launcher"
             agentAvailability={agentAvailability}
+            hasWorkspace={hasWorkspace}
+            hasProject={!!currentProject}
+            onOpenFileBrowser={openFileBrowser}
             data-toolbar-item=""
           />
         ),
@@ -1233,20 +1281,6 @@ export function Toolbar({
         // contributions the button doesn't render at all (#11304).
         isAvailable: pluginConfigs.size > 0,
       },
-      "panel-tray": {
-        // Always available, unlike the plugin tray: its inventory is fixed, so
-        // there is no empty state. Individual rows gate themselves instead.
-        render: () => (
-          <PanelTrayButton
-            key="panel-tray"
-            hasWorkspace={hasWorkspace}
-            hasProject={!!currentProject}
-            onOpenFileBrowser={openFileBrowser}
-            data-toolbar-item=""
-          />
-        ),
-        isAvailable: true,
-      },
       // Individual contributions still need a top-level renderer, but only
       // reach the toolbar once explicitly promoted — `isToolbarButtonVisible`
       // gates that below, not `isAvailable`.
@@ -1311,33 +1345,97 @@ export function Toolbar({
 
   const pinnedButtons = toolbarLayout.pinnedButtons;
 
-  const effectiveLeftButtons = useMemo(
-    () =>
-      // Dedupe defensively so a persisted list holding a repeated id never
-      // renders duplicate pills (#10937) — the store also heals this, this is
-      // belt-and-suspenders at the render boundary.
-      Array.from(new Set(toolbarLayout.leftButtons)).filter((id) =>
-        isToolbarButtonVisible(
-          id,
-          pinnedButtons,
-          effectiveAgentSettings,
-          agentAvailability,
-          pluginConfigs.has(id)
-        )
-      ),
-    [
-      toolbarLayout.leftButtons,
-      pinnedButtons,
-      effectiveAgentSettings,
-      agentAvailability,
-      pluginConfigs,
-    ]
-  );
+  // An agent the user explicitly pinned but that sits in neither side array
+  // still has to render (#11680). Two ways to get here, and neither can be
+  // repaired in the store's `merge()` — the pin lives in `agentSettingsStore`,
+  // which loads asynchronously over IPC and isn't readable at toolbar-store
+  // hydration:
+  //   - a genuinely fresh profile, where `buildInitialAgentPinUpdates` stamps
+  //     `pinned: true` for the first few installed agents before the user has
+  //     ever touched the toolbar;
+  //   - a stale sibling project view overwriting the orderings, which reconcile
+  //     last-writer-wins and so drop a position another view just wrote (the
+  //     same window `restorePromotedPanelButtons` covers for panels).
+  // `isAgentPinned`, not `isAgentToolbarVisible`: only an explicit `true` earns
+  // a slot here. Reading the tri-state's installed-means-visible fall-through
+  // would put every installed CLI back on the toolbar, which is the crowding
+  // this issue removed.
+  const unpositionedAgentPins = useMemo(() => {
+    const onEitherSide = new Set([...toolbarLayout.leftButtons, ...toolbarLayout.rightButtons]);
+    return LAUNCHABLE_AGENT_IDS.filter(
+      (id) => !onEitherSide.has(id) && isAgentPinned(effectiveAgentSettings?.agents?.[id])
+    );
+  }, [toolbarLayout.leftButtons, toolbarLayout.rightButtons, effectiveAgentSettings]);
+
+  // Materialize those positions once they're knowable, so the repair is a
+  // one-frame bridge rather than a permanent ghost. A rendered-but-unpositioned
+  // button is absent from Settings → Toolbar's sortable columns and inert to
+  // `moveButton`, which reads the arrays — the first-run seeding above would
+  // otherwise leave up to five agents that can never be reordered. The action
+  // no-ops when the id already holds a position, writes nothing to
+  // `pinnedButtons`, and converges under a concurrent sibling view. One batched
+  // call, not a call per id: every insert lands at the same index, so repairing
+  // the first-run seeding one agent at a time would persist them reversed
+  // against the order they just rendered in.
+  useEffect(() => {
+    if (unpositionedAgentPins.length > 0) positionAgentButton(unpositionedAgentPins);
+  }, [unpositionedAgentPins, positionAgentButton]);
+
+  // Whichever side the launcher is on — that is where the things pinned out of
+  // it belong. Splicing unconditionally into the left would strand them away
+  // from a launcher the user moved right.
+  const launcherOnRight =
+    toolbarLayout.rightButtons.includes("launcher") &&
+    !toolbarLayout.leftButtons.includes("launcher");
+
+  const effectiveLeftButtons = useMemo(() => {
+    // Dedupe defensively so a persisted list holding a repeated id never
+    // renders duplicate pills (#10937) — the store also heals this, this is
+    // belt-and-suspenders at the render boundary.
+    const positioned = Array.from(new Set(toolbarLayout.leftButtons));
+
+    if (!launcherOnRight && unpositionedAgentPins.length > 0) {
+      // Beside the launcher they were pinned out of, in registry order, so the
+      // brand marks stay contiguous rather than scattering to the end of the row.
+      const launcherIndex = positioned.indexOf("launcher");
+      positioned.splice(
+        launcherIndex === -1 ? positioned.length : launcherIndex + 1,
+        0,
+        ...unpositionedAgentPins
+      );
+    }
+
+    return positioned.filter((id) =>
+      isToolbarButtonVisible(
+        id,
+        pinnedButtons,
+        effectiveAgentSettings,
+        agentAvailability,
+        pluginConfigs.has(id)
+      )
+    );
+  }, [
+    toolbarLayout.leftButtons,
+    launcherOnRight,
+    unpositionedAgentPins,
+    pinnedButtons,
+    effectiveAgentSettings,
+    agentAvailability,
+    pluginConfigs,
+  ]);
 
   const effectiveRightButtons = useMemo(() => {
     // Dedupe the persisted base before appending plugin extras, so duplicate
     // ids (e.g. repeated `forge-stats`, #10937) can't render twice.
     const base = Array.from(new Set(toolbarLayout.rightButtons));
+    if (launcherOnRight && unpositionedAgentPins.length > 0) {
+      const launcherIndex = base.indexOf("launcher");
+      base.splice(
+        launcherIndex === -1 ? base.length : launcherIndex + 1,
+        0,
+        ...unpositionedAgentPins
+      );
+    }
     const positioned = new Set([...base, ...toolbarLayout.leftButtons]);
     // Only *promoted* contributions append — plugin buttons reach the user
     // through the tray by default now (#11304), so the pre-tray behavior of
@@ -1357,6 +1455,8 @@ export function Toolbar({
   }, [
     toolbarLayout.rightButtons,
     toolbarLayout.leftButtons,
+    launcherOnRight,
+    unpositionedAgentPins,
     pluginButtonIds,
     pinnedButtons,
     effectiveAgentSettings,
@@ -1568,12 +1668,19 @@ export function Toolbar({
     ]
   );
 
-  // Mirrors PanelTrayButton's own row gates so an inlined overflow row degrades
-  // the same way the tray row does rather than silently opening nothing.
+  // Mirrors the launcher's own row gates so an inlined overflow row degrades
+  // the same way the launcher row does rather than silently opening nothing.
   const panelTrayDisabled: Partial<Record<string, boolean>> = {
     "file-browser": !hasWorkspace,
     "dev-server": !currentProject,
   };
+
+  // Same filter the launcher's own Launch section applies, so the rows the
+  // overflow menu inlines are exactly the rows the dropdown would have shown.
+  const launcherAgentIds = useMemo(
+    () => LAUNCHABLE_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id])),
+    [agentAvailability]
+  );
 
   const overflowShortcutById: Partial<Record<string, string | null>> = {
     "copy-tree": copyTreeShortcut,
@@ -1606,6 +1713,7 @@ export function Toolbar({
       overflowActions={overflowActions}
       pluginOverflowMeta={pluginOverflowMeta}
       pluginTrayGroups={pluginTrayGroups}
+      launcherAgentIds={launcherAgentIds}
       panelTrayDisabled={panelTrayDisabled}
       shortcutById={overflowShortcutById}
     />

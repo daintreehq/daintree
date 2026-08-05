@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { ComponentProps } from "react";
 import { render, fireEvent, act } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import type { ActionFrecencyEntry } from "@shared/types/actions";
@@ -15,7 +16,8 @@ let openChangeSpy: ((open: boolean) => void) | null = null;
 let tooltipOpenChangeSpy: ((open: boolean) => void) | null = null;
 let capturedTooltipOpen: boolean | undefined = undefined;
 let closeAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
-let pointerDownOutsideSpy: (() => void) | null = null;
+let pointerDownOutsideSpy: ((e: { preventDefault: () => void }) => void) | null = null;
+let escapeKeyDownSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 
 let mockSettings: AgentSettings | null = null;
 let mockPanelsById: Record<string, unknown> = {};
@@ -122,6 +124,39 @@ vi.mock("@/store/worktreeStore", () => ({
     selector({ activeWorktreeId: mockActiveWorktreeId }),
 }));
 
+const setPanelButtonOnToolbarMock = vi.fn();
+const positionAgentButtonMock = vi.fn();
+const toggleButtonVisibilityMock = vi.fn();
+
+let mockPinnedButtons: Record<string, boolean> = {};
+let mockLeftButtons: string[] = [];
+let mockRightButtons: string[] = [];
+
+type MockToolbarStoreState = {
+  layout: {
+    pinnedButtons: Record<string, boolean>;
+    leftButtons: string[];
+    rightButtons: string[];
+  };
+  setPanelButtonOnToolbar: typeof setPanelButtonOnToolbarMock;
+  positionAgentButton: typeof positionAgentButtonMock;
+  toggleButtonVisibility: typeof toggleButtonVisibilityMock;
+};
+
+vi.mock("@/store/toolbarPreferencesStore", () => ({
+  useToolbarPreferencesStore: (selector: (s: MockToolbarStoreState) => unknown) =>
+    selector({
+      layout: {
+        pinnedButtons: mockPinnedButtons,
+        leftButtons: mockLeftButtons,
+        rightButtons: mockRightButtons,
+      },
+      setPanelButtonOnToolbar: setPanelButtonOnToolbarMock,
+      positionAgentButton: positionAgentButtonMock,
+      toggleButtonVisibility: toggleButtonVisibilityMock,
+    }),
+}));
+
 let mockKeybindingDisplay: Record<string, string | null> = {};
 
 vi.mock("@/hooks", () => ({
@@ -179,6 +214,11 @@ vi.mock("@shared/config/agentIds", () => {
     ASSISTANT_ONLY_AGENT_IDS,
     LAUNCHABLE_AGENT_IDS,
     isAssistantOnlyAgentId: () => false,
+    // Reached through `dispatchToolbarVisibility`, which the pin toggle routes
+    // through so the launcher and Settings can't write an agent pin two
+    // different ways (#11680).
+    isBuiltInAgentId: (value: unknown): boolean =>
+      typeof value === "string" && (BUILT_IN_AGENT_IDS as readonly string[]).includes(value),
   };
 });
 
@@ -274,13 +314,16 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     children,
     onCloseAutoFocus,
     onPointerDownOutside,
+    onEscapeKeyDown,
   }: {
     children: React.ReactNode;
     onCloseAutoFocus?: (e: { preventDefault: () => void }) => void;
-    onPointerDownOutside?: () => void;
+    onPointerDownOutside?: (e: { preventDefault: () => void }) => void;
+    onEscapeKeyDown?: (e: { preventDefault: () => void }) => void;
   }) => {
     closeAutoFocusSpy = onCloseAutoFocus ?? null;
     pointerDownOutsideSpy = onPointerDownOutside ?? null;
+    escapeKeyDownSpy = onEscapeKeyDown ?? null;
     return <div data-testid="dropdown-content">{children}</div>;
   },
   DropdownMenuItem: ({
@@ -456,9 +499,29 @@ vi.mock("lucide-react", () => ({
   ChevronRight: () => <span data-testid="chevron-right-icon" />,
   Keyboard: () => <span data-testid="keyboard-icon" />,
   Unplug: () => <span data-testid="unplug-icon" />,
+  // The Panels section's own glyphs. `@/components/icons` re-exports straight
+  // from here, so a missing entry resolves to `undefined` and React throws on
+  // the element rather than failing an assertion.
+  Globe: () => <span data-testid="globe-icon" />,
+  MonitorPlay: () => <span data-testid="monitor-play-icon" />,
+  SquareTerminal: () => <span data-testid="square-terminal-icon" />,
+  SquareMenu: () => <span data-testid="square-menu-icon" />,
+  FolderTree: () => <span data-testid="folder-tree-icon" />,
 }));
 
-import { AgentTrayButton } from "../AgentTrayButton";
+import {
+  LauncherMenuButton as LauncherMenuButtonImpl,
+  LAUNCHER_PANEL_ITEMS,
+} from "../LauncherMenuButton";
+import { LAUNCHER_PANEL_BUTTON_IDS } from "@shared/types/toolbar";
+
+// These suites predate the tray merge and exercise the Agents half only, so
+// they default the Panels-section props rather than restating them at ~40 render
+// sites. `LauncherMenuButton.panels.test.tsx` covers the gating those props
+// drive.
+function LauncherMenuButton(props: Partial<ComponentProps<typeof LauncherMenuButtonImpl>>) {
+  return <LauncherMenuButtonImpl hasWorkspace hasProject onOpenFileBrowser={() => {}} {...props} />;
+}
 
 function settingsWith(
   overrides: Record<
@@ -469,13 +532,17 @@ function settingsWith(
   return { agents: overrides } as unknown as AgentSettings;
 }
 
+// The Agents and Panels sections share the `launcher-row-` prefix (#11680) —
+// one affordance, one naming scheme — so the panel ids have to come back out
+// here or every agent-ordering assertion in this file gains four entries.
 function agentRows(container: HTMLElement): string[] {
-  return Array.from(container.querySelectorAll('[data-testid^="agent-tray-row-"]'))
-    .map((el) => el.getAttribute("data-testid")?.replace("agent-tray-row-", "") ?? "")
-    .filter(Boolean);
+  const panelIds = new Set<string>(LAUNCHER_PANEL_BUTTON_IDS);
+  return Array.from(container.querySelectorAll('[data-testid^="launcher-row-"]'))
+    .map((el) => el.getAttribute("data-testid")?.replace("launcher-row-", "") ?? "")
+    .filter((id) => id && !panelIds.has(id));
 }
 
-describe("AgentTrayButton", () => {
+describe("LauncherMenuButton", () => {
   beforeEach(() => {
     dispatchMock.mockClear();
     setAgentPinnedMock.mockClear();
@@ -488,6 +555,7 @@ describe("AgentTrayButton", () => {
     capturedTooltipOpen = undefined;
     closeAutoFocusSpy = null;
     pointerDownOutsideSpy = null;
+    escapeKeyDownSpy = null;
     mockSettings = null;
     mockPanelsById = {};
     mockPanelIds = [];
@@ -505,6 +573,12 @@ describe("AgentTrayButton", () => {
     mockCcrPresetsByAgent = {};
     mockMergedPresetsFn = () => [];
     mockKeybindingDisplay = {};
+    setPanelButtonOnToolbarMock.mockClear();
+    positionAgentButtonMock.mockClear();
+    toggleButtonVisibilityMock.mockClear();
+    mockPinnedButtons = {};
+    mockLeftButtons = ["launcher", "terminal", "file-browser"];
+    mockRightButtons = ["settings"];
   });
 
   afterEach(() => {
@@ -516,10 +590,48 @@ describe("AgentTrayButton", () => {
     });
   });
 
-  it("renders the plug trigger with accessible label", () => {
-    const { getByLabelText, getAllByTestId } = render(<AgentTrayButton />);
-    expect(getByLabelText("Agent tray")).toBeTruthy();
-    expect(getAllByTestId("plug-icon").length).toBeGreaterThan(0);
+  it("renders the plus trigger with accessible label", () => {
+    // Scoped to the trigger, not the whole tree: a bare `getAllByTestId` also
+    // matches the footer's "Set Up Agents" Plug glyph, so it stayed green with
+    // the trigger icon removed entirely. The plus is the point of #11680 — a
+    // plug reads as connections, not as "make me a new thing".
+    const { getByLabelText } = render(<LauncherMenuButton />);
+    const trigger = getByLabelText("Launcher");
+    expect(trigger).toBeTruthy();
+    expect(trigger.querySelector('[data-testid="plus-icon"]')).toBeTruthy();
+    expect(trigger.querySelector('[data-testid="plug-icon"]')).toBeNull();
+  });
+
+  it("cancels an in-progress shortcut capture on Escape instead of dismissing", () => {
+    // Lesson #4588: between mounting the capture UI and entering recording
+    // state, Escape reaches Radix's DismissableLayer and tears the menu down
+    // mid-recording. The guard has to preventDefault and clear the capture.
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    const { getByTestId, queryByTestId } = render(
+      <LauncherMenuButton agentAvailability={availability} />
+    );
+    fireEvent.click(getByTestId("launcher-shortcut-edit-claude"));
+    expect(getByTestId("launcher-capture-claude")).toBeTruthy();
+
+    const escapeEvent = { preventDefault: vi.fn() };
+    act(() => escapeKeyDownSpy?.(escapeEvent));
+
+    expect(escapeEvent.preventDefault).toHaveBeenCalled();
+    expect(queryByTestId("launcher-capture-claude")).toBeNull();
+  });
+
+  it("keeps the menu open on an outside pointer press while capturing", () => {
+    // A stray click on the capture row's own inner controls must not tear down
+    // the in-progress recording session.
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+    fireEvent.click(getByTestId("launcher-shortcut-edit-claude"));
+
+    const outsideEvent = { preventDefault: vi.fn() };
+    act(() => pointerDownOutsideSpy?.(outsideEvent));
+
+    expect(outsideEvent.preventDefault).toHaveBeenCalled();
+    expect(getByTestId("launcher-capture-claude")).toBeTruthy();
   });
 
   it("lists all ready agents in the Launch section regardless of pin state", () => {
@@ -534,15 +646,15 @@ describe("AgentTrayButton", () => {
     });
 
     const { container, getAllByTestId, getByTestId } = render(
-      <AgentTrayButton agentAvailability={availability} />
+      <LauncherMenuButton agentAvailability={availability} />
     );
 
     const labels = getAllByTestId("menu-label").map((el) => el.textContent);
     expect(labels).toContain("Launch");
 
     expect(agentRows(container)).toEqual(["claude", "gemini", "codex"]);
-    expect(getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("true");
-    expect(getByTestId("agent-tray-pin-gemini").getAttribute("data-pinned")).toBe("false");
+    expect(getByTestId("launcher-pin-claude").getAttribute("data-pinned")).toBe("true");
+    expect(getByTestId("launcher-pin-gemini").getAttribute("data-pinned")).toBe("false");
   });
 
   it("still renders the Launch section when every ready agent is pinned", () => {
@@ -558,7 +670,7 @@ describe("AgentTrayButton", () => {
     });
 
     const { container, getAllByTestId } = render(
-      <AgentTrayButton agentAvailability={availability} />
+      <LauncherMenuButton agentAvailability={availability} />
     );
 
     expect(agentRows(container)).toEqual(["claude", "gemini", "codex"]);
@@ -575,7 +687,7 @@ describe("AgentTrayButton", () => {
     mockSettings = settingsWith({});
     mockActionMruList = ["agent.codex", "agent.claude"];
 
-    const { container } = render(<AgentTrayButton agentAvailability={availability} />);
+    const { container } = render(<LauncherMenuButton agentAvailability={availability} />);
 
     // codex most recent, claude next, gemini untracked -> pushed to the end.
     expect(agentRows(container)).toEqual(["codex", "claude", "gemini"]);
@@ -590,7 +702,7 @@ describe("AgentTrayButton", () => {
     mockSettings = settingsWith({});
     mockActionMruList = [];
 
-    const { container } = render(<AgentTrayButton agentAvailability={availability} />);
+    const { container } = render(<LauncherMenuButton agentAvailability={availability} />);
 
     expect(agentRows(container)).toEqual(["claude", "gemini", "codex"]);
   });
@@ -599,8 +711,8 @@ describe("AgentTrayButton", () => {
     const availability = { gemini: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ gemini: { pinned: false } });
 
-    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-    fireEvent.click(getByTestId("agent-tray-row-gemini"));
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+    fireEvent.click(getByTestId("launcher-row-gemini"));
 
     expect(dispatchMock).toHaveBeenCalledWith(
       "agent.launch",
@@ -625,8 +737,8 @@ describe("AgentTrayButton", () => {
     mockPanelIds = ["panel-1"];
     mockActiveWorktreeId = "wt-1";
 
-    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-    fireEvent.click(getByTestId("agent-tray-row-claude"));
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+    fireEvent.click(getByTestId("launcher-row-claude"));
 
     expect(dispatchMock).toHaveBeenCalledWith(
       "agent.launch",
@@ -648,17 +760,17 @@ describe("AgentTrayButton", () => {
       codex: { pinned: false },
     });
 
-    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-    expect(getByTestId("agent-tray-pin-gemini").getAttribute("data-pinned")).toBe("false");
-    expect(getByTestId("agent-tray-pin-codex").getAttribute("data-pinned")).toBe("false");
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+    expect(getByTestId("launcher-pin-gemini").getAttribute("data-pinned")).toBe("false");
+    expect(getByTestId("launcher-pin-codex").getAttribute("data-pinned")).toBe("false");
   });
 
   it("clicking the pin indicator promotes an unpinned agent without launching", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: false } });
 
-    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-    fireEvent.click(getByTestId("agent-tray-pin-claude"));
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+    fireEvent.click(getByTestId("launcher-pin-claude"));
 
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
     expect(dispatchMock).not.toHaveBeenCalledWith(
@@ -672,8 +784,8 @@ describe("AgentTrayButton", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: false } });
 
-    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-    fireEvent.keyDown(getByTestId("agent-tray-row-claude"), { key: "P" });
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+    fireEvent.keyDown(getByTestId("launcher-row-claude"), { key: "P" });
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
   });
 
@@ -681,12 +793,12 @@ describe("AgentTrayButton", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({});
 
-    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
     // Missing entry no longer implies pinned — the renderer normalizer is
     // responsible for synthesizing `pinned: true` when the CLI is installed,
     // and the tray reads from the normalized store. A raw entry without
     // `pinned` should read as unpinned.
-    expect(getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("false");
+    expect(getByTestId("launcher-pin-claude").getAttribute("data-pinned")).toBe("false");
   });
 
   it("only puts installed-but-unauth agents in Needs Setup (missing agents are hidden)", () => {
@@ -698,7 +810,7 @@ describe("AgentTrayButton", () => {
     mockSettings = settingsWith({ claude: { pinned: true } });
 
     const { container, getAllByTestId } = render(
-      <AgentTrayButton agentAvailability={availability} />
+      <LauncherMenuButton agentAvailability={availability} />
     );
 
     const labels = getAllByTestId("menu-label").map((el) => el.textContent);
@@ -725,7 +837,7 @@ describe("AgentTrayButton", () => {
     mockSettings = settingsWith({ claude: { pinned: true } });
 
     const { container, getAllByTestId } = render(
-      <AgentTrayButton agentAvailability={availability} />
+      <LauncherMenuButton agentAvailability={availability} />
     );
     // Sanity check: this must be the Needs-Setup branch, not the fallback.
     const labels = getAllByTestId("menu-label").map((el) => el.textContent);
@@ -747,7 +859,7 @@ describe("AgentTrayButton", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
 
-    const { container } = render(<AgentTrayButton agentAvailability={availability} />);
+    const { container } = render(<LauncherMenuButton agentAvailability={availability} />);
     const footer = Array.from(container.querySelectorAll('[role="menuitem"]')).find((el) =>
       el.textContent?.includes(TOOLBAR_CUSTOMIZE_LABEL)
     );
@@ -765,18 +877,18 @@ describe("AgentTrayButton", () => {
 
   it("shows loading placeholder when availability is undefined", () => {
     mockSettings = settingsWith({ claude: { pinned: true } });
-    const { getByText } = render(<AgentTrayButton />);
+    const { getByText } = render(<LauncherMenuButton />);
     expect(getByText("Checking agents…")).toBeTruthy();
   });
 
   it("shows loading placeholder before hasRealData even if availability is supplied", () => {
     mockHasRealData = false;
     const { getByText, queryByTestId } = render(
-      <AgentTrayButton agentAvailability={{} as unknown as CliAvailability} />
+      <LauncherMenuButton agentAvailability={{} as unknown as CliAvailability} />
     );
     expect(getByText("Checking agents…")).toBeTruthy();
     // Fallback rows must not render during the initial probe.
-    expect(queryByTestId("agent-tray-fallback-claude")).toBeNull();
+    expect(queryByTestId("launcher-fallback-claude")).toBeNull();
   });
 
   it("shows fallback setup rows when data has loaded but nothing is installed", () => {
@@ -788,14 +900,14 @@ describe("AgentTrayButton", () => {
     } as unknown as CliAvailability;
 
     const { queryByText, getByTestId, getAllByTestId } = render(
-      <AgentTrayButton agentAvailability={availability} />
+      <LauncherMenuButton agentAvailability={availability} />
     );
     // Should NOT show the old dead-end message.
     expect(queryByText("No agents available")).toBeNull();
     // Every built-in shows up as a setup row so the user can still discover them.
-    expect(getByTestId("agent-tray-fallback-claude")).toBeTruthy();
-    expect(getByTestId("agent-tray-fallback-gemini")).toBeTruthy();
-    expect(getByTestId("agent-tray-fallback-codex")).toBeTruthy();
+    expect(getByTestId("launcher-fallback-claude")).toBeTruthy();
+    expect(getByTestId("launcher-fallback-gemini")).toBeTruthy();
+    expect(getByTestId("launcher-fallback-codex")).toBeTruthy();
     const labels = getAllByTestId("menu-label").map((el) => el.textContent);
     expect(labels).toContain("Available Agents");
   });
@@ -804,7 +916,7 @@ describe("AgentTrayButton", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
 
-    render(<AgentTrayButton agentAvailability={availability} />);
+    render(<LauncherMenuButton agentAvailability={availability} />);
     expect(openChangeSpy).toBeTruthy();
     refreshAvailabilityMock.mockClear();
 
@@ -820,7 +932,7 @@ describe("AgentTrayButton", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
 
-    const { unmount } = render(<AgentTrayButton agentAvailability={availability} />);
+    const { unmount } = render(<LauncherMenuButton agentAvailability={availability} />);
     refreshAvailabilityMock.mockClear();
 
     Object.defineProperty(document, "visibilityState", {
@@ -847,7 +959,7 @@ describe("AgentTrayButton", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
 
-    const { container } = render(<AgentTrayButton agentAvailability={availability} />);
+    const { container } = render(<LauncherMenuButton agentAvailability={availability} />);
     const manage = Array.from(container.querySelectorAll('[role="menuitem"]')).find((el) =>
       el.textContent?.includes("Manage Agents")
     );
@@ -865,7 +977,7 @@ describe("AgentTrayButton", () => {
     mockSettings = settingsWith({ claude: { pinned: true } });
 
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
-    const { container } = render(<AgentTrayButton agentAvailability={availability} />);
+    const { container } = render(<LauncherMenuButton agentAvailability={availability} />);
     const setup = Array.from(container.querySelectorAll('[role="menuitem"]')).find((el) =>
       el.textContent?.includes("Set Up Agents")
     );
@@ -883,10 +995,10 @@ describe("AgentTrayButton", () => {
     mockSettings = null;
     const availability = { claude: "ready" } as unknown as CliAvailability;
 
-    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
     // Null settings means the normalizer hasn't run yet — with opt-in
     // semantics, that reads as unpinned until real data arrives.
-    expect(getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("false");
+    expect(getByTestId("launcher-pin-claude").getAttribute("data-pinned")).toBe("false");
   });
 
   it("suppresses tooltip reopen across dropdown and dialog focus restoration (issue #5153)", () => {
@@ -894,11 +1006,11 @@ describe("AgentTrayButton", () => {
     mockSettings = settingsWith({ claude: { pinned: true } });
     mockSeenAgentIds = ["claude"];
 
-    const { getByLabelText } = render(<AgentTrayButton agentAvailability={availability} />);
+    const { getByLabelText } = render(<LauncherMenuButton agentAvailability={availability} />);
     expect(tooltipOpenChangeSpy).toBeTruthy();
     expect(closeAutoFocusSpy).toBeTruthy();
 
-    const button = getByLabelText("Agent tray");
+    const button = getByLabelText("Launcher");
 
     // Hover opens the tooltip.
     act(() => {
@@ -942,7 +1054,7 @@ describe("AgentTrayButton", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
 
-    render(<AgentTrayButton agentAvailability={availability} />);
+    render(<LauncherMenuButton agentAvailability={availability} />);
     expect(closeAutoFocusSpy).toBeTruthy();
 
     const preventDefault = vi.fn();
@@ -957,11 +1069,11 @@ describe("AgentTrayButton", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
 
-    render(<AgentTrayButton agentAvailability={availability} />);
+    render(<LauncherMenuButton agentAvailability={availability} />);
     expect(closeAutoFocusSpy).toBeTruthy();
     expect(pointerDownOutsideSpy).toBeTruthy();
 
-    pointerDownOutsideSpy!();
+    pointerDownOutsideSpy!({ preventDefault: () => {} });
     const preventDefault = vi.fn();
     closeAutoFocusSpy!({ preventDefault });
     expect(preventDefault).toHaveBeenCalledTimes(1);
@@ -974,11 +1086,11 @@ describe("AgentTrayButton", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
 
-    render(<AgentTrayButton agentAvailability={availability} />);
+    render(<LauncherMenuButton agentAvailability={availability} />);
     expect(closeAutoFocusSpy).toBeTruthy();
     expect(pointerDownOutsideSpy).toBeTruthy();
 
-    pointerDownOutsideSpy!();
+    pointerDownOutsideSpy!({ preventDefault: () => {} });
     closeAutoFocusSpy!({ preventDefault: vi.fn() });
 
     const preventDefault = vi.fn();
@@ -998,11 +1110,11 @@ describe("AgentTrayButton", () => {
     mockSeenAgentIds = ["gemini"];
 
     const { getByTestId, queryByTestId } = render(
-      <AgentTrayButton agentAvailability={availability} />
+      <LauncherMenuButton agentAvailability={availability} />
     );
-    expect(getByTestId("agent-tray-discovery-badge").getAttribute("data-visible")).toBe("true");
-    expect(queryByTestId("agent-tray-new-pill-claude")).toBeTruthy();
-    expect(queryByTestId("agent-tray-new-pill-gemini")).toBeNull();
+    expect(getByTestId("launcher-discovery-badge").getAttribute("data-visible")).toBe("true");
+    expect(queryByTestId("launcher-new-pill-claude")).toBeTruthy();
+    expect(queryByTestId("launcher-new-pill-gemini")).toBeNull();
   });
 
   it("suppresses the discovery badge while the welcome card is actually renderable", () => {
@@ -1012,10 +1124,10 @@ describe("AgentTrayButton", () => {
     mockSeenAgentIds = [];
 
     const { getByTestId, queryByTestId } = render(
-      <AgentTrayButton agentAvailability={availability} />
+      <LauncherMenuButton agentAvailability={availability} />
     );
-    expect(getByTestId("agent-tray-discovery-badge").getAttribute("data-visible")).toBe("false");
-    expect(queryByTestId("agent-tray-new-pill-claude")).toBeNull();
+    expect(getByTestId("launcher-discovery-badge").getAttribute("data-visible")).toBe("false");
+    expect(queryByTestId("launcher-new-pill-claude")).toBeNull();
   });
 
   it("shows the discovery badge when a pinned agent exists even if welcomeCardDismissed is false", () => {
@@ -1031,9 +1143,9 @@ describe("AgentTrayButton", () => {
     mockWelcomeCardDismissed = false;
     mockSeenAgentIds = ["claude"];
 
-    const { queryByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-    expect(queryByTestId("agent-tray-discovery-badge")).toBeTruthy();
-    expect(queryByTestId("agent-tray-new-pill-gemini")).toBeTruthy();
+    const { queryByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+    expect(queryByTestId("launcher-discovery-badge")).toBeTruthy();
+    expect(queryByTestId("launcher-new-pill-gemini")).toBeTruthy();
   });
 
   it("hides the discovery badge once all ready agents are in seenAgentIds", () => {
@@ -1042,8 +1154,8 @@ describe("AgentTrayButton", () => {
     mockWelcomeCardDismissed = true;
     mockSeenAgentIds = ["claude", "gemini"];
 
-    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-    expect(getByTestId("agent-tray-discovery-badge").getAttribute("data-visible")).toBe("false");
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+    expect(getByTestId("launcher-discovery-badge").getAttribute("data-visible")).toBe("false");
   });
 
   it("does not call markAgentsSeen on tray open — discovery is now per-launch", () => {
@@ -1055,7 +1167,7 @@ describe("AgentTrayButton", () => {
     mockWelcomeCardDismissed = true;
     mockSeenAgentIds = [];
 
-    render(<AgentTrayButton agentAvailability={availability} />);
+    render(<LauncherMenuButton agentAvailability={availability} />);
     expect(openChangeSpy).toBeTruthy();
     markAgentsSeenMock.mockClear();
 
@@ -1072,7 +1184,7 @@ describe("AgentTrayButton", () => {
     mockWelcomeCardDismissed = true;
     mockSeenAgentIds = [];
 
-    render(<AgentTrayButton agentAvailability={availability} />);
+    render(<LauncherMenuButton agentAvailability={availability} />);
     recordAgentFirstSeenMock.mockClear();
 
     openChangeSpy!(true);
@@ -1088,7 +1200,7 @@ describe("AgentTrayButton", () => {
     } as unknown as CliAvailability;
     mockSettings = settingsWith({});
 
-    render(<AgentTrayButton agentAvailability={availability} />);
+    render(<LauncherMenuButton agentAvailability={availability} />);
     recordAgentFirstSeenMock.mockClear();
 
     openChangeSpy!(true);
@@ -1100,10 +1212,10 @@ describe("AgentTrayButton", () => {
     mockSettings = settingsWith({});
     mockSeenAgentIds = [];
 
-    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
     markAgentsSeenMock.mockClear();
 
-    fireEvent.click(getByTestId("agent-tray-row-claude"));
+    fireEvent.click(getByTestId("launcher-row-claude"));
 
     expect(markAgentsSeenMock).toHaveBeenCalledTimes(1);
     expect(markAgentsSeenMock).toHaveBeenCalledWith(["claude"]);
@@ -1116,10 +1228,10 @@ describe("AgentTrayButton", () => {
     const availability = { codex: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({});
 
-    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
     recordActionMruMock.mockClear();
 
-    fireEvent.click(getByTestId("agent-tray-row-codex"));
+    fireEvent.click(getByTestId("launcher-row-codex"));
 
     expect(recordActionMruMock).toHaveBeenCalledTimes(1);
     expect(recordActionMruMock).toHaveBeenCalledWith("agent.codex");
@@ -1138,9 +1250,9 @@ describe("AgentTrayButton", () => {
       gemini: now - 1000,
     };
 
-    const { queryByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-    expect(queryByTestId("agent-tray-new-pill-claude")).toBeNull();
-    expect(queryByTestId("agent-tray-new-pill-gemini")).toBeTruthy();
+    const { queryByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+    expect(queryByTestId("launcher-new-pill-claude")).toBeNull();
+    expect(queryByTestId("launcher-new-pill-gemini")).toBeTruthy();
   });
 
   it("renders the NEW indicator as a screen-reader-paired dot rather than a text pill", () => {
@@ -1150,14 +1262,16 @@ describe("AgentTrayButton", () => {
     mockSettings = settingsWith({});
     mockSeenAgentIds = [];
 
-    const { getByTestId, container } = render(<AgentTrayButton agentAvailability={availability} />);
-    const dot = getByTestId("agent-tray-new-pill-claude");
+    const { getByTestId, container } = render(
+      <LauncherMenuButton agentAvailability={availability} />
+    );
+    const dot = getByTestId("launcher-new-pill-claude");
     expect(dot.getAttribute("aria-hidden")).toBe("true");
     expect(dot.textContent ?? "").toBe("");
 
     // Screen reader pairing: the row should expose "New" via an sr-only sibling.
     const row = container.querySelector(
-      '[data-testid="agent-tray-row-claude"]'
+      '[data-testid="launcher-row-claude"]'
     ) as HTMLElement | null;
     expect(row).toBeTruthy();
     const srOnly = Array.from(row!.querySelectorAll(".sr-only")).map((el) =>
@@ -1176,8 +1290,8 @@ describe("AgentTrayButton", () => {
     mockMergedPresetsFn = (agentId: string) =>
       agentId === "claude" ? [{ id: "user-alpha", name: "Alpha" }] : [];
 
-    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-    const dot = getByTestId("agent-tray-new-pill-claude");
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+    const dot = getByTestId("launcher-new-pill-claude");
     expect(dot.getAttribute("aria-hidden")).toBe("true");
   });
 
@@ -1190,7 +1304,7 @@ describe("AgentTrayButton", () => {
     mockMergedPresetsFn = (agentId: string) =>
       agentId === "claude" ? [{ id: "user-alpha", name: "Alpha" }] : [];
 
-    const { getAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+    const { getAllByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
     markAgentsSeenMock.mockClear();
     fireEvent.keyDown(getAllByTestId("submenu-trigger")[0]!, { key: "Enter" });
 
@@ -1214,8 +1328,8 @@ describe("AgentTrayButton", () => {
     mockPanelIds = ["panel-1"];
     mockActiveWorktreeId = "wt-mine";
 
-    const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-    fireEvent.click(getByTestId("agent-tray-row-claude"));
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+    fireEvent.click(getByTestId("launcher-row-claude"));
 
     // Should launch new, not focus — panel is in a different worktree
     expect(dispatchMock).toHaveBeenCalledWith(
@@ -1247,7 +1361,7 @@ describe("AgentTrayButton", () => {
 
     it("Enter on the submenu trigger launches default (presetId: null)", () => {
       const availability = arrangeAgentWithPresets();
-      const { getAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const { getAllByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
       const submenuTrigger = getAllByTestId("submenu-trigger")[0]!;
 
       fireEvent.keyDown(submenuTrigger, { key: "Enter" });
@@ -1261,7 +1375,7 @@ describe("AgentTrayButton", () => {
 
     it("Space on the submenu trigger also launches default", () => {
       const availability = arrangeAgentWithPresets();
-      const { getAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const { getAllByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
       const submenuTrigger = getAllByTestId("submenu-trigger")[0]!;
 
       fireEvent.keyDown(submenuTrigger, { key: " " });
@@ -1275,7 +1389,7 @@ describe("AgentTrayButton", () => {
 
     it("other keys (ArrowRight, Tab) do NOT trigger launch", () => {
       const availability = arrangeAgentWithPresets();
-      const { getAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const { getAllByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
       const submenuTrigger = getAllByTestId("submenu-trigger")[0]!;
 
       fireEvent.keyDown(submenuTrigger, { key: "ArrowRight" });
@@ -1286,7 +1400,7 @@ describe("AgentTrayButton", () => {
 
     it("groups CCR and custom presets when both present", () => {
       const availability = arrangeAgentWithPresets();
-      const { queryAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const { queryAllByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
 
       const labels = queryAllByTestId("menu-label");
       const labelTexts = labels.map((el) => el.textContent);
@@ -1299,7 +1413,7 @@ describe("AgentTrayButton", () => {
       mockSettings = settingsWith({ claude: { pinned: false } });
       mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
 
-      const { queryByText } = render(<AgentTrayButton agentAvailability={availability} />);
+      const { queryByText } = render(<LauncherMenuButton agentAvailability={availability} />);
       expect(queryByText("CCR Routes")).toBeNull();
       expect(queryByText("Custom")).toBeNull();
     });
@@ -1309,7 +1423,7 @@ describe("AgentTrayButton", () => {
       mockSettings = settingsWith({ claude: { pinned: false } });
       mockMergedPresetsFn = () => [{ id: "user-alpha", name: "Alpha" }];
 
-      const { queryAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const { queryAllByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
       // The submenu always includes the implicit Default entry alongside named
       // presets, so a single named preset already represents two real launch
       // choices and warrants the submenu picker.
@@ -1344,7 +1458,7 @@ describe("AgentTrayButton", () => {
           worktreePresets: { "wt-A": "user-alpha" },
         },
       });
-      const { getAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const { getAllByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
       const submenuTrigger = getAllByTestId("submenu-trigger")[0]!;
 
       fireEvent.keyDown(submenuTrigger, { key: "Enter" });
@@ -1361,7 +1475,7 @@ describe("AgentTrayButton", () => {
     it("does not persist the scope when no active worktree is set", () => {
       mockActiveWorktreeId = null;
       const availability = arrangeAgentWithPresets();
-      const { getAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const { getAllByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
       const submenuTrigger = getAllByTestId("submenu-trigger")[0]!;
 
       fireEvent.keyDown(submenuTrigger, { key: "Enter" });
@@ -1407,8 +1521,8 @@ describe("AgentTrayButton", () => {
       ["directing", /bg-state-working/],
     ] as const)("renders the badge for actionable state %s", (state, colorPattern) => {
       const availability = arrangeClaudePanel(state);
-      const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-      const row = getByTestId("agent-tray-row-claude");
+      const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+      const row = getByTestId("launcher-row-claude");
       const badge = badgeIn(row);
       expect(badge?.getAttribute("data-visible")).toBe("true");
       expect(badge?.className).toMatch(colorPattern);
@@ -1416,8 +1530,8 @@ describe("AgentTrayButton", () => {
 
     it.each([["working"], ["idle"]] as const)("hides the badge for passive state %s", (state) => {
       const availability = arrangeClaudePanel(state);
-      const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-      const row = getByTestId("agent-tray-row-claude");
+      const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+      const row = getByTestId("launcher-row-claude");
       expect(badgeIn(row)?.getAttribute("data-visible")).toBe("false");
     });
 
@@ -1430,8 +1544,8 @@ describe("AgentTrayButton", () => {
       "hides the badge for terminal state %s",
       (state) => {
         const availability = arrangeClaudePanel(state);
-        const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-        const row = getByTestId("agent-tray-row-claude");
+        const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+        const row = getByTestId("launcher-row-claude");
         expect(badgeIn(row)?.getAttribute("data-visible")).toBe("false");
       }
     );
@@ -1440,8 +1554,8 @@ describe("AgentTrayButton", () => {
       const availability = { claude: "ready" } as unknown as CliAvailability;
       mockSettings = settingsWith({ claude: { pinned: false } });
 
-      const { getByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
-      const row = getByTestId("agent-tray-row-claude");
+      const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+      const row = getByTestId("launcher-row-claude");
       expect(badgeIn(row)?.getAttribute("data-visible")).toBe("false");
     });
   });
@@ -1469,7 +1583,7 @@ describe("AgentTrayButton", () => {
       });
       const availability = arrangeAgentWithPresets();
 
-      const { getAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const { getAllByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
       const groups = getAllByTestId("preset-radio-group");
       // The worktree-scoped pick wins over the agent-level default — the
       // submenu radio group resolves to "user-beta".
@@ -1483,7 +1597,7 @@ describe("AgentTrayButton", () => {
       });
       const availability = arrangeAgentWithPresets();
 
-      const { getAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const { getAllByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
       const groups = getAllByTestId("preset-radio-group");
       expect(groups[0]!.getAttribute("data-value")).toBe("user-alpha");
     });
@@ -1493,7 +1607,7 @@ describe("AgentTrayButton", () => {
       mockSettings = settingsWith({ claude: { pinned: false } });
       const availability = arrangeAgentWithPresets();
 
-      const { getAllByTestId } = render(<AgentTrayButton agentAvailability={availability} />);
+      const { getAllByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
       const groups = getAllByTestId("preset-radio-group");
       expect(groups[0]!.getAttribute("data-value")).toBe("");
     });
@@ -1511,12 +1625,12 @@ describe("AgentTrayButton", () => {
       mockSettings = settingsWith({ claude: { pinned: false } });
 
       const { getByTestId, getAllByTestId } = render(
-        <AgentTrayButton agentAvailability={availability} />
+        <LauncherMenuButton agentAvailability={availability} />
       );
 
       const shortcutNodes = getAllByTestId("menu-shortcut").map((el) => el.textContent);
       expect(shortcutNodes).toContain("⌘⌥C");
-      expect(getByTestId("agent-tray-shortcut-edit-claude")).toBeTruthy();
+      expect(getByTestId("launcher-shortcut-edit-claude")).toBeTruthy();
     });
 
     it("renders the edit affordance without a pill when the agent is unbound", () => {
@@ -1524,35 +1638,35 @@ describe("AgentTrayButton", () => {
       mockSettings = settingsWith({ claude: { pinned: false } });
 
       const { getByTestId, queryAllByTestId } = render(
-        <AgentTrayButton agentAvailability={availability} />
+        <LauncherMenuButton agentAvailability={availability} />
       );
 
-      expect(getByTestId("agent-tray-shortcut-edit-claude")).toBeTruthy();
-      const claudeRow = getByTestId("agent-tray-row-claude");
+      expect(getByTestId("launcher-shortcut-edit-claude")).toBeTruthy();
+      const claudeRow = getByTestId("launcher-row-claude");
       // No menu-shortcut node inside the row when unbound.
       const shortcutsInRow = Array.from(
         claudeRow.querySelectorAll('[data-testid="menu-shortcut"]')
       );
       expect(shortcutsInRow).toHaveLength(0);
       // Other agents' edit affordances are independent.
-      expect(queryAllByTestId(/agent-tray-shortcut-edit-/).length).toBeGreaterThan(1);
+      expect(queryAllByTestId(/launcher-shortcut-edit-/).length).toBeGreaterThan(1);
     });
 
     it("clicking the edit affordance opens the inline capture and does not launch the agent", () => {
       mockSettings = settingsWith({ claude: { pinned: false } });
 
       const { getByTestId, queryByTestId } = render(
-        <AgentTrayButton agentAvailability={availability} />
+        <LauncherMenuButton agentAvailability={availability} />
       );
 
-      const editButton = getByTestId("agent-tray-shortcut-edit-claude");
+      const editButton = getByTestId("launcher-shortcut-edit-claude");
       fireEvent.click(editButton);
 
-      expect(getByTestId("agent-tray-capture-claude")).toBeTruthy();
+      expect(getByTestId("launcher-capture-claude")).toBeTruthy();
       expect(getByTestId("mock-agent-shortcut-capture-claude")).toBeTruthy();
       // The launch row for claude is replaced by the capture surface, so the
       // launch onSelect path can't fire from this row.
-      expect(queryByTestId("agent-tray-row-claude")).toBeNull();
+      expect(queryByTestId("launcher-row-claude")).toBeNull();
       // No agent.launch dispatch was triggered by entering capture.
       const launchDispatches = dispatchMock.mock.calls.filter((call) => call[0] === "agent.launch");
       expect(launchDispatches).toHaveLength(0);
@@ -1563,11 +1677,11 @@ describe("AgentTrayButton", () => {
       mockSettings = settingsWith({ claude: { pinned: false } });
 
       const { getByTestId, queryByTestId } = render(
-        <AgentTrayButton agentAvailability={availability} />
+        <LauncherMenuButton agentAvailability={availability} />
       );
 
-      fireEvent.click(getByTestId("agent-tray-shortcut-edit-claude"));
-      expect(getByTestId("agent-tray-capture-claude")).toBeTruthy();
+      fireEvent.click(getByTestId("launcher-shortcut-edit-claude"));
+      expect(getByTestId("launcher-capture-claude")).toBeTruthy();
 
       await act(async () => {
         fireEvent.click(getByTestId("mock-agent-shortcut-save-claude"));
@@ -1578,28 +1692,321 @@ describe("AgentTrayButton", () => {
         { actionId: "agent.claude", combo: ["Cmd+Alt+K"] },
         { source: "user" }
       );
-      expect(queryByTestId("agent-tray-capture-claude")).toBeNull();
-      expect(getByTestId("agent-tray-row-claude")).toBeTruthy();
+      expect(queryByTestId("launcher-capture-claude")).toBeNull();
+      expect(getByTestId("launcher-row-claude")).toBeTruthy();
     });
 
     it("Cancel from capture restores the row without dispatching anything", () => {
       mockSettings = settingsWith({ claude: { pinned: false } });
 
       const { getByTestId, queryByTestId } = render(
-        <AgentTrayButton agentAvailability={availability} />
+        <LauncherMenuButton agentAvailability={availability} />
       );
 
-      fireEvent.click(getByTestId("agent-tray-shortcut-edit-claude"));
-      expect(getByTestId("agent-tray-capture-claude")).toBeTruthy();
+      fireEvent.click(getByTestId("launcher-shortcut-edit-claude"));
+      expect(getByTestId("launcher-capture-claude")).toBeTruthy();
 
       fireEvent.click(getByTestId("mock-agent-shortcut-cancel-claude"));
 
-      expect(queryByTestId("agent-tray-capture-claude")).toBeNull();
-      expect(getByTestId("agent-tray-row-claude")).toBeTruthy();
+      expect(queryByTestId("launcher-capture-claude")).toBeNull();
+      expect(getByTestId("launcher-row-claude")).toBeTruthy();
       const dispatchCalls = dispatchMock.mock.calls.filter(
         (call) => call[0] === "keybinding.setOverride"
       );
       expect(dispatchCalls).toHaveLength(0);
     });
+  });
+});
+
+// Ported from the panel tray's own suite when the two trays merged (#11680).
+// They live here rather than in a second file so there is one mock surface for
+// the merged component — two divergent partial mocks of the same module is how
+// a suite starts passing against a shape the component no longer has.
+describe("LauncherMenuButton — Panels section", () => {
+  // Its own reset: this block sits outside the suite above, so the `beforeEach`
+  // there doesn't reach it and both the call counts and the array fixtures would
+  // carry over from the previous case.
+  beforeEach(() => {
+    dispatchMock.mockClear();
+    setPanelButtonOnToolbarMock.mockClear();
+    positionAgentButtonMock.mockClear();
+    toggleButtonVisibilityMock.mockClear();
+    mockPinnedButtons = {};
+    mockLeftButtons = ["launcher", "terminal", "file-browser"];
+    mockRightButtons = ["settings"];
+    mockKeybindingDisplay = {};
+    mockSettings = null;
+    mockHasRealData = true;
+    mockActionMruList = [];
+  });
+
+  const panelRowIds = (container: HTMLElement) =>
+    LAUNCHER_PANEL_ITEMS.map((i) => i.id).filter((id) =>
+      container.querySelector(`[data-testid="launcher-row-${id}"]`)
+    );
+
+  it("renders a row for every inventory item, promoted ones included", () => {
+    // The plugin tray's rule: promotion adds an access point, it never moves the
+    // button out of the launcher. `terminal` and `file-browser` are positioned
+    // (see beforeEach) and still get rows.
+    //
+    // Read from the DOM and compare to the inventory, rather than iterating the
+    // inventory to look each row up — the latter can't notice a row that failed
+    // to render, and comparing the exported constant to a hard-coded list would
+    // just restate the source of truth.
+    const { container } = render(<LauncherMenuButton />);
+    expect(panelRowIds(container)).toEqual(LAUNCHER_PANEL_ITEMS.map((i) => i.id));
+  });
+
+  it("covers exactly the shared panel-button id list", () => {
+    // The store's hydration repair and Settings' toggle routing both key off
+    // `LAUNCHER_PANEL_BUTTON_IDS`. A row here with no entry there would never get
+    // its position rebuilt after a cross-view overwrite; an id there with no row
+    // would be unpinnable. Neither failure is visible from either side alone.
+    expect(LAUNCHER_PANEL_ITEMS.map((i) => i.id)).toEqual([...LAUNCHER_PANEL_BUTTON_IDS]);
+  });
+
+  it("routes the file browser through the toolbar's own handler, not a bare dispatch", () => {
+    // That handler surfaces a retry toast when the action refuses; dispatching
+    // directly here would make the launcher fail silently where the button doesn't.
+    const onOpenFileBrowser = vi.fn();
+    const { getByTestId } = render(<LauncherMenuButton onOpenFileBrowser={onOpenFileBrowser} />);
+    fireEvent.click(getByTestId("launcher-row-file-browser"));
+    expect(onOpenFileBrowser).toHaveBeenCalledTimes(1);
+    expect(dispatchMock).not.toHaveBeenCalledWith(
+      "worktree.openFileBrowserPanel",
+      undefined,
+      expect.anything()
+    );
+  });
+
+  it("dispatches the panel actions for the other rows", () => {
+    const { getByTestId } = render(<LauncherMenuButton />);
+
+    fireEvent.click(getByTestId("launcher-row-terminal"));
+    expect(dispatchMock).toHaveBeenCalledWith("agent.terminal", undefined, { source: "user" });
+
+    fireEvent.click(getByTestId("launcher-row-browser"));
+    expect(dispatchMock).toHaveBeenCalledWith("agent.browser", undefined, { source: "user" });
+
+    fireEvent.click(getByTestId("launcher-row-dev-server"));
+    expect(dispatchMock).toHaveBeenCalledWith("devServer.start", undefined, { source: "user" });
+  });
+
+  it("does not open a row whose precondition is missing", () => {
+    const onOpenFileBrowser = vi.fn();
+    const { getByTestId } = render(
+      <LauncherMenuButton
+        hasWorkspace={false}
+        hasProject={false}
+        onOpenFileBrowser={onOpenFileBrowser}
+      />
+    );
+
+    fireEvent.click(getByTestId("launcher-row-file-browser"));
+    fireEvent.click(getByTestId("launcher-row-dev-server"));
+
+    expect(onOpenFileBrowser).not.toHaveBeenCalled();
+    expect(getByTestId("launcher-row-dev-server").getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("keeps a disabled row's label stable and its pin still operable", () => {
+    // The label must not swap to the unavailability reason: a command whose
+    // visible name changes with state re-announces as a different item and stops
+    // matching itself under type-ahead. The reason rides alongside instead.
+    //
+    // And the row stays `aria-disabled` rather than `disabled` so Radix keeps it
+    // in arrow-key and type-ahead order — which is what leaves the pin reachable
+    // on a panel the user hasn't opened a project for yet.
+    const { getByTestId } = render(<LauncherMenuButton hasProject={false} />);
+    const row = getByTestId("launcher-row-dev-server");
+
+    expect(row.textContent).toContain("Dev preview");
+    expect(row.textContent).toContain("Needs a project");
+
+    fireEvent.click(getByTestId("launcher-pin-dev-server"));
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("dev-server", true);
+  });
+
+  it("promotes an unpositioned button when its pin is clicked", () => {
+    const { getByTestId } = render(<LauncherMenuButton />);
+
+    expect(getByTestId("launcher-pin-browser").getAttribute("data-pinned")).toBe("false");
+    fireEvent.click(getByTestId("launcher-pin-browser"));
+
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("browser", true);
+  });
+
+  it("demotes a positioned button when its pin is clicked", () => {
+    mockLeftButtons = ["launcher", "terminal", "browser", "file-browser"];
+    const { getByTestId } = render(<LauncherMenuButton />);
+
+    expect(getByTestId("launcher-pin-browser").getAttribute("data-pinned")).toBe("true");
+    fireEvent.click(getByTestId("launcher-pin-browser"));
+
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("browser", false);
+  });
+
+  it("reads a default-array panel as already on the toolbar", () => {
+    // `terminal` and `file-browser` still ship in `DEFAULT_LEFT_BUTTONS`, so
+    // their pins must read as on out of the box even though neither carries a
+    // `pinnedButtons` entry — array fall-through, not a seeded default.
+    const { getByTestId } = render(<LauncherMenuButton />);
+    expect(getByTestId("launcher-pin-terminal").getAttribute("data-pinned")).toBe("true");
+    expect(getByTestId("launcher-pin-file-browser").getAttribute("data-pinned")).toBe("true");
+  });
+
+  it("toggles the pin from the P key without activating the row", () => {
+    const onOpenFileBrowser = vi.fn();
+    const { getByTestId } = render(<LauncherMenuButton onOpenFileBrowser={onOpenFileBrowser} />);
+    fireEvent.keyDown(getByTestId("launcher-row-file-browser"), { key: "P" });
+
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("file-browser", false);
+    expect(onOpenFileBrowser).not.toHaveBeenCalled();
+  });
+
+  it("does not activate the row when the pin itself is clicked", () => {
+    const onOpenFileBrowser = vi.fn();
+    const { getByTestId } = render(<LauncherMenuButton onOpenFileBrowser={onOpenFileBrowser} />);
+    fireEvent.click(getByTestId("launcher-pin-file-browser"));
+
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledTimes(1);
+    expect(onOpenFileBrowser).not.toHaveBeenCalled();
+  });
+
+  it("offers the palette and the toolbar settings tab as footer routes", () => {
+    // The launcher carries the buttons it can pin; `review`, `file` and `diff`
+    // have no toolbar id to pin, so the palette is their route rather than a row.
+    const { container } = render(<LauncherMenuButton />);
+    const actionIds = Array.from(container.querySelectorAll("[data-action-id]")).map((el) =>
+      el.getAttribute("data-action-id")
+    );
+    expect(actionIds).toContain("panel.palette");
+    expect(actionIds).toContain("app.settings.openTab");
+  });
+
+  it("shows each panel row's keybinding hint", () => {
+    mockKeybindingDisplay = { "devServer.start": "⌘⌥D" };
+    const { getByTestId } = render(<LauncherMenuButton />);
+    expect(getByTestId("launcher-row-dev-server").textContent).toContain("⌘⌥D");
+  });
+});
+
+describe("LauncherMenuButton — agent pin write path (#11680)", () => {
+  beforeEach(() => {
+    setAgentPinnedMock.mockClear();
+    positionAgentButtonMock.mockClear();
+    setPanelButtonOnToolbarMock.mockClear();
+    mockPinnedButtons = {};
+    mockLeftButtons = ["launcher", "terminal", "file-browser"];
+    mockRightButtons = ["settings"];
+    mockSettings = null;
+    mockHasRealData = true;
+    mockActionMruList = [];
+  });
+
+  const ready = { claude: "ready", gemini: "ready" } as unknown as CliAvailability;
+
+  it("gives a newly-pinned agent a position as well as a pin", () => {
+    // The gap this issue opened: with no agent id in `DEFAULT_LEFT_BUTTONS`, a
+    // fresh profile's `setAgentPinned(id, true)` leaves the button with nowhere
+    // to render. Both writes, or the pin does nothing visible.
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+    fireEvent.click(getByTestId("launcher-pin-claude"));
+
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
+    expect(positionAgentButtonMock).toHaveBeenCalledWith("claude");
+  });
+
+  it("writes the position synchronously, not behind the pin's IPC", () => {
+    // Deferring until the write resolved bought nothing: `Toolbar.tsx`
+    // materializes a position for anything reading as explicitly pinned, and it
+    // reads the same optimistic state, so it would persist the position during
+    // the in-flight window anyway. Two mechanisms racing to write the same value
+    // is worse than one that always does.
+    setAgentPinnedMock.mockReturnValueOnce(new Promise(() => {}));
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+    fireEvent.click(getByTestId("launcher-pin-claude"));
+
+    expect(positionAgentButtonMock).toHaveBeenCalledWith("claude");
+  });
+
+  it("does not ask for a position when unpinning", () => {
+    mockSettings = settingsWith({ claude: { pinned: true } });
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+    fireEvent.click(getByTestId("launcher-pin-claude"));
+
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
+    expect(positionAgentButtonMock).not.toHaveBeenCalled();
+  });
+
+  it("reads an installed-but-unpositioned agent as unpinned", () => {
+    // `isAgentToolbarVisible` would call this one visible — it resolves an unset
+    // pin to "the binary is installed", which stopped implying a toolbar slot.
+    // A pin that reads as on when the button isn't there sends the user to
+    // Settings looking for a button that was never rendered.
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+    expect(getByTestId("launcher-pin-claude").getAttribute("data-pinned")).toBe("false");
+  });
+
+  it("reads a grandfathered agent that still holds a position as pinned", () => {
+    mockLeftButtons = ["launcher", "claude", "terminal", "file-browser"];
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+    expect(getByTestId("launcher-pin-claude").getAttribute("data-pinned")).toBe("true");
+    // …and unpinning it writes the explicit `false` rather than trying to promote.
+    fireEvent.click(getByTestId("launcher-pin-claude"));
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
+  });
+
+  it("pins an agent that has presets, from its split row", () => {
+    // The row switches to `SplitLaunchItem` the moment a preset exists. Without
+    // its own affordance, creating a preset silently took that agent's pin away.
+    mockMergedPresetsFn = () => [{ id: "p1", name: "Fast" }] as never;
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+
+    expect(getByTestId("launcher-pin-claude").getAttribute("data-pinned")).toBe("false");
+    fireEvent.click(getByTestId("launcher-pin-claude"));
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
+  });
+
+  it("toggles a split row's pin from the P key without launching", () => {
+    mockMergedPresetsFn = () => [{ id: "p1", name: "Fast" }] as never;
+    const { getAllByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+    fireEvent.keyDown(getAllByTestId("submenu-trigger")[0]!, { key: "P" });
+
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
+    expect(dispatchMock).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("does not let one row's debounce swallow another row's pin", () => {
+    // Distinct rows are distinct intents. A single shared timestamp dropped the
+    // second of any two toggles landing inside 50ms — reachable from the
+    // keyboard with P, ArrowDown, P.
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+    fireEvent.click(getByTestId("launcher-pin-claude"));
+    fireEvent.click(getByTestId("launcher-pin-terminal"));
+
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("terminal", false);
+  });
+
+  it("still debounces a double-fire on the SAME row", () => {
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+    fireEvent.click(getByTestId("launcher-pin-claude"));
+    fireEvent.click(getByTestId("launcher-pin-claude"));
+
+    expect(setAgentPinnedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("never writes an agent pin through the panel setter", () => {
+    // The two halves of the unified affordance still write to their own stores;
+    // crossing them is what would put an agent id into `pinnedButtons`.
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+    fireEvent.click(getByTestId("launcher-pin-claude"));
+    expect(setPanelButtonOnToolbarMock).not.toHaveBeenCalled();
   });
 });

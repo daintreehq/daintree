@@ -214,7 +214,7 @@ function PluginTrayRow({
  * contribution claimed its own top-level slot and all of them rendered the
  * same generic glyph.
  *
- * Mirrors `AgentTrayButton`'s structure deliberately: same controlled
+ * Mirrors `LauncherMenuButton`'s structure deliberately: same controlled
  * Dropdown + ContextMenu + Tooltip nesting, same focus-restoration
  * suppression, and the same hover-reveal pin affordance — here promoting a
  * contribution to its own top-level button instead of pinning an agent.
@@ -232,7 +232,7 @@ export function PluginTrayButton({
 
   const [open, setOpen] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
-  // Mirrors AgentTrayButton: Radix reopens the Tooltip whenever the trigger
+  // Mirrors LauncherMenuButton: Radix reopens the Tooltip whenever the trigger
   // regains focus, including the programmatic restore from onCloseAutoFocus
   // and from a dialog opened via a menu item closing much later. Hold the
   // suppression until the next genuine pointer hover (see #5153).

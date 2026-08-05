@@ -173,7 +173,7 @@ test.describe.serial("Presets: Custom Edit (25–34)", () => {
     await trayButton.click({ force: true, noWaitAfter: true });
 
     const submenuTrigger = ctx.window
-      .getByRole("menu", { name: "Agent tray" })
+      .getByRole("menu", { name: "Launcher" })
       .locator(SEL.preset.trayLaunchPresetSubmenu, { hasText: "Claude" });
     await expect(submenuTrigger).toBeVisible({ timeout: T_MEDIUM });
     await submenuTrigger.hover();

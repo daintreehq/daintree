@@ -19,7 +19,7 @@ let fixtureCleanup: (() => void) | undefined;
 let fakeBinDir: string;
 
 // A fake `claude` binary on PATH makes Claude `launchable`, which is the
-// precondition for the toolbar split-button chevron and the agent-tray
+// precondition for the toolbar split-button chevron and the launcher
 // submenu trigger to render. Without it those surfaces never mount and the
 // tests asserting them would silently pass.
 function writeFakeClaude(): void {
@@ -147,7 +147,7 @@ test.describe.serial("Presets: Custom Add (13–24)", () => {
       await closeButton.click();
     }
 
-    const trayButton = ctx.window.locator('[aria-label^="Agent tray"]');
+    const trayButton = ctx.window.locator('[aria-label^="Launcher"]');
     await trayButton.click();
     const submenuTrigger = ctx.window.locator('[data-testid="submenu-trigger"]', {
       hasText: "Claude",

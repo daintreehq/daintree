@@ -30,7 +30,7 @@ const updateAgentMock = vi.fn().mockResolvedValue(undefined);
 const updateWorktreePresetMock = vi.fn().mockResolvedValue(undefined);
 const recordActionMruMock = vi.fn();
 
-// AgentTrayButton calls `useAgentSettingsStore.getState()` inside
+// LauncherMenuButton calls `useAgentSettingsStore.getState()` inside
 // `handleLaunch`, so the mock has to expose both the hook selector and a
 // static `getState`. `settings` reads via a getter so `beforeEach`
 // mutations to `sharedSettings` propagate through the static handle too.
@@ -229,11 +229,14 @@ vi.mock("@/components/ui/button", () => ({
 
 // Settings-tab mocks.
 let sharedToolbarLayout = {
-  leftButtons: ["agent-tray", "claude", "gemini", "codex", "terminal"] as string[],
+  leftButtons: ["launcher", "claude", "gemini", "codex", "terminal"] as string[],
   rightButtons: ["settings"] as string[],
   pinnedButtons: {} as Record<string, boolean>,
 };
 const sharedToolbarLauncher = { alwaysShowDevServer: false, defaultSelection: undefined };
+
+const setPanelButtonOnToolbarMock = vi.fn();
+const positionAgentButtonMock = vi.fn();
 
 vi.mock("@/store", () => ({
   useToolbarPreferencesStore: (
@@ -243,6 +246,9 @@ vi.mock("@/store", () => ({
       setLeftButtons: () => void;
       setRightButtons: () => void;
       toggleButtonVisibility: typeof toggleButtonVisibilityMock;
+      setPanelButtonOnToolbar: typeof setPanelButtonOnToolbarMock;
+      positionAgentButton: typeof positionAgentButtonMock;
+      setPluginButtonPromoted: () => void;
       setAlwaysShowDevServer: () => void;
       setDefaultSelection: () => void;
       reset: () => void;
@@ -254,6 +260,9 @@ vi.mock("@/store", () => ({
       setLeftButtons: vi.fn(),
       setRightButtons: vi.fn(),
       toggleButtonVisibility: toggleButtonVisibilityMock,
+      setPanelButtonOnToolbar: setPanelButtonOnToolbarMock,
+      positionAgentButton: positionAgentButtonMock,
+      setPluginButtonPromoted: vi.fn(),
       setAlwaysShowDevServer: vi.fn(),
       setDefaultSelection: vi.fn(),
       reset: vi.fn(),
@@ -331,13 +340,18 @@ vi.mock("@/components/Settings/SettingsSwitch", () => ({
   ),
 }));
 
-import { AgentTrayButton } from "@/components/Layout/AgentTrayButton";
+import { LauncherMenuButton } from "@/components/Layout/LauncherMenuButton";
+import { LAUNCHER_PANEL_BUTTON_IDS } from "@shared/types/toolbar";
 import { ToolbarSettingsTab } from "@/components/Settings/ToolbarSettingsTab";
 
+// The launcher's Agents and Panels sections share the `launcher-row-` prefix
+// (#11680) — one affordance, one naming scheme — so the panel ids have to come
+// back out here or every count in this file gains four.
 function agentRows(container: HTMLElement): string[] {
-  return Array.from(container.querySelectorAll('[data-testid^="agent-tray-row-"]'))
-    .map((el) => el.getAttribute("data-testid")?.replace("agent-tray-row-", "") ?? "")
-    .filter(Boolean);
+  const panelIds = new Set<string>(LAUNCHER_PANEL_BUTTON_IDS);
+  return Array.from(container.querySelectorAll('[data-testid^="launcher-row-"]'))
+    .map((el) => el.getAttribute("data-testid")?.replace("launcher-row-", "") ?? "")
+    .filter((id) => id && !panelIds.has(id));
 }
 
 describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#5112)", () => {
@@ -357,7 +371,7 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
       },
     } as AgentSettings;
     sharedToolbarLayout = {
-      leftButtons: ["agent-tray", "claude", "gemini", "codex", "terminal"],
+      leftButtons: ["launcher", "claude", "gemini", "codex", "terminal"],
       rightButtons: ["settings"],
       pinnedButtons: {},
     };
@@ -371,9 +385,16 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
       codex: "ready",
     } as unknown as CliAvailability;
 
-    const tray = render(<AgentTrayButton agentAvailability={availability} />);
+    const tray = render(
+      <LauncherMenuButton
+        agentAvailability={availability}
+        hasWorkspace
+        hasProject
+        onOpenFileBrowser={() => {}}
+      />
+    );
     expect(agentRows(tray.container)).toEqual(["claude", "gemini", "codex"]);
-    expect(tray.getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("true");
+    expect(tray.getByTestId("launcher-pin-claude").getAttribute("data-pinned")).toBe("true");
     tray.unmount();
 
     const settings = render(<ToolbarSettingsTab />);
@@ -383,9 +404,16 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
     settings.unmount();
 
-    const tray2 = render(<AgentTrayButton agentAvailability={availability} />);
+    const tray2 = render(
+      <LauncherMenuButton
+        agentAvailability={availability}
+        hasWorkspace
+        hasProject
+        onOpenFileBrowser={() => {}}
+      />
+    );
     expect(agentRows(tray2.container)).toEqual(["claude", "gemini", "codex"]);
-    expect(tray2.getByTestId("agent-tray-pin-claude").getAttribute("data-pinned")).toBe("false");
+    expect(tray2.getByTestId("launcher-pin-claude").getAttribute("data-pinned")).toBe("false");
   });
 
   it("pinning in the tray makes the Settings > Toolbar checkbox flip to checked", () => {
@@ -408,8 +436,15 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     settings.unmount();
 
     // User clicks the pin indicator in the tray for gemini.
-    const tray = render(<AgentTrayButton agentAvailability={availability} />);
-    fireEvent.click(tray.getByTestId("agent-tray-pin-gemini"));
+    const tray = render(
+      <LauncherMenuButton
+        agentAvailability={availability}
+        hasWorkspace
+        hasProject
+        onOpenFileBrowser={() => {}}
+      />
+    );
+    fireEvent.click(tray.getByTestId("launcher-pin-gemini"));
     expect(setAgentPinnedMock).toHaveBeenCalledWith("gemini", true);
     tray.unmount();
 
@@ -446,13 +481,17 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
   it("Settings checkbox toggles for agent IDs never touch toolbarPreferencesStore.pinnedButtons", () => {
     const settings = render(<ToolbarSettingsTab />);
     fireEvent.click(settings.getByLabelText("Toggle Claude agent visibility"));
-    fireEvent.click(settings.getByLabelText("Toggle Terminal visibility"));
+    fireEvent.click(settings.getByLabelText("Toggle Launcher visibility"));
 
-    // Agent -> setAgentPinned; non-agent -> toggleButtonVisibility.
+    // Agent -> setAgentPinned; plain built-in -> toggleButtonVisibility.
+    // `terminal` is no longer either: since #11680 it is a launcher panel button
+    // and routes through `setPanelButtonOnToolbar` like the other three, so a
+    // built-in that stays on the generic path is the honest subject here.
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
     expect(toggleButtonVisibilityMock).toHaveBeenCalledTimes(1);
-    expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("terminal", "left");
+    expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("launcher", "left");
     // Agent toggles never write pinnedButtons.
     expect(toggleButtonVisibilityMock).not.toHaveBeenCalledWith("claude", expect.anything());
+    expect(setPanelButtonOnToolbarMock).not.toHaveBeenCalled();
   });
 });
