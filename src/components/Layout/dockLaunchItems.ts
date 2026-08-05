@@ -482,9 +482,11 @@ export function activateDockLaunchItem(
           title: `Couldn't open ${item.name}`,
           // Purpose-written rather than the action's own message: those name
           // internal ids ("Worktree not found: wt-3f2") and state a cause
-          // without a fix. Every refusal reachable here comes down to nothing
-          // resolving to open against.
-          message: "No folder resolved for this workspace. Select a worktree and try again.",
+          // without a fix. Covers every kind this launcher offers, so it stays
+          // true for a dev preview with no project open as well as a browser
+          // with no folder — unlike the file-browser-only surfaces.
+          message:
+            "No project folder or worktree resolved for this launch. Open a project or select a worktree, then try again.",
           // `uiFeedback` is a passive kind, so without this the toast the
           // closed menu depends on would be an inbox row nobody sees.
           priority: "high",

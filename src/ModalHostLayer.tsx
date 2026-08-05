@@ -275,9 +275,11 @@ export function ModalHostLayer({
         notify({
           type: "error",
           title: `Couldn't open ${name}`,
-          // Same purpose-written copy the other launcher surfaces use — the
-          // action's own messages name internal ids and carry no fix.
-          message: "No folder resolved for this workspace. Select a worktree and try again.",
+          // Purpose-written, and general enough to stay true across every kind
+          // the palette offers — the action's own messages name internal ids
+          // and carry no fix.
+          message:
+            "No project folder or worktree resolved for this launch. Open a project or select a worktree, then try again.",
           // `uiFeedback` is passive; without this the palette's only signal
           // would be an inbox row.
           priority: "high",
