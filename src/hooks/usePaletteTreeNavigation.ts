@@ -149,6 +149,16 @@ export interface UsePaletteTreeNavigationResult<TGroup, TItem> {
  */
 const CARET_KEYS = new Set(["Home", "End"]);
 
+/**
+ * Rows a page key moves by.
+ *
+ * A constant, not a measurement: these lists are not virtualised and their rows
+ * vary in height, so any "visible page" computed from the scroller would be a
+ * different number every time it was asked. Ten is the figure the ARIA
+ * practices use and the one real listboxes settle on.
+ */
+const PAGE_SIZE = 10;
+
 function isNavigable<TGroup, TItem>(
   row: PaletteTreeRow<TGroup, TItem>
 ): row is NavigablePaletteTreeRow<TGroup, TItem> {
@@ -265,6 +275,30 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
     [navigableRows]
   );
 
+  /**
+   * A page-sized jump that CLAMPS rather than wrapping.
+   *
+   * Deliberately not `step(±PAGE_SIZE)`: that normalises modulo the list, so
+   * PageDown over a five-row list would land back on the row it started from —
+   * a key that visibly does nothing. Running off the end lands on the end,
+   * which is both what the ARIA practices describe and what a reader expects
+   * from a page key.
+   */
+  const page = useCallback(
+    (delta: number) => {
+      if (navigableRows.length === 0) return;
+      setSelectedRowId((previousId) => {
+        const current = previousId
+          ? navigableRows.findIndex((row) => row.rowId === previousId)
+          : -1;
+        const from = current >= 0 ? current : 0;
+        const next = Math.min(navigableRows.length - 1, Math.max(0, from + delta));
+        return navigableRows[next]!.rowId;
+      });
+    },
+    [navigableRows]
+  );
+
   const selectRow = useCallback((rowId: string) => setSelectedRowId(rowId), []);
 
   const activateRow = useCallback(
@@ -299,6 +333,20 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
           consume();
           step(-1);
           break;
+        // Bound HERE rather than left to the browser. Native scrolling walks
+        // the viewport several rows while the selection sits still, so the
+        // highlight goes off screen and Enter commits a row the user can no
+        // longer see. A fixed row count rather than a measured page: the rows
+        // are not virtualised and their heights vary, and every list that
+        // implements this at all uses a constant.
+        case "PageDown":
+          consume();
+          page(PAGE_SIZE);
+          break;
+        case "PageUp":
+          consume();
+          page(-PAGE_SIZE);
+          break;
         case "Home":
           if (allowCaretKeys) break;
           consume();
@@ -324,7 +372,7 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
           break;
       }
     },
-    [navigableRows, onActivate, selectedRow, step]
+    [navigableRows, onActivate, page, selectedRow, step]
   );
 
   const handleInputKeyDown = useCallback<KeyboardEventHandler<HTMLInputElement>>(

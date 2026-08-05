@@ -348,6 +348,33 @@ describe("PilotView", () => {
     expect(screen.getByTestId("pilot-stale").textContent).toContain("12m");
   });
 
+  it("qualifies the summary as last-known while the feed is stale", () => {
+    // The stale banner sits directly above this sentence. An unqualified
+    // "Nothing needs you" underneath it is the surface making a live all-clear
+    // claim out of data it cannot currently see.
+    seed([run({ agentState: "working", title: "one", since: NOW - 60_000 })], {
+      degraded: true,
+      lastSuccessfulAt: NOW - 12 * 60_000,
+    });
+    render(<PilotView />);
+
+    const live = "Nothing needs you · 1 agent working";
+    expect(screen.queryByText(live)).toBeNull();
+    expect(screen.getByText(new RegExp(live.replace(/[·]/g, "\\$&")))).toBeTruthy();
+    expect(screen.getByTestId("pilot-summary").textContent).toMatch(/last known/i);
+  });
+
+  it("does not offer the zero-data prompt over a retained empty fleet", () => {
+    // "Start an agent in any project" over a feed that stopped answering an
+    // hour ago presents an unknown as an all-clear. The banner is the only
+    // honest thing this state can say.
+    seed([], { degraded: true, lastSuccessfulAt: NOW - 12 * 60_000 });
+    render(<PilotView />);
+
+    expect(screen.getByTestId("pilot-stale")).toBeTruthy();
+    expect(screen.queryByText(EMPTY_FLEET_COPY)).toBeNull();
+  });
+
   it("leads with the demand count when agents need the user", () => {
     seed([
       run({ runId: "a", agentState: "waiting", waitingReason: "error", since: NOW - 60_000 }),
@@ -1067,6 +1094,21 @@ describe("PilotView", () => {
       // The sentence stated a demand the surface gave no way to act on. As a
       // control it has to deliver the number it advertised.
       expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
+    });
+
+    it("hands focus back to the search box after applying its filter", () => {
+      // The footer goes on advertising "↑↓ Navigate" while focus sits on the
+      // button, where the body's handler bails on events that did not come from
+      // the scroller — so the arrows it names do nothing at all.
+      seed([
+        run({ runId: "a", agentState: "waiting", title: "one", since: NOW - 60_000 }),
+        run({ runId: "b", agentState: "waiting", title: "two", since: NOW - 30_000 }),
+      ]);
+      render(<PilotView />);
+
+      fireEvent.click(screen.getByTestId("pilot-demand-action"));
+
+      expect(document.activeElement).toBe(screen.getByTestId("pilot-search"));
     });
 
     it("does not count work awaiting review as a demand it can isolate", () => {

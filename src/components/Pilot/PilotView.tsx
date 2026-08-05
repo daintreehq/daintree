@@ -747,7 +747,7 @@ export function PilotView() {
   // Counted by band, never off the raw row total: a fleet holding two working
   // agents and six exited ones is not "8 agents running".
   const live = fleet.bands.running;
-  const summary =
+  const fleetPhrase =
     status.kind === "loading" || status.kind === "unavailable"
       ? ""
       : needsYou > 0
@@ -760,13 +760,38 @@ export function PilotView() {
               ? `Nothing needs you · ${agentCount(fleet.total)}`
               : "";
 
+  /**
+   * The same sentence, qualified when the feed is dead.
+   *
+   * "Nothing needs you" over retained runs is the surface making a live
+   * all-clear claim out of data it cannot currently see — the exact thing the
+   * stale rule forbids, printed directly under the banner that contradicts it.
+   * The sentence stays whole rather than being rewritten, because what changed
+   * is how current it is, not what it says.
+   */
+  const summary =
+    status.kind === "stale" && fleetPhrase !== "" ? `Last known: ${fleetPhrase}` : fleetPhrase;
+
   const hasTree = renderGroups.length > 0;
-  // Stale counts as well as live: retained runs are real rows, so a query that
-  // matches none of them is a true statement about the query rather than a claim
-  // that the fleet is clear. `loading` and `unavailable` stay out — they already
-  // render the skeleton and the can't-reach-host message.
+
+  /**
+   * Whether either narrowing is in play, which is what an empty list means.
+   *
+   * A query or a filter turning up nothing is a true statement about the
+   * narrowing. A fleet with nothing in it at all is a statement about the
+   * fleet, and only live data can make that one.
+   */
+  const hasNarrowing = query.trim().length > 0 || bandFilter !== "all";
+
+  // Stale narrows honestly — retained runs are real rows, so a query matching
+  // none of them says something true — but a retained EMPTY fleet may not
+  // render the zero-data prompt: "Start an agent in any project" over a feed
+  // that stopped answering an hour ago presents an unknown as an all-clear.
+  // `loading` and `unavailable` stay out entirely; they already render the
+  // skeleton and the can't-reach-host message.
   const showEmpty =
-    (status.kind === "live" || status.kind === "stale") && renderGroups.length === 0;
+    renderGroups.length === 0 &&
+    (status.kind === "live" || (status.kind === "stale" && hasNarrowing));
   const showSkeleton = useDeferredLoading(status.kind === "loading", UI_DOHERTY_THRESHOLD);
 
   /**
@@ -1010,6 +1035,12 @@ export function PilotView() {
             demandCount={needsYou}
             onShowDemand={() => {
               setBandFilter("needs-you");
+              // The footer advertises the list's keys, and this button leaves
+              // focus on itself — where the body's handler bails on events that
+              // did not come from the scroller, so the arrows it is advertising
+              // do nothing. The Clear-filter button in the empty state already
+              // makes exactly this handoff.
+              searchRef.current?.focus();
             }}
           />
         </AppPaletteDialog.Footer>

@@ -452,7 +452,7 @@ describe("AppPaletteDialog.Body results region (#11431)", () => {
     expect(document.getElementById(activeDescendant!)).not.toBeNull();
   });
 
-  it.each(["ArrowUp", "ArrowDown", "Home", "End", "Enter"])(
+  it.each(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", "Enter"])(
     "forwards %s to the palette's navigation handler",
     (key) => {
       const onNavigationKeyDown = vi.fn();

@@ -307,6 +307,80 @@ describe("usePaletteTreeNavigation", () => {
     });
   });
 
+  describe("paging", () => {
+    /** Twenty-six rows, so a page-sized jump has somewhere to land. */
+    const longList = (): GroupSpec[] => [["a", Array.from({ length: 26 }, (_, i) => `a${i}`)]];
+
+    const selectedIndex = (result: { current: { selectedNavigableIndex: number } }) =>
+      result.current.selectedNavigableIndex;
+
+    it("moves further than an arrow does", () => {
+      // Asserted as a relationship rather than against the page size itself,
+      // which would just be the constant copied out of the implementation.
+      const { result } = setup(longList());
+
+      act(() => result.current.handleBodyKeyDown(keyEvent("ArrowDown").event));
+      const oneRow = selectedIndex(result);
+
+      act(() => result.current.selectRow("i:a0"));
+      act(() => result.current.handleBodyKeyDown(keyEvent("PageDown").event));
+
+      expect(selectedIndex(result)).toBeGreaterThan(oneRow);
+    });
+
+    it("returns to where it started when a page down is undone by a page up", () => {
+      const { result } = setup(longList());
+
+      act(() => result.current.selectRow("i:a12"));
+      act(() => result.current.handleBodyKeyDown(keyEvent("PageDown").event));
+      act(() => result.current.handleBodyKeyDown(keyEvent("PageUp").event));
+
+      expect(result.current.selectedRowId).toBe("i:a12");
+    });
+
+    it("lands on the last row rather than wrapping past the end", () => {
+      // The reason this cannot be `step(+n)`: modulo arithmetic over a list
+      // shorter than a page returns the row it started from, so the key would
+      // visibly do nothing at all.
+      const { result } = setup([["a", ["a1", "a2", "a3"]]]);
+
+      const pageDown = keyEvent("PageDown");
+      act(() => result.current.handleBodyKeyDown(pageDown.event));
+
+      expectConsumed(pageDown, true, "PageDown on a short list");
+      expect(result.current.selectedRowId).toBe("i:a3");
+    });
+
+    it("lands on the first row rather than wrapping past the start", () => {
+      const { result } = setup([["a", ["a1", "a2", "a3"]]]);
+
+      act(() => result.current.selectRow("i:a2"));
+      act(() => result.current.handleBodyKeyDown(keyEvent("PageUp").event));
+
+      expect(result.current.selectedRowId).toBe("i:a1");
+    });
+
+    it("keeps the page keys off the browser's own scrolling of the region", () => {
+      const { result } = setup(longList());
+
+      const pageDown = keyEvent("PageDown");
+      act(() => result.current.handleBodyKeyDown(pageDown.event));
+
+      // Native scrolling walks the viewport while the selection sits still,
+      // which is how the highlight ends up off screen with Enter still on it.
+      expectConsumed(pageDown, true, "PageDown must not also scroll natively");
+    });
+
+    it("leaves the page keys to the browser when nothing is navigable", () => {
+      const { result } = setup([["a", []]]);
+
+      const pageDown = keyEvent("PageDown");
+      act(() => result.current.handleBodyKeyDown(pageDown.event));
+
+      expectConsumed(pageDown, false, "PageDown over an empty list");
+    });
+  });
+
   describe("caret arbitration", () => {
     it("leaves Home and End to the caret when the predicate says so", () => {
       const { result } = setup([["a", ["a1", "a2"]]], {
@@ -411,7 +485,9 @@ describe("usePaletteTreeNavigation", () => {
     it("leaves every other key untouched", () => {
       const { result } = setup([["a", ["a1"]]]);
 
-      for (const key of ["Escape", "Tab", "Backspace", "PageDown", "a"]) {
+      // PageDown was here until the page keys were bound; everything left is a
+      // key the palette shell, the dialog or the browser still has a use for.
+      for (const key of ["Escape", "Tab", "Backspace", "a"]) {
         const handle = keyEvent(key);
         act(() => result.current.handleInputKeyDown(handle.event));
         expectConsumed(handle, false, `${key} should not be consumed`);
