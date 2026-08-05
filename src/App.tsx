@@ -124,12 +124,7 @@ function AppInner() {
     }))
   );
 
-  const { focusedId, addPanel } = usePanelStore(
-    useShallow((state) => ({
-      focusedId: state.focusedId,
-      addPanel: state.addPanel,
-    }))
-  );
+  const focusedId = usePanelStore((state) => state.focusedId);
 
   const { launchAgent, availability, agentSettings, refreshSettings } = useAgentLauncher();
 
@@ -545,7 +540,6 @@ function AppInner() {
                 shouldMountPanelPalette={shouldMountPanelPalette}
                 resumeSession={resumeSession}
                 handleLaunchAgent={handleLaunchAgent}
-                addPanel={addPanel}
                 defaultTerminalCwd={defaultTerminalCwd}
                 activeWorktreeId={activeWorktreeId}
                 isProjectSwitcherModalOpen={isProjectSwitcherModalOpen}

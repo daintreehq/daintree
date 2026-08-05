@@ -677,6 +677,10 @@ export function Toolbar({
           type: "error",
           title: "Couldn't open the file browser",
           message: "No folder resolved for this workspace. Select a worktree and try again.",
+          // `uiFeedback` is a passive kind that resolves to `priority: "low"`
+          // (inbox only), which would leave this refusal — and its Retry — with
+          // no visible signal at all.
+          priority: "high",
           context: { eventKind: "uiFeedback" },
           action: { label: "Retry", onClick: openFileBrowser },
         });

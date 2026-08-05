@@ -230,7 +230,7 @@ export function DockLaunchButton({
         activeWorktreeId,
         recipeContext,
         onLaunchAgent,
-        settingsSource: "menu",
+        source: "menu",
       });
     },
     [activeWorktreeId, closeLauncher, cwd, onLaunchAgent, recipeContext]

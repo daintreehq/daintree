@@ -10,16 +10,17 @@ import {
   subscribeToPanelKindRegistry,
   getPanelKindRegistrySnapshot,
 } from "@shared/config/panelKindRegistry";
-import { usePanelStore } from "@/store/panelStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useActionMruStore } from "@/store/actionMruStore";
 import { actionService } from "@/services/ActionService";
+import { launchPanelKind } from "@/registry/panelKindLaunch";
+import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
+import { notify } from "@/lib/notify";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { getRecipeScope } from "@/utils/recipeScope";
 import { logError } from "@/utils/logger";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type { ActionSource, AgentAvailabilityState, TerminalRecipe } from "@shared/types";
-import type { AddPanelOptions } from "@shared/types/addPanelOptions";
 import type { RecipeContext } from "@/utils/recipeVariables";
 
 export const AGENT_MRU_PREFIX = "agent.";
@@ -27,19 +28,6 @@ export const AGENT_MRU_PREFIX = "agent.";
 /** Cap the "Recently launched" band so it stays a quick-reach shortcut rather
  * than a second full agent list above the fixed Pinned/Other groups. */
 export const RECENCY_BAND_CAP = 3;
-
-/**
- * Panel kinds `agent.launch` understands. `terminal` resolves to the plain
- * shell; `browser` and `dev-preview` return from their own branches in
- * `launchAgent` (seeding the dev-server title, reusing the launch reentrancy
- * guard). Every other kind must be created through `addPanel` directly —
- * `resolveAgentLaunchKind` throws on an id it can't resolve as an agent (#11498).
- */
-const AGENT_LAUNCH_PANEL_KINDS: ReadonlySet<string> = new Set([
-  "terminal",
-  "browser",
-  "dev-preview",
-]);
 
 /** Terminal opts out of the palette (it has dedicated spawn actions) but is the
  * launcher's most-used entry, so it is added back explicitly here. */
@@ -441,13 +429,15 @@ export interface ActivateDockLaunchItemContext {
   activeWorktreeId: string | null;
   recipeContext?: RecipeContext;
   onLaunchAgent: (agentId: string) => void;
-  settingsSource: ActionSource;
+  /** Dispatch source for everything this activation dispatches. Must stay a
+   * foreground source, or panel actions silently skip their focus handling. */
+  source: ActionSource;
 }
 
 /**
- * Run a launcher entry. Agents and the three kinds `launchAgent` special-cases
- * keep routing through `onLaunchAgent`; everything else creates its panel
- * directly at the location its menu heading advertised.
+ * Run a launcher entry. Agents keep routing through `onLaunchAgent`; panels go
+ * through the shared launch seam, so a kind activates here exactly as it does
+ * from the palette or the toolbar (#11668).
  */
 export function activateDockLaunchItem(
   item: DockLaunchItem,
@@ -462,7 +452,7 @@ export function activateDockLaunchItem(
       void actionService.dispatch(
         "app.settings.openTab",
         { tab: "agents", subtab: agent.id },
-        { source: ctx.settingsSource }
+        { source: ctx.source }
       );
       return;
     }
@@ -472,22 +462,39 @@ export function activateDockLaunchItem(
   }
 
   if (item.category === "panel") {
-    if (AGENT_LAUNCH_PANEL_KINDS.has(item.kindId)) {
-      ctx.onLaunchAgent(item.kindId);
-      return;
-    }
-    void usePanelStore.getState().addPanel({
-      kind: item.kindId,
-      cwd: ctx.cwd,
-      worktreeId: ctx.activeWorktreeId ?? undefined,
+    // The menu closes on select, so an action that refuses leaves no trace
+    // otherwise — the same reason LauncherQuickActions reports its refusals.
+    void launchPanelKind({
+      kindId: item.kindId,
       location: item.location,
-      // Folds dock activation into the same set() that commits the panel, so
-      // the offscreen-container watchdog can't close it in the render gap (#6590).
-      activateDockOnCreate: item.location === "dock",
-      // Plugin kinds are deliberately outside the built-in AddPanelOptions
-      // union (a `string & {}` member would defeat discriminated narrowing),
-      // so widening happens here at the integration boundary.
-    } as AddPanelOptions);
+      cwd: ctx.cwd,
+      worktreeId: ctx.activeWorktreeId,
+      source: ctx.source,
+    })
+      .then((outcome) => {
+        if (outcome.route !== "action" || outcome.result.ok) return;
+        // A full grid is already reported by `addPanel`, with an accurate
+        // message and the actual recovery (#11666).
+        if (isPanelLimitError(outcome.result.error.message)) return;
+        logError("Panel launch from dock refused", outcome.result.error);
+        notify({
+          type: "error",
+          title: `Couldn't open ${item.name}`,
+          // Purpose-written rather than the action's own message: those name
+          // internal ids ("Worktree not found: wt-3f2") and state a cause
+          // without a fix. Covers every kind this launcher offers, so it stays
+          // true for a dev preview with no project open as well as a browser
+          // with no folder — unlike the file-browser-only surfaces.
+          message:
+            "No project folder or worktree resolved for this launch. Open a project or select a worktree, then try again.",
+          // `uiFeedback` is a passive kind, so without this the toast the
+          // closed menu depends on would be an inbox row nobody sees.
+          priority: "high",
+          context: { eventKind: "uiFeedback" },
+          action: { label: "Retry", onClick: () => activateDockLaunchItem(item, ctx) },
+        });
+      })
+      .catch((error) => logError("Panel launch from dock failed", error));
     return;
   }
 
