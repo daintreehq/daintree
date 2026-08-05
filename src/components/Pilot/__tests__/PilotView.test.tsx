@@ -513,19 +513,17 @@ describe("PilotView", () => {
     expect(age()).toContain("3m");
   });
 
-  it("re-pins the order on reopen rather than serving the previous session's", async () => {
+  it("does not carry a pointer's hold across a reopen", async () => {
     seed([
       run({ runId: "a", agentState: "working", title: "a", since: NOW - 10_000 }),
       run({ runId: "b", agentState: "working", title: "b", since: NOW - 5_000 }),
     ]);
     const view = render(<PilotView />);
-    expect(screen.getAllByTestId("pilot-row").map((r) => r.textContent)).toEqual([
-      expect.stringContaining("a"),
-      expect.stringContaining("b"),
-    ]);
+    fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
 
-    // Close, let the fleet change, reopen. The new order must reflect the fleet
-    // as it is NOW — a stale pin would keep serving the closed session's order.
+    // Close with the hold still taken, let the fleet change, reopen. The new
+    // order must reflect the fleet as it is NOW — a hold that survived would
+    // serve the ranking of a fleet that has moved on.
     usePilotStore.setState({ isOpen: false });
     view.rerender(<PilotView />);
     seed([
@@ -975,19 +973,20 @@ describe("PilotView", () => {
       expect(document.activeElement).toBe(screen.getByTestId("pilot-search"));
     });
 
-    it("holds the opening order while a filter comes and goes", () => {
-      // `frozenOrder` pins position for the whole opening. A filter must narrow
-      // that order, never re-derive one — every row here is a click target.
+    it("holds a pointer's order through a filter coming and going", () => {
+      // A filter must narrow the order the pointer is holding, never re-derive
+      // one underneath it — every row here is a click target.
       seed([
         run({ runId: "a", agentState: "waiting", title: "alpha", since: NOW - 10_000 }),
         run({ runId: "b", agentState: "waiting", title: "bravo", since: NOW - 5_000 }),
       ]);
       render(<PilotView />);
-      // Titles, not full text: "bravo" changes band below, so its visible
-      // status word legitimately changes. Position is what must not.
+      // Titles, not full text: "bravo" changes band below, so its glyph
+      // legitimately changes. Position is what must not.
       const titles = () =>
         screen.getAllByTestId("pilot-row").map((r) => r.getAttribute("aria-label")?.split(",")[0]);
-      const opening = titles();
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+      const held = titles();
 
       // "bravo" becomes the more urgent of the two, which would reorder them
       // on a fresh sort.
@@ -1006,11 +1005,11 @@ describe("PilotView", () => {
       fireEvent.click(screen.getByRole("radio", { name: /Waiting/ }));
       // Asserted WHILE narrowed, not only after returning to All: a filter that
       // re-derived the order would be invisible if the check waited until the
-      // pinned order had been restored anyway.
-      expect(titles()).toEqual(opening);
+      // held order had been restored anyway.
+      expect(titles()).toEqual(held);
 
       fireEvent.click(screen.getByRole("radio", { name: /^All/ }));
-      expect(titles()).toEqual(opening);
+      expect(titles()).toEqual(held);
     });
 
     it("clears the filter without discarding the query", () => {
@@ -1167,35 +1166,148 @@ describe("PilotView", () => {
     });
   });
 
-  it("keeps a row in place when its state changes while the dialog is open", async () => {
-    seed([
-      run({ runId: "first", agentState: "working", title: "first", since: NOW - 10_000 }),
-      run({ runId: "second", agentState: "working", title: "second", since: NOW - 5_000 }),
-    ]);
-    render(<PilotView />);
-    expect(screen.getAllByTestId("pilot-row").map((r) => r.textContent)).toEqual([
-      expect.stringContaining("first"),
-      expect.stringContaining("second"),
-    ]);
+  describe("ordering", () => {
+    /** Row titles in rendered order, read off the name so a glyph change can't confuse it. */
+    function order(): (string | undefined)[] {
+      return screen
+        .getAllByTestId("pilot-row")
+        .map((r) => r.getAttribute("aria-label")?.split(",")[0]);
+    }
 
-    // "second" becomes the most urgent run. Its badge must update, but the row
-    // must NOT jump above "first" — every row here is a click target, and
-    // reordering under the cursor is how a misclick happens.
-    seed([
-      run({ runId: "first", agentState: "working", title: "first", since: NOW - 10_000 }),
-      run({
-        runId: "second",
-        agentState: "waiting",
-        waitingReason: "error",
-        title: "second",
-        since: NOW,
-      }),
-    ]);
-    await vi.advanceTimersByTimeAsync(0);
+    function seedTwo(secondBlocked: boolean) {
+      seed([
+        run({ runId: "first", agentState: "working", title: "first", since: NOW - 10_000 }),
+        secondBlocked
+          ? run({
+              runId: "second",
+              agentState: "waiting",
+              waitingReason: "error",
+              title: "second",
+              since: NOW,
+            })
+          : run({ runId: "second", agentState: "working", title: "second", since: NOW - 5_000 }),
+      ]);
+    }
 
-    expect(screen.getAllByTestId("pilot-row").map((r) => r.textContent)).toEqual([
-      expect.stringContaining("first"),
-      expect.stringContaining("second"),
-    ]);
+    it("re-ranks a run that blocks while the list is being read", async () => {
+      // The ranking IS the answer this surface gives. An agent that blocks
+      // while you are looking at the list sitting below every working one until
+      // you close and reopen is the ranking lying.
+      seedTwo(false);
+      render(<PilotView />);
+      expect(order()).toEqual(["first", "second"]);
+
+      act(() => seedTwo(true));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(order()).toEqual(["second", "first"]);
+    });
+
+    it("lands a newly-spawned run at its real rank rather than the end", async () => {
+      seedTwo(false);
+      render(<PilotView />);
+
+      act(() => {
+        seed([
+          run({ runId: "first", agentState: "working", title: "first", since: NOW - 10_000 }),
+          run({ runId: "second", agentState: "working", title: "second", since: NOW - 5_000 }),
+          run({
+            runId: "third",
+            agentState: "waiting",
+            waitingReason: "error",
+            title: "third",
+            since: NOW,
+          }),
+        ]);
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Appending it would bury a blocked agent under two working ones for the
+      // rest of the opening.
+      expect(order()[0]).toBe("third");
+    });
+
+    it("holds the order still while a pointer is working the list", async () => {
+      seedTwo(false);
+      render(<PilotView />);
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+
+      act(() => seedTwo(true));
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Every row is a click target, and a row that moves out from under an
+      // aimed cursor is how a misclick happens.
+      expect(order()).toEqual(["first", "second"]);
+    });
+
+    it("selects the row the pointer is aimed at", () => {
+      seedTwo(false);
+      render(<PilotView />);
+
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[1]!);
+
+      // Hover and the Enter target were two different lit rows before this.
+      expect(
+        document.querySelector('[aria-selected="true"]')?.getAttribute("aria-label")
+      ).toContain("second");
+    });
+
+    it("re-ranks the moment the pointer leaves the list", async () => {
+      seedTwo(false);
+      render(<PilotView />);
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+      act(() => seedTwo(true));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(order()).toEqual(["first", "second"]);
+
+      fireEvent.pointerLeave(document.getElementById("pilot-agent-list")!);
+
+      expect(order()).toEqual(["second", "first"]);
+    });
+
+    it("gives the list back to the keyboard on the next arrow, from what was on screen", async () => {
+      seedTwo(false);
+      render(<PilotView />);
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+      act(() => seedTwo(true));
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Stepping happens against the held order — "second" is still the row
+      // below "first" at the moment the key is pressed — and only then does the
+      // hold release. Selection is id-keyed, so it survives the re-rank.
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "ArrowDown" });
+
+      expect(
+        document.querySelector('[aria-selected="true"]')?.getAttribute("aria-label")
+      ).toContain("second");
+      expect(order()).toEqual(["second", "first"]);
+    });
+
+    it("leaves the hold alone for a key the list never acted on", async () => {
+      seedTwo(false);
+      render(<PilotView />);
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "s" } });
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+
+      // End belongs to the caret while there is a query to edit, so the list
+      // never moves — and a hold released by a key that did nothing would let
+      // the rows shift under a cursor that had not been given up.
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "End" });
+      act(() => {
+        seed([
+          run({ runId: "first", agentState: "working", title: "first s", since: NOW - 10_000 }),
+          run({
+            runId: "second",
+            agentState: "waiting",
+            waitingReason: "error",
+            title: "second s",
+            since: NOW,
+          }),
+        ]);
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(order()).toEqual(["first s", "second s"]);
+    });
   });
 });

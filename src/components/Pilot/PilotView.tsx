@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent, KeyboardEventHandler } from "react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -53,6 +54,58 @@ function groupDomId(workspaceId: string): string {
 
 function runDomId(runId: string): string {
   return `pilot-option-run-${runId}`;
+}
+
+/**
+ * A snapshot of where things were, by id.
+ *
+ * Ids rather than rows, so a held order cannot also freeze a glyph or an age:
+ * position is the only thing worth holding still under a pointer.
+ */
+interface PilotOrder {
+  groups: string[];
+  rows: Map<string, string[]>;
+}
+
+function capturePilotOrder(groups: readonly PilotProjectGroup[]): PilotOrder {
+  return {
+    groups: groups.map((group) => group.workspaceId),
+    rows: new Map(groups.map((group) => [group.workspaceId, group.rows.map((r) => r.run.runId)])),
+  };
+}
+
+/**
+ * The live fleet, re-sorted back into a captured order.
+ *
+ * Anything the capture never saw compares equal to its fellow newcomers and,
+ * `Array.sort` being stable, keeps its live relative rank at the tail — for as
+ * long as the hold lasts. Nothing is written back into the snapshot, so
+ * releasing puts every newcomer straight at its real position rather than
+ * leaving it stranded at the end of the list for the rest of the opening.
+ */
+function applyPilotOrder(
+  groups: readonly PilotProjectGroup[],
+  order: PilotOrder
+): PilotProjectGroup[] {
+  const groupIndex = new Map(order.groups.map((id, i) => [id, i]));
+  const rankOf = (index: Map<string, number>, id: string) =>
+    index.get(id) ?? Number.MAX_SAFE_INTEGER;
+
+  const ordered = [...groups].sort(
+    (a, b) => rankOf(groupIndex, a.workspaceId) - rankOf(groupIndex, b.workspaceId)
+  );
+
+  return ordered.map((group) => {
+    const rowOrder = order.rows.get(group.workspaceId);
+    if (!rowOrder) return group;
+    const rowIndex = new Map(rowOrder.map((id, i) => [id, i]));
+    return {
+      ...group,
+      rows: [...group.rows].sort(
+        (a, b) => rankOf(rowIndex, a.run.runId) - rankOf(rowIndex, b.run.runId)
+      ),
+    };
+  });
 }
 
 /** Layout only; the selected treatment comes from the shared row class. */
@@ -183,11 +236,21 @@ function RunRow({
   isSelected,
   domId,
   onActivate,
+  onPointerMove,
 }: {
   row: PilotRow;
   isSelected: boolean;
   domId: string;
   onActivate: () => void;
+  /**
+   * `onPointerMove`, never `onMouseEnter`.
+   *
+   * `SearchablePalette` documents the reason and this surface is exactly the
+   * case it describes: keyboard scrolling under a stationary cursor drags rows
+   * past the pointer, and `mouseenter` would read that as the user choosing
+   * each one on the way. Movement is what says a pointer is being aimed.
+   */
+  onPointerMove: () => void;
 }) {
   /**
    * The agent's brand, unless the title already is it.
@@ -231,6 +294,7 @@ function RunRow({
       aria-label={accessibleName}
       data-testid="pilot-row"
       onClick={onActivate}
+      onPointerMove={onPointerMove}
       // One line, ~32px. Two-line rows made 8 agents into 16 lines of identical
       // shape with nothing to scan down; the trailing group below puts the
       // facts into columns instead.
@@ -466,98 +530,31 @@ export function PilotView() {
   }, [snapshot, workspaces, nowMs]);
 
   /**
-   * Position, pinned for as long as the dialog stays open.
+   * Position, held only while the pointer is genuinely working the list.
    *
-   * Ordering is derived from live agent state, so without this a run changing
-   * state reorders the list under the cursor — the classic sort-thrash misclick,
-   * and the one that matters most here because every row is a navigation target.
-   * The ORDER is pinned; the rows keep updating in place, so a state glyph or
-   * an age still moves the instant it changes.
+   * Ordering is derived from live agent state and the ranking IS the answer
+   * this surface exists to give, so it has to stay true: an agent that blocks
+   * while you are looking at the list has to rise to where the ranking says it
+   * belongs, not sit below every idle agent until you close and reopen.
    *
-   * Held in state rather than a ref so every mutation is a declared input of the
-   * memo below. A ref read during render is invisible to memoization and would
-   * serve a stale order for a frame after reopening.
+   * The misclick this used to guard against is real but pointer-only. Selection
+   * is keyed by `rowId` (#11071), so a re-rank cannot make Enter commit a row
+   * the user did not choose — only a mouse aimed at a row that moves out from
+   * under it can go wrong. So the order is held from the first pointer movement
+   * over the list, and released the moment the pointer leaves or the keyboard
+   * takes over. Ids only: the rows themselves keep updating in place, so a
+   * glyph or an age still moves the instant it changes.
+   *
+   * Held in state rather than a ref so every mutation is a declared input of
+   * the memo below. A ref read during render is invisible to memoization and
+   * would serve a stale order for a frame.
    */
-  const [frozenOrder, setFrozenOrder] = useState<{
-    groups: string[];
-    rows: Map<string, string[]>;
-  } | null>(null);
+  const [pointerOrder, setPointerOrder] = useState<PilotOrder | null>(null);
 
-  useEffect(() => {
-    if (!isOpen) {
-      setFrozenOrder(null);
-      return;
-    }
-    // Pin on the FIRST non-empty fleet after opening, not on open itself: the
-    // snapshot can still be null when the dialog mounts.
-    if (liveGroups.length === 0) return;
-
-    setFrozenOrder((prev) => {
-      if (prev === null) {
-        return {
-          groups: liveGroups.map((g) => g.workspaceId),
-          rows: new Map(liveGroups.map((g) => [g.workspaceId, g.rows.map((r) => r.run.runId)])),
-        };
-      }
-
-      // Anything that appears while the dialog is open takes a permanent place
-      // at the end, assigned once. Leaving new ids unranked would let them keep
-      // sorting against each other on every snapshot — reintroducing exactly
-      // the movement this exists to prevent, just among the newcomers.
-      let changed = false;
-      const groups = [...prev.groups];
-      const seenGroups = new Set(groups);
-      const rows = new Map(prev.rows);
-
-      for (const group of liveGroups) {
-        if (!seenGroups.has(group.workspaceId)) {
-          groups.push(group.workspaceId);
-          seenGroups.add(group.workspaceId);
-          changed = true;
-        }
-        const known = rows.get(group.workspaceId);
-        const next = known ? [...known] : [];
-        const seenRows = new Set(next);
-        for (const row of group.rows) {
-          if (!seenRows.has(row.run.runId)) {
-            next.push(row.run.runId);
-            seenRows.add(row.run.runId);
-            changed = true;
-          }
-        }
-        if (!known || next.length !== known.length) rows.set(group.workspaceId, next);
-      }
-
-      // Returning the previous object when nothing moved is what stops this
-      // effect from re-rendering itself on every snapshot.
-      return changed ? { groups, rows } : prev;
-    });
-  }, [isOpen, liveGroups]);
-
-  const stableGroups = useMemo(() => {
-    if (!frozenOrder) return liveGroups;
-
-    const groupIndex = new Map(frozenOrder.groups.map((id, i) => [id, i]));
-    const ordered = [...liveGroups].sort((a, b) => {
-      const ai = groupIndex.get(a.workspaceId) ?? Number.MAX_SAFE_INTEGER;
-      const bi = groupIndex.get(b.workspaceId) ?? Number.MAX_SAFE_INTEGER;
-      return ai - bi;
-    });
-
-    return ordered.map((group) => {
-      const rowOrder = frozenOrder.rows.get(group.workspaceId);
-      if (!rowOrder) return group;
-      const rowIndex = new Map(rowOrder.map((id, i) => [id, i]));
-      return {
-        ...group,
-        rows: [...group.rows].sort((a, b) => {
-          const ai = rowIndex.get(a.run.runId) ?? Number.MAX_SAFE_INTEGER;
-          const bi = rowIndex.get(b.run.runId) ?? Number.MAX_SAFE_INTEGER;
-          return ai - bi;
-        }),
-      };
-    });
-  }, [liveGroups, frozenOrder]);
+  const orderedGroups = useMemo(
+    () => (pointerOrder === null ? liveGroups : applyPilotOrder(liveGroups, pointerOrder)),
+    [liveGroups, pointerOrder]
+  );
 
   /**
    * The narrowing pipeline, in the one order that makes the counts honest.
@@ -569,7 +566,10 @@ export function PilotView() {
    * user nothing. The two narrowings intersect with AND, so "the blocked agents
    * in this repo" is one question.
    */
-  const queryGroups = useMemo(() => filterPilotGroups(stableGroups, query), [stableGroups, query]);
+  const queryGroups = useMemo(
+    () => filterPilotGroups(orderedGroups, query),
+    [orderedGroups, query]
+  );
 
   const filterCounts = useMemo(() => countPilotBands(queryGroups), [queryGroups]);
 
@@ -617,6 +617,10 @@ export function PilotView() {
       setBandFilter("all");
       // Closing takes focus with it without a blur ever reaching the bar.
       setIsFilterFocused(false);
+      // A hold belongs to one pointer over one list. Carrying it across a close
+      // would reopen the surface serving the ranking of a fleet that has moved
+      // on, which is the staleness this stopped doing in the first place.
+      setPointerOrder(null);
     }
   }, [isOpen]);
 
@@ -654,7 +658,54 @@ export function PilotView() {
     shouldPreserveInputCaretKey: () => query.length > 0,
   });
 
-  const { selectedRow, activeDescendantId, renderGroups } = navigation;
+  const { selectedRow, activeDescendantId, renderGroups, selectRow } = navigation;
+
+  /**
+   * A pointer aimed at a row selects it, and takes the order still while it is
+   * being aimed.
+   *
+   * Both halves in one handler because they are one gesture: the hold exists to
+   * keep the row under the cursor from moving before the click lands, so it has
+   * to start at the same moment the cursor starts choosing.
+   */
+  const handleRowPointerMove = useCallback(
+    (rowId: string) => {
+      setPointerOrder((held) => (held === null ? capturePilotOrder(liveGroups) : held));
+      selectRow(rowId);
+    },
+    [liveGroups, selectRow]
+  );
+
+  const releasePointerOrder = useCallback(() => setPointerOrder(null), []);
+
+  /**
+   * The keyboard takes the list back, and the pointer's hold with it.
+   *
+   * Released AFTER delegating, never before: the arrow has to act on the order
+   * the user can currently see, and the resulting `rowId` then survives the
+   * re-rank because selection was never index-keyed. `defaultPrevented` is the
+   * signal because the model cancels exactly the keys it acted on — a Home the
+   * search caret kept, or an arrow over an empty list, leaves the hold alone.
+   */
+  const releaseOnConsumedKey = useCallback((event: KeyboardEvent<HTMLElement>) => {
+    if (event.defaultPrevented) setPointerOrder(null);
+  }, []);
+
+  const handleInputKeyDown = useCallback<KeyboardEventHandler<HTMLInputElement>>(
+    (event) => {
+      navigation.handleInputKeyDown(event);
+      releaseOnConsumedKey(event);
+    },
+    [navigation, releaseOnConsumedKey]
+  );
+
+  const handleBodyKeyDown = useCallback<KeyboardEventHandler<HTMLElement>>(
+    (event) => {
+      navigation.handleBodyKeyDown(event);
+      releaseOnConsumedKey(event);
+    },
+    [navigation, releaseOnConsumedKey]
+  );
 
   /**
    * What the surface can honestly claim right now.
@@ -728,7 +779,7 @@ export function PilotView() {
    * leave nothing on screen — that is precisely when it is the way back.
    */
   const showFilterBar =
-    (status.kind === "live" || status.kind === "stale") && stableGroups.length > 0;
+    (status.kind === "live" || status.kind === "stale") && orderedGroups.length > 0;
 
   // Removing a focused element does not reliably fire a blur, so a bar that
   // vanishes under the cursor — the fleet drains, or the host stops answering
@@ -754,7 +805,7 @@ export function PilotView() {
           inputRef={searchRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={navigation.handleInputKeyDown}
+          onKeyDown={handleInputKeyDown}
           placeholder="Search agents…"
           aria-label="Search agents"
           // The role is constant, not conditional on there being results. A
@@ -794,7 +845,7 @@ export function PilotView() {
         className="p-0"
         ariaLabel="Agents"
         activeDescendant={activeDescendantId}
-        onNavigationKeyDown={navigation.handleBodyKeyDown}
+        onNavigationKeyDown={handleBodyKeyDown}
       >
         {showSkeleton && (
           /*
@@ -900,6 +951,11 @@ export function PilotView() {
         <div
           id={LIST_ID}
           {...(hasTree ? { role: "listbox", "aria-label": "Agents by project" } : {})}
+          // The pointer stops working the list the moment it leaves it, so the
+          // ranking goes back to being true. On the container rather than the
+          // rows: moving between two rows leaves one and enters the next, and a
+          // per-row handler would release and re-take the hold on the way past.
+          onPointerLeave={releasePointerOrder}
         >
           {renderGroups.map(({ header, items }, groupIndex) => (
             // `role="group"` is a permitted listbox child and carries the
@@ -932,6 +988,7 @@ export function PilotView() {
                   isSelected={row.rowId === selectedRow?.rowId}
                   domId={row.domId}
                   onActivate={() => navigation.activateRow(row.rowId)}
+                  onPointerMove={() => handleRowPointerMove(row.rowId)}
                 />
               ))}
             </div>

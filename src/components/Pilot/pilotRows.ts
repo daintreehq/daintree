@@ -113,11 +113,10 @@ function rank(band: FleetBand): number {
  * recomputed rather than inherited.
  *
  * `topBand` is found by RANK across the survivors rather than read off
- * `rows[0]`. Rows reaching a filter have already been through `frozenOrder`,
- * which pins the order captured when the dialog opened — so once a run changes
- * state the first row is no longer guaranteed to be the worst one present.
- * Inheriting either field would put a header's summary and its collapsed pip
- * cluster at odds with the rows directly underneath it.
+ * `rows[0]`. Rows reaching a filter may have been re-sorted into an order the
+ * fleet overview is holding still under a pointer, so the first row is not
+ * guaranteed to be the worst one present. Inheriting either field would put a
+ * group's derived facts at odds with the rows directly underneath it.
  */
 function narrowGroup(group: PilotProjectGroup, rows: PilotRow[]): PilotProjectGroup {
   let topBand: FleetBand = "idle";

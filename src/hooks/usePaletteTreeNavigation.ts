@@ -223,10 +223,27 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
   // content refreshes, and re-running this each tick would fight the user's own
   // scroll.
   const activeDescendantId = selectedRow?.domId;
+
+  /**
+   * Where the selected row sits among ALL rendered rows, headers included.
+   *
+   * A list that re-ranks under an open palette moves the selected row without
+   * changing its id, so an effect watching the descendant alone never fires and
+   * the highlight walks off screen while Enter still commits it. Headers count
+   * because they occupy vertical space as surely as the options do.
+   *
+   * A number, not the row: it changes only when the position genuinely does, so
+   * a rebuild that leaves everything where it was still does not re-scroll.
+   */
+  const selectedRowPosition = useMemo(
+    () => (selectedRow ? rows.indexOf(selectedRow) : -1),
+    [rows, selectedRow]
+  );
+
   useEffect(() => {
     if (!isActive || activeDescendantId === undefined) return;
     document.getElementById(activeDescendantId)?.scrollIntoView({ block: "nearest" });
-  }, [isActive, activeDescendantId]);
+  }, [isActive, activeDescendantId, selectedRowPosition]);
 
   const step = useCallback(
     (delta: number) => {
