@@ -22,6 +22,20 @@ const toolbarButtonIds: Record<string, string> = {
   Notifications: "notification-center",
 };
 
+/**
+ * Toolbar commands that live in the panel tray (#11667).
+ *
+ * `browser` and `dev-server` left the default toolbar in v13, so on a fresh
+ * profile — which is every e2e profile — they have no direct button and no
+ * overflow row of their own. The tray dropdown is their route. Keyed by the
+ * button's aria-label, valued by the tray row's item id.
+ */
+const toolbarPanelTrayItemIds: Record<string, string> = {
+  "Open browser": "browser",
+  "Open dev preview": "dev-server",
+  "Browse files": "file-browser",
+};
+
 const toolbarShortcuts: Record<string, string> = {
   "Open terminal": `${mod}+Alt+t`,
   "Open browser": `${mod}+Alt+b`,
@@ -233,6 +247,60 @@ async function clickToolbarOverflowItem(
   return false;
 }
 
+/**
+ * Open the panel tray and activate one of its rows.
+ *
+ * Sits between the overflow attempt and the keyboard fallback in
+ * `clickToolbarButton`: when the tray is itself in overflow its rows are inlined
+ * and the overflow path already found them, so this only runs for the case the
+ * overflow path can't cover — a visible tray whose items have no button of their
+ * own.
+ */
+async function clickPanelTrayItem(
+  page: Page,
+  toolbar: Locator,
+  label: string,
+  timeout: number
+): Promise<boolean> {
+  const itemId = toolbarPanelTrayItemIds[label];
+  if (!itemId) return false;
+
+  const tray = toolbar.locator('[data-toolbar-button-id="panel-tray"] button');
+  if (!(await clickFirstVisible(tray, 1000, 500))) return false;
+
+  // The caller's timeout, not a fixed second: the dropdown primitives are
+  // lazy-loaded, so the first tray open on a cold release runner can be slower
+  // than any menu this suite has already warmed.
+  const row = page.locator(`[data-testid="panel-tray-row-${itemId}"]`);
+  if (!(await row.isVisible({ timeout }).catch(() => false))) {
+    await page.keyboard.press("Escape").catch(() => undefined);
+    return false;
+  }
+
+  try {
+    await row.click({ timeout });
+  } catch {
+    // Same ambiguity as a direct toolbar button: once the row was there, don't
+    // retry a non-idempotent command through another route.
+  }
+  return true;
+}
+
+async function hasPanelTrayItem(page: Page, toolbar: Locator, label: string): Promise<boolean> {
+  const itemId = toolbarPanelTrayItemIds[label];
+  if (!itemId) return false;
+
+  const tray = toolbar.locator('[data-toolbar-button-id="panel-tray"] button');
+  if (!(await clickFirstVisible(tray, 1000, 250))) return false;
+
+  const visible = await page
+    .locator(`[data-testid="panel-tray-row-${itemId}"]`)
+    .isVisible({ timeout: 500 })
+    .catch(() => false);
+  await page.keyboard.press("Escape").catch(() => undefined);
+  return visible;
+}
+
 async function hasToolbarOverflowItem(
   page: Page,
   toolbar: Locator,
@@ -289,6 +357,10 @@ export async function clickToolbarButton(
     return;
   }
 
+  if (label && (await clickPanelTrayItem(page, toolbar, label, timeout))) {
+    return;
+  }
+
   if (label && toolbarShortcuts[label]) {
     await page.keyboard.press(toolbarShortcuts[label]);
     return;
@@ -326,6 +398,10 @@ export async function expectToolbarButtonReachable(
     }
 
     if (label && (await hasToolbarOverflowItem(page, toolbar, label))) {
+      return;
+    }
+
+    if (label && (await hasPanelTrayItem(page, toolbar, label))) {
       return;
     }
 
@@ -376,6 +452,39 @@ export async function openTerminal(page: Page): Promise<void> {
  */
 export async function openBrowser(page: Page): Promise<void> {
   await clickToolbarButton(page, SEL.toolbar.openBrowser);
+}
+
+/**
+ * Open the dev preview panel.
+ *
+ * Always route through here rather than clicking `SEL.toolbar.openDevPreview`
+ * directly: since #11667 `dev-server` is not a default toolbar button, so on a
+ * fresh profile — which every e2e profile is — that locator matches nothing and
+ * the panel is reached through the panel tray instead. A direct click would
+ * fail, and a direct `isVisible()` probe guarding a `test.skip()` would skip
+ * forever while still reporting green.
+ */
+export async function openDevPreview(page: Page): Promise<void> {
+  await clickToolbarButton(page, SEL.toolbar.openDevPreview);
+}
+
+/**
+ * Whether a toolbar command can be reached at all — as a direct button, an
+ * overflow row, or a panel-tray row. The boolean sibling of
+ * `expectToolbarButtonReachable`, for specs that legitimately skip when an entry
+ * point is absent in a given launch state rather than failing.
+ */
+export async function isToolbarButtonReachable(
+  page: Page,
+  selector: string,
+  timeout = 5000
+): Promise<boolean> {
+  try {
+    await expectToolbarButtonReachable(page, selector, timeout);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function getFirstGridPanel(page: Page): Locator {

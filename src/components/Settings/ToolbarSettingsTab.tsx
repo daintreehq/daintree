@@ -25,10 +25,22 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, LayoutGrid, Rocket, RotateCcw } from "lucide-react";
+import { LayoutPanelTop } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import type { AnyToolbarButtonId, PluginToolbarButtonId } from "@/../../shared/types/toolbar";
+import type {
+  AnyToolbarButtonId,
+  PanelTrayButtonId,
+  PluginToolbarButtonId,
+} from "@/../../shared/types/toolbar";
+// `@shared/...` because these are value imports — the type-only spelling above
+// is erased at compile time and never has to resolve at runtime.
+import {
+  PANEL_TRAY_BUTTON_IDS,
+  isPanelButtonOnToolbar,
+  isPanelTrayButtonId,
+} from "@shared/types/toolbar";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import {
   TOOLBAR_BUTTON_METADATA,
@@ -175,19 +187,21 @@ function SortableButtonItem({
   );
 }
 
-interface PluginButtonRowProps {
-  buttonId: PluginToolbarButtonId;
+interface TrayButtonRowProps {
+  buttonId: AnyToolbarButtonId;
   isVisible: boolean;
-  onToggle: (buttonId: PluginToolbarButtonId) => void;
+  onToggle: (buttonId: AnyToolbarButtonId) => void;
   metadata: ToolbarButtonMetadata | undefined;
 }
 
-// Plugin buttons toggle promotion, not visibility — they always remain
-// reachable in the plugin tray (#11304), and they're never persisted into the
-// position arrays, so they get no drag handle and stay out of cross-side
-// movement. Reusing `SortableButtonItem` would call `useSortable` outside a
-// `SortableContext` and crash; this is a plain non-sortable row.
-function PluginButtonRow({ buttonId, isVisible, onToggle, metadata }: PluginButtonRowProps) {
+// Tray-backed buttons toggle promotion, not visibility — they always remain
+// reachable in their tray, whether that's the plugin tray (#11304) or the panel
+// tray (#11667). A plugin contribution is never persisted into the position
+// arrays at all, and a panel button may or may not be, so neither gets a drag
+// handle or takes part in cross-side movement. Reusing `SortableButtonItem`
+// would call `useSortable` outside a `SortableContext` and crash; this is a
+// plain non-sortable row.
+function TrayButtonRow({ buttonId, isVisible, onToggle, metadata }: TrayButtonRowProps) {
   if (!metadata) return null;
   const Icon = metadata.icon;
 
@@ -292,6 +306,7 @@ export function ToolbarSettingsTab() {
   const moveButton = useToolbarPreferencesStore((s) => s.moveButton);
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
   const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
+  const setPanelButtonOnToolbar = useToolbarPreferencesStore((s) => s.setPanelButtonOnToolbar);
   const setAlwaysShowDevServer = useToolbarPreferencesStore((s) => s.setAlwaysShowDevServer);
   const setDefaultSelection = useToolbarPreferencesStore((s) => s.setDefaultSelection);
   const reset = useToolbarPreferencesStore((s) => s.reset);
@@ -346,6 +361,18 @@ export function ToolbarSettingsTab() {
         pluginConfigs.has(id)
       ),
     [layout.pinnedButtons, agentSettings, agentAvailability, pluginConfigs]
+  );
+
+  // Panel-tray buttons need the array-aware resolver, not `isVisible`: since
+  // v13 `browser`/`dev-server` carry no pin entry on a fresh profile, so
+  // `isToolbarButtonVisible`'s "absent means visible" default would report both
+  // as on while neither is anywhere on the toolbar (#11667). Inside the side
+  // columns the two agree — a column only ever renders ids the arrays already
+  // hold — but the panel section below lists all three regardless.
+  const isPanelOnToolbar = useCallback(
+    (id: PanelTrayButtonId) =>
+      isPanelButtonOnToolbar(id, layout.pinnedButtons, layout.leftButtons, layout.rightButtons),
+    [layout.pinnedButtons, layout.leftButtons, layout.rightButtons]
   );
 
   const findContainer = (id: UniqueIdentifier, lists: SideLists): ToolbarSide | null => {
@@ -484,6 +511,17 @@ export function ToolbarSettingsTab() {
       setPluginButtonPromoted(buttonId, !isVisible(buttonId));
       return;
     }
+    // Panel-tray buttons need the same treatment for a different reason
+    // (#11667). `browser` and `dev-server` are not defaults, so the generic
+    // toggle's "delete the key to show" leaves nothing recording that the user
+    // wants them — and a stale sibling view's write, which replaces the position
+    // arrays wholesale, would then silently un-promote them with nothing left to
+    // rebuild from. `setPanelButtonOnToolbar` writes the explicit `true` that
+    // survives, and positions the button if it has no slot yet.
+    if (isPanelTrayButtonId(buttonId)) {
+      setPanelButtonOnToolbar(buttonId, !isPanelOnToolbar(buttonId));
+      return;
+    }
     dispatchToolbarVisibility(buttonId, side, {
       agentSettings,
       agentAvailability,
@@ -541,6 +579,33 @@ export function ToolbarSettingsTab() {
         </DndContext>
       </SettingsSection>
 
+      {/*
+        Its own section rather than relying on the two side columns above: those
+        render `layout.leftButtons`/`layout.rightButtons`, and since v13
+        `browser` and `dev-server` are in neither array on a fresh profile
+        (#11667). Without this the panel tray's "Customize toolbar…" footer would
+        land the user on a page that lists none of the buttons they were just
+        looking at. Enumerating `PANEL_TRAY_BUTTON_IDS` keeps the page honest
+        regardless of array membership, the same way the plugin section does.
+      */}
+      <SettingsSection
+        icon={LayoutPanelTop}
+        title="Panel buttons"
+        description={`Every panel button lives in the panel tray. Pin one to give it its own toolbar button too. ${PANEL_TRAY_BUTTON_IDS.filter(isPanelOnToolbar).length} of ${PANEL_TRAY_BUTTON_IDS.length} pinned.`}
+      >
+        <div className="space-y-2">
+          {PANEL_TRAY_BUTTON_IDS.map((buttonId) => (
+            <TrayButtonRow
+              key={buttonId}
+              buttonId={buttonId}
+              isVisible={isPanelOnToolbar(buttonId)}
+              onToggle={(id) => handleToggle(id, "left")}
+              metadata={allMetadata[buttonId]}
+            />
+          ))}
+        </div>
+      </SettingsSection>
+
       {pluginButtonIds.length > 0 && (
         <SettingsSection
           icon={DEFAULT_PLUGIN_ICON}
@@ -549,7 +614,7 @@ export function ToolbarSettingsTab() {
         >
           <div className="space-y-2">
             {pluginButtonIds.map((buttonId) => (
-              <PluginButtonRow
+              <TrayButtonRow
                 key={buttonId}
                 buttonId={buttonId}
                 isVisible={isVisible(buttonId)}

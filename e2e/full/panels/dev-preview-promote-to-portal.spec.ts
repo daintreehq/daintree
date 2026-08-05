@@ -4,7 +4,7 @@ import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { getGridPanelCount } from "../../helpers/panels";
+import { getGridPanelCount, isToolbarButtonReachable, openDevPreview } from "../../helpers/panels";
 import { saveCurrentProjectSettings } from "../../helpers/projectSettings";
 import { SEL } from "../../helpers/selectors";
 import { T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
@@ -60,18 +60,20 @@ test.describe.serial("Core: Dev preview promote to portal", () => {
   test("promoting a dev preview opens a portal tab sharing the session cookie", async () => {
     const { window } = ctx;
 
-    // 1. Open a dev-preview panel.
-    const devBtn = window.locator(SEL.toolbar.openDevPreview);
-    if (!(await devBtn.isVisible().catch(() => false))) {
+    // 1. Open a dev-preview panel. Reachability, not direct button visibility:
+    //    since #11667 `dev-server` is not a default toolbar button, so probing
+    //    the locator would fail on every fresh profile and skip this test
+    //    permanently while still reporting green.
+    if (!(await isToolbarButtonReachable(window, SEL.toolbar.openDevPreview))) {
       test.info().annotations.push({
         type: "conditional-skip",
-        description: "Dev preview toolbar button not visible in this launch state",
+        description: "Dev preview entry point not reachable in this launch state",
       });
       test.skip();
       return;
     }
     const before = await getGridPanelCount(window);
-    await devBtn.click();
+    await openDevPreview(window);
     await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
 
     // 2. Wait for the configured dev server to be running, then write a cookie

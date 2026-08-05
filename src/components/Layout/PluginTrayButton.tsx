@@ -169,7 +169,7 @@ function PluginTrayRow({
       data-testid={`plugin-tray-row-${config.id}`}
     >
       <span className="mr-2 inline-flex h-4 w-4 items-center justify-center">
-        <Icon className="h-3.5 w-3.5 text-text-muted" />
+        <Icon className="h-3.5 w-3.5 text-text-secondary" />
       </span>
 
       <span className="flex-1">{config.label}</span>
@@ -355,7 +355,7 @@ export function PluginTrayButton({
 
         <DropdownMenuSeparator />
         <DropdownMenuActionItem actionId="app.pluginManager" className="h-7">
-          <Package className="mr-2 h-3.5 w-3.5 text-text-muted" />
+          <Package className="mr-2 h-3.5 w-3.5 text-text-secondary" />
           Manage plugins
         </DropdownMenuActionItem>
         <DropdownMenuActionItem
@@ -363,7 +363,7 @@ export function PluginTrayButton({
           args={{ tab: "toolbar" }}
           className="h-7"
         >
-          <Settings2 className="mr-2 h-3.5 w-3.5 text-text-muted" />
+          <Settings2 className="mr-2 h-3.5 w-3.5 text-text-secondary" />
           {TOOLBAR_CUSTOMIZE_LABEL}
         </DropdownMenuActionItem>
       </DropdownMenuContent>

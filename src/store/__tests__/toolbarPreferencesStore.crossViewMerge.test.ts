@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
  */
 describe("toolbarPreferencesStore cross-view write merge (#11351)", () => {
   const STORAGE_KEY = "daintree-toolbar-preferences";
-  const VERSION = 12;
+  const VERSION = 13;
   const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
   type Layout = {
@@ -123,19 +123,23 @@ describe("toolbarPreferencesStore cross-view write merge (#11351)", () => {
     expect(written.state.launcher.alwaysShowDevServer).toBe(true);
   });
 
-  it("does not revert a sibling's file-browser opt-in from an untouched default (#11495)", async () => {
-    // `file-browser` ships hidden, so every fresh view holds `false` without the
-    // user having chosen it. If the null baseline normalizes to `{}`, that
-    // untouched `false` reads as this view's own edit and overwrites a sibling
-    // view that legitimately turned the button on.
+  it("does not revert a sibling's file-browser opt-in from an untouched default (#11495, #11667)", async () => {
+    // Originally this guarded the v12 seed: `file-browser` shipped hidden, so
+    // every fresh view held a `false` nobody chose, and a null baseline
+    // normalizing to `{}` made that untouched value read as this view's own edit.
+    // v13 removed the seed, so a fresh view now holds no entry at all and there
+    // is nothing to mistake for an edit — but the outcome the sibling depends on
+    // is identical, so the case stays as the regression probe for it.
     const backing = installLocalStorage({});
     const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
 
-    // A sibling view enabled the file browser — the toggle deletes the key.
+    // The sibling made a real edit this view has never seen: an explicit hide.
+    // Asserting against `{}` on both sides would pass even under a wholesale
+    // overwrite, so the sibling has to hold something distinguishable.
     backing.set(
       STORAGE_KEY,
       siblingBlob({
-        layout: { leftButtons: [], rightButtons: [], pinnedButtons: {} },
+        layout: { leftButtons: [], rightButtons: [], pinnedButtons: { "copy-tree": false } },
       })
     );
 
@@ -144,6 +148,35 @@ describe("toolbarPreferencesStore cross-view write merge (#11351)", () => {
 
     const written = readBlob(backing);
     expect(written.state.layout.pinnedButtons["file-browser"]).toBeUndefined();
+    // The sibling's untouched edit survives this view's unrelated write.
+    expect(written.state.layout.pinnedButtons["copy-tree"]).toBe(false);
+    expect(written.state.launcher.alwaysShowDevServer).toBe(true);
+  });
+
+  it("preserves a sibling's panel promotion when a stale view writes something unrelated (#11667)", async () => {
+    // Array orderings reconcile last-writer-wins, so this view's write DOES
+    // replace the sibling's side arrays and drop the promoted position. The
+    // explicit `true` is what has to survive — `restorePromotedPanelButtons`
+    // rebuilds the position from it on the next hydration. Without the pin entry
+    // the promotion would be gone with nothing left to reconstruct it from.
+    const backing = installLocalStorage({});
+    const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
+
+    backing.set(
+      STORAGE_KEY,
+      siblingBlob({
+        layout: {
+          leftButtons: ["terminal", "browser", "panel-tray"],
+          rightButtons: [],
+          pinnedButtons: { browser: true },
+        },
+      })
+    );
+
+    store.getState().setAlwaysShowDevServer(true);
+
+    const written = readBlob(backing);
+    expect(written.state.layout.pinnedButtons["browser"]).toBe(true);
     expect(written.state.launcher.alwaysShowDevServer).toBe(true);
   });
 
@@ -154,8 +187,9 @@ describe("toolbarPreferencesStore cross-view write merge (#11351)", () => {
     const backing = installLocalStorage({});
     const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
 
-    // Start from the opt-in state so the toggle records a departure from it.
-    store.getState().toggleButtonVisibility("file-browser", "left");
+    // Since v13 the store already starts in the shown state with no pin entry
+    // (#11667), so the single toggle below IS the departure from it. Before v13
+    // this needed a priming toggle first to clear the shipped `false` seed.
     expect(store.getState().layout.pinnedButtons["file-browser"]).toBeUndefined();
 
     backing.set(

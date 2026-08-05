@@ -44,6 +44,7 @@ import {
   groupPluginToolbarButtons,
   type PluginTrayGroup,
 } from "./PluginTrayButton";
+import { PANEL_TRAY_ITEMS, PanelTrayButton } from "./PanelTrayButton";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -190,6 +191,9 @@ interface OverflowMenuProps {
   // overflows, its dropdown is unreachable, so the overflow menu inlines these
   // groups instead — an un-promoted contribution has no other toolbar route.
   pluginTrayGroups: PluginTrayGroup[];
+  // Per-item availability for the inlined `panel-tray` rows, mirroring the gates
+  // the tray applies to its own rows.
+  panelTrayDisabled: Partial<Record<string, boolean>>;
   // Shortcut display strings keyed by toolbar button id, so each overflow item
   // shows the same hint its visible button does (issue #9821).
   shortcutById: Partial<Record<string, string | null>>;
@@ -214,6 +218,7 @@ function OverflowMenu({
   overflowActions,
   pluginOverflowMeta,
   pluginTrayGroups,
+  panelTrayDisabled,
   shortcutById,
 }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
@@ -386,6 +391,42 @@ function OverflowMenu({
                 </DropdownMenuGroup>
               )),
               ...(isLast ? [] : [<DropdownMenuSeparator key="plugin-tray-sep" />]),
+            ];
+          }
+          if (id === "panel-tray") {
+            // Same reason as `plugin-tray` above: the tray's dropdown can't be
+            // opened from inside this menu, and since v13 `browser` and
+            // `dev-server` have no top-level button of their own on a fresh
+            // profile — so a bare row here would dismiss the menu and open
+            // nothing. Pins are omitted: promoting a button while the toolbar
+            // is too narrow to show it has nothing to reveal.
+            //
+            // Items that already carry their own overflow row are skipped: an
+            // existing profile keeps its `browser`/`dev-server` buttons, and
+            // when those overflow alongside the tray the generic rows below
+            // already offer them. Inlining anyway would put two identically
+            // labelled rows in one menu.
+            const inlined = PANEL_TRAY_ITEMS.filter((item) => !overflowIds.includes(item.id));
+            if (inlined.length === 0) return [];
+            const isLast = idx === overflowIds.length - 1;
+            return [
+              ...inlined.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <DropdownMenuItem
+                    key={`panel-tray-${item.id}`}
+                    disabled={panelTrayDisabled[item.id]}
+                    onClick={() => overflowActions[item.id]?.()}
+                  >
+                    <Icon className="mr-2 h-3.5 w-3.5" />
+                    <span className="flex-1">{item.label}</span>
+                    {shortcutById[item.id] && (
+                      <DropdownMenuShortcut>{shortcutById[item.id]}</DropdownMenuShortcut>
+                    )}
+                  </DropdownMenuItem>
+                );
+              }),
+              ...(isLast ? [] : [<DropdownMenuSeparator key="panel-tray-sep" />]),
             ];
           }
           const meta = OVERFLOW_MENU_META[id] ?? pluginOverflowMeta[id];
@@ -1188,6 +1229,20 @@ export function Toolbar({
         // contributions the button doesn't render at all (#11304).
         isAvailable: pluginConfigs.size > 0,
       },
+      "panel-tray": {
+        // Always available, unlike the plugin tray: its inventory is fixed, so
+        // there is no empty state. Individual rows gate themselves instead.
+        render: () => (
+          <PanelTrayButton
+            key="panel-tray"
+            hasWorkspace={hasWorkspace}
+            hasProject={!!currentProject}
+            onOpenFileBrowser={openFileBrowser}
+            data-toolbar-item=""
+          />
+        ),
+        isAvailable: true,
+      },
       // Individual contributions still need a top-level renderer, but only
       // reach the toolbar once explicitly promoted — `isToolbarButtonVisible`
       // gates that below, not `isAvailable`.
@@ -1509,6 +1564,13 @@ export function Toolbar({
     ]
   );
 
+  // Mirrors PanelTrayButton's own row gates so an inlined overflow row degrades
+  // the same way the tray row does rather than silently opening nothing.
+  const panelTrayDisabled: Partial<Record<string, boolean>> = {
+    "file-browser": !hasWorkspace,
+    "dev-server": !currentProject,
+  };
+
   const overflowShortcutById: Partial<Record<string, string | null>> = {
     "copy-tree": copyTreeShortcut,
     "notification-center": notificationsShortcut,
@@ -1540,6 +1602,7 @@ export function Toolbar({
       overflowActions={overflowActions}
       pluginOverflowMeta={pluginOverflowMeta}
       pluginTrayGroups={pluginTrayGroups}
+      panelTrayDisabled={panelTrayDisabled}
       shortcutById={overflowShortcutById}
     />
   );
