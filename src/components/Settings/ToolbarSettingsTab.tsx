@@ -527,7 +527,9 @@ export function ToolbarSettingsTab() {
         // into the button's own group, and a drop that only crossed a boundary
         // therefore changes nothing — skip the write rather than churn persist.
         const grouped = orderToolbarButtonsByGroup(reordered, resolveGroup);
-        if (grouped.some((id, i) => id !== groupedLeft[i])) {
+        const unchanged =
+          grouped.length === groupedLeft.length && grouped.every((id, i) => id === groupedLeft[i]);
+        if (!unchanged) {
           setLeftButtons(grouped);
         }
       } else {
@@ -605,7 +607,7 @@ export function ToolbarSettingsTab() {
       <SettingsSection
         icon={LayoutGrid}
         title="Toolbar buttons"
-        description="Drag to reorder within a side or move a button between the left and right groups. Left-side buttons stay grouped as launcher, agents, then panels, so dragging one across a boundary snaps it back into its own group. Toggle to show or hide."
+        description="Drag to reorder within a side or move a button between the left and right groups. Left-side buttons stay grouped as launcher, agents, panels, then everything else, so dragging one across a boundary snaps it back into its own group. Toggle to show or hide."
       >
         <DndContext
           sensors={sensors}

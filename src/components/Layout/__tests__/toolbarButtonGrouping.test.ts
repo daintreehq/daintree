@@ -67,13 +67,23 @@ describe("orderToolbarButtonsByGroup", () => {
     expect(orderToolbarButtonsByGroup([], resolve)).toEqual([]);
   });
 
-  it("sorts plugin contributions into the trailing utilities group", () => {
-    const ordered = orderToolbarButtonsByGroup(
-      ["my-plugin.action", "terminal", "claude"],
-      resolveWithPlugins(new Set(["my-plugin.action"]))
-    );
+  it("sorts by live registry membership, not by the id alone", () => {
+    // `settings` is unclassified (utilities) and `terminal` is a declared
+    // panel, so panels normally win the lead regardless of input order.
+    const ids: AnyToolbarButtonId[] = ["settings", "terminal"];
+    expect(orderToolbarButtonsByGroup(ids, resolveWithPlugins(new Set()))).toEqual([
+      "terminal",
+      "settings",
+    ]);
 
-    expect(ordered).toEqual(["claude", "terminal", "my-plugin.action"]);
+    // Flagging `terminal` as a live contribution demotes it to utilities, where
+    // it shares a group with `settings` and the input order stands. The same
+    // ids, a different result — so the membership argument genuinely reaches
+    // the ordering and the plugin branch can't be dropped.
+    expect(orderToolbarButtonsByGroup(ids, resolveWithPlugins(new Set(["terminal"])))).toEqual([
+      "settings",
+      "terminal",
+    ]);
   });
 });
 

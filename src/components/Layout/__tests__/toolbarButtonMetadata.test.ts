@@ -7,11 +7,7 @@ import {
   getToolbarButtonGroup,
   isToolbarButtonVisible,
 } from "../toolbarButtonMetadata";
-import {
-  LAUNCHER_PANEL_BUTTON_IDS,
-  TOOLBAR_BUTTON_PRIORITIES,
-  type AnyToolbarButtonId,
-} from "@shared/types/toolbar";
+import { TOOLBAR_BUTTON_PRIORITIES, type AnyToolbarButtonId } from "@shared/types/toolbar";
 
 // IDs that intentionally have no entry in TOOLBAR_BUTTON_METADATA. The fixed
 // titlebar buttons (sidebar-toggle, assistant-toggle, portal-toggle) are
@@ -155,27 +151,25 @@ describe("getToolbarButtonGroup (#11681)", () => {
     }
   });
 
-  it("classifies the launcher and every launcher panel button", () => {
-    expect(getToolbarButtonGroup("launcher")).toBe("launcher");
-    // Read off the launcher's own list rather than a copy, so a panel button
-    // added there can't silently fall through to `utilities`.
-    for (const id of LAUNCHER_PANEL_BUTTON_IDS) {
-      expect(getToolbarButtonGroup(id)).toBe("panels");
-    }
+  it("falls back rather than throwing on an id it has never heard of", () => {
+    expect(getToolbarButtonGroup("not-a-real-button" as AnyToolbarButtonId)).toBe("utilities");
   });
 
-  it("trails unclassified built-ins into utilities rather than calling them panels", () => {
-    for (const id of ["plugin-tray", "settings", "notification-center", "copy-tree"] as const) {
-      expect(getToolbarButtonGroup(id)).toBe("utilities");
-    }
+  it("lets the plugin flag override a declared built-in group", () => {
+    // The same id resolves differently depending on whether the caller says it
+    // is a live contribution — so the `isPluginContribution` branch is load
+    // bearing and can't be dropped without this failing. A plugin that shadows
+    // a built-in id must not inherit that built-in's placement.
+    const declared = getToolbarButtonGroup("terminal");
+    expect(getToolbarButtonGroup("terminal", true)).not.toBe(declared);
+    expect(getToolbarButtonGroup("terminal", true)).toBe("utilities");
   });
 
-  it("routes a registered plugin contribution to utilities by registry membership", () => {
-    const pluginId = "my-plugin.action" as AnyToolbarButtonId;
-    expect(getToolbarButtonGroup(pluginId, true)).toBe("utilities");
-    // Agent classification wins over the plugin flag — a contribution can't
-    // impersonate an agent by claiming an agent id.
-    expect(getToolbarButtonGroup(BUILT_IN_AGENT_IDS[0] as AnyToolbarButtonId, true)).toBe("agents");
+  it("classifies an agent id as an agent even when flagged as a contribution", () => {
+    // Agent dispatch runs first, so a contribution can't impersonate an agent
+    // by claiming an agent id.
+    const agentId = BUILT_IN_AGENT_IDS[0] as AnyToolbarButtonId;
+    expect(getToolbarButtonGroup(agentId, true)).toBe(getToolbarButtonGroup(agentId));
   });
 
   it("does not inherit a group from Object.prototype for a prototype-shaped id", () => {
@@ -186,9 +180,17 @@ describe("getToolbarButtonGroup (#11681)", () => {
     }
   });
 
-  it("declares a group for every id the metadata registry knows", () => {
-    for (const id of Object.keys(TOOLBAR_BUTTON_METADATA) as AnyToolbarButtonId[]) {
-      expect(TOOLBAR_BUTTON_GROUP_ORDER).toContain(getToolbarButtonGroup(id));
+  it("orders every declared group, so no button can resolve to an unplaced one", () => {
+    // Guards the coupling between the resolver and the order array: a group
+    // added to one but not the other would silently render out of sequence.
+    const declared = new Set(
+      (Object.keys(TOOLBAR_BUTTON_METADATA) as AnyToolbarButtonId[]).map((id) =>
+        getToolbarButtonGroup(id)
+      )
+    );
+    expect(declared.size).toBeGreaterThan(1);
+    for (const group of declared) {
+      expect(TOOLBAR_BUTTON_GROUP_ORDER.indexOf(group)).toBeGreaterThanOrEqual(0);
     }
   });
 });

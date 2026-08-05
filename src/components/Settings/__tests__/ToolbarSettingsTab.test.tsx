@@ -437,8 +437,13 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
   });
 
   function fire(name: string, event: unknown) {
+    // Assert the handler exists before invoking it: optional chaining would
+    // silently no-op if the component stopped wiring it, quietly turning every
+    // negative assertion below into a test that proves nothing.
+    const handler = dnd.props?.[name];
+    expect(typeof handler).toBe("function");
     act(() => {
-      dnd.props?.[name]?.(event);
+      handler!(event);
     });
   }
 
@@ -484,7 +489,42 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
     fire("onDragEnd", { active: { id: "launcher" }, over: { id: "terminal" } });
 
     expect(setLeftButtonsMock).not.toHaveBeenCalled();
+    expect(setRightButtonsMock).not.toHaveBeenCalled();
     expect(moveButtonMock).not.toHaveBeenCalled();
+  });
+
+  it("regroups the left column live during a cross-side drag", () => {
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["launcher", "claude", "gemini"],
+      rightButtons: ["terminal"],
+      pinnedButtons: {},
+    });
+
+    const { container } = render(<ToolbarSettingsTab />);
+
+    // Drop the panel into the middle of the agent block. The preview must show
+    // it after the agents, not where the pointer is — otherwise the gap opens
+    // somewhere the button will never land.
+    fire("onDragStart", { active: { id: "terminal" } });
+    fire("onDragOver", {
+      active: { id: "terminal", rect: { current: { translated: { right: 0 } } } },
+      over: { id: "gemini", rect: { left: 0, width: 100 } },
+    });
+
+    const order = Array.from(container.querySelectorAll('[role="switch"]'))
+      .map((el) => el.getAttribute("aria-label"))
+      .filter((label) => label?.startsWith("Toggle "))
+      // The DragOverlay renders its own card for the button under the cursor,
+      // always last and only while a drag is in flight. The right column is
+      // empty at this point, so what remains is the left column.
+      .slice(0, -1);
+
+    expect(order).toEqual([
+      "Toggle Launcher visibility",
+      "Toggle Claude agent visibility",
+      "Toggle Gemini agent visibility",
+      "Toggle Terminal visibility",
+    ]);
   });
 
   it("translates a right-to-left drop into an index that survives grouping", () => {

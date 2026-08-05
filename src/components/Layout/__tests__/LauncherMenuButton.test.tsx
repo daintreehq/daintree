@@ -972,19 +972,44 @@ describe("LauncherMenuButton", () => {
     );
   });
 
-  it("leaves Manage agents as the footer's only settings exit", () => {
+  it("leaves the footer at its two entries, with one settings exit", () => {
     const availability = { claude: "ready" } as unknown as CliAvailability;
     mockSettings = settingsWith({ claude: { pinned: true } });
 
-    const { container } = render(<LauncherMenuButton agentAvailability={availability} />);
-    const items = Array.from(container.querySelectorAll('[role="menuitem"]')).map(
-      (el) => el.textContent ?? ""
-    );
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
 
-    // The two other exits are gone: customize lives on the right click, and
-    // setup only appears when nothing is installed (#11681).
-    expect(items.filter((text) => text.includes("Manage agents"))).toHaveLength(1);
-    expect(items.some((text) => text.includes("Set up agents"))).toBe(false);
+    // Everything after the last separator is the footer. Counting the nodes
+    // rather than matching labels means a third exit sneaking back in fails
+    // here even if it is worded differently (#11681).
+    const dropdown = getByTestId("dropdown-content");
+    const children = Array.from(dropdown.children);
+    const lastSeparator = children.map((el) => el.tagName).lastIndexOf("HR");
+    expect(lastSeparator).toBeGreaterThan(-1);
+
+    const footer = children.slice(lastSeparator + 1);
+    expect(footer).toHaveLength(2);
+    expect(footer[0]!.textContent).toContain("More panels");
+    expect(footer[1]!.textContent).toContain("Manage agents");
+  });
+
+  it("keeps the setup wizard out of the loading and needs-setup states", () => {
+    // Still probing: nothing is known yet, so offering setup would be noise.
+    mockHasRealData = false;
+    const { container: loading } = render(
+      <LauncherMenuButton agentAvailability={{} as unknown as CliAvailability} />
+    );
+    expect(loading.textContent).not.toContain("Set up agents");
+
+    // Installed but unauthenticated agents get their own per-agent rows, which
+    // are a better route than the blanket wizard.
+    mockHasRealData = true;
+    const { container: needsSetup } = render(
+      <LauncherMenuButton
+        agentAvailability={{ codex: "installed" } as unknown as CliAvailability}
+      />
+    );
+    expect(needsSetup.textContent).toContain("Needs setup");
+    expect(needsSetup.textContent).not.toContain("Set up agents");
   });
 
   it("renders Set up agents only in the nothing-installed empty state", () => {

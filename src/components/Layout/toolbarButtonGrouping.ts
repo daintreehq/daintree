@@ -64,9 +64,19 @@ export function getToolbarDividerAfterIds(
  * Settings shows the grouped projection but `moveButton` splices into the
  * stored array, so a projected index can't be passed through directly. Only the
  * order relative to the button's own group peers survives grouping, so anchor
- * on those: after the preceding peer when there is one, otherwise before the
- * following peer. With no peers at all the position is unobservable once
+ * on those: after the nearest preceding peer, otherwise before the nearest
+ * following one. With no peers at all the position is unobservable once
  * grouped, so appending is as correct as anything else.
+ *
+ * Each direction keeps scanning outward past peers the stored array no longer
+ * holds. The projection is a snapshot taken at drag start while the stored
+ * array is read at drop, and the two can diverge mid-drag — the side arrays
+ * reconcile last-writer-wins across project views, so a sibling view's write
+ * can drop a peer underneath an open drag.
+ *
+ * Assumes `activeId` is absent from `rawTargetIds` (it is — this only runs for
+ * a cross-side move) and that neither list repeats an id (the store sanitizes
+ * on every write, and the render boundary dedupes again).
  */
 export function getGroupedInsertionIndex(
   rawTargetIds: readonly AnyToolbarButtonId[],
@@ -75,18 +85,18 @@ export function getGroupedInsertionIndex(
   resolveGroup: ResolveToolbarButtonGroup
 ): number {
   const group = resolveGroup(activeId);
-  const peers = projectedTargetIds.filter((id) => id !== activeId && resolveGroup(id) === group);
   const droppedAt = projectedTargetIds.indexOf(activeId);
+  const peers = projectedTargetIds.filter((id) => id !== activeId && resolveGroup(id) === group);
 
-  const previousPeer = peers.filter((id) => projectedTargetIds.indexOf(id) < droppedAt).pop();
-  if (previousPeer !== undefined) {
-    const at = rawTargetIds.indexOf(previousPeer);
+  const preceding = peers.filter((id) => projectedTargetIds.indexOf(id) < droppedAt);
+  for (let i = preceding.length - 1; i >= 0; i--) {
+    const at = rawTargetIds.indexOf(preceding[i]!);
     if (at !== -1) return at + 1;
   }
 
-  const nextPeer = peers.find((id) => projectedTargetIds.indexOf(id) > droppedAt);
-  if (nextPeer !== undefined) {
-    const at = rawTargetIds.indexOf(nextPeer);
+  const following = peers.filter((id) => projectedTargetIds.indexOf(id) > droppedAt);
+  for (const peer of following) {
+    const at = rawTargetIds.indexOf(peer);
     if (at !== -1) return at;
   }
 
