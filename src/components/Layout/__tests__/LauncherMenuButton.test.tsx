@@ -1907,38 +1907,28 @@ describe("LauncherMenuButton — agent pin write path (#11680)", () => {
 
   const ready = { claude: "ready", gemini: "ready" } as unknown as CliAvailability;
 
-  it("gives a newly-pinned agent a position once the pin write lands", async () => {
+  it("gives a newly-pinned agent a position as well as a pin", () => {
     // The gap this issue opened: with no agent id in `DEFAULT_LEFT_BUTTONS`, a
     // fresh profile's `setAgentPinned(id, true)` leaves the button with nowhere
-    // to render. Both writes or the pin does nothing visible — but the position
-    // waits for the pin, so a rejected IPC leaves no orphaned slot behind.
+    // to render. Both writes, or the pin does nothing visible.
     const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
     fireEvent.click(getByTestId("launcher-pin-claude"));
 
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
-    expect(positionAgentButtonMock).not.toHaveBeenCalled();
-
-    await act(async () => {
-      await Promise.resolve();
-    });
     expect(positionAgentButtonMock).toHaveBeenCalledWith("claude");
   });
 
-  it("writes no position when the pin write rejects", async () => {
-    // The rollback restores an *unset* pin, which `isAgentButtonOnToolbar`
-    // resolves through the position — so an orphaned slot would make a failed
-    // write read as a successful pin on every surface.
-    setAgentPinnedMock.mockRejectedValueOnce(new Error("ipc down"));
+  it("writes the position synchronously, not behind the pin's IPC", () => {
+    // Deferring until the write resolved bought nothing: `Toolbar.tsx`
+    // materializes a position for anything reading as explicitly pinned, and it
+    // reads the same optimistic state, so it would persist the position during
+    // the in-flight window anyway. Two mechanisms racing to write the same value
+    // is worse than one that always does.
+    setAgentPinnedMock.mockReturnValueOnce(new Promise(() => {}));
     const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
     fireEvent.click(getByTestId("launcher-pin-claude"));
 
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
-    expect(positionAgentButtonMock).not.toHaveBeenCalled();
+    expect(positionAgentButtonMock).toHaveBeenCalledWith("claude");
   });
 
   it("does not ask for a position when unpinning", () => {

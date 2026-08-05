@@ -209,12 +209,16 @@ function mergeButtonList(
  */
 function positionLauncherButton(
   layout: ToolbarLayoutState,
-  buttonId: AnyToolbarButtonId
+  buttonIds: AnyToolbarButtonId[]
 ): { leftButtons: AnyToolbarButtonId[]; rightButtons: AnyToolbarButtonId[] } {
   const launcherOnRight = layout.rightButtons.includes("launcher");
   const target = [...(launcherOnRight ? layout.rightButtons : layout.leftButtons)];
   const launcherIndex = target.indexOf("launcher");
-  target.splice(launcherIndex === -1 ? target.length : launcherIndex + 1, 0, buttonId);
+  // One splice for the whole batch rather than one per id: repeated single
+  // inserts all land at the same index (the launcher does not move) or all
+  // append (when there is no launcher), and those two produce OPPOSITE
+  // orderings. Inserting the batch keeps the caller's order either way.
+  target.splice(launcherIndex === -1 ? target.length : launcherIndex + 1, 0, ...buttonIds);
   const positioned = sanitizeButtonList(target);
   return launcherOnRight
     ? { leftButtons: layout.leftButtons, rightButtons: positioned }
@@ -241,18 +245,16 @@ type ToolbarLayoutState = ToolbarPreferences["layout"];
  * from it here.
  */
 function restorePromotedPanelButtons(layout: ToolbarLayoutState): ToolbarLayoutState {
-  let next = layout;
-  // Reverse order, because every insert lands at the same index — immediately
-  // after the launcher, which does not move. Walking forwards would emit the
-  // list backwards. (This was self-correcting while the anchor was the mid-row
-  // panel tray: inserting *at* its index pushed it right, so the next insert
-  // landed after the previous one.)
-  for (let i = LAUNCHER_PANEL_BUTTON_IDS.length - 1; i >= 0; i--) {
-    const buttonId = LAUNCHER_PANEL_BUTTON_IDS[i]!;
-    if (next.pinnedButtons[buttonId] !== true) continue;
-    if (next.leftButtons.includes(buttonId) || next.rightButtons.includes(buttonId)) continue;
-    next = { ...next, ...positionLauncherButton(next, buttonId) };
-  }
+  const missing = LAUNCHER_PANEL_BUTTON_IDS.filter(
+    (buttonId) =>
+      layout.pinnedButtons[buttonId] === true &&
+      !layout.leftButtons.includes(buttonId) &&
+      !layout.rightButtons.includes(buttonId)
+  );
+  if (missing.length === 0) return layout;
+  // One batched insert, in list order — see `positionLauncherButton` on why
+  // restoring them one at a time reverses the group.
+  const next: ToolbarLayoutState = { ...layout, ...positionLauncherButton(layout, [...missing]) };
   return next;
 }
 
@@ -552,7 +554,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             layout: {
               ...state.layout,
               pinnedButtons: pinned,
-              ...positionLauncherButton(state.layout, buttonId),
+              ...positionLauncherButton(state.layout, [buttonId]),
             },
           };
         }),
@@ -564,7 +566,9 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           ) {
             return state;
           }
-          return { layout: { ...state.layout, ...positionLauncherButton(state.layout, buttonId) } };
+          return {
+            layout: { ...state.layout, ...positionLauncherButton(state.layout, [buttonId]) },
+          };
         }),
       setPluginButtonPromoted: (buttonId, promoted) =>
         set((state) => {

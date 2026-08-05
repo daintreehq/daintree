@@ -50,23 +50,23 @@ export function dispatchToolbarVisibility(
         deps.agentSettings?.agents?.[buttonId],
         deps.agentAvailability?.[buttonId]
       );
-    const write = deps.setAgentPinned(buttonId, nextPinned);
-    if (!nextPinned) return;
-    // Position only once the pin write has actually landed. `setAgentPinned`
-    // updates its own store optimistically before its first `await`, and
-    // `Toolbar.tsx` renders an explicitly-pinned agent that holds no position
-    // anyway, so nothing flickers in the interval — while persisting the
-    // position up front would survive a rejected IPC. That matters because the
-    // rollback restores an *unset* pin, which `isAgentButtonOnToolbar` resolves
-    // through the position: the orphaned slot would make a failed write read as
-    // a successful pin on every surface.
-    void Promise.resolve(write).then(
-      () => deps.positionAgentButton?.(buttonId),
-      () => {
-        // Swallowed: `setAgentPinned` already surfaces its own failure, and the
-        // position is exactly what must NOT be written on this path.
-      }
-    );
+    // Synchronous, deliberately, even though `setAgentPinned` is an async IPC
+    // that can roll its optimistic write back. Deferring the position until the
+    // write resolves buys nothing: `Toolbar.tsx` materializes a position for any
+    // agent reading as explicitly pinned, and it reads the SAME optimistic
+    // state, so it would persist the position during the in-flight window
+    // regardless. Two mechanisms racing to write the same value is worse than
+    // one that always does.
+    //
+    // The residual is small and self-correcting: if the pin write fails, the
+    // rollback leaves an unset pin over a real position, which
+    // `isAgentButtonOnToolbar` reads as on — so the button the user asked for
+    // appears (and keeps appearing across restarts, since array membership is
+    // exactly how a grandfathered agent stays visible) while `setAgentPinned`
+    // separately surfaces the failure. Nothing is lost; the intent is recorded
+    // in the other of the two stores.
+    if (nextPinned) deps.positionAgentButton?.(buttonId);
+    void deps.setAgentPinned(buttonId, nextPinned);
     return;
   }
   deps.toggleButtonVisibility(buttonId, side);

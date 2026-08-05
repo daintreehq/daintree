@@ -2090,6 +2090,29 @@ describe("toolbarPreferencesStore", () => {
       expect(leftButtons.indexOf("launcher")).toBeLessThan(leftButtons.indexOf("browser"));
     });
 
+    it("rebuilds several dropped promotions in list order with no launcher to anchor to", async () => {
+      // The fallback appends instead of splicing at a fixed index, so a
+      // per-id loop orders this case the OPPOSITE way round from the anchored
+      // one. Batching is what makes both agree.
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["terminal"],
+              rightButtons: ["settings"],
+              pinnedButtons: { launcher: false, browser: true, "dev-server": true },
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 14,
+        })
+      );
+
+      const { leftButtons } = (await loadStore()).getState().layout;
+      expect(leftButtons.indexOf("browser")).toBeLessThan(leftButtons.indexOf("dev-server"));
+    });
+
     it("follows the launcher to the right side when the user moved it there", async () => {
       // `agent-tray`, not `panel-tray`: only one of the two survives v14, so the
       // side the launcher ends up on is the side the *renamed* id was parked on.

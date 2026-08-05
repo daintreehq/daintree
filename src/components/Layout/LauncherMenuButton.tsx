@@ -367,7 +367,12 @@ function SplitLaunchItem({ row, onLaunch, onTogglePin, stopPointer }: SplitLaunc
         className="p-0 [&>svg:last-child]:hidden overflow-hidden"
         data-testid="submenu-trigger"
         onKeyDown={handleKeyDown}
-        aria-label={`${row.name} (press Enter to launch, Right Arrow for presets)`}
+        // The pin hint rides in the label rather than an `sr-only` child: an
+        // `aria-label` on the trigger REPLACES its descendant text, so the
+        // sibling span the plain rows use would never be announced here.
+        aria-label={`${row.name} (press Enter to launch, Right Arrow for presets, P to ${
+          row.pinned ? "unpin from" : "pin to"
+        } toolbar)`}
       >
         <span ref={leftAreaRef} className="flex flex-1 items-center gap-2 px-2.5 py-1.5">
           <span className="inline-flex h-4 w-4 items-center justify-center shrink-0">
@@ -387,8 +392,6 @@ function SplitLaunchItem({ row, onLaunch, onTogglePin, stopPointer }: SplitLaunc
             </>
           )}
         </span>
-        <span className="sr-only">Press P to {row.pinned ? "unpin from" : "pin to"} toolbar</span>
-
         <LauncherPinAffordance
           testId={`launcher-pin-${row.id}`}
           onToolbar={row.pinned}
@@ -633,7 +636,12 @@ export function LauncherMenuButton({
   // exist to keep the card and the discovery badge from both firing for the same
   // agents, so the moment they disagree a grandfathered profile gets both.
   const hasNoPinnedAgents = useMemo(() => {
-    if (!agentSettings?.agents) return true;
+    // `false` when settings haven't loaded, matching `WelcomeScreen`'s own
+    // `if (!agentSettings) return false` — it declares the card ineligible, so
+    // claiming "no pins" here would suppress the badge for a card that is never
+    // going to render.
+    if (!agentSettings) return false;
+    if (!agentSettings.agents) return true;
     return !LAUNCHABLE_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
   }, [agentSettings]);
 
