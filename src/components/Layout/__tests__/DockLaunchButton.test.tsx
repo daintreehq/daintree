@@ -41,7 +41,9 @@ vi.mock("@/registry", () => ({
 }));
 
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ addPanel: addPanelMock }) },
+  usePanelStore: {
+    getState: () => ({ addPanel: addPanelMock, panelsById: { "panel-1": { location: "grid" } } }),
+  },
 }));
 
 vi.mock("@/components/PanelPalette/PanelKindIcon", () => ({
@@ -257,9 +259,9 @@ beforeEach(() => {
   });
   notifySpawnFailuresMock.mockReset();
   logErrorMock.mockReset();
-  actionDispatchMock.mockReset();
+  actionDispatchMock.mockReset().mockResolvedValue({ ok: true, result: null });
   recordActionMruMock.mockReset();
-  addPanelMock.mockReset();
+  addPanelMock.mockReset().mockResolvedValue("panel-1");
   popoverCloseAutoFocusSpy = null;
   popoverPointerDownOutsideSpy = null;
   popoverEscapeKeyDownSpy = null;
@@ -411,7 +413,14 @@ describe("DockLaunchButton", () => {
       const { getByText } = renderButton({ onLaunchAgent });
 
       fireEvent.click(getByText("Terminal"));
-      expect(onLaunchAgent).toHaveBeenLastCalledWith("terminal");
+      // Through the launch action its registry entry names, so a shell opened
+      // here resolves its preset and command exactly as one opened elsewhere
+      // does — never as a bare panel.
+      expect(actionDispatchMock).toHaveBeenCalledWith(
+        getPanelKindConfig("terminal")!.launchActionId,
+        expect.objectContaining({ agentId: "terminal" }),
+        { source: "menu" }
+      );
       expect(addPanelMock).not.toHaveBeenCalled();
     });
   });
@@ -577,7 +586,12 @@ describe("DockLaunchButton", () => {
       // proved nothing about what Enter would do.
       const movedName = moved?.textContent;
       fireEvent.keyDown(input, { key: "Enter" });
-      const launched = onLaunchAgent.mock.calls.length > 0 || addPanelMock.mock.calls.length > 0;
+      // A row launches through whichever path its category uses: agents call
+      // back, panels dispatch their launch action or create directly.
+      const launched =
+        onLaunchAgent.mock.calls.length > 0 ||
+        addPanelMock.mock.calls.length > 0 ||
+        actionDispatchMock.mock.calls.length > 0;
       expect(launched).toBe(true);
       expect(movedName).toBeTruthy();
     });
@@ -1046,14 +1060,18 @@ describe("DockLaunchButton", () => {
     });
 
     it("cancels the return when a clicked row launches a terminal", () => {
-      // Terminal routes through onLaunchAgent rather than addPanel — the exact
-      // path the issue was reported against.
+      // Terminal dispatches its launch action rather than creating a bare
+      // panel — the exact path the issue was reported against.
       const onLaunchAgent = vi.fn();
       const { getByText } = renderButton({ onLaunchAgent });
 
       fireEvent.click(getByText("Terminal"));
 
-      expect(onLaunchAgent).toHaveBeenCalledWith("terminal");
+      expect(actionDispatchMock).toHaveBeenCalledWith(
+        getPanelKindConfig("terminal")!.launchActionId,
+        expect.objectContaining({ agentId: "terminal" }),
+        { source: "menu" }
+      );
       expect(fireCloseAutoFocus()).toHaveBeenCalledTimes(1);
     });
 

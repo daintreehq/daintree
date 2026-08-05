@@ -16,8 +16,11 @@ import type { UseAgentLauncherReturn } from "./hooks/useAgentLauncher";
 import type { PluginDeepLinkState } from "./hooks/app";
 import type { SettingsTab } from "./components/Settings";
 import type { NonGitFolderStep } from "./components/Project/NonGitFolderDialog";
-import type { BuiltInPanelKind } from "./types";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { launchPanelKind } from "@/registry/panelKindLaunch";
+import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
+import { notify } from "@/lib/notify";
+import { logError } from "@/utils/logger";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { usePilotStore } from "@/store/pilotStore";
 import { Toaster } from "./components/ui/toaster";
@@ -26,7 +29,7 @@ import { ReEntrySummary } from "./components/ui/ReEntrySummary";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { PostHydrationListeners } from "./components/PostHydrationListeners";
 import { PanelTransitionOverlay } from "./components/Panel";
-import { usePanelStore, usePluginManagerStore } from "./store";
+import { usePluginManagerStore } from "./store";
 import { actionService } from "./services/ActionService";
 import {
   LazyQuickSwitcher,
@@ -83,7 +86,6 @@ interface ModalHostLayerProps {
   shouldMountPanelPalette: boolean;
   resumeSession: (session: AgentSessionRecord) => Promise<void>;
   handleLaunchAgent: (type: string) => void | Promise<void>;
-  addPanel: ReturnType<typeof usePanelStore.getState>["addPanel"];
   defaultTerminalCwd: string | undefined;
   activeWorktreeId: string | null;
   isProjectSwitcherModalOpen: boolean;
@@ -177,7 +179,6 @@ export function ModalHostLayer({
   shouldMountPanelPalette,
   resumeSession,
   handleLaunchAgent,
-  addPanel,
   defaultTerminalCwd,
   activeWorktreeId,
   isProjectSwitcherModalOpen,
@@ -253,6 +254,33 @@ export function ModalHostLayer({
   // registry, a keybinding and the project switcher, none of which has a prop
   // path into this layer.
   const isPilotOpen = usePilotStore((s) => s.isOpen);
+
+  // Both palette activation paths (click and Enter) launch the same way, and
+  // through the same seam the dock uses, so a kind can't behave differently
+  // depending on which launcher opened it (#11668). The palette closes on
+  // select, so a refusal has to be reported or it leaves no trace.
+  const launchPanelFromPalette = (kindId: string, name: string) => {
+    void launchPanelKind({
+      kindId,
+      location: "grid",
+      cwd: defaultTerminalCwd,
+      worktreeId: activeWorktreeId,
+      source: "user",
+    })
+      .then((outcome) => {
+        if (outcome.route !== "action" || outcome.result.ok) return;
+        // A full grid is already reported by `addPanel` with the real recovery.
+        if (isPanelLimitError(outcome.result.error.message)) return;
+        notify({
+          type: "error",
+          title: `Couldn't open ${name}`,
+          message: outcome.result.error.message,
+          context: { eventKind: "uiFeedback" },
+          action: { label: "Retry", onClick: () => launchPanelFromPalette(kindId, name) },
+        });
+      })
+      .catch((error) => logError("Panel launch from palette failed", error));
+  };
 
   return (
     <>
@@ -391,12 +419,7 @@ export function ModalHostLayer({
                     void handleLaunchAgent(agentId);
                   }
                 } else {
-                  addPanel({
-                    kind: result.id as BuiltInPanelKind,
-                    cwd: defaultTerminalCwd,
-                    worktreeId: activeWorktreeId ?? undefined,
-                    location: "grid",
-                  });
+                  launchPanelFromPalette(result.id, result.name);
                 }
               }}
               onConfirm={() => {
@@ -411,12 +434,7 @@ export function ModalHostLayer({
                     void handleLaunchAgent(agentId);
                   }
                 } else {
-                  addPanel({
-                    kind: selected.id as BuiltInPanelKind,
-                    cwd: defaultTerminalCwd,
-                    worktreeId: activeWorktreeId ?? undefined,
-                    location: "grid",
-                  });
+                  launchPanelFromPalette(selected.id, selected.name);
                 }
               }}
               onClose={panelPalette.close}

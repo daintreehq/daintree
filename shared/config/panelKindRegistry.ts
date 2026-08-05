@@ -174,6 +174,18 @@ export interface PanelKindConfig {
    * encoded in `DEFAULT_PANEL_KIND_POLICY`.
    */
   policy?: PanelKindPolicy;
+  /**
+   * Action a bare launch of this kind dispatches through, so every launcher
+   * surface activates it the same way instead of each one deciding for itself
+   * (#11668). The action owns target resolution, defaults and dedup; the
+   * launcher only says where it wants the panel. Kinds that need nothing
+   * beyond a plain panel omit this and are created through `addPanel`.
+   *
+   * Read via {@link resolvePanelKindLaunchActionId}, never directly — plugin
+   * configs arrive over IPC, and a plugin naming an arbitrary action here
+   * would turn its own launcher row into a dispatch of that action.
+   */
+  launchActionId?: string;
 }
 
 /**
@@ -194,6 +206,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     canConvert: true,
     keepAliveOnProjectSwitch: true,
     showInPalette: false,
+    launchActionId: "agent.launch",
   },
   browser: {
     id: "browser",
@@ -213,6 +226,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     // Reading surface like file/review: focus returns to what the user was
     // last viewing when the panel leaves the grid, not the first grid terminal.
     policy: { dockFallbackTarget: "previous-focused" },
+    launchActionId: "agent.launch",
   },
   "dev-preview": {
     id: "dev-preview",
@@ -231,6 +245,9 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     searchAliases: ["localhost", "server", "preview", "port"],
     firstRenderRestore: true,
     lazyImportPath: "src/components/DevPreview/DevPreviewPane.tsx",
+    // Not `agent.launch`: that path creates a bare preview with no command, so
+    // only this one honours the project's configured dev-server command.
+    launchActionId: "devServer.start",
   },
   review: {
     id: "review",
@@ -298,6 +315,9 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     // Reading surface like review, file and diff: focus returns to what the
     // user was last reading when the panel leaves the grid.
     policy: { dockFallbackTarget: "previous-focused" },
+    // Resolves its own browse root, composes the title, and focuses an existing
+    // browser for the same folder instead of opening a second one.
+    launchActionId: "worktree.openFileBrowserPanel",
   },
   diff: {
     id: "diff",
@@ -550,6 +570,28 @@ export function resolvePanelKindPolicy(
 ): Required<PanelKindPolicy> {
   const config = typeof source === "string" ? getPanelKindConfig(source) : (source ?? undefined);
   return { ...DEFAULT_PANEL_KIND_POLICY, ...(config?.policy ?? {}) };
+}
+
+/**
+ * Resolve the action a bare launch of this kind should dispatch through, or
+ * `undefined` when the kind is created through a plain `addPanel`.
+ *
+ * Plugin-contributed kinds always resolve to `undefined`, whatever their config
+ * declares: their `PanelKindConfig` arrives over IPC from a plugin manifest, so
+ * honouring the field would let a plugin turn its own launcher row into a
+ * dispatch of any action it names. Plugin panels are spawned generically
+ * instead — `panel.openPluginPanel` remains the explicit, capability-gated way
+ * to reach one.
+ *
+ * Takes the same `PanelKindConfig | PanelKind | undefined` source as
+ * {@link resolvePanelKindPolicy}; sync and side-effect free.
+ */
+export function resolvePanelKindLaunchActionId(
+  source: PanelKindConfig | PanelKind | undefined
+): string | undefined {
+  const config = typeof source === "string" ? getPanelKindConfig(source) : (source ?? undefined);
+  if (!config || config.extensionId !== undefined) return undefined;
+  return config.launchActionId;
 }
 
 /**

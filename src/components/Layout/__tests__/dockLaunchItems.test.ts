@@ -13,6 +13,7 @@ const runRecipeWithResultsMock = vi.fn();
 const recordActionMruMock = vi.fn();
 const actionDispatchMock = vi.fn();
 const notifySpawnFailuresMock = vi.fn();
+const notifyMock = vi.fn();
 const logErrorMock = vi.fn();
 
 // The real `@/registry` eagerly pulls in TerminalPane and the whole panel
@@ -37,7 +38,13 @@ vi.mock("@/registry", () => ({
 }));
 
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ addPanel: addPanelMock }) },
+  usePanelStore: {
+    getState: () => ({ addPanel: addPanelMock, panelsById: { "panel-1": { location: "grid" } } }),
+  },
+}));
+
+vi.mock("@/lib/notify", () => ({
+  notify: (...args: unknown[]) => notifyMock(...args),
 }));
 
 vi.mock("@/store/recipeStore", () => ({
@@ -71,6 +78,7 @@ import {
   type DockLaunchPanelItem,
 } from "../dockLaunchItems";
 import type { TerminalRecipe } from "@shared/types";
+import { PANEL_LIMIT_ERROR_SUFFIX } from "@/services/actions/definitions/panelLimitError";
 
 const AGENTS: DockLaunchAgent[] = [
   { id: "claude", name: "Claude", availability: "ready" },
@@ -92,16 +100,19 @@ function build(over: Partial<Parameters<typeof buildDockLaunchModel>[0]> = {}) {
   });
 }
 
+const PANEL_LIMIT_MESSAGE = `Can't open another panel: ${PANEL_LIMIT_ERROR_SUFFIX}`;
+
 const PLUGIN_DOCKABLE = "test-plugin-dockable";
 const PLUGIN_GRID_ONLY = "test-plugin-grid-only";
 const PLUGIN_HIDDEN = "test-plugin-hidden";
 
 beforeEach(() => {
-  addPanelMock.mockReset();
+  addPanelMock.mockReset().mockResolvedValue("panel-1");
   runRecipeWithResultsMock.mockReset().mockResolvedValue({ spawned: [], failed: [] });
   recordActionMruMock.mockReset();
-  actionDispatchMock.mockReset();
+  actionDispatchMock.mockReset().mockResolvedValue({ ok: true, result: null });
   notifySpawnFailuresMock.mockReset();
+  notifyMock.mockReset();
   logErrorMock.mockReset();
 });
 
@@ -365,7 +376,7 @@ describe("activateDockLaunchItem", () => {
     activeWorktreeId: "wt-1",
     recipeContext: undefined,
     onLaunchAgent: vi.fn(),
-    settingsSource: "menu" as const,
+    source: "menu" as const,
   };
 
   beforeEach(() => ctx.onLaunchAgent.mockReset());
@@ -377,18 +388,67 @@ describe("activateDockLaunchItem", () => {
     return found;
   }
 
-  it("routes the kinds agent.launch understands through onLaunchAgent", () => {
-    // resolveAgentLaunchKind throws on an id it can't resolve, so only these
-    // three may take that path.
-    for (const kind of ["terminal", "browser", "dev-preview"]) {
+  it("activates a panel kind through its registered launch action, not onLaunchAgent", () => {
+    for (const kind of ["terminal", "browser", "dev-preview", "file-browser"]) {
       activateDockLaunchItem(panelItem(kind), ctx);
     }
-    expect(ctx.onLaunchAgent.mock.calls.map((c) => c[0])).toEqual([
-      "terminal",
-      "browser",
-      "dev-preview",
+    // Each kind reaches the action its registry entry names, so the dock can't
+    // drift from the toolbar or the palette (#11668).
+    expect(actionDispatchMock.mock.calls.map((c) => c[0])).toEqual([
+      getPanelKindConfig("terminal")!.launchActionId,
+      getPanelKindConfig("browser")!.launchActionId,
+      getPanelKindConfig("dev-preview")!.launchActionId,
+      getPanelKindConfig("file-browser")!.launchActionId,
     ]);
+    expect(ctx.onLaunchAgent).not.toHaveBeenCalled();
     expect(addPanelMock).not.toHaveBeenCalled();
+  });
+
+  it("tells the launch action where the menu heading promised the panel would land", () => {
+    activateDockLaunchItem(panelItem("browser"), ctx);
+    expect(actionDispatchMock).toHaveBeenCalledWith(
+      getPanelKindConfig("browser")!.launchActionId,
+      expect.objectContaining({
+        agentId: "browser",
+        location: "dock",
+        cwd: "/repo",
+        worktreeId: "wt-1",
+        activateDockOnCreate: true,
+      }),
+      { source: "menu" }
+    );
+  });
+
+  it("reports a refused launch, since the menu closes on select", async () => {
+    actionDispatchMock.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "No folder to browse" },
+    });
+
+    activateDockLaunchItem(panelItem("file-browser"), ctx);
+    await vi.waitFor(() => expect(notifyMock).toHaveBeenCalled());
+
+    const payload = notifyMock.mock.calls[0]![0] as {
+      type: string;
+      message: string;
+      action?: { label: string };
+    };
+    expect(payload.type).toBe("error");
+    expect(payload.message).toBe("No folder to browse");
+    expect(payload.action?.label).toBe("Retry");
+  });
+
+  it("stays quiet when addPanel already reported a full grid", async () => {
+    actionDispatchMock.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: PANEL_LIMIT_MESSAGE },
+    });
+
+    activateDockLaunchItem(panelItem("file-browser"), ctx);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("creates every other kind via addPanel at its advertised location", () => {

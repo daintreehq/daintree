@@ -164,7 +164,7 @@ describe("DockLaunchMenuItems", () => {
 
   it("routes a blocked agent to its settings subtab under the caller's source", () => {
     const onLaunchAgent = vi.fn();
-    const { getByText } = renderItems({ onLaunchAgent, settingsSource: "context-menu" });
+    const { getByText } = renderItems({ onLaunchAgent, source: "context-menu" });
 
     fireEvent.click(getByText("Gemini"));
     expect(onLaunchAgent).not.toHaveBeenCalled();
