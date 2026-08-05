@@ -497,6 +497,9 @@ export function PilotView() {
       map.set(project.id, {
         kind: "project",
         name: project.name,
+        // Required on both workspace types, unlike the fields around it, so it
+        // is assigned rather than spread in on a check.
+        lastOpened: project.lastOpened,
         ...(project.emoji ? { emoji: project.emoji } : {}),
         ...(project.color ? { color: project.color } : {}),
         ...(project.lastCompletionSeenAt !== undefined
@@ -508,6 +511,7 @@ export function PilotView() {
       map.set(scratch.id, {
         kind: "scratch",
         name: scratch.name,
+        lastOpened: scratch.lastOpened,
         ...(scratch.lastCompletionSeenAt !== undefined
           ? { lastCompletionSeenAt: scratch.lastCompletionSeenAt }
           : {}),
@@ -531,10 +535,12 @@ export function PilotView() {
   /**
    * Position, held only while the pointer is genuinely working the list.
    *
-   * Ordering is derived from live agent state and the ranking IS the answer
+   * Row order is derived from live agent state and the ranking IS the answer
    * this surface exists to give, so it has to stay true: an agent that blocks
    * while you are looking at the list has to rise to where the ranking says it
-   * belongs, not sit below every idle agent until you close and reopen.
+   * belongs, not sit below every idle agent until you close and reopen. Group
+   * order follows workspace recency and holds still on its own, so what moves
+   * under the pointer is a row within its project.
    *
    * The misclick this used to guard against is real but pointer-only. Selection
    * is keyed by `rowId` (#11071), so a re-rank cannot make Enter commit a row

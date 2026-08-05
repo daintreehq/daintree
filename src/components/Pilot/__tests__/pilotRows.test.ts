@@ -213,13 +213,13 @@ describe("buildPilotGroups", () => {
     expect(alpha.rows.map((r) => r.run.runId).sort()).toEqual(["a", "c"]);
   });
 
-  it("orders projects by their worst band, not alphabetically", () => {
+  it("orders projects by last opened, not by worst band", () => {
     const groups = buildPilotGroups(
       [
-        run({ runId: "w", workspaceId: "aaa", agentState: "working", since: NOW }),
+        run({ runId: "w", workspaceId: "fresh", agentState: "working", since: NOW }),
         run({
           runId: "b",
-          workspaceId: "zzz",
+          workspaceId: "stale",
           agentState: "waiting",
           waitingReason: "error",
           since: NOW,
@@ -227,17 +227,76 @@ describe("buildPilotGroups", () => {
       ],
       ctx({
         workspaces: new Map([
-          ["aaa", { kind: "project", name: "aaa" }],
-          ["zzz", { kind: "project", name: "zzz" }],
+          // Named so that the old band rule and a bare name fallback would BOTH
+          // put "aaa" first. Only recency lifts the just-opened project over it.
+          ["fresh", { kind: "project", name: "zzz", lastOpened: NOW }],
+          ["stale", { kind: "project", name: "aaa", lastOpened: NOW - 3_600_000 }],
         ]),
       })
     );
 
-    // "zzz" holds a blocked run, so it outranks "aaa" despite sorting later.
-    expect(groups[0]!.name).toBe("zzz");
+    expect(groups.map((g) => g.name)).toEqual(["zzz", "aaa"]);
   });
 
-  it("falls back to alphabetical when two projects are equally urgent", () => {
+  it("puts the project just opened above another project's waiting agents", () => {
+    // The reported case (#11678): the current project held one working agent and
+    // rendered below a project holding four waiting ones, because waiting
+    // outranked everything at group level. Only the opening times differ between
+    // the two calls, so the flip is proof recency is what decides.
+    const fleet = (groundwork: number, pixel: number) =>
+      buildPilotGroups(
+        [
+          run({ runId: "gt", workspaceId: "gt", agentState: "working", since: NOW }),
+          ...["a", "b", "c", "d"].map((id) =>
+            run({
+              runId: `px-${id}`,
+              workspaceId: "px",
+              agentState: "waiting",
+              since: NOW - 600_000,
+            })
+          ),
+        ],
+        ctx({
+          currentWorkspaceId: "gt",
+          workspaces: new Map([
+            ["gt", { kind: "project", name: "Groundwork Terrain", lastOpened: groundwork }],
+            ["px", { kind: "project", name: "Pixel Reconstruct", lastOpened: pixel }],
+          ]),
+        })
+      ).map((g) => g.name);
+
+    expect(fleet(NOW, NOW - 86_400_000)).toEqual(["Groundwork Terrain", "Pixel Reconstruct"]);
+    expect(fleet(NOW - 86_400_000, NOW)).toEqual(["Pixel Reconstruct", "Groundwork Terrain"]);
+  });
+
+  it("orders a mixed fleet strictly newest-opened first", () => {
+    const groups = buildPilotGroups(
+      [
+        run({
+          runId: "a",
+          workspaceId: "old",
+          agentState: "waiting",
+          waitingReason: "error",
+          since: NOW,
+        }),
+        run({ runId: "b", workspaceId: "mid", agentState: "working", since: NOW }),
+        run({ runId: "c", workspaceId: "new", agentState: "exited" }),
+      ],
+      ctx({
+        workspaces: new Map([
+          // Both name and band run opposite to the opening times, so neither can
+          // be what produces the expected order.
+          ["old", { kind: "project", name: "aaa", lastOpened: NOW - 86_400_000 }],
+          ["mid", { kind: "scratch", name: "mmm", lastOpened: NOW - 3_600_000 }],
+          ["new", { kind: "project", name: "zzz", lastOpened: NOW }],
+        ]),
+      })
+    );
+
+    expect(groups.map((g) => g.name)).toEqual(["zzz", "mmm", "aaa"]);
+  });
+
+  it("breaks an equal last-opened tie by name", () => {
     const groups = buildPilotGroups(
       [
         run({ runId: "b", workspaceId: "p2", agentState: "working", since: NOW }),
@@ -245,8 +304,8 @@ describe("buildPilotGroups", () => {
       ],
       ctx({
         workspaces: new Map([
-          ["p1", { kind: "project", name: "beta" }],
-          ["p2", { kind: "project", name: "alpha" }],
+          ["p1", { kind: "project", name: "beta", lastOpened: NOW }],
+          ["p2", { kind: "project", name: "alpha", lastOpened: NOW }],
         ]),
       })
     );
@@ -254,10 +313,28 @@ describe("buildPilotGroups", () => {
     expect(groups.map((g) => g.name)).toEqual(["alpha", "beta"]);
   });
 
-  it("does not let activity times reorder two equally quiet projects", () => {
-    // The tiebreak used to be recency, so the order changed between every
-    // opening and spatial memory never formed. Same fleet, only the timestamps
-    // swapped: the order has to be the same both times.
+  it("sinks a workspace it cannot date below every dated one, without dropping it", () => {
+    // A run whose workspace has left the store still has to render. Ranking it
+    // is a separate question: an absent opening time is not evidence of a recent
+    // one, so it settles at the bottom rather than displacing a real history.
+    // Named so a name fallback would put the unknown group first instead.
+    const groups = buildPilotGroups(
+      [
+        run({ runId: "orphan", workspaceId: "gone", agentState: "waiting", since: NOW }),
+        run({ runId: "known", workspaceId: "p1", agentState: "working", since: NOW }),
+      ],
+      ctx({
+        workspaces: new Map([["p1", { kind: "project", name: "zzz", lastOpened: NOW - 600_000 }]]),
+      })
+    );
+
+    expect(groups.map((g) => g.name)).toEqual(["zzz", "Unknown workspace"]);
+    expect(groups[1]!.rows.map((r) => r.run.runId)).toEqual(["orphan"]);
+  });
+
+  it("does not let run activity times reorder project groups", () => {
+    // Group order is workspace recency, which only a switch advances. An agent
+    // starting or blocking must not reshuffle the projects under the cursor.
     const quiet = (aSince: number, bSince: number) =>
       buildPilotGroups(
         [
@@ -266,104 +343,20 @@ describe("buildPilotGroups", () => {
         ],
         ctx({
           workspaces: new Map([
-            ["p1", { kind: "project", name: "beta" }],
-            ["p2", { kind: "project", name: "alpha" }],
+            ["p1", { kind: "project", name: "beta", lastOpened: NOW }],
+            ["p2", { kind: "project", name: "alpha", lastOpened: NOW - 600_000 }],
           ]),
         })
       ).map((g) => g.name);
 
-    expect(quiet(NOW - 600_000, NOW)).toEqual(quiet(NOW, NOW - 600_000));
+    expect(quiet(NOW - 600_000, NOW)).toEqual(["beta", "alpha"]);
+    expect(quiet(NOW, NOW - 600_000)).toEqual(["beta", "alpha"]);
   });
 
-  it("puts the longest-standing demand first among equally urgent projects", () => {
-    // The anti-starvation rule the rows already follow, now applied a level up:
-    // a stream of fresh blocks must never bury the one stuck for forty minutes.
-    const groups = buildPilotGroups(
-      [
-        run({
-          runId: "fresh",
-          workspaceId: "p1",
-          agentState: "waiting",
-          waitingReason: "error",
-          since: NOW - 60_000,
-        }),
-        run({
-          runId: "stale",
-          workspaceId: "p2",
-          agentState: "waiting",
-          waitingReason: "error",
-          since: NOW - 40 * 60_000,
-        }),
-      ],
-      ctx({
-        workspaces: new Map([
-          // Named so alphabetical order would give the opposite answer.
-          ["p1", { kind: "project", name: "aaa" }],
-          ["p2", { kind: "project", name: "zzz" }],
-        ]),
-      })
-    );
-
-    expect(groups.map((g) => g.name)).toEqual(["zzz", "aaa"]);
-  });
-
-  it("dates a project by its oldest demand, not by its oldest run", () => {
-    // A project whose blocked agent is fresh must not inherit urgency from a
-    // long-running working agent sitting beside it.
-    const groups = buildPilotGroups(
-      [
-        run({
-          runId: "old-work",
-          workspaceId: "p1",
-          agentState: "working",
-          since: NOW - 3_600_000,
-        }),
-        run({
-          runId: "fresh-block",
-          workspaceId: "p1",
-          agentState: "waiting",
-          waitingReason: "error",
-          since: NOW - 1_000,
-        }),
-        run({
-          runId: "older-block",
-          workspaceId: "p2",
-          agentState: "waiting",
-          waitingReason: "error",
-          since: NOW - 60_000,
-        }),
-      ],
-      ctx({
-        workspaces: new Map([
-          ["p1", { kind: "project", name: "aaa" }],
-          ["p2", { kind: "project", name: "zzz" }],
-        ]),
-      })
-    );
-
-    expect(groups.map((g) => g.name)).toEqual(["zzz", "aaa"]);
-  });
-
-  it("sorts a demand of unknown age behind one it can actually date", () => {
-    // An unknown age is not evidence of urgency — treating it as infinitely old
-    // would let a pre-detection boot window outrank a genuine wait.
-    const groups = buildPilotGroups(
-      [
-        run({ runId: "undated", workspaceId: "p1", agentState: "waiting" }),
-        run({ runId: "dated", workspaceId: "p2", agentState: "waiting", since: NOW - 1_000 }),
-      ],
-      ctx({
-        workspaces: new Map([
-          ["p1", { kind: "project", name: "aaa" }],
-          ["p2", { kind: "project", name: "zzz" }],
-        ]),
-      })
-    );
-
-    expect(groups.map((g) => g.name)).toEqual(["zzz", "aaa"]);
-  });
-
-  it("gives the current workspace primacy only among equally quiet projects", () => {
+  it("does not use the current workspace to break an equal-recency tie", () => {
+    // Being the workspace asking is not evidence of recency — `lastOpened`
+    // already carries that, and under write suppression a switch can leave it
+    // unmoved, so context must not buy a position the timestamp does not.
     const groups = buildPilotGroups(
       [
         run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW }),
@@ -372,41 +365,15 @@ describe("buildPilotGroups", () => {
       ctx({
         currentWorkspaceId: "p2",
         workspaces: new Map([
-          ["p1", { kind: "project", name: "alpha" }],
-          ["p2", { kind: "project", name: "zeta" }],
+          ["p1", { kind: "project", name: "alpha", lastOpened: NOW }],
+          ["p2", { kind: "project", name: "zeta", lastOpened: NOW }],
         ]),
       })
     );
 
-    // Alphabetically last, but it is the workspace this view already owns and
-    // neither project has anything urgent to say.
-    expect(groups.map((g) => g.name)).toEqual(["zeta", "alpha"]);
-  });
-
-  it("never lets the current workspace outrank another project's demand", () => {
-    // Context above severity would bury a blocked agent somewhere else, which is
-    // the exact failure the band ordering exists to prevent.
-    const groups = buildPilotGroups(
-      [
-        run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW }),
-        run({
-          runId: "b",
-          workspaceId: "p2",
-          agentState: "waiting",
-          waitingReason: "error",
-          since: NOW,
-        }),
-      ],
-      ctx({
-        currentWorkspaceId: "p1",
-        workspaces: new Map([
-          ["p1", { kind: "project", name: "here" }],
-          ["p2", { kind: "project", name: "elsewhere" }],
-        ]),
-      })
-    );
-
-    expect(groups.map((g) => g.name)).toEqual(["elsewhere", "here"]);
+    expect(groups.map((g) => g.name)).toEqual(["alpha", "zeta"]);
+    // Still marked as the current workspace — it just does not buy position.
+    expect(groups.find((g) => g.name === "zeta")!.isCurrent).toBe(true);
   });
 
   it("orders two identically named projects the same way whatever order they arrive in", () => {
@@ -418,8 +385,8 @@ describe("buildPilotGroups", () => {
         runs,
         ctx({
           workspaces: new Map([
-            ["p1", { kind: "project", name: "same" }],
-            ["p2", { kind: "project", name: "same" }],
+            ["p1", { kind: "project", name: "same", lastOpened: NOW }],
+            ["p2", { kind: "project", name: "same", lastOpened: NOW }],
           ]),
         })
       ).map((g) => g.workspaceId);

@@ -93,6 +93,25 @@ function seedViewWorkspace(id: string | null): void {
   (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__ = { id };
 }
 
+/**
+ * The two workspace stores, with explicit opening times.
+ *
+ * Group order is workspace MRU, so a fixture that left these out would fall
+ * through to the name tiebreak and prove nothing about the rule under test.
+ * The default below reproduces that old alphabetical order deliberately, so
+ * only the tests that care about recency have to think about it.
+ */
+function seedWorkspaceOpenings(daintreeOpened: number, spikeOpened: number): void {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: only id/name/lastOpened are read
+  useProjectStore.setState({
+    projects: [{ id: "p1", name: "daintree", lastOpened: daintreeOpened }],
+  } as Partial<ReturnType<typeof useProjectStore.getState>>);
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: only id/name/lastOpened are read
+  useScratchStore.setState({
+    scratches: [{ id: "s1", name: "spike", lastOpened: spikeOpened }],
+  } as Partial<ReturnType<typeof useScratchStore.getState>>);
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
@@ -100,14 +119,7 @@ beforeEach(() => {
   seedViewWorkspace(null);
   seed(null);
   usePilotStore.setState({ isOpen: true });
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: only id/name are read
-  useProjectStore.setState({ projects: [{ id: "p1", name: "daintree" }] } as Partial<
-    ReturnType<typeof useProjectStore.getState>
-  >);
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: only id/name are read
-  useScratchStore.setState({ scratches: [{ id: "s1", name: "spike" }] } as Partial<
-    ReturnType<typeof useScratchStore.getState>
-  >);
+  seedWorkspaceOpenings(NOW, NOW - 60_000);
 });
 
 afterEach(() => {
@@ -409,21 +421,23 @@ describe("PilotView", () => {
     expect(screen.getByText("2 agents need you")).toBeTruthy();
   });
 
-  it("groups rows under their project, most urgent project first", () => {
+  it("groups rows under their project, most recently opened first", () => {
+    seedWorkspaceOpenings(NOW - 60_000, NOW);
     seed([
-      run({ runId: "w", workspaceId: "p1", agentState: "working", since: NOW - 10_000 }),
       run({
         runId: "b",
-        workspaceId: "s1",
+        workspaceId: "p1",
         agentState: "waiting",
         waitingReason: "error",
         since: NOW - 60_000,
       }),
+      run({ runId: "w", workspaceId: "s1", agentState: "working", since: NOW - 10_000 }),
     ]);
     render(<PilotView />);
 
     const headers = screen.getAllByTestId("pilot-group-header").map((h) => h.textContent ?? "");
-    // "spike" holds the blocked run, so it leads despite "daintree" sorting first.
+    // "spike" was opened last, so it leads even though "daintree" sorts first
+    // alphabetically AND is the one holding the blocked run.
     expect(headers[0]).toContain("spike");
     expect(headers[1]).toContain("daintree");
   });
@@ -1379,38 +1393,30 @@ describe("PilotView", () => {
       // The group half of the re-sort has its own branch, so a hold that kept
       // rows in place while letting entire projects jump under the pointer
       // would otherwise pass everything above.
-      const seedProjects = (spikeBlocked: boolean) => {
-        seed([
-          run({ runId: "a", workspaceId: "p1", agentState: "working", title: "in daintree" }),
-          spikeBlocked
-            ? run({
-                runId: "b",
-                workspaceId: "s1",
-                agentState: "waiting",
-                waitingReason: "error",
-                title: "in spike",
-                since: NOW,
-              })
-            : run({ runId: "b", workspaceId: "s1", agentState: "working", title: "in spike" }),
-        ]);
-      };
+      seed([
+        run({ runId: "a", workspaceId: "p1", agentState: "working", title: "in daintree" }),
+        run({ runId: "b", workspaceId: "s1", agentState: "working", title: "in spike" }),
+      ]);
       // Read through the rows rather than the header text: one row per project
       // means row order IS group order, and the workspace-name lookup does not
       // survive the microtask flush this test needs (the name loaders resolve
       // against no IPC host and empty their stores).
-      seedProjects(false);
       render(<PilotView />);
       expect(order()).toEqual(["in daintree", "in spike"]);
 
       fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
-      act(() => seedProjects(true));
+      // Let those mount-time loaders settle first, since they empty both stores:
+      // the switch below has to be seeded on top of that, not before it.
       await vi.advanceTimersByTimeAsync(0);
+      // Switching to the scratch elsewhere makes it the most recently opened,
+      // which is the only thing that reorders groups now.
+      act(() => seedWorkspaceOpenings(NOW - 60_000, NOW));
       expect(order()).toEqual(["in daintree", "in spike"]);
 
       fireEvent.pointerLeave(document.getElementById("pilot-agent-list")!);
 
-      // The project holding the blocked agent leads the moment the pointer
-      // stops protecting the position it was aimed at.
+      // The newly opened project leads the moment the pointer stops protecting
+      // the position it was aimed at.
       expect(order()).toEqual(["in spike", "in daintree"]);
     });
 
