@@ -80,7 +80,7 @@ import { resolveEffectivePresetId } from "@shared/types";
 import { isPanelButtonOnToolbar } from "@shared/types/toolbar";
 import type { LauncherPanelButtonId } from "@shared/types/toolbar";
 import { isAgentLaunchable, isAgentInstalled } from "../../../shared/utils/agentAvailability";
-import { isAgentButtonOnToolbar } from "../../../shared/utils/agentPinned";
+import { isAgentButtonOnToolbar, isAgentPinned } from "../../../shared/utils/agentPinned";
 import {
   getDominantAgentState,
   agentStateDotColor,
@@ -303,9 +303,11 @@ function LauncherPinAffordance({
 type SplitLaunchItemProps = {
   row: AgentRow;
   onLaunch: (agentId: BuiltInAgentId, presetId?: string | null) => void;
+  onTogglePin: (row: AgentRow) => void;
+  stopPointer: (e: ReactPointerEvent) => void;
 };
 
-function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
+function SplitLaunchItem({ row, onLaunch, onTogglePin, stopPointer }: SplitLaunchItemProps) {
   const leftAreaRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
@@ -330,6 +332,15 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
       e.preventDefault();
       e.stopPropagation();
       onLaunch(row.id, null);
+      return;
+    }
+    // Same "P" contract as every other row. Without it, creating a preset for an
+    // agent silently took that agent's pin away — the row switches to this
+    // component the moment `getMergedPresets` returns anything (#11680).
+    if (e.key === "p" || e.key === "P") {
+      e.preventDefault();
+      e.stopPropagation();
+      onTogglePin(row);
     }
   };
 
@@ -376,6 +387,15 @@ function SplitLaunchItem({ row, onLaunch }: SplitLaunchItemProps) {
             </>
           )}
         </span>
+        <span className="sr-only">Press P to {row.pinned ? "unpin from" : "pin to"} toolbar</span>
+
+        <LauncherPinAffordance
+          testId={`launcher-pin-${row.id}`}
+          onToolbar={row.pinned}
+          onToggle={() => onTogglePin(row)}
+          stopPointer={stopPointer}
+        />
+
         <span
           className="flex items-center px-2 py-1.5 border-l border-daintree-border/50"
           aria-hidden="true"
@@ -544,7 +564,7 @@ export function LauncherMenuButton({
   // Before the first real availability result lands we can't distinguish
   // "all agents missing" from "still detecting", so we show a spinner.
   const isAvailabilityLoading = agentAvailability === undefined || !hasRealData;
-  const lastPinActionAt = useRef(0);
+  const lastPinActionAt = useRef<Map<string, number>>(new Map());
 
   // Radix Tooltip reopens whenever the trigger receives focus, including
   // programmatic focus restoration from DropdownMenu's onCloseAutoFocus and
@@ -607,10 +627,15 @@ export function LauncherMenuButton({
     [agentSettings, agentAvailability, leftButtons, rightButtons]
   );
 
-  const hasNoPinnedAgents = useMemo(
-    () => !LAUNCHABLE_AGENT_IDS.some((id) => isAgentOnToolbar(id)),
-    [isAgentOnToolbar]
-  );
+  // Deliberately `isAgentPinned`, not the array-aware `isAgentOnToolbar` the pin
+  // affordance reads. This value has to mirror `WelcomeScreen`'s own render
+  // predicate exactly, and that one still asks about explicit pins — the two
+  // exist to keep the card and the discovery badge from both firing for the same
+  // agents, so the moment they disagree a grandfathered profile gets both.
+  const hasNoPinnedAgents = useMemo(() => {
+    if (!agentSettings?.agents) return true;
+    return !LAUNCHABLE_AGENT_IDS.some((id) => isAgentPinned(agentSettings.agents?.[id]));
+  }, [agentSettings]);
 
   // While the first-run welcome card is actually being rendered, suppress
   // the launcher discovery badge so the card and badge don't both fire for the
@@ -781,17 +806,20 @@ export function LauncherMenuButton({
     }
   };
 
-  // Shared by both row kinds: a rapid double-fire (pointer + synthesized click,
-  // or a held "P") must not toggle twice and land back where it started.
-  const guardPinAction = () => {
+  // Keyed per row, not one timestamp for the whole menu: a rapid double-fire on
+  // ONE row (pointer + synthesized click, or a held "P") must not toggle twice
+  // and land back where it started, but two different rows toggled in quick
+  // succession — P, ArrowDown, P, or any assistive input driving the menu — are
+  // distinct intents and must both land.
+  const guardPinAction = (rowKey: string) => {
     const now = Date.now();
-    if (now - lastPinActionAt.current < 50) return false;
-    lastPinActionAt.current = now;
+    if (now - (lastPinActionAt.current.get(rowKey) ?? -Infinity) < 50) return false;
+    lastPinActionAt.current.set(rowKey, now);
     return true;
   };
 
   const toggleAgentPin = (row: AgentRow) => {
-    if (!guardPinAction()) return;
+    if (!guardPinAction(`agent:${row.id}`)) return;
     // Through the shared dispatcher, not `setAgentPinned` directly: it is what
     // also gives a newly-pinned agent a toolbar position, and it is what
     // Settings → Toolbar calls. Two surfaces writing an agent pin two different
@@ -811,7 +839,7 @@ export function LauncherMenuButton({
   };
 
   const togglePanelPin = (item: LauncherPanelItem) => {
-    if (!guardPinAction()) return;
+    if (!guardPinAction(`panel:${item.id}`)) return;
     setPanelButtonOnToolbar(
       item.id,
       !isPanelButtonOnToolbar(item.id, pinnedButtons, leftButtons, rightButtons)
@@ -855,7 +883,15 @@ export function LauncherMenuButton({
 
   const renderLaunchItem = (row: AgentRow) => {
     if (row.presets && row.presets.length > 0) {
-      return <SplitLaunchItem key={`launch-${row.id}`} row={row} onLaunch={handleLaunch} />;
+      return (
+        <SplitLaunchItem
+          key={`launch-${row.id}`}
+          row={row}
+          onLaunch={handleLaunch}
+          onTogglePin={toggleAgentPin}
+          stopPointer={stopPointer}
+        />
+      );
     }
 
     return (
@@ -955,7 +991,7 @@ export function LauncherMenuButton({
             </>
           )}
 
-          <DropdownMenuSeparator />
+          {(isAvailabilityLoading || launchable.length > 0) && <DropdownMenuSeparator />}
           <DropdownMenuLabel>Panels</DropdownMenuLabel>
           {LAUNCHER_PANEL_ITEMS.map((item) => (
             <PanelRow

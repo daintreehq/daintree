@@ -1709,6 +1709,11 @@ describe("toolbarPreferencesStore", () => {
         expect(pinnedButtons).toEqual({});
       });
 
+      it("normalizes an array-shaped pinnedButtons rather than re-persisting it", async () => {
+        v13({ leftButtons: ["agent-tray"], rightButtons: [], pinnedButtons: [] });
+        expect((await loadStore()).getState().layout.pinnedButtons).toEqual({});
+      });
+
       it("survives a layout with no button arrays at all", async () => {
         v13({ pinnedButtons: { "agent-tray": false } });
         const store = await loadStore();
@@ -2058,6 +2063,31 @@ describe("toolbarPreferencesStore", () => {
 
       expect(store.getState().layout.pinnedButtons["browser"]).toBe(true);
       expect(store.getState().layout.leftButtons.indexOf("browser")).toBe(before);
+    });
+
+    it("rebuilds several dropped promotions in list order, not reversed", async () => {
+      // Every restore inserts immediately after the launcher, and the launcher
+      // does not move — so walking the id list forwards emits it backwards. (The
+      // old mid-row anchor hid this: inserting *at* the tray's index pushed the
+      // tray right, so the next insert landed after the previous one.)
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["launcher", "terminal"],
+              rightButtons: ["settings"],
+              pinnedButtons: { browser: true, "dev-server": true },
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 14,
+        })
+      );
+
+      const { leftButtons } = (await loadStore()).getState().layout;
+      expect(leftButtons.indexOf("browser")).toBeLessThan(leftButtons.indexOf("dev-server"));
+      expect(leftButtons.indexOf("launcher")).toBeLessThan(leftButtons.indexOf("browser"));
     });
 
     it("follows the launcher to the right side when the user moved it there", async () => {

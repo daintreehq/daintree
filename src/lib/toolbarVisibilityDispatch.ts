@@ -50,11 +50,23 @@ export function dispatchToolbarVisibility(
         deps.agentSettings?.agents?.[buttonId],
         deps.agentAvailability?.[buttonId]
       );
-    // Position before the pin write: the pin is an async IPC round-trip, and
-    // ordering the synchronous local write first means the button never renders
-    // for a frame with no slot to render into.
-    if (nextPinned) deps.positionAgentButton?.(buttonId);
-    void deps.setAgentPinned(buttonId, nextPinned);
+    const write = deps.setAgentPinned(buttonId, nextPinned);
+    if (!nextPinned) return;
+    // Position only once the pin write has actually landed. `setAgentPinned`
+    // updates its own store optimistically before its first `await`, and
+    // `Toolbar.tsx` renders an explicitly-pinned agent that holds no position
+    // anyway, so nothing flickers in the interval — while persisting the
+    // position up front would survive a rejected IPC. That matters because the
+    // rollback restores an *unset* pin, which `isAgentButtonOnToolbar` resolves
+    // through the position: the orphaned slot would make a failed write read as
+    // a successful pin on every surface.
+    void Promise.resolve(write).then(
+      () => deps.positionAgentButton?.(buttonId),
+      () => {
+        // Swallowed: `setAgentPinned` already surfaces its own failure, and the
+        // position is exactly what must NOT be written on this path.
+      }
+    );
     return;
   }
   deps.toggleButtonVisibility(buttonId, side);

@@ -643,6 +643,7 @@ export function Toolbar({
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
+  const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
   // Live subscription so pin/unpin toggles from the launcher immediately
   // update per-agent toolbar button visibility. The `agentSettings` prop is
   // sourced from `useAgentLauncher()`'s local useState which does not react to
@@ -1344,40 +1345,60 @@ export function Toolbar({
 
   const pinnedButtons = toolbarLayout.pinnedButtons;
 
+  // An agent the user explicitly pinned but that sits in neither side array
+  // still has to render (#11680). Two ways to get here, and neither can be
+  // repaired in the store's `merge()` — the pin lives in `agentSettingsStore`,
+  // which loads asynchronously over IPC and isn't readable at toolbar-store
+  // hydration:
+  //   - a genuinely fresh profile, where `buildInitialAgentPinUpdates` stamps
+  //     `pinned: true` for the first few installed agents before the user has
+  //     ever touched the toolbar;
+  //   - a stale sibling project view overwriting the orderings, which reconcile
+  //     last-writer-wins and so drop a position another view just wrote (the
+  //     same window `restorePromotedPanelButtons` covers for panels).
+  // `isAgentPinned`, not `isAgentToolbarVisible`: only an explicit `true` earns
+  // a slot here. Reading the tri-state's installed-means-visible fall-through
+  // would put every installed CLI back on the toolbar, which is the crowding
+  // this issue removed.
+  const unpositionedAgentPins = useMemo(() => {
+    const onEitherSide = new Set([...toolbarLayout.leftButtons, ...toolbarLayout.rightButtons]);
+    return LAUNCHABLE_AGENT_IDS.filter(
+      (id) => !onEitherSide.has(id) && isAgentPinned(effectiveAgentSettings?.agents?.[id])
+    );
+  }, [toolbarLayout.leftButtons, toolbarLayout.rightButtons, effectiveAgentSettings]);
+
+  // Materialize those positions once they're knowable, so the repair is a
+  // one-frame bridge rather than a permanent ghost. A rendered-but-unpositioned
+  // button is absent from Settings → Toolbar's sortable columns and inert to
+  // `moveButton`, which reads the arrays — the first-run seeding above would
+  // otherwise leave up to five agents that can never be reordered. The action
+  // no-ops when the id already holds a position, writes nothing to
+  // `pinnedButtons`, and converges under a concurrent sibling view.
+  useEffect(() => {
+    for (const id of unpositionedAgentPins) positionAgentButton(id);
+  }, [unpositionedAgentPins, positionAgentButton]);
+
+  // Whichever side the launcher is on — that is where the things pinned out of
+  // it belong. Splicing unconditionally into the left would strand them away
+  // from a launcher the user moved right.
+  const launcherOnRight =
+    toolbarLayout.rightButtons.includes("launcher") &&
+    !toolbarLayout.leftButtons.includes("launcher");
+
   const effectiveLeftButtons = useMemo(() => {
     // Dedupe defensively so a persisted list holding a repeated id never
     // renders duplicate pills (#10937) — the store also heals this, this is
     // belt-and-suspenders at the render boundary.
     const positioned = Array.from(new Set(toolbarLayout.leftButtons));
 
-    // An agent the user explicitly pinned but that sits in neither side array
-    // still has to render (#11680). Two ways to get here, and neither can be
-    // repaired in the store's `merge()` — the pin lives in `agentSettingsStore`,
-    // which loads asynchronously over IPC and isn't readable at toolbar-store
-    // hydration:
-    //   - a genuinely fresh profile, where `buildInitialAgentPinUpdates` stamps
-    //     `pinned: true` for the first few installed agents before the user has
-    //     ever touched the toolbar;
-    //   - a stale sibling project view overwriting the orderings, which
-    //     reconcile last-writer-wins and so drop a position another view just
-    //     wrote (the same window `restorePromotedPanelButtons` covers for
-    //     panels).
-    // `isAgentPinned`, not `isAgentToolbarVisible`: only an explicit `true`
-    // earns a slot here. Reading the tri-state's installed-means-visible
-    // fall-through would put every installed CLI back on the toolbar, which is
-    // the crowding this issue removed.
-    const onEitherSide = new Set([...positioned, ...toolbarLayout.rightButtons]);
-    const unpositionedPins = LAUNCHABLE_AGENT_IDS.filter(
-      (id) => !onEitherSide.has(id) && isAgentPinned(effectiveAgentSettings?.agents?.[id])
-    );
-    if (unpositionedPins.length > 0) {
+    if (!launcherOnRight && unpositionedAgentPins.length > 0) {
       // Beside the launcher they were pinned out of, in registry order, so the
       // brand marks stay contiguous rather than scattering to the end of the row.
       const launcherIndex = positioned.indexOf("launcher");
       positioned.splice(
         launcherIndex === -1 ? positioned.length : launcherIndex + 1,
         0,
-        ...unpositionedPins
+        ...unpositionedAgentPins
       );
     }
 
@@ -1392,7 +1413,8 @@ export function Toolbar({
     );
   }, [
     toolbarLayout.leftButtons,
-    toolbarLayout.rightButtons,
+    launcherOnRight,
+    unpositionedAgentPins,
     pinnedButtons,
     effectiveAgentSettings,
     agentAvailability,
@@ -1403,6 +1425,14 @@ export function Toolbar({
     // Dedupe the persisted base before appending plugin extras, so duplicate
     // ids (e.g. repeated `forge-stats`, #10937) can't render twice.
     const base = Array.from(new Set(toolbarLayout.rightButtons));
+    if (launcherOnRight && unpositionedAgentPins.length > 0) {
+      const launcherIndex = base.indexOf("launcher");
+      base.splice(
+        launcherIndex === -1 ? base.length : launcherIndex + 1,
+        0,
+        ...unpositionedAgentPins
+      );
+    }
     const positioned = new Set([...base, ...toolbarLayout.leftButtons]);
     // Only *promoted* contributions append — plugin buttons reach the user
     // through the tray by default now (#11304), so the pre-tray behavior of
@@ -1422,6 +1452,8 @@ export function Toolbar({
   }, [
     toolbarLayout.rightButtons,
     toolbarLayout.leftButtons,
+    launcherOnRight,
+    unpositionedAgentPins,
     pluginButtonIds,
     pinnedButtons,
     effectiveAgentSettings,

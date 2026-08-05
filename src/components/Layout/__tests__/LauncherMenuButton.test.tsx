@@ -16,7 +16,8 @@ let openChangeSpy: ((open: boolean) => void) | null = null;
 let tooltipOpenChangeSpy: ((open: boolean) => void) | null = null;
 let capturedTooltipOpen: boolean | undefined = undefined;
 let closeAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
-let pointerDownOutsideSpy: (() => void) | null = null;
+let pointerDownOutsideSpy: ((e: { preventDefault: () => void }) => void) | null = null;
+let escapeKeyDownSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 
 let mockSettings: AgentSettings | null = null;
 let mockPanelsById: Record<string, unknown> = {};
@@ -313,13 +314,16 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     children,
     onCloseAutoFocus,
     onPointerDownOutside,
+    onEscapeKeyDown,
   }: {
     children: React.ReactNode;
     onCloseAutoFocus?: (e: { preventDefault: () => void }) => void;
-    onPointerDownOutside?: () => void;
+    onPointerDownOutside?: (e: { preventDefault: () => void }) => void;
+    onEscapeKeyDown?: (e: { preventDefault: () => void }) => void;
   }) => {
     closeAutoFocusSpy = onCloseAutoFocus ?? null;
     pointerDownOutsideSpy = onPointerDownOutside ?? null;
+    escapeKeyDownSpy = onEscapeKeyDown ?? null;
     return <div data-testid="dropdown-content">{children}</div>;
   },
   DropdownMenuItem: ({
@@ -551,6 +555,7 @@ describe("LauncherMenuButton", () => {
     capturedTooltipOpen = undefined;
     closeAutoFocusSpy = null;
     pointerDownOutsideSpy = null;
+    escapeKeyDownSpy = null;
     mockSettings = null;
     mockPanelsById = {};
     mockPanelIds = [];
@@ -585,10 +590,48 @@ describe("LauncherMenuButton", () => {
     });
   });
 
-  it("renders the plug trigger with accessible label", () => {
-    const { getByLabelText, getAllByTestId } = render(<LauncherMenuButton />);
-    expect(getByLabelText("Launcher")).toBeTruthy();
-    expect(getAllByTestId("plug-icon").length).toBeGreaterThan(0);
+  it("renders the plus trigger with accessible label", () => {
+    // Scoped to the trigger, not the whole tree: a bare `getAllByTestId` also
+    // matches the footer's "Set Up Agents" Plug glyph, so it stayed green with
+    // the trigger icon removed entirely. The plus is the point of #11680 — a
+    // plug reads as connections, not as "make me a new thing".
+    const { getByLabelText } = render(<LauncherMenuButton />);
+    const trigger = getByLabelText("Launcher");
+    expect(trigger).toBeTruthy();
+    expect(trigger.querySelector('[data-testid="plus-icon"]')).toBeTruthy();
+    expect(trigger.querySelector('[data-testid="plug-icon"]')).toBeNull();
+  });
+
+  it("cancels an in-progress shortcut capture on Escape instead of dismissing", () => {
+    // Lesson #4588: between mounting the capture UI and entering recording
+    // state, Escape reaches Radix's DismissableLayer and tears the menu down
+    // mid-recording. The guard has to preventDefault and clear the capture.
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    const { getByTestId, queryByTestId } = render(
+      <LauncherMenuButton agentAvailability={availability} />
+    );
+    fireEvent.click(getByTestId("launcher-shortcut-edit-claude"));
+    expect(getByTestId("launcher-capture-claude")).toBeTruthy();
+
+    const escapeEvent = { preventDefault: vi.fn() };
+    act(() => escapeKeyDownSpy?.(escapeEvent));
+
+    expect(escapeEvent.preventDefault).toHaveBeenCalled();
+    expect(queryByTestId("launcher-capture-claude")).toBeNull();
+  });
+
+  it("keeps the menu open on an outside pointer press while capturing", () => {
+    // A stray click on the capture row's own inner controls must not tear down
+    // the in-progress recording session.
+    const availability = { claude: "ready" } as unknown as CliAvailability;
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={availability} />);
+    fireEvent.click(getByTestId("launcher-shortcut-edit-claude"));
+
+    const outsideEvent = { preventDefault: vi.fn() };
+    act(() => pointerDownOutsideSpy?.(outsideEvent));
+
+    expect(outsideEvent.preventDefault).toHaveBeenCalled();
+    expect(getByTestId("launcher-capture-claude")).toBeTruthy();
   });
 
   it("lists all ready agents in the Launch section regardless of pin state", () => {
@@ -1030,7 +1073,7 @@ describe("LauncherMenuButton", () => {
     expect(closeAutoFocusSpy).toBeTruthy();
     expect(pointerDownOutsideSpy).toBeTruthy();
 
-    pointerDownOutsideSpy!();
+    pointerDownOutsideSpy!({ preventDefault: () => {} });
     const preventDefault = vi.fn();
     closeAutoFocusSpy!({ preventDefault });
     expect(preventDefault).toHaveBeenCalledTimes(1);
@@ -1047,7 +1090,7 @@ describe("LauncherMenuButton", () => {
     expect(closeAutoFocusSpy).toBeTruthy();
     expect(pointerDownOutsideSpy).toBeTruthy();
 
-    pointerDownOutsideSpy!();
+    pointerDownOutsideSpy!({ preventDefault: () => {} });
     closeAutoFocusSpy!({ preventDefault: vi.fn() });
 
     const preventDefault = vi.fn();
@@ -1864,15 +1907,38 @@ describe("LauncherMenuButton — agent pin write path (#11680)", () => {
 
   const ready = { claude: "ready", gemini: "ready" } as unknown as CliAvailability;
 
-  it("gives a newly-pinned agent a position as well as a pin", () => {
+  it("gives a newly-pinned agent a position once the pin write lands", async () => {
     // The gap this issue opened: with no agent id in `DEFAULT_LEFT_BUTTONS`, a
     // fresh profile's `setAgentPinned(id, true)` leaves the button with nowhere
-    // to render. Both writes or the pin does nothing visible.
+    // to render. Both writes or the pin does nothing visible — but the position
+    // waits for the pin, so a rejected IPC leaves no orphaned slot behind.
     const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
     fireEvent.click(getByTestId("launcher-pin-claude"));
 
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
+    expect(positionAgentButtonMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(positionAgentButtonMock).toHaveBeenCalledWith("claude");
+  });
+
+  it("writes no position when the pin write rejects", async () => {
+    // The rollback restores an *unset* pin, which `isAgentButtonOnToolbar`
+    // resolves through the position — so an orphaned slot would make a failed
+    // write read as a successful pin on every surface.
+    setAgentPinnedMock.mockRejectedValueOnce(new Error("ipc down"));
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+    fireEvent.click(getByTestId("launcher-pin-claude"));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
+    expect(positionAgentButtonMock).not.toHaveBeenCalled();
   });
 
   it("does not ask for a position when unpinning", () => {
@@ -1900,6 +1966,50 @@ describe("LauncherMenuButton — agent pin write path (#11680)", () => {
     // …and unpinning it writes the explicit `false` rather than trying to promote.
     fireEvent.click(getByTestId("launcher-pin-claude"));
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
+  });
+
+  it("pins an agent that has presets, from its split row", () => {
+    // The row switches to `SplitLaunchItem` the moment a preset exists. Without
+    // its own affordance, creating a preset silently took that agent's pin away.
+    mockMergedPresetsFn = () => [{ id: "p1", name: "Fast" }] as never;
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+
+    expect(getByTestId("launcher-pin-claude").getAttribute("data-pinned")).toBe("false");
+    fireEvent.click(getByTestId("launcher-pin-claude"));
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
+  });
+
+  it("toggles a split row's pin from the P key without launching", () => {
+    mockMergedPresetsFn = () => [{ id: "p1", name: "Fast" }] as never;
+    const { getAllByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+    fireEvent.keyDown(getAllByTestId("submenu-trigger")[0]!, { key: "P" });
+
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
+    expect(dispatchMock).not.toHaveBeenCalledWith(
+      "agent.launch",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("does not let one row's debounce swallow another row's pin", () => {
+    // Distinct rows are distinct intents. A single shared timestamp dropped the
+    // second of any two toggles landing inside 50ms — reachable from the
+    // keyboard with P, ArrowDown, P.
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+    fireEvent.click(getByTestId("launcher-pin-claude"));
+    fireEvent.click(getByTestId("launcher-pin-terminal"));
+
+    expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("terminal", false);
+  });
+
+  it("still debounces a double-fire on the SAME row", () => {
+    const { getByTestId } = render(<LauncherMenuButton agentAvailability={ready} />);
+    fireEvent.click(getByTestId("launcher-pin-claude"));
+    fireEvent.click(getByTestId("launcher-pin-claude"));
+
+    expect(setAgentPinnedMock).toHaveBeenCalledTimes(1);
   });
 
   it("never writes an agent pin through the panel setter", () => {

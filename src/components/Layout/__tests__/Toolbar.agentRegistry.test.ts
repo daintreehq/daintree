@@ -94,8 +94,24 @@ describe("Toolbar — agent registry zero-touch guarantee (issue #5070)", () => 
       // button with nowhere to render. Two live paths reach this: a fresh
       // profile's `buildInitialAgentPinUpdates` seeding, and a stale sibling
       // view overwriting the orderings.
-      expect(source).toContain("unpositionedPins");
+      expect(source).toContain("unpositionedAgentPins");
       expect(source).toMatch(/positioned\.splice\(/);
+    });
+
+    it("materializes the position rather than leaving a permanently ghosted button", () => {
+      // A rendered-but-unpositioned button is absent from Settings' sortable
+      // columns and inert to `moveButton`, which reads the arrays — so the
+      // first-run seeding would strand up to five agents that can never be
+      // reordered. The splice is a bridge; the write is the repair.
+      expect(source).toMatch(
+        /for \(const id of unpositionedAgentPins\) positionAgentButton\(id\);/
+      );
+    });
+
+    it("puts the repair on whichever side the launcher is on", () => {
+      // Splicing unconditionally into the left would strand pinned agents away
+      // from a launcher the user dragged to the right.
+      expect(source).toContain("launcherOnRight");
     });
 
     it("keys the repair off the explicit pin, never the availability fall-through", () => {
@@ -104,8 +120,8 @@ describe("Toolbar — agent registry zero-touch guarantee (issue #5070)", () => 
       // installed CLI — exactly the crowding this issue removed — while looking
       // like a correct visibility check.
       const repair = source.slice(
-        source.indexOf("const unpositionedPins"),
-        source.indexOf("return positioned.filter(")
+        source.indexOf("const unpositionedAgentPins"),
+        source.indexOf("const launcherOnRight")
       );
       expect(repair).toContain("isAgentPinned(");
       expect(repair).not.toContain("isAgentToolbarVisible(");

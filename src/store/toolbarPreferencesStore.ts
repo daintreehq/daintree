@@ -242,7 +242,13 @@ type ToolbarLayoutState = ToolbarPreferences["layout"];
  */
 function restorePromotedPanelButtons(layout: ToolbarLayoutState): ToolbarLayoutState {
   let next = layout;
-  for (const buttonId of LAUNCHER_PANEL_BUTTON_IDS) {
+  // Reverse order, because every insert lands at the same index — immediately
+  // after the launcher, which does not move. Walking forwards would emit the
+  // list backwards. (This was self-correcting while the anchor was the mid-row
+  // panel tray: inserting *at* its index pushed it right, so the next insert
+  // landed after the previous one.)
+  for (let i = LAUNCHER_PANEL_BUTTON_IDS.length - 1; i >= 0; i--) {
+    const buttonId = LAUNCHER_PANEL_BUTTON_IDS[i]!;
     if (next.pinnedButtons[buttonId] !== true) continue;
     if (next.leftButtons.includes(buttonId) || next.rightButtons.includes(buttonId)) continue;
     next = { ...next, ...positionLauncherButton(next, buttonId) };
@@ -946,7 +952,10 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
           };
 
           const mergeTrayPins = (value: unknown): unknown => {
-            if (typeof value !== "object" || value === null || Array.isArray(value)) return value;
+            // A malformed map normalizes to `{}` rather than passing through, so
+            // an array-shaped blob doesn't get re-persisted at v14 — the v12/v13
+            // steps narrow the same way.
+            if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
             const carried: Record<string, unknown> = {};
             let agentTrayHidden = false;
             let panelTrayHidden = false;
