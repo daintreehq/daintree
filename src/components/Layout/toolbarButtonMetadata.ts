@@ -11,7 +11,7 @@ import {
   SquareMenu,
   SquareTerminal,
 } from "lucide-react";
-import { FolderTree, Folders, History, Package } from "@/components/icons";
+import { FolderTree, Folders, History, LayoutPanelTop, Package } from "@/components/icons";
 import {
   BUILT_IN_AGENT_IDS,
   isBuiltInAgentId,
@@ -62,6 +62,11 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
     label: "Plugin tray",
     icon: Package,
     description: "Dropdown collecting every plugin's toolbar buttons",
+  },
+  "panel-tray": {
+    label: "Panel tray",
+    icon: LayoutPanelTop,
+    description: "Dropdown for opening the non-agent panels and pinning them to the toolbar",
   },
   ...AGENT_METADATA,
   terminal: {

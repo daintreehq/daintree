@@ -5,6 +5,7 @@ import type {
   ToolbarPreferences,
   ToolbarButtonId,
   AnyToolbarButtonId,
+  PanelTrayButtonId,
   PluginToolbarButtonId,
   ToolbarPinnedState,
 } from "@/../../shared/types/toolbar";
@@ -17,13 +18,25 @@ import {
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { BUILT_IN_AGENT_IDS, LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 
+/**
+ * `browser` and `dev-server` are deliberately absent (#11667). Both assume web
+ * development; the file browser assumes only that the project has files, so it
+ * takes the first-class slot and the other two move into the panel tray.
+ *
+ * Absence from this array — not a seeded `pinnedButtons` entry — is what makes
+ * them ship hidden. `mergeButtonList` only ever *adds* defaults a profile is
+ * missing and never removes an id a profile carries, so an existing toolbar
+ * keeps both buttons untouched while a fresh one never grows them. That
+ * per-profile discriminator is the whole reason no migration has to stamp
+ * anything: see the `ToolbarPinnedState` doc comment on why stamping a default
+ * would forfeit the ability to ever change it again.
+ */
 const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
   "agent-tray",
   ...(LAUNCHABLE_AGENT_IDS as unknown as ToolbarButtonId[]),
   "terminal",
-  "browser",
   "file-browser",
-  "dev-server",
+  "panel-tray",
 ];
 
 const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
@@ -38,27 +51,16 @@ const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "problems",
 ];
 
-/**
- * Built-ins that ship hidden: offered in Settings → Toolbar, but absent from the
- * toolbar until the user opts in (#11495).
- *
- * Every path that materializes "no persisted pin map" has to resolve to this,
- * not to `{}` — the defaults, the hydration merge, and the cross-view baseline
- * alike. `{}` means "the user has no pins", which for a built-in reads as
- * *visible*; using it for a missing map is what would leak the button onto a
- * toolbar. An explicitly stored `{}` is different and must be respected: that is
- * exactly what `toggleButtonVisibility` leaves behind when a user turns the
- * button on.
- */
-const DEFAULT_PINNED_BUTTONS: ToolbarPinnedState = { "file-browser": false };
-
 const DEFAULT_PREFERENCES: ToolbarPreferences = {
   layout: {
     leftButtons: DEFAULT_LEFT_BUTTONS,
     rightButtons: DEFAULT_RIGHT_BUTTONS,
-    // Not redundant with the v12 migration: a fresh install has no persisted
-    // blob, so `migrate` never runs and this is the only source of truth.
-    pinnedButtons: DEFAULT_PINNED_BUTTONS,
+    // Always empty, and there is no `DEFAULT_PINNED_BUTTONS` constant to seed it
+    // from any more (#11667). A default belongs in the arrays above; this map
+    // holds user overrides only, so a fresh profile has nothing to say here.
+    // Reintroducing a seeded default would repeat the v12 mistake — see the
+    // `ToolbarPinnedState` doc comment.
+    pinnedButtons: {},
   },
   launcher: {
     alwaysShowDevServer: false,
@@ -68,8 +70,19 @@ const DEFAULT_PREFERENCES: ToolbarPreferences = {
 
 const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "assistant-toggle", "portal-toggle"];
 
-/** Home side lookup, used to pick the survivor when an id sits on both sides. */
-const DEFAULT_LEFT_BUTTON_SET = new Set<AnyToolbarButtonId>(DEFAULT_LEFT_BUTTONS);
+/**
+ * Home side lookup, used *only* to pick the survivor when an id sits on both
+ * sides. Deliberately not `DEFAULT_LEFT_BUTTONS` itself: `browser` and
+ * `dev-server` left the defaults in v13 (#11667) but a profile old enough to
+ * carry a cross-side duplicate of one still had it as a left-side button when
+ * the duplicate formed. Reading the live defaults here would flip the repair for
+ * exactly those profiles and keep the copy the user dragged *away* from.
+ *
+ * Membership here never causes a button to be inserted anywhere — that is
+ * `mergeButtonList`'s job, and it reads the defaults, not this set.
+ */
+const LEFT_HOME_BUTTON_IDS: ToolbarButtonId[] = [...DEFAULT_LEFT_BUTTONS, "browser", "dev-server"];
+const DEFAULT_LEFT_BUTTON_SET = new Set<AnyToolbarButtonId>(LEFT_HOME_BUTTON_IDS);
 
 function sanitizeButtonList(buttons: AnyToolbarButtonId[]): AnyToolbarButtonId[] {
   const filtered = buttons.filter((id) => !FIXED_BUTTON_IDS.includes(id as ToolbarButtonId));
@@ -205,16 +218,14 @@ function toToolbarPersisted(
     layout: {
       leftButtons: sanitizeButtonList(asButtonList(layout?.leftButtons) ?? DEFAULT_LEFT_BUTTONS),
       rightButtons: sanitizeButtonList(asButtonList(layout?.rightButtons) ?? DEFAULT_RIGHT_BUTTONS),
-      // Absent falls back to defaults like the two lists above; an explicitly
-      // stored map (including `{}`) is normalized as-is. The distinction decides
-      // whether a ships-hidden button survives a cross-view merge: normalizing a
-      // *missing* map to `{}` would make a sibling view's untouched
-      // `file-browser: false` look like a fresh edit and revert another view's
-      // opt-in (#11495).
-      pinnedButtons:
-        layout?.pinnedButtons === undefined
-          ? { ...DEFAULT_PINNED_BUTTONS }
-          : normalizePinnedButtons(layout.pinnedButtons),
+      // Both a missing and an explicitly-stored-empty map normalize to `{}`,
+      // because as of #11667 no built-in ships hidden and the defaults carry no
+      // pins to preserve. The distinction used to matter: while `file-browser`
+      // shipped as a seeded `false`, normalizing a *missing* map to `{}` made a
+      // sibling view's untouched seed look like a fresh edit and reverted
+      // another view's opt-in (#11495). With nothing seeded there is no baseline
+      // `false` left to misread, so the two cases converge.
+      pinnedButtons: normalizePinnedButtons(layout?.pinnedButtons),
     },
     launcher: {
       alwaysShowDevServer:
@@ -316,6 +327,26 @@ interface ToolbarPreferencesState extends ToolbarPreferences {
    */
   setPluginButtonPromoted: (buttonId: PluginToolbarButtonId, promoted: boolean) => void;
   /**
+   * Give a panel-tray button its own top-level toolbar slot, or take it away
+   * (#11667).
+   *
+   * Distinct from `toggleButtonVisibility` because that only ever touches
+   * `pinnedButtons`, and since v13 `browser`/`dev-server` are absent from
+   * `DEFAULT_LEFT_BUTTONS` — so on a fresh profile they sit in neither side
+   * array and clearing a pin alone would leave them with nowhere to render.
+   *
+   * Showing deletes any hide entry and, only when the id is positioned on
+   * neither side, gives it one; it never writes `true`. A positioned built-in
+   * with no pin entry is already visible, so a `true` would record nothing the
+   * arrays don't already say — and seeding this map with values the user did not
+   * choose is the v12 mistake (see `ToolbarPinnedState`).
+   *
+   * Hiding writes `false` and leaves the position alone, exactly like
+   * `toggleButtonVisibility`, so re-showing restores the button where the user
+   * had it rather than appending it somewhere new.
+   */
+  setPanelButtonOnToolbar: (buttonId: PanelTrayButtonId, onToolbar: boolean) => void;
+  /**
    * Prune `pinnedButtons` entries for plugin buttons that are no longer in
    * the loaded plugin set. `pinnedButtons` is renderer-local persisted state
    * with no main-process access, so an uninstalled plugin's stale hide entry
@@ -393,6 +424,38 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             layout: { ...state.layout, pinnedButtons: pinned },
           };
         }),
+      setPanelButtonOnToolbar: (buttonId, onToolbar) =>
+        set((state) => {
+          const pinned: ToolbarPinnedState = { ...state.layout.pinnedButtons };
+          if (!onToolbar) {
+            if (pinned[buttonId] === false) return state;
+            pinned[buttonId] = false;
+            return { layout: { ...state.layout, pinnedButtons: pinned } };
+          }
+
+          delete pinned[buttonId];
+          const isPositioned =
+            state.layout.leftButtons.includes(buttonId) ||
+            state.layout.rightButtons.includes(buttonId);
+          if (isPositioned) {
+            if (state.layout.pinnedButtons[buttonId] === undefined) return state;
+            return { layout: { ...state.layout, pinnedButtons: pinned } };
+          }
+
+          // Unpositioned: land it next to the tray it was promoted from, so the
+          // panel buttons stay grouped instead of the id appearing at whichever
+          // end of the row a bare append would put it. `panel-tray` can only be
+          // missing from a hand-edited profile, in which case the left side is
+          // where these buttons have always lived (`LEFT_HOME_BUTTON_IDS`).
+          const trayOnRight = state.layout.rightButtons.includes("panel-tray");
+          const side = trayOnRight ? "rightButtons" : "leftButtons";
+          const target = [...state.layout[side]];
+          const trayIndex = target.indexOf("panel-tray");
+          target.splice(trayIndex === -1 ? target.length : trayIndex, 0, buttonId);
+          return {
+            layout: { ...state.layout, pinnedButtons: pinned, [side]: sanitizeButtonList(target) },
+          };
+        }),
       setPluginButtonPromoted: (buttonId, promoted) =>
         set((state) => {
           const current = state.layout.pinnedButtons[buttonId];
@@ -449,7 +512,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }),
     {
       name: "daintree-toolbar-preferences",
-      version: 12,
+      version: 13,
       storage: createSafeJSONStorage<ToolbarPreferencesPersistedState>({
         mergeOnWrite: mergeToolbarPreferencesPersistedWrite,
       }),
@@ -680,6 +743,60 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             pinnedButtons: { ...carriedPins, "file-browser": false },
           };
         }
+        if (version < 13) {
+          // Undo the v12 stamp above (#11667). `file-browser` now ships visible,
+          // and the `false` v12 wrote onto every profile was never user intent —
+          // removing it repairs a bad write rather than overriding a preference.
+          //
+          // Only a literal `false` is removed. A `true` is left alone: nothing
+          // writes `true` for a built-in, so one can only have arrived from a
+          // hand-edited profile, and deleting it would be the same overreach v12
+          // committed.
+          //
+          // One reset is unavoidable and is NOT a bug: a user who deliberately
+          // hid `file-browser` after v12 carries the identical `false` as the
+          // stamp, so the button reappears for them once. The two are
+          // indistinguishable precisely because v12 materialized a default into
+          // user state — the reason this map now records overrides only. The
+          // affected population is small: the shipped state was already hidden,
+          // so hiding it again required showing it first.
+          //
+          // `browser` and `dev-server` are deliberately untouched — no `false`
+          // stamp, no position change. They ship absent from the *defaults*
+          // (`DEFAULT_LEFT_BUTTONS`), which leaves every existing profile's copy
+          // exactly where it is while fresh profiles never grow one. Stamping
+          // them here would mass-backfill a default into existing records and
+          // forfeit the ability to change it again, which is the whole mistake
+          // this step exists to undo.
+          //
+          // `panel-tray` needs no placement here either: `mergeButtonList`
+          // inserts a newly-defaulted id on every hydration, and pushing it into
+          // the arrays as well is how a profile ends up with the id twice
+          // (#10938).
+          //
+          // Narrowed rather than asserted, matching the v12 step: `state` is
+          // already `Record<string, unknown>`, so `in`/`typeof` guards reach the
+          // same place without a type assertion, and the lint ratchet scores
+          // `no-unsafe-type-assertion` per rule.
+          const layout = state.layout;
+          const hasLayout = typeof layout === "object" && layout !== null && !Array.isArray(layout);
+          const existingPins = hasLayout && "pinnedButtons" in layout ? layout.pinnedButtons : null;
+          const carriedPins =
+            typeof existingPins === "object" &&
+            existingPins !== null &&
+            !Array.isArray(existingPins)
+              ? existingPins
+              : {};
+          const repairedPins = Object.fromEntries(
+            Object.entries(carriedPins).filter(
+              ([key, value]) => !(key === "file-browser" && value === false)
+            )
+          );
+          state.layout = {
+            ...(hasLayout ? layout : {}),
+            pinnedButtons: repairedPins,
+          };
+        }
         return state as unknown as ToolbarPreferencesState;
       },
       partialize: (state) => ({
@@ -715,17 +832,14 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
               currentState.layout.rightButtons,
               healed.leftButtons
             ),
-            // Defaults, never `{}` — see `DEFAULT_PINNED_BUTTONS`. A blob already
-            // stamped at the current version skips `migrate` entirely, so a
-            // layout that carries no pin map would otherwise surface a
-            // ships-hidden button. An explicitly stored `{}` still wins, which is
-            // how a genuine opt-in survives.
-            //
-            // The constant rather than `currentState.layout.pinnedButtons`: on a
-            // re-`rehydrate()` zustand passes live state here, not the creator
-            // defaults, so reading from it would carry the previous blob's pins
-            // into a blob that has none.
-            pinnedButtons: persisted.layout?.pinnedButtons ?? { ...DEFAULT_PINNED_BUTTONS },
+            // A literal `{}`, never `currentState.layout.pinnedButtons`: on a
+            // re-`rehydrate()` zustand passes live state here rather than the
+            // creator defaults, so reading from it would carry the previous
+            // blob's pins into a blob that has none. There is no default pin map
+            // to fall back to any more (#11667) — a profile with no persisted
+            // pins has expressed no overrides, and every built-in it positions
+            // is therefore visible.
+            pinnedButtons: persisted.layout?.pinnedButtons ?? {},
           },
         };
       },

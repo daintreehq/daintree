@@ -1,10 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  AnyToolbarButtonId,
-  PluginToolbarButtonId,
-  ToolbarPinnedState,
-} from "@/../../shared/types/toolbar";
+import type { AnyToolbarButtonId, PluginToolbarButtonId } from "@/../../shared/types/toolbar";
 
 // Mirror the production agent IDs so the v5 migration is exercised against
 // the real set, not a subset. Keeping the mock in sync guards against
@@ -82,25 +78,11 @@ function setStoredState(state: Record<string, unknown>, version = 2) {
   storageMock.setItem(STORAGE_KEY, JSON.stringify({ state, version }));
 }
 
-/**
- * `pinnedButtons` minus the hides that ship as defaults — currently just
- * `file-browser`, which the store seeds and the v12 migration stamps onto every
- * older profile so a new built-in can be offered in Settings without appearing
- * on anyone's toolbar (#11495).
- *
- * The per-version cases below assert what their own migration step produced, so
- * they compare against this rather than the raw map; the seed itself is covered
- * by the v11→v12 block. Filtering in one place is what keeps the next
- * ships-hidden button a one-line change here instead of an edit to every
- * expectation in the file.
- */
-function pinsWithoutShippedHides(pinned: ToolbarPinnedState): Record<string, boolean> {
-  const rest: Record<string, boolean> = {};
-  for (const [key, value] of Object.entries(pinned)) {
-    if (key !== "file-browser" && typeof value === "boolean") rest[key] = value;
-  }
-  return rest;
-}
+// The cases below compare `pinnedButtons` directly. They used to route through a
+// `pinsWithoutShippedHides()` filter that stripped the `file-browser: false`
+// seed v12 stamped onto every profile; v13 removed that seed and the store no
+// longer ships any hidden built-in, so there is nothing left to filter out
+// (#11667). An empty map is now the correct expectation everywhere.
 
 async function loadStore() {
   const mod = await import("../toolbarPreferencesStore");
@@ -389,7 +371,7 @@ describe("toolbarPreferencesStore", () => {
       store.getState().setLeftButtons([...store.getState().layout.leftButtons].reverse());
 
       store.getState().reset();
-      expect(pinsWithoutShippedHides(store.getState().layout.pinnedButtons)).toEqual({});
+      expect(store.getState().layout.pinnedButtons).toEqual({});
       expect(store.getState().layout.leftButtons).toEqual(defaults.leftButtons);
       expect(store.getState().layout.rightButtons).toEqual(defaults.rightButtons);
     });
@@ -443,14 +425,14 @@ describe("toolbarPreferencesStore", () => {
 
       const store = await loadStore();
       // v9→v10 renames "github-stats" to "forge-stats" after the v8 conversion.
-      expect(pinsWithoutShippedHides(store.getState().layout.pinnedButtons)).toEqual({
+      expect(store.getState().layout.pinnedButtons).toEqual({
         terminal: false,
         "forge-stats": false,
         "copy-tree": false,
       });
     });
 
-    it("merges new default buttons without re-inserting hidden ones", async () => {
+    it("preserves a hidden button's pin state without giving it a position back", async () => {
       setStoredState(
         {
           layout: {
@@ -464,12 +446,38 @@ describe("toolbarPreferencesStore", () => {
       );
 
       const store = await loadStore();
-      // "browser" was hidden — it should be re-added to leftButtons by mergeButtonList
-      // (since it was missing from the persisted leftButtons) but its hide-state
-      // is preserved as `pinnedButtons.browser === false`.
+      // The v7→v8 conversion still translates the old `hiddenButtons` entry into
+      // an explicit `false`.
       expect(store.getState().layout.pinnedButtons["browser"]).toBe(false);
-      // mergeButtonList will add browser back to leftButtons since it's a default
-      expect(store.getState().layout.leftButtons).toContain("browser");
+      // But `browser` left the defaults in v13 (#11667), so `mergeButtonList`
+      // has nothing to re-insert — the id is simply absent from this profile.
+      expect(store.getState().layout.leftButtons).not.toContain("browser");
+    });
+
+    it("keeps browser and dev-server positioned when a profile already carries them", async () => {
+      // The invariant the whole #11667 migration policy rests on: dropping the
+      // two from `DEFAULT_LEFT_BUTTONS` must not evict them from a profile that
+      // has them, because array membership is the only thing distinguishing an
+      // existing toolbar from a fresh one.
+      setStoredState(
+        {
+          layout: {
+            leftButtons: ["terminal", "browser", "file-browser", "dev-server"],
+            rightButtons: ["settings"],
+            pinnedButtons: {},
+          },
+          launcher: { alwaysShowDevServer: false },
+        },
+        12
+      );
+
+      const store = await loadStore();
+      const { leftButtons, pinnedButtons } = store.getState().layout;
+      expect(leftButtons).toContain("browser");
+      expect(leftButtons).toContain("dev-server");
+      // Untouched pin state — no `false` stamped onto either.
+      expect(pinnedButtons["browser"]).toBeUndefined();
+      expect(pinnedButtons["dev-server"]).toBeUndefined();
     });
   });
 
@@ -490,12 +498,20 @@ describe("toolbarPreferencesStore", () => {
       );
 
       const store = await loadStore();
-      expect(pinsWithoutShippedHides(store.getState().layout.pinnedButtons)).toEqual({});
+      expect(store.getState().layout.pinnedButtons).toEqual({});
     });
 
-    it("includes dev-server in default left buttons", async () => {
+    it("omits browser and dev-server from default left buttons but keeps the ids valid", async () => {
       const store = await loadStore();
-      expect(store.getState().layout.leftButtons).toContain("dev-server");
+      const { leftButtons, rightButtons } = store.getState().layout;
+      // Both moved into the panel tray for fresh profiles (#11667). They are not
+      // deleted ids — `TOOLBAR_BUTTON_PRIORITIES` and the metadata registry
+      // still carry them — they simply aren't defaults any more.
+      expect(leftButtons).not.toContain("browser");
+      expect(leftButtons).not.toContain("dev-server");
+      expect(rightButtons).not.toContain("browser");
+      expect(rightButtons).not.toContain("dev-server");
+      expect(leftButtons).toContain("panel-tray");
     });
 
     it("includes command-palette in default right buttons before settings", async () => {
@@ -576,7 +592,7 @@ describe("toolbarPreferencesStore", () => {
       expect(layout.pinnedButtons["command-palette"]).toBe(false);
     });
 
-    it("re-inserts dev-server for persisted state missing it via mergeButtonList", async () => {
+    it("re-inserts a still-defaulted button for persisted state missing it via mergeButtonList", async () => {
       setStoredState({
         layout: {
           leftButtons: ["terminal", "browser", "notes"],
@@ -587,7 +603,11 @@ describe("toolbarPreferencesStore", () => {
       });
 
       const store = await loadStore();
-      expect(store.getState().layout.leftButtons).toContain("dev-server");
+      // `file-browser` stands in for what `dev-server` used to prove here: a
+      // default missing from the persisted list gets inserted on hydration.
+      // `dev-server` can no longer make the point — it left the defaults in v13.
+      expect(store.getState().layout.leftButtons).toContain("file-browser");
+      expect(store.getState().layout.leftButtons).not.toContain("dev-server");
     });
 
     it("v2→v3 renames 'agent-setup' to 'agent-tray' across all button arrays", async () => {
@@ -720,7 +740,7 @@ describe("toolbarPreferencesStore", () => {
       const store = await loadStore();
       const { layout } = store.getState();
       // Agent IDs stripped at v5, then v8 converts the remainder to a map.
-      expect(pinsWithoutShippedHides(layout.pinnedButtons)).toEqual({ "copy-tree": false });
+      expect(layout.pinnedButtons).toEqual({ "copy-tree": false });
       // Ordering arrays untouched.
       expect(layout.leftButtons).toContain("claude");
       expect(layout.leftButtons).toContain("gemini");
@@ -755,7 +775,7 @@ describe("toolbarPreferencesStore", () => {
 
       const store = await loadStore();
       // All built-in agent IDs stripped; non-agent entry survives into pinnedButtons.
-      expect(pinsWithoutShippedHides(store.getState().layout.pinnedButtons)).toEqual({
+      expect(store.getState().layout.pinnedButtons).toEqual({
         "copy-tree": false,
       });
     });
@@ -777,7 +797,7 @@ describe("toolbarPreferencesStore", () => {
       );
 
       const store = await loadStore();
-      expect(pinsWithoutShippedHides(store.getState().layout.pinnedButtons)).toEqual({
+      expect(store.getState().layout.pinnedButtons).toEqual({
         "forge-stats": false,
         "copy-tree": false,
       });
@@ -804,7 +824,7 @@ describe("toolbarPreferencesStore", () => {
       );
 
       const store = await loadStore();
-      expect(pinsWithoutShippedHides(store.getState().layout.pinnedButtons)).toEqual({
+      expect(store.getState().layout.pinnedButtons).toEqual({
         "copy-tree": false,
       });
       // Ordering arrays untouched.
@@ -880,7 +900,7 @@ describe("toolbarPreferencesStore", () => {
       expect(layout.leftButtons).toContain("terminal");
       expect(layout.leftButtons).toContain("browser");
       expect(layout.rightButtons).toContain("settings");
-      expect(pinsWithoutShippedHides(layout.pinnedButtons)).toEqual({});
+      expect(layout.pinnedButtons).toEqual({});
     });
 
     it("sanitizeButtonList strips assistant-toggle when set via setRightButtons", async () => {
@@ -941,12 +961,18 @@ describe("toolbarPreferencesStore", () => {
       );
 
       const store = await loadStore();
-      // v0→v1: removes old dev-server, mergeButtonList re-adds it from current defaults
-      expect(store.getState().layout.leftButtons).toContain("dev-server");
+      // v0→v1 strips the old `dev-server` entry, and since v13 the current
+      // defaults no longer undo that — the removal finally sticks. This
+      // assertion used to read `toContain`, which only passed because
+      // `mergeButtonList` re-added what v0→v1 had just removed (#11667).
+      expect(store.getState().layout.leftButtons).not.toContain("dev-server");
+      // `browser` was never touched by v0→v1, and dropping it from the defaults
+      // doesn't evict it from a profile that carries it.
+      expect(store.getState().layout.leftButtons).toContain("browser");
       // v0→v1: resets defaultSelection that was "dev-server"
       expect(store.getState().launcher.defaultSelection).toBeUndefined();
       // v7→v8: replaces the hiddenButtons array with the pinnedButtons map.
-      expect(pinsWithoutShippedHides(store.getState().layout.pinnedButtons)).toEqual({});
+      expect(store.getState().layout.pinnedButtons).toEqual({});
     });
 
     describe("v7→v8 hiddenButtons → pinnedButtons", () => {
@@ -968,7 +994,7 @@ describe("toolbarPreferencesStore", () => {
 
         const store = await loadStore();
         const { layout } = store.getState();
-        expect(pinsWithoutShippedHides(layout.pinnedButtons)).toEqual({
+        expect(layout.pinnedButtons).toEqual({
           terminal: false,
           "copy-tree": false,
         });
@@ -996,7 +1022,7 @@ describe("toolbarPreferencesStore", () => {
         );
 
         const store = await loadStore();
-        expect(pinsWithoutShippedHides(store.getState().layout.pinnedButtons)).toEqual({});
+        expect(store.getState().layout.pinnedButtons).toEqual({});
       });
 
       it("synthesizes a v8 layout shape when v7 state lacks the layout block", async () => {
@@ -1011,7 +1037,7 @@ describe("toolbarPreferencesStore", () => {
         const store = await loadStore();
         // merge() should fall back to defaults rather than crash; pinnedButtons
         // must still be the canonical empty map.
-        expect(pinsWithoutShippedHides(store.getState().layout.pinnedButtons)).toEqual({});
+        expect(store.getState().layout.pinnedButtons).toEqual({});
         expect(store.getState().layout.leftButtons).toBeDefined();
       });
 
@@ -1036,7 +1062,7 @@ describe("toolbarPreferencesStore", () => {
         );
 
         const store = await loadStore();
-        expect(pinsWithoutShippedHides(store.getState().layout.pinnedButtons)).toEqual({
+        expect(store.getState().layout.pinnedButtons).toEqual({
           terminal: true,
           "copy-tree": false,
         });
@@ -1059,7 +1085,7 @@ describe("toolbarPreferencesStore", () => {
         );
 
         const store = await loadStore();
-        expect(pinsWithoutShippedHides(store.getState().layout.pinnedButtons)).toEqual({
+        expect(store.getState().layout.pinnedButtons).toEqual({
           "copy-tree": false,
         });
       });
@@ -1112,7 +1138,7 @@ describe("toolbarPreferencesStore", () => {
         );
 
         const store = await loadStore();
-        expect(pinsWithoutShippedHides(store.getState().layout.pinnedButtons)).toEqual({
+        expect(store.getState().layout.pinnedButtons).toEqual({
           "copy-tree": false,
           terminal: false,
         });
@@ -1219,7 +1245,7 @@ describe("toolbarPreferencesStore", () => {
         );
 
         const store = await loadStore();
-        expect(pinsWithoutShippedHides(store.getState().layout.pinnedButtons)).toEqual({
+        expect(store.getState().layout.pinnedButtons).toEqual({
           "forge-stats": false,
         });
         expect(store.getState().layout.rightButtons).toContain("forge-stats");
@@ -1286,7 +1312,7 @@ describe("toolbarPreferencesStore", () => {
         );
         expect(rightButtons.indexOf("forge-stats")).toBeLessThan(rightButtons.indexOf("settings"));
         // The pin map is a Record — unique keys by construction, left untouched.
-        expect(pinsWithoutShippedHides(pinnedButtons)).toEqual({ "forge-stats": false });
+        expect(pinnedButtons).toEqual({ "forge-stats": false });
       });
 
       it("heals duplicates on an already-current blob via merge() (#10937)", async () => {
@@ -1319,8 +1345,12 @@ describe("toolbarPreferencesStore", () => {
       });
     });
 
-    describe("v11→v12 file-browser ships hidden (#11495)", () => {
-      it("hides file-browser for a profile that has never seen the button", async () => {
+    describe("v11→v13 file-browser is stamped hidden then un-stamped (#11495, #11667)", () => {
+      // A pre-v12 profile now runs both steps back to back: v12 stamps
+      // `file-browser: false` onto it, v13 removes that stamp. These assert the
+      // net result, which is what a real upgrade produces — the v12 step is not
+      // reachable on its own any more.
+      it("leaves no file-browser pin for a profile that has never seen the button", async () => {
         storageMock.setItem(
           STORAGE_KEY,
           JSON.stringify({
@@ -1338,18 +1368,14 @@ describe("toolbarPreferencesStore", () => {
 
         const store = await loadStore();
         const { leftButtons, rightButtons, pinnedButtons } = store.getState().layout;
-        expect(pinnedButtons["file-browser"]).toBe(false);
-        // Offered in Settings (so it needs a position) but not on the toolbar.
+        expect(pinnedButtons["file-browser"]).toBeUndefined();
+        // Positioned exactly once, and now actually on the toolbar.
         expect(
           [...leftButtons, ...rightButtons].filter((id) => id === "file-browser")
         ).toHaveLength(1);
       });
 
-      it("hides file-browser even for a heavily customized layout, with no carve-out", async () => {
-        // The reflexive instinct is to infer "this user would want it" from what
-        // they already show. #10709: a newly-introduced default belongs in the
-        // safe state for every pre-existing profile, unconditionally — otherwise
-        // the migration hands some users a toolbar change they never asked for.
+      it("leaves every unrelated preference untouched through both steps", async () => {
         storageMock.setItem(
           STORAGE_KEY,
           JSON.stringify({
@@ -1368,9 +1394,7 @@ describe("toolbarPreferencesStore", () => {
         const store = await loadStore();
         const { pinnedButtons } = store.getState().layout;
         const { launcher } = store.getState();
-        expect(pinnedButtons["file-browser"]).toBe(false);
-        // Every unrelated preference survives the step untouched.
-        expect(pinsWithoutShippedHides(pinnedButtons)).toEqual({
+        expect(pinnedButtons).toEqual({
           "copy-tree": false,
           terminal: true,
           "acme.tool": true,
@@ -1378,11 +1402,11 @@ describe("toolbarPreferencesStore", () => {
         expect(launcher.alwaysShowDevServer).toBe(true);
       });
 
-      it("overwrites a stray pre-v12 file-browser opt-in", async () => {
-        // `file-browser` was not a shipped built-in before v12, so a `true` here
-        // can only be junk (a hand-edited profile, or a dev build that carried
-        // the id early). Treating it as a user choice would let exactly the
-        // toolbar change this migration exists to prevent through.
+      it("preserves a stray file-browser `true` rather than deleting it", async () => {
+        // v12 overwrote this with `false`; v13 only removes a literal `false`, so
+        // the overwrite survives as an explicit-but-inert entry. Deleting a
+        // `true` would be the same overreach v13 exists to undo — and nothing in
+        // the app writes `true` for a built-in, so it can only be hand-authored.
         storageMock.setItem(
           STORAGE_KEY,
           JSON.stringify({
@@ -1394,12 +1418,12 @@ describe("toolbarPreferencesStore", () => {
               },
               launcher: { alwaysShowDevServer: false },
             },
-            version: 11,
+            version: 12,
           })
         );
 
         const store = await loadStore();
-        expect(store.getState().layout.pinnedButtons["file-browser"]).toBe(false);
+        expect(store.getState().layout.pinnedButtons["file-browser"]).toBe(true);
       });
 
       it("synthesizes a layout when a pre-v12 blob has none", async () => {
@@ -1412,19 +1436,71 @@ describe("toolbarPreferencesStore", () => {
         );
 
         const store = await loadStore();
-        expect(store.getState().layout.pinnedButtons["file-browser"]).toBe(false);
+        expect(store.getState().layout.pinnedButtons).toEqual({});
+        expect(store.getState().layout.leftButtons).toContain("file-browser");
       });
+    });
 
-      it("keeps an opt-in made after the migration ran", async () => {
-        // Already at the current version, so `migrate` does not run again — a
-        // user who turned the button on must not have it switched back off on
-        // every subsequent launch.
+    describe("v12→v13 un-hides file-browser (#11667)", () => {
+      it("deletes the v12 stamp and nothing else", async () => {
         storageMock.setItem(
           STORAGE_KEY,
           JSON.stringify({
             state: {
               layout: {
-                leftButtons: ["terminal", "file-browser"],
+                leftButtons: ["terminal", "browser", "file-browser", "dev-server"],
+                rightButtons: ["settings"],
+                pinnedButtons: { "file-browser": false, "copy-tree": false, "acme.tool": true },
+              },
+              launcher: { alwaysShowDevServer: false },
+            },
+            version: 12,
+          })
+        );
+
+        const store = await loadStore();
+        expect(store.getState().layout.pinnedButtons).toEqual({
+          "copy-tree": false,
+          "acme.tool": true,
+        });
+      });
+
+      it("never stamps browser or dev-server hidden on an existing profile", async () => {
+        // The whole point of the additive policy: converging existing users would
+        // mean mass-backfilling a default into their records, which permanently
+        // destroys the ability to change that default again — the exact mistake
+        // v12 made with file-browser and that v13 is undoing.
+        storageMock.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            state: {
+              layout: {
+                leftButtons: ["terminal", "browser", "file-browser", "dev-server"],
+                rightButtons: ["settings"],
+                pinnedButtons: { "file-browser": false },
+              },
+              launcher: { alwaysShowDevServer: false },
+            },
+            version: 12,
+          })
+        );
+
+        const store = await loadStore();
+        const { leftButtons, pinnedButtons } = store.getState().layout;
+        expect(pinnedButtons["browser"]).toBeUndefined();
+        expect(pinnedButtons["dev-server"]).toBeUndefined();
+        // Still positioned, so still visible — nobody loses a button they use.
+        expect(leftButtons).toContain("browser");
+        expect(leftButtons).toContain("dev-server");
+      });
+
+      it("adds panel-tray through the hydration merge, not a migration step", async () => {
+        storageMock.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            state: {
+              layout: {
+                leftButtons: ["terminal", "browser", "dev-server"],
                 rightButtons: ["settings"],
                 pinnedButtons: {},
               },
@@ -1435,24 +1511,58 @@ describe("toolbarPreferencesStore", () => {
         );
 
         const store = await loadStore();
-        // No entry at all is the "visible" state for a built-in, which is what
-        // `toggleButtonVisibility` leaves behind when a user re-enables it.
-        expect(store.getState().layout.pinnedButtons["file-browser"]).toBeUndefined();
+        const { leftButtons, rightButtons } = store.getState().layout;
+        // Exactly once — pushing a newly-defaulted id into the arrays from a
+        // migration as well is how a profile ends up carrying it twice (#10938).
+        expect([...leftButtons, ...rightButtons].filter((id) => id === "panel-tray")).toHaveLength(
+          1
+        );
+        expect(leftButtons).toContain("panel-tray");
+      });
+
+      it("leaves a profile already at v13 alone", async () => {
+        // `migrate` doesn't run for a current-version blob, so a user who hid
+        // file-browser after v13 must not have that choice reverted on launch.
+        storageMock.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            state: {
+              layout: {
+                leftButtons: ["terminal", "file-browser", "panel-tray"],
+                rightButtons: ["settings"],
+                pinnedButtons: { "file-browser": false },
+              },
+              launcher: { alwaysShowDevServer: false },
+            },
+            version: 13,
+          })
+        );
+
+        const store = await loadStore();
+        expect(store.getState().layout.pinnedButtons["file-browser"]).toBe(false);
       });
     });
   });
 
-  describe("file-browser defaults (#11495)", () => {
-    it("offers file-browser on the left between browser and dev-server, hidden", async () => {
+  describe("panel button defaults (#11495, #11667)", () => {
+    it("ships file-browser visible and the panel tray after it", async () => {
       // No stored state on purpose: a fresh install never runs `migrate`, so the
-      // store's own defaults are the only thing standing between a new user and
-      // a toolbar button the issue says must be opt-in.
+      // store's own defaults are the only source of truth for a new user.
       const store = await loadStore();
       const { leftButtons, pinnedButtons } = store.getState().layout;
 
-      expect(pinnedButtons["file-browser"]).toBe(false);
-      expect(leftButtons.indexOf("browser")).toBeLessThan(leftButtons.indexOf("file-browser"));
-      expect(leftButtons.indexOf("file-browser")).toBeLessThan(leftButtons.indexOf("dev-server"));
+      expect(pinnedButtons["file-browser"]).toBeUndefined();
+      expect(leftButtons).toContain("file-browser");
+      expect(leftButtons.indexOf("file-browser")).toBeLessThan(leftButtons.indexOf("panel-tray"));
+    });
+
+    it("synthesizes no pin entries at all for a fresh profile", async () => {
+      // The #11667 invariant: `pinnedButtons` records user intent only. A profile
+      // nobody has touched has expressed none, so an empty map is the only
+      // correct state — a seeded default here is what made a deliberate hide
+      // indistinguishable from a migration artifact in v12.
+      const store = await loadStore();
+      expect(store.getState().layout.pinnedButtons).toEqual({});
     });
 
     it("keeps file-browser on the side the user moved it to across hydration", async () => {
@@ -1484,10 +1594,11 @@ describe("toolbarPreferencesStore", () => {
       );
     });
 
-    it("stays hidden for a current-version blob whose layout carries no pin map", async () => {
-      // A blob already stamped v12 never reaches `migrate`, so `merge()` is the
-      // only thing standing between a missing pin map and a visible button.
-      // Falling back to `{}` here would read as "no pins" — i.e. visible.
+    it("synthesizes no pins for a current-version blob whose layout carries no pin map", async () => {
+      // A blob already stamped at the current version never reaches `migrate`,
+      // so `merge()` alone decides what a missing pin map resolves to. Since
+      // #11667 that is `{}` — there is no ships-hidden default left to restore,
+      // and inventing one here would put a value in the map the user never chose.
       storageMock.setItem(
         STORAGE_KEY,
         JSON.stringify({
@@ -1495,12 +1606,12 @@ describe("toolbarPreferencesStore", () => {
             layout: { leftButtons: ["terminal", "file-browser"], rightButtons: ["settings"] },
             launcher: { alwaysShowDevServer: false },
           },
-          version: 12,
+          version: 13,
         })
       );
 
       const store = await loadStore();
-      expect(store.getState().layout.pinnedButtons["file-browser"]).toBe(false);
+      expect(store.getState().layout.pinnedButtons).toEqual({});
     });
 
     it("hydrates cleanly with no persisted blob at all", async () => {
@@ -1510,14 +1621,14 @@ describe("toolbarPreferencesStore", () => {
       const store = await loadStore();
 
       expect(store.persist.hasHydrated()).toBe(true);
-      expect(store.getState().layout.pinnedButtons["file-browser"]).toBe(false);
+      expect(store.getState().layout.pinnedButtons).toEqual({});
       expect(store.getState().layout.leftButtons).toContain("file-browser");
     });
 
-    it("restores the hidden default on a re-hydrate onto a blob with no pin map", async () => {
+    it("does not carry the previous blob's pins into a re-hydrate onto one with no pin map", async () => {
       // zustand hands `merge` the LIVE state on a second `rehydrate()`, not the
       // creator defaults, so resolving a missing pin map from current state would
-      // carry the previous blob's opt-in into one that has none.
+      // leak the previous blob's overrides into one that has none.
       storageMock.setItem(
         STORAGE_KEY,
         JSON.stringify({
@@ -1525,6 +1636,45 @@ describe("toolbarPreferencesStore", () => {
             layout: {
               leftButtons: ["terminal", "file-browser"],
               rightButtons: ["settings"],
+              pinnedButtons: { "copy-tree": false },
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 13,
+        })
+      );
+
+      const store = await loadStore();
+      expect(store.getState().layout.pinnedButtons).toEqual({ "copy-tree": false });
+
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: { leftButtons: ["terminal", "file-browser"], rightButtons: ["settings"] },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 13,
+        })
+      );
+      await store.persist.rehydrate();
+
+      expect(store.getState().layout.pinnedButtons).toEqual({});
+    });
+
+    it("heals a browser duplicated across sides toward the moved copy after it left the defaults", async () => {
+      // `browser` is no longer in `DEFAULT_LEFT_BUTTONS`, but a profile old
+      // enough to have duplicated it had it as a left-side button at the time.
+      // `healCrossSideDuplicates` reads a frozen home set rather than the live
+      // defaults precisely so the repair still keeps the copy the user dragged
+      // away, instead of flipping and deleting it (#11667).
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["terminal", "browser"],
+              rightButtons: ["browser", "settings"],
               pinnedButtons: {},
             },
             launcher: { alwaysShowDevServer: false },
@@ -1534,21 +1684,10 @@ describe("toolbarPreferencesStore", () => {
       );
 
       const store = await loadStore();
-      expect(store.getState().layout.pinnedButtons["file-browser"]).toBeUndefined();
-
-      storageMock.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          state: {
-            layout: { leftButtons: ["terminal", "file-browser"], rightButtons: ["settings"] },
-            launcher: { alwaysShowDevServer: false },
-          },
-          version: 12,
-        })
-      );
-      await store.persist.rehydrate();
-
-      expect(store.getState().layout.pinnedButtons["file-browser"]).toBe(false);
+      const { leftButtons, rightButtons } = store.getState().layout;
+      expect([...leftButtons, ...rightButtons].filter((id) => id === "browser")).toHaveLength(1);
+      expect(rightButtons).toContain("browser");
+      expect(leftButtons).not.toContain("browser");
     });
 
     it("heals a default already duplicated onto both sides by the old hydration", async () => {
@@ -1625,6 +1764,101 @@ describe("toolbarPreferencesStore", () => {
       const { leftButtons, rightButtons } = store.getState().layout;
       expect(leftButtons).not.toContain("terminal");
       expect(rightButtons).toContain("terminal");
+    });
+  });
+
+  describe("setPanelButtonOnToolbar (#11667)", () => {
+    it("gives an unpositioned button a slot before the tray without writing a pin", async () => {
+      // The case `toggleButtonVisibility` cannot handle: on a fresh profile
+      // `browser` is in neither side array, so clearing a pin alone would leave
+      // it with nowhere to render.
+      const store = await loadStore();
+      expect(store.getState().layout.leftButtons).not.toContain("browser");
+
+      store.getState().setPanelButtonOnToolbar("browser", true);
+
+      const { leftButtons, pinnedButtons } = store.getState().layout;
+      expect(leftButtons).toContain("browser");
+      expect(leftButtons.indexOf("browser")).toBe(leftButtons.indexOf("panel-tray") - 1);
+      // No `true` written: a positioned built-in with no entry is already
+      // visible, so recording one would put a value in the map the user's own
+      // action didn't require — the seeding habit v13 exists to end.
+      expect(pinnedButtons["browser"]).toBeUndefined();
+    });
+
+    it("hides by writing false and keeps the position for a later re-show", async () => {
+      const store = await loadStore();
+      store.getState().setPanelButtonOnToolbar("browser", true);
+      const promotedIndex = store.getState().layout.leftButtons.indexOf("browser");
+
+      store.getState().setPanelButtonOnToolbar("browser", false);
+      expect(store.getState().layout.pinnedButtons["browser"]).toBe(false);
+      // Position retained, so re-showing restores it where the user had it
+      // rather than appending it somewhere new.
+      expect(store.getState().layout.leftButtons.indexOf("browser")).toBe(promotedIndex);
+
+      store.getState().setPanelButtonOnToolbar("browser", true);
+      expect(store.getState().layout.pinnedButtons["browser"]).toBeUndefined();
+      expect(store.getState().layout.leftButtons.indexOf("browser")).toBe(promotedIndex);
+    });
+
+    it("never positions the same id twice", async () => {
+      const store = await loadStore();
+      store.getState().setPanelButtonOnToolbar("dev-server", true);
+      store.getState().setPanelButtonOnToolbar("dev-server", true);
+
+      const { leftButtons, rightButtons } = store.getState().layout;
+      expect([...leftButtons, ...rightButtons].filter((id) => id === "dev-server")).toHaveLength(1);
+    });
+
+    it("clears an existing hide without moving an already-positioned button", async () => {
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["terminal", "browser", "file-browser", "panel-tray"],
+              rightButtons: ["settings"],
+              pinnedButtons: { browser: false },
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 13,
+        })
+      );
+
+      const store = await loadStore();
+      const before = store.getState().layout.leftButtons.indexOf("browser");
+
+      store.getState().setPanelButtonOnToolbar("browser", true);
+
+      expect(store.getState().layout.pinnedButtons["browser"]).toBeUndefined();
+      expect(store.getState().layout.leftButtons.indexOf("browser")).toBe(before);
+    });
+
+    it("follows the tray to the right side when the user moved it there", async () => {
+      storageMock.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            layout: {
+              leftButtons: ["terminal", "file-browser"],
+              rightButtons: ["panel-tray", "settings"],
+              pinnedButtons: {},
+            },
+            launcher: { alwaysShowDevServer: false },
+          },
+          version: 13,
+        })
+      );
+
+      const store = await loadStore();
+      store.getState().setPanelButtonOnToolbar("dev-server", true);
+
+      const { leftButtons, rightButtons } = store.getState().layout;
+      expect(rightButtons).toContain("dev-server");
+      expect(leftButtons).not.toContain("dev-server");
+      expect(rightButtons.indexOf("dev-server")).toBe(rightButtons.indexOf("panel-tray") - 1);
     });
   });
 });

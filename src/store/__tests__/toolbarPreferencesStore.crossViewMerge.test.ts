@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
  */
 describe("toolbarPreferencesStore cross-view write merge (#11351)", () => {
   const STORAGE_KEY = "daintree-toolbar-preferences";
-  const VERSION = 12;
+  const VERSION = 13;
   const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
   type Layout = {
@@ -123,11 +123,13 @@ describe("toolbarPreferencesStore cross-view write merge (#11351)", () => {
     expect(written.state.launcher.alwaysShowDevServer).toBe(true);
   });
 
-  it("does not revert a sibling's file-browser opt-in from an untouched default (#11495)", async () => {
-    // `file-browser` ships hidden, so every fresh view holds `false` without the
-    // user having chosen it. If the null baseline normalizes to `{}`, that
-    // untouched `false` reads as this view's own edit and overwrites a sibling
-    // view that legitimately turned the button on.
+  it("does not revert a sibling's file-browser opt-in from an untouched default (#11495, #11667)", async () => {
+    // Originally this guarded the v12 seed: `file-browser` shipped hidden, so
+    // every fresh view held a `false` nobody chose, and a null baseline
+    // normalizing to `{}` made that untouched value read as this view's own edit.
+    // v13 removed the seed, so a fresh view now holds no entry at all and there
+    // is nothing to mistake for an edit — but the outcome the sibling depends on
+    // is identical, so the case stays as the regression probe for it.
     const backing = installLocalStorage({});
     const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
 
@@ -154,8 +156,9 @@ describe("toolbarPreferencesStore cross-view write merge (#11351)", () => {
     const backing = installLocalStorage({});
     const { useToolbarPreferencesStore: store } = await import("../toolbarPreferencesStore");
 
-    // Start from the opt-in state so the toggle records a departure from it.
-    store.getState().toggleButtonVisibility("file-browser", "left");
+    // Since v13 the store already starts in the shown state with no pin entry
+    // (#11667), so the single toggle below IS the departure from it. Before v13
+    // this needed a priming toggle first to clear the shipped `false` seed.
     expect(store.getState().layout.pinnedButtons["file-browser"]).toBeUndefined();
 
     backing.set(

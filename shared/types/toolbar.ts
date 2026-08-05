@@ -28,6 +28,7 @@ export type ToolbarButtonId =
   | "sidebar-toggle"
   | "agent-tray"
   | "plugin-tray"
+  | "panel-tray"
   | BuiltInAgentId
   | "terminal"
   | "browser"
@@ -49,16 +50,25 @@ export type ToolbarButtonId =
  * used by `agentSettingsStore.agents[id].pinned`, but the default the missing
  * entry falls back to differs by button kind:
  *
- * Built-in buttons (incl. `agent-tray` / `plugin-tray`) default to visible:
+ * Built-in buttons (incl. `agent-tray` / `plugin-tray` / `panel-tray`) default
+ * to visible:
  *   - `false`      → user explicitly hid this button
- *   - `true`       → user explicitly pinned this button
  *   - `undefined`  → visible
  *
- * A built-in can still *ship* hidden by seeding an explicit `false` — see
- * `file-browser` in `toolbarPreferencesStore`, which offers the button in
- * Settings without changing anyone's existing toolbar (#11495). That seed is
- * load-bearing, not redundant with the v12 migration: a fresh install never
- * runs `migrate`.
+ * This map records ONLY explicit user intent, and nothing may ever backfill a
+ * default into it (#11667). A built-in that should be absent from a fresh
+ * toolbar is expressed by leaving it out of `DEFAULT_LEFT_BUTTONS` /
+ * `DEFAULT_RIGHT_BUTTONS` — array membership, which is per-profile and needs no
+ * write — never by seeding a `false`.
+ *
+ * v12 got this wrong: it stamped `file-browser: false` onto every profile, which
+ * permanently converted an implicit default into an explicit choice and made a
+ * deliberate hide indistinguishable from a seed. v13 deletes that stamp. Seeding
+ * a default here again would forfeit the same option a second time, so a
+ * built-in's pin entry stays absent until the user acts on it. Note that
+ * `true` is never written for a built-in: a positioned built-in with no entry is
+ * already visible, so an explicit `true` would carry no information the array
+ * doesn't. (Plugin contributions are the sole exception — see below.)
  *
  * Plugin contributions default to tray-only (#11304) — they always appear in
  * the plugin tray, and `true` additionally promotes one to its own top-level
@@ -67,10 +77,23 @@ export type ToolbarButtonId =
  *   - `false`/`undefined` → tray row only
  *
  * Agent-button IDs (entries in `BUILT_IN_AGENT_IDS`) live in
- * `agentSettingsStore`, not here. Only `agent-tray`, `plugin-tray`, the
- * non-agent built-ins, and plugin buttons are governed by this map.
+ * `agentSettingsStore`, not here. Only `agent-tray`, `plugin-tray`,
+ * `panel-tray`, the non-agent built-ins, and plugin buttons are governed by
+ * this map.
  */
 export type ToolbarPinnedState = Partial<Record<AnyToolbarButtonId, boolean>>;
+
+/**
+ * The built-in panel buttons the panel tray can promote to (or demote from) a
+ * top-level toolbar slot (#11667).
+ *
+ * `browser` and `dev-server` left `DEFAULT_LEFT_BUTTONS` in v13, so on a fresh
+ * profile they sit in neither side array — which means promoting one has to
+ * give it a position as well as clear any hide. `toggleButtonVisibility` only
+ * ever touches `pinnedButtons`, so the tray routes through
+ * `setPanelButtonOnToolbar` instead.
+ */
+export type PanelTrayButtonId = "file-browser" | "browser" | "dev-server";
 
 /** Configuration for which toolbar buttons are visible and their order */
 export interface ToolbarLayout {
@@ -107,6 +130,11 @@ export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPri
   "voice-recording": 1,
   "agent-tray": 2,
   "plugin-tray": 2,
+  // Same tier as the other trays, and deliberately ahead of the individual
+  // panel buttons at 3: on a fresh profile the tray is the only toolbar route
+  // to `browser` and `dev-server`, so evicting it before them would strand
+  // panels whose own buttons aren't there to fall back to.
+  "panel-tray": 2,
   ...(Object.fromEntries(
     BUILT_IN_AGENT_IDS.map((id) => [id, 2 as ToolbarButtonPriority])
   ) as Record<BuiltInAgentId, ToolbarButtonPriority>),
