@@ -271,10 +271,16 @@ export function ModalHostLayer({
         if (outcome.route !== "action" || outcome.result.ok) return;
         // A full grid is already reported by `addPanel` with the real recovery.
         if (isPanelLimitError(outcome.result.error.message)) return;
+        logError("Panel launch from palette refused", outcome.result.error);
         notify({
           type: "error",
           title: `Couldn't open ${name}`,
-          message: outcome.result.error.message,
+          // Same purpose-written copy the other launcher surfaces use — the
+          // action's own messages name internal ids and carry no fix.
+          message: "No folder resolved for this workspace. Select a worktree and try again.",
+          // `uiFeedback` is passive; without this the palette's only signal
+          // would be an inbox row.
+          priority: "high",
           context: { eventKind: "uiFeedback" },
           action: { label: "Retry", onClick: () => launchPanelFromPalette(kindId, name) },
         });

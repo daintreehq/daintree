@@ -153,6 +153,10 @@ export function LauncherQuickActions() {
           // hit ("No folder to browse", a worktree that no longer exists) come
           // down to the same thing for the user, and the recovery is the same.
           message: "No folder resolved for this workspace. Select a worktree and try again.",
+          // `uiFeedback` is a passive kind that resolves to `priority: "low"`
+          // (inbox only), which would leave this refusal — and its Retry — with
+          // no visible signal at all.
+          priority: "high",
           context: { eventKind: "uiFeedback" },
           action: { label: "Retry", onClick: openFileBrowser },
         });

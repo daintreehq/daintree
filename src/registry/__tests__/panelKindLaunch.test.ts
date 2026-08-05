@@ -20,8 +20,21 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 import { launchPanelKind } from "../panelKindLaunch";
+import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
 
 const PLUGIN_KIND = "test-plugin-launch-kind";
+
+/**
+ * The product contract from issue #11668, stated independently of the registry
+ * so a wrong value there fails here: routing dev-preview or file-browser
+ * through the generic agent path is the bug being fixed.
+ */
+const expectedLaunchActions = {
+  terminal: "agent.launch",
+  browser: "agent.launch",
+  "dev-preview": "devServer.start",
+  "file-browser": "worktree.openFileBrowserPanel",
+} as const;
 
 beforeEach(() => {
   addPanelMock.mockReset().mockResolvedValue("panel-1");
@@ -56,31 +69,30 @@ describe("launchPanelKind", () => {
     expect(outcome).toMatchObject({ route: "action" });
   });
 
-  it("routes each built-in kind to a different action rather than one shared path", async () => {
-    const dispatched = new Map<string, string>();
-    for (const kindId of ["terminal", "browser", "dev-preview", "file-browser"]) {
+  it("routes each kind to the action issue #11668 requires", async () => {
+    for (const [kindId, actionId] of Object.entries(expectedLaunchActions)) {
       actionDispatchMock.mockClear();
       await launch({ kindId });
-      dispatched.set(kindId, actionDispatchMock.mock.calls[0]![0] as string);
+      expect(actionDispatchMock.mock.calls[0]![0]).toBe(actionId);
     }
-
-    // The bug this fixes: dev-preview and file-browser were launched through
-    // the generic agent path, dropping the dev-server command and the file
-    // browser's target resolution.
-    expect(dispatched.get("dev-preview")).not.toBe(dispatched.get("browser"));
-    expect(dispatched.get("file-browser")).not.toBe(dispatched.get("browser"));
-    expect(dispatched.get("terminal")).toBe(dispatched.get("browser"));
   });
 
-  it("passes the surface's destination and target to the action", async () => {
-    await launch({ kindId: "browser", location: "dock", cwd: "/repo", worktreeId: "wt-9" });
+  it("only names actions the app actually registers", () => {
+    for (const kindId of Object.keys(expectedLaunchActions)) {
+      const actionId = getPanelKindConfig(kindId)!.launchActionId!;
+      // A typo here dispatches to nothing and refuses the launch at runtime.
+      expect(BUILT_IN_ACTION_IDS).toContain(actionId);
+    }
+  });
+
+  it("passes the surface's destination to the action", async () => {
+    await launch({ kindId: "browser", location: "dock", cwd: "/repo" });
 
     const [, args, opts] = actionDispatchMock.mock.calls[0]!;
     expect(args).toMatchObject({
       agentId: "browser",
       location: "dock",
       cwd: "/repo",
-      worktreeId: "wt-9",
       activateDockOnCreate: true,
     });
     expect(opts).toEqual({ source: "menu" });
@@ -92,10 +104,20 @@ describe("launchPanelKind", () => {
     expect(actionDispatchMock.mock.calls[0]![1]).toMatchObject({ activateDockOnCreate: false });
   });
 
-  it("sends an empty worktree id as absent so the action resolves its own target", async () => {
-    await launch({ worktreeId: "" });
+  it("never names the surface's worktree as an explicit target", async () => {
+    // A launcher's ambient selection is not a named target. `resolveLaunchTarget`
+    // keeps an inherited ghost id but makes an explicit one throw (#10812), and
+    // `resolveFileBrowserTarget` prefers the focused worktree over the active
+    // one — forwarding this would override both.
+    await launch({ kindId: "browser", worktreeId: "ghost-wt" });
 
-    expect(actionDispatchMock.mock.calls[0]![1]).toMatchObject({ worktreeId: undefined });
+    expect(actionDispatchMock.mock.calls[0]![1]).not.toHaveProperty("worktreeId");
+  });
+
+  it("sends an empty cwd as absent so the action resolves its own", async () => {
+    await launch({ kindId: "browser", cwd: "" });
+
+    expect(actionDispatchMock.mock.calls[0]![1]).toMatchObject({ cwd: undefined });
   });
 
   it("forwards the caller's dispatch source unchanged", async () => {

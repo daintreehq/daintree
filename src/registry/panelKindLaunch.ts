@@ -9,6 +9,11 @@ export interface LaunchPanelKindOptions {
   /** Where the surface told the user this panel would land. */
   location: "dock" | "grid";
   cwd?: string;
+  /**
+   * The surface's ambient worktree. Used to place a directly-created panel; it
+   * is deliberately NOT forwarded to a launch action, which resolves its own
+   * target from the dispatch context — see {@link launchPanelKind}.
+   */
   worktreeId: string | null;
   source: ActionSource;
 }
@@ -59,17 +64,17 @@ export async function launchPanelKind({
     // `ActionService` hands `run()` the parsed args, so the rest are dropped
     // before they reach it. `agentId` is what `agent.launch` calls the kind —
     // its schema admits the synthetic `terminal`/`browser`/`dev-preview` ids.
+    //
+    // No `worktreeId`: a launcher's ambient selection is not a named target,
+    // and the two resolve differently on purpose. `resolveLaunchTarget` keeps
+    // an inherited ghost id so the panel joins its worktree's surviving
+    // terminals but makes an explicit one throw (#10812/#11232), and
+    // `resolveFileBrowserTarget` prefers the focused worktree over the active
+    // one. Forwarding the surface's id would assert a target nobody named and
+    // override both. Every launch action reads the dispatch context instead.
     const result = await actionService.dispatch(
       actionId,
-      {
-        agentId: kindId,
-        location,
-        cwd,
-        // Empty ids are rejected by the stricter arg schemas, and mean the same
-        // thing as an absent one: resolve the target from context.
-        worktreeId: worktreeId || undefined,
-        activateDockOnCreate,
-      },
+      { agentId: kindId, location, cwd: cwd || undefined, activateDockOnCreate },
       { source }
     );
     return { route: "action", actionId, result };
@@ -78,7 +83,9 @@ export async function launchPanelKind({
   const panelId = await usePanelStore.getState().addPanel({
     kind: kindId,
     cwd,
-    worktreeId: worktreeId ?? undefined,
+    // An empty id would place the panel in a bucket nothing renders, so it
+    // means the same as an absent one.
+    worktreeId: worktreeId || undefined,
     location,
     // Folds dock activation into the same set() that commits the panel, so the
     // offscreen-container watchdog can't close it in the render gap (#6590).

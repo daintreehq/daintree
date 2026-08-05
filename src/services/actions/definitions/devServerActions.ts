@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { isAbsolute } from "@shared/utils/path";
 import { projectClient } from "@/clients";
+import { readDevServerCommand } from "@/utils/devServerCommand";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
@@ -56,8 +57,7 @@ export function registerDevServerActions(
         throw new Error("No project is currently open");
       }
 
-      const settings = await projectClient.getSettings(projectId);
-      const devServerCommand = settings?.devServerCommand?.trim();
+      const devServerCommand = await readDevServerCommand(projectId);
 
       const cwd = firstAbsolutePath(
         ctx.activeWorktreePath,
@@ -75,7 +75,7 @@ export function registerDevServerActions(
         cwd,
         worktreeId: ctx.activeWorktreeId,
         location: "grid",
-        devCommand: devServerCommand || undefined,
+        devCommand: devServerCommand,
       });
     },
   }));

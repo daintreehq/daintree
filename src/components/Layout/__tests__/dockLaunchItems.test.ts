@@ -412,11 +412,13 @@ describe("activateDockLaunchItem", () => {
         agentId: "browser",
         location: "dock",
         cwd: "/repo",
-        worktreeId: "wt-1",
         activateDockOnCreate: true,
       }),
       { source: "menu" }
     );
+    // The launcher's ambient worktree is not a named target — the action
+    // resolves its own, so a ghost selection still lands beside its terminals.
+    expect(actionDispatchMock.mock.calls[0]![1]).not.toHaveProperty("worktreeId");
   });
 
   it("reports a refused launch, since the menu closes on select", async () => {
@@ -430,11 +432,13 @@ describe("activateDockLaunchItem", () => {
 
     const payload = notifyMock.mock.calls[0]![0] as {
       type: string;
-      message: string;
+      priority?: string;
       action?: { label: string };
     };
     expect(payload.type).toBe("error");
-    expect(payload.message).toBe("No folder to browse");
+    // `uiFeedback` is passive, so without an explicit high priority this
+    // refusal would be an inbox row the closed menu never surfaces.
+    expect(payload.priority).toBe("high");
     expect(payload.action?.label).toBe("Retry");
   });
 
@@ -445,10 +449,19 @@ describe("activateDockLaunchItem", () => {
     });
 
     activateDockLaunchItem(panelItem("file-browser"), ctx);
-    await Promise.resolve();
-    await Promise.resolve();
-
+    // Drain past the continuation rather than counting microtasks: the control
+    // below proves an ordinary refusal does reach notify through this same
+    // flush, so silence here is suppression and not a race.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(notifyMock).not.toHaveBeenCalled();
+
+    actionDispatchMock.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "No folder to browse" },
+    });
+    activateDockLaunchItem(panelItem("file-browser"), ctx);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 
   it("creates every other kind via addPanel at its advertised location", () => {

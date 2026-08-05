@@ -476,10 +476,18 @@ export function activateDockLaunchItem(
         // A full grid is already reported by `addPanel`, with an accurate
         // message and the actual recovery (#11666).
         if (isPanelLimitError(outcome.result.error.message)) return;
+        logError("Panel launch from dock refused", outcome.result.error);
         notify({
           type: "error",
           title: `Couldn't open ${item.name}`,
-          message: outcome.result.error.message,
+          // Purpose-written rather than the action's own message: those name
+          // internal ids ("Worktree not found: wt-3f2") and state a cause
+          // without a fix. Every refusal reachable here comes down to nothing
+          // resolving to open against.
+          message: "No folder resolved for this workspace. Select a worktree and try again.",
+          // `uiFeedback` is a passive kind, so without this the toast the
+          // closed menu depends on would be an inbox row nobody sees.
+          priority: "high",
           context: { eventKind: "uiFeedback" },
           action: { label: "Retry", onClick: () => activateDockLaunchItem(item, ctx) },
         });
