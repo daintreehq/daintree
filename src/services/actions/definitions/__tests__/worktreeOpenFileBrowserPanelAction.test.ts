@@ -294,18 +294,20 @@ describe("worktree.openFileBrowserPanel", () => {
       expect(addPanelOptions()).toMatchObject({ worktreeId: "wt-1" });
     });
 
-    it("finds a browser still pending a spawn batch's id append", async () => {
-      // A spawn or hydration batch commits `panelsById` immediately and defers
-      // the `panelIds` append to its flush. Scanning the committed list alone
-      // would miss a browser opened moments earlier and duplicate it.
+    it("does not reuse a record the panel list has not admitted", async () => {
+      // `panelsById` holds more than the grid does: a superseded hydration
+      // leaves its abandoned panels there deliberately, and a batch commits the
+      // map before appending ids. Neither can be focused — `activateTerminal`
+      // walks the same id list — so reusing one would report a panel the user
+      // never sees, which is worse than a duplicate.
       seedWorktree("wt-1");
-      panelsMock.byId = [browserPanel("fb-pending", { worktreeId: "wt-1" })];
+      panelsMock.byId = [browserPanel("fb-unlisted", { worktreeId: "wt-1" })];
       panelsMock.ids = [];
 
       const result = await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
 
-      expect(addPanelMock).not.toHaveBeenCalled();
-      expect(result).toEqual({ panelId: "fb-pending" });
+      expect(result).toEqual({ panelId: "fb-panel-1" });
+      expect(activateTerminalMock).not.toHaveBeenCalled();
     });
 
     it("surfaces a reused browser that sits behind a sibling tab", async () => {

@@ -622,12 +622,15 @@ export function registerWorktreeContextActions(
         const { usePanelStore } = await import("@/store/panelStore");
 
         const store = usePanelStore.getState();
-        // Every panel, not `panelIds`: a spawn or hydration batch commits
-        // `panelsById` immediately and defers the `panelIds` append to its
-        // flush, so scanning the committed list alone would miss a browser
-        // opened moments earlier and duplicate it (`hydrationBatch.ts`).
-        const existing = Object.values(store.panelsById).find(
-          (panel): panel is FileBrowserPanelData => {
+        // `panelIds`, deliberately, rather than every `panelsById` record.
+        // Unlisted entries are not merely early: a superseded hydration leaves
+        // its abandoned panels in the map on purpose, and `activateTerminal`
+        // walks this same list — so reusing an unlisted record would report a
+        // panel that can never be focused, which is worse than the duplicate
+        // that a batch-pending browser would otherwise cause.
+        const existing = store.panelIds
+          .map((id) => store.panelsById[id])
+          .find((panel): panel is FileBrowserPanelData => {
             if (panel === undefined || !isFileBrowserPanel(panel)) return false;
             // Grid members only. A dialog browser is ephemeral modal content
             // and reusing one would hand the grid an uncounted, unpersisted
@@ -644,8 +647,7 @@ export function registerWorktreeContextActions(
             return worktreeId === undefined
               ? panelIsWorkspaceRooted
               : !panelIsWorkspaceRooted && panel.worktreeId === worktreeId;
-          }
-        );
+          });
 
         if (existing) {
           if (reveal) {

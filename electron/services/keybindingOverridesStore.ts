@@ -42,9 +42,15 @@ export function getValidatedOverrides(): Record<string, string[]> {
   // carried onto the successor id.
   for (const [oldId, newId] of Object.entries(RENAMED_BINDING_ACTIONS)) {
     const inherited = validated[oldId];
-    if (inherited !== undefined && validated[newId] === undefined) {
-      validated[newId] = inherited;
-    }
+    if (inherited === undefined) continue;
+    if (validated[newId] === undefined) validated[newId] = inherited;
+    // The old key leaves with it, which is what makes this a migration rather
+    // than a permanent aliasing layer. Every mutation path (set, remove,
+    // export) reads this map, edits it, and writes the whole thing back — so
+    // the rename persists on the first write, and a later "remove the override
+    // for the successor" cannot be undone by the legacy entry aliasing itself
+    // back into place on the next read.
+    delete validated[oldId];
   }
   return validated;
 }

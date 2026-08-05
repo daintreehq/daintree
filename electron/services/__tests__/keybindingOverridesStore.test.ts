@@ -42,7 +42,23 @@ describe("getValidatedOverrides", () => {
       // the user's own shortcut recorded but inert.
       seedOverrides({ "worktree.openFileBrowser": ["Cmd+Shift+B"] });
 
-      expect(getValidatedOverrides()["worktree.openFileBrowserPanel"]).toEqual(["Cmd+Shift+B"]);
+      expect(getValidatedOverrides()).toEqual({
+        "worktree.openFileBrowserPanel": ["Cmd+Shift+B"],
+      });
+    });
+
+    it("retires the legacy key so removing the inherited override sticks", () => {
+      // Every mutation path reads this map, edits it, and writes the whole
+      // thing back. A legacy entry left in the result would be re-persisted by
+      // that write and alias itself onto the successor again on the next read,
+      // undoing a removal the user just made.
+      seedOverrides({ "worktree.openFileBrowser": ["Cmd+Shift+B"] });
+
+      const afterRemoval = getValidatedOverrides();
+      delete afterRemoval["worktree.openFileBrowserPanel"];
+      seedOverrides(afterRemoval);
+
+      expect(getValidatedOverrides()).toEqual({});
     });
 
     it("carries a deliberate unbind onto the successor", () => {

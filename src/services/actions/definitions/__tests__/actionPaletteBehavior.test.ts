@@ -139,21 +139,13 @@ describe("action palette behavior", () => {
     // (#11666). Mirrors `useActionPalette`'s own filter for which definitions
     // reach a row at all.
     //
-    // The pairs below predate that work and are left as found: each is a real
-    // duplicate title, but resolving them means renaming or merging actions
-    // that have nothing to do with the file browser. Listed so a NEW collision
-    // fails here rather than joining them.
-    const KNOWN_DUPLICATE_TITLES = [
-      "terminal / Set Grid Layout Strategy: panel.gridLayout.setStrategy, terminal.gridLayout.setStrategy",
-      "terminal / Set Grid Layout Value: panel.gridLayout.setValue, terminal.gridLayout.setValue",
-      "project / Close Project: project.close, project.closeActive",
-    ];
-
+    // Scored through `isPaletteRunnable`, not `kind`/`hidden` alone: an action
+    // the palette filters out for requiring args never renders a row, so it
+    // cannot collide with anything. Counting those would allowlist phantom
+    // pairs and let a real one slip in behind them.
     const seen = new Map<string, string[]>();
     for (const def of definitions.values()) {
-      if (def.kind !== "command") continue;
-      const palette = def.palette as PaletteBehavior | undefined;
-      if (palette?.mode === "hidden") continue;
+      if (!isPaletteRunnable(def)) continue;
       const key = `${def.category ?? "General"} / ${def.title}`;
       seen.set(key, [...(seen.get(key) ?? []), String(def.id)]);
     }
@@ -162,10 +154,7 @@ describe("action palette behavior", () => {
       .filter(([, ids]) => ids.length > 1)
       .map(([key, ids]) => `${key}: ${ids.join(", ")}`);
 
-    expect(collisions.filter((c) => !KNOWN_DUPLICATE_TITLES.includes(c))).toEqual([]);
-    // The allowlist decays rather than rots: a pair that gets resolved must be
-    // removed from it, not left standing as permission for a future collision.
-    expect(KNOWN_DUPLICATE_TITLES.filter((c) => !collisions.includes(c))).toEqual([]);
+    expect(collisions).toEqual([]);
   });
 
   it("every palette redirect points at a registered, palette-runnable command", () => {
