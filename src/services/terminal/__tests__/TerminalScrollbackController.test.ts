@@ -429,35 +429,45 @@ describe("TerminalScrollbackController", () => {
       });
 
       it("is idempotent — a second pass on a clamped buffer does not touch the setter", () => {
+        const nowSpy = vi.spyOn(Date, "now");
+        try {
+          nowSpy.mockReturnValue(50_000);
+          const managed = makeMockManaged({ isVisible: true });
+          managed.terminal.options.scrollback = largeCurrent;
+          setBufferLength(managed, largeCurrent);
+
+          restoreScrollback(managed);
+          const afterFirst = managed.terminal.options.scrollback;
+          // Buffer now sits at the clamped capacity.
+          setBufferLength(managed, afterFirst + managed.terminal.rows);
+
+          // Step clear of the cooldown so this proves idempotence rather than
+          // rate limiting. Watch the setter itself: writing the same value
+          // again still rebuilds xterm's CircularList, so it has to fail.
+          nowSpy.mockReturnValue(50_000 + SCROLLBACK_REDUCE_COOLDOWN_MS + 1);
+          const writes = watchScrollbackWrites(managed);
+          restoreScrollback(managed);
+
+          expect(writes()).toEqual([]);
+          expect(managed.terminal.options.scrollback).toBe(afterFirst);
+        } finally {
+          nowSpy.mockRestore();
+        }
+      });
+
+      it("stamps the reduce cooldown for a clamp", () => {
         const managed = makeMockManaged({ isVisible: true });
         managed.terminal.options.scrollback = largeCurrent;
         setBufferLength(managed, largeCurrent);
+        const before = Date.now();
 
         restoreScrollback(managed);
-        const afterFirst = managed.terminal.options.scrollback;
-        // Buffer now sits at the clamped capacity.
-        setBufferLength(managed, afterFirst + managed.terminal.rows);
-
-        // Watch the setter itself: the cooldown this path skips exists to stop
-        // repeat writes churning xterm's CircularList, so "wrote the same
-        // value again" has to count as a failure.
-        const writes = watchScrollbackWrites(managed);
-        restoreScrollback(managed);
-
-        expect(writes()).toEqual([]);
-        expect(managed.terminal.options.scrollback).toBe(afterFirst);
+        // A clamp still rewrites options.scrollback, so it counts against the
+        // cooldown that rate-limits CircularList reallocation.
+        expect(managed.lastScrollbackReduceAt).toBeGreaterThanOrEqual(before);
       });
 
-      it("does not stamp the reduce cooldown for a clamp", () => {
-        const managed = makeMockManaged({ isVisible: true });
-        managed.terminal.options.scrollback = largeCurrent;
-        setBufferLength(managed, largeCurrent);
-
-        restoreScrollback(managed);
-        expect(managed.lastScrollbackReduceAt).toBeUndefined();
-      });
-
-      it("clamps regardless of a live reduce cooldown", () => {
+      it("holds the clamp off during a live reduce cooldown", () => {
         const nowSpy = vi.spyOn(Date, "now");
         try {
           const managed = makeMockManaged({ isVisible: true });
@@ -468,10 +478,35 @@ describe("TerminalScrollbackController", () => {
           nowSpy.mockReturnValue(10_000 + SCROLLBACK_REDUCE_COOLDOWN_MS - 1);
           restoreScrollback(managed);
 
-          // The cooldown exists to rate-limit destructive reduces; a clamp
-          // evicts nothing, so it must not be gated by one.
-          expect(managed.terminal.options.scrollback).toBe(retained(managed));
+          expect(managed.terminal.options.scrollback).toBe(largeCurrent);
           expect(managed.lastScrollbackReduceAt).toBe(10_000);
+        } finally {
+          nowSpy.mockRestore();
+        }
+      });
+
+      // An agent-detection flap promotes (growth, unguarded) and demotes
+      // (clamp) in turn. Without a shared cooldown each cycle would cost two
+      // CircularList rebuilds — the churn #10911's cooldown exists to damp.
+      it("does not re-clamp on every promotion/demotion flap", () => {
+        const nowSpy = vi.spyOn(Date, "now");
+        try {
+          nowSpy.mockReturnValue(50_000);
+          // Starts demoted: the plain target is below the agent-era ceiling.
+          const managed = makeMockManaged({ isVisible: true });
+          managed.terminal.options.scrollback = largeCurrent;
+          setBufferLength(managed, largeCurrent);
+
+          restoreScrollback(managed); // clamp
+          const writes = watchScrollbackWrites(managed);
+
+          managed.runtimeAgentId = "claude";
+          restoreScrollback(managed); // re-promoted → growth
+          managed.runtimeAgentId = undefined;
+          restoreScrollback(managed); // demoted again, still inside cooldown
+
+          // The growth write is unavoidable; the second clamp is not.
+          expect(writes().filter((value) => value < largeCurrent)).toEqual([]);
         } finally {
           nowSpy.mockRestore();
         }

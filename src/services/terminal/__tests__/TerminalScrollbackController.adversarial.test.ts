@@ -147,7 +147,6 @@ describe("TerminalScrollbackController adversarial", () => {
 
     // 3000 - 24 = 2976 retained vs a 1500 plain target ⇒ clamp, not evict.
     expect(managed.terminal.options.scrollback).toBe(2976);
-    expect(managed.lastScrollbackReduceAt).toBeUndefined();
   });
 
   it("HIDDEN_AT_BURST_TIER_IS_NOT_PROTECTED", () => {

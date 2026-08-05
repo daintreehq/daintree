@@ -114,19 +114,28 @@ export function restoreScrollback(managed: ManagedTerminal): void {
       if (managed.isAltBuffer) return;
       if (managed.terminal.hasSelection()) return;
 
+      // Both a clamp and a destructive reduce rewrite options.scrollback, and
+      // either recreates xterm's CircularList — so they share one cooldown. An
+      // agent-detection flap raises the ceiling on every promotion, which would
+      // otherwise let a re-clamp through on every demotion.
+      const lastReduceAt = managed.lastScrollbackReduceAt;
+      if (lastReduceAt !== undefined && Date.now() - lastReduceAt < SCROLLBACK_REDUCE_COOLDOWN_MS) {
+        return;
+      }
+
       // A pane the user can see is not a safe place to drop history, but the
       // ceiling can still come down to the lines already retained: nothing on
       // screen is lost and the buffer stops growing toward the old ceiling, so
-      // a resource-profile downshift still takes effect. Idempotent — once
-      // applied the buffer sits at capacity and safeTarget stops moving.
-      // Deliberately below the four guards above: those are live interaction
-      // states, where clamping to capacity would start rolling history out
-      // from under a selection or a scrolled-back reader on the next line of
-      // output. Mere visibility carries no such reading position. #11673
+      // a resource-profile downshift still takes effect. Deliberately below the
+      // four guards above: those are live interaction states, where clamping to
+      // capacity would start rolling history out from under a selection or a
+      // scrolled-back reader on the next line of output. Mere visibility
+      // carries no such reading position. #11673
       if (managed.isVisible) {
         const safeTarget = Math.max(targetLines, scrollbackUsed);
         if (safeTarget < currentScrollback) {
           writeScrollback(managed, safeTarget);
+          managed.lastScrollbackReduceAt = Date.now();
           logDebug("Terminal scrollback ceiling clamped to retained history", {
             requestedTarget: targetLines,
             appliedTarget: safeTarget,
@@ -134,11 +143,6 @@ export function restoreScrollback(managed: ManagedTerminal): void {
             kind: managed.kind,
           });
         }
-        return;
-      }
-
-      const lastReduceAt = managed.lastScrollbackReduceAt;
-      if (lastReduceAt !== undefined && Date.now() - lastReduceAt < SCROLLBACK_REDUCE_COOLDOWN_MS) {
         return;
       }
     }
