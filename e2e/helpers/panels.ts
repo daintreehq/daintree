@@ -265,13 +265,13 @@ async function clickPanelTrayItem(
   const itemId = toolbarPanelTrayItemIds[label];
   if (!itemId) return false;
 
-  const tray = toolbar.locator('[data-toolbar-button-id="panel-tray"] button');
+  const tray = toolbar.locator('[data-toolbar-button-id="launcher"] button');
   if (!(await clickFirstVisible(tray, 1000, 500))) return false;
 
   // The caller's timeout, not a fixed second: the dropdown primitives are
   // lazy-loaded, so the first tray open on a cold release runner can be slower
   // than any menu this suite has already warmed.
-  const row = page.locator(`[data-testid="panel-tray-row-${itemId}"]`);
+  const row = page.locator(`[data-testid="launcher-row-${itemId}"]`);
   if (!(await row.isVisible({ timeout }).catch(() => false))) {
     await page.keyboard.press("Escape").catch(() => undefined);
     return false;
@@ -290,11 +290,11 @@ async function hasPanelTrayItem(page: Page, toolbar: Locator, label: string): Pr
   const itemId = toolbarPanelTrayItemIds[label];
   if (!itemId) return false;
 
-  const tray = toolbar.locator('[data-toolbar-button-id="panel-tray"] button');
+  const tray = toolbar.locator('[data-toolbar-button-id="launcher"] button');
   if (!(await clickFirstVisible(tray, 1000, 250))) return false;
 
   const visible = await page
-    .locator(`[data-testid="panel-tray-row-${itemId}"]`)
+    .locator(`[data-testid="launcher-row-${itemId}"]`)
     .isVisible({ timeout: 500 })
     .catch(() => false);
   await page.keyboard.press("Escape").catch(() => undefined);
@@ -470,7 +470,7 @@ export async function openDevPreview(page: Page): Promise<void> {
 
 /**
  * Whether a toolbar command can be reached at all — as a direct button, an
- * overflow row, or a panel-tray row. The boolean sibling of
+ * overflow row, or a launcher panel row. The boolean sibling of
  * `expectToolbarButtonReachable`, for specs that legitimately skip when an entry
  * point is absent in a given launch state rather than failing.
  */

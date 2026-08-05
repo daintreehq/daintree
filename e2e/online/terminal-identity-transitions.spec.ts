@@ -523,7 +523,7 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
     await test.step("cold-launch Claude terminal", async () => {
       const { window } = ctx;
       await window.locator(SEL.agent.trayButton).click();
-      const launchClaude = window.getByTestId("agent-tray-row-claude");
+      const launchClaude = window.getByTestId("launcher-row-claude");
       await expect(launchClaude).toBeVisible({ timeout: 30_000 * SLOW_HOST_MULTIPLIER });
       await launchClaude.click();
 

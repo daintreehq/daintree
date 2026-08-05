@@ -102,8 +102,8 @@ describe("Toolbar keyboard navigation — issue #2814", () => {
       );
     });
 
-    it("passes data-toolbar-item to AgentTrayButton", () => {
-      expect(source).toMatch(/<AgentTrayButton[\s\S]*?data-toolbar-item=""/);
+    it("passes data-toolbar-item to LauncherMenuButton", () => {
+      expect(source).toMatch(/<LauncherMenuButton[\s\S]*?data-toolbar-item=""/);
     });
 
     it("passes data-toolbar-item to VoiceRecordingToolbarButton", () => {
@@ -176,7 +176,7 @@ describe("Toolbar keyboard navigation — issue #8163", () => {
 
     it("marks the overflow trigger Button with data-toolbar-overflow-trigger", () => {
       // A dedicated marker is required because [data-toolbar-item][aria-haspopup='menu']
-      // also matches AgentButton and AgentTrayButton (which appear earlier in
+      // also matches AgentButton and LauncherMenuButton (which appear earlier in
       // document order), so the overflow trigger cannot be located by that
       // selector alone.
       expect(source).toContain('data-toolbar-overflow-trigger=""');
@@ -190,7 +190,7 @@ describe("Toolbar keyboard navigation — issue #8163", () => {
     });
 
     it("does not locate the overflow trigger via aria-haspopup selector", () => {
-      // Regression guard against the AgentButton/AgentTrayButton false-positive.
+      // Regression guard against the AgentButton/LauncherMenuButton false-positive.
       expect(source).not.toMatch(
         /querySelector[^)]*\[data-toolbar-item\]\[aria-haspopup=['"]menu['"]\]/
       );

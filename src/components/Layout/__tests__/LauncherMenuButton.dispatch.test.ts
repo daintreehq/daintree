@@ -1,8 +1,8 @@
 // @vitest-environment node
 /**
- * Adversarial tests for the AgentTrayButton dispatch payload construction.
+ * Adversarial tests for the LauncherMenuButton dispatch payload construction.
  *
- * The handleLaunch callback in AgentTrayButton uses:
+ * The handleLaunch callback in LauncherMenuButton uses:
  *   { agentId, ...(presetId !== undefined ? { presetId } : {}) }
  *
  * null  = default sentinel — must be included in the payload so useAgentLauncher
@@ -16,7 +16,7 @@
 import { describe, it, expect } from "vitest";
 
 /**
- * Mirror of the ternary inside handleLaunch (AgentTrayButton.tsx:151-152).
+ * Mirror of the ternary inside handleLaunch (LauncherMenuButton.tsx:151-152).
  * Any change to that line must be reflected here.
  */
 function buildLaunchPayload(agentId: string, presetId?: string | null): Record<string, unknown> {

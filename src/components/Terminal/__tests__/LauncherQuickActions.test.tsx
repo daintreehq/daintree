@@ -93,7 +93,7 @@ beforeEach(() => {
     { id: "terminal", label: "Terminal", description: "", icon: null },
   ];
   h.layout = {
-    leftButtons: ["agent-tray", "claude", "gemini", "terminal"],
+    leftButtons: ["launcher", "claude", "gemini", "terminal"],
     rightButtons: [],
     pinnedButtons: {},
   };
@@ -122,7 +122,7 @@ describe("LauncherQuickActions", () => {
     // and it must not appear: the launcher mirrors the toolbar, not the full
     // launchable set.
     h.layout = {
-      leftButtons: ["agent-tray", "claude", "terminal"],
+      leftButtons: ["launcher", "claude", "terminal"],
       rightButtons: [],
       pinnedButtons: {},
     };

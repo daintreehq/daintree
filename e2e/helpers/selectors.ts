@@ -254,7 +254,7 @@ export const SEL = {
   agent: {
     panel: '[aria-label^="Claude agent:"]',
     startButton: '[aria-label="Start Claude"]',
-    trayButton: '[aria-label^="Agent tray"]',
+    trayButton: '[aria-label^="Launcher"]',
     chromeAgentPanel: (agentId: string) => `[data-chrome-agent-id="${agentId}"]`,
     everDetectedAgentPanel: '[data-ever-detected-agent="true"]',
   },

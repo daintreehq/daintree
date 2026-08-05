@@ -9,7 +9,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
  */
 describe("toolbarPreferencesStore cross-view write merge (#11351)", () => {
   const STORAGE_KEY = "daintree-toolbar-preferences";
-  const VERSION = 13;
+  // Must track the store's own `version`. The reconciler reads `onDisk` raw and
+  // bails out wholesale when the versions differ, so a stale constant here makes
+  // every case in this file exercise the take-incoming shortcut instead of the
+  // merge — passing for the wrong reason on the assertions that expect a drop,
+  // and failing on the ones that expect a survivor.
+  const VERSION = 14;
   const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
 
   type Layout = {
@@ -166,7 +171,7 @@ describe("toolbarPreferencesStore cross-view write merge (#11351)", () => {
       STORAGE_KEY,
       siblingBlob({
         layout: {
-          leftButtons: ["terminal", "browser", "panel-tray"],
+          leftButtons: ["terminal", "browser", "launcher"],
           rightButtons: [],
           pinnedButtons: { browser: true },
         },

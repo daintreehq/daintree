@@ -363,9 +363,9 @@
  *    a cut-out gap so the pip floats visually above the icon:
  *
  *      - ring-daintree-sidebar — semantic-status pips on a colored dot
- *        (AssistantButton MCP/agent pips, AgentButton, AgentTrayButton
- *        running-state pip, plus AgentTrayButton's separate discovery
- *        badge — see `showDiscoveryBadge` in AgentTrayButton.tsx). Ring
+ *        (AssistantButton MCP/agent pips, AgentButton, LauncherMenuButton
+ *        running-state pip, plus LauncherMenuButton's separate discovery
+ *        badge — see `showDiscoveryBadge` in LauncherMenuButton.tsx). Ring
  *        color matches the toolbar / sidebar surface (they share a token
  *        across themes) so the gap reads as a clean cut-out.
  *      - ring-daintree-bg/60 — ambient muted indicator (NotificationCenter
@@ -386,7 +386,7 @@
 
 /* ── Shared pip geometry ──
  * The semantic-status pips (AssistantButton MCP/agent pips, AgentButton and
- * AgentTrayButton running-state pips) all float at the same corner offset with
+ * LauncherMenuButton running-state pips) all float at the same corner offset with
  * the same 6px circle and sidebar-colored ring cut-out. This class owns that
  * geometry so render sites stop re-typing the literals; it carries no color and
  * no visibility — color comes from a per-surface class, visibility/motion from

@@ -25,23 +25,24 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, LayoutGrid, Rocket, RotateCcw } from "lucide-react";
-import { LayoutPanelTop } from "@/components/icons";
+import { LayoutPanelTop, Plus } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type {
   AnyToolbarButtonId,
-  PanelTrayButtonId,
+  LauncherPanelButtonId,
   PluginToolbarButtonId,
 } from "@/../../shared/types/toolbar";
 // `@shared/...` because these are value imports — the type-only spelling above
 // is erased at compile time and never has to resolve at runtime.
 import {
-  PANEL_TRAY_BUTTON_IDS,
+  LAUNCHER_PANEL_BUTTON_IDS,
   isPanelButtonOnToolbar,
-  isPanelTrayButtonId,
+  isLauncherPanelButtonId,
 } from "@shared/types/toolbar";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import { LAUNCHABLE_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
+import { isAgentButtonOnToolbar } from "../../../shared/utils/agentPinned";
 import {
   TOOLBAR_BUTTON_METADATA,
   isToolbarButtonVisible,
@@ -307,6 +308,7 @@ export function ToolbarSettingsTab() {
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
   const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
   const setPanelButtonOnToolbar = useToolbarPreferencesStore((s) => s.setPanelButtonOnToolbar);
+  const positionAgentButton = useToolbarPreferencesStore((s) => s.positionAgentButton);
   const setAlwaysShowDevServer = useToolbarPreferencesStore((s) => s.setAlwaysShowDevServer);
   const setDefaultSelection = useToolbarPreferencesStore((s) => s.setDefaultSelection);
   const reset = useToolbarPreferencesStore((s) => s.reset);
@@ -363,16 +365,31 @@ export function ToolbarSettingsTab() {
     [layout.pinnedButtons, agentSettings, agentAvailability, pluginConfigs]
   );
 
-  // Panel-tray buttons need the array-aware resolver, not `isVisible`: since
+  // Launcher panel buttons need the array-aware resolver, not `isVisible`: since
   // v13 `browser`/`dev-server` carry no pin entry on a fresh profile, so
   // `isToolbarButtonVisible`'s "absent means visible" default would report both
   // as on while neither is anywhere on the toolbar (#11667). Inside the side
   // columns the two agree — a column only ever renders ids the arrays already
-  // hold — but the panel section below lists all three regardless.
+  // hold — but the panel section below lists all four regardless.
   const isPanelOnToolbar = useCallback(
-    (id: PanelTrayButtonId) =>
+    (id: LauncherPanelButtonId) =>
       isPanelButtonOnToolbar(id, layout.pinnedButtons, layout.leftButtons, layout.rightButtons),
     [layout.pinnedButtons, layout.leftButtons, layout.rightButtons]
+  );
+
+  // Agents need one for the same reason since #11680: `isAgentToolbarVisible`
+  // resolves an unset pin to "the binary is installed", which no longer implies
+  // a toolbar slot now that agent ids left `DEFAULT_LEFT_BUTTONS`. The launcher
+  // reads through this same resolver, so the two surfaces can't disagree about
+  // which agents are on the toolbar.
+  const isAgentOnToolbar = useCallback(
+    (id: AnyToolbarButtonId) =>
+      isAgentButtonOnToolbar(
+        agentSettings?.agents?.[id],
+        agentAvailability?.[id],
+        layout.leftButtons.includes(id) || layout.rightButtons.includes(id)
+      ),
+    [agentSettings, agentAvailability, layout.leftButtons, layout.rightButtons]
   );
 
   const findContainer = (id: UniqueIdentifier, lists: SideLists): ToolbarSide | null => {
@@ -511,23 +528,34 @@ export function ToolbarSettingsTab() {
       setPluginButtonPromoted(buttonId, !isVisible(buttonId));
       return;
     }
-    // Panel-tray buttons need the same treatment for a different reason
+    // Launcher panel buttons need the same treatment for a different reason
     // (#11667). `browser` and `dev-server` are not defaults, so the generic
     // toggle's "delete the key to show" leaves nothing recording that the user
     // wants them — and a stale sibling view's write, which replaces the position
     // arrays wholesale, would then silently un-promote them with nothing left to
     // rebuild from. `setPanelButtonOnToolbar` writes the explicit `true` that
     // survives, and positions the button if it has no slot yet.
-    if (isPanelTrayButtonId(buttonId)) {
+    if (isLauncherPanelButtonId(buttonId)) {
       setPanelButtonOnToolbar(buttonId, !isPanelOnToolbar(buttonId));
       return;
     }
-    dispatchToolbarVisibility(buttonId, side, {
-      agentSettings,
-      agentAvailability,
-      setAgentPinned,
-      toggleButtonVisibility,
-    });
+    // The explicit next state comes from the array-aware resolver, not the
+    // dispatcher's own `isAgentToolbarVisible` fallback: since #11680 an
+    // installed-but-unpositioned agent reads as visible to that fallback while
+    // rendering nothing, so the toggle would write `false` on a button the user
+    // is trying to turn on. Non-agent ids ignore the argument.
+    dispatchToolbarVisibility(
+      buttonId,
+      side,
+      {
+        agentSettings,
+        agentAvailability,
+        setAgentPinned,
+        toggleButtonVisibility,
+        positionAgentButton,
+      },
+      isBuiltInAgentId(buttonId) ? !isAgentOnToolbar(buttonId) : undefined
+    );
   };
 
   const activeMetadata = activeId ? allMetadata[activeId] : undefined;
@@ -581,20 +609,47 @@ export function ToolbarSettingsTab() {
 
       {/*
         Its own section rather than relying on the two side columns above: those
-        render `layout.leftButtons`/`layout.rightButtons`, and since v13
-        `browser` and `dev-server` are in neither array on a fresh profile
-        (#11667). Without this the panel tray's "Customize toolbar…" footer would
-        land the user on a page that lists none of the buttons they were just
-        looking at. Enumerating `PANEL_TRAY_BUTTON_IDS` keeps the page honest
-        regardless of array membership, the same way the plugin section does.
+        render `layout.leftButtons`/`layout.rightButtons`, and since #11680 no
+        agent id is in either array on a fresh profile — the same reason the
+        panel section below exists for `browser`/`dev-server` since v13 (#11667).
+        Without this the launcher's "Customize toolbar…" footer would land the
+        user on a page that lists none of the agents they were just looking at,
+        leaving the launcher as the only place an agent can be pinned at all.
+        Enumerating `LAUNCHABLE_AGENT_IDS` keeps the page honest regardless of
+        array membership, the same way the plugin section does.
+      */}
+      <SettingsSection
+        icon={Plus}
+        title="Agent buttons"
+        description={`Every agent lives in the launcher. Pin one to give it its own toolbar button too. ${LAUNCHABLE_AGENT_IDS.filter(isAgentOnToolbar).length} of ${LAUNCHABLE_AGENT_IDS.length} pinned.`}
+      >
+        <div className="space-y-2">
+          {LAUNCHABLE_AGENT_IDS.map((buttonId) => (
+            <TrayButtonRow
+              key={buttonId}
+              buttonId={buttonId}
+              isVisible={isAgentOnToolbar(buttonId)}
+              onToggle={(id) => handleToggle(id, "left")}
+              metadata={allMetadata[buttonId]}
+            />
+          ))}
+        </div>
+      </SettingsSection>
+
+      {/*
+        Same reason as the agent section above: since v13 `browser` and
+        `dev-server` are in neither array on a fresh profile (#11667), so the
+        side columns can't be the only place these are listed. Enumerating
+        `LAUNCHER_PANEL_BUTTON_IDS` keeps the page honest regardless of array
+        membership.
       */}
       <SettingsSection
         icon={LayoutPanelTop}
         title="Panel buttons"
-        description={`Every panel button lives in the panel tray. Pin one to give it its own toolbar button too. ${PANEL_TRAY_BUTTON_IDS.filter(isPanelOnToolbar).length} of ${PANEL_TRAY_BUTTON_IDS.length} pinned.`}
+        description={`Every panel button lives in the launcher. Pin one to give it its own toolbar button too. ${LAUNCHER_PANEL_BUTTON_IDS.filter(isPanelOnToolbar).length} of ${LAUNCHER_PANEL_BUTTON_IDS.length} pinned.`}
       >
         <div className="space-y-2">
-          {PANEL_TRAY_BUTTON_IDS.map((buttonId) => (
+          {LAUNCHER_PANEL_BUTTON_IDS.map((buttonId) => (
             <TrayButtonRow
               key={buttonId}
               buttonId={buttonId}

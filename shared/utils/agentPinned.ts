@@ -41,3 +41,32 @@ export function isAgentToolbarVisible(
   if (entry?.pinned === false) return false;
   return isAgentInstalled(availability);
 }
+
+/**
+ * Whether an agent currently has its own top-level toolbar button — the agent
+ * counterpart of `isPanelButtonOnToolbar`, and what the launcher's pin
+ * affordance reads (#11680).
+ *
+ * `isAgentToolbarVisible` cannot answer this. It resolves an unset pin to "the
+ * binary is installed", which was the same thing while every agent id shipped in
+ * `DEFAULT_LEFT_BUTTONS`; since #11680 dropped that spread, a fresh profile's
+ * installed-but-unpinned agent is in neither side array and renders nothing,
+ * while `isAgentToolbarVisible` still reports it as on.
+ *
+ * Same three states, same order as `isPanelButtonOnToolbar`: an explicit `false`
+ * is a hide and wins over any position; an explicit `true` is the user's own
+ * promotion and reads as on even in the window before the position is rebuilt;
+ * otherwise the position decides. The availability term stays on the
+ * fall-through branch because that branch *is* the grandfathered profile — it
+ * carries every agent id in its arrays and has always shown exactly the
+ * installed ones.
+ */
+export function isAgentButtonOnToolbar(
+  entry: AgentSettingsEntry | undefined | null,
+  availability: AgentAvailabilityState | undefined,
+  isPositioned: boolean
+): boolean {
+  if (entry?.pinned === true) return true;
+  if (entry?.pinned === false) return false;
+  return isPositioned && isAgentInstalled(availability);
+}

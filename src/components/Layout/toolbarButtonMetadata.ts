@@ -6,12 +6,11 @@ import {
   Globe,
   Mic,
   MonitorPlay,
-  Plug,
   SlidersHorizontal,
   SquareMenu,
   SquareTerminal,
 } from "lucide-react";
-import { FolderTree, Folders, History, LayoutPanelTop, Package } from "@/components/icons";
+import { FolderTree, Folders, History, Package, Plus } from "@/components/icons";
 import {
   BUILT_IN_AGENT_IDS,
   isBuiltInAgentId,
@@ -53,20 +52,15 @@ const AGENT_METADATA: Partial<Record<AnyToolbarButtonId, ToolbarButtonMetadata>>
   ) as Partial<Record<AnyToolbarButtonId, ToolbarButtonMetadata>>;
 
 export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, ToolbarButtonMetadata>> = {
-  "agent-tray": {
-    label: "Agent tray",
-    icon: Plug,
-    description: "Dropdown for launching any agent and jumping into setup",
+  launcher: {
+    label: "Launcher",
+    icon: Plus,
+    description: "Dropdown for launching any agent or panel and pinning it to the toolbar",
   },
   "plugin-tray": {
     label: "Plugin tray",
     icon: Package,
     description: "Dropdown collecting every plugin's toolbar buttons",
-  },
-  "panel-tray": {
-    label: "Panel tray",
-    icon: LayoutPanelTop,
-    description: "Dropdown for opening the non-agent panels and pinning them to the toolbar",
   },
   ...AGENT_METADATA,
   terminal: {
@@ -138,7 +132,7 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
  *
  * Agent IDs (entries in `BUILT_IN_AGENT_IDS`) route to `isAgentToolbarVisible`
  * — their pin lives in `agentSettingsStore`. Built-in IDs, including
- * `agent-tray` and `plugin-tray`, read from the toolbar store's
+ * `launcher` and `plugin-tray`, read from the toolbar store's
  * `pinnedButtons` map: an explicit `false` hides; missing or `true` shows.
  *
  * Registered plugin contributions invert that default (#11304): they reach the

@@ -24,7 +24,7 @@ let fakeBinDir: string;
 let fixtureCleanup: (() => void) | undefined;
 
 // A fake `claude` binary on PATH makes the agent "launchable", which is what
-// surfaces it on the toolbar split-button and in the agent-tray sub-menu —
+// surfaces it on the toolbar split-button and in the launcher sub-menu —
 // without it those launch surfaces never render and the dropdown/sub-menu
 // assertions below would be silently skipped. Mirrors the harness in
 // core-agent-preset-icon-color.spec.ts.
@@ -167,7 +167,7 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
     await ctx.window.waitForTimeout(T_SETTLE);
 
     const openClaudeSubmenu = async () => {
-      const trayButton = ctx.window.locator('[aria-label^="Agent tray"]');
+      const trayButton = ctx.window.locator('[aria-label^="Launcher"]');
       await expect(trayButton).toBeVisible({ timeout: T_MEDIUM });
       await trayButton.click();
       const submenuTrigger = ctx.window

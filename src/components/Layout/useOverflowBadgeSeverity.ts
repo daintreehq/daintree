@@ -100,7 +100,7 @@ export function useOverflowBadgeSeverity(
       info = true;
     }
 
-    if (overflowIds.includes("agent-tray") && onboardingLoaded) {
+    if (overflowIds.includes("launcher") && onboardingLoaded) {
       const seenSet = new Set(seenAgentIds);
       for (const id of LAUNCHABLE_AGENT_IDS) {
         if (isAgentLaunchable(availability?.[id]) && !seenSet.has(id)) {

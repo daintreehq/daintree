@@ -26,9 +26,8 @@ export type AnyToolbarButtonId = ToolbarButtonId | PluginToolbarButtonId;
  */
 export type ToolbarButtonId =
   | "sidebar-toggle"
-  | "agent-tray"
+  | "launcher"
   | "plugin-tray"
-  | "panel-tray"
   | BuiltInAgentId
   | "terminal"
   | "browser"
@@ -50,8 +49,7 @@ export type ToolbarButtonId =
  * used by `agentSettingsStore.agents[id].pinned`, but the default the missing
  * entry falls back to differs by button kind:
  *
- * Built-in buttons (incl. `agent-tray` / `plugin-tray` / `panel-tray`) default
- * to visible:
+ * Built-in buttons (incl. `launcher` / `plugin-tray`) default to visible:
  *   - `false`      → user explicitly hid this button
  *   - `undefined`  → visible
  *
@@ -68,7 +66,7 @@ export type ToolbarButtonId =
  * built-in's pin entry stays absent until the user acts on it.
  *
  * A `true` therefore only ever appears where the user asked for the button
- * directly — a promoted plugin contribution, or a `panel-tray` button they
+ * directly — a promoted plugin contribution, or a launcher panel button they
  * pinned (`setPanelButtonOnToolbar`). It is a record of an action, never of a
  * default. `toggleButtonVisibility`, which every other built-in uses, still
  * never writes one: for a button that is already a default, `true` would say
@@ -81,15 +79,15 @@ export type ToolbarButtonId =
  *   - `false`/`undefined` → tray row only
  *
  * Agent-button IDs (entries in `BUILT_IN_AGENT_IDS`) live in
- * `agentSettingsStore`, not here. Only `agent-tray`, `plugin-tray`,
- * `panel-tray`, the non-agent built-ins, and plugin buttons are governed by
- * this map.
+ * `agentSettingsStore`, not here. Only `launcher`, `plugin-tray`, the non-agent
+ * built-ins, and plugin buttons are governed by this map.
  */
 export type ToolbarPinnedState = Partial<Record<AnyToolbarButtonId, boolean>>;
 
 /**
- * The built-in panel buttons the panel tray can promote to (or demote from) a
- * top-level toolbar slot (#11667), in the order the tray lists them.
+ * The built-in panel buttons the launcher can promote to (or demote from) a
+ * top-level toolbar slot (#11667, extended in #11680), in the order the
+ * launcher's Panels section lists them.
  *
  * `browser` and `dev-server` left `DEFAULT_LEFT_BUTTONS` in v13, so on a fresh
  * profile they sit in neither side array — which means promoting one has to
@@ -97,21 +95,36 @@ export type ToolbarPinnedState = Partial<Record<AnyToolbarButtonId, boolean>>;
  * explicit `true` that survives a cross-view array overwrite.
  * `toggleButtonVisibility` does neither: it only ever writes `false` or deletes
  * the key. Every surface that can show or hide one of these buttons must route
- * through `setPanelButtonOnToolbar` instead — the tray, and Settings → Toolbar.
+ * through `setPanelButtonOnToolbar` instead — the launcher, and Settings →
+ * Toolbar.
+ *
+ * `terminal` and `file-browser` join the list in #11680 even though both still
+ * ship in `DEFAULT_LEFT_BUTTONS`. Membership here is about which setter owns the
+ * id, not about whether it has a default slot: the launcher gives every Panels
+ * row the same pin affordance, so every one of them has to write through the
+ * same action or the four visibility rules the issue set out to collapse simply
+ * move around. `isPanelButtonOnToolbar`'s array fall-through already reads a
+ * default-array member as on, so their shipped behavior is unchanged.
  *
  * One exported list so a fourth surface can't quietly disagree about which ids
  * those are.
  */
-export const PANEL_TRAY_BUTTON_IDS = ["file-browser", "browser", "dev-server"] as const;
+export const LAUNCHER_PANEL_BUTTON_IDS = [
+  "terminal",
+  "file-browser",
+  "browser",
+  "dev-server",
+] as const;
 
-export type PanelTrayButtonId = (typeof PANEL_TRAY_BUTTON_IDS)[number];
+export type LauncherPanelButtonId = (typeof LAUNCHER_PANEL_BUTTON_IDS)[number];
 
-export function isPanelTrayButtonId(id: AnyToolbarButtonId): id is PanelTrayButtonId {
-  return (PANEL_TRAY_BUTTON_IDS as readonly string[]).includes(id);
+export function isLauncherPanelButtonId(id: AnyToolbarButtonId): id is LauncherPanelButtonId {
+  return (LAUNCHER_PANEL_BUTTON_IDS as readonly string[]).includes(id);
 }
 
 /**
- * Whether a panel-tray button currently has its own top-level toolbar button.
+ * Whether a launcher panel button currently has its own top-level toolbar
+ * button.
  *
  * Three states, in priority order. An explicit `false` is a hide and wins over
  * any position. An explicit `true` is a promotion the user made, and reads as on
@@ -119,16 +132,19 @@ export function isPanelTrayButtonId(id: AnyToolbarButtonId): id is PanelTrayButt
  * `restorePromotedPanelButtons` rebuilding it. Otherwise the position decides:
  * that is the legacy profile, which carries `browser`/`dev-server` in its arrays
  * with no pin entry at all and must keep reading as promoted so an existing
- * user's toolbar looks untouched.
+ * user's toolbar looks untouched. It is also what keeps `terminal` and
+ * `file-browser` reading as on out of the box — both ship in
+ * `DEFAULT_LEFT_BUTTONS` and carry no pin entry until the user acts.
  *
  * Lives here rather than beside `isToolbarButtonVisible` because it is the only
  * resolver that reads the side arrays, and every surface that shows one of these
- * buttons has to agree with the tray: the tray itself, and Settings → Toolbar.
- * `isToolbarButtonVisible` cannot answer this — without the arrays a fresh
- * profile's absent `browser` pin reads as visible when the button isn't there.
+ * buttons has to agree with the launcher: the launcher itself, and Settings →
+ * Toolbar. `isToolbarButtonVisible` cannot answer this — without the arrays a
+ * fresh profile's absent `browser` pin reads as visible when the button isn't
+ * there.
  */
 export function isPanelButtonOnToolbar(
-  id: PanelTrayButtonId,
+  id: LauncherPanelButtonId,
   pinnedButtons: ToolbarPinnedState,
   leftButtons: AnyToolbarButtonId[],
   rightButtons: AnyToolbarButtonId[]
@@ -171,13 +187,12 @@ export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPri
   "portal-toggle": 1,
   "forge-stats": 1,
   "voice-recording": 1,
-  "agent-tray": 2,
+  // Deliberately ahead of the individual panel buttons at 3: on a fresh profile
+  // the launcher is the only toolbar route to the agents and to `browser` /
+  // `dev-server`, so evicting it before them would strand everything whose own
+  // button isn't there to fall back to (#11680).
+  launcher: 2,
   "plugin-tray": 2,
-  // Same tier as the other trays, and deliberately ahead of the individual
-  // panel buttons at 3: on a fresh profile the tray is the only toolbar route
-  // to `browser` and `dev-server`, so evicting it before them would strand
-  // panels whose own buttons aren't there to fall back to.
-  "panel-tray": 2,
   ...(Object.fromEntries(
     BUILT_IN_AGENT_IDS.map((id) => [id, 2 as ToolbarButtonPriority])
   ) as Record<BuiltInAgentId, ToolbarButtonPriority>),

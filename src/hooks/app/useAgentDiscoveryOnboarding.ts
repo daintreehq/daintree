@@ -159,7 +159,7 @@ interface AgentDiscoveryOnboarding extends AgentDiscoveryState {
  * Reads the discovery-related onboarding fields from a shared Zustand store
  * and exposes optimistic mutations. Hydration fires once on first mount and
  * is shared across all subscribers — critical for keeping the welcome card
- * (`WelcomeScreen`) and the tray badge (`AgentTrayButton`) in sync within a
+ * (`WelcomeScreen`) and the tray badge (`LauncherMenuButton`) in sync within a
  * session; see review on #5111.
  */
 export function useAgentDiscoveryOnboarding(): AgentDiscoveryOnboarding {

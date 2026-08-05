@@ -38,7 +38,7 @@ interface ToolbarState {
 function makeToolbarState(
   layout: ToolbarState["layout"] = {
     // Mix of agent IDs and non-agent IDs so we can test both branches.
-    leftButtons: ["agent-tray", "claude", "gemini", "terminal"],
+    leftButtons: ["launcher", "claude", "gemini", "terminal"],
     rightButtons: ["copy-tree", "settings"],
     pinnedButtons: {},
   }
@@ -303,13 +303,27 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
   });
 
-  it("keeps non-agent switch toggle on toggleButtonVisibility", () => {
+  it("keeps plain built-in toggles on toggleButtonVisibility", () => {
+    // The launcher, not `terminal`: since #11680 terminal is a launcher panel
+    // button and routes through `setPanelButtonOnToolbar` with the other three,
+    // so a left-side built-in that stays on the generic path is the honest
+    // subject here.
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+    fireEvent.click(getByLabelText("Toggle Launcher visibility"));
+
+    expect(toggleButtonVisibilityMock).toHaveBeenCalledTimes(1);
+    expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("launcher", "left");
+    expect(setAgentPinnedMock).not.toHaveBeenCalled();
+  });
+
+  it("routes the terminal toggle through the launcher panel setter", () => {
+    // The #11680 unification: every Panels row writes the same way, so terminal
+    // stopped being a plain built-in the moment it gained a launcher row.
     const { getByLabelText } = render(<ToolbarSettingsTab />);
     fireEvent.click(getByLabelText("Toggle Terminal visibility"));
 
-    expect(toggleButtonVisibilityMock).toHaveBeenCalledTimes(1);
-    expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("terminal", "left");
-    expect(setAgentPinnedMock).not.toHaveBeenCalled();
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("terminal", false);
+    expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
   });
 
   it("dispatches `'right'` as the side argument for right-side non-agent toggles", () => {
@@ -347,7 +361,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     // position arrays wholesale — would then silently un-promote them with
     // nothing left to rebuild the position from.
     mockToolbarState = makeToolbarState({
-      leftButtons: ["terminal", "browser", "file-browser", "panel-tray"],
+      leftButtons: ["terminal", "browser", "file-browser", "launcher"],
       rightButtons: ["settings"],
       pinnedButtons: { browser: false },
     });
@@ -362,7 +376,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
 
   it("routes a panel-button hide through the same action", () => {
     mockToolbarState = makeToolbarState({
-      leftButtons: ["terminal", "file-browser", "panel-tray"],
+      leftButtons: ["terminal", "file-browser", "launcher"],
       rightButtons: ["settings"],
       pinnedButtons: {},
     });
@@ -381,7 +395,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     });
 
     const { getByText } = render(<ToolbarSettingsTab />);
-    // Left side: agent-tray (visible), claude (pinned, visible),
+    // Left side: launcher (visible), claude (pinned, visible),
     // gemini (unpinned, not visible), terminal (not hidden, visible) => 3 / 4.
     expect(getByText("3/4")).toBeTruthy();
   });
@@ -398,7 +412,7 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
   it("handles a right-side agent correctly (routes through setAgentPinned)", () => {
     // Relocate codex to the right side — an unlikely but possible layout.
     mockToolbarState.layout = {
-      leftButtons: ["agent-tray", "terminal"],
+      leftButtons: ["launcher", "terminal"],
       rightButtons: ["codex", "settings"],
       pinnedButtons: {},
     };
@@ -431,11 +445,11 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
   it("commits a same-side reorder via setLeftButtons (not moveButton)", () => {
     render(<ToolbarSettingsTab />);
 
-    // Drag "agent-tray" (index 0) onto "terminal" (index 3) within the left side.
-    fire("onDragEnd", { active: { id: "agent-tray" }, over: { id: "terminal" } });
+    // Drag "launcher" (index 0) onto "terminal" (index 3) within the left side.
+    fire("onDragEnd", { active: { id: "launcher" }, over: { id: "terminal" } });
 
     expect(setLeftButtonsMock).toHaveBeenCalledTimes(1);
-    expect(setLeftButtonsMock).toHaveBeenCalledWith(["claude", "gemini", "terminal", "agent-tray"]);
+    expect(setLeftButtonsMock).toHaveBeenCalledWith(["claude", "gemini", "terminal", "launcher"]);
     expect(moveButtonMock).not.toHaveBeenCalled();
   });
 
@@ -512,7 +526,7 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
 
   it("supports dropping onto an empty side without crashing", () => {
     mockToolbarState = makeToolbarState({
-      leftButtons: ["agent-tray", "terminal"],
+      leftButtons: ["launcher", "terminal"],
       rightButtons: [],
       pinnedButtons: {},
     });
@@ -532,7 +546,7 @@ describe("ToolbarSettingsTab — drag reordering and cross-side moves", () => {
   it("does not mutate the store when a drag is cancelled", () => {
     render(<ToolbarSettingsTab />);
 
-    fire("onDragStart", { active: { id: "agent-tray" } });
+    fire("onDragStart", { active: { id: "launcher" } });
     fire("onDragCancel", {});
 
     expect(setLeftButtonsMock).not.toHaveBeenCalled();
@@ -685,9 +699,9 @@ describe("ToolbarSettingsTab — plugin button promotion (#11304)", () => {
 
   it("leaves built-in toggles on toggleButtonVisibility", () => {
     const { getByLabelText } = render(<ToolbarSettingsTab />);
-    fireEvent.click(getByLabelText("Toggle Terminal visibility"));
+    fireEvent.click(getByLabelText("Toggle Launcher visibility"));
 
-    expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("terminal", "left");
+    expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("launcher", "left");
     expect(setPluginButtonPromotedMock).not.toHaveBeenCalled();
   });
 });
@@ -697,7 +711,7 @@ describe("ToolbarSettingsTab — panel button pinning (#11667)", () => {
   // sit in neither side array and the two drag columns can't render them.
   function freshV13Profile() {
     return makeToolbarState({
-      leftButtons: ["terminal", "file-browser", "panel-tray"],
+      leftButtons: ["terminal", "file-browser", "launcher"],
       rightButtons: ["settings"],
       pinnedButtons: {},
     });
@@ -756,7 +770,7 @@ describe("ToolbarSettingsTab — panel button pinning (#11667)", () => {
     // dropped the position, and `restorePromotedPanelButtons` has not rebuilt it
     // yet. The explicit `true` is what keeps the switch honest until it does.
     mockToolbarState = makeToolbarState({
-      leftButtons: ["terminal", "file-browser", "panel-tray"],
+      leftButtons: ["terminal", "file-browser", "launcher"],
       rightButtons: ["settings"],
       pinnedButtons: { browser: true },
     });
@@ -770,15 +784,15 @@ describe("ToolbarSettingsTab — panel button pinning (#11667)", () => {
 
   it("counts pinned panel buttons in the section description", () => {
     mockToolbarState = makeToolbarState({
-      leftButtons: ["terminal", "file-browser", "browser", "panel-tray"],
+      leftButtons: ["terminal", "file-browser", "browser", "launcher"],
       rightButtons: ["settings"],
       pinnedButtons: {},
     });
 
     const { getByTestId } = render(<ToolbarSettingsTab />);
-    // file-browser + browser positioned, dev-server absent.
+    // terminal + file-browser + browser positioned, dev-server absent.
     expect(getByTestId("section-Panel buttons").getAttribute("data-description")).toContain(
-      "2 of 3 pinned"
+      "3 of 4 pinned"
     );
   });
 });

@@ -20,7 +20,7 @@ let fixtureCleanup: (() => void) | undefined;
 let fakeBinDir: string;
 
 /**
- * Tests 101–106: Agent tray default-launch behavior.
+ * Tests 101–106: launcher default-launch behavior.
  *
  * A fake `claude` binary is placed on PATH so Claude is detected as a
  * launchable agent and the tray actually renders its split-button — without
@@ -135,7 +135,7 @@ test.describe.serial("Presets: Tray Default Launch (101–106)", () => {
     // binary. A hard failure here (rather than a silent per-test skip) means a
     // broken harness can never masquerade as a passing run.
     await openTray();
-    await expect(trayMenu().locator('[data-testid="agent-tray-row-claude"]')).toBeVisible({
+    await expect(trayMenu().locator('[data-testid="launcher-row-claude"]')).toBeVisible({
       timeout: T_LONG,
     });
     await closeTray();
@@ -154,7 +154,7 @@ test.describe.serial("Presets: Tray Default Launch (101–106)", () => {
     await openTray();
 
     // Claude is launchable, so it renders as a plain launch row...
-    await expect(trayMenu().locator('[data-testid="agent-tray-row-claude"]')).toBeVisible({
+    await expect(trayMenu().locator('[data-testid="launcher-row-claude"]')).toBeVisible({
       timeout: T_MEDIUM,
     });
     // ...and with no presets there must be no split-button submenu trigger.

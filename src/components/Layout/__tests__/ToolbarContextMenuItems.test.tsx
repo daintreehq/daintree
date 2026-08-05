@@ -153,7 +153,7 @@ describe("ToolbarContextMenuItems", () => {
 
   it("uses DropdownMenu primitives for the dropdown variant", () => {
     const { queryAllByTestId, queryByTestId } = render(
-      <ToolbarContextMenuItems buttonId="agent-tray" side="left" variant="dropdown" />
+      <ToolbarContextMenuItems buttonId="launcher" side="left" variant="dropdown" />
     );
     expect(queryAllByTestId("dropdown-menu-action-item").length).toBe(1);
     expect(queryAllByTestId("dropdown-menu-item").length).toBe(1);
@@ -169,7 +169,7 @@ describe("ToolbarContextMenuItems", () => {
     // `actionService.dispatch`; in the test mock the source is the default
     // "user" because there's no wrapping Radix context. We only assert the
     // action id and args here — source assertion is exercised in
-    // AgentTrayButton.test.tsx.
+    // LauncherMenuButton.test.tsx.
     expect(dispatchMock).toHaveBeenCalledWith(
       "app.settings.openTab",
       { tab: "toolbar" },
@@ -186,11 +186,11 @@ describe("ToolbarContextMenuItems", () => {
 
   it("propagates buttonId and side to the dropdown variant's unpin handler", () => {
     const { getByTestId } = render(
-      <ToolbarContextMenuItems buttonId="agent-tray" side="left" variant="dropdown" />
+      <ToolbarContextMenuItems buttonId="launcher" side="left" variant="dropdown" />
     );
     const unpin = getByTestId("dropdown-menu-item");
     fireEvent.click(unpin);
-    expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("agent-tray", "left");
+    expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("launcher", "left");
   });
 
   it("uses the onUnpin override when provided (agent IDs route to setAgentPinned)", () => {

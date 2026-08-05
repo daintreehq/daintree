@@ -29,6 +29,7 @@ export {
   LayoutPanelTop, // workspace plugin category (panels, notes)
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   Plug, // agent (integration that plugs into the host system)
+  Plus, // the toolbar launcher — "make me a new thing" (agent, panel)
   Sprout, // origin / first step (main worktree, first agent launch)
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";
