@@ -78,13 +78,17 @@ type TierTestService = {
 };
 
 function makeMockManaged(overrides: Record<string, unknown> = {}) {
+  // Normal screen: xterm reports one buffer through both handles, so the shrink
+  // path's normal-buffer accounting sees the same lengths as `active`.
+  const buffer = { length: 100, type: "normal", baseY: 0, viewportY: 0 };
   return {
     terminal: {
       options: { scrollback: 5000, cursorBlink: true },
       rows: 24,
       cols: 80,
       buffer: {
-        active: { length: 100, type: "normal", baseY: 0, viewportY: 0 },
+        active: buffer,
+        normal: buffer,
         onBufferChange: vi.fn(() => ({ dispose: vi.fn() })),
       },
       refresh: vi.fn(),
