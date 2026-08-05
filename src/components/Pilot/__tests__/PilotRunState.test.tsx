@@ -105,6 +105,14 @@ describe("PilotRunState", () => {
     expect(new Set(shapes).size).toBe(shapes.length);
   });
 
+  it("separates an errored agent from one asking a question by shape, not just hue", () => {
+    // These two shared the hollow circle and differed only in colour, with the
+    // row's visible status word carrying the real distinction. That word is
+    // gone, and "the agent stopped" versus "the agent asked you something" is
+    // too far apart to leave resting on a hue a colour-vision remap can move.
+    expect(shapeOf("blocked")).not.toBe(shapeOf("needs-you"));
+  });
+
   it("spins only the run that is actually working", () => {
     const spinning = (band: FleetBand, agentState?: AgentState) => {
       const { container, unmount } = render(<PilotRunState band={band} agentState={agentState} />);

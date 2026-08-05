@@ -9,10 +9,10 @@ import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { actionService } from "@/services/ActionService";
-import { FLEET_BANDS, isDemandBand, type FleetBand } from "@/lib/fleetAttention";
+import { FLEET_BANDS, type FleetBand } from "@/lib/fleetAttention";
 import { UI_ANIMATION_DURATION, UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { agoPhrase, formatWaitAge, ROW_TONE_CLASS } from "@/lib/projectRowStatus";
+import { agoPhrase, formatWaitAge } from "@/lib/projectRowStatus";
 import {
   buildPilotGroups,
   countPilotBands,
@@ -244,7 +244,11 @@ function GroupHeader({
         // The summary rides the label in BOTH states. Collapsed it is the only
         // account of what is inside; expanded it saves a screen-reader user
         // walking the rows to learn what walking them would cost.
-        aria-label={`${group.name}, ${summary}`}
+        //
+        // Being in the current workspace decides whether opening a run is
+        // instant or swaps the whole view, which the header renders as a word
+        // and then hides. A fact that load-bearing cannot be visual-only.
+        aria-label={`${group.name}${group.isCurrent ? ", current workspace" : ""}, ${summary}`}
         data-testid="pilot-group-toggle"
         onClick={onToggle}
         className="flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-daintree-text/40 transition-colors hover:text-daintree-text"
@@ -299,25 +303,35 @@ function RunRow({
   domId: string;
   onActivate: () => void;
 }) {
-  // Only a demand gets a visible word. The other three states are neutral by
-  // design now, and a status word for each of them was half of what made every
-  // row look equally important — but the state still has to be readable as
-  // text, so it moves into the option's accessible name instead of vanishing.
-  const isDemand = isDemandBand(row.band);
+  /**
+   * The agent's brand, unless the title already is it.
+   *
+   * The brand is on the row as an icon only, and search matches on it precisely
+   * because "codex" is a plausible thing to type — so two identically-titled
+   * runs on different agents were one string to a screen reader. An untitled
+   * run falls back to its agent's name for the title, though, and "Claude,
+   * Claude" is a separator promising a second fact and then not delivering one.
+   */
+  const agentLabel =
+    row.chrome.label.toLowerCase() === row.title.toLowerCase() ? null : row.chrome.label;
 
   /**
    * Spelled out rather than left to the name-from-content computation.
    *
-   * Those spans are inline, so a computed name concatenates them with no
-   * separators at all: "Fix authWorkingfeature-x2m". Naming the parts here is
-   * what turns the row back into a sentence, and it lets the age be announced
-   * as an age ("2m ago") instead of a bare token a screen reader reads as
-   * "two em".
+   * The row's own spans are inline, so a computed name concatenates them with
+   * no separators at all: "Fix auth2m". Naming the parts here is what turns the
+   * row back into a sentence, and it lets the age be announced as an age
+   * ("2m ago") instead of a bare token a screen reader reads as "two em".
+   *
+   * The state is here and nowhere else on the row now. The worktree is neither:
+   * it is a scratch project's UUID as often as it is a branch, and dropping it
+   * from the drawn row without dropping it from the name would have left the
+   * noise exactly where it is least escapable.
    */
   const accessibleName = [
     row.title,
+    agentLabel,
     row.statusLabel,
-    row.worktreeLabel,
     row.age !== null ? agoPhrase(row.age) : null,
   ]
     .filter((part): part is string => part !== null)
@@ -370,34 +384,28 @@ function RunRow({
       </span>
 
       {/*
-        The scan column. Everything here is `aria-hidden` — the row's own label
-        above says all of it, in order and with separators, so announcing these
-        as well would read each row's facts twice.
+        The scan column, now a single fact wide.
 
-        The group may shrink, but only into the worktree: the status word and
-        the age are short and bounded, while an untruncatable 10rem worktree
-        beside a 3.5rem age floor could push the title out of a narrow palette
-        entirely and give the list a horizontal scrollbar.
+        `aria-hidden` — the row's own label above says this in order and with
+        separators, so announcing it here would read the age twice. Right-
+        aligned, tabular, and given a floor width so "just now" and "2h 15m"
+        start at the same x: without that the ages sit at eight different
+        offsets and "how long has this been stuck" goes back to being eight
+        separate reads instead of one scan.
+
+        The status word and the worktree used to sit to its left. The glyph in
+        the chevron column already says the state, and the worktree was as often
+        a scratch project's UUID as a branch name — both were charging the
+        truncating title for width to say nothing it needed.
       */}
-      <span aria-hidden="true" className="flex min-w-0 items-center gap-2 text-[11px] leading-none">
-        {isDemand && (
-          <span className={cn("shrink-0", ROW_TONE_CLASS[row.tone])}>{row.statusLabel}</span>
-        )}
-        {row.worktreeLabel !== null && (
-          <span className="max-w-[8rem] truncate text-daintree-text/40">{row.worktreeLabel}</span>
-        )}
-        {/*
-          Right-aligned, tabular, and given a floor width so "just now" and
-          "2h 15m" start at the same x. Without that the ages sit at eight
-          different offsets and "how long has this been stuck" goes back to
-          being eight separate reads instead of one scan.
-        */}
-        {row.age !== null && (
-          <span className="min-w-[3.5rem] shrink-0 text-right tabular-nums text-daintree-text/50">
-            {row.age}
-          </span>
-        )}
-      </span>
+      {row.age !== null && (
+        <span
+          aria-hidden="true"
+          className="min-w-[3.5rem] shrink-0 text-right text-[11px] leading-none tabular-nums text-daintree-text/50"
+        >
+          {row.age}
+        </span>
+      )}
     </div>
   );
 }

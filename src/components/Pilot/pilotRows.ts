@@ -3,13 +3,12 @@ import type { FleetBand, FleetBandCounts } from "@/lib/fleetAttention";
 import {
   bandForRun,
   bandLabel,
-  BAND_TONE,
   compareWithinBand,
   emptyBandCounts,
   FLEET_BANDS,
   isDemandBand,
 } from "@/lib/fleetAttention";
-import { formatWaitAge, type ProjectRowTone } from "@/lib/projectRowStatus";
+import { formatWaitAge } from "@/lib/projectRowStatus";
 import { isFilterMatch } from "@/lib/projectSwitcherSearch";
 import { composeTitledPanel } from "@/utils/terminalTitleDisplay";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -26,11 +25,20 @@ export interface PilotRow {
   chrome: TerminalChromeDescriptor;
   /** Preset colour when the user picked one, which `BrandMark` treats as deliberate. */
   presetColor: string | undefined;
-  /** What the run is doing, in the same words the switcher uses for the same state. */
+  /**
+   * What the run is doing, in the same words the switcher uses for the same
+   * state. Not drawn — the glyph says this now — but it carries the state into
+   * the row's accessible name, which is where it may never stop being text.
+   */
   statusLabel: string;
-  /** Status colour for {@link statusLabel}. Always a status token, never the accent. */
-  tone: ProjectRowTone;
-  /** Worktree label, or null when it would only repeat the project name. */
+  /**
+   * Worktree label, or null when it would only repeat the project name.
+   *
+   * Not drawn either: a scratch project's directory is a UUID, and the title
+   * was truncating to make room for a string nobody can read. It stays on the
+   * row because {@link filterPilotGroups} matches on it — typing a branch name
+   * to find a run is useful whether or not the label is on screen.
+   */
   worktreeLabel: string | null;
   /** Compact age of the current state, or null when the run never recorded one. */
   age: string | null;
@@ -241,7 +249,6 @@ export function buildPilotGroups(
         chrome,
         presetColor: run.agentPresetColor,
         statusLabel: bandLabel(band, run),
-        tone: BAND_TONE[band],
         worktreeLabel: disambiguatingLabel(directoryLabel(run.cwd), name),
         age: run.since !== undefined ? formatWaitAge(run.since, ctx.nowMs) : null,
       };

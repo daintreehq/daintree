@@ -198,12 +198,13 @@ describe("PilotView", () => {
   });
 
   it("names a row as a sentence rather than a run of jammed-together facts", () => {
-    // Left to the name-from-content computation these inline spans concatenate
-    // with no separators — "Fix authWorkingfeature-x2m". Naming the parts is
-    // what keeps the row a phrase, and what lets the age be read as an age.
+    // Left to the name-from-content computation the row's inline spans
+    // concatenate with no separators — "Fix auth2m". Naming the parts is what
+    // keeps the row a phrase, and what lets the age be read as an age.
     seed([
       run({
         runId: "a",
+        agentId: "claude",
         agentState: "waiting",
         title: "Fix auth",
         cwd: "/repo/feature-x",
@@ -213,24 +214,58 @@ describe("PilotView", () => {
     render(<PilotView />);
 
     expect(screen.getByTestId("pilot-row").getAttribute("aria-label")).toBe(
-      "Fix auth, Waiting, feature-x, 2m ago"
+      "Fix auth, Claude, Waiting, 2m ago"
     );
   });
 
   it("leaves no dangling separator when a run has no age to report", () => {
-    seed([run({ runId: "a", agentState: "working", title: "Fix auth", cwd: "/repo/feature-x" })]);
+    seed([
+      run({
+        runId: "a",
+        agentId: "claude",
+        agentState: "working",
+        title: "Fix auth",
+        cwd: "/repo/feature-x",
+      }),
+    ]);
     render(<PilotView />);
 
     expect(screen.getByTestId("pilot-row").getAttribute("aria-label")).toBe(
-      "Fix auth, Working, feature-x"
+      "Fix auth, Claude, Working"
     );
   });
 
-  it("spends colour only on the agents that are actually asking for something", () => {
-    // The whole point of the surface. One blocked agent among six working ones
-    // has to be the only status word on screen — six green labels beside one
-    // amber one is the wall this replaced, where nothing stood out because
-    // everything was shouting.
+  it("tells two identically-titled runs apart by the agent behind them", () => {
+    // The brand is on the row as an icon only, so without it in the name the
+    // two are one string to a screen reader — and search already matches on it,
+    // because "codex" is a plausible thing to type when looking for one.
+    seed([
+      run({ runId: "a", agentId: "claude", agentState: "working", title: "same", since: NOW }),
+      run({ runId: "b", agentId: "codex", agentState: "working", title: "same", since: NOW }),
+    ]);
+    render(<PilotView />);
+
+    const names = screen.getAllByTestId("pilot-row").map((r) => r.getAttribute("aria-label"));
+    expect(names).toHaveLength(2);
+    expect(new Set(names).size).toBe(2);
+  });
+
+  it("does not repeat the agent's name when the title already is it", () => {
+    // An untitled run falls back to its agent's name for the title, and
+    // "Claude, Claude" is a separator promising a second fact and
+    // then not delivering one.
+    seed([run({ runId: "a", agentId: "claude", agentState: "working", since: NOW })]);
+    render(<PilotView />);
+
+    const name = screen.getByTestId("pilot-row").getAttribute("aria-label") ?? "";
+    expect(name).toContain("Claude");
+    expect(name.match(/Claude/g)).toHaveLength(1);
+  });
+
+  it("stops spending row width on a status word the glyph already carries", () => {
+    // Seven rows, seven states, and not one of them prints what it is doing.
+    // The word cost width beside a title that was already truncating, and the
+    // glyph two columns to its left had said the same thing.
     seed([
       run({
         runId: "blocked",
@@ -247,17 +282,31 @@ describe("PilotView", () => {
 
     const rows = screen.getAllByTestId("pilot-row");
     expect(rows).toHaveLength(7);
-
-    // Rendered text is what the eye sees, and only the demand row spends a
-    // word on its state — the six working rows say nothing visible about
-    // theirs.
-    const withVisibleStatus = rows.filter((row) => /Blocked|Working/.test(row.textContent ?? ""));
-    expect(withVisibleStatus).toHaveLength(1);
-    expect(withVisibleStatus[0]!.textContent).toContain("Blocked");
+    expect(rows.filter((row) => /Blocked|Working/.test(row.textContent ?? ""))).toHaveLength(0);
 
     // ...and every one of the seven still says what it is doing, in text.
     expect(screen.getAllByRole("option", { name: /Working/ })).toHaveLength(6);
     expect(screen.getAllByRole("option", { name: /Blocked/ })).toHaveLength(1);
+  });
+
+  it("keeps the worktree searchable after it stops being drawn", () => {
+    // A scratch project's directory is a UUID, so the label was charging the
+    // title for width to say nothing readable. Typing a branch name to find a
+    // run is still useful, which is why the field stays on the row.
+    seed([
+      run({ runId: "a", agentState: "working", title: "one", cwd: "/repo/feature-x", since: NOW }),
+      run({ runId: "b", agentState: "working", title: "two", cwd: "/repo/main-line", since: NOW }),
+    ]);
+    render(<PilotView />);
+
+    const first = screen.getAllByTestId("pilot-row")[0]!;
+    expect(first.textContent).not.toContain("feature-x");
+    expect(first.getAttribute("aria-label")).not.toContain("feature-x");
+
+    fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "feature-x" } });
+
+    expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
+    expect(screen.getByText("one")).toBeTruthy();
   });
 
   it("marks the workspace this view already owns", () => {

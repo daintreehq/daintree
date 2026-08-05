@@ -5,6 +5,7 @@ import {
   InteractingCircle,
   ExitedCircle,
   CircleCheck,
+  CircleSlash,
 } from "@/components/icons";
 import type { FleetBand } from "@/lib/fleetAttention";
 import type { AgentState } from "@shared/types/agent";
@@ -36,9 +37,15 @@ const NEUTRAL_TONE = "text-text-secondary";
  * These are the BAND's representative shapes. `PilotRunState` refines two of
  * them where the row knows more than the band does — directing inside
  * `running`, and exited inside `idle`.
+ *
+ * `blocked` gets the prohibition sign rather than the hollow circle it used to
+ * share with `needs-you`. The row's visible status word was the only non-colour
+ * channel separating "the agent errored" from "the agent asked you a question";
+ * with that word gone, the shapes have to carry it. Same circle family as every
+ * other glyph here, so it still reads as one of the set.
  */
 export const BAND_GLYPH: Record<FleetBand, ComponentType<{ className?: string }>> = {
-  blocked: HollowCircle,
+  blocked: CircleSlash,
   "needs-you": HollowCircle,
   review: CircleCheck,
   running: SpinnerCircle,

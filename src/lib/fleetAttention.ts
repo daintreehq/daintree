@@ -1,5 +1,4 @@
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
-import type { ProjectRowTone } from "./projectRowStatus";
 
 /**
  * Attention bands, worst-first.
@@ -24,20 +23,6 @@ const DEMAND_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["blocked", "nee
 export function isDemandBand(band: FleetBand): boolean {
   return DEMAND_BANDS.has(band);
 }
-
-/**
- * Tone for a band, reusing the switcher's palette so one vocabulary of status
- * colour serves both surfaces. Never the accent: status is a status token, and
- * the accent is reserved for the single focus anchor in the region.
- */
-export const BAND_TONE: Record<FleetBand, ProjectRowTone> = {
-  blocked: "blocked",
-  "needs-you": "waiting",
-  review: "review",
-  running: "working",
-  done: "muted",
-  idle: "muted",
-};
 
 /**
  * Which band a run belongs to.
