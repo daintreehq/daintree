@@ -56,7 +56,7 @@ export const PANEL_TRAY_ITEMS: readonly PanelTrayItem[] = [
     id: "file-browser",
     label: "Browse files",
     icon: FolderTree,
-    actionId: "worktree.openFileBrowser",
+    actionId: "worktree.openFileBrowserPanel",
   },
   { id: "browser", label: "Browser", icon: Globe, actionId: "agent.browser" },
   { id: "dev-server", label: "Dev preview", icon: MonitorPlay, actionId: "devServer.start" },
