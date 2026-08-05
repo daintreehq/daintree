@@ -325,6 +325,52 @@ describe("worktree.openFileBrowserPanel", () => {
       expect(setActiveTabMock).toHaveBeenCalledWith("group-1", "fb-tabbed");
     });
 
+    it("does not pull a reused browser in front of a user an MCP dispatch is suppressed against", async () => {
+      // The create path omits `focusPolicy` for an agent dispatch precisely so
+      // the store resolves "preserve" under a live suppression lease. Reuse
+      // calls `activateTerminal`, which moves `focusedId` AND leaves fullscreen
+      // — so running it unconditionally lets the one dispatch the guard exists
+      // for steal focus from a typing user, with the outcome turning on nothing
+      // but whether a browser happened to be open already.
+      seedWorktree("wt-1");
+      panelsMock.byId = [browserPanel("fb-existing", { worktreeId: "wt-1" })];
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test fixture: only the id is read
+      getPanelGroupMock.mockReturnValue({ id: "group-1", activeTabId: "other" } as TabGroup);
+      // The real guard, held the way `useMcpBridge` holds it around every MCP
+      // dispatch, rather than a mock of it that could drift.
+      const { runWithMcpSpawnFocusSuppressed } = await import("@/store/mcpSpawnFocusGuard");
+
+      const result = await runWithMcpSpawnFocusSuppressed(async () =>
+        getAction().run({ worktreeId: "wt-1" }, { dispatchSource: "agent" } as ActionContext)
+      );
+
+      expect(activateTerminalMock).not.toHaveBeenCalled();
+      // Swapping the group's visible tab is part of the same "show me this"
+      // gesture, so it is suppressed with it — otherwise the sibling the user
+      // was reading gets replaced without anything asking for it.
+      expect(setActiveTabMock).not.toHaveBeenCalled();
+      // Still the reuse path, not a silent refusal: the browser is found and
+      // reported, it just isn't dragged in front of the user.
+      expect(addPanelMock).not.toHaveBeenCalled();
+      expect(result).toEqual({ panelId: "fb-existing" });
+    });
+
+    it("still surfaces a reused browser for a person acting while a lease is held", async () => {
+      // The lease is a coarse time window over a whole MCP dispatch and readily
+      // overlaps an unrelated human action; someone who just asked to browse is
+      // not the background focus theft it guards against — the same reason the
+      // create path passes an explicit `focusPolicy: "take"` that bypasses it.
+      seedWorktree("wt-1");
+      panelsMock.byId = [browserPanel("fb-existing", { worktreeId: "wt-1" })];
+      const { runWithMcpSpawnFocusSuppressed } = await import("@/store/mcpSpawnFocusGuard");
+
+      await runWithMcpSpawnFocusSuppressed(async () =>
+        getAction().run({ worktreeId: "wt-1" }, { dispatchSource: "user" } as ActionContext)
+      );
+
+      expect(activateTerminalMock).toHaveBeenCalledWith("fb-existing");
+    });
+
     it.each(["dialog", "trash", "background", "dock", "overlay"] as const)(
       "does not reuse a %s browser",
       async (location) => {

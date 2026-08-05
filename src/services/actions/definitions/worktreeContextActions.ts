@@ -7,6 +7,12 @@ import { copyTreeClient, systemClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore, getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
+// Static, unlike the panel stores below: both are leaf modules (a lease map and
+// a zustand store) that pull in no client graph, and they are the same two
+// guards `panelStore.addPanel` reads before it decides whether a spawn may
+// take focus.
+import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
+import { isAssistantFocused } from "@/store/macroFocusStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
@@ -672,13 +678,27 @@ export function registerWorktreeContextActions(
               }),
             });
           }
-          // Activation focuses the panel but leaves a tab group showing
-          // whatever tab it had; the group's stored active tab wins over
-          // `focusedId` in the grid, so a browser sharing a group would stay
-          // hidden behind its sibling. Mirrors `panelStore`'s own focus path.
-          const group = store.getPanelGroup(existing.id);
-          if (group) store.setActiveTab(group.id, existing.id);
-          store.activateTerminal(existing.id);
+          // Reuse has to answer the same focus question the create path below
+          // does. `activateTerminal` moves `focusedId` AND leaves fullscreen
+          // (#11506), so running it unconditionally would let a suppressed
+          // dispatch that happens to find an existing browser steal focus from
+          // a typing user (#6959) — while the identical dispatch that has to
+          // create one would not. Foreground takes focus outright, exactly as
+          // the explicit `focusPolicy: "take"` below does; everything else
+          // defers to the same two ambient guards `addPanel` resolves
+          // "preserve" from. Those two are the whole difference for this kind:
+          // `file-browser` keeps the registry's default
+          // `defaultFocusOnCreate: true`, the third term of that resolution.
+          const takeFocus = foreground || !(isMcpSpawnFocusSuppressed() || isAssistantFocused());
+          if (takeFocus) {
+            // Activation focuses the panel but leaves a tab group showing
+            // whatever tab it had; the group's stored active tab wins over
+            // `focusedId` in the grid, so a browser sharing a group would stay
+            // hidden behind its sibling. Mirrors `panelStore`'s own focus path.
+            const group = store.getPanelGroup(existing.id);
+            if (group) store.setActiveTab(group.id, existing.id);
+            store.activateTerminal(existing.id);
+          }
           return { panelId: existing.id };
         }
 
