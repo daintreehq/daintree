@@ -312,7 +312,7 @@ export type PtyHostRequest =
       requestId: string;
       preserveSession?: boolean;
     }
-  | { type: "trim-state"; targetLines: number }
+  | { type: "trim-state"; targetLines: number; requestId: string }
   | { type: "set-resource-monitoring"; enabled: boolean }
   | { type: "set-session-persist-suppressed"; suppressed: boolean }
   | { type: "set-resource-profile"; profile: ResourceProfile }
@@ -624,6 +624,7 @@ export type PtyHostEvent =
   | { type: "terminals-by-state"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "all-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "memory-rollup"; requestId: string; rollup: MemoryRollup }
+  | { type: "trim-state-result"; requestId: string; result: TrimStateResult }
   | {
       type: "semantic-search-result";
       requestId: string;
@@ -739,6 +740,31 @@ export type PtyHostResponseEvent = Extract<PtyHostEvent, { requestId: string }>;
  */
 export interface GracefulKillResult {
   sessionId: string | null;
+}
+
+/**
+ * Outcome of one shard's `trim-state` pass. Trimming scrollback only drops JS
+ * references, so the caller's footprint re-sample cannot attribute a delta to it
+ * within any practical settle window (#11674). These counts are the only
+ * evidence the trim ran, and they separate "every terminal was deliberately
+ * protected" from "there was nothing left to trim".
+ */
+export interface TrimStateResult {
+  /** Terminals whose scrollback cap actually moved down. */
+  trimmed: number;
+  /** Terminals the per-session policy protected, or that were already at the floor. */
+  skipped: number;
+}
+
+/** {@link TrimStateResult} summed across shards, with fan-out completeness. */
+export interface TrimStateSummary extends TrimStateResult {
+  shardsTotal: number;
+  /**
+   * Shards that failed or timed out. Non-zero means `trimmed`/`skipped` are a
+   * floor, not a census — an incomplete fan-out must never be read as
+   * "nothing was eligible".
+   */
+  shardsFailed: number;
 }
 
 export function isPtyHostResponseEvent(event: PtyHostEvent): event is PtyHostResponseEvent {

@@ -11,6 +11,7 @@ import { getSystemSleepService } from "./SystemSleepService.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
 import { getIsE2EFaultMode } from "../setup/runtimeFlags.js";
 import { getSystemMemoryThresholds, readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
+import type { TrimStateSummary } from "../../shared/types/pty-host.js";
 
 const POLL_INTERVAL_MS = 30_000;
 const SNAPSHOT_COOLDOWN_MS = 5 * 60 * 1000;
@@ -53,17 +54,15 @@ export const TIER1_MITIGATION_COOLDOWN_MS = 5 * 60 * 1000;
  * macOS/Linux, Windows background trim), so privateBytes lags reclamation by
  * a few seconds. 3s sits within the 2–5s window confirmed reliable on all
  * three platforms while staying well under {@link POLL_INTERVAL_MS}.
+ *
+ * This window brackets tier 1's *destructive* levers — tearing down a hidden
+ * portal tab kills a renderer, and that footprint does come back inside it. It
+ * says nothing about the pty-host scrollback trim, which only drops JS
+ * references: the collection is a GC away and the pages are an OS reclaim pass
+ * after that, both far outside any window worth blocking a 30s poll on. That
+ * lever reports what it did instead of what the sampler can see (#11674).
  */
 export const RECLAIM_SETTLE_MS = 3_000;
-
-/**
- * Below this MB delta, tier 1 is considered to have reclaimed effectively
- * nothing — if pressure also persists after the settle window, the ladder
- * escalates to tier 2. Above this threshold tier 1 is judged to have worked
- * (the pressure that prompted us may have legitimately re-arrived, but
- * that's a different cycle and should not chain into immediate escalation).
- */
-export const MIN_RECLAIMED_MB = 50;
 
 interface PidTrendState {
   startedAt: number;
@@ -287,7 +286,14 @@ export interface MemoryPressureActions {
   hibernateIdleProjects: () => Promise<void>;
   /** Returns the number of cached project views evicted. */
   evictCachedProjectViews?: () => Promise<number> | number;
-  trimPtyHostState?: () => void;
+  /**
+   * Asks the pty-host to trim the scrollback of terminals its governance policy
+   * clears — never one with a live agent. Resolves with the trimmed/skipped
+   * counts, which are the only observable evidence it ran: the trim drops JS
+   * references, and no footprint re-sample within a settle window can see that
+   * (#11674). The counts are logged, never used to gate escalation.
+   */
+  trimPtyHostState?: () => Promise<TrimStateSummary>;
   /**
    * Optional Blink memory sampler. If wired, called once per poll BEFORE
    * pressure evaluation so renderer samples land alongside the metrics
@@ -366,7 +372,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
   let pollCount = 0;
   let consecutivePressureCount = 0;
   let lastTier1At = 0;
-  let lastTier1ReclaimMb = 0;
   let lastTier2At = 0;
   let mitigationInFlight = false;
   const thresholdExceededPids = new Set<number>();
@@ -532,7 +537,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       } else {
         consecutivePressureCount = 0;
         lastTier1At = 0;
-        lastTier1ReclaimMb = 0;
         return;
       }
 
@@ -603,6 +607,8 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           }
 
           let tier1TabsEvicted = 0;
+          let tier1Trim: TrimStateSummary | null = null;
+          let tier1TrimFailed = false;
           if (shouldRunTier1) {
             lastTier1At = Date.now();
             logInfo("memory-pressure-tier1-mitigation", {
@@ -613,10 +619,13 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
 
             tier1TabsEvicted = await actions.destroyHiddenWebviews(1);
 
+            // Awaited so the settle window below brackets a *completed* trim.
+            // Fire-and-forget left the host still processing the message while
+            // the sampler was already reading the "after" footprint.
             try {
-              actions.trimPtyHostState?.();
+              tier1Trim = (await actions.trimPtyHostState?.()) ?? null;
             } catch {
-              /* non-critical */
+              tier1TrimFailed = true;
             }
 
             await new Promise<void>((resolve) => setTimeout(resolve, RECLAIM_SETTLE_MS));
@@ -632,12 +641,9 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             pressureRemains = measured.pressureRemains;
             systemPressureRemains = measured.systemPressureRemains;
           } catch {
-            // Re-sample failed — assume pressure persists and treat reclaim
-            // as zero so the gate falls through to escalation. Without
-            // forcing afterMb=beforeMb here, deltaMb would equal the full
-            // beforeMb, satisfying `deltaMb >= MIN_RECLAIMED_MB` and
-            // *suppressing* escalation, which is the opposite of the
-            // safe-side intent.
+            // Re-sample failed — assume pressure persists so the gate falls
+            // through to escalation, and force afterMb=beforeMb so the logged
+            // delta reads as the zero it is rather than the full beforeMb.
             pressureRemains = true;
             systemPressureRemains = systemPressureActive;
             resampleFailed = true;
@@ -646,10 +652,12 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
 
           const deltaMb = resampleFailed ? 0 : Math.max(0, beforeMb - afterMb);
           if (shouldRunTier1) {
-            lastTier1ReclaimMb = deltaMb;
             logInfo("memory-pressure-tier1-reclaim", {
               beforeMb: Math.round(beforeMb),
               afterMb: Math.round(afterMb),
+              // Attributable to the portal-tab teardown only. The scrollback
+              // trim cannot move this inside the settle window whatever it did,
+              // so a zero here is not evidence either lever failed.
               deltaMb: Math.round(deltaMb),
               // Portal tabs are the only part of this lever whose outcome main
               // can observe (the webview push is fire-and-forget), so this is a
@@ -657,15 +665,33 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               // "it found none" when the delta reads zero — previously
               // indistinguishable.
               portalTabsDestroyed: tier1TabsEvicted,
+              // The trim's own report, for the same reason: separates "every
+              // terminal was deliberately protected" (trimmed 0 / skipped N)
+              // from "the trim never reached the host" (shardsFailed > 0).
+              ptyTerminalsTrimmed: tier1Trim?.trimmed ?? 0,
+              ptyTerminalsSkipped: tier1Trim?.skipped ?? 0,
+              ptyTrimShardsTotal: tier1Trim?.shardsTotal ?? 0,
+              ptyTrimShardsFailed: tier1Trim?.shardsFailed ?? 0,
+              ptyTrimFailed: tier1TrimFailed,
               pressureRemains,
               resampleFailed,
             });
           }
 
+          // Pressure measured *after* tier 1 settled is the whole test. The gate
+          // used to also require `lastTier1ReclaimMb < MIN_RECLAIMED_MB`, which
+          // was unsound twice over: the pty-host trim can never move that number
+          // inside the settle window, so the term was true by construction and
+          // rubber-stamped every escalation; and because the two tiers run on
+          // out-of-phase cooldowns (5 min vs 10 min), the delta being consulted
+          // was usually a *stale* reading from an earlier poll, gating a
+          // present-tense decision on a past one. A footprint still over
+          // threshold after the settle is the honest signal, and it is the one
+          // that survives whether or not any lever's effect was observable
+          // (#11674).
           if (
             shouldCheckTier2 &&
             pressureRemains &&
-            (systemPressureRemains || lastTier1ReclaimMb < MIN_RECLAIMED_MB) &&
             Date.now() - lastTier2At >= MITIGATION_COOLDOWN_MS
           ) {
             // Stamp the cooldown BEFORE the tier-2 actions so a thrown
@@ -681,7 +707,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             logInfo("memory-pressure-tier2-mitigation", {
               pollCount,
               consecutivePressureCount,
-              tier1ReclaimMb: Math.round(lastTier1ReclaimMb),
               systemPressureRemains,
             });
 
@@ -795,7 +820,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       trendWarnedPids.clear();
       consecutivePressureCount = 0;
       lastTier1At = 0;
-      lastTier1ReclaimMb = 0;
       lastTier2At = 0;
       mitigationInFlight = false;
     });

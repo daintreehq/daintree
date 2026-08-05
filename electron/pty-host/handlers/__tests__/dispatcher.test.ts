@@ -45,6 +45,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     updateObservedTitle: vi.fn(),
     transitionState: vi.fn(() => true),
     trimScrollback: vi.fn(),
+    trimIdleAnalysisSessions: vi.fn(() => ({ trimmed: 2, skipped: 5 })),
     setActivityMonitorTier: vi.fn(),
     setProcessTreeCache: vi.fn(),
     setPtyPool: vi.fn(),
@@ -358,6 +359,48 @@ describe("createPtyHostMessageDispatcher", () => {
       requestId: 7,
       id: "term-1",
       agentSessionId: "session-42",
+    });
+  });
+
+  describe("trim-state (#11674)", () => {
+    it("routes main's pressure trim through the guarded pass, never the bulk flatten", () => {
+      // trimScrollback exempts nothing by design — it is the resource
+      // governor's last-resort lever before an actual PTY pause. Main's
+      // pressure trim is not that, so reaching it from here would flatten a
+      // working agent's scrollback (and its serialize source) for a reclaim
+      // main cannot even measure.
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+
+      dispatch({ type: "trim-state", targetLines: 500, requestId: "trim-1" });
+
+      expect(ctx.ptyManager.trimIdleAnalysisSessions).toHaveBeenCalledWith({ targetLines: 500 });
+      expect(ctx.ptyManager.trimScrollback).not.toHaveBeenCalled();
+    });
+
+    it("replies with the manager's counts against the request id", () => {
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+
+      dispatch({ type: "trim-state", targetLines: 500, requestId: "trim-2" });
+
+      expect(ctx.sendEvent).toHaveBeenCalledWith({
+        type: "trim-state-result",
+        requestId: "trim-2",
+        result: { trimmed: 2, skipped: 5 },
+      });
+    });
+
+    it("normalizes the target before applying it", () => {
+      // 0 is the legacy "unlimited" sentinel; passing it through unnormalized
+      // would ask xterm for a scrollback it rejects.
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+
+      dispatch({ type: "trim-state", targetLines: 0, requestId: "trim-3" });
+
+      const [[opts]] = vi.mocked(ctx.ptyManager.trimIdleAnalysisSessions).mock.calls;
+      expect(opts?.targetLines).toBeGreaterThan(0);
     });
   });
 });

@@ -142,6 +142,17 @@ export class PtyManager extends EventEmitter {
     }
   }
 
+  /**
+   * Uniform, unguarded flatten of every terminal's analysis scrollback.
+   *
+   * Deliberately exempts nothing. Its only caller is the resource governor's
+   * `trimBuffers` fallback (`electron/pty-host.ts`), which runs on the host's
+   * fixed heap budget as the last step before an actual PTY pause — there,
+   * active agents are the dominant consumer, so exempting them leaves nothing
+   * to reclaim and self-defeats into the visible pause it exists to avoid
+   * (#10948, reverted). Pressure levers that are *not* the last line of
+   * defense must use {@link trimIdleAnalysisSessions} instead (#11674).
+   */
   trimScrollback(targetLines: number): void {
     for (const terminal of this.registry.getAll()) {
       terminal.trimScrollback(targetLines);
@@ -202,9 +213,20 @@ export class PtyManager extends EventEmitter {
    * Governance trim pass: shrink the analysis scrollback of terminals that have
    * been quiet past the idle floor and have no active agent
    * (ACTIVE_AGENT_STATES — the same set that protects against eviction and
-   * hibernation). Unlike the resource governor's heap-pressure trims this is
-   * profile-driven (efficiency entry), so the per-session policy is the only
-   * thing between it and a working agent — it must stay conservative.
+   * hibernation).
+   *
+   * Two callers, both of which reach it through a host handler: the
+   * profile-driven efficiency entry, and main's memory-pressure `trim-state`
+   * fan-out (tier 1 and `host-throttled`). Neither is a last-resort lever — the
+   * governor's own ranked reclaim has already run or been skipped by the time
+   * `trim-state` lands — so the per-session policy is the only thing between
+   * either of them and a working agent, and it must stay conservative. The
+   * buffer this shrinks is also what `getSerializedStateAsync()` serializes, so
+   * an over-eager trim costs restore fidelity, not just live scrollback.
+   *
+   * `trimmed` counts only terminals whose cap actually moved: the analysis
+   * backend can refuse a resize, and a count that reported those as trimmed
+   * would be exactly the unfalsifiable telemetry #11674 is about.
    */
   trimIdleAnalysisSessions(opts?: { now?: number; targetLines?: number; idleTrimMs?: number }): {
     trimmed: number;
@@ -216,11 +238,12 @@ export class PtyManager extends EventEmitter {
     let skipped = 0;
     for (const terminal of this.registry.getAll()) {
       const info = terminal.getInfo();
+      const before = terminal.getCurrentScrollback();
       const eligible = shouldTrimAnalysisSession({
         agentState: info.agentState,
         lastInputTime: info.lastInputTime,
         lastOutputTime: info.lastOutputTime,
-        scrollbackLines: terminal.getCurrentScrollback(),
+        scrollbackLines: before,
         minScrollbackLines: targetLines,
         now,
         idleTrimMs: opts?.idleTrimMs,
@@ -230,7 +253,11 @@ export class PtyManager extends EventEmitter {
         continue;
       }
       terminal.trimScrollback(targetLines);
-      trimmed++;
+      if (terminal.getCurrentScrollback() < before) {
+        trimmed++;
+      } else {
+        skipped++;
+      }
     }
     return { trimmed, skipped };
   }

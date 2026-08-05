@@ -777,18 +777,81 @@ describe("PtyClient fabric", () => {
       const client = createFabricClient();
       client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
       const shardA = projectShard("project-a");
+      // trim-state is an RPC now, so it fans out over ready shards (as
+      // get-memory-rollup and get-all-terminals do) — a shard that cannot
+      // reply yet would only contribute a timeout.
+      shardA.child.emit("message", { type: "ready" });
 
       client.pauseAll();
       client.resumeAll();
-      client.trimState(1000);
+      void client.trimState(1000).catch(() => {});
 
       for (const child of [defaultShard().child, shardA.child]) {
         expect(messagesOfType(child, "pause-all")).toHaveLength(1);
         expect(messagesOfType(child, "resume-all")).toHaveLength(1);
-        expect(messagesOfType(child, "trim-state")).toEqual([
-          { type: "trim-state", targetLines: 1000 },
-        ]);
+        const trims = messagesOfType(child, "trim-state");
+        expect(trims).toHaveLength(1);
+        expect(trims[0]).toMatchObject({ type: "trim-state", targetLines: 1000 });
+        expect(typeof trims[0].requestId).toBe("string");
       }
+      client.dispose();
+    });
+
+    it("sums trim-state counts across shards (#11674)", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      const promise = client.trimState(500);
+      const defaultReq = messagesOfType(defaultShard().child, "trim-state")[0];
+      const shardAReq = messagesOfType(shardA.child, "trim-state")[0];
+      defaultShard().child.emit("message", {
+        type: "trim-state-result",
+        requestId: defaultReq.requestId,
+        result: { trimmed: 1, skipped: 2 },
+      });
+      shardA.child.emit("message", {
+        type: "trim-state-result",
+        requestId: shardAReq.requestId,
+        result: { trimmed: 3, skipped: 4 },
+      });
+
+      expect(await promise).toEqual({
+        trimmed: 4,
+        skipped: 6,
+        shardsTotal: 2,
+        shardsFailed: 0,
+      });
+      client.dispose();
+    });
+
+    it("keeps a responding shard's counts when a sibling never answers", async () => {
+      // A silent shard must surface as shardsFailed, not fold into `skipped` —
+      // an incomplete fan-out read as "nothing was eligible" is the same class
+      // of unfalsifiable signal #11674 is about.
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      const promise = client.trimState(500);
+      const defaultReq = messagesOfType(defaultShard().child, "trim-state")[0];
+      defaultShard().child.emit("message", {
+        type: "trim-state-result",
+        requestId: defaultReq.requestId,
+        result: { trimmed: 5, skipped: 1 },
+      });
+
+      // Let the surviving shard's request time out in the broker.
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      expect(await promise).toEqual({
+        trimmed: 5,
+        skipped: 1,
+        shardsTotal: 2,
+        shardsFailed: 1,
+      });
       client.dispose();
     });
   });

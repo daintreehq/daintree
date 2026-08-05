@@ -102,6 +102,8 @@ import type {
   MemoryRollup,
   GracefulKillResult,
   PtyHostWorkerGovernanceSnapshot,
+  TrimStateResult,
+  TrimStateSummary,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
@@ -2312,11 +2314,44 @@ export class PtyClient extends EventEmitter {
     return promise.catch(() => false);
   }
 
-  /** Request every shard to trim scrollback on all terminals to reduce memory */
-  trimState(targetLines: number): void {
-    for (const shard of this.shards.values()) {
-      shard.send({ type: "trim-state", targetLines });
+  /**
+   * Ask every shard to trim the scrollback of terminals its governance policy
+   * says are safe to touch — quiet past the idle floor with no active agent.
+   * Terminals running an agent keep their history (#11674).
+   *
+   * Resolves with the summed counts rather than void because the trim's effect
+   * is invisible to a footprint re-sample: it drops JS references, and nothing
+   * returns to the OS inside any settle window main can afford to wait. The
+   * counts are the only evidence it ran. Failed shards are reported, never
+   * folded into `skipped` — an incomplete fan-out must not read as "nothing was
+   * eligible".
+   */
+  async trimState(targetLines: number): Promise<TrimStateSummary> {
+    const shards = this.fanOutShards();
+    const results = await Promise.all(
+      shards.map((shard) =>
+        sendPtyHostRpc<TrimStateResult>(shard, "trim-state", (requestId) => ({
+          type: "trim-state",
+          targetLines,
+          requestId,
+        })).catch(() => null)
+      )
+    );
+    const summary: TrimStateSummary = {
+      trimmed: 0,
+      skipped: 0,
+      shardsTotal: shards.length,
+      shardsFailed: 0,
+    };
+    for (const result of results) {
+      if (!result) {
+        summary.shardsFailed++;
+        continue;
+      }
+      summary.trimmed += result.trimmed;
+      summary.skipped += result.skipped;
     }
+    return summary;
   }
 
   /** Suppress or resume terminal session persistence across all shards */

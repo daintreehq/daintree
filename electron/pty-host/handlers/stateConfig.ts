@@ -25,12 +25,25 @@ export function createStateConfigHandlers(ctx: HostContext): HandlerMap {
       }
     },
 
+    /**
+     * Main's memory-pressure trim (ProcessMemoryMonitor tier 1 and the
+     * `host-throttled` listener both land here). Routed through the guarded
+     * pass, not `trimScrollback`: this lever is redundant with the governor's
+     * own ranked reclaim, and flattening a live agent's canonical scrollback —
+     * which is also its serialize/restore source — costs far more than it
+     * reclaims (#11674).
+     *
+     * The counts are the reply because a scrollback trim only drops JS
+     * references; main's footprint re-sample cannot attribute a delta to it.
+     */
     "trim-state": (msg) => {
       const targetLines = normalizeScrollbackLines(msg.targetLines);
-      ptyManager.trimScrollback(targetLines);
-      setTimeout(() => {
-        if (global.gc) global.gc();
-      }, 100);
+      const { trimmed, skipped } = ptyManager.trimIdleAnalysisSessions({ targetLines });
+      sendEvent({
+        type: "trim-state-result",
+        requestId: msg.requestId,
+        result: { trimmed, skipped },
+      });
     },
 
     "set-session-persist-suppressed": (msg) => {

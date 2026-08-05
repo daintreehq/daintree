@@ -294,11 +294,12 @@ export async function initPerWindowServices(
           }
         }
       }
-      try {
-        ptyClient!.trimState(SCROLLBACK_BACKGROUND);
-      } catch {
+      // Fire-and-forget: unlike tier 1 this path makes no escalation decision,
+      // so the trim counts have no consumer here. `.catch()` rather than
+      // try/catch — trimState is async, so a rejection would escape the block.
+      void ptyClient!.trimState(SCROLLBACK_BACKGROUND).catch(() => {
         /* non-critical */
-      }
+      });
     });
     ptyClient.setPortRefreshCallback((windowId) => {
       // Called with no windowId on a full host restart (refresh every window)

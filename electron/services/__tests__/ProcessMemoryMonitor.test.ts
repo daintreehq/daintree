@@ -51,7 +51,6 @@ import {
   PRESSURE_COUNT_TIER2,
   MITIGATION_COOLDOWN_MS,
   RECLAIM_SETTLE_MS,
-  MIN_RECLAIMED_MB,
   recordBlinkSample,
   forgetBlinkSample,
   getBlinkSamples,
@@ -65,10 +64,15 @@ import {
   getTrendSnapshot,
   type MemoryPressureActions,
 } from "../ProcessMemoryMonitor.js";
+import type { TrimStateSummary } from "../../../shared/types/pty-host.js";
 
 const EIGHT_GB = 8 * 1024 * 1024 * 1024;
 
 const mockGetAppMetrics = app.getAppMetrics as ReturnType<typeof vi.fn>;
+
+function makeTrimSummary(overrides: Partial<TrimStateSummary> = {}): TrimStateSummary {
+  return { trimmed: 0, skipped: 0, shardsTotal: 1, shardsFailed: 0, ...overrides };
+}
 
 function makeMetric(
   type: string,
@@ -801,10 +805,9 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
     });
 
-    it("does not escalate to tier 2 when tier 1 reclaims above the minimum", async () => {
-      // Tier 1 frees 100 MB (well above MIN_RECLAIMED_MB), and the post-
-      // settle sample drops below the Browser pressure threshold — both
-      // halves of the AND gate should suppress escalation.
+    it("does not escalate to tier 2 when tier 1 clears the pressure", async () => {
+      // The post-settle sample drops below the Browser pressure threshold, so
+      // there is nothing left to escalate about.
       arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 250 });
       stop = startAppMetricsMonitor(mockActions);
 
@@ -815,8 +818,7 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalledWith(2);
     });
 
-    it("escalates to tier 2 when tier 1 reclaims insufficient memory and pressure remains", async () => {
-      // Tier 1 freed only 10 MB (< MIN_RECLAIMED_MB) and pressure persists.
+    it("escalates to tier 2 when pressure survives tier 1", async () => {
       arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 340 });
       stop = startAppMetricsMonitor(mockActions);
 
@@ -827,9 +829,8 @@ describe("ProcessMemoryMonitor", () => {
     });
 
     it("does NOT escalate to tier 2 when post-settle re-sample shows pressure cleared", async () => {
-      // Tier 1 freed only 5 MB (< MIN_RECLAIMED_MB) but pressure dropped
-      // below threshold after the settle window — pressureRemains is false,
-      // so the AND gate suppresses escalation even though delta is small.
+      // Pressure dropped below threshold after the settle window, so the gate
+      // suppresses escalation.
       arrangeClosedLoopMetrics({ beforeMb: 305, afterMb: 295 });
       stop = startAppMetricsMonitor(mockActions);
 
@@ -918,7 +919,7 @@ describe("ProcessMemoryMonitor", () => {
     });
 
     it("calls trimPtyHostState during tier 1 mitigation", async () => {
-      const trimPtyHostState = vi.fn();
+      const trimPtyHostState = vi.fn(async () => makeTrimSummary());
       const actionsWithTrim: MemoryPressureActions = {
         ...mockActions,
         trimPtyHostState,
@@ -931,10 +932,8 @@ describe("ProcessMemoryMonitor", () => {
       expect(trimPtyHostState).toHaveBeenCalledTimes(1);
     });
 
-    it("continues tier 1 even if trimPtyHostState throws", async () => {
-      const trimPtyHostState = vi.fn().mockImplementation(() => {
-        throw new Error("trim failed");
-      });
+    it("continues tier 1 even if trimPtyHostState rejects", async () => {
+      const trimPtyHostState = vi.fn().mockRejectedValue(new Error("trim failed"));
       const actionsWithTrim: MemoryPressureActions = {
         ...mockActions,
         trimPtyHostState,
@@ -948,6 +947,67 @@ describe("ProcessMemoryMonitor", () => {
 
       expect(trimPtyHostState).toHaveBeenCalled();
       expect(actionsWithTrim.destroyHiddenWebviews).toHaveBeenCalledWith(1);
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({ ptyTrimFailed: true })
+      );
+    });
+
+    it("awaits the pty-host trim before opening the settle window (#11674)", async () => {
+      // Fire-and-forget left the host still processing the trim while the
+      // sampler was already reading the "after" footprint, so the bracket
+      // measured a mitigation that had not finished.
+      const order: string[] = [];
+      let releaseTrim: () => void = () => {};
+      const trimPtyHostState = vi.fn(
+        () =>
+          new Promise<ReturnType<typeof makeTrimSummary>>((resolve) => {
+            order.push("trim-started");
+            releaseTrim = () => resolve(makeTrimSummary());
+          })
+      );
+      mockGetAppMetrics.mockImplementation(() => {
+        order.push("sampled");
+        return [makeMetric("Browser", 350 * 1024, 100)];
+      });
+      stop = startAppMetricsMonitor({ ...mockActions, trimPtyHostState });
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      // The trim is still pending, so the post-settle re-sample must not have
+      // run yet — no matter how much time has passed.
+      const sampledBeforeRelease = order.filter((e) => e === "sampled").length;
+      releaseTrim();
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
+
+      expect(order).toContain("trim-started");
+      expect(order.filter((e) => e === "sampled").length).toBeGreaterThan(sampledBeforeRelease);
+    });
+
+    it("logs the trim's own counts so a zero delta stays attributable (#11674)", async () => {
+      // A scrollback trim only drops JS references, so `deltaMb` cannot see it
+      // however many terminals it touched. The counts are the evidence, and
+      // they must distinguish "every terminal was deliberately protected" from
+      // "the trim never reached the host".
+      const trimPtyHostState = vi.fn(async () =>
+        makeTrimSummary({ trimmed: 0, skipped: 8, shardsTotal: 2, shardsFailed: 0 })
+      );
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor({ ...mockActions, trimPtyHostState });
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({
+          deltaMb: 0,
+          ptyTerminalsTrimmed: 0,
+          ptyTerminalsSkipped: 8,
+          ptyTrimShardsTotal: 2,
+          ptyTrimShardsFailed: 0,
+          ptyTrimFailed: false,
+        })
+      );
     });
 
     it("calls destroyHiddenWebviews(1) on tier 1 mitigation", async () => {
@@ -1010,16 +1070,21 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
     });
 
-    it("escalation gate honors MIN_RECLAIMED_MB at the boundary", async () => {
-      // Reclaim exactly equals MIN_RECLAIMED_MB → the gate `deltaMb <
-      // MIN_RECLAIMED_MB` is false, so no escalation even with pressure
-      // persisting.
-      arrangeClosedLoopMetrics({ beforeMb: 400, afterMb: 400 - MIN_RECLAIMED_MB });
+    it("escalates on surviving pressure even when tier 1's measured reclaim was large (#11674)", async () => {
+      // The gate used to suppress escalation whenever the tier-1 delta cleared
+      // MIN_RECLAIMED_MB. That term was unsound twice over: the pty-host
+      // scrollback trim can never move it inside the settle window, so it was
+      // true by construction and rubber-stamped every escalation; and because
+      // the tiers run on out-of-phase cooldowns the delta consulted here was
+      // usually stale. A footprint still over threshold after the settle is the
+      // only honest signal — 50 MB back is not a reprieve when 350 remain.
+      arrangeClosedLoopMetrics({ beforeMb: 400, afterMb: 350 });
       stop = startAppMetricsMonitor(mockActions);
 
       await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
 
-      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
     });
 
     it("escalates to tier 2 when the post-settle re-sample throws", async () => {
@@ -1204,8 +1269,10 @@ describe("ProcessMemoryMonitor", () => {
 
       expect(mitigation).toBeDefined();
       expect(mitigation?.[1]).not.toHaveProperty("deltaMb");
+      // `tier1ReclaimMb` is gone with the delta gate it fed (#11674) — it
+      // reported a number tier 1's dominant lever could never move.
+      expect(mitigation?.[1]).not.toHaveProperty("tier1ReclaimMb");
       expect(mitigation?.[1]).toMatchObject({
-        tier1ReclaimMb: 0,
         systemPressureRemains: false,
       });
     });

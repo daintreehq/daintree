@@ -507,6 +507,22 @@ describe("routeHostEvent", () => {
     );
   });
 
+  it("resolves a trim-state-result to its pending request (#11674)", () => {
+    const { deps, brokerCalls } = makeDeps();
+
+    const handled = routeHostEvent(
+      {
+        type: "trim-state-result",
+        requestId: "trim-7",
+        result: { trimmed: 3, skipped: 4 },
+      } as PtyHostEvent,
+      deps
+    );
+
+    expect(handled).toBe(true);
+    expect(brokerCalls).toEqual([{ requestId: "trim-7", result: { trimmed: 3, skipped: 4 } }]);
+  });
+
   it("logs and returns false for unknown event types", () => {
     const logWarn = vi.fn();
     const { deps } = makeDeps({ logWarn });
