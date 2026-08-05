@@ -110,6 +110,34 @@ export function isPanelTrayButtonId(id: AnyToolbarButtonId): id is PanelTrayButt
   return (PANEL_TRAY_BUTTON_IDS as readonly string[]).includes(id);
 }
 
+/**
+ * Whether a panel-tray button currently has its own top-level toolbar button.
+ *
+ * Three states, in priority order. An explicit `false` is a hide and wins over
+ * any position. An explicit `true` is a promotion the user made, and reads as on
+ * even in the window between a stale cross-view write dropping the position and
+ * `restorePromotedPanelButtons` rebuilding it. Otherwise the position decides:
+ * that is the legacy profile, which carries `browser`/`dev-server` in its arrays
+ * with no pin entry at all and must keep reading as promoted so an existing
+ * user's toolbar looks untouched.
+ *
+ * Lives here rather than beside `isToolbarButtonVisible` because it is the only
+ * resolver that reads the side arrays, and every surface that shows one of these
+ * buttons has to agree with the tray: the tray itself, and Settings → Toolbar.
+ * `isToolbarButtonVisible` cannot answer this — without the arrays a fresh
+ * profile's absent `browser` pin reads as visible when the button isn't there.
+ */
+export function isPanelButtonOnToolbar(
+  id: PanelTrayButtonId,
+  pinnedButtons: ToolbarPinnedState,
+  leftButtons: AnyToolbarButtonId[],
+  rightButtons: AnyToolbarButtonId[]
+): boolean {
+  if (pinnedButtons[id] === false) return false;
+  if (pinnedButtons[id] === true) return true;
+  return leftButtons.includes(id) || rightButtons.includes(id);
+}
+
 /** Configuration for which toolbar buttons are visible and their order */
 export interface ToolbarLayout {
   /** Ordered list of button IDs to show on the left side (excluding sidebar-toggle which is always first) */

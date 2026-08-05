@@ -111,9 +111,8 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   ),
 }));
 
-const { PanelTrayButton, PANEL_TRAY_ITEMS, isPanelButtonOnToolbar } =
-  await import("../PanelTrayButton");
-const { PANEL_TRAY_BUTTON_IDS } = await import("@shared/types/toolbar");
+const { PanelTrayButton, PANEL_TRAY_ITEMS } = await import("../PanelTrayButton");
+const { PANEL_TRAY_BUTTON_IDS, isPanelButtonOnToolbar } = await import("@shared/types/toolbar");
 
 function renderTray(
   overrides: {

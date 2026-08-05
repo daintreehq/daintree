@@ -691,3 +691,94 @@ describe("ToolbarSettingsTab — plugin button promotion (#11304)", () => {
     expect(setPluginButtonPromotedMock).not.toHaveBeenCalled();
   });
 });
+
+describe("ToolbarSettingsTab — panel button pinning (#11667)", () => {
+  // A fresh v13 profile: `browser` and `dev-server` left the defaults, so they
+  // sit in neither side array and the two drag columns can't render them.
+  function freshV13Profile() {
+    return makeToolbarState({
+      leftButtons: ["terminal", "file-browser", "panel-tray"],
+      rightButtons: ["settings"],
+      pinnedButtons: {},
+    });
+  }
+
+  beforeEach(() => {
+    clearStoreMocks();
+    vi.mocked(useSortable).mockImplementation(defaultSortable);
+    mockToolbarState = freshV13Profile();
+    mockAgentSettings = null;
+  });
+
+  it("lists a panel button the side columns cannot reach", () => {
+    // The reason this section exists: the panel tray's "Customize toolbar…"
+    // footer routes here, so the page has to list the buttons the tray holds
+    // even when no side array carries them.
+    const { getByLabelText, queryByLabelText } = render(<ToolbarSettingsTab />);
+
+    expect(queryByLabelText("Toggle Browser visibility")).toBeNull();
+    expect(queryByLabelText("Toggle Dev preview visibility")).toBeNull();
+    expect(getByLabelText("Show Browser in toolbar")).toBeTruthy();
+    expect(getByLabelText("Show Dev preview in toolbar")).toBeTruthy();
+  });
+
+  it("reads an unpositioned panel button as off, not as an absent-means-visible default", () => {
+    // `isToolbarButtonVisible` answers "no pin entry" with `true`, which would
+    // show both switches on while neither button is anywhere on the toolbar —
+    // and cost the user two clicks to promote one.
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+
+    expect(getByLabelText("Show Browser in toolbar").getAttribute("aria-checked")).toBe("false");
+    expect(getByLabelText("Show Browse files in toolbar").getAttribute("aria-checked")).toBe(
+      "true"
+    );
+  });
+
+  it("promotes an unpositioned panel button in a single click", () => {
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+    fireEvent.click(getByLabelText("Show Dev preview in toolbar"));
+
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledTimes(1);
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("dev-server", true);
+    expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
+  });
+
+  it("demotes a positioned panel button through the same action", () => {
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+    fireEvent.click(getByLabelText("Show Browse files in toolbar"));
+
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("file-browser", false);
+    expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps an explicitly promoted button on while its position is missing", () => {
+    // The cross-view window: a stale sibling's write replaced the arrays and
+    // dropped the position, and `restorePromotedPanelButtons` has not rebuilt it
+    // yet. The explicit `true` is what keeps the switch honest until it does.
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["terminal", "file-browser", "panel-tray"],
+      rightButtons: ["settings"],
+      pinnedButtons: { browser: true },
+    });
+
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+    expect(getByLabelText("Show Browser in toolbar").getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(getByLabelText("Show Browser in toolbar"));
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("browser", false);
+  });
+
+  it("counts pinned panel buttons in the section description", () => {
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["terminal", "file-browser", "browser", "panel-tray"],
+      rightButtons: ["settings"],
+      pinnedButtons: {},
+    });
+
+    const { getByTestId } = render(<ToolbarSettingsTab />);
+    // file-browser + browser positioned, dev-server absent.
+    expect(getByTestId("section-Panel buttons").getAttribute("data-description")).toContain(
+      "2 of 3 pinned"
+    );
+  });
+});

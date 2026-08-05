@@ -23,11 +23,10 @@ import { actionService } from "@/services/ActionService";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { useKeybindingDisplay } from "@/hooks";
 import type { BuiltInActionId } from "@shared/types/actions";
-import type {
-  AnyToolbarButtonId,
-  PanelTrayButtonId,
-  ToolbarPinnedState,
-} from "@shared/types/toolbar";
+// `@shared/...` because this is a value import — the type-only spelling below is
+// erased at compile time and never has to resolve at runtime.
+import { isPanelButtonOnToolbar } from "@shared/types/toolbar";
+import type { PanelTrayButtonId } from "@shared/types/toolbar";
 import { cn } from "@/lib/utils";
 
 export interface PanelTrayItem {
@@ -62,28 +61,6 @@ export const PANEL_TRAY_ITEMS: readonly PanelTrayItem[] = [
   { id: "browser", label: "Browser", icon: Globe, actionId: "agent.browser" },
   { id: "dev-server", label: "Dev preview", icon: MonitorPlay, actionId: "devServer.start" },
 ];
-
-/**
- * Whether a tray item currently has its own top-level toolbar button.
- *
- * Three states, in priority order. An explicit `false` is a hide and wins over
- * any position. An explicit `true` is a promotion the user made, and reads as on
- * even in the window between a stale cross-view write dropping the position and
- * `restorePromotedPanelButtons` rebuilding it. Otherwise the position decides:
- * that is the legacy profile, which carries `browser`/`dev-server` in its arrays
- * with no pin entry at all and must keep reading as promoted so an existing
- * user's toolbar looks untouched.
- */
-export function isPanelButtonOnToolbar(
-  id: PanelTrayButtonId,
-  pinnedButtons: ToolbarPinnedState,
-  leftButtons: AnyToolbarButtonId[],
-  rightButtons: AnyToolbarButtonId[]
-): boolean {
-  if (pinnedButtons[id] === false) return false;
-  if (pinnedButtons[id] === true) return true;
-  return leftButtons.includes(id) || rightButtons.includes(id);
-}
 
 function PanelTrayRow({
   item,
@@ -134,7 +111,7 @@ function PanelTrayRow({
       data-testid={`panel-tray-row-${item.id}`}
     >
       <span className="mr-2 inline-flex h-4 w-4 items-center justify-center">
-        <Icon className="h-3.5 w-3.5 text-text-muted" />
+        <Icon className="h-3.5 w-3.5 text-text-secondary" />
       </span>
 
       {/*
@@ -328,7 +305,7 @@ export function PanelTrayButton({
 
         <DropdownMenuSeparator />
         <DropdownMenuActionItem actionId="panel.palette" className="h-7">
-          <SquareMenu className="mr-2 h-3.5 w-3.5 text-text-muted" />
+          <SquareMenu className="mr-2 h-3.5 w-3.5 text-text-secondary" />
           More panels…
         </DropdownMenuActionItem>
         <DropdownMenuActionItem
@@ -336,7 +313,7 @@ export function PanelTrayButton({
           args={{ tab: "toolbar" }}
           className="h-7"
         >
-          <Settings2 className="mr-2 h-3.5 w-3.5 text-text-muted" />
+          <Settings2 className="mr-2 h-3.5 w-3.5 text-text-secondary" />
           {TOOLBAR_CUSTOMIZE_LABEL}
         </DropdownMenuActionItem>
       </DropdownMenuContent>
