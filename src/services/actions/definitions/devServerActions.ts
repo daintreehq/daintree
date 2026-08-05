@@ -53,17 +53,16 @@ export function registerDevServerActions(
         (await projectClient.getCurrent().catch(() => null));
       const projectId = ctx.projectId ?? currentProject?.id;
 
-      if (!projectId) {
-        throw new Error("No project is currently open");
-      }
-
-      const devServerCommand = await readDevServerCommand(projectId);
+      // Scratch-owned views have no project, and the dock/palette launcher used
+      // to open a dev preview there via the workspace cwd fallback (#11673).
+      const devServerCommand = projectId ? await readDevServerCommand(projectId) : undefined;
 
       const cwd = firstAbsolutePath(
         ctx.activeWorktreePath,
         readActiveWorktreePath(ctx.activeWorktreeId),
         ctx.projectPath,
-        currentProject?.path
+        currentProject?.path,
+        ctx.scratchPath
       );
       if (!cwd) {
         throw new Error("No absolute project path is available for Dev Preview");

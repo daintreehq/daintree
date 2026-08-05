@@ -75,6 +75,22 @@ describe("devServerActions", () => {
     );
   });
 
+  it("falls back to the scratch path when no project is open", async () => {
+    projectStoreMock.getState.mockReturnValue({ currentProject: null });
+    const run = setupActions();
+
+    await run("devServer.start", { scratchPath: "/scratch/workspace" });
+
+    expect(projectClientMock.getSettings).not.toHaveBeenCalled();
+    expect(panelStoreMock.getState().addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "dev-preview",
+        cwd: "/scratch/workspace",
+        devCommand: undefined,
+      })
+    );
+  });
+
   it("rejects launch when no absolute cwd can be resolved", async () => {
     projectStoreMock.getState.mockReturnValue({
       currentProject: { id: "project-1", path: "relative" },
