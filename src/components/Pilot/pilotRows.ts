@@ -376,10 +376,14 @@ export const PILOT_BAND_FILTERS: readonly Exclude<PilotBandFilter, "all">[] = [
  * A segment's name, declared here rather than in the bar because two surfaces
  * say it: the segment itself, and the empty state that has to name which filter
  * produced no rows.
+ *
+ * "Waiting", not "Needs you", so the four segments read the same here as they
+ * do in the sidebar's `QuickStateFilterBar`. The key stays `needs-you` — it
+ * names the band set, which has not changed.
  */
 export const PILOT_BAND_FILTER_LABEL: Record<PilotBandFilter, string> = {
   all: "All",
-  "needs-you": "Needs you",
+  "needs-you": "Waiting",
   working: "Working",
   finished: "Finished",
 };

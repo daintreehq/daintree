@@ -76,13 +76,19 @@ export function bandForRun(run: FleetRunRow, acknowledgedAt?: number): FleetBand
  * completion must not still say "ready for review" while sorting as done.
  * `running` and `idle` split on state because they each cover two situations
  * the user can tell apart and would want to.
+ *
+ * "Waiting" rather than "Needs you" for the same reason the filter segment says
+ * it: the sidebar has called this state waiting since it shipped, and one state
+ * with two names across two surfaces is a vocabulary the user has to learn
+ * twice. The prose sentences elsewhere ("2 agents need you") are sentences, not
+ * state labels, and keep their own phrasing.
  */
 export function bandLabel(band: FleetBand, run: FleetRunRow): string {
   switch (band) {
     case "blocked":
       return "Blocked";
     case "needs-you":
-      return "Needs you";
+      return "Waiting";
     case "review":
       return "Ready for review";
     case "running":

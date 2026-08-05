@@ -193,7 +193,7 @@ describe("PilotView", () => {
     ]);
     render(<PilotView />);
 
-    expect(screen.getByRole("option", { name: /Needs you/ }).textContent).toContain("one");
+    expect(screen.getByRole("option", { name: /Waiting/ }).textContent).toContain("one");
     expect(screen.getByRole("option", { name: /Idle/ }).textContent).toContain("two");
   });
 
@@ -213,7 +213,7 @@ describe("PilotView", () => {
     render(<PilotView />);
 
     expect(screen.getByTestId("pilot-row").getAttribute("aria-label")).toBe(
-      "Fix auth, Needs you, feature-x, 2m ago"
+      "Fix auth, Waiting, feature-x, 2m ago"
     );
   });
 
@@ -852,7 +852,7 @@ describe("PilotView", () => {
       render(<PilotView />);
       expect(rowTitles()).toHaveLength(4);
 
-      fireEvent.click(segment(/Needs you/));
+      fireEvent.click(segment(/Waiting/));
 
       expect(rowTitles()).toHaveLength(2);
       expect(rowTitles().join(" ")).toContain("auth blocked");
@@ -867,7 +867,7 @@ describe("PilotView", () => {
       fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
       expect(rowTitles()).toHaveLength(2);
 
-      fireEvent.click(segment(/Needs you/));
+      fireEvent.click(segment(/Waiting/));
 
       expect(rowTitles()).toHaveLength(1);
       expect(rowTitles()[0]).toContain("auth blocked");
@@ -883,7 +883,7 @@ describe("PilotView", () => {
       fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
 
       expect(segment(/^All/).getAttribute("aria-label")).toBe("All, 2 agents");
-      expect(segment(/Needs you/).getAttribute("aria-label")).toBe("Needs you, 1 agent");
+      expect(segment(/Waiting/).getAttribute("aria-label")).toBe("Waiting, 1 agent");
       expect(segment(/Working/).getAttribute("aria-label")).toBe("Working, 1 agent");
     });
 
@@ -894,14 +894,14 @@ describe("PilotView", () => {
       render(<PilotView />);
       const before = screen.getAllByRole("radio").map((el) => el.getAttribute("aria-label"));
 
-      fireEvent.click(segment(/Needs you/));
+      fireEvent.click(segment(/Waiting/));
 
       expect(screen.getAllByRole("radio").map((el) => el.getAttribute("aria-label"))).toEqual(
         before
       );
     });
 
-    it("sorts review into Finished and out of Needs you", () => {
+    it("sorts review into Finished and out of Waiting", () => {
       // The asymmetry worth pinning: `review` IS a demand band, so it counts
       // toward `demandCount`, but the Needs-you segment is blocked + needs-you
       // only. A review row must land in exactly one of the two segments.
@@ -911,7 +911,7 @@ describe("PilotView", () => {
       ]);
       render(<PilotView />);
 
-      expect(segment(/Needs you/).getAttribute("aria-label")).toBe("Needs you, 1 agent");
+      expect(segment(/Waiting/).getAttribute("aria-label")).toBe("Waiting, 1 agent");
       expect(segment(/Finished/).getAttribute("aria-label")).toBe("Finished, 1 agent");
 
       fireEvent.click(segment(/Finished/));
@@ -949,7 +949,7 @@ describe("PilotView", () => {
       render(<PilotView />);
       expect(rowTitles().join(" ")).not.toContain("auth blocked");
 
-      fireEvent.click(segment(/Needs you/));
+      fireEvent.click(segment(/Waiting/));
 
       // Same rule the query already follows: making someone click to reveal
       // what they just filtered for is the narrowing failing to do its job.
@@ -959,7 +959,7 @@ describe("PilotView", () => {
     it("scopes a collapse made under a filter to that filter", () => {
       seedMixedFleet();
       render(<PilotView />);
-      fireEvent.click(segment(/Needs you/));
+      fireEvent.click(segment(/Waiting/));
 
       fireEvent.click(screen.getAllByTestId("pilot-group-toggle")[0]!);
       expect(rowTitles()).toHaveLength(0);
@@ -1125,7 +1125,7 @@ describe("PilotView", () => {
           }),
         ]);
       });
-      fireEvent.click(screen.getByRole("radio", { name: /Needs you/ }));
+      fireEvent.click(screen.getByRole("radio", { name: /Waiting/ }));
       // Asserted WHILE narrowed, not only after returning to All: a filter that
       // re-derived the order would be invisible if the check waited until the
       // pinned order had been restored anyway.
@@ -1153,7 +1153,7 @@ describe("PilotView", () => {
     it("starts every opening back at All", () => {
       seedMixedFleet();
       const view = render(<PilotView />);
-      fireEvent.click(segment(/Needs you/));
+      fireEvent.click(segment(/Waiting/));
       expect(rowTitles()).toHaveLength(2);
 
       usePilotStore.setState({ isOpen: false });
@@ -1193,7 +1193,7 @@ describe("PilotView", () => {
     });
 
     it("delivers its count even when its filter is already the active one", () => {
-      // With the filter already on Needs you, setting it again is a no-op, so
+      // With the filter already on Waiting, setting it again is a no-op, so
       // nothing clears a collapse the user made — and the button would go on
       // advertising agents while showing none of them.
       seed([
@@ -1202,7 +1202,7 @@ describe("PilotView", () => {
       ]);
       render(<PilotView />);
 
-      fireEvent.click(screen.getByRole("radio", { name: /Needs you/ }));
+      fireEvent.click(screen.getByRole("radio", { name: /Waiting/ }));
       fireEvent.click(screen.getByTestId("pilot-group-toggle"));
       expect(screen.queryAllByTestId("pilot-row")).toHaveLength(0);
 
