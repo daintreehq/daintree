@@ -456,8 +456,11 @@ export async function initGlobalServices(
             }
             return viewsEvicted;
           },
-          trimPtyHostState: () => {
-            getPtyClient()?.trimState(SCROLLBACK_BACKGROUND);
+          trimPtyHostState: async () => {
+            const client = getPtyClient();
+            if (!client) return { trimmed: 0, skipped: 0, shardsTotal: 0, shardsFailed: 0 };
+            // Graduated lever: never at the cost of a working agent's history.
+            return client.trimState(SCROLLBACK_BACKGROUND, "idle-only");
           },
           sampleBlinkMemory: () => {
             if (!windowRegistry) return;

@@ -312,7 +312,7 @@ export type PtyHostRequest =
       requestId: string;
       preserveSession?: boolean;
     }
-  | { type: "trim-state"; targetLines: number }
+  | { type: "trim-state"; targetLines: number; requestId: string; scope: TrimStateScope }
   | { type: "set-resource-monitoring"; enabled: boolean }
   | { type: "set-session-persist-suppressed"; suppressed: boolean }
   | { type: "set-resource-profile"; profile: ResourceProfile }
@@ -624,6 +624,7 @@ export type PtyHostEvent =
   | { type: "terminals-by-state"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "all-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "memory-rollup"; requestId: string; rollup: MemoryRollup }
+  | { type: "trim-state-result"; requestId: string; result: TrimStateResult }
   | {
       type: "semantic-search-result";
       requestId: string;
@@ -739,6 +740,53 @@ export type PtyHostResponseEvent = Extract<PtyHostEvent, { requestId: string }>;
  */
 export interface GracefulKillResult {
   sessionId: string | null;
+}
+
+/**
+ * Who a `trim-state` pass is allowed to touch.
+ *
+ * `idle-only` applies the governance policy — a terminal with a live agent
+ * keeps its scrollback (which is also its serialize/restore source). This is
+ * for graduated pressure levers like ProcessMemoryMonitor tier 1, which are
+ * redundant with the host's own governor and must not cost more than they
+ * reclaim (#11674).
+ *
+ * `all` exempts nothing. Reserved for the post-pause emergency: once the
+ * governor has already paused every PTY, active agents are the dominant
+ * consumer, and sparing them leaves nothing to reclaim — the self-defeating
+ * shape that got the equivalent exemption reverted from `performPrePauseTrim`
+ * (#10948).
+ */
+export type TrimStateScope = "idle-only" | "all";
+
+/**
+ * Outcome of one shard's `trim-state` pass. Trimming scrollback only drops JS
+ * references, so the caller's footprint re-sample cannot attribute a delta to it
+ * within any practical settle window (#11674). These counts are what the pass
+ * decided to do, and they separate "every terminal was deliberately protected"
+ * from "there was nothing left to trim".
+ *
+ * They are a record of intent, not of completion: on the worker-backed analysis
+ * path the host lowers its own cap and posts the resize to the worker without
+ * waiting for it, so `trimmed` means the shrink was applied and dispatched, not
+ * that the worker's buffer has already released the lines.
+ */
+export interface TrimStateResult {
+  /** Terminals whose scrollback cap moved down. */
+  trimmed: number;
+  /** Terminals the per-session policy protected, or that were already at the floor. */
+  skipped: number;
+}
+
+/** {@link TrimStateResult} summed across shards, with fan-out completeness. */
+export interface TrimStateSummary extends TrimStateResult {
+  shardsTotal: number;
+  /**
+   * Shards that failed or timed out. Non-zero means `trimmed`/`skipped` are a
+   * floor, not a census — an incomplete fan-out must never be read as
+   * "nothing was eligible".
+   */
+  shardsFailed: number;
 }
 
 export function isPtyHostResponseEvent(event: PtyHostEvent): event is PtyHostResponseEvent {

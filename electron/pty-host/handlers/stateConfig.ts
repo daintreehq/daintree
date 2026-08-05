@@ -25,12 +25,35 @@ export function createStateConfigHandlers(ctx: HostContext): HandlerMap {
       }
     },
 
+    /**
+     * Main's memory-pressure trim. The scope decides who is fair game, because
+     * main's two callers are not the same kind of event (#11674):
+     *
+     * - `idle-only` (ProcessMemoryMonitor tier 1) is a graduated lever,
+     *   redundant with the governor's own ranked reclaim. Flattening a live
+     *   agent's canonical scrollback — which is also its serialize/restore
+     *   source — costs far more there than it reclaims, so the governance
+     *   policy protects it.
+     * - `all` (the `host-throttled` listener) is the post-pause emergency. The
+     *   governor skips its own pre-pause trim entirely at critical utilization
+     *   and pauses immediately, so this is the only buffer reclaim left on that
+     *   path; exempting the active agents holding the memory would leave
+     *   nothing to reclaim (#10948).
+     *
+     * The counts are the reply because a scrollback trim only drops JS
+     * references; main's footprint re-sample cannot attribute a delta to it.
+     */
     "trim-state": (msg) => {
       const targetLines = normalizeScrollbackLines(msg.targetLines);
-      ptyManager.trimScrollback(targetLines);
-      setTimeout(() => {
-        if (global.gc) global.gc();
-      }, 100);
+      const { trimmed, skipped } =
+        msg.scope === "all"
+          ? ptyManager.trimScrollback(targetLines)
+          : ptyManager.trimIdleAnalysisSessions({ targetLines });
+      sendEvent({
+        type: "trim-state-result",
+        requestId: msg.requestId,
+        result: { trimmed, skipped },
+      });
     },
 
     "set-session-persist-suppressed": (msg) => {
