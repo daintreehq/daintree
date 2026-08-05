@@ -49,8 +49,8 @@ export interface PanelTrayItem {
  * needs a resolved worktree while the other two need a file. The "More panels…"
  * footer routes to the palette, which carries the complete dynamic inventory.
  *
- * Order is the reading order of the row, not the toolbar's — `file-browser`
- * leads because it is the promoted one.
+ * Order matches `PANEL_TRAY_BUTTON_IDS`, which the store and Settings also read,
+ * so no surface can disagree about what the tray holds.
  */
 export const PANEL_TRAY_ITEMS: readonly PanelTrayItem[] = [
   {

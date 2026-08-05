@@ -67,10 +67,12 @@ export type ToolbarButtonId =
  * a default here again would forfeit the same option a second time, so a
  * built-in's pin entry stays absent until the user acts on it.
  *
- * A `true` therefore only ever appears where the user asked for a button whose
- * default is *off* the toolbar — a promoted plugin contribution, or a
- * `panel-tray` button the user pinned. For a button that is already a default,
- * `true` would say nothing its array membership doesn't, so nothing writes one.
+ * A `true` therefore only ever appears where the user asked for the button
+ * directly — a promoted plugin contribution, or a `panel-tray` button they
+ * pinned (`setPanelButtonOnToolbar`). It is a record of an action, never of a
+ * default. `toggleButtonVisibility`, which every other built-in uses, still
+ * never writes one: for a button that is already a default, `true` would say
+ * nothing its array membership doesn't.
  *
  * Plugin contributions default to tray-only (#11304) — they always appear in
  * the plugin tray, and `true` additionally promotes one to its own top-level
@@ -87,15 +89,26 @@ export type ToolbarPinnedState = Partial<Record<AnyToolbarButtonId, boolean>>;
 
 /**
  * The built-in panel buttons the panel tray can promote to (or demote from) a
- * top-level toolbar slot (#11667).
+ * top-level toolbar slot (#11667), in the order the tray lists them.
  *
  * `browser` and `dev-server` left `DEFAULT_LEFT_BUTTONS` in v13, so on a fresh
  * profile they sit in neither side array — which means promoting one has to
- * give it a position as well as clear any hide. `toggleButtonVisibility` only
- * ever touches `pinnedButtons`, so the tray routes through
- * `setPanelButtonOnToolbar` instead.
+ * give it a position as well as clear any hide, and has to leave behind an
+ * explicit `true` that survives a cross-view array overwrite.
+ * `toggleButtonVisibility` does neither: it only ever writes `false` or deletes
+ * the key. Every surface that can show or hide one of these buttons must route
+ * through `setPanelButtonOnToolbar` instead — the tray, and Settings → Toolbar.
+ *
+ * One exported list so a fourth surface can't quietly disagree about which ids
+ * those are.
  */
-export type PanelTrayButtonId = "file-browser" | "browser" | "dev-server";
+export const PANEL_TRAY_BUTTON_IDS = ["file-browser", "browser", "dev-server"] as const;
+
+export type PanelTrayButtonId = (typeof PANEL_TRAY_BUTTON_IDS)[number];
+
+export function isPanelTrayButtonId(id: AnyToolbarButtonId): id is PanelTrayButtonId {
+  return (PANEL_TRAY_BUTTON_IDS as readonly string[]).includes(id);
+}
 
 /** Configuration for which toolbar buttons are visible and their order */
 export interface ToolbarLayout {

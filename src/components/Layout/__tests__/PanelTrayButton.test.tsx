@@ -113,6 +113,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 
 const { PanelTrayButton, PANEL_TRAY_ITEMS, isPanelButtonOnToolbar } =
   await import("../PanelTrayButton");
+const { PANEL_TRAY_BUTTON_IDS } = await import("@shared/types/toolbar");
 
 function renderTray(
   overrides: {
@@ -158,6 +159,14 @@ describe("PanelTrayButton (#11667)", () => {
 
     expect(renderedIds).toEqual(PANEL_TRAY_ITEMS.map((i) => i.id));
     expect(renderedIds).toContain("file-browser");
+  });
+
+  it("covers exactly the shared panel-button id list", () => {
+    // The store's hydration repair and Settings' toggle routing both key off
+    // `PANEL_TRAY_BUTTON_IDS`. A row here with no entry there would never get its
+    // position rebuilt after a cross-view overwrite; an id there with no row
+    // would be unpinnable. Neither failure is visible from either side alone.
+    expect(PANEL_TRAY_ITEMS.map((i) => i.id)).toEqual([...PANEL_TRAY_BUTTON_IDS]);
   });
 
   it("routes the file browser through the toolbar's own handler, not a bare dispatch", () => {

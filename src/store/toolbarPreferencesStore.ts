@@ -9,6 +9,10 @@ import type {
   PluginToolbarButtonId,
   ToolbarPinnedState,
 } from "@/../../shared/types/toolbar";
+// `@shared/...`, not the `@/../../shared/...` spelling the type-only import
+// above uses: that path is erased at compile time and never has to resolve at
+// runtime, but a value import does.
+import { PANEL_TRAY_BUTTON_IDS } from "@shared/types/toolbar";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import {
   mergeRecordByWriterDelta,
@@ -172,9 +176,6 @@ function mergeButtonList(
 
   return sanitizeButtonList(result);
 }
-
-/** Panel-tray buttons, in the order the tray lists them. */
-const PANEL_TRAY_BUTTON_IDS: PanelTrayButtonId[] = ["file-browser", "browser", "dev-server"];
 
 /**
  * Give a panel button a slot next to the tray it was promoted from, so the panel

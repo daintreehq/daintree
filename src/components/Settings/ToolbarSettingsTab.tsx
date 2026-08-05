@@ -29,6 +29,9 @@ import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { AnyToolbarButtonId, PluginToolbarButtonId } from "@/../../shared/types/toolbar";
+// `@shared/...` because this is a value import — the type-only spelling above
+// is erased at compile time and never has to resolve at runtime.
+import { isPanelTrayButtonId } from "@shared/types/toolbar";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import {
   TOOLBAR_BUTTON_METADATA,
@@ -292,6 +295,7 @@ export function ToolbarSettingsTab() {
   const moveButton = useToolbarPreferencesStore((s) => s.moveButton);
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
   const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
+  const setPanelButtonOnToolbar = useToolbarPreferencesStore((s) => s.setPanelButtonOnToolbar);
   const setAlwaysShowDevServer = useToolbarPreferencesStore((s) => s.setAlwaysShowDevServer);
   const setDefaultSelection = useToolbarPreferencesStore((s) => s.setDefaultSelection);
   const reset = useToolbarPreferencesStore((s) => s.reset);
@@ -482,6 +486,17 @@ export function ToolbarSettingsTab() {
     // the switch could never turn the button on (#11304).
     if (pluginConfigs.has(buttonId) && isPluginToolbarButtonId(buttonId)) {
       setPluginButtonPromoted(buttonId, !isVisible(buttonId));
+      return;
+    }
+    // Panel-tray buttons need the same treatment for a different reason
+    // (#11667). `browser` and `dev-server` are not defaults, so the generic
+    // toggle's "delete the key to show" leaves nothing recording that the user
+    // wants them — and a stale sibling view's write, which replaces the position
+    // arrays wholesale, would then silently un-promote them with nothing left to
+    // rebuild from. `setPanelButtonOnToolbar` writes the explicit `true` that
+    // survives, and positions the button if it has no slot yet.
+    if (isPanelTrayButtonId(buttonId)) {
+      setPanelButtonOnToolbar(buttonId, !isVisible(buttonId));
       return;
     }
     dispatchToolbarVisibility(buttonId, side, {

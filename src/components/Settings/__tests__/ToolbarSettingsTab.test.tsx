@@ -8,6 +8,7 @@ const setRightButtonsMock = vi.fn();
 const moveButtonMock = vi.fn();
 const toggleButtonVisibilityMock = vi.fn();
 const setPluginButtonPromotedMock = vi.fn();
+const setPanelButtonOnToolbarMock = vi.fn();
 const setAlwaysShowDevServerMock = vi.fn();
 const setDefaultSelectionMock = vi.fn();
 const resetMock = vi.fn();
@@ -28,6 +29,7 @@ interface ToolbarState {
   moveButton: typeof moveButtonMock;
   toggleButtonVisibility: typeof toggleButtonVisibilityMock;
   setPluginButtonPromoted: typeof setPluginButtonPromotedMock;
+  setPanelButtonOnToolbar: typeof setPanelButtonOnToolbarMock;
   setAlwaysShowDevServer: typeof setAlwaysShowDevServerMock;
   setDefaultSelection: typeof setDefaultSelectionMock;
   reset: typeof resetMock;
@@ -49,6 +51,7 @@ function makeToolbarState(
     moveButton: moveButtonMock,
     toggleButtonVisibility: toggleButtonVisibilityMock,
     setPluginButtonPromoted: setPluginButtonPromotedMock,
+    setPanelButtonOnToolbar: setPanelButtonOnToolbarMock,
     setAlwaysShowDevServer: setAlwaysShowDevServerMock,
     setDefaultSelection: setDefaultSelectionMock,
     reset: resetMock,
@@ -64,6 +67,7 @@ function clearStoreMocks() {
   moveButtonMock.mockClear();
   toggleButtonVisibilityMock.mockClear();
   setPluginButtonPromotedMock.mockClear();
+  setPanelButtonOnToolbarMock.mockClear();
   setAlwaysShowDevServerMock.mockClear();
   setDefaultSelectionMock.mockClear();
   resetMock.mockClear();
@@ -319,9 +323,9 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("copy-tree", "right");
   });
 
-  it("lists the hidden-by-default file browser with its switch off (#11495)", () => {
-    // The whole point of the issue: the button has to be *offered* in Settings
-    // while staying off the toolbar until the user opts in. A fixture of its own
+  it("shows a hidden file browser with its switch off (#11495)", () => {
+    // `file-browser` ships visible since #11667, but a user can still hide it —
+    // and Settings has to render that state honestly. A fixture of its own
     // rather than the shared default, so the visible-count and drag-array
     // expectations elsewhere in this file stay put.
     mockToolbarState = makeToolbarState({
@@ -336,19 +340,38 @@ describe("ToolbarSettingsTab — agent visibility routing", () => {
     expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
 
-  it("routes the file browser opt-in to toggleButtonVisibility on its own side", () => {
+  it("routes a panel-button opt-in to setPanelButtonOnToolbar, never the generic toggle (#11667)", () => {
+    // The generic toggle shows a button by DELETING its pin key, which leaves
+    // nothing recording that the user asked for it. `browser` and `dev-server`
+    // are not defaults, so a stale sibling view's write — which replaces the
+    // position arrays wholesale — would then silently un-promote them with
+    // nothing left to rebuild the position from.
     mockToolbarState = makeToolbarState({
-      leftButtons: ["terminal", "file-browser"],
+      leftButtons: ["terminal", "browser", "file-browser", "panel-tray"],
       rightButtons: ["settings"],
-      pinnedButtons: { "file-browser": false },
+      pinnedButtons: { browser: false },
+    });
+
+    const { getByLabelText } = render(<ToolbarSettingsTab />);
+    fireEvent.click(getByLabelText("Toggle Browser visibility"));
+
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("browser", true);
+    expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
+    expect(setAgentPinnedMock).not.toHaveBeenCalled();
+  });
+
+  it("routes a panel-button hide through the same action", () => {
+    mockToolbarState = makeToolbarState({
+      leftButtons: ["terminal", "file-browser", "panel-tray"],
+      rightButtons: ["settings"],
+      pinnedButtons: {},
     });
 
     const { getByLabelText } = render(<ToolbarSettingsTab />);
     fireEvent.click(getByLabelText("Toggle Browse files visibility"));
 
-    expect(toggleButtonVisibilityMock).toHaveBeenCalledTimes(1);
-    expect(toggleButtonVisibilityMock).toHaveBeenCalledWith("file-browser", "left");
-    expect(setAgentPinnedMock).not.toHaveBeenCalled();
+    expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("file-browser", false);
+    expect(toggleButtonVisibilityMock).not.toHaveBeenCalled();
   });
 
   it("reflects pinned agents in the side visible-count summary", () => {
