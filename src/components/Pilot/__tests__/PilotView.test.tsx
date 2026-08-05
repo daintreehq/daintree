@@ -99,7 +99,7 @@ beforeEach(() => {
   dispatchMock.mockClear();
   seedViewWorkspace(null);
   seed(null);
-  usePilotStore.setState({ isOpen: true, collapsedWorkspaceIds: [] });
+  usePilotStore.setState({ isOpen: true });
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: only id/name are read
   useProjectStore.setState({ projects: [{ id: "p1", name: "daintree" }] } as Partial<
     ReturnType<typeof useProjectStore.getState>
@@ -399,29 +399,6 @@ describe("PilotView", () => {
     expect(screen.getByText("Rebuild the fleet snapshot")).toBeTruthy();
   });
 
-  it("collapses a project's rows while keeping its header", () => {
-    seed([run({ agentState: "working", since: NOW - 10_000 })]);
-    render(<PilotView />);
-    expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
-
-    const toggle = screen.getByTestId("pilot-group-toggle");
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    fireEvent.click(toggle);
-
-    expect(screen.queryByTestId("pilot-row")).toBeNull();
-    expect(screen.getByTestId("pilot-group-header")).toBeTruthy();
-    expect(screen.getByTestId("pilot-group-toggle").getAttribute("aria-expanded")).toBe("false");
-  });
-
-  it("keeps the project out of the tab order", () => {
-    // The search box owns the keyboard. A focusable disclosure inside the list
-    // would put a tab stop between the query and the results.
-    seed([run({ agentState: "working", since: NOW - 10_000 })]);
-    render(<PilotView />);
-
-    expect(screen.getByTestId("pilot-group-toggle").getAttribute("tabindex")).toBe("-1");
-  });
-
   it("filters rows by title and drops projects left with nothing", () => {
     seed([
       run({ runId: "a", workspaceId: "p1", agentState: "working", title: "auth refactor" }),
@@ -435,55 +412,6 @@ describe("PilotView", () => {
     expect(screen.getAllByTestId("pilot-group-header")).toHaveLength(1);
     expect(screen.getByText("auth refactor")).toBeTruthy();
     expect(screen.queryByText("docs pass")).toBeNull();
-  });
-
-  it("reveals matches inside a collapsed project rather than hiding them", () => {
-    seed([run({ agentState: "working", title: "auth refactor" })]);
-    usePilotStore.setState({ isOpen: true, collapsedWorkspaceIds: ["p1"] });
-    render(<PilotView />);
-    expect(screen.queryByTestId("pilot-row")).toBeNull();
-
-    fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
-
-    // Making someone click to reveal what they just searched for is the search
-    // failing to do its job.
-    expect(screen.getByText("auth refactor")).toBeTruthy();
-  });
-
-  it("restores the collapsed state when the search is cleared", () => {
-    seed([run({ agentState: "working", title: "auth refactor" })]);
-    usePilotStore.setState({ isOpen: true, collapsedWorkspaceIds: ["p1"] });
-    render(<PilotView />);
-
-    const search = screen.getByTestId("pilot-search");
-    fireEvent.change(search, { target: { value: "auth" } });
-    expect(screen.getByText("auth refactor")).toBeTruthy();
-
-    fireEvent.change(search, { target: { value: "" } });
-    expect(screen.queryByTestId("pilot-row")).toBeNull();
-  });
-
-  it("keeps the collapse toggle live during a search without editing the saved set", () => {
-    seed([
-      run({ runId: "a", workspaceId: "p1", agentState: "working", title: "auth one" }),
-      run({ runId: "b", workspaceId: "p1", agentState: "working", title: "auth two" }),
-    ]);
-    render(<PilotView />);
-
-    fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
-    expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
-
-    // Collapsing during a search must actually collapse — a header whose
-    // aria-expanded never moves is a dead control.
-    fireEvent.click(screen.getByTestId("pilot-group-toggle"));
-    expect(screen.queryByTestId("pilot-row")).toBeNull();
-
-    // ...and it must not leak into the persisted set, or the group would
-    // mysteriously stay collapsed long after the search ended.
-    expect(usePilotStore.getState().collapsedWorkspaceIds).toEqual([]);
-
-    fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "" } });
-    expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
   });
 
   describe("Escape", () => {
@@ -527,26 +455,6 @@ describe("PilotView", () => {
       fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Escape" });
 
       expect(usePilotStore.getState().isOpen).toBe(false);
-    });
-
-    it("starts the next search fully expanded", () => {
-      seed([
-        run({ runId: "a", workspaceId: "p1", agentState: "working", title: "auth one" }),
-        run({ runId: "b", workspaceId: "p1", agentState: "working", title: "auth two" }),
-      ]);
-      renderWithEscape();
-
-      const search = screen.getByTestId("pilot-search");
-      fireEvent.change(search, { target: { value: "auth" } });
-      fireEvent.click(screen.getByTestId("pilot-group-toggle"));
-      expect(screen.queryByTestId("pilot-row")).toBeNull();
-
-      // A collapse made during one search is scoped to it. Carrying it forward
-      // would hide matches the next search went looking for.
-      fireEvent.change(search, { target: { value: "" } });
-      fireEvent.change(search, { target: { value: "auth" } });
-
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
     });
   });
 
@@ -728,8 +636,7 @@ describe("PilotView", () => {
       seedTwoProjects();
       render(<PilotView />);
 
-      // Every selectable row is an agent, so Enter has exactly one meaning —
-      // it can no longer land on a project and collapse it by accident.
+      // Every selectable row is an agent, so Enter has exactly one meaning.
       press("Enter");
 
       expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", {
@@ -738,86 +645,36 @@ describe("PilotView", () => {
       });
     });
 
-    it("collapses with Left and expands with Right, acting on the selected agent's project", () => {
-      seedTwoProjects();
-      render(<PilotView />);
-      expect(selected().text).toContain("alpha");
-
-      // No project is ever selected, so the disclosure keys act on the group
-      // holding the current agent rather than on a highlighted header.
-      press("ArrowLeft");
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
-      expect(screen.getAllByTestId("pilot-group-toggle")[0]!.getAttribute("aria-expanded")).toBe(
-        "false"
-      );
-
-      // Selection followed the collapse out to a still-visible agent.
-      expect(selected().text).toContain("charlie");
-
-      press("ArrowRight");
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(3);
-    });
-
-    it("can reopen a project after collapsing every one of them", () => {
-      // Collapsing the last expanded project empties the list. The disclosures
-      // are not tab stops, so if Right bailed on an empty list the keyboard
-      // user would be shut out of their own fleet with no way back.
-      seedTwoProjects();
-      render(<PilotView />);
-
-      press("ArrowLeft");
-      press("ArrowLeft");
-      expect(screen.queryByTestId("pilot-row")).toBeNull();
-
-      press("ArrowRight");
-      expect(screen.getAllByTestId("pilot-row").length).toBeGreaterThan(0);
-    });
-
-    it("moves the highlight out of a group it collapses", () => {
-      seedTwoProjects();
-      render(<PilotView />);
-      expect(selected().text).toContain("alpha");
-
-      fireEvent.click(screen.getAllByTestId("pilot-group-toggle")[0]!);
-
-      // "alpha" has left the list. A highlight still pointing at it would leave
-      // Enter committing a row that isn't on screen.
-      expect(selected()).toMatchObject({
-        role: "option",
-        text: expect.stringContaining("charlie"),
-      });
-    });
-
     it("leaves the caret alone while there is a query to edit", () => {
       seedTwoProjects();
       render(<PilotView />);
 
       fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "a" } });
-      const before = screen.getAllByTestId("pilot-row").length;
 
-      // Left/Right are the tree's structural keys AND the search box's editing
-      // keys, and the box owns focus. With text in it, the caret wins.
-      press("ArrowLeft");
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(before);
+      // Home/End are the list's structural keys AND the search box's editing
+      // keys, and the box owns focus. With text in it, the caret wins, so the
+      // highlight must not jump to the last row.
+      press("End");
+      expect(selected().text).toContain("alpha");
       // ...but Up/Down never belong to a single-line caret.
       press("ArrowDown");
       expect(selected().text).not.toContain("alpha");
     });
 
-    it("still collapses from the results region after Tab moves focus there", () => {
+    it("hands the horizontal arrows to the caret outright", () => {
+      // With no disclosure the list has no horizontal axis, so neither the
+      // input nor the results region may cancel these — a palette that eats a
+      // key it does nothing with is a palette the browser can't work around.
       seedTwoProjects();
       render(<PilotView />);
 
-      // Tab moves focus off the input onto the scroll region, which forwards a
-      // fixed key set to the palette. Vertical movement survived that move
-      // already; the disclosure half has to as well, or the region is half a
-      // keyboard.
-      const region = screen.getByRole("group", { name: "Agents" });
-      fireEvent.keyDown(region, { key: "ArrowLeft" });
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
+      const search = screen.getByTestId("pilot-search");
+      expect(fireEvent.keyDown(search, { key: "ArrowLeft" })).toBe(true);
+      expect(fireEvent.keyDown(search, { key: "ArrowRight" })).toBe(true);
 
-      fireEvent.keyDown(region, { key: "ArrowRight" });
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(3);
+      const region = screen.getByRole("group", { name: "Agents" });
+      expect(fireEvent.keyDown(region, { key: "ArrowLeft" })).toBe(true);
+      expect(fireEvent.keyDown(region, { key: "ArrowRight" })).toBe(true);
     });
 
     it("leaves the keys alone when there is nothing listed to navigate", () => {
@@ -990,34 +847,6 @@ describe("PilotView", () => {
       // Enter committing a row that is no longer listed is the bug this guards.
       const selected = document.querySelector('[aria-selected="true"]');
       expect(selected?.textContent).toContain("auth working");
-    });
-
-    it("opens a persistently collapsed group that the filter matches", () => {
-      seedMixedFleet();
-      usePilotStore.setState({ isOpen: true, collapsedWorkspaceIds: ["p1"] });
-      render(<PilotView />);
-      expect(rowTitles().join(" ")).not.toContain("auth blocked");
-
-      fireEvent.click(segment(/Waiting/));
-
-      // Same rule the query already follows: making someone click to reveal
-      // what they just filtered for is the narrowing failing to do its job.
-      expect(rowTitles().join(" ")).toContain("auth blocked");
-    });
-
-    it("scopes a collapse made under a filter to that filter", () => {
-      seedMixedFleet();
-      render(<PilotView />);
-      fireEvent.click(segment(/Waiting/));
-
-      fireEvent.click(screen.getAllByTestId("pilot-group-toggle")[0]!);
-      expect(rowTitles()).toHaveLength(0);
-      // It must not leak into the persisted set, or the group would stay
-      // collapsed long after the filter was cleared.
-      expect(usePilotStore.getState().collapsedWorkspaceIds).toEqual([]);
-
-      fireEvent.click(segment(/^All/));
-      expect(rowTitles()).toHaveLength(4);
     });
 
     it("keeps the bar reachable when the narrowing leaves nothing", () => {
@@ -1241,25 +1070,6 @@ describe("PilotView", () => {
       expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
     });
 
-    it("delivers its count even when its filter is already the active one", () => {
-      // With the filter already on Waiting, setting it again is a no-op, so
-      // nothing clears a collapse the user made — and the button would go on
-      // advertising agents while showing none of them.
-      seed([
-        run({ runId: "a", agentState: "waiting", title: "one", since: NOW - 60_000 }),
-        run({ runId: "b", agentState: "waiting", title: "two", since: NOW - 30_000 }),
-      ]);
-      render(<PilotView />);
-
-      fireEvent.click(screen.getByRole("radio", { name: /Waiting/ }));
-      fireEvent.click(screen.getByTestId("pilot-group-toggle"));
-      expect(screen.queryAllByTestId("pilot-row")).toHaveLength(0);
-
-      fireEvent.click(screen.getByTestId("pilot-demand-action"));
-
-      expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
-    });
-
     it("does not count work awaiting review as a demand it can isolate", () => {
       // `review` is a demand band but NOT part of the Needs-you segment, so
       // counting it here would promise agents the button then failed to show.
@@ -1310,53 +1120,50 @@ describe("PilotView", () => {
   });
 
   describe("group headers", () => {
-    it("summarises a project only once its rows are gone", () => {
-      // Expanded, the rows ARE the summary; a sentence restating them is a
-      // third thing to read for facts already on screen.
+    it("carries the project's name to every option filed under it", () => {
+      // The header is not an item, so a screen reader learns which project a
+      // run belongs to from the enclosing group's name and nowhere else.
       seed([
-        run({
-          runId: "a",
-          agentState: "waiting",
-          waitingReason: "error",
-          title: "one",
-          since: NOW - 60_000,
-        }),
-        run({ runId: "b", agentState: "working", title: "two", since: NOW - 60_000 }),
+        run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW - 60_000 }),
+        run({ runId: "b", workspaceId: "s1", agentState: "working", since: NOW - 60_000 }),
       ]);
       render(<PilotView />);
 
-      const header = () => screen.getByTestId("pilot-group-header").textContent ?? "";
-      // Expanded, the header is structure and nothing else — no prose summary,
-      // no counts.
-      expect(header()).not.toContain("Agent blocked");
-      expect(header()).not.toMatch(/\d/);
-
-      fireEvent.click(screen.getByTestId("pilot-group-toggle"));
-
-      // Collapsed, something has to stop a project hiding a blocked agent
-      // behind a chevron — one pip per band present, each with its count.
-      expect(header()).toMatch(/\d/);
+      const names = screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"));
+      expect(names).toContain("daintree");
+      expect(names).toContain("spike");
     });
 
-    it("reports a collapsed project's blocked agent through the toggle's name", () => {
+    it("names the current workspace in the group's own label, not just on screen", () => {
+      // Which workspace you are already in decides whether opening a run is
+      // instant or swaps the whole view. The header renders that as a word and
+      // then hides it, so without this the fact is visual-only.
+      seedViewWorkspace("p1");
       seed([
-        run({
-          runId: "a",
-          agentState: "waiting",
-          waitingReason: "error",
-          title: "one",
-          since: NOW - 60_000,
-        }),
-        run({ runId: "b", agentState: "working", title: "two", since: NOW - 60_000 }),
+        run({ runId: "a", workspaceId: "p1", agentState: "working", since: NOW - 60_000 }),
+        run({ runId: "b", workspaceId: "s1", agentState: "working", since: NOW - 60_000 }),
       ]);
-      usePilotStore.setState({ isOpen: true, collapsedWorkspaceIds: ["p1"] });
       render(<PilotView />);
 
-      // The pips are decorative; the accessible account is the toggle's label,
-      // and it has to carry the demand in both states.
-      const label = screen.getByTestId("pilot-group-toggle").getAttribute("aria-label") ?? "";
-      expect(label).toContain("daintree");
-      expect(label).toContain("Agent blocked");
+      const labelled = screen
+        .getAllByRole("group")
+        .map((g) => g.getAttribute("aria-label") ?? "")
+        .filter((label) => label.includes("current workspace"));
+
+      expect(labelled).toHaveLength(1);
+      expect(labelled[0]).toContain("daintree");
+    });
+
+    it("is not a control, so the list holds nothing but options", () => {
+      // A `<button>` inside a `role="group"` inside a `role="listbox"` was
+      // never structurally right: a listbox's children are options. The
+      // disclosure it served is gone with it.
+      seed([run({ agentState: "working", since: NOW - 10_000 })]);
+      render(<PilotView />);
+
+      expect(screen.getByTestId("pilot-group-header")).toBeTruthy();
+      expect(screen.queryByTestId("pilot-group-toggle")).toBeNull();
+      expect(screen.getByRole("listbox").querySelector("button")).toBeNull();
     });
   });
 

@@ -16,12 +16,8 @@ interface TestItem {
   label: string;
 }
 
-/** `[groupId, itemIds, { collapsed, navigableHeader }]` */
-type GroupSpec = [
-  string,
-  string[],
-  { collapsed?: boolean; navigableHeader?: boolean; skipItems?: string[] }?,
-];
+/** `[groupId, itemIds, { navigableHeader, skipItems }]` */
+type GroupSpec = [string, string[], { navigableHeader?: boolean; skipItems?: string[] }?];
 
 function buildGroups(specs: GroupSpec[]): PaletteTreeGroupInput<TestGroup, TestItem>[] {
   return specs.map(([groupId, itemIds, options = {}]) => ({
@@ -32,7 +28,6 @@ function buildGroups(specs: GroupSpec[]): PaletteTreeGroupInput<TestGroup, TestI
       domId: `dom-h-${groupId}`,
       navigable: options.navigableHeader ?? false,
     },
-    isCollapsed: options.collapsed ?? false,
     items: itemIds.map((itemId) => ({
       rowId: `i:${itemId}`,
       domId: `dom-i-${itemId}`,
@@ -87,7 +82,6 @@ function setup(
   specs: GroupSpec[],
   options: {
     onActivate?: (row: NavigablePaletteTreeRow<TestGroup, TestItem>) => void;
-    onGroupCollapsedChange?: (groupId: string, collapsed: boolean) => void;
     shouldPreserveInputCaretKey?: (event: KeyboardEvent<HTMLInputElement>) => boolean;
     selectionScopeKey?: string;
     isActive?: boolean;
@@ -101,7 +95,6 @@ function setup(
         isActive: options.isActive ?? true,
         selectionScopeKey: scope ?? null,
         onActivate,
-        onGroupCollapsedChange: options.onGroupCollapsedChange,
         shouldPreserveInputCaretKey: options.shouldPreserveInputCaretKey,
       }),
     { initialProps: { groups: buildGroups(specs), scope: options.selectionScopeKey } }
@@ -124,15 +117,14 @@ describe("usePaletteTreeNavigation", () => {
       expect(rowIds(result.current.rows)).toEqual(["h:a", "i:a1", "i:a2", "h:b", "i:b1"]);
     });
 
-    it("keeps a collapsed group's header while structurally excluding its items", () => {
+    it("builds the render model and the nav domain from the same pass", () => {
+      // A caller that maps over `renderGroups` is rendering exactly what the
+      // arrows address, so neither can hold a row the other does not.
       const { result } = setup([
-        ["a", ["a1", "a2"], { collapsed: true }],
+        ["a", ["a1", "a2"]],
         ["b", ["b1"]],
       ]);
 
-      expect(rowIds(result.current.rows)).toEqual(["h:a", "h:b", "i:b1"]);
-      // The render model and the nav domain are the same objects, so a hidden
-      // row cannot exist in one and not the other.
       const rendered = result.current.renderGroups.flatMap((g) => [g.header, ...g.items]);
       expect(rendered).toEqual(result.current.rows);
     });
@@ -284,11 +276,11 @@ describe("usePaletteTreeNavigation", () => {
       act(() => result.current.selectRow("i:b1"));
       expect(result.current.activeDescendantId).toBe("dom-i-b1");
 
-      // Collapsing b removes the selected row from the model entirely.
+      // b's run exits, removing the selected row from the model entirely.
       rerender({
         groups: buildGroups([
           ["a", ["a1", "a2"]],
-          ["b", ["b1"], { collapsed: true }],
+          ["b", []],
         ]),
         scope: undefined,
       });
@@ -315,140 +307,37 @@ describe("usePaletteTreeNavigation", () => {
     });
   });
 
-  describe("disclosure", () => {
-    it("collapses the selected row's group on ArrowLeft", () => {
-      const onGroupCollapsedChange = vi.fn();
-      const { result } = setup(
-        [
-          ["a", ["a1"]],
-          ["b", ["b1"]],
-        ],
-        { onGroupCollapsedChange }
-      );
-
-      act(() => result.current.selectRow("i:b1"));
-      const { event } = keyEvent("ArrowLeft");
-      act(() => result.current.handleBodyKeyDown(event));
-
-      expect(onGroupCollapsedChange).toHaveBeenCalledWith("b", true);
-    });
-
-    it("handles ArrowRight before the no-navigable-row guard", () => {
-      const onGroupCollapsedChange = vi.fn();
-      // Every group shut: nothing is navigable, so a guard placed first would
-      // strand the user with no way to reopen anything.
-      const { result } = setup([["a", ["a1"], { collapsed: true }]], { onGroupCollapsedChange });
-
-      expect(result.current.selectedRow).toBeNull();
-      const right = keyEvent("ArrowRight");
-      act(() => result.current.handleBodyKeyDown(right.event));
-
-      expect(onGroupCollapsedChange).toHaveBeenCalledWith("a", false);
-      expectConsumed(right, true, "ArrowRight with every group shut");
-    });
-
-    it("reopens the group ArrowLeft just closed rather than the first collapsed one", () => {
-      const onGroupCollapsedChange = vi.fn();
-      const { result, rerender } = setup(
-        [
-          ["a", ["a1"], { collapsed: true }],
-          ["b", ["b1"]],
-        ],
-        { onGroupCollapsedChange }
-      );
-
-      act(() => result.current.selectRow("i:b1"));
-      act(() => result.current.handleBodyKeyDown(keyEvent("ArrowLeft").event));
-      expect(onGroupCollapsedChange).toHaveBeenLastCalledWith("b", true);
-
-      rerender({
-        groups: buildGroups([
-          ["a", ["a1"], { collapsed: true }],
-          ["b", ["b1"], { collapsed: true }],
-        ]),
-        scope: undefined,
-      });
-      act(() => result.current.handleBodyKeyDown(keyEvent("ArrowRight").event));
-
-      expect(onGroupCollapsedChange).toHaveBeenLastCalledWith("b", false);
-    });
-
-    it("falls through to a still-collapsed group when the remembered one is gone", () => {
-      const onGroupCollapsedChange = vi.fn();
-      const { result, rerender } = setup(
-        [
-          ["a", ["a1"], { collapsed: true }],
-          ["b", ["b1"]],
-        ],
-        { onGroupCollapsedChange }
-      );
-
-      act(() => result.current.selectRow("i:b1"));
-      act(() => result.current.handleBodyKeyDown(keyEvent("ArrowLeft").event));
-
-      // b disappears entirely while the palette is open; the remembered target
-      // is now stale, and consuming the key against it would do nothing.
-      rerender({ groups: buildGroups([["a", ["a1"], { collapsed: true }]]), scope: undefined });
-      act(() => result.current.handleBodyKeyDown(keyEvent("ArrowRight").event));
-
-      expect(onGroupCollapsedChange).toHaveBeenLastCalledWith("a", false);
-    });
-
-    it("remembers the keyboard-collapsed group across a selection-scope change", () => {
-      // A new query re-ranks the list but says nothing about which group the
-      // keyboard last shut, so → must still reopen that one rather than
-      // whichever group happens to sit first.
-      const onGroupCollapsedChange = vi.fn();
-      const { result, rerender } = setup(
-        [
-          ["a", ["a1"], { collapsed: true }],
-          ["b", ["b1"]],
-        ],
-        { onGroupCollapsedChange, selectionScopeKey: "q1" }
-      );
-
-      act(() => result.current.selectRow("i:b1"));
-      act(() => result.current.handleBodyKeyDown(keyEvent("ArrowLeft").event));
-
-      rerender({
-        groups: buildGroups([
-          ["a", ["a1"], { collapsed: true }],
-          ["b", ["b1"], { collapsed: true }],
-        ]),
-        scope: "q2",
-      });
-      act(() => result.current.handleBodyKeyDown(keyEvent("ArrowRight").event));
-
-      expect(onGroupCollapsedChange).toHaveBeenLastCalledWith("b", false);
-    });
-
-    it("leaves the horizontal arrows alone when no collapse handler is supplied", () => {
-      const { result } = setup([["a", ["a1"]]]);
-
-      const left = keyEvent("ArrowLeft");
-      const right = keyEvent("ArrowRight");
-      act(() => result.current.handleBodyKeyDown(left.event));
-      act(() => result.current.handleBodyKeyDown(right.event));
-
-      expectConsumed(left, false, "ArrowLeft without a collapse handler");
-      expectConsumed(right, false, "ArrowRight without a collapse handler");
-    });
-  });
-
   describe("caret arbitration", () => {
-    it("leaves Home, End and the horizontal arrows to the caret when the predicate says so", () => {
-      const onGroupCollapsedChange = vi.fn();
+    it("leaves Home and End to the caret when the predicate says so", () => {
       const { result } = setup([["a", ["a1", "a2"]]], {
-        onGroupCollapsedChange,
         shouldPreserveInputCaretKey: (event) => event.currentTarget.value.length > 0,
       });
 
-      for (const key of ["Home", "End", "ArrowLeft", "ArrowRight"]) {
+      for (const key of ["Home", "End"]) {
         const handle = keyEvent(key, { value: "typed" });
         act(() => result.current.handleInputKeyDown(handle.event));
         expectConsumed(handle, false, `${key} should stay with the caret`);
       }
-      expect(onGroupCollapsedChange).not.toHaveBeenCalled();
+      expect(result.current.selectedRowId).toBe("i:a1");
+    });
+
+    it("never contests the horizontal arrows, whatever the predicate says", () => {
+      // The list has no horizontal axis: the disclosure that gave these keys a
+      // job is gone, so they belong to the caret unconditionally and must reach
+      // it uncancelled from the body region too.
+      const shouldPreserveInputCaretKey = vi.fn(() => false);
+      const { result } = setup([["a", ["a1", "a2"]]], { shouldPreserveInputCaretKey });
+
+      for (const key of ["ArrowLeft", "ArrowRight"]) {
+        const onInput = keyEvent(key, { value: "" });
+        act(() => result.current.handleInputKeyDown(onInput.event));
+        expectConsumed(onInput, false, `${key} on the input`);
+
+        const onBody = keyEvent(key);
+        act(() => result.current.handleBodyKeyDown(onBody.event));
+        expectConsumed(onBody, false, `${key} on the body region`);
+      }
+      expect(shouldPreserveInputCaretKey).not.toHaveBeenCalled();
       expect(result.current.selectedRowId).toBe("i:a1");
     });
 

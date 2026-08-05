@@ -375,19 +375,14 @@ AppPaletteDialog.Header = function AppPaletteHeader({
  * scroll container itself holds focus. Tab and Shift+Tab are deliberately
  * absent: the container is a real tab stop (see `tabIndex` below) and palettes
  * such as the project switcher render controls after it that must stay
- * reachable by native traversal. PageUp/PageDown/Space are left to the
- * browser so the region keeps its native scrolling.
+ * reachable by native traversal. Space is left to the browser so the region
+ * keeps its native scrolling. The horizontal arrows were here for the one
+ * palette with collapsible groups and left with it (#11669); no list on this
+ * shell has a horizontal axis now.
  */
 const BODY_NAVIGATION_KEYS = new Set([
   "ArrowUp",
   "ArrowDown",
-  // Horizontal arrows carry the disclosure half of the tree pattern for palettes
-  // whose list has collapsible groups (`PilotView`). Withholding them left the
-  // region able to move between rows but not in or out of a group, which is
-  // half a keyboard. Flat-list palettes have no case for them and ignore them,
-  // uncancelled, exactly as they did before.
-  "ArrowLeft",
-  "ArrowRight",
   "Home",
   "End",
   "Enter",

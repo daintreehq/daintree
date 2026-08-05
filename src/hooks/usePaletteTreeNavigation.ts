@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { KeyboardEvent, KeyboardEventHandler } from "react";
 
 /**
@@ -14,8 +14,12 @@ import type { KeyboardEvent, KeyboardEventHandler } from "react";
  * arrow-key domain are one derivation, never two. `renderGroups` and `rows`
  * hold the same row objects, built in a single pass — a caller that renders
  * `renderGroups` cannot show a row the arrows can't reach, or reach one that
- * isn't on screen. Collapsed items are absent from both rather than filtered
- * out of one, so `aria-activedescendant` can only ever name a rendered row.
+ * isn't on screen, so `aria-activedescendant` can only ever name a rendered row.
+ *
+ * Groups are structure, not state: they organise the rows and nothing more.
+ * This hook once carried a disclosure model too, whose horizontal arrows could
+ * act on a group the user was nowhere near, and whose only consumer has since
+ * dropped collapse entirely (#11669).
  */
 
 /** What every row carries, header or item. */
@@ -46,18 +50,11 @@ export interface PaletteTreeItemInput<TItem> extends PaletteTreeRowIdentity {
   item: TItem;
 }
 
-/**
- * One group as the caller has already ordered and filtered it.
- *
- * Collapse is the caller's to store — palettes split it across persisted and
- * search-scoped state for reasons that belong to their domain — so this takes
- * the resolved answer and reports changes back through `onGroupCollapsedChange`.
- */
+/** One group as the caller has already ordered and filtered it. */
 export interface PaletteTreeGroupInput<TGroup, TItem> {
   groupId: string;
   group: TGroup;
   header: PaletteTreeRowIdentity;
-  isCollapsed: boolean;
   items: readonly PaletteTreeItemInput<TItem>[];
 }
 
@@ -66,7 +63,6 @@ export type PaletteTreeRow<TGroup, TItem> =
       kind: "group";
       groupId: string;
       group: TGroup;
-      isCollapsed: boolean;
     })
   | (PaletteTreeRowIdentity & {
       kind: "item";
@@ -112,14 +108,12 @@ export interface UsePaletteTreeNavigationOptions<TGroup, TItem> {
    */
   selectionScopeKey?: string | number | null;
   onActivate: (row: NavigablePaletteTreeRow<TGroup, TItem>) => void;
-  /** Omitted, the horizontal arrows stay with the caret and nothing collapses. */
-  onGroupCollapsedChange?: (groupId: string, collapsed: boolean) => void;
   /**
    * Whether a caret exists that the structural keys must stand down for.
    *
-   * Home/End/←/→ are this list's structural keys, but they are also the search
+   * Home/End are this list's structural keys, but they are also the search
    * box's editing keys and the box owns focus by default. Consulted only for
-   * those four, and only on the input — the body region has no caret. Defaults
+   * those two, and only on the input — the body region has no caret. Defaults
    * to preserving them, because editable text should win unless a caller says
    * otherwise.
    */
@@ -146,7 +140,14 @@ export interface UsePaletteTreeNavigationResult<TGroup, TItem> {
   handleBodyKeyDown: KeyboardEventHandler<HTMLElement>;
 }
 
-const CARET_KEYS = new Set(["Home", "End", "ArrowLeft", "ArrowRight"]);
+/**
+ * Keys this list and a text caret both have a claim on.
+ *
+ * The horizontal arrows were here too while groups could collapse. With no
+ * disclosure left they are the caret's alone, so they never reach the switch
+ * below and never need arbitrating.
+ */
+const CARET_KEYS = new Set(["Home", "End"]);
 
 function isNavigable<TGroup, TItem>(
   row: PaletteTreeRow<TGroup, TItem>
@@ -159,16 +160,9 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
   isActive,
   selectionScopeKey = null,
   onActivate,
-  onGroupCollapsedChange,
   shouldPreserveInputCaretKey,
 }: UsePaletteTreeNavigationOptions<TGroup, TItem>): UsePaletteTreeNavigationResult<TGroup, TItem> {
-  /**
-   * The render model and the flat nav list, built together.
-   *
-   * A collapsed group contributes no item rows at all rather than contributing
-   * them and hiding them later: a row that isn't built can't be selected, which
-   * is what makes the drift unrepresentable instead of merely guarded against.
-   */
+  /** The render model and the flat nav list, built together from one pass. */
   const renderGroups = useMemo<PaletteTreeRenderGroup<TGroup, TItem>[]>(
     () =>
       groups.map((input) => ({
@@ -179,19 +173,16 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
           navigable: input.header.navigable,
           groupId: input.groupId,
           group: input.group,
-          isCollapsed: input.isCollapsed,
         },
-        items: input.isCollapsed
-          ? []
-          : input.items.map((item) => ({
-              kind: "item" as const,
-              rowId: item.rowId,
-              domId: item.domId,
-              navigable: item.navigable,
-              groupId: input.groupId,
-              group: input.group,
-              item: item.item,
-            })),
+        items: input.items.map((item) => ({
+          kind: "item" as const,
+          rowId: item.rowId,
+          domId: item.domId,
+          navigable: item.navigable,
+          groupId: input.groupId,
+          group: input.group,
+          item: item.item,
+        })),
       })),
     [groups]
   );
@@ -206,12 +197,11 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
   /**
    * The selected ROW is the state; its index is derived. Tracking an index
    * instead would let it outlive the row it pointed at — the list shrinks under
-   * an open palette whenever a group collapses or an entry disappears, and the
-   * index would then address a different row than the user selected (#11071).
+   * an open palette whenever an entry disappears or a narrowing changes, and
+   * the index would then address a different row than the user selected
+   * (#11071).
    */
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
-  /** The group the keyboard last closed, so → can re-open that one. */
-  const lastCollapsedGroupIdRef = useRef<string | null>(null);
 
   /** Unmoved, the highlight sits on the first row the arrows can reach. */
   const selectedNavigableIndex = useMemo(() => {
@@ -228,14 +218,6 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
   useEffect(() => {
     setSelectedRowId(null);
   }, [selectionScopeKey, isActive]);
-
-  // Disclosure history is NOT selection state: a new query re-ranks the list
-  // but says nothing about which group the keyboard last closed, and dropping
-  // the memory there would send the next → to the first collapsed group
-  // instead of the one the user just shut. Only closing forgets it.
-  useEffect(() => {
-    lastCollapsedGroupIdRef.current = null;
-  }, [isActive]);
 
   // Keyed on the id rather than the row object: rows are rebuilt whenever their
   // content refreshes, and re-running this each tick would fight the user's own
@@ -278,43 +260,13 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
     [navigableRows, onActivate]
   );
 
-  /**
-   * ←/→ act on the group holding the selected row, which is what lets a palette
-   * whose headers are not stops still open and close its groups.
-   */
+  /** Vertical movement, the two ends, and commit. Groups are structure only. */
   const handleNavigationKeyDown = useCallback(
     (event: KeyboardEvent<HTMLElement>, allowCaretKeys: boolean) => {
       const consume = () => {
         event.preventDefault();
         event.stopPropagation();
       };
-
-      // Expand BEFORE the empty-list guard, because collapsing the last open
-      // group is exactly what empties the list — and disclosures need not be
-      // tab stops, so bailing here could strand a keyboard user with every
-      // group shut and no way to reopen one.
-      if (event.key === "ArrowRight" && !allowCaretKeys && onGroupCollapsedChange) {
-        const remembered = lastCollapsedGroupIdRef.current;
-        // Validate the remembered group against the current list: it may have
-        // disappeared while the palette was open, and reopening a group that is
-        // no longer there would be a write against stale data.
-        const rememberedStillCollapsed =
-          remembered !== null &&
-          renderGroups.some(
-            (group) => group.header.groupId === remembered && group.header.isCollapsed
-          );
-        const target = rememberedStillCollapsed
-          ? remembered
-          : selectedRow && isCollapsedGroup(renderGroups, selectedRow.groupId)
-            ? selectedRow.groupId
-            : renderGroups.find((group) => group.header.isCollapsed)?.header.groupId;
-        if (target !== undefined) {
-          consume();
-          onGroupCollapsedChange(target, false);
-          lastCollapsedGroupIdRef.current = null;
-        }
-        return;
-      }
 
       // Nothing to navigate means the browser's own behaviour is the only
       // useful one left; swallowing the key would leave the region eating
@@ -340,15 +292,6 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
           consume();
           setSelectedRowId(navigableRows[navigableRows.length - 1]!.rowId);
           break;
-        case "ArrowLeft": {
-          if (allowCaretKeys || !selectedRow || !onGroupCollapsedChange) break;
-          consume();
-          lastCollapsedGroupIdRef.current = selectedRow.groupId;
-          onGroupCollapsedChange(selectedRow.groupId, true);
-          // The highlight needs no explicit move: a hidden row is no longer in
-          // `rows`, so the derived index falls back to the first visible one.
-          break;
-        }
         case "Enter":
           consume();
           if (selectedRow) {
@@ -364,7 +307,7 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
           break;
       }
     },
-    [navigableRows, onActivate, onGroupCollapsedChange, renderGroups, selectedRow, step]
+    [navigableRows, onActivate, selectedRow, step]
   );
 
   const handleInputKeyDown = useCallback<KeyboardEventHandler<HTMLInputElement>>(
@@ -396,11 +339,4 @@ export function usePaletteTreeNavigation<TGroup, TItem>({
     handleInputKeyDown,
     handleBodyKeyDown,
   };
-}
-
-function isCollapsedGroup<TGroup, TItem>(
-  renderGroups: readonly PaletteTreeRenderGroup<TGroup, TItem>[],
-  groupId: string
-): boolean {
-  return renderGroups.some((group) => group.header.groupId === groupId && group.header.isCollapsed);
 }

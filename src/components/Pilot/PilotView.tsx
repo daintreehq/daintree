@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -9,8 +8,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { actionService } from "@/services/ActionService";
-import { FLEET_BANDS, type FleetBand } from "@/lib/fleetAttention";
-import { UI_ANIMATION_DURATION, UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { agoPhrase, formatWaitAge } from "@/lib/projectRowStatus";
 import {
@@ -25,7 +23,7 @@ import {
   type PilotRow,
   type PilotWorkspaceMeta,
 } from "./pilotRows";
-import { BAND_GLYPH, BAND_GLYPH_TONE, PilotRunState } from "./PilotRunState";
+import { PilotRunState } from "./PilotRunState";
 import { PilotFilterBar } from "./PilotFilterBar";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
@@ -48,9 +46,7 @@ const AGE_TICK_MS = 30_000;
 /** The loading rule's ">5s says something" threshold. */
 const LOADING_HINT_MS = 5_000;
 
-/**
- * Id of a project's run container, which its disclosure button `aria-controls`.
- */
+/** Id of a project's group container. */
 function groupDomId(workspaceId: string): string {
   return `pilot-option-group-${workspaceId}`;
 }
@@ -80,41 +76,9 @@ function agentCount(count: number): string {
   return count === 1 ? "1 agent" : `${count} agents`;
 }
 
-/** The worst band's own sentence, plural-aware. */
-function bandPhrase(band: FleetBand, count: number): string {
-  switch (band) {
-    case "blocked":
-      return count === 1 ? "Agent blocked" : `${count} agents blocked`;
-    case "needs-you":
-      return demandPhrase(count);
-    case "review":
-      return count === 1 ? "Ready for review" : `${count} agents ready for review`;
-    case "running":
-      return count === 1 ? "Agent working" : `${count} agents working`;
-    case "done":
-      return count === 1 ? "Agent finished" : `${count} agents finished`;
-    default:
-      return agentCount(count);
-  }
-}
-
-/**
- * A group's one status sentence, in the switcher's shape: what the worst thing
- * in it is, then how much else is there.
- *
- * Named rather than left to the tone: "blocked" and "needs input" are both
- * demands and would otherwise differ only in hue, which is the colour-only
- * encoding the switcher's own status line exists to avoid.
- *
- * The remainder is "N more" rather than a repeated total — "2 agents blocked ·
- * 3 agents" states the same population twice and reads as a contradiction, and
- * naming that remainder "running" would be false for an exited or idle run.
- */
-function groupSummary(group: PilotProjectGroup): string {
-  const inTopBand = group.rows.filter((row) => row.band === group.topBand).length;
-  const rest = group.rows.length - inTopBand;
-  const lead = bandPhrase(group.topBand, inTopBand);
-  return rest > 0 ? `${lead} · ${rest} more` : lead;
+/** Work handed back, plural-aware. The footer's sentence when nothing is asking. */
+function reviewPhrase(count: number): string {
+  return count === 1 ? "Ready for review" : `${count} agents ready for review`;
 }
 
 /** The resting tone. Selected is the shared row class's to own, off the attribute. */
@@ -167,102 +131,25 @@ function WorkspaceTile({ group }: { group: PilotProjectGroup }) {
 }
 
 /**
- * What a collapsed project is still holding, as one pip per band present.
- *
- * Expanded, the rows ARE the summary and a sentence restating them in prose is
- * a third thing to read for facts already on screen. Collapsed, the rows are
- * gone and something has to stop a project hiding a blocked agent behind a
- * chevron — so the summary earns its place at exactly the moment the rows stop
- * being visible, and nowhere else.
- *
- * Glyphs, not words, and the same glyphs the filter bar uses, so the cluster
- * reads as a compressed version of the list rather than a new notation.
- * `aria-hidden` throughout: the toggle's own label already carries
- * `groupSummary()` in both states, and announcing four glyph-count fragments
- * beside it would be the same fact twice, less intelligibly the second time.
- */
-function CollapsedBandPips({ group }: { group: PilotProjectGroup }) {
-  const counts = new Map<FleetBand, number>();
-  for (const row of group.rows) counts.set(row.band, (counts.get(row.band) ?? 0) + 1);
-
-  return (
-    <span aria-hidden="true" className="flex shrink-0 items-center gap-2">
-      {FLEET_BANDS.filter((band) => counts.has(band)).map((band) => {
-        const Glyph = BAND_GLYPH[band];
-        return (
-          <span key={band} className="flex items-center gap-1">
-            <Glyph className={cn("size-2.5 shrink-0", BAND_GLYPH_TONE[band])} />
-            <span className="text-[10px] leading-none tabular-nums text-daintree-text/50">
-              {counts.get(band)}
-            </span>
-          </span>
-        );
-      })}
-    </span>
-  );
-}
-
-/**
- * A project, as a heading — never a row.
+ * A project, as a heading — never a row, and never a control.
  *
  * Deliberately outside the selection domain. The arrow keys walk agents,
  * because agents are what this surface is for; stopping on a project on the way
  * past made the common case (compare what is working against what is waiting)
- * cost an extra keystroke per project, and put Enter one mistake away from
- * collapsing the group instead of opening the run you were aiming at.
+ * cost an extra keystroke per project.
  *
- * The disclosure is a real button rather than a click handler on the row, so it
- * announces its state and its target. `tabIndex={-1}` keeps it out of the tab
- * order — the search box owns the keyboard — matching the switcher's own
- * in-header sort control.
+ * It used to carry a disclosure, which is gone (#11669). A durable collapse set
+ * meant a project shut last week could hide an agent that blocked today, on the
+ * one surface that exists to show every agent — and a `<button>` inside a
+ * `role="group"` inside a `role="listbox"` was never structurally right either.
+ * The header's whole job now is to file the rows underneath it.
  */
-function GroupHeader({
-  group,
-  isCollapsed,
-  groupId,
-  className,
-  onToggle,
-}: {
-  group: PilotProjectGroup;
-  isCollapsed: boolean;
-  groupId: string;
-  className?: string;
-  onToggle: () => void;
-}) {
-  const summary = groupSummary(group);
-
+function GroupHeader({ group, className }: { group: PilotProjectGroup; className?: string }) {
   return (
     <div
       data-testid="pilot-group-header"
       className={cn("flex w-full items-center gap-2 py-1 pr-3 pl-3 select-none", className)}
     >
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-expanded={!isCollapsed}
-        aria-controls={groupId}
-        // The summary rides the label in BOTH states. Collapsed it is the only
-        // account of what is inside; expanded it saves a screen-reader user
-        // walking the rows to learn what walking them would cost.
-        //
-        // Being in the current workspace decides whether opening a run is
-        // instant or swaps the whole view, which the header renders as a word
-        // and then hides. A fact that load-bearing cannot be visual-only.
-        aria-label={`${group.name}${group.isCurrent ? ", current workspace" : ""}, ${summary}`}
-        data-testid="pilot-group-toggle"
-        onClick={onToggle}
-        className="flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-daintree-text/40 transition-colors hover:text-daintree-text"
-      >
-        <ChevronRight
-          aria-hidden="true"
-          className={cn(
-            "size-3 transition-transform ease-out motion-reduce:transition-none",
-            !isCollapsed && "rotate-90"
-          )}
-          style={{ transitionDuration: `${UI_ANIMATION_DURATION}ms` }}
-        />
-      </button>
-
       <WorkspaceTile group={group} />
 
       {/*
@@ -272,8 +159,9 @@ function GroupHeader({
         semibold name plus a second coloured line outweighed the very rows it
         was meant to be filing.
 
-        The toggle's label already carries the name and the summary, so this is
-        hidden rather than announced a second time.
+        The enclosing `role="group"` already carries the name as the label for
+        every option inside it, so this is hidden rather than announced a second
+        time on the way past.
       */}
       <div aria-hidden="true" className="flex min-w-0 flex-1 items-center gap-1.5">
         <span className={cn(PALETTE_SECTION_LABEL_CLASS, "truncate")}>{group.name}</span>
@@ -286,8 +174,6 @@ function GroupHeader({
           <span className="shrink-0 text-[10px] leading-none text-daintree-text/30">Current</span>
         )}
       </div>
-
-      {isCollapsed && <CollapsedBandPips group={group} />}
     </div>
   );
 }
@@ -480,8 +366,6 @@ function PilotFooter({
 export function PilotView() {
   const isOpen = usePilotStore((s) => s.isOpen);
   const close = usePilotStore((s) => s.close);
-  const collapsedIds = usePilotStore((s) => s.collapsedWorkspaceIds);
-  const toggleCollapsed = usePilotStore((s) => s.toggleWorkspaceCollapsed);
   const snapshot = useFleetSnapshotStore((s) => s.snapshot);
   const projects = useProjectStore((s) => s.projects);
   const scratches = useScratchStore((s) => s.scratches);
@@ -495,21 +379,10 @@ export function PilotView() {
    * `pilotStore`.
    *
    * Both are narrowing state for one opening of the dialog and both reset when
-   * it closes. `collapsedWorkspaceIds` lives in the store because it is the
-   * opposite thing — a durable preference about a project that should survive
-   * closing — and a filter that persisted would reopen the surface already
-   * hiding agents, with the reason two openings in the past.
+   * it closes. A filter that persisted would reopen the surface already hiding
+   * agents, with the reason two openings in the past.
    */
   const [bandFilter, setBandFilter] = useState<PilotBandFilter>("all");
-  /**
-   * Collapse overrides that apply only while the list is narrowed.
-   *
-   * Narrowing force-expands every matching group, so without a separate set the
-   * header toggle would be a dead control: `aria-expanded` pinned open while the
-   * click silently edited the persisted set, collapsing the group minutes later
-   * when the query cleared.
-   */
-  const [narrowingCollapsed, setNarrowingCollapsed] = useState<readonly string[]>([]);
   /**
    * True while real focus sits on a filter segment.
    *
@@ -706,22 +579,12 @@ export function PilotView() {
   );
 
   /**
-   * Either narrowing is in play, so a group holding a match must open itself.
-   *
-   * The filter has exactly the same claim on this as the query does: finding
-   * the blocked agent you filtered for still collapsed behind a chevron is the
-   * same "narrowing failing to do its job" the query path already solves.
-   */
-  const isNarrowing = query.trim().length > 0 || bandFilter !== "all";
-
-  /**
    * The tree, in the shared model's shape.
    *
    * A project is structure, not content: its header is `navigable: false`, so
    * the arrow keys walk agents and never stop on a heading on the way past.
-   * That kept the common case — compare what is working against what is waiting
-   * — from costing an extra keystroke per project, and kept Enter from sitting
-   * one mistake away from collapsing a group instead of opening the run.
+   * That keeps the common case — compare what is working against what is
+   * waiting — from costing an extra keystroke per project.
    */
   const paletteGroups = useMemo<PaletteTreeGroupInput<PilotProjectGroup, PilotRow>[]>(
     () =>
@@ -730,21 +593,14 @@ export function PilotView() {
         group,
         header: {
           rowId: `group:${group.workspaceId}`,
-          // The runs container's id, which is what the disclosure button
-          // `aria-controls`. Safe only because the header is not navigable, so
-          // this id never reaches `aria-activedescendant`. Making headers
-          // navigable here would first have to give the header element an id
-          // of its own — pointing the active descendant at a role-less
-          // container is the dangling reference #11071 was about.
+          // The group container's id. Safe only because the header is not
+          // navigable, so this id never reaches `aria-activedescendant`.
+          // Making headers navigable here would first have to give the header
+          // element an id of its own — pointing the active descendant at a
+          // role-less container is the dangling reference #11071 was about.
           domId: groupDomId(group.workspaceId),
           navigable: false,
         },
-        // A collapsed group that contains a match opens itself — making someone
-        // click to reveal the thing they just narrowed to is the narrowing
-        // failing to do its job.
-        isCollapsed: isNarrowing
-          ? narrowingCollapsed.includes(group.workspaceId)
-          : collapsedIds.includes(group.workspaceId),
         items: group.rows.map((row) => ({
           rowId: row.run.runId,
           domId: runDomId(row.run.runId),
@@ -752,17 +608,8 @@ export function PilotView() {
           item: row,
         })),
       })),
-    [visibleGroups, isNarrowing, narrowingCollapsed, collapsedIds]
+    [visibleGroups]
   );
-
-  // The narrowing-scoped collapses belong to the query AND the filter that
-  // produced them — a collapse made while looking at blocked agents has no
-  // claim on the list once the segment changes. Closing drops them too, so a
-  // reopen doesn't restore state from a fleet that has moved on. The selection
-  // resets alongside, inside the navigation model.
-  useEffect(() => {
-    setNarrowingCollapsed([]);
-  }, [query, bandFilter, isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -772,21 +619,6 @@ export function PilotView() {
       setIsFilterFocused(false);
     }
   }, [isOpen]);
-
-  const setGroupCollapsed = useCallback(
-    (workspaceId: string, collapsed: boolean) => {
-      if (isNarrowing) {
-        setNarrowingCollapsed((ids) => {
-          const has = ids.includes(workspaceId);
-          if (collapsed === has) return ids;
-          return collapsed ? [...ids, workspaceId] : ids.filter((id) => id !== workspaceId);
-        });
-      } else if (collapsedIds.includes(workspaceId) !== collapsed) {
-        toggleCollapsed(workspaceId);
-      }
-    },
-    [isNarrowing, collapsedIds, toggleCollapsed]
-  );
 
   const activate = useCallback((row: NavigablePaletteTreeRow<PilotProjectGroup, PilotRow>) => {
     if (row.kind !== "item") return;
@@ -800,17 +632,17 @@ export function PilotView() {
    * `shouldPreserveInputCaretKey` is true where a caret exists to protect, and
    * the list's structural keys stand down for it.
    *
-   * Home/End/←/→ are structural keys, but they are also the search box's
-   * editing keys, and the box owns focus by default. While the query is
-   * non-empty they stay with the caret; an empty box has nothing to edit, so
-   * they navigate. Search force-expands every matching group anyway, which is
-   * where collapse would matter least.
+   * Home/End are structural keys, but they are also the search box's editing
+   * keys, and the box owns focus by default. While the query is non-empty they
+   * stay with the caret; an empty box has nothing to edit, so they jump to the
+   * first and last row. The horizontal arrows are no longer contested at all —
+   * with the disclosure gone the list has no horizontal axis, so they are the
+   * caret's outright.
    *
    * Deliberately keyed on the query alone and not on the band filter: an active
-   * filter with an empty box still leaves nothing to edit, and handing the
-   * caret keys over then would take collapse and expand away from a keyboard
-   * user for no gain. The filter bar binds its own arrows, but only while it
-   * physically holds focus, so the two never contend.
+   * filter with an empty box still leaves nothing to edit. The filter bar binds
+   * its own arrows, but only while it physically holds focus, so the two never
+   * contend.
    */
   const navigation = usePaletteTreeNavigation<PilotProjectGroup, PilotRow>({
     groups: paletteGroups,
@@ -819,7 +651,6 @@ export function PilotView() {
     // highlight would survive on a row the filter had just removed.
     selectionScopeKey: `${query}|${bandFilter}`,
     onActivate: activate,
-    onGroupCollapsedChange: setGroupCollapsed,
     shouldPreserveInputCaretKey: () => query.length > 0,
   });
 
@@ -871,7 +702,7 @@ export function PilotView() {
       : needsYou > 0
         ? demandPhrase(needsYou)
         : review > 0
-          ? bandPhrase("review", review)
+          ? reviewPhrase(review)
           : live > 0
             ? `Nothing needs you · ${live} ${live === 1 ? "agent" : "agents"} working`
             : fleet.total > 0
@@ -1075,33 +906,34 @@ export function PilotView() {
             // project's name as the label for every option inside it, which
             // is how a screen reader still hears which project a run belongs
             // to now that the header itself is not an item.
+            //
+            // Being in the current workspace decides whether opening a run is
+            // instant or swaps the whole view, and the header renders that as a
+            // word it then hides — so it rides the label rather than being
+            // visual-only. Short on purpose: this name is re-announced as
+            // context for every option inside, and the group's own contents are
+            // those options, so a prose summary here would be read once per row.
             <div
               key={header.domId}
+              id={header.domId}
               role="group"
-              aria-label={header.group.name}
+              aria-label={`${header.group.name}${header.group.isCurrent ? ", current workspace" : ""}`}
               // The scroller spaces siblings equally, so after a long run list
               // the next project arrives with no more separation than one more
               // agent. Only between groups — a leading gap would push the list
               // off its own top edge.
               className={groupIndex > 0 ? "mt-2" : undefined}
             >
-              <GroupHeader
-                group={header.group}
-                isCollapsed={header.isCollapsed}
-                groupId={header.domId}
-                onToggle={() => setGroupCollapsed(header.groupId, !header.isCollapsed)}
-              />
-              <div id={header.domId}>
-                {items.map((row) => (
-                  <RunRow
-                    key={row.domId}
-                    row={row.item}
-                    isSelected={row.rowId === selectedRow?.rowId}
-                    domId={row.domId}
-                    onActivate={() => navigation.activateRow(row.rowId)}
-                  />
-                ))}
-              </div>
+              <GroupHeader group={header.group} />
+              {items.map((row) => (
+                <RunRow
+                  key={row.domId}
+                  row={row.item}
+                  isSelected={row.rowId === selectedRow?.rowId}
+                  domId={row.domId}
+                  onActivate={() => navigation.activateRow(row.rowId)}
+                />
+              ))}
             </div>
           ))}
         </div>
@@ -1121,12 +953,6 @@ export function PilotView() {
             demandCount={needsYou}
             onShowDemand={() => {
               setBandFilter("needs-you");
-              // Cleared explicitly, not left to the narrowing effect. With the
-              // filter ALREADY on needs-you the state set is a no-op, the
-              // effect never re-runs, and a group the user had collapsed stays
-              // collapsed — leaving the button advertising agents it then
-              // failed to put on screen.
-              setNarrowingCollapsed([]);
             }}
           />
         </AppPaletteDialog.Footer>

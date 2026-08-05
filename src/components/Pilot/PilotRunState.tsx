@@ -72,12 +72,11 @@ export const BAND_GLYPH: Record<FleetBand, ComponentType<{ className?: string }>
  * `done` and `idle` stay neutral: an acknowledged completion and an exited
  * shell are not news.
  *
- * Exported alongside the glyphs so a collapsed group's pips and a run's own
- * state mark cannot end up differently coloured for the same band — the two
- * read as one signal only if they agree by construction rather than by two
- * lists someone has to keep in step.
+ * Module-private: the collapsed-group pip cluster that used to draw from it is
+ * gone, and the filter bar spells its own segment tones out in full because
+ * Tailwind's scanner cannot see an assembled `${tone}/40`.
  */
-export const BAND_GLYPH_TONE: Record<FleetBand, string> = {
+const BAND_GLYPH_TONE: Record<FleetBand, string> = {
   blocked: "text-status-danger",
   "needs-you": "text-state-waiting",
   review: "text-category-blue",
