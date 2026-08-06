@@ -194,12 +194,23 @@ vi.mock("../../services/TrashedPidTracker.js", () => ({
   initializeTrashedPidCleanup: vi.fn(),
 }));
 
+// `runScratchCleanup`/`runAssistantScratchCleanup` are also imported by
+// globalServicesInit for the disk-critical edge. A factory that omits them
+// throws only when that edge is actually exercised, so they must be present
+// for the onCriticalChange tests below.
 vi.mock("../../services/ScratchCleanupService.js", () => ({
   initializeScratchCleanup: vi.fn(),
+  runScratchCleanup: vi.fn(async () => {}),
 }));
 
 vi.mock("../../services/AssistantScratchService.js", () => ({
   startAssistantScratchCleanup: vi.fn(async () => {}),
+  runAssistantScratchCleanup: vi.fn(async () => {}),
+}));
+
+vi.mock("../../services/AgentCompileCacheCleanupService.js", () => ({
+  initializeAgentCompileCacheCleanup: vi.fn(),
+  requestAgentCompileCacheCleanup: vi.fn(async () => {}),
 }));
 
 // GpuCrashMonitorService is NOT a deferred task — it stays eager pre-window in
@@ -801,6 +812,7 @@ describe("initGlobalServices task ordering", () => {
     expect(registeredTaskNames).toContain("trashed-pid-cleanup");
     expect(registeredTaskNames).toContain("scratch-cleanup");
     expect(registeredTaskNames).toContain("assistant-scratch-cleanup");
+    expect(registeredTaskNames).toContain("agent-compile-cache-cleanup");
     // GpuCrashMonitor is intentionally NOT a deferred task — it must stay
     // eager in main.ts so the child-process-gone listener installs before
     // GPU process spawn. Deferring it would silently drop startup-window
@@ -859,6 +871,79 @@ describe("initGlobalServices task ordering", () => {
     expect(trashedSpy).toHaveBeenCalled();
     expect(scratchSpy).toHaveBeenCalled();
     expect(assistantSpy).toHaveBeenCalled();
+  });
+
+  it("defers the agent compile cache sweep rather than running it during init (#11699)", async () => {
+    const { initializeAgentCompileCacheCleanup } =
+      await import("../../services/AgentCompileCacheCleanupService.js");
+    const spy = initializeAgentCompileCacheCleanup as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    // The first sweep on an affected install can delete gigabytes, so it must
+    // not run on the boot-critical path.
+    expect(spy).not.toHaveBeenCalled();
+
+    const run = registeredTaskRuns.get("agent-compile-cache-cleanup");
+    expect(run).toBeDefined();
+    await run!();
+
+    expect(spy).toHaveBeenCalled();
+  });
+
+  it("reclaims the agent compile cache on the disk-critical edge only (#11699)", async () => {
+    const { startDiskSpaceMonitor } = await import("../../services/DiskSpaceMonitor.js");
+    const { requestAgentCompileCacheCleanup } =
+      await import("../../services/AgentCompileCacheCleanupService.js");
+    const requestSpy = requestAgentCompileCacheCleanup as ReturnType<typeof vi.fn>;
+    requestSpy.mockClear();
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const monitorRun = registeredTaskRuns.get("disk-space-monitor");
+    expect(monitorRun).toBeDefined();
+    await monitorRun!();
+
+    const monitorArgs = (startDiskSpaceMonitor as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0];
+    expect(monitorArgs?.onCriticalChange).toBeTypeOf("function");
+
+    monitorArgs.onCriticalChange(false);
+    expect(requestSpy).not.toHaveBeenCalled();
+
+    monitorArgs.onCriticalChange(true);
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs but does not reject when the disk-critical compile cache sweep fails", async () => {
+    const { startDiskSpaceMonitor } = await import("../../services/DiskSpaceMonitor.js");
+    const { requestAgentCompileCacheCleanup } =
+      await import("../../services/AgentCompileCacheCleanupService.js");
+    const { logError } = await import("../../utils/logger.js");
+    const requestSpy = requestAgentCompileCacheCleanup as ReturnType<typeof vi.fn>;
+    const logErrorSpy = logError as ReturnType<typeof vi.fn>;
+    requestSpy.mockClear();
+    logErrorSpy.mockClear();
+    requestSpy.mockRejectedValueOnce(new Error("EBUSY"));
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+    const monitorRun = registeredTaskRuns.get("disk-space-monitor");
+    await monitorRun!();
+
+    const monitorArgs = (startDiskSpaceMonitor as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0];
+    // The callback is synchronous and fire-and-forget: a rejected sweep must be
+    // caught here or it surfaces as an unhandled rejection.
+    expect(() => monitorArgs.onCriticalChange(true)).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(logErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("agent compile cache cleanup threw"),
+      expect.any(Error)
+    );
   });
 
   it("prune-old-logs task invokes pruneOldLogsAsync with retentionDays from privacy settings", async () => {
