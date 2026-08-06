@@ -50,7 +50,7 @@ import {
   getScratchRowStatus,
   ROW_DOT_CLASS,
   ROW_TONE_CLASS,
-  type ProjectRowTone,
+  type ProjectRowStatus,
 } from "@/lib/projectRowStatus";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
@@ -209,9 +209,23 @@ interface ProjectListItemProps {
  * The dot repeats the status line's tone rather than encoding anything on its
  * own — status must never be colour-only, and the sentence beside it already
  * carries the meaning for anyone who can't separate these hues.
+ *
+ * A row with nothing to report draws no dot, only the slot that reserves its
+ * width (#11692). The slot is what keeps the tiles and names in one column: an
+ * omitted dot would pull every quiet row 14px left of the busy ones, and a list
+ * that is mostly quiet would read as the ragged edge rather than the tidy one.
  */
-function StatusDot({ tone }: { tone: ProjectRowTone }) {
-  return <div className={cn("w-1.5 h-1.5 rounded-full shrink-0", ROW_DOT_CLASS[tone])} />;
+function StatusDot({ status }: { status: ProjectRowStatus }) {
+  return (
+    <div className="w-1.5 shrink-0">
+      {!status.isDormantFallback && (
+        <div
+          className={cn("w-1.5 h-1.5 rounded-full", ROW_DOT_CLASS[status.tone])}
+          data-testid="workspace-status-dot"
+        />
+      )}
+    </div>
+  );
 }
 
 /** Matches the resolution of the wait ages on screen — they change by the minute. */
@@ -272,11 +286,21 @@ function ProjectListItem({
       id={`project-option-${project.id}`}
       role="option"
       aria-selected={isSelected}
+      // Where you are, on its own channel from where Enter goes. `aria-selected`
+      // is spoken for — it is the one authority on the Enter target
+      // (`PALETTE_ROW_CLASS`) — so the current project rides `aria-current`
+      // instead, the same way every other surface in the app marks its active
+      // row. Support for the bare attribute inside a listbox is uneven enough
+      // that the accessible name says it too (see below).
+      aria-current={project.isActive ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left cursor-pointer",
+        "group w-full flex items-center gap-2 px-3 py-1 rounded-[var(--radius-md)] text-left cursor-pointer",
         project.isActive
-          ? "text-daintree-text"
+          ? // Hover still has to answer: the band wash used to sit under this
+            // row permanently, which both marked it and made it look hovered
+            // already, so pointing at it said nothing back.
+            "text-daintree-text hover:bg-overlay-subtle"
           : project.isMissing
             ? // A missing project stays dimmed while selected: the row's own
               // brightness is what says the folder is gone, and restoring it
@@ -291,7 +315,7 @@ function ProjectListItem({
       onPointerEnter={onHoverProject ? (e) => onHoverProject(project.id, e.pointerType) : undefined}
       onPointerLeave={onHoverProjectEnd ? (e) => onHoverProjectEnd(e.pointerType) : undefined}
     >
-      <StatusDot tone={status.tone} />
+      <StatusDot status={status} />
 
       <div
         className={cn(
@@ -324,18 +348,40 @@ function ProjectListItem({
               aria-label="Notifications muted for this project"
             />
           )}
+          {/*
+           * The band header above says which row this is, but a screen reader
+           * arrowing straight onto the option may never hear the group boundary
+           * — and `aria-current` itself goes unannounced inside a listbox often
+           * enough that it can't be the only carrier. In the name it is always
+           * read, and one extra word on one row is a cheap way to be sure.
+           */}
+          {project.isActive && <span className="sr-only">, current</span>}
         </div>
 
-        <div className="flex items-center gap-1 min-w-0 mt-0.5">
-          <span className={cn("truncate text-[11px] leading-none", ROW_TONE_CLASS[status.tone])}>
-            {status.text}
-          </span>
-          {status.pathHint && (
-            <span className="truncate text-[11px] leading-none text-daintree-text/50 shrink">
-              {`· ${status.pathHint}`}
-            </span>
-          )}
-        </div>
+        {/*
+         * The second line is earned, not standing. It says what the row is
+         * doing, and "Opened 13h ago" is not that — repeated down twenty rows
+         * it was most of the palette's height and none of its meaning (#11692).
+         * A path hint is the exception: it disambiguates two projects with the
+         * same folder name, so it belongs to identity rather than status and
+         * survives on its own.
+         */}
+        {(!status.isDormantFallback || status.pathHint) && (
+          <div className="flex items-center gap-1 min-w-0 mt-0.5">
+            {!status.isDormantFallback && (
+              <span
+                className={cn("truncate text-[11px] leading-none", ROW_TONE_CLASS[status.tone])}
+              >
+                {status.text}
+              </span>
+            )}
+            {status.pathHint && (
+              <span className="truncate text-[11px] leading-none text-daintree-text/50 shrink">
+                {status.isDormantFallback ? status.pathHint : `· ${status.pathHint}`}
+              </span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -460,36 +506,45 @@ function ScratchListItem({
       id={`project-option-${scratch.id}`}
       role="option"
       aria-selected={isSelected}
+      // Same split the project rows draw: `aria-selected` is the Enter target,
+      // `aria-current` is the workspace you are in. A ranked scratch has no
+      // band header to place it, so the accessible name carries the word too.
+      aria-current={scratch.isActive ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left cursor-pointer",
+        "group w-full flex items-center gap-2 px-3 py-1 rounded-[var(--radius-md)] text-left cursor-pointer",
         scratch.isActive
           ? "text-daintree-text hover:bg-overlay-subtle"
           : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
       )}
       onClick={() => onSelect(scratch)}
     >
-      <StatusDot tone={status.tone} />
+      <StatusDot status={status} />
 
       <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
         <FileText className="h-4 w-4" aria-hidden="true" />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="truncate text-sm font-semibold leading-tight">{scratch.name}</div>
         {/*
-         * Origin trails the status rather than leading it. In the ranked list a
+         * Origin rides the name, not the status line. In the ranked list a
          * scratch sits among projects with no section header to place it, so
-         * "Scratch" still has to be on the row — but what the row is doing
-         * outranks what kind of thing it is.
+         * "Scratch" has to be on the row somewhere — and it answers what the
+         * row *is*, which belongs beside the name. Parked on the status line it
+         * also held that line open on a scratch with nothing to report, which
+         * is the second line #11692 is trying to give back.
          */}
-        <div className="flex items-center gap-1 min-w-0 mt-0.5">
-          <span className={cn("truncate text-[11px] leading-none", ROW_TONE_CLASS[status.tone])}>
-            {status.text}
-          </span>
-          <span className="truncate text-[11px] leading-none text-daintree-text/50 shrink-0">
-            · Scratch
-          </span>
+        <div className="flex items-baseline gap-1 min-w-0">
+          <span className="truncate text-sm font-semibold leading-tight">{scratch.name}</span>
+          <span className="text-[11px] leading-none text-daintree-text/50 shrink-0">· Scratch</span>
+          {scratch.isActive && <span className="sr-only">, current</span>}
         </div>
+        {!status.isDormantFallback && (
+          <div
+            className={cn("truncate text-[11px] leading-none mt-0.5", ROW_TONE_CLASS[status.tone])}
+          >
+            {status.text}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -497,7 +552,7 @@ function ScratchListItem({
 
 interface ProjectSection {
   key: ProjectSectionKey;
-  label: string | null;
+  label: string;
   items: ProjectSwitcherProjectRow[];
 }
 
@@ -514,9 +569,11 @@ const OTHER_PROJECTS_SORT_OPTIONS: Record<
 };
 
 /**
- * The Other band's header, which doubles as its sort control (#11455). Every
- * row in the band prints a timestamp, so an unlabelled frecency order reads as
- * broken — the control's first job is naming the order, changing it second.
+ * The Other band's header, which doubles as its sort control (#11455). The
+ * band is the residual catch-all, so its order is the one thing a reader can't
+ * infer from the rows — the control's first job is naming that order, changing
+ * it second. More so since the rows stopped printing their opened times
+ * (#11692): there is now nothing else on screen hinting at how they are sorted.
  *
  * Two structural constraints shape the markup:
  *
@@ -766,40 +823,34 @@ function ProjectListContent({
           </div>
         ) : sections ? (
           sections.map((section, sectionIdx) => {
-            const isActiveSection = section.key === "current";
             const isLast = sectionIdx === sections.length - 1;
             const headerId = `project-section-${section.key}`;
 
             // Bands wrap options, so they can't be bare `div`s inside the
-            // listbox: a labelled band is a `group` named by its own visible
-            // header, and an unlabelled one flattens away so its rows stay
-            // owned by the listbox (an unnamed `group` is an ARIA violation).
+            // listbox: each is a `group` named by its own visible header. Every
+            // band carries one now that `current` is labelled (#11692), which
+            // is also what keeps this legal — an unnamed `group` is an ARIA
+            // violation, so a band without a header would have to flatten away.
             return (
               <div key={section.key} role="presentation">
                 {sectionIdx > 0 && <AppPaletteDialog.Divider />}
                 <div
-                  role={section.label ? "group" : "presentation"}
-                  aria-labelledby={section.label ? headerId : undefined}
-                  className={cn(
-                    "px-2 py-1.5",
-                    sectionIdx === 0 && "pt-2",
-                    isLast && "pb-2",
-                    isActiveSection && "bg-overlay-subtle"
-                  )}
+                  role="group"
+                  aria-labelledby={headerId}
+                  className={cn("px-2 py-1.5", sectionIdx === 0 && "pt-2", isLast && "pb-2")}
                 >
-                  {section.label &&
-                    (section.key === "other" ? (
-                      <OtherProjectsHeader
-                        headerId={headerId}
-                        label={section.label}
-                        itemCount={section.items.length}
-                        onReturnFocus={onReturnFocus}
-                      />
-                    ) : (
-                      <div id={headerId} className={cn(PALETTE_SECTION_LABEL_CLASS, "px-3 py-1")}>
-                        {section.label}
-                      </div>
-                    ))}
+                  {section.key === "other" ? (
+                    <OtherProjectsHeader
+                      headerId={headerId}
+                      label={section.label}
+                      itemCount={section.items.length}
+                      onReturnFocus={onReturnFocus}
+                    />
+                  ) : (
+                    <div id={headerId} className={cn(PALETTE_SECTION_LABEL_CLASS, "px-3 py-1")}>
+                      {section.label}
+                    </div>
+                  )}
                   {section.items.map(renderItem)}
                 </div>
               </div>
@@ -1096,31 +1147,46 @@ function ScratchSection({
                         type="button"
                         onClick={() => onSelect?.(scratch)}
                         className={cn(
-                          "w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors",
+                          "w-full flex items-center gap-2 px-3 py-1 rounded-[var(--radius-md)] text-left transition-colors",
                           scratch.isActive ? "bg-overlay-subtle" : "hover:bg-overlay-subtle"
                         )}
                         role="option"
+                        // This list has no roving cursor of its own, so
+                        // `aria-selected` here has only ever meant "the scratch
+                        // you're in" and stays. `aria-current` names that
+                        // directly, matching how the ranked rows above say it.
                         aria-selected={scratch.isActive}
+                        aria-current={scratch.isActive ? "true" : undefined}
                       >
-                        <StatusDot tone={status.tone} />
+                        <StatusDot status={status} />
                         <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
                           <FileText className="h-4 w-4" aria-hidden="true" />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium truncate">{scratch.name}</div>
+                          <div className="text-sm font-medium truncate leading-tight">
+                            {scratch.name}
+                          </div>
                           {/*
                            * No origin hint here — the section header already
                            * says "Scratch", so repeating it on every row would
                            * be chrome naming what the reader just read.
+                           *
+                           * The status line is conditional for the same reason
+                           * it is on a project row (#11692); the cleanup
+                           * countdown below is not, because a scratch about to
+                           * be deleted is exactly the row that has something to
+                           * report even when nothing is running.
                            */}
-                          <div
-                            className={cn(
-                              "text-[11px] leading-none truncate mt-0.5",
-                              ROW_TONE_CLASS[status.tone]
-                            )}
-                          >
-                            {status.text}
-                          </div>
+                          {!status.isDormantFallback && (
+                            <div
+                              className={cn(
+                                "text-[11px] leading-none truncate mt-0.5",
+                                ROW_TONE_CLASS[status.tone]
+                              )}
+                            >
+                              {status.text}
+                            </div>
+                          )}
                           {countdown && (
                             <div
                               className="text-[11px] leading-none text-daintree-text/40 mt-0.5 truncate"

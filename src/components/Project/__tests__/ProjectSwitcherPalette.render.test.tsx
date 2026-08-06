@@ -258,22 +258,49 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
     expect(screen.getByText("2 agents running")).toBeTruthy();
   });
 
-  it("labels the relative time as an opened time when nothing is running", () => {
+  // A row with nothing running has nothing to report, and twenty of those in a
+  // row were most of the palette's height and none of its meaning (#11692).
+  it("gives a row with nothing to report no second line at all", () => {
     const twoHoursAgo = Date.now() - 2 * 3600000;
     render(
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ lastOpened: twoHoursAgo })]} />
     );
-    expect(screen.getByText("Opened 2h ago")).toBeTruthy();
+    expect(screen.queryByText(/^Opened /)).toBeNull();
+    expect(screen.queryByText("Not opened yet")).toBeNull();
   });
 
-  it("names the state, not the path, when the project was never opened", () => {
+  it("stays silent rather than echoing a path for a never-opened project", () => {
     render(
       <ProjectSwitcherPalette
         {...baseProps}
         results={[makeProject({ path: "/home/user/my-project", displayPath: "my-project" })]}
       />
     );
-    expect(screen.getByText("Not opened yet")).toBeTruthy();
+    expect(screen.queryByText("Not opened yet")).toBeNull();
+    // The name is still the row — silence removes the status line, not the row.
+    expect(screen.getByRole("option", { name: /Test Project/ })).toBeTruthy();
+  });
+
+  // The hint tells two same-named folders apart, so it is identity rather than
+  // status: it outlives the line the dormant row no longer draws.
+  it("keeps the disambiguating path on a row that has gone quiet", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({
+            lastOpened: Date.now() - 2 * 3600000,
+            displayPath: "payments/api",
+          }),
+        ]}
+      />
+    );
+
+    const hint = screen.getByText("payments/api");
+    expect(hint).toBeTruthy();
+    // No orphaned separator: the "·" only joins the hint to a status sentence,
+    // and there is no sentence here to join it to.
+    expect(hint.textContent).not.toContain("·");
   });
 
   it("shows 'Suspended to free memory' for an auto-parked closed project", () => {
@@ -289,9 +316,11 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
     // The parked label wins over the plain time-ago for an auto-closed project.
     expect(screen.getByText("Suspended to free memory")).toBeTruthy();
     expect(screen.queryByText(/Opened 2h ago/)).toBeNull();
+    // Muted, but still a fact the row earned — it keeps its line and its mark.
+    expect(screen.getByTestId("workspace-status-dot")).toBeTruthy();
   });
 
-  it("shows the opened time (not the parked label) for a closed project without the marker", () => {
+  it("says nothing at all for a closed project without the parked marker", () => {
     const twoHoursAgo = Date.now() - 2 * 3600000;
     render(
       <ProjectSwitcherPalette
@@ -299,8 +328,59 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
         results={[makeProject({ status: "closed", lastOpened: twoHoursAgo })]}
       />
     );
-    expect(screen.getByText("Opened 2h ago")).toBeTruthy();
+    // Closed on its own is not a reason: without the auto-park marker the row
+    // falls through to the opened-time fallback, which no longer prints.
     expect(screen.queryByText("Suspended to free memory")).toBeNull();
+    expect(screen.queryByText(/^Opened /)).toBeNull();
+  });
+});
+
+/**
+ * The leading dot marks rows that have something to say. It used to sit on
+ * every row as a hollow ring, which made the most common mark in the list the
+ * one carrying no information — and left it competing with the filled dots that
+ * do (#11692).
+ */
+describe("ProjectSwitcherPalette status dot", () => {
+  it("marks a row with something to report and leaves a quiet one unmarked", () => {
+    const { rerender } = render(
+      <ProjectSwitcherPalette {...baseProps} results={[makeProject({ waitingAgentCount: 1 })]} />
+    );
+    expect(screen.getByTestId("workspace-status-dot")).toBeTruthy();
+
+    rerender(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ lastOpened: Date.now() - 2 * 3600000 })]}
+      />
+    );
+    expect(screen.queryByTestId("workspace-status-dot")).toBeNull();
+  });
+
+  // The dot's width is reserved whether or not it draws, so a mostly-quiet list
+  // keeps one column of tiles rather than two.
+  it("holds the indicator column open on an unmarked row", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({ id: "busy", name: "Busy", waitingAgentCount: 1 }),
+          makeProject({ id: "quiet", name: "Quiet", lastOpened: Date.now() - 2 * 3600000 }),
+        ]}
+      />
+    );
+
+    const busy = screen.getByRole("option", { name: /Busy/ });
+    const quiet = screen.getByRole("option", { name: /Quiet/ });
+    // Same number of leading children before the identity tile: the quiet row
+    // drops the dot inside its slot, not the slot itself.
+    expect(quiet.children.length).toBe(busy.children.length);
+    expect(
+      busy.firstElementChild!.querySelector("[data-testid='workspace-status-dot']")
+    ).toBeTruthy();
+    expect(
+      quiet.firstElementChild!.querySelector("[data-testid='workspace-status-dot']")
+    ).toBeNull();
   });
 });
 
@@ -372,6 +452,67 @@ describe("ProjectSwitcherPalette clone repo button", () => {
   it("does not render Clone Repository button when onCloneRepo is not provided", () => {
     render(<ProjectSwitcherPalette {...baseProps} results={[makeProject()]} />);
     expect(screen.queryByTestId("project-clone-button")).toBeNull();
+  });
+});
+
+/**
+ * Two things in this list need telling apart: where you are, and where Enter
+ * would take you (#11692). They ride separate channels on purpose —
+ * `aria-selected` is the sole authority on the Enter target, so "current" is
+ * said with a band header, `aria-current`, and a word in the accessible name.
+ */
+describe("ProjectSwitcherPalette current-project marker", () => {
+  const currentAndOther = [
+    makeProject({ id: "active", name: "Active Project", isActive: true, section: "current" }),
+    makeProject({ id: "other", name: "Other Project", section: "other" }),
+  ];
+
+  it("separates where you are from where Enter goes", () => {
+    // The hook preselects the first switchable row, so the cursor is on a row
+    // the current marker must not also claim.
+    render(<ProjectSwitcherPalette {...modalProps} results={currentAndOther} selectedIndex={1} />);
+
+    const current = screen.getByRole("option", { name: /Active Project/ });
+    const cursor = screen.getByRole("option", { name: /Other Project/ });
+
+    expect(current.getAttribute("aria-current")).toBe("true");
+    expect(current.getAttribute("aria-selected")).toBe("false");
+    expect(cursor.getAttribute("aria-selected")).toBe("true");
+    expect(cursor.getAttribute("aria-current")).toBeNull();
+  });
+
+  it("names the band the current project sits in", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={currentAndOther} />);
+
+    const band = screen.getByRole("group", { name: "Current project" });
+    expect(within(band).getByRole("option", { name: /Active Project/ })).toBeTruthy();
+    // The band holds only the current project — the rest of the list is
+    // elsewhere, which is what makes the header true.
+    expect(within(band).getAllByRole("option")).toHaveLength(1);
+  });
+
+  // Bands are browse-only, so search leaves the header behind. The row still
+  // has to say it — `aria-current` alone goes unannounced inside a listbox
+  // often enough that the accessible name has to carry the word too.
+  it("keeps saying it in search, where there is no band to say it for the row", () => {
+    render(
+      <ProjectSwitcherPalette {...modalProps} query="proj" rankedSearch results={currentAndOther} />
+    );
+
+    expect(screen.queryByRole("group", { name: "Current project" })).toBeNull();
+    const current = screen.getByRole("option", { name: /Active Project, current/ });
+    expect(current.getAttribute("aria-current")).toBe("true");
+    // Only the one row says it — the word is a marker, not decoration.
+    expect(screen.queryByRole("option", { name: /Other Project, current/ })).toBeNull();
+  });
+
+  // The header is chrome, not a row. Arrow keys walk `results`, and a label
+  // that registered as an option would put a dead stop in that walk.
+  it("does not add the header to the option count", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={currentAndOther} />);
+
+    const list = screen.getByRole("listbox", { name: "Workspaces" });
+    expect(within(list).getAllByRole("option")).toHaveLength(currentAndOther.length);
   });
 });
 
@@ -914,16 +1055,37 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
 
   // In the ranked list a scratch sits among projects with no section header to
   // place it, so losing the origin would make it indistinguishable from one.
-  it("keeps the scratch origin legible in search once status takes the line", () => {
+  // It rides the name because it answers what the row *is*, and because parked
+  // on the status line it held that line open on a scratch with nothing to
+  // report — the second line #11692 hands back.
+  it("keeps the scratch origin legible beside the name", () => {
     render(<ProjectSwitcherPalette {...rankedProps({ activeAgentCount: 1 })} />);
 
-    const line = screen.getByText("Agent running").parentElement!;
-    // Order matters: the origin trails the status, and the separator is what
-    // keeps them one readable line rather than two adjacent labels.
-    expect(Array.from(line.children).map((el) => el.textContent!.trim())).toEqual([
-      "Agent running",
+    const nameLine = screen.getByText("Spike notes").parentElement!;
+    expect(Array.from(nameLine.children).map((el) => el.textContent!.trim())).toEqual([
+      "Spike notes",
       "· Scratch",
     ]);
+    // The status keeps its own line rather than sharing the name's.
+    expect(nameLine.textContent).not.toContain("Agent running");
+    expect(screen.getByText("Agent running")).toBeTruthy();
+  });
+
+  it("gives a quiet scratch one line without losing what it is", () => {
+    render(<ProjectSwitcherPalette {...rankedProps({ lastOpened: Date.now() - 2 * 3600_000 })} />);
+
+    expect(screen.queryByText(/^Opened /)).toBeNull();
+    expect(screen.queryByTestId("workspace-status-dot")).toBeNull();
+    // Provenance is identity, not status — it survives the collapse.
+    expect(screen.getByText("· Scratch")).toBeTruthy();
+  });
+
+  it("marks the scratch you are in without claiming the Enter target", () => {
+    render(<ProjectSwitcherPalette {...rankedProps({ isActive: true })} />);
+
+    const row = screen.getByRole("option", { name: /Spike notes/ });
+    expect(row.getAttribute("aria-current")).toBe("true");
+    expect(row.textContent).toContain(", current");
   });
 
   it("keeps the cleanup countdown beside the status line", () => {
@@ -945,10 +1107,31 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     expect(screen.queryByLabelText("Idle")).toBeNull();
   });
 
-  it("falls back to the opened time when the scratch has no activity", () => {
+  it("stays quiet in the pinned section when the scratch has no activity", () => {
     render(<ProjectSwitcherPalette {...browseProps({ lastOpened: Date.now() - 2 * 3600_000 })} />);
 
-    expect(screen.getByText(/^Opened /)).toBeTruthy();
+    expect(screen.queryByText(/^Opened /)).toBeNull();
+    expect(screen.queryByTestId("workspace-status-dot")).toBeNull();
+    expect(screen.getByText("Spike notes")).toBeTruthy();
+  });
+
+  // Cleanup is the one thing a dormant scratch still has to say: it is about to
+  // be deleted, which is exactly the report an idle row can owe you.
+  it("keeps the cleanup countdown on a scratch that is otherwise quiet", () => {
+    const lastOpened = Date.now() - (SCRATCH_CLEANUP_TTL_MS - 2 * 24 * 3600_000);
+    render(<ProjectSwitcherPalette {...browseProps({ lastOpened })} />);
+
+    expect(screen.queryByText(/^Opened /)).toBeNull();
+    expect(screen.getByTestId("scratch-cleanup-countdown")).toBeTruthy();
+  });
+
+  it("marks the pinned scratch you are in", () => {
+    render(<ProjectSwitcherPalette {...browseProps({ isActive: true })} />);
+
+    const row = within(screen.getByRole("listbox", { name: "Scratch workspaces" })).getByRole(
+      "option"
+    );
+    expect(row.getAttribute("aria-current")).toBe("true");
   });
 
   // The tick lives at the palette level, not inside the project list. Moved

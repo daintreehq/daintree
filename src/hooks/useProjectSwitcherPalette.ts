@@ -101,17 +101,24 @@ export const PROJECT_SECTION_ORDER = [
 export type ProjectSectionKey = (typeof PROJECT_SECTION_ORDER)[number];
 
 /**
- * Header text per band. `current` is deliberately unlabelled.
+ * Header text per band.
+ *
+ * `current` went unlabelled while the keyboard cursor was the loudest thing on
+ * the surface — position alone read as "you are here" next to an accent-painted
+ * row. Once the cursor calmed to a neutral fill (#11686) the two stopped being
+ * telling apart, and the band that says where you are is the one that has to
+ * say so out loud (#11692). "Current project", not "Current": the word on its
+ * own could be read as the current *selection*, which is the other signal.
  *
  * "Other projects", not "Recent" or "Frequent": the band is the residual
  * catch-all — frecency-ordered, holding never-opened projects and acknowledged
  * completions alike — so any label naming a sort order would be a lie the row
- * timestamps immediately expose. "Running" requires live agents; projects with
+ * contents immediately expose. "Running" requires live agents; projects with
  * only bare processes fall through to Pinned/Other, where their status line
  * still says "Process running".
  */
-export const PROJECT_SECTION_LABELS: Record<ProjectSectionKey, string | null> = {
-  current: null,
+export const PROJECT_SECTION_LABELS: Record<ProjectSectionKey, string> = {
+  current: "Current project",
   attention: "Needs attention",
   pinned: "Pinned",
   running: "Running",
