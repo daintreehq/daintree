@@ -167,10 +167,6 @@ export function NewTerminalPalette({
             keys: ["↵"],
             label: selectedOption ? `to launch ${selectedOption.label.toLowerCase()}` : "to launch",
           }}
-          hints={[
-            { keys: ["↑", "↓"], label: "navigate" },
-            { keys: ["Esc"], label: "close" },
-          ]}
         />
       </AppPaletteDialog.Footer>
     </AppPaletteDialog>

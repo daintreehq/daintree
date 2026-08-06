@@ -128,13 +128,7 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
   const footer = (
     <div className="flex items-center gap-3 w-full">
       <div className="flex-1 min-w-0">
-        <PaletteFooterHints
-          primaryHint={{ keys: ["↵"], label: "to recall" }}
-          hints={[
-            { keys: ["↑", "↓"], label: "navigate" },
-            { keys: ["Esc"], label: "close" },
-          ]}
-        />
+        <PaletteFooterHints primaryHint={{ keys: ["↵"], label: "to recall" }} />
       </div>
       <button
         type="button"

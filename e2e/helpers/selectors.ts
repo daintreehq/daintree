@@ -499,7 +499,9 @@ export const SEL = {
     rows: "#searchable-palette-list > div",
   },
   palettePrefix: {
-    // Footer affordance listing the @/#/:/> prefixes; rendered only on empty query.
+    // Footer affordance listing the @/#/:/> prefixes. Empty query only, and
+    // only until the first action-palette opening that showed it closes — it
+    // teaches once per profile, then retires (#11690).
     discoverabilityRow: '[aria-label="Prefix shortcuts"]',
     // Mode chip (e.g. "Commands") rendered as the action-palette input prefix.
     modeChip: '[role="dialog"][aria-label="Command palette"] [role="status"][aria-live="polite"]',

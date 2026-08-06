@@ -178,11 +178,10 @@ export function PluginQuickPickDialog() {
   const footer = canSelectMany ? (
     <PaletteFooterHints
       primaryHint={{ keys: ["⌘", "↵"], label: `confirm ${checkedIds.size} selected` }}
-      hints={[
-        { keys: ["↵"], label: "toggle" },
-        { keys: ["↑", "↓"], label: "navigate" },
-        { keys: ["Esc"], label: "close" },
-      ]}
+      // Enter earns its chip here and only here: in a multi-select list it
+      // toggles the row instead of confirming, so the palette's usual primary
+      // key does something else. Navigation and close stay unstated.
+      hints={[{ keys: ["↵"], label: "toggle" }]}
     />
   ) : undefined;
 

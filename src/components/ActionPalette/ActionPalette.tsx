@@ -5,6 +5,7 @@ import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import {
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
@@ -55,10 +56,15 @@ function looksLikePath(query: string): boolean {
   return /[/\\]/.test(query) || /^[.~]/.test(query);
 }
 
-// Compact prefix table surfaced in the default empty-query footer so users can
-// discover the mode-routing characters without having to type one first. Drops
-// out as soon as a query or mode is active so it never competes with the
-// primary "↵ to {action}" hint.
+// Compact prefix table surfaced in the empty-query footer so users can discover
+// the mode-routing characters without having to type one first. Drops out as
+// soon as a query or mode is active so it never competes with the primary
+// "↵ to {action}" hint.
+//
+// Teaching content rather than chrome, so it gets one showing and then retires
+// (#11690) — see `hasSeenActionPalettePrefixHint`. The empty-query browse rail
+// covers what actions exist; this covers the input grammar that hands search to
+// another palette, which nothing else states.
 function PrefixDiscoverabilityRow() {
   return (
     <div
@@ -158,6 +164,8 @@ export function ActionPalette({
 
   const actionPaletteShortcut = useEffectiveCombo("action.palette.open");
   const pinnedActionIds = useActionPrefsStore((state) => state.pinnedActionIds);
+  const hasSeenPrefixHint = usePreferencesStore((state) => state.hasSeenActionPalettePrefixHint);
+  const markPrefixHintSeen = usePreferencesStore((state) => state.markActionPalettePrefixHintSeen);
   // Stable id wraps the rendered footer hint and gets pointed at by every
   // option's aria-describedby — mirrors QuickSwitcher.tsx so screen readers
   // announce what Enter does for each row.
@@ -325,14 +333,42 @@ export function ActionPalette({
         if (route.mode) setActiveMode(route.mode);
         return;
       }
-      // Atomic hand-off — `openPalette` replaces `activePaletteId` directly,
-      // so the action palette unmounts as the target mounts. No `close()`
+      // Atomic hand-off — `openPalette` replaces `activePaletteId` directly, so
+      // this palette's `isOpen` goes false as the target mounts. No `close()`
       // call needed; an explicit close would briefly null the mutex and
-      // teardown focus restoration via the palette-to-palette guard.
+      // teardown focus restoration via the palette-to-palette guard. The
+      // component itself stays mounted (`useKeepMounted`) and only its dialog
+      // exits, which is what lets the prefix-hint close effect still run.
       usePaletteStore.getState().openPalette(route.paletteId);
     },
     [activeMode, query]
   );
+
+  // Mirror showSections (`!query.trim()`) so a whitespace-only buffer collapses
+  // to the same default state instead of diverging between the sectioned MRU
+  // body and the prefix-hint footer. The seen flag is an extra clause, not a
+  // replacement: within its one showing the row still comes and goes with the
+  // query, so typing and clearing brings it back.
+  const showPrefixHints = !hasSeenPrefixHint && activeMode === null && !query.trim();
+
+  // Consumed by an opening that actually showed the row, and only once it
+  // closes. Marking on open would clear the flag under the user mid-read, since
+  // this component subscribes to it; observing `isOpen` rather than wrapping
+  // `close()` catches every exit, including the prefix hand-off that swaps
+  // palettes through `paletteStore` without calling it.
+  // `isOpen` gates the exposure too, not just the spend. The component stays
+  // mounted between openings (`useKeepMounted`) and `close()` resets the query,
+  // so a closed palette otherwise satisfies the predicate and would bank an
+  // exposure the user never saw.
+  const prefixHintShownRef = useRef(false);
+  useEffect(() => {
+    if (isOpen && showPrefixHints) prefixHintShownRef.current = true;
+  }, [isOpen, showPrefixHints]);
+  useEffect(() => {
+    if (isOpen || !prefixHintShownRef.current) return;
+    prefixHintShownRef.current = false;
+    markPrefixHintSeen();
+  }, [isOpen, markPrefixHintSeen]);
 
   const getFooter = useCallback(
     (selectedItem: ActionPaletteItemType | null): React.ReactNode => {
@@ -344,44 +380,24 @@ export function ActionPalette({
         body = (
           <PaletteFooterHints
             primaryHint={{ keys: ["↵"], label: "to run command" }}
-            hints={[
-              { keys: ["⌫"], label: "exit scope" },
-              { keys: ["Esc"], label: "close" },
-            ]}
+            // Backspace keeps its chip: inside a mode it pops the scope rather
+            // than deleting a character, which is the one thing here a user
+            // can't infer from every other list they've used.
+            hints={[{ keys: ["⌫"], label: "exit scope" }]}
           />
         );
       } else if (results.length === 0 && looksLikePath(query)) {
         // Default empty-mode hint: surface the projects prefix when the query
         // resembles a path or filename. Per-query-shape only — no auto-routing.
-        body = (
-          <PaletteFooterHints
-            primaryHint={{ keys: ["/"], label: "search projects" }}
-            hints={[
-              { keys: ["↑", "↓"], label: "navigate" },
-              { keys: ["Esc"], label: "close" },
-            ]}
-          />
-        );
+        body = <PaletteFooterHints primaryHint={{ keys: ["/"], label: "search projects" }} />;
       } else {
         // Default footer mirrors SearchablePalette's getActionLabel composition
         // so we keep that affordance while still owning the wrapper id used by
         // aria-describedby.
         const phrase = `to ${(selectedItem?.title ?? "Run action").trim().toLowerCase()}`;
-        body = (
-          <PaletteFooterHints
-            primaryHint={{ keys: ["↵"], label: phrase }}
-            hints={[
-              { keys: ["↑", "↓"], label: "navigate" },
-              { keys: ["Esc"], label: "close" },
-            ]}
-          />
-        );
+        body = <PaletteFooterHints primaryHint={{ keys: ["↵"], label: phrase }} />;
       }
 
-      // Mirror showSections (`!query.trim()`) so a whitespace-only buffer
-      // collapses to the same default state instead of diverging between the
-      // sectioned MRU body and the prefix-hint footer.
-      const showPrefixHints = activeMode === null && !query.trim();
       return (
         <div id={footerHintId} className="@container/palette-footer w-full flex flex-col gap-1.5">
           {body}
@@ -389,7 +405,7 @@ export function ActionPalette({
         </div>
       );
     },
-    [activeMode, query, results.length, footerHintId]
+    [activeMode, query, results.length, footerHintId, showPrefixHints]
   );
 
   const chipNode = chipShouldRender ? <ModeChip label={chipLabel} isVisible={chipVisible} /> : null;

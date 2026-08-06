@@ -242,10 +242,6 @@ export function PanelPalette({
             keys: ["↵"],
             label: selectedKind ? `to create ${selectedKind.name.toLowerCase()}` : "to create",
           }}
-          hints={[
-            { keys: ["↑", "↓"], label: "navigate" },
-            { keys: ["Esc"], label: "close" },
-          ]}
         />
       </AppPaletteDialog.Footer>
     </AppPaletteDialog>

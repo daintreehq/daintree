@@ -749,7 +749,6 @@ describe("PilotView", () => {
       expect(fireEvent.keyDown(search, { key: "ArrowDown" })).toBe(true);
       expect(fireEvent.keyDown(search, { key: "Enter" })).toBe(true);
       expect(screen.queryByText("Open")).toBeNull();
-      expect(screen.queryByText("Navigate")).toBeNull();
     });
 
     it("keeps the highlight on its row when the list shrinks underneath it", async () => {
@@ -1134,9 +1133,9 @@ describe("PilotView", () => {
     });
 
     it("hands focus back to the search box after applying its filter", () => {
-      // The footer goes on advertising "↑↓ Navigate" while focus sits on the
-      // button, where the body's handler bails on events that did not come from
-      // the scroller — so the arrows it names do nothing at all.
+      // While focus sits on the button the body's handler bails on events that
+      // did not come from the scroller, so the arrow keys do nothing at all —
+      // focus has to go back for the list to be navigable again.
       seed([
         run({ runId: "a", agentState: "waiting", title: "one", since: NOW - 60_000 }),
         run({ runId: "b", agentState: "waiting", title: "two", since: NOW - 30_000 }),

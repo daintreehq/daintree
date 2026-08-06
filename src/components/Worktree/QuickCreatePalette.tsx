@@ -190,9 +190,11 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
         ) : undefined
       }
       footer={
+        // No `Esc cancel` chip. Escape closes the palette but the pending
+        // `worktree.createWithRecipe` keeps running — there is no abort path —
+        // so naming it "cancel" promised something the key doesn't do.
         <PaletteFooterHints
           primaryHint={{ keys: ["↵"], label: palette.isPending ? "creating…" : "to create" }}
-          hints={[{ keys: ["Esc"], label: "cancel" }]}
         />
       }
     />

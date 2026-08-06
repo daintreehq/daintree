@@ -857,4 +857,57 @@ describe("preferencesStore migration", () => {
       expect(store.getState().projectSwitcherOtherSortMode).toBe("mostUsed");
     });
   });
+
+  describe("hasSeenActionPalettePrefixHint (v15 migration)", () => {
+    it("starts unseen so a fresh install still gets taught the prefixes", async () => {
+      const store = await loadStore();
+      expect(store.getState().hasSeenActionPalettePrefixHint).toBe(false);
+    });
+
+    it("only ever moves forward — marking twice is the same as marking once", async () => {
+      const store = await loadStore();
+      store.getState().markActionPalettePrefixHintSeen();
+      store.getState().markActionPalettePrefixHintSeen();
+      expect(store.getState().hasSeenActionPalettePrefixHint).toBe(true);
+    });
+
+    it("survives a reload, or the hint would return on every app start", async () => {
+      const first = await loadStore();
+      first.getState().markActionPalettePrefixHintSeen();
+
+      vi.resetModules();
+      _resetPersistedStoreRegistryForTests();
+      const reloaded = await loadStore();
+      expect(reloaded.getState().hasSeenActionPalettePrefixHint).toBe(true);
+    });
+
+    it("supplies the field in the migration itself, not only in the sanitizer", async () => {
+      // Hydration sanitizes too, so a blob-in/state-out test passes even with
+      // the migration branch deleted. Drive `migrate` directly to pin it.
+      const store = await loadStore();
+      // Awaited rather than asserted: `migrate` is typed `S | Promise<S>`, and
+      // awaiting narrows it without an unsafe cast.
+      const migrated = await store.persist.getOptions().migrate?.({ dockDensity: "compact" }, 14);
+
+      expect(migrated?.hasSeenActionPalettePrefixHint).toBe(false);
+      expect(migrated?.dockDensity).toBe("compact");
+    });
+
+    it("does not re-teach a user who already dismissed it before the upgrade", async () => {
+      const store = await loadStore();
+      const migrated = await store.persist
+        .getOptions()
+        .migrate?.({ hasSeenActionPalettePrefixHint: true }, 14);
+
+      expect(migrated?.hasSeenActionPalettePrefixHint).toBe(true);
+    });
+
+    it("treats a corrupt value as unseen rather than as truthy", async () => {
+      // A hand-edited string is truthy, which would silently retire the hint
+      // for someone who never saw it.
+      setStoredState({ hasSeenActionPalettePrefixHint: "yes" }, 15);
+      const store = await loadStore();
+      expect(store.getState().hasSeenActionPalettePrefixHint).toBe(false);
+    });
+  });
 });

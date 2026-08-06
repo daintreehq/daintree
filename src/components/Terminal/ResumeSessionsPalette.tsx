@@ -233,10 +233,6 @@ export function ResumeSessionsPalette() {
             keys: ["↵"],
             label: selected ? `to resume ${selected.name.toLowerCase()}` : "to resume",
           }}
-          hints={[
-            { keys: ["↑", "↓"], label: "navigate" },
-            { keys: ["Esc"], label: "close" },
-          ]}
         />
       </AppPaletteDialog.Footer>
     </AppPaletteDialog>
