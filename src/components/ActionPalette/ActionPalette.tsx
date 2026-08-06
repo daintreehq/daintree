@@ -333,10 +333,12 @@ export function ActionPalette({
         if (route.mode) setActiveMode(route.mode);
         return;
       }
-      // Atomic hand-off — `openPalette` replaces `activePaletteId` directly,
-      // so the action palette unmounts as the target mounts. No `close()`
+      // Atomic hand-off — `openPalette` replaces `activePaletteId` directly, so
+      // this palette's `isOpen` goes false as the target mounts. No `close()`
       // call needed; an explicit close would briefly null the mutex and
-      // teardown focus restoration via the palette-to-palette guard.
+      // teardown focus restoration via the palette-to-palette guard. The
+      // component itself stays mounted (`useKeepMounted`) and only its dialog
+      // exits, which is what lets the prefix-hint close effect still run.
       usePaletteStore.getState().openPalette(route.paletteId);
     },
     [activeMode, query]
@@ -354,10 +356,14 @@ export function ActionPalette({
   // this component subscribes to it; observing `isOpen` rather than wrapping
   // `close()` catches every exit, including the prefix hand-off that swaps
   // palettes through `paletteStore` without calling it.
+  // `isOpen` gates the exposure too, not just the spend. The component stays
+  // mounted between openings (`useKeepMounted`) and `close()` resets the query,
+  // so a closed palette otherwise satisfies the predicate and would bank an
+  // exposure the user never saw.
   const prefixHintShownRef = useRef(false);
   useEffect(() => {
-    if (showPrefixHints) prefixHintShownRef.current = true;
-  }, [showPrefixHints]);
+    if (isOpen && showPrefixHints) prefixHintShownRef.current = true;
+  }, [isOpen, showPrefixHints]);
   useEffect(() => {
     if (isOpen || !prefixHintShownRef.current) return;
     prefixHintShownRef.current = false;

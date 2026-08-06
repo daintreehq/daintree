@@ -1061,11 +1061,11 @@ export function PilotView() {
             demandCount={needsYou}
             onShowDemand={() => {
               setBandFilter("needs-you");
-              // The footer advertises the list's keys, and this button leaves
-              // focus on itself — where the body's handler bails on events that
-              // did not come from the scroller, so the arrows it is advertising
-              // do nothing. The Clear-filter button in the empty state already
-              // makes exactly this handoff.
+              // This button leaves focus on itself, where the body's handler
+              // bails on events that did not come from the scroller — so the
+              // arrows stop moving the selection until focus goes back. The
+              // Clear-filter button in the empty state already makes exactly
+              // this handoff.
               searchRef.current?.focus();
             }}
           />

@@ -429,9 +429,22 @@ describe("ActionPalette", () => {
 
     it("does not spend the hint on an opening that never showed the row", () => {
       // Opened straight into a query — the row never rendered, so closing has
-      // nothing to consume and the next empty open still teaches.
+      // nothing to consume and the next empty open still teaches. The closed
+      // render drops the query because production `close()` resets it: the
+      // palette then satisfies the row's query/mode predicate while invisible,
+      // which is exactly the state that must not bank an exposure.
       const { rerender } = render(<ActionPalette {...baseProps} query="al" />);
-      rerender(<ActionPalette {...baseProps} query="al" isOpen={false} />);
+      rerender(<ActionPalette {...baseProps} query="" isOpen={false} />);
+      expect(seen()).toBe(false);
+    });
+
+    it("does not spend the hint while sitting closed between openings", () => {
+      // `useKeepMounted` keeps this component mounted after its first open, so
+      // it goes on rendering with an empty query and no mode — the row's own
+      // conditions — long after the palette is off screen.
+      usePreferencesStore.setState({ hasSeenActionPalettePrefixHint: false });
+      const { rerender } = render(<ActionPalette {...baseProps} isOpen={false} />);
+      rerender(<ActionPalette {...baseProps} isOpen={false} />);
       expect(seen()).toBe(false);
     });
 

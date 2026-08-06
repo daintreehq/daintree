@@ -158,7 +158,11 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     expect(written.state.reduceAnimations).toBe(true);
   });
 
-  it("does not re-teach the palette prefix hint a sibling view already spent", async () => {
+  // Disk convergence only. Like every other field here, a sibling's live state
+  // is not pushed across views — an already-hydrated view can still show the
+  // hint once before it reloads. What must not happen is that view's write
+  // erasing the record, sending the hint back to every view on next launch.
+  it("keeps a sibling's spent prefix hint on disk through an unrelated write", async () => {
     const backing = installLocalStorage({});
     const { usePreferencesStore: store } = await import("../preferencesStore");
 
