@@ -893,32 +893,48 @@ describe("initGlobalServices task ordering", () => {
     expect(spy).toHaveBeenCalled();
   });
 
-  it("reclaims the agent compile cache on the disk-critical edge only (#11699)", async () => {
+  /**
+   * Register a fresh disk-space monitor and return the options IT was given.
+   * Clearing the monitor ref first is load-bearing: the task short-circuits on
+   * an already-installed monitor, so without this a later test reads an
+   * earlier test's callback out of the mock instead of its own.
+   */
+  async function captureDiskMonitorOptions(): Promise<{
+    onCriticalChange: (isCritical: boolean) => void;
+  }> {
+    const { setStopDiskSpaceMonitor } = await import("../serviceRefs.js");
     const { startDiskSpaceMonitor } = await import("../../services/DiskSpaceMonitor.js");
+    const startSpy = startDiskSpaceMonitor as ReturnType<typeof vi.fn>;
+    setStopDiskSpaceMonitor(null);
+    startSpy.mockClear();
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+    const monitorRun = registeredTaskRuns.get("disk-space-monitor");
+    expect(monitorRun).toBeDefined();
+    await monitorRun!();
+
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    return startSpy.mock.calls[0][0];
+  }
+
+  it("reclaims the agent compile cache on the disk-critical edge only (#11699)", async () => {
     const { requestAgentCompileCacheCleanup } =
       await import("../../services/AgentCompileCacheCleanupService.js");
     const requestSpy = requestAgentCompileCacheCleanup as ReturnType<typeof vi.fn>;
     requestSpy.mockClear();
 
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
+    const monitorOptions = await captureDiskMonitorOptions();
 
-    const monitorRun = registeredTaskRuns.get("disk-space-monitor");
-    expect(monitorRun).toBeDefined();
-    await monitorRun!();
-
-    const monitorArgs = (startDiskSpaceMonitor as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0];
-    expect(monitorArgs?.onCriticalChange).toBeTypeOf("function");
-
-    monitorArgs.onCriticalChange(false);
+    // Recovering from pressure must not start a sweep.
+    monitorOptions.onCriticalChange(false);
     expect(requestSpy).not.toHaveBeenCalled();
 
-    monitorArgs.onCriticalChange(true);
+    monitorOptions.onCriticalChange(true);
     expect(requestSpy).toHaveBeenCalledTimes(1);
   });
 
   it("logs but does not reject when the disk-critical compile cache sweep fails", async () => {
-    const { startDiskSpaceMonitor } = await import("../../services/DiskSpaceMonitor.js");
     const { requestAgentCompileCacheCleanup } =
       await import("../../services/AgentCompileCacheCleanupService.js");
     const { logError } = await import("../../utils/logger.js");
@@ -926,24 +942,20 @@ describe("initGlobalServices task ordering", () => {
     const logErrorSpy = logError as ReturnType<typeof vi.fn>;
     requestSpy.mockClear();
     logErrorSpy.mockClear();
-    requestSpy.mockRejectedValueOnce(new Error("EBUSY"));
+    const sweepError = new Error("EBUSY");
+    requestSpy.mockRejectedValueOnce(sweepError);
 
-    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
-    await initGlobalServices(fakeRegistry);
-    const monitorRun = registeredTaskRuns.get("disk-space-monitor");
-    await monitorRun!();
+    const monitorOptions = await captureDiskMonitorOptions();
+    // The callback is synchronous fire-and-forget, so the rejection has to be
+    // caught at the call site or it escapes as an unhandled rejection.
+    monitorOptions.onCriticalChange(true);
 
-    const monitorArgs = (startDiskSpaceMonitor as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0];
-    // The callback is synchronous and fire-and-forget: a rejected sweep must be
-    // caught here or it surfaces as an unhandled rejection.
-    expect(() => monitorArgs.onCriticalChange(true)).not.toThrow();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(logErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("agent compile cache cleanup threw"),
-      expect.any(Error)
-    );
+    await vi.waitFor(() => {
+      expect(logErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("agent compile cache cleanup threw"),
+        sweepError
+      );
+    });
   });
 
   it("prune-old-logs task invokes pruneOldLogsAsync with retentionDays from privacy settings", async () => {

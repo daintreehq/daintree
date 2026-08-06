@@ -81,55 +81,90 @@ interface VersionDir {
   mtimeMs: number;
 }
 
+/**
+ * Why a directory was or was not admitted. A three-way status rather than a
+ * boolean because "vanished" must not be conflated with "too big": treating a
+ * concurrently-removed directory as over budget would latch the budget pass and
+ * evict every older cache behind it.
+ */
+type MeasurementStatus = "fits" | "too-big" | "gone";
+
 interface Measurement {
   bytes: number;
   entries: number;
   inspected: number;
-  /** False when the directory blew a budget or could not be measured. */
-  fits: boolean;
+  status: MeasurementStatus;
+}
+
+interface Discovery {
+  versionDirs: VersionDir[];
+  /** Agent directories that hold no version directories at all. */
+  emptyAgentDirs: string[];
 }
 
 function isNodeError(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && "code" in err;
 }
 
-/** Immediate real subdirectories of `dir`; `[]` when it cannot be read. */
+/**
+ * Immediate real subdirectories of `dir`; `[]` when it cannot be read. An
+ * absent directory is the ordinary case and stays quiet, but a genuinely
+ * unreadable one is logged — otherwise an EACCES on a 9 GB cache would report
+ * a clean sweep forever.
+ */
 async function listSubdirectories(dir: string): Promise<string[]> {
   const names: string[] = [];
   try {
     const handle = await fs.opendir(dir);
     for await (const entry of handle) {
-      // isDirectory() is false for symlinks, so a symlinked directory is never
-      // followed — the cache holds no symlinks, and following one would put
-      // `fs.rm` outside the cache root.
+      // isDirectory() is false for a symlink, so a symlinked entry is never
+      // descended into — following one would put `fs.rm` outside the cache.
       if (entry.isDirectory()) names.push(entry.name);
     }
-  } catch {
-    // Absent or unreadable root/agent directory — nothing to reclaim here.
+  } catch (error) {
+    if (!isNodeError(error) || (error.code !== "ENOENT" && error.code !== "ENOTDIR")) {
+      logError(`[AgentCompileCacheCleanup] Failed to read ${dir}`, error);
+    }
     return [];
   }
   return names;
 }
 
-/** Every version directory under every agent directory, with its own mtime. */
-async function discoverVersionDirs(root: string): Promise<VersionDir[]> {
-  const found: VersionDir[] = [];
+/**
+ * Every version directory under every agent directory, with its own mtime.
+ *
+ * A relocated cache root (a symlink onto another volume) is followed
+ * deliberately: the spawn path writes through that same symlink, so refusing
+ * to sweep it would leave the cache unbounded for exactly the users who moved
+ * it. Everything *below* the root must be a real directory, re-checked with
+ * `lstat` here so an entry swapped for a symlink between listing and stat is
+ * not handed to `fs.rm`.
+ */
+async function discoverVersionDirs(root: string): Promise<Discovery> {
+  const versionDirs: VersionDir[] = [];
+  const emptyAgentDirs: string[] = [];
   // Every agent directory is swept, not just the ones currently in
   // NODE_COMPILE_CACHE_AGENTS: dropping an agent from that allowlist would
   // otherwise strand its cache forever.
   for (const agentName of await listSubdirectories(root)) {
     const agentDir = path.join(root, agentName);
-    for (const versionName of await listSubdirectories(agentDir)) {
+    const versionNames = await listSubdirectories(agentDir);
+    if (versionNames.length === 0) {
+      emptyAgentDirs.push(agentDir);
+      continue;
+    }
+    for (const versionName of versionNames) {
       const versionDir = path.join(agentDir, versionName);
       try {
-        const stats = await fs.stat(versionDir);
-        found.push({ path: versionDir, agentDir, mtimeMs: stats.mtimeMs });
+        const stats = await fs.lstat(versionDir);
+        if (!stats.isDirectory()) continue;
+        versionDirs.push({ path: versionDir, agentDir, mtimeMs: stats.mtimeMs });
       } catch {
         // Vanished or unreadable between listing and stat — skip it.
       }
     }
   }
-  return found;
+  return { versionDirs, emptyAgentDirs };
 }
 
 /**
@@ -138,6 +173,10 @@ async function discoverVersionDirs(root: string): Promise<VersionDir[]> {
  * directory), so this never recurses; an unexpected subdirectory is
  * unmeasurable and reported as not fitting, which evicts the directory rather
  * than let an unmeasured subtree escape the budget.
+ *
+ * Only a vanished blob (`ENOENT`) may be skipped. Any other stat failure means
+ * the directory's true size is unknown, and treating unknown as zero would let
+ * an arbitrarily large unreadable blob sit inside the budget.
  */
 async function measureVersionDir(
   dir: string,
@@ -147,31 +186,37 @@ async function measureVersionDir(
   let bytes = 0;
   let entries = 0;
   let inspected = 0;
+  const tooBig = (): Measurement => ({ bytes, entries, inspected, status: "too-big" });
 
   try {
     const handle = await fs.opendir(dir);
     for await (const entry of handle) {
-      if (!entry.isFile()) return { bytes, entries, inspected, fits: false };
+      if (!entry.isFile()) return tooBig();
       entries += 1;
-      if (entries > remainingEntries) return { bytes, entries, inspected, fits: false };
-      let size = 0;
+      if (entries > remainingEntries) return tooBig();
+      inspected += 1;
+      let stats;
       try {
-        const stats = await fs.lstat(path.join(dir, entry.name));
-        inspected += 1;
-        size = stats.size;
-      } catch {
-        // A blob that vanished mid-measure contributes nothing; the directory
-        // is still measurable.
-        continue;
+        stats = await fs.lstat(path.join(dir, entry.name));
+      } catch (error) {
+        if (isNodeError(error) && error.code === "ENOENT") continue;
+        return tooBig();
       }
-      bytes += size;
-      if (bytes > remainingBytes) return { bytes, entries, inspected, fits: false };
+      if (!stats.isFile()) return tooBig();
+      bytes += stats.size;
+      if (bytes > remainingBytes) return tooBig();
     }
-  } catch {
-    return { bytes, entries, inspected, fits: false };
+  } catch (error) {
+    // The directory itself disappearing is not evidence that it was too big —
+    // reporting it as such would latch the budget pass and evict every older
+    // cache behind it.
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return { bytes, entries, inspected, status: "gone" };
+    }
+    return tooBig();
   }
 
-  return { bytes, entries, inspected, fits: true };
+  return { bytes, entries, inspected, status: "fits" };
 }
 
 /** Best-effort recursive removal. Returns false (logged) on failure. */
@@ -184,6 +229,21 @@ async function removeVersionDir(dir: string, reason: string): Promise<boolean> {
   } catch (error) {
     logError(`[AgentCompileCacheCleanup] Failed to remove ${dir} (${reason})`, error);
     return false;
+  }
+}
+
+/**
+ * Drop agent directories that hold nothing. ENOTEMPTY just means a live agent
+ * repopulated one mid-sweep, which is not a failure.
+ */
+async function removeEmptyAgentDirs(agentDirs: Iterable<string>): Promise<void> {
+  for (const agentDir of agentDirs) {
+    try {
+      await fs.rmdir(agentDir);
+    } catch (error) {
+      if (isNodeError(error) && (error.code === "ENOTEMPTY" || error.code === "ENOENT")) continue;
+      logError(`[AgentCompileCacheCleanup] Failed to remove empty agent dir ${agentDir}`, error);
+    }
   }
 }
 
@@ -205,11 +265,17 @@ export async function runAgentCompileCacheCleanup(
     entriesInspected: 0,
   };
 
-  const versionDirs = await discoverVersionDirs(root);
+  const { versionDirs, emptyAgentDirs } = await discoverVersionDirs(root);
   result.candidates = versionDirs.length;
-  if (versionDirs.length === 0) return result;
 
-  const touchedAgentDirs = new Set<string>();
+  // An agent directory left behind with no version directories is pure dead
+  // weight — no sweep would otherwise ever visit it.
+  const touchedAgentDirs = new Set<string>(emptyAgentDirs);
+  if (versionDirs.length === 0) {
+    await removeEmptyAgentDirs(touchedAgentDirs);
+    return result;
+  }
+
   const expiredBefore = now - policy.ttlMs;
   const survivors: VersionDir[] = [];
 
@@ -243,7 +309,10 @@ export async function runAgentCompileCacheCleanup(
         remainingEntries
       );
       result.entriesInspected += measurement.inspected;
-      if (measurement.fits) {
+      // Already gone (a concurrent sweep, or the user clearing the cache):
+      // nothing to reclaim and, critically, no reason to latch.
+      if (measurement.status === "gone") continue;
+      if (measurement.status === "fits") {
         remainingBytes -= measurement.bytes;
         remainingEntries -= measurement.entries;
         continue;
@@ -260,16 +329,7 @@ export async function runAgentCompileCacheCleanup(
     }
   }
 
-  // An agent directory emptied by this sweep is itself dead weight. ENOTEMPTY
-  // just means a live agent repopulated it, which is not a failure.
-  for (const agentDir of touchedAgentDirs) {
-    try {
-      await fs.rmdir(agentDir);
-    } catch (error) {
-      if (isNodeError(error) && (error.code === "ENOTEMPTY" || error.code === "ENOENT")) continue;
-      logError(`[AgentCompileCacheCleanup] Failed to remove empty agent dir ${agentDir}`, error);
-    }
-  }
+  await removeEmptyAgentDirs(touchedAgentDirs);
 
   if (result.expiredRemoved > 0 || result.budgetRemoved > 0 || result.failed > 0) {
     logInfo(

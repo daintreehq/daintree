@@ -30,12 +30,22 @@ describe("getAgentCompileCacheDir", () => {
     ["traversal through a valid segment", path.join("claude", "..", "..", "escape")],
     ["separator-bearing id", path.join("claude", "nested")],
     ["empty id", ""],
+    ["the current directory", "."],
   ])("returns null for %s", (_label, agentId) => {
     expect(getAgentCompileCacheDir(USER_DATA, agentId)).toBeNull();
   });
 
-  it("returns null for an id that resolves to the root itself", () => {
-    expect(getAgentCompileCacheDir(USER_DATA, ".")).toBeNull();
+  // These all normalize to the same immediate child as a bare `claude`, so a
+  // containment-only check would accept them and let one agent own several
+  // spellings of its cache directory.
+  it.each([
+    ["a leading current-dir segment", "./claude"],
+    ["an absolute id", "/claude"],
+    ["a trailing forward slash", "claude/"],
+    ["a trailing backslash", "claude\\"],
+    ["an embedded NUL", "claude\0evil"],
+  ])("returns null for %s", (_label, agentId) => {
+    expect(getAgentCompileCacheDir(USER_DATA, agentId)).toBeNull();
   });
 
   it("keeps every accepted id strictly inside the root", () => {

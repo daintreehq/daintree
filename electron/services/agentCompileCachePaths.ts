@@ -28,6 +28,11 @@ export function getAgentCompileCacheRoot(userDataPath: string): string {
  */
 export function getAgentCompileCacheDir(userDataPath: string, agentId: string): string | null {
   if (typeof agentId !== "string" || agentId.length === 0) return null;
+  // Reject on the RAW id, before normalization: `./claude`, `/claude` and
+  // `claude/` all normalize to the same immediate child as `claude`, so a
+  // containment check alone would silently accept several spellings of one
+  // agent — different ids mapping to one cache directory.
+  if (/[/\\\0]/.test(agentId) || agentId === "." || agentId === "..") return null;
   const root = path.normalize(getAgentCompileCacheRoot(userDataPath));
   const candidate = path.normalize(path.join(root, agentId));
   if (!candidate.startsWith(root + path.sep)) return null;

@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { app } from "electron";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
-  app: { getPath: vi.fn(() => path.join(os.tmpdir(), "unused-userdata")) },
+  // Per-process so a concurrent suite cannot target the same tree; individual
+  // tests that exercise the default root point this at their own temp dir.
+  app: { getPath: vi.fn(() => path.join(os.tmpdir(), `unused-userdata-${process.pid}`)) },
 }));
 
 vi.mock("../../utils/logger.js", () => ({
@@ -18,6 +21,7 @@ import {
   requestAgentCompileCacheCleanup,
   type AgentCompileCacheCleanupPolicy,
 } from "../AgentCompileCacheCleanupService.js";
+import { AGENT_COMPILE_CACHE_TTL_DAYS } from "../../../shared/config/agentCompileCache.js";
 
 const NOW = 1_700_000_000_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -93,6 +97,7 @@ describe("runAgentCompileCacheCleanup discovery", () => {
 
     expect(result.candidates).toBe(1);
     expect(await exists(path.join(root, "stray.txt"))).toBe(true);
+    expect(await exists(path.join(root, "claude", "stray.txt"))).toBe(true);
   });
 
   it("sweeps agent directories that are no longer in the injection allowlist", async () => {
@@ -153,11 +158,40 @@ describe("runAgentCompileCacheCleanup TTL pass", () => {
 
   it("leaves an agent directory that still holds a surviving version directory", async () => {
     await seedVersionDir("claude", "v20-old", { ageDays: 90 });
-    await seedVersionDir("claude", "v26-new", { ageDays: 1 });
+    const fresh = await seedVersionDir("claude", "v26-new", { ageDays: 1 });
 
     await runAgentCompileCacheCleanup(NOW, root, TTL_ONLY);
 
+    expect(await exists(fresh)).toBe(true);
     expect(await exists(path.join(root, "claude"))).toBe(true);
+  });
+
+  it("removes an agent directory that holds no version directories at all", async () => {
+    // Nothing else in the sweep would ever visit it.
+    await fs.mkdir(path.join(root, "orphan"), { recursive: true });
+
+    const result = await runAgentCompileCacheCleanup(NOW, root, TTL_ONLY);
+
+    expect(result.candidates).toBe(0);
+    expect(await exists(path.join(root, "orphan"))).toBe(false);
+  });
+
+  it("applies the TTL derived from the shared policy when none is injected", async () => {
+    // Exercises DEFAULT_AGENT_COMPILE_CACHE_POLICY rather than an injected one:
+    // ages are derived from the exported constant, so a swapped or mis-wired
+    // field fails here instead of passing silently.
+    const stale = await seedVersionDir("claude", "v20-old", {
+      ageDays: AGENT_COMPILE_CACHE_TTL_DAYS + 5,
+    });
+    const fresh = await seedVersionDir("claude", "v26-new", {
+      ageDays: AGENT_COMPILE_CACHE_TTL_DAYS - 5,
+    });
+
+    const result = await runAgentCompileCacheCleanup(NOW, root);
+
+    expect(result.expiredRemoved).toBe(1);
+    expect(await exists(stale)).toBe(false);
+    expect(await exists(fresh)).toBe(true);
   });
 });
 
@@ -238,9 +272,11 @@ describe("runAgentCompileCacheCleanup budget pass", () => {
     const result = await runAgentCompileCacheCleanup(NOW, root, byteBudget(30));
 
     expect(result.budgetRemoved).toBe(2);
-    // 103 blobs exist. Bounded work means inspecting the 3 that fit plus at
-    // most the overrun that proved the next directory did not.
-    expect(result.entriesInspected).toBeLessThan(20);
+    // 103 blobs exist, but the count is deterministic: v26's 3 blobs exactly
+    // fill the 30-byte budget, v24's first blob proves the zero remainder is
+    // blown, and v22 is never opened. Every blob is the same size, so readdir
+    // order cannot change this.
+    expect(result.entriesInspected).toBe(4);
   });
 
   it("counts files toward the entry budget independently of their size", async () => {
@@ -281,6 +317,130 @@ describe("runAgentCompileCacheCleanup budget pass", () => {
 
     expect(result.budgetRemoved).toBe(1);
     expect(await exists(dir)).toBe(false);
+  });
+
+  it("does not evict older caches when the newest directory vanishes mid-sweep", async () => {
+    // A directory disappearing is not evidence that it was too big. Conflating
+    // the two would latch the budget pass and wipe every older cache behind it.
+    const vanishing = await seedVersionDir("claude", "v26", {
+      ageDays: 1,
+      fileCount: 1,
+      fileSize: 10,
+    });
+    const older = await seedVersionDir("claude", "v22", { ageDays: 2, fileCount: 1, fileSize: 10 });
+
+    const realOpendir = fs.opendir;
+    vi.spyOn(fs, "opendir").mockImplementation(async (target, options) => {
+      if (target === vanishing) {
+        const err: NodeJS.ErrnoException = new Error("ENOENT: no such file or directory");
+        err.code = "ENOENT";
+        throw err;
+      }
+      return realOpendir(target as string, options);
+    });
+
+    const result = await runAgentCompileCacheCleanup(NOW, root, byteBudget(10_000));
+
+    expect(result.budgetRemoved).toBe(0);
+    expect(await exists(older)).toBe(true);
+  });
+
+  it("evicts a directory whose blob size cannot be read rather than counting it as zero", async () => {
+    // An unreadable blob of unknown size must not be treated as free, or an
+    // arbitrarily large one sits inside the budget forever.
+    const unreadable = await seedVersionDir("claude", "v26", {
+      ageDays: 1,
+      fileCount: 1,
+      fileSize: 10,
+    });
+    const older = await seedVersionDir("claude", "v22", { ageDays: 2, fileCount: 1, fileSize: 10 });
+
+    const realLstat = fs.lstat;
+    vi.spyOn(fs, "lstat").mockImplementation(async (target, options) => {
+      if (typeof target === "string" && target.startsWith(unreadable + path.sep)) {
+        const err: NodeJS.ErrnoException = new Error("EACCES: permission denied");
+        err.code = "EACCES";
+        throw err;
+      }
+      return realLstat(target as string, options);
+    });
+
+    const result = await runAgentCompileCacheCleanup(NOW, root, byteBudget(10_000));
+
+    expect(result.budgetRemoved).toBeGreaterThanOrEqual(1);
+    expect(await exists(unreadable)).toBe(false);
+    // The unmeasurable directory latches the pass, so the older one goes too.
+    expect(await exists(older)).toBe(false);
+  });
+
+  it("applies the TTL first and budgets only the survivors", async () => {
+    // A regression that stopped after the TTL pass, or that charged the expired
+    // directory's bytes against the survivor budget, would fail here.
+    const expired = await seedVersionDir("claude", "v18", {
+      ageDays: 90,
+      fileCount: 50,
+      fileSize: 100,
+    });
+    const newest = await seedVersionDir("claude", "v26", {
+      ageDays: 1,
+      fileCount: 2,
+      fileSize: 100,
+    });
+    const middle = await seedVersionDir("claude", "v24", {
+      ageDays: 2,
+      fileCount: 2,
+      fileSize: 100,
+    });
+    const oldestFresh = await seedVersionDir("claude", "v22", {
+      ageDays: 3,
+      fileCount: 2,
+      fileSize: 100,
+    });
+
+    const result = await runAgentCompileCacheCleanup(NOW, root, byteBudget(500));
+
+    expect(result.expiredRemoved).toBe(1);
+    expect(result.budgetRemoved).toBe(1);
+    expect(await exists(expired)).toBe(false);
+    expect(await exists(newest)).toBe(true);
+    expect(await exists(middle)).toBe(true);
+    expect(await exists(oldestFresh)).toBe(false);
+  });
+
+  it("counts a failed over-budget removal and still removes the rest", async () => {
+    const newest = await seedVersionDir("claude", "v26", {
+      ageDays: 1,
+      fileCount: 1,
+      fileSize: 100,
+    });
+    const locked = await seedVersionDir("claude", "v24", {
+      ageDays: 2,
+      fileCount: 1,
+      fileSize: 100,
+    });
+    const oldest = await seedVersionDir("claude", "v22", {
+      ageDays: 3,
+      fileCount: 1,
+      fileSize: 100,
+    });
+
+    const realRm = fs.rm;
+    vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (target === locked) {
+        const err: NodeJS.ErrnoException = new Error("EPERM: operation not permitted");
+        err.code = "EPERM";
+        throw err;
+      }
+      return realRm(target as string, options);
+    });
+
+    const result = await runAgentCompileCacheCleanup(NOW, root, byteBudget(100));
+
+    expect(result.failed).toBe(1);
+    expect(result.budgetRemoved).toBe(1);
+    expect(await exists(newest)).toBe(true);
+    expect(await exists(locked)).toBe(true);
+    expect(await exists(oldest)).toBe(false);
   });
 
   it("leaves everything in place when the whole cache fits", async () => {
@@ -339,14 +499,26 @@ describe("requestAgentCompileCacheCleanup", () => {
     // Startup, the periodic tick, and the disk-critical edge can all fire at
     // once; two concurrent sweeps would race to delete the same directories
     // and each count the other's work as a failure.
-    const a = requestAgentCompileCacheCleanup();
-    const b = requestAgentCompileCacheCleanup();
-    expect(a).toBe(b);
+    //
+    // Counting sweeps rather than comparing promise identity: an
+    // implementation that returned distinct promises while running one sweep
+    // would still be correct, and one that returned the cached promise while
+    // secretly starting a second sweep would not.
+    const userData = path.join(root, "userdata");
+    await fs.mkdir(path.join(userData, "agent-compile-cache", "claude"), { recursive: true });
+    vi.mocked(app.getPath).mockReturnValue(userData);
 
-    await a;
+    let sweeps = 0;
+    const realOpendir = fs.opendir;
+    vi.spyOn(fs, "opendir").mockImplementation(async (target, options) => {
+      if (target === path.join(userData, "agent-compile-cache")) sweeps += 1;
+      return realOpendir(target as string, options);
+    });
 
-    const c = requestAgentCompileCacheCleanup();
-    expect(c).not.toBe(a);
-    await c;
+    await Promise.all([requestAgentCompileCacheCleanup(), requestAgentCompileCacheCleanup()]);
+    expect(sweeps).toBe(1);
+
+    await requestAgentCompileCacheCleanup();
+    expect(sweeps).toBe(2);
   });
 });
