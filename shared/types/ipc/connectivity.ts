@@ -42,7 +42,13 @@ export interface ServiceConnectivityPayload {
   serviceKey: ConnectivityServiceKey;
   /** Current reachability status. */
   status: ServiceConnectivityStatus;
-  /** Unix epoch milliseconds at which the last probe completed (0 if no probe has run). */
+  /**
+   * Unix epoch milliseconds at which this service's state was last observed
+   * (0 if nothing has been observed yet). For `github` that's the completion
+   * of a token-health probe; for `mcp` it's when the current runtime status
+   * was observed — including the initial seed, not just later changes — and
+   * never a network round trip.
+   */
   checkedAt: number;
 }
 

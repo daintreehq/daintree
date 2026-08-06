@@ -90,7 +90,7 @@ export class ServiceConnectivityRegistry {
     };
   }
 
-  /** Snapshot of every service's current state — safe to call before any probe has run. */
+  /** Snapshot of every service's current state — safe to call before anything has been observed. */
   getSnapshot(): ServiceConnectivitySnapshot {
     // Return a shallow clone so consumers can't mutate internal state.
     return Object.fromEntries(

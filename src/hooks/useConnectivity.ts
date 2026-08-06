@@ -21,8 +21,8 @@ function buildInitialSnapshot(): ServiceConnectivitySnapshot {
  * Subscribes to per-service connectivity health pushed from the main process.
  *
  * Mount-time hydration is mandatory: each `WebContentsView` has an isolated
- * Zustand store, so a window that mounts after the initial probes settled
- * would never receive the current state through push events alone. The
+ * Zustand store, so a window that mounts after the initial source states
+ * settled would never receive the current state through push events alone. The
  * `cancelled` guard prevents a late-arriving `getState()` from clobbering a
  * push event that landed first on a slow main-process round trip.
  */
