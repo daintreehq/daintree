@@ -77,10 +77,6 @@ describe("setupPowerMonitor", () => {
       CHANNELS: { EVENTS_PUSH: "events:push" },
     }));
 
-    vi.doMock("../../services/connectivity/AgentConnectivityService.js", () => ({
-      agentConnectivityService: { refresh: vi.fn().mockResolvedValue(undefined) },
-    }));
-
     mockGetAppWebContents = vi.fn((win: { webContents: unknown }) => win.webContents);
     vi.doMock("../webContentsRegistry.js", () => ({
       getAppWebContents: mockGetAppWebContents,

@@ -6,10 +6,7 @@ import {
   isStoreMigrationError,
 } from "../services/StoreMigrations.js";
 import { initializeTelemetry, setOnboardingCompleteTag } from "../services/TelemetryService.js";
-import {
-  agentConnectivityService,
-  getServiceConnectivityRegistry,
-} from "../services/connectivity/index.js";
+import { getServiceConnectivityRegistry } from "../services/connectivity/index.js";
 import { notificationService } from "../services/NotificationService.js";
 import { getActionBreadcrumbService } from "../services/ActionBreadcrumbService.js";
 import { getPluginActionAuditService } from "../services/PluginActionAuditService.js";
@@ -541,18 +538,10 @@ export async function initGlobalServices(
   // module load; probing starts in activate() and stops on deactivation), so
   // a disabled plugin issues no GitHub network and holds no token state.
 
-  // Background agent provider reachability probes (Claude, Gemini, Codex)
-  // and the registry that aggregates GitHub, agents, and MCP into a single
+  // The registry that aggregates GitHub token health and MCP into a single
   // per-service connectivity snapshot for renderers. Registry must register
   // before mcp-server so it wires onStatusChange before MCP's first event —
   // preserved by the group split (mcp-server drains in the heavy group 3).
-  registerDeferredTask({
-    name: "agent-connectivity",
-    run: () => {
-      agentConnectivityService.start();
-    },
-  });
-
   registerDeferredTask({
     name: "service-connectivity-registry",
     run: () => {

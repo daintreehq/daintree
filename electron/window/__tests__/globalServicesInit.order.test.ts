@@ -103,7 +103,6 @@ vi.mock("../../services/TelemetryService.js", () => ({
 }));
 
 vi.mock("../../services/connectivity/index.js", () => ({
-  agentConnectivityService: { start: vi.fn(), dispose: vi.fn() },
   getServiceConnectivityRegistry: () => ({ start: vi.fn(), dispose: vi.fn() }),
 }));
 
@@ -477,7 +476,6 @@ describe("initGlobalServices task ordering", () => {
       "disk-space-monitor",
       "event-loop-lag-monitor",
       "app-metrics-monitor",
-      "agent-connectivity",
       "service-connectivity-registry",
       "periodic-cleanup",
     ];

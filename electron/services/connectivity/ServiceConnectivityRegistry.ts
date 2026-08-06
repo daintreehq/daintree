@@ -8,11 +8,6 @@ import { CONNECTIVITY_SERVICE_KEYS } from "../../../shared/types/ipc/connectivit
 import type { ForgeTokenHealthState } from "../../../shared/types/forge.js";
 import { logWarn } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import {
-  agentConnectivityService as defaultAgentConnectivityService,
-  type AgentConnectivityChange,
-  type AgentConnectivityProvider,
-} from "./AgentConnectivityService.js";
 
 interface GitHubHealthLike {
   getState(): ForgeTokenHealthState;
@@ -24,35 +19,17 @@ interface McpServerLike {
   onStatusChange(listener: (running: boolean) => void): () => void;
 }
 
-interface AgentConnectivityLike {
-  getProviderState(provider: AgentConnectivityProvider): {
-    status: ServiceConnectivityStatus;
-    checkedAt: number;
-  };
-  onStateChange(listener: (change: AgentConnectivityChange) => void): () => void;
-}
-
 type SnapshotChangeListener = (payload: ServiceConnectivityPayload) => void;
 type RecoveryNotifier = (serviceKey: ConnectivityServiceKey, label: string) => void;
 
-const PROVIDER_TO_KEY: Record<AgentConnectivityProvider, ConnectivityServiceKey> = {
-  claude: "agent:claude",
-  gemini: "agent:gemini",
-  codex: "agent:codex",
-};
-
 const SERVICE_LABELS: Record<ConnectivityServiceKey, string> = {
   github: "GitHub",
-  "agent:claude": "Claude",
-  "agent:gemini": "Gemini",
-  "agent:codex": "Codex",
   mcp: "MCP server",
 };
 
 export interface ServiceConnectivityRegistryOptions {
   gitHubHealth: GitHubHealthLike;
   mcpServer: McpServerLike;
-  agentConnectivity?: AgentConnectivityLike;
   /**
    * Called when a service flips from `unreachable` to `reachable`. Receives the
    * service key and a human-readable label. Optional — when omitted, recovery
@@ -67,12 +44,15 @@ export interface ServiceConnectivityRegistryOptions {
  * Aggregates connectivity health from multiple underlying services into one
  * snapshot keyed by `ConnectivityServiceKey`.
  *
- * - `agent:claude|gemini|codex` is sourced from `AgentConnectivityService`.
  * - `github` is derived from the GitHub forge provider's `healthEvents`
  *   capability. A 401 (token revoked) maps to `unknown` here, not
  *   `unreachable` — token validity is a separate concern surfaced via the
  *   forge token-health push channel.
  * - `mcp` is derived synchronously from `mcpServerService.isRunning`.
+ *
+ * Both sources are byproducts of work the app already does. Nothing here
+ * issues traffic purely to observe a service, which is why agent provider
+ * APIs are absent — see the note in `shared/types/ipc/connectivity.ts`.
  *
  * The renderer subscribes to a single broadcast channel and reads a fixed-shape
  * map. Dev-server connectivity is intentionally excluded — it's per-session and
@@ -84,7 +64,6 @@ export class ServiceConnectivityRegistry {
   private readonly cleanups: Array<() => void> = [];
   private readonly gitHubHealth: GitHubHealthLike;
   private readonly mcpServer: McpServerLike;
-  private readonly agentConnectivity: AgentConnectivityLike;
   private readonly onRecovery: RecoveryNotifier | null;
   private readonly now: () => number;
   private started = false;
@@ -92,7 +71,6 @@ export class ServiceConnectivityRegistry {
   constructor(options: ServiceConnectivityRegistryOptions) {
     this.gitHubHealth = options.gitHubHealth;
     this.mcpServer = options.mcpServer;
-    this.agentConnectivity = options.agentConnectivity ?? defaultAgentConnectivityService;
     this.onRecovery = options.onRecovery ?? null;
     this.now = options.now ?? (() => Date.now());
 
@@ -141,20 +119,11 @@ export class ServiceConnectivityRegistry {
     if (this.mcpServer.isRunning) {
       this.applyMcpState(true, { silent: true });
     }
-    for (const provider of ["claude", "gemini", "codex"] as const) {
-      const state = this.agentConnectivity.getProviderState(provider);
-      this.applyAgentState(provider, state, { silent: true });
-    }
 
     this.cleanups.push(
       this.gitHubHealth.onStateChange((payload) => this.applyGitHubState(payload))
     );
     this.cleanups.push(this.mcpServer.onStatusChange((running) => this.applyMcpState(running)));
-    this.cleanups.push(
-      this.agentConnectivity.onStateChange((change) =>
-        this.applyAgentState(change.provider, change)
-      )
-    );
   }
 
   dispose(): void {
@@ -192,15 +161,6 @@ export class ServiceConnectivityRegistry {
     // MCP has no native checkedAt — use now() since this is a real transition
     // observation (silent seeding only calls us when running === true).
     this.update("mcp", status, this.now(), options);
-  }
-
-  private applyAgentState(
-    provider: AgentConnectivityProvider,
-    state: { status: ServiceConnectivityStatus; checkedAt: number },
-    options: { silent?: boolean } = {}
-  ): void {
-    const key = PROVIDER_TO_KEY[provider];
-    this.update(key, state.status, state.checkedAt, options);
   }
 
   private update(

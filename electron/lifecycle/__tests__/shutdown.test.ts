@@ -168,10 +168,8 @@ vi.mock("../../services/SystemSleepService.js", () => ({
   getSystemSleepService: vi.fn(() => systemSleepMock),
 }));
 
-const agentConnectivityMock = vi.hoisted(() => ({ dispose: vi.fn() }));
 const connectivityRegistryMock = vi.hoisted(() => ({ dispose: vi.fn() }));
 vi.mock("../../services/connectivity/index.js", () => ({
-  agentConnectivityService: agentConnectivityMock,
   getServiceConnectivityRegistry: vi.fn(() => connectivityRegistryMock),
 }));
 
@@ -842,7 +840,7 @@ describe("registerShutdownHandler", () => {
   // reactivation could race the async teardown. They now live in `before-quit`
   // so they are disposed exactly once at app quit time.
   describe("global service disposal moved from last-window-close (issue #8604)", () => {
-    it("disposes hibernation, idle-terminal, system-sleep, and connectivity services", async () => {
+    it("disposes hibernation, idle-terminal, system-sleep, and the connectivity registry", async () => {
       const { beforeQuitCb } = await setup({});
       await beforeQuitCb(makeEvent());
 
@@ -853,7 +851,6 @@ describe("registerShutdownHandler", () => {
       expect(hibernationMock.stop).toHaveBeenCalledTimes(1);
       expect(idleTerminalMock.stop).toHaveBeenCalledTimes(1);
       expect(systemSleepMock.dispose).toHaveBeenCalledTimes(1);
-      expect(agentConnectivityMock.dispose).toHaveBeenCalledTimes(1);
       expect(connectivityRegistryMock.dispose).toHaveBeenCalledTimes(1);
       expect(notificationServiceMock.dispose).toHaveBeenCalledTimes(1);
     });
