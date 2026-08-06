@@ -60,6 +60,7 @@
   --color-border-strong: var(--theme-border-strong);
   --color-border-divider: var(--theme-border-divider);
   --color-border-interactive: var(--theme-border-interactive);
+  --color-selection-outline: var(--theme-selection-outline);
   --color-accent-primary: var(--theme-accent-primary);
   --color-accent-hover: var(--theme-accent-hover);
   --color-accent-foreground: var(--theme-accent-foreground);
@@ -2583,6 +2584,23 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   [data-highlighted] {
     outline: 2px solid Highlight;
     outline-offset: -2px;
+  }
+
+  /* The palette selected row is a raised fill plus a neutral outline, and the
+     fill is discarded here, so it redraws from the system selected-item pair.
+     Scoped to the `.palette-row` marker rather than [role="option"], which the
+     file pane, the settings selectors and the agent/forge dropdowns also use.
+     The descendant rule is load-bearing: children that set their own colour are
+     force-mapped to CanvasText independently of the row, which lands unreadable
+     on a SelectedItem fill. */
+  .palette-row[aria-selected="true"] {
+    background-color: SelectedItem;
+    border-color: SelectedItem;
+  }
+
+  .palette-row[aria-selected="true"],
+  .palette-row[aria-selected="true"] * {
+    color: SelectedItemText;
   }
 
   /* Macro-focus regions use a Tailwind ring (box-shadow) which is removed here.

@@ -197,6 +197,16 @@ export function createDaintreeTokens(
     "border-strong": tokens["border-strong"] ?? withAlpha(borderInk, dark ? 0.14 : 0.18),
     "border-divider": tokens["border-divider"] ?? withAlpha(borderInk, dark ? 0.05 : 0.085),
     "border-interactive": tokens["border-interactive"] ?? withAlpha(borderInk, dark ? 0.2 : 0.2),
+    // Driven from `text-primary`, not `borderInk`: this is the one border that
+    // must hit a fixed ratio, and `text-primary` is the only ink already floored
+    // against every surface, so a fraction of it lands predictably in all 14
+    // themes. Light needs the heavier alpha for the same reason the light border
+    // ladder is doubled — the eye's luminance discrimination is compressed near
+    // white, and the outline sits on the raised fill rather than the surface.
+    // Both values are enforced at 3:1 by `getThemeContrastWarnings`; raising the
+    // fill or retuning `text-primary` will trip that rather than fail silently.
+    "selection-outline":
+      tokens["selection-outline"] ?? withAlpha(tokens["text-primary"], dark ? 0.42 : 0.53),
     "accent-foreground": tokens["accent-foreground"] ?? tokens["text-inverse"],
     // RC-4 (engine slice): on light, brighten the accent on hover (mix toward white)
     // so it advances on interaction instead of darkening into the canvas.

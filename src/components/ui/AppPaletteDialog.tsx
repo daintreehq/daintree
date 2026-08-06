@@ -590,14 +590,13 @@ function DefaultKeyboardHints() {
 // `surface-input` fill. Alpha-based, so it reads the same over a dialog and
 // over the dock launcher's popover.
 //
-// The focus lift that pairs with it is accent at /40, the same strength every
-// focus border in the app now carries — this input used to be the one holdout,
-// drawn neutral on the theory that the selection rail should own the region's
-// only accent, which just made the focused element the dimmest thing on the
-// surface. /40 also matches `PALETTE_ROW_CLASS`'s selected outline, so the
-// focused field and the selected row render the same green; change them
-// together. Tailwind needs the variants written out at each use site, so they
-// live inline below.
+// The focus lift that pairs with it draws `selection-outline`, the same token
+// `PALETTE_ROW_CLASS` uses for the selected row, with the ring at half strength
+// so the field reads as the quieter half of one treatment rather than a second
+// colour; change them together. Neutral rather than accent (#11686): the row,
+// its old rail and this field were three accent signals in one focus region.
+// Tailwind needs the variants written out at each use site, so they live inline
+// below.
 const PALETTE_INPUT_SURFACE =
   "bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)]";
 
@@ -624,8 +623,8 @@ AppPaletteDialog.Input = function AppPaletteInput({
         className={cn(
           "flex w-full items-center gap-1.5 pl-2 pr-3 py-1.5",
           PALETTE_INPUT_SURFACE,
-          // Accent focus — see `PALETTE_INPUT_SURFACE`.
-          "focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20"
+          // Neutral focus — see `PALETTE_INPUT_SURFACE`.
+          "focus-within:border-selection-outline focus-within:ring-1 focus-within:ring-selection-outline/50"
         )}
       >
         {inputPrefix}
@@ -651,8 +650,8 @@ AppPaletteDialog.Input = function AppPaletteInput({
         "w-full px-3 py-2 text-sm",
         PALETTE_INPUT_SURFACE,
         "text-daintree-text placeholder:text-text-placeholder",
-        // Accent focus — see `PALETTE_INPUT_SURFACE`.
-        "focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/20",
+        // Neutral focus — see `PALETTE_INPUT_SURFACE`.
+        "focus:outline-hidden focus:border-selection-outline focus:ring-1 focus:ring-selection-outline/50",
         className
       )}
       {...props}

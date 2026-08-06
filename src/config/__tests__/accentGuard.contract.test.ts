@@ -124,17 +124,6 @@ const DURABLE_ALLOWLIST = new Set([
   // Current worktree card left-edge accent bar (single primary anchor per active focus region)
   "src/components/Worktree/WorktreeCard.tsx",
 
-  // The one definition of the palette selected-row treatment: the left-edge
-  // accent stripe plus the half-strength accent outline that carries the same
-  // anchor around the row (single primary anchor per active focus region).
-  // PilotView, ProjectSwitcherPalette, ResumeSessionsPalette, QuickSwitcherItem,
-  // ActionPaletteItem, DockLaunchButton, PanelPalette, PluginQuickPickDialog,
-  // PromptHistoryPalette, WorktreePalette and QuickCreatePalette all take it
-  // from here rather than spelling it out themselves, which is why none of them
-  // needs a bucket entry for the row treatment. QuickCreatePalette still has one
-  // below, but for an unrelated `checked:bg-daintree-accent` checkbox.
-  "src/components/ui/paletteRowStyles.ts",
-
   // PluginManagerView selected-row left-edge accent stripe in the master-detail
   // list, plus the detail subtab active-tab underline (single primary anchor per
   // active focus region)

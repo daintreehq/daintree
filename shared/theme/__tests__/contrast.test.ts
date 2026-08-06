@@ -379,6 +379,64 @@ describe("getThemeContrastWarnings", () => {
     }
   });
 
+  it("produces zero palette selection-outline warnings across all built-in themes", () => {
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      const warnings = getThemeContrastWarnings(scheme);
+      const selectionFailures = warnings.filter((w) => w.message.includes("selection-outline"));
+      expect(
+        selectionFailures,
+        `${scheme.id}: selection-outline is the palette row's only non-text indicator and must hit 3:1`
+      ).toHaveLength(0);
+    }
+  });
+
+  it("fails an outline that clears the surrounding surface but not the row fill it encloses", () => {
+    // The row lifts towards the outline on dark, so the surface pair is the
+    // permissive one — an outline can pass it while vanishing into the fill it
+    // actually borders. #5A5A5A is 3.04:1 on black and 1.52:1 on #767676.
+    const scheme = makeScheme({
+      "surface-sidebar": "#000000" as AppColorSchemeTokens["surface-sidebar"],
+      "overlay-raised": "#767676" as AppColorSchemeTokens["overlay-raised"],
+      "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    expect(
+      warnings.filter((w) => w.message.includes("selection-outline against the selected row fill"))
+    ).toHaveLength(1);
+    expect(
+      warnings.filter((w) => w.message.includes("selection-outline against the surrounding"))
+    ).toHaveLength(0);
+  });
+
+  it("composites an rgba outline over the row fill rather than reading its raw alpha", () => {
+    // At face value #FFFFFF would be 21:1 on this fill; at 10% alpha the pixel
+    // that actually renders is ~#2C2C2C, which is nowhere near 3:1.
+    const scheme = makeScheme({
+      "surface-sidebar": "#141414" as AppColorSchemeTokens["surface-sidebar"],
+      "overlay-raised": "#1E1E1E" as AppColorSchemeTokens["overlay-raised"],
+      "selection-outline": "rgba(255, 255, 255, 0.1)" as AppColorSchemeTokens["selection-outline"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    expect(
+      warnings.filter((w) => w.message.includes("selection-outline against the selected row fill"))
+    ).toHaveLength(1);
+  });
+
+  it("reports the palette selection check as unevaluable when the outline is not hex or rgba", () => {
+    const scheme = makeScheme({
+      "selection-outline":
+        "color-mix(in oklab, #ffffff 42%, transparent)" as AppColorSchemeTokens["selection-outline"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    const unevaluable = warnings.find(
+      (w) =>
+        w.kind === "unevaluable" &&
+        w.message.includes("Cannot evaluate palette selection contrast") &&
+        w.message.includes("selection-outline")
+    );
+    expect(unevaluable).toBeDefined();
+  });
+
   it("emits contrast warning when search-highlight-background rgba is composited over a surface", () => {
     const scheme = makeScheme({
       "search-highlight-text": "#cccccc" as AppColorSchemeTokens["search-highlight-text"],

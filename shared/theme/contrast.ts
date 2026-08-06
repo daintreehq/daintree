@@ -566,6 +566,10 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
     }
   }
 
+  // Palette selected-row indicator (#11686) — the outline is the whole non-text
+  // signal there, so it carries 1.4.11 on its own.
+  warnings.push(...getPaletteSelectionWarnings(scheme));
+
   // Terminal ANSI / syntax legibility and distinctness — OKLab-based because
   // the terminal background is always dark and WCAG ratios are unreliable there.
   warnings.push(...getTerminalSyntaxWarnings(scheme));
@@ -581,6 +585,86 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
 // literal here could silently drift from the pair everything else is derived from.
 const ACCENT_MIN_CONTRAST = ACCENT_CONTRAST_PAIR.minimum;
 const ACCENT_OUTLINE_MIN_CONTRAST = 3.0;
+
+// What sits behind an unselected palette row. `.surface-overlay` (index.css)
+// resolves to the sidebar on dark and to the elevated panel on light, and rows
+// are transparent until selected, so this is also the unselected row's colour.
+// Deliberately the solid token rather than the dark material's ~94% composite
+// over the canvas: the canvas is the darker plane, so compositing pushes the
+// surface and the fill down together and *raises* the outline's ratio. The
+// solid surface is the conservative end of the range.
+const PALETTE_SURFACE_BY_TYPE = {
+  dark: "surface-sidebar",
+  light: "surface-panel-elevated",
+} as const satisfies Record<AppColorScheme["type"], AppThemeTokenKey>;
+
+const SELECTION_OUTLINE_MIN_CONTRAST = 3.0;
+
+// The pixel a token actually paints when it lands on `backdrop`. Tokens reach us
+// either as an opaque hex or as an `rgba()` wash; anything else (a `color-mix()`
+// from a partially-specified import) is not evaluable by this math, and says so
+// rather than guessing.
+function resolveOverBackdrop(value: string, backdrop: string): string | null {
+  if (isHexColor(value)) return value;
+  const rgba = parseRgba(value);
+  if (!rgba) return null;
+  return blendOverBackground(rgba.hex, backdrop, rgba.opacity);
+}
+
+// WCAG 1.4.11 for the palette selected row. The raised fill clears barely
+// 1.1-1.2:1 against the surface in every built-in theme, so it cannot be the
+// indicator; `selection-outline` is, and it has to hold 3:1 against BOTH
+// neighbours it touches. The fill is the binding one — on dark the row lifts
+// *towards* the outline, so the pair that looks safe against the surrounding
+// surface can still fail against the row it encloses.
+function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+  const surfaceKey = PALETTE_SURFACE_BY_TYPE[scheme.type];
+  const surface = scheme.tokens[surfaceKey];
+  const outlineToken = scheme.tokens["selection-outline"];
+  const fillToken = scheme.tokens["overlay-raised"];
+
+  if (!isHexColor(surface)) {
+    warnings.push({
+      kind: "unevaluable",
+      message: `Cannot evaluate palette selection contrast: ${surfaceKey}="${surface}" is not a hex color`,
+    });
+    return warnings;
+  }
+
+  const fill = resolveOverBackdrop(fillToken, surface);
+  if (fill === null) {
+    warnings.push({
+      kind: "unevaluable",
+      message: `Cannot evaluate palette selection contrast: overlay-raised="${fillToken}" is neither hex nor rgba()`,
+    });
+    return warnings;
+  }
+
+  const outline = resolveOverBackdrop(outlineToken, fill);
+  if (outline === null) {
+    warnings.push({
+      kind: "unevaluable",
+      message: `Cannot evaluate palette selection contrast: selection-outline="${outlineToken}" is neither hex nor rgba()`,
+    });
+    return warnings;
+  }
+
+  for (const [label, against] of [
+    ["the selected row fill", fill],
+    [`the surrounding ${surfaceKey}`, surface],
+  ] as const) {
+    const ratio = contrastRatio(outline, against);
+    if (ratio < SELECTION_OUTLINE_MIN_CONTRAST) {
+      warnings.push({
+        kind: "low-contrast",
+        message: `selection-outline against ${label} is ${ratio.toFixed(2)}:1; target is ${SELECTION_OUTLINE_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
+      });
+    }
+  }
+
+  return warnings;
+}
 
 // Structured result describing how an accent override fails its contrast gate, so
 // the theme picker can render a specific, actionable warning instead of a generic

@@ -41,10 +41,10 @@ function ThemeListItem({
       role="option"
       aria-selected={isSelected}
       className={cn(
-        // Was a hand-rolled copy of the shared row: a visible resting outline,
-        // a JS-ternary selected state and a rail that popped instead of fading.
-        // `PALETTE_ROW_CLASS` is the same visual driven off `aria-selected`, so
-        // this row now matches every other palette in the family.
+        // Was a hand-rolled copy of the shared row: a visible resting outline
+        // and a JS-ternary selected state. `PALETTE_ROW_CLASS` is the same
+        // visual driven off `aria-selected`, so this row now matches every
+        // other palette in the family.
         PALETTE_ROW_CLASS,
         "group w-full text-left px-3 py-2 rounded-[var(--radius-md)] flex items-center gap-3",
         "hover:bg-overlay-subtle"
