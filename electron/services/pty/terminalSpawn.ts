@@ -18,6 +18,7 @@ import {
 } from "../PtyPool.js";
 import { markHostPerformance } from "../../utils/hostPerformance.js";
 import { PERF_MARKS } from "../../../shared/perf/marks.js";
+import { getAgentCompileCacheDir } from "../agentCompileCachePaths.js";
 
 // Agent CLIs that ship as Node binaries and benefit from V8 bytecode
 // caching across launches. Codex is a Rust binary and would silently
@@ -118,6 +119,8 @@ export function buildTerminalEnv(
   // version + V8 flags so a single dir is safe across runtime upgrades.
   // Only set when DAINTREE_USER_DATA is available (production) and the
   // caller has not provided an explicit override via intentionalEnv.
+  // Node never evicts what it writes here — `AgentCompileCacheCleanupService`
+  // in Main bounds the tree (#11699).
   const userData = process.env.DAINTREE_USER_DATA;
   const launchAgentId = options.launchAgentId;
   if (
@@ -126,7 +129,8 @@ export function buildTerminalEnv(
     NODE_COMPILE_CACHE_AGENTS.has(launchAgentId) &&
     mergedEnv.NODE_COMPILE_CACHE === undefined
   ) {
-    mergedEnv.NODE_COMPILE_CACHE = path.join(userData, "agent-compile-cache", launchAgentId);
+    const cacheDir = getAgentCompileCacheDir(userData, launchAgentId);
+    if (cacheDir) mergedEnv.NODE_COMPILE_CACHE = cacheDir;
   }
 
   return ensureUtf8Locale(mergedEnv);

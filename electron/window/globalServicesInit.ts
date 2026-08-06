@@ -42,6 +42,10 @@ import {
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
 import { runScratchCleanup } from "../services/ScratchCleanupService.js";
+import {
+  initializeAgentCompileCacheCleanup,
+  requestAgentCompileCacheCleanup,
+} from "../services/AgentCompileCacheCleanupService.js";
 import { runAssistantScratchCleanup } from "../services/AssistantScratchService.js";
 import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
 import {
@@ -365,6 +369,13 @@ export async function initGlobalServices(
               });
               runAssistantScratchCleanup().catch((err) => {
                 logError("[DiskSpaceMonitor] assistant scratch cleanup threw", err);
+              });
+              // The agent compile cache is itself a plausible cause of the
+              // pressure — it reached 9.3 GB unbounded in #11699 — so it is
+              // worth reclaiming on the critical edge rather than waiting for
+              // the next idle tick.
+              requestAgentCompileCacheCleanup().catch((err) => {
+                logError("[DiskSpaceMonitor] agent compile cache cleanup threw", err);
               });
               try {
                 const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
@@ -1113,6 +1124,13 @@ export async function initGlobalServices(
   // `child-process-gone` listener BEFORE the GPU process spawns (first
   // window creation), or startup-window GPU crashes are silently dropped.
   // It stays as an eager pre-window call in main.ts.
+  registerDeferredTask({
+    name: "agent-compile-cache-cleanup",
+    // Fire-and-forget: the first sweep on an affected install may delete
+    // gigabytes, which must not serialize the rest of the deferred queue.
+    run: () => initializeAgentCompileCacheCleanup(),
+  });
+
   registerDeferredTask({
     name: "trashed-pid-cleanup",
     run: async () => {
