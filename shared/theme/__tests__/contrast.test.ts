@@ -412,10 +412,11 @@ describe("getThemeContrastWarnings", () => {
       "overlay-raised": "#767676" as AppColorSchemeTokens["overlay-raised"],
       "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
     });
-    const failure = getThemeContrastWarnings(scheme).find((w) =>
-      w.message.includes("selection-outline against")
-    );
-    expect(failure?.message).toContain("the selected row fill");
+    const messages = getThemeContrastWarnings(scheme)
+      .filter((w) => w.message.includes("selection-outline against"))
+      .map((w) => w.message);
+    expect(messages.some((m) => m.includes("the selected row fill"))).toBe(true);
+    expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(false);
   });
 
   it("scores the dark palette surface as translucent, not as the solid sidebar", () => {
@@ -427,34 +428,34 @@ describe("getThemeContrastWarnings", () => {
       "overlay-raised": "#000000" as AppColorSchemeTokens["overlay-raised"],
       "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
     });
-    const failure = getThemeContrastWarnings(scheme).find((w) =>
-      w.message.includes("selection-outline against")
-    );
-    expect(failure?.message).toContain("the surrounding palette surface");
+    const messages = getThemeContrastWarnings(scheme)
+      .filter((w) => w.message.includes("selection-outline against"))
+      .map((w) => w.message);
+    expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(true);
   });
 
   it("composites an rgba outline over the row fill rather than reading its raw alpha", () => {
-    // At face value #FFFFFF would be 21:1 on this fill; at 10% alpha the pixel
-    // that actually renders is ~#2C2C2C, which is nowhere near 3:1.
+    // Opaque white would score 16.67:1 on this fill and sail through; at 10%
+    // alpha the pixel that actually renders is #353535, which is 1.36:1.
     const scheme = makeFlatDarkScheme({
       "overlay-raised": "#1E1E1E" as AppColorSchemeTokens["overlay-raised"],
       "selection-outline": "rgba(255, 255, 255, 0.1)" as AppColorSchemeTokens["selection-outline"],
     });
     const failures = getThemeContrastWarnings(scheme).filter((w) =>
-      w.message.includes("selection-outline against")
+      w.message.includes("selection-outline against the selected row fill")
     );
     expect(failures).toHaveLength(1);
   });
 
   it("composites an alpha-hex outline instead of reading it as opaque", () => {
-    // `#FFFFFF10` is 6% white. Treating the hex as opaque would score it 21:1
-    // and pass; the pixel that renders is ~#151515 on this fill.
+    // `#FFFFFF10` is 6% white. Read as opaque it would score 19.30:1 and pass;
+    // the pixel that renders is #1D1D1D on this fill.
     const scheme = makeFlatDarkScheme({
       "overlay-raised": "#0E0E0E" as AppColorSchemeTokens["overlay-raised"],
       "selection-outline": "#FFFFFF10" as AppColorSchemeTokens["selection-outline"],
     });
     const failures = getThemeContrastWarnings(scheme).filter((w) =>
-      w.message.includes("selection-outline against")
+      w.message.includes("selection-outline against the selected row fill")
     );
     expect(failures).toHaveLength(1);
   });

@@ -613,10 +613,14 @@ function resolvePaletteSurfaces(scheme: AppColorScheme): string[] | null {
   }
   const sidebar = scheme.tokens["surface-sidebar"];
   if (!isHexColor(sidebar)) return null;
-  const surfaces = DARK_PALETTE_BACKDROPS.map((key) => scheme.tokens[key])
-    .filter(isHexColor)
-    .map((backdrop) => blendOverBackground(sidebar, backdrop, DARK_PALETTE_SURFACE_OPACITY));
-  return surfaces.length > 0 ? surfaces : [sidebar];
+  // The solid sidebar stays in the running: performance mode and
+  // `prefers-contrast: more` both drop the material and render it opaque.
+  return [
+    sidebar,
+    ...DARK_PALETTE_BACKDROPS.map((key) => scheme.tokens[key])
+      .filter(isHexColor)
+      .map((backdrop) => blendOverBackground(sidebar, backdrop, DARK_PALETTE_SURFACE_OPACITY)),
+  ];
 }
 
 const SELECTION_OUTLINE_MIN_CONTRAST = 3.0;
@@ -640,7 +644,10 @@ function resolveOverBackdrop(value: string, backdrop: string): string | null {
 // Splits `#RGBA`/`#RRGGBBAA` into its opaque colour and alpha. Returns null for
 // the 3- and 6-digit forms, which are already opaque.
 function splitHexAlpha(hex: string): { hex: string; opacity: number } | null {
-  const body = hex.slice(1);
+  // `isHexColor` trims before validating, so a padded token reaches us intact —
+  // slicing without trimming would leave the alpha digits unrecognised and the
+  // colour would take the opaque path.
+  const body = hex.trim().slice(1);
   if (body.length === 4) {
     return {
       hex: `#${body.slice(0, 3)}`,
@@ -676,10 +683,12 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
     return warnings;
   }
 
-  // Report the worst surface only. Every candidate is the same surface under a
-  // different backdrop, so warning once per plane would be four spellings of one
-  // problem.
-  let worst: { ratio: number; label: string } | null = null;
+  // Collapse the backdrops but not the pairs: every candidate surface is the
+  // same surface behind a different plane, so warning per plane would be five
+  // spellings of one problem — but "invisible against the row" and "invisible
+  // against the surface" are separate faults, and reporting only the worse one
+  // would send an author to fix half the problem.
+  const worstByLabel = new Map<string, number>();
 
   for (const surface of surfaces) {
     const fill = resolveOverBackdrop(fillToken, surface);
@@ -705,15 +714,18 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
       ["the surrounding palette surface", surface],
     ] as const) {
       const ratio = contrastRatio(outline, against);
-      if (!worst || ratio < worst.ratio) worst = { ratio, label };
+      const seen = worstByLabel.get(label);
+      if (seen === undefined || ratio < seen) worstByLabel.set(label, ratio);
     }
   }
 
-  if (worst && worst.ratio < SELECTION_OUTLINE_MIN_CONTRAST) {
-    warnings.push({
-      kind: "low-contrast",
-      message: `selection-outline against ${worst.label} is ${worst.ratio.toFixed(2)}:1; target is ${SELECTION_OUTLINE_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
-    });
+  for (const [label, ratio] of worstByLabel) {
+    if (ratio < SELECTION_OUTLINE_MIN_CONTRAST) {
+      warnings.push({
+        kind: "low-contrast",
+        message: `selection-outline against ${label} is ${ratio.toFixed(2)}:1; target is ${SELECTION_OUTLINE_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
+      });
+    }
   }
 
   return warnings;
