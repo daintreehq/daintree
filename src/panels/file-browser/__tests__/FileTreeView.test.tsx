@@ -986,9 +986,8 @@ describe("FileTreeView cursor reveal", () => {
   it("leaves the view alone while folders above the cursor expand", () => {
     // #11684: expanding splices rows in above a stationary cursor, so its index
     // changes without the cursor having moved. Scrolling for that is what drags
-    // the list away from the folder the user just opened — and it compounds,
-    // because opening one big folder is what makes the tree long enough to
-    // scroll before the next folder is opened at all.
+    // the list away from the folder the user just opened, and each further
+    // expansion shifts the same cursor again.
     const { show } = renderCursor(COLLAPSED, "README.md");
     scrollIntoViewMock.mockClear();
 
