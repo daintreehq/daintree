@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { KBD_CLASS, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
@@ -14,9 +13,10 @@ import {
 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { ActionPaletteItem } from "./ActionPaletteItem";
-import type {
-  ActionPaletteItem as ActionPaletteItemType,
-  UseActionPaletteReturn,
+import {
+  RECENTLY_USED_SECTION_ID,
+  type ActionPaletteItem as ActionPaletteItemType,
+  type UseActionPaletteReturn,
 } from "@/hooks/useActionPalette";
 
 const SECTION_HEADER_CLASS =
@@ -117,7 +117,7 @@ type ActionPaletteProps = Pick<
   | "totalResults"
   | "selectedIndex"
   | "isStale"
-  | "pinnedCount"
+  | "sections"
   | "close"
   | "setQuery"
   | "setSelectedIndex"
@@ -137,7 +137,7 @@ export function ActionPalette({
   totalResults,
   selectedIndex,
   isStale,
-  pinnedCount,
+  sections,
   close,
   setQuery,
   setSelectedIndex,
@@ -169,7 +169,11 @@ export function ActionPalette({
   // sectioned listbox itself, keyed by `data-action-id` so the divider divs
   // don't throw off the offset.
   const sectionedListRef = useRef<HTMLDivElement>(null);
-  const showSections = !query.trim() && results.length > 0;
+  // Driven by the descriptors rather than by `query`, because filtering lags
+  // the input: the hook only publishes sections alongside the browse rows that
+  // produced them, so this can't sectionize a set of search results (or strip
+  // the headers off a browse list that is still on screen) mid-keystroke.
+  const showSections = sections.length > 0;
 
   useEffect(() => {
     if (!showSections) return;
@@ -182,7 +186,7 @@ export function ActionPalette({
   }, [showSections, selectedIndex, results]);
 
   const renderActionRow = useCallback(
-    (item: ActionPaletteItemType, index: number) => {
+    (item: ActionPaletteItemType, index: number, canHide: boolean) => {
       const isPinned = pinnedActionIds.includes(item.id);
       return (
         <div key={item.id} data-action-id={item.id}>
@@ -195,13 +199,16 @@ export function ActionPalette({
             isPinned={isPinned}
             onPin={pinAction}
             onUnpin={unpinAction}
-            onHide={hideAction}
+            onHide={canHide ? hideAction : undefined}
             footerHintId={footerHintId}
+            posInSet={index + 1}
+            setSize={results.length}
           />
         </div>
       );
     },
     [
+      results.length,
       pinnedActionIds,
       selectedIndex,
       handleSelect,
@@ -214,8 +221,6 @@ export function ActionPalette({
   );
 
   const renderSectionedBody = useCallback(() => {
-    const pinnedRows = results.slice(0, pinnedCount);
-    const recentRows = results.slice(pinnedCount);
     return (
       <>
         <div
@@ -227,47 +232,42 @@ export function ActionPalette({
           data-stale={isStale ? "true" : undefined}
           aria-busy={isStale || undefined}
         >
-          {pinnedRows.length > 0 && (
-            <>
-              {/*
-                Listbox children must be role="option" or role="group" per ARIA.
-                role="group" inside role="listbox" is broken under Chromium 146 +
-                VoiceOver (label is dropped, "empty group" is announced), so the
-                separator masquerades as a non-interactive option instead — AT
-                announces the section name, arrow keys still skip it because it
-                isn't in `results`.
-              */}
-              <div
-                className={SECTION_HEADER_CLASS}
-                role="option"
-                aria-disabled="true"
-                aria-selected="false"
-                aria-label="Favorites"
-              >
-                Favorites
-              </div>
-              {pinnedRows.map((item, idx) => renderActionRow(item, idx))}
-            </>
-          )}
-          {recentRows.length > 0 && (
-            <>
-              <div
-                className={SECTION_HEADER_CLASS}
-                role="option"
-                aria-disabled="true"
-                aria-selected="false"
-                aria-label="Recently used"
-              >
-                Recently used
-              </div>
-              {recentRows.map((item, idx) => renderActionRow(item, pinnedCount + idx))}
-            </>
-          )}
+          {sections.map((section) => {
+            const canHide = section.id === RECENTLY_USED_SECTION_ID;
+            return (
+              <Fragment key={section.id}>
+                {/*
+                  Listbox children must be role="option" or role="group" per ARIA.
+                  role="group" inside role="listbox" is broken under Chromium 146 +
+                  VoiceOver (label is dropped, "empty group" is announced), so the
+                  separator masquerades as a non-interactive option instead — AT
+                  announces the section name, arrow keys still skip it because it
+                  isn't in `results`.
+                */}
+                <div
+                  className={SECTION_HEADER_CLASS}
+                  role="option"
+                  aria-disabled="true"
+                  aria-selected="false"
+                  aria-label={section.label}
+                >
+                  {section.label}
+                </div>
+                {results
+                  .slice(section.start, section.start + section.count)
+                  // Rows are indexed against `results`, not the slice, so the
+                  // highlight and hover handlers keep addressing the flat list
+                  // the keyboard navigates.
+                  .map((item, idx) => renderActionRow(item, section.start + idx, canHide))}
+              </Fragment>
+            );
+          })}
         </div>
-        <PaletteOverflowNotice shown={results.length} total={totalResults} />
       </>
     );
-  }, [results, pinnedCount, isStale, totalResults, renderActionRow]);
+    // No overflow notice here: the browse rail is uncapped, so `shown` always
+    // equals `total`. The search path keeps its notice via SearchablePalette.
+  }, [results, sections, isStale, renderActionRow]);
 
   const [activeMode, setActiveMode] = useState<ActionPaletteMode | null>(null);
   // Hold the last rendered chip label across the exit animation so the chip
@@ -426,6 +426,11 @@ export function ActionPalette({
             onUnpin={unpinAction}
             onHide={hideAction}
             footerHintId={footerHintId}
+            // Redundant on this path — the search body has no headers to throw
+            // the count off — but stated anyway so a row announces the same way
+            // whichever body rendered it.
+            posInSet={index + 1}
+            setSize={results.length}
           />
         );
       }}

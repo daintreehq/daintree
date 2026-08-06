@@ -599,7 +599,7 @@ export function ModalHostLayer({
               totalResults={actionPalette.totalResults}
               selectedIndex={actionPalette.selectedIndex}
               isStale={actionPalette.isStale}
-              pinnedCount={actionPalette.pinnedCount}
+              sections={actionPalette.sections}
               close={actionPalette.close}
               setQuery={actionPalette.setQuery}
               setSelectedIndex={actionPalette.setSelectedIndex}

@@ -56,7 +56,10 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
 }));
 
 import { ActionPalette } from "./ActionPalette";
-import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
+import type {
+  ActionPaletteItem as ActionPaletteItemType,
+  UseActionPaletteReturn,
+} from "@/hooks/useActionPalette";
 import { usePaletteStore } from "@/store/paletteStore";
 
 function makeItem(id: string, title: string): ActionPaletteItemType {
@@ -87,7 +90,7 @@ const baseProps = {
   totalResults: 0,
   selectedIndex: 0,
   isStale: false,
-  pinnedCount: 0,
+  sections: [] as UseActionPaletteReturn["sections"],
   close: noop,
   setQuery: noop,
   setSelectedIndex: noop,
@@ -152,7 +155,9 @@ describe("ActionPalette", () => {
     expect(screen.queryByText("No actions yet")).toBeNull();
   });
 
-  it("shows the empty message when no MRU exists and no query is typed", () => {
+  it("shows the empty message when the registry exposes no eligible actions", () => {
+    // No longer the empty-MRU state — that now browses the whole inventory.
+    // This is the defensive case where there is genuinely nothing to list.
     render(<ActionPalette {...baseProps} />);
     expect(screen.getByText("No actions yet")).toBeTruthy();
   });
@@ -170,13 +175,32 @@ describe("ActionPalette", () => {
     expect(lastSearchablePaletteProps.current?.isFiltering).toBe(true);
   });
 
-  it("passes a renderBody callback when on the empty-query rail with results", () => {
+  it("passes a renderBody callback when the hook supplies sections", () => {
     render(
       <ActionPalette
         {...baseProps}
         query=""
         results={[makeItem("a.action", "Alpha")]}
         totalResults={1}
+        sections={[{ id: "category:general", label: "General", start: 0, count: 1 }]}
+      />
+    );
+
+    expect(typeof lastSearchablePaletteProps.current?.renderBody).toBe("function");
+  });
+
+  it("keeps the sectioned body while a typed query's results are still catching up", () => {
+    // Filtering lags the input, so the browse rows and their sections are both
+    // still on screen for a frame after the first keystroke. Gating on `query`
+    // would strip the headers off rows that still need them.
+    render(
+      <ActionPalette
+        {...baseProps}
+        query="al"
+        results={[makeItem("a.action", "Alpha")]}
+        totalResults={1}
+        sections={[{ id: "category:general", label: "General", start: 0, count: 1 }]}
+        isStale
       />
     );
 
@@ -368,27 +392,75 @@ describe("ActionPalette", () => {
   });
 
   describe("section header listbox separators", () => {
-    it("renders section headers as aria-disabled options so AT announces them", () => {
+    const THREE_SECTIONS = [
+      { id: "favorites", label: "Favorites", start: 0, count: 1 },
+      { id: "recently-used", label: "Recently used", start: 1, count: 1 },
+      { id: "category:worktree", label: "Worktrees", start: 2, count: 2 },
+    ];
+    const FOUR_ROWS = [
+      makeItem("pinned.alpha", "Alpha"),
+      makeItem("recent.beta", "Beta"),
+      makeItem("browse.gamma", "Gamma"),
+      makeItem("browse.delta", "Delta"),
+    ];
+
+    function renderSectionedBody(props: Partial<typeof baseProps> = {}) {
       render(
         <ActionPalette
           {...baseProps}
-          pinnedCount={1}
-          results={[makeItem("pinned.alpha", "Alpha"), makeItem("recent.beta", "Beta")]}
-          totalResults={2}
+          results={FOUR_ROWS}
+          totalResults={FOUR_ROWS.length}
+          sections={THREE_SECTIONS}
+          {...props}
         />
       );
       const renderBody = lastSearchablePaletteProps.current?.renderBody as
         (() => React.ReactNode) | undefined;
       expect(typeof renderBody).toBe("function");
-      const { container } = render(<>{renderBody!()}</>);
+      return render(<>{renderBody!()}</>).container;
+    }
 
-      const favorites = container.querySelector('[aria-label="Favorites"]');
-      const recent = container.querySelector('[aria-label="Recently used"]');
-      expect(favorites?.getAttribute("role")).toBe("option");
-      expect(favorites?.getAttribute("aria-disabled")).toBe("true");
-      expect(favorites?.getAttribute("aria-selected")).toBe("false");
-      expect(recent?.getAttribute("role")).toBe("option");
-      expect(recent?.getAttribute("aria-disabled")).toBe("true");
+    it("renders every section header as an aria-disabled option so AT announces them", () => {
+      const container = renderSectionedBody();
+
+      for (const { label } of THREE_SECTIONS) {
+        const header = container.querySelector(`[aria-label="${label}"]`);
+        expect(header?.getAttribute("role")).toBe("option");
+        expect(header?.getAttribute("aria-disabled")).toBe("true");
+        expect(header?.getAttribute("aria-selected")).toBe("false");
+      }
+    });
+
+    it("never nests a role=group inside the listbox", () => {
+      // role="group" inside role="listbox" drops its label under Chromium +
+      // VoiceOver, which is why the headers masquerade as inert options.
+      const container = renderSectionedBody();
+      expect(container.querySelectorAll('[role="group"]').length).toBe(0);
+    });
+
+    it("keeps headers out of the navigable rows", () => {
+      const container = renderSectionedBody();
+      const navigable = container.querySelectorAll('[role="option"]:not([aria-disabled="true"])');
+      // Arrow keys walk `results`; the three dividers must not join them.
+      expect(navigable.length).toBe(FOUR_ROWS.length);
+    });
+
+    it("indexes rows against the flat result list, not each section's slice", () => {
+      // The last row is selected, so the highlight must follow its global index
+      // rather than its offset within the final section.
+      const container = renderSectionedBody({ selectedIndex: FOUR_ROWS.length - 1 });
+      const selected = container.querySelectorAll('[aria-selected="true"]');
+      expect(selected.length).toBe(1);
+      expect(selected[0]?.getAttribute("id")).toBe(`action-option-${FOUR_ROWS[3]!.id}`);
+    });
+
+    it("offers the hide control only on Recently used rows", () => {
+      const container = renderSectionedBody();
+      const hideButtons = container.querySelectorAll('[aria-label^="Hide "]');
+      // "Hide from Recently used" against a category row would promise an
+      // eviction that rail can't perform.
+      expect(hideButtons.length).toBe(1);
+      expect(hideButtons[0]?.getAttribute("aria-label")).toContain("Beta");
     });
   });
 });
