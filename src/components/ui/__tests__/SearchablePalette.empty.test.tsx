@@ -64,6 +64,7 @@ function renderEmpty({
       renderItem={(item) => <div key={item.id}>{item.label}</div>}
       label="Test"
       ariaLabel="Test palette"
+      tier="command"
       emptyShortcut={emptyShortcut}
       emptyEntityName={emptyEntityName}
       emptyContent={emptyContent}

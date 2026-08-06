@@ -70,6 +70,7 @@ function renderPalette(initial: { query: string; results: Item[]; isFiltering: b
     renderItem: (item: Item) => <div key={item.id}>{item.id}</div>,
     label: "Test",
     ariaLabel: "Test palette",
+    tier: "command" as const,
     isFiltering: initial.isFiltering,
   };
   return render(<SearchablePalette<Item> {...props} />);
@@ -104,6 +105,7 @@ describe("SearchablePalette filter-result live announcement", () => {
         renderItem={(item) => <div key={item.id}>{item.id}</div>}
         label="Test"
         ariaLabel="Test palette"
+        tier="command"
         isFiltering={false}
       />
     );
@@ -133,6 +135,7 @@ describe("SearchablePalette filter-result live announcement", () => {
         renderItem={(item) => <div key={item.id}>{item.id}</div>}
         label="Test"
         ariaLabel="Test palette"
+        tier="command"
         isFiltering={false}
       />
     );
@@ -160,6 +163,7 @@ describe("SearchablePalette filter-result live announcement", () => {
         renderItem={(item) => <div key={item.id}>{item.id}</div>}
         label="Test"
         ariaLabel="Test palette"
+        tier="command"
         isFiltering={false}
       />
     );
@@ -187,6 +191,7 @@ describe("SearchablePalette filter-result live announcement", () => {
         renderItem={(item) => <div key={item.id}>{item.id}</div>}
         label="Test"
         ariaLabel="Test palette"
+        tier="command"
         isFiltering={isFiltering}
       />
     );

@@ -41,19 +41,38 @@ import {
 export { KBD_CLASS };
 
 /**
- * One width for the whole palette family. Palettes are opened from the same
- * keyboard reflex and often in sequence, so a per-palette width reads as the
- * surface jumping around rather than as a deliberate size. Popover-hosted
- * palettes take this too, which is what keeps the project switcher identical
- * whether it opens as a dropdown or as a modal.
+ * How much box a palette earns. A launcher hanging off a toolbar button and a
+ * global command palette are not the same kind of surface, and one width in
+ * between served neither: anchored menus sit around 320px, centred command
+ * palettes around 600px.
+ *
+ * Two tiers, not a free width per palette — palettes open from the same
+ * keyboard reflex and often in sequence, so unconstrained per-surface sizing
+ * reads as the box jumping around rather than as a deliberate size.
  */
-export const PALETTE_SURFACE_WIDTH = "w-[484px] max-w-[calc(100vw-2rem)]";
+export type PaletteSurfaceTier = "anchored" | "command";
+
+/**
+ * Tailwind needs each class present in source for the JIT compiler, so these
+ * are whole literal strings — never build one by interpolation. Indexing the
+ * map at runtime is fine; the scanner only reads the text.
+ */
+export const PALETTE_SURFACE_WIDTHS: Record<PaletteSurfaceTier, string> = {
+  anchored: "w-[352px] max-w-[calc(100vw-2rem)]",
+  command: "w-[608px] max-w-[calc(100vw-2rem)]",
+};
 
 export interface AppPaletteDialogProps {
   isOpen: boolean;
   onClose: () => void;
   children: React.ReactNode;
   ariaLabel: string;
+  /**
+   * Which tier of surface this is. Required and never inferred: a picker's
+   * weight is an authoring decision, and a default would quietly hand every
+   * new launcher the command palette's box.
+   */
+  tier: PaletteSurfaceTier;
   /**
    * Extra classes for the palette box — sizing and layout only. The surface
    * itself is NOT overridable from here: `surface-overlay` is a handwritten
@@ -69,6 +88,7 @@ export function AppPaletteDialog({
   onClose,
   children,
   ariaLabel,
+  tier,
   className,
 }: AppPaletteDialogProps) {
   useEscapeStack(isOpen, onClose);
@@ -279,7 +299,7 @@ export function AppPaletteDialog({
           // `shadow-modal` sits one step above the popovers' `shadow-overlay`:
           // same inset top lip, deeper drop, because this one floats over a
           // scrim.
-          PALETTE_SURFACE_WIDTH,
+          PALETTE_SURFACE_WIDTHS[tier],
           "mx-4 surface-overlay shadow-modal rounded-[var(--radius-lg)] overflow-hidden origin-top",
           // Tailwind v4 scale-* emits the individual `scale` property, which
           // `transform` in a transition list does NOT cover — the palette
@@ -501,6 +521,13 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
   children,
   className,
 }: AppPaletteFooterProps) {
+  // No content, no band. A footer earns its border by naming what Enter does
+  // for the current selection; `↑↓ navigate` and `Esc close` are conventions
+  // the surface does not need to restate, so there is no default to fall back
+  // to. Returning null rather than an empty wrapper matters because callers
+  // render <Footer> unconditionally and pass content that resolves per
+  // selection — an empty div would still draw the top border and padding.
+  if (children == null || children === false) return null;
   return (
     <div
       className={cn(
@@ -508,7 +535,7 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
         className
       )}
     >
-      {children ?? <DefaultKeyboardHints />}
+      {children}
     </div>
   );
 };
@@ -525,8 +552,12 @@ export interface PaletteFooterHintsProps {
    * Secondary chips rendered on the trailing edge. They drop in reverse order
    * (last hides first) as the footer narrows, so order them by ascending
    * importance — the most-droppable chip last.
+   *
+   * Optional, and omitting it is the common case: a footer that carries one
+   * contextual action is the shape the family wants. Reach for these only when
+   * the surface has a second thing to say that isn't a navigation convention.
    */
-  hints: PaletteFooterHint[];
+  hints?: PaletteFooterHint[];
 }
 
 function HintChip({ hint, className }: { hint: PaletteFooterHint; className?: string }) {
@@ -552,7 +583,7 @@ const SECONDARY_DROP_CLASSES = [
   "@max-[200px]/palette-footer:hidden",
 ];
 
-export function PaletteFooterHints({ primaryHint, hints }: PaletteFooterHintsProps) {
+export function PaletteFooterHints({ primaryHint, hints = [] }: PaletteFooterHintsProps) {
   return (
     <div className="@container/palette-footer w-full flex items-center justify-between gap-3">
       <HintChip hint={primaryHint} />
@@ -570,18 +601,6 @@ export function PaletteFooterHints({ primaryHint, hints }: PaletteFooterHintsPro
         </div>
       )}
     </div>
-  );
-}
-
-function DefaultKeyboardHints() {
-  return (
-    <PaletteFooterHints
-      primaryHint={{ keys: ["↵"], label: "to select" }}
-      hints={[
-        { keys: ["↑", "↓"], label: "navigate" },
-        { keys: ["Esc"], label: "close" },
-      ]}
-    />
   );
 }
 

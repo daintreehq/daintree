@@ -193,7 +193,7 @@ export function PanelPalette({
       : undefined;
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Panel palette">
+    <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Panel palette" tier="anchored">
       <AppPaletteDialog.Header
         label={showCounter ? `New Panel (${panelCount} / ${hardLimit})` : "New Panel"}
         shortcut={panelPaletteShortcut}

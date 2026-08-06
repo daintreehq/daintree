@@ -326,6 +326,7 @@ export function DockLaunchButton({
       </Tooltip>
       <AppPalettePopover.Content
         ariaLabel="Launch"
+        tier="anchored"
         inputRef={inputRef}
         onClearQuery={clearQuery}
         onCloseAutoFocus={suppressTooltipDuringFocusRestore}
@@ -333,9 +334,10 @@ export function DockLaunchButton({
         side="top"
         align="start"
         sideOffset={4}
-        // Width comes from the shell — one `PALETTE_SURFACE_WIDTH` for the whole
-        // family, so the launcher can't drift away from the palettes it sits next
-        // to in the same keyboard reflex.
+        // Width comes from the shell's anchored tier, so the launcher can't
+        // drift away from the other menus it sits next to in the same keyboard
+        // reflex — and doesn't wear a command palette's box for a list of
+        // agents and panels.
         className="p-0"
         // Catch-all behind the input's own handler, for the frame before the
         // shell's refocus lands and for focus legitimately sitting on the
@@ -394,8 +396,6 @@ export function DockLaunchButton({
             </div>
           )}
         </AppPaletteDialog.Body>
-
-        <AppPaletteDialog.Footer />
       </AppPalettePopover.Content>
     </AppPalettePopover>
   );

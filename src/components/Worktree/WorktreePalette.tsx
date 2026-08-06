@@ -97,6 +97,7 @@ export function WorktreePalette({
 
   return (
     <SearchablePalette<WorktreeState>
+      tier="anchored"
       isOpen={isOpen}
       query={query}
       results={results}

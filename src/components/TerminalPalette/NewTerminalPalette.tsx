@@ -99,7 +99,12 @@ export function NewTerminalPalette({
   const activeDescendant = selectedOption ? `new-terminal-option-${selectedOption.id}` : undefined;
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="New terminal palette">
+    <AppPaletteDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      ariaLabel="New terminal palette"
+      tier="anchored"
+    >
       <AppPaletteDialog.Header label="New terminal" shortcut={newTerminalShortcut}>
         <AppPaletteDialog.Input
           inputRef={inputRef}

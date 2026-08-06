@@ -50,6 +50,7 @@ function renderPalette(overrides: Record<string, unknown> = {}) {
     renderItem: (item: Item) => <div key={item.id}>{item.id}</div>,
     label: "Test",
     ariaLabel: "Test palette",
+    tier: "command" as const,
     ...overrides,
   };
   return render(<SearchablePalette<Item> {...props} />);

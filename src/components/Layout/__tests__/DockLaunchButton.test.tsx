@@ -200,12 +200,20 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
         {children}
       </div>
     ),
-    Footer: () => <div data-testid="dock-launcher-footer" />,
     Empty: ({ query }: { query: string }) => (
       <div data-testid="dock-launcher-empty">{query.trim() ? "no matches" : "nothing"}</div>
     ),
   };
-  return { AppPaletteDialog, PALETTE_SURFACE_WIDTH: "w-[484px]" };
+  return {
+    AppPaletteDialog,
+    PALETTE_SURFACE_WIDTHS: {
+      // Sentinel values, not the production pixels: this mock only has to satisfy
+      // the real AppPalettePopover's width lookup, and copying the shipped
+      // classes here would couple every future resize to six mock factories.
+      anchored: "mock-anchored-width",
+      command: "mock-command-width",
+    },
+  };
 });
 
 import { DockLaunchButton } from "../DockLaunchButton";

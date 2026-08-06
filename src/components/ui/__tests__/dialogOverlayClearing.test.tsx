@@ -77,7 +77,7 @@ const harnesses = [
   {
     name: "AppPaletteDialog",
     node: (isOpen: boolean) => (
-      <AppPaletteDialog isOpen={isOpen} onClose={() => {}} ariaLabel="Test palette">
+      <AppPaletteDialog isOpen={isOpen} onClose={() => {}} ariaLabel="Test palette" tier="command">
         <input type="text" placeholder="Palette input" />
       </AppPaletteDialog>
     ),

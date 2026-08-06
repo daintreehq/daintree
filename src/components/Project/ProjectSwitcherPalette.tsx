@@ -1591,7 +1591,15 @@ function ModalContent({
   const listRef = useRef<HTMLDivElement>(null);
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Project switcher">
+    <AppPaletteDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      ariaLabel="Project switcher"
+      // The modal form is the global ⌘P surface, so it takes the command box.
+      // Its dropdown twin below is anchored: same content, same material, a
+      // box scaled to how the user reached it.
+      tier="command"
+    >
       <ProjectPaletteInner
         inputRef={inputRef}
         listRef={listRef}
@@ -1668,6 +1676,10 @@ function DropdownContent({
       <AppPalettePopover.Trigger asChild>{children}</AppPalettePopover.Trigger>
       <AppPalettePopover.Content
         ariaLabel="Project switcher"
+        // Anchored: reached by clicking the title bar, showing the projects
+        // already to hand. The ⌘P modal above renders the same content on the
+        // command tier — same material, a box scaled to the way in.
+        tier="anchored"
         inputRef={inputRef}
         onClearQuery={handleClearQuery}
         onCloseAutoFocus={onDropdownCloseAutoFocus}

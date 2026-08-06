@@ -84,6 +84,7 @@ export function QuickSwitcher({
 
   return (
     <SearchablePalette<QuickSwitcherItemData>
+      tier="command"
       isOpen={isOpen}
       query={query}
       results={results}

@@ -61,6 +61,7 @@ function renderPalette(onHoverIndex?: (index: number) => void) {
       )}
       label="Test"
       ariaLabel="Test palette"
+      tier="command"
     />
   );
 }

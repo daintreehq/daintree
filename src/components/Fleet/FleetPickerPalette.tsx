@@ -173,7 +173,12 @@ export function FleetPickerPalette({ isOpen, onClose }: FleetPickerPaletteProps)
   const showFooterHint = hasVisibleRows || picker.driftCount > 0;
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Select terminals to arm">
+    <AppPaletteDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      ariaLabel="Select terminals to arm"
+      tier="command"
+    >
       <div className="flex flex-col">
         <div
           className={cn(

@@ -77,6 +77,7 @@ function renderPalette({
       )}
       label="Test"
       ariaLabel="Test palette"
+      tier="command"
       footer={footer}
       getFooter={getFooter}
       getActionLabel={getActionLabel}
@@ -129,10 +130,15 @@ describe("SearchablePalette footer", () => {
     expect(getByTestId("static-footer").textContent).toBe("static");
   });
 
-  it("falls back to default keyboard hints when neither prop is provided", () => {
+  it("renders no footer band at all when no footer source is provided", () => {
     renderPalette();
 
-    expect(document.body.textContent).toContain("to select");
+    // Not merely "no hint text": the band itself must be absent. A palette that
+    // has nothing to say about Enter should not spend a bordered strip saying
+    // so, and an empty wrapper would still draw its top border and padding.
+    expect(document.body.querySelector("kbd")).toBeNull();
+    expect(document.body.textContent).not.toContain("to select");
+    expect(document.body.querySelector(".border-t")).toBeNull();
   });
 
   it("does not render an aria-live region for the footer", () => {
@@ -149,7 +155,7 @@ describe("SearchablePalette footer", () => {
     expect(footerContainer?.querySelector("[aria-live]")).toBeNull();
   });
 
-  it("getActionLabel composes a custom verb into the default footer hint", () => {
+  it("getActionLabel composes a custom verb into the footer hint", () => {
     renderPalette({
       selectedIndex: 1,
       getActionLabel: (item) => (item ? `Switch to ${item.label}` : "Switch"),
@@ -157,6 +163,21 @@ describe("SearchablePalette footer", () => {
 
     expect(document.body.textContent).toContain("to switch to bravo");
     expect(document.body.textContent).not.toContain("to select");
+  });
+
+  it("getActionLabel renders one contextual chip, not a navigation lesson", () => {
+    renderPalette({
+      selectedIndex: 1,
+      getActionLabel: (item) => (item ? `Switch to ${item.label}` : "Switch"),
+    });
+
+    // The footer names what Enter does and stops there. `↑↓` and `Esc` are
+    // conventions every picker in the app shares, so restating them per surface
+    // is chrome that teaches nothing.
+    const keys = Array.from(document.body.querySelectorAll("kbd"), (el) => el.textContent);
+    expect(keys).toEqual(["↵"]);
+    expect(document.body.textContent).not.toContain("navigate");
+    expect(document.body.textContent).not.toContain("close");
   });
 
   it("getActionLabel receives null when results are empty", () => {
@@ -192,10 +213,11 @@ describe("SearchablePalette footer", () => {
     expect(document.body.textContent).toContain("to select");
   });
 
-  it("explicit footer={false} suppresses both the action-label path and the default hints", () => {
+  it("explicit footer={false} suppresses the action-label path and renders no band", () => {
     renderPalette({ footer: false, getActionLabel: () => "Switch terminal" });
     expect(document.body.textContent).not.toContain("to switch terminal");
     expect(document.body.textContent).not.toContain("to select");
+    expect(document.body.querySelector(".border-t")).toBeNull();
   });
 
   it("getActionLabel updates when selectedIndex moves to a different item", () => {
@@ -219,6 +241,7 @@ describe("SearchablePalette footer", () => {
         )}
         label="Test"
         ariaLabel="Test palette"
+        tier="command"
         getActionLabel={fn}
       />
     );
@@ -243,6 +266,7 @@ describe("SearchablePalette footer", () => {
         )}
         label="Test"
         ariaLabel="Test palette"
+        tier="command"
         getActionLabel={fn}
       />
     );
@@ -281,6 +305,7 @@ describe("SearchablePalette footer", () => {
           )}
           label="Test"
           ariaLabel="Test palette"
+          tier="command"
           getActionLabel={getActionLabel}
         />
       );
@@ -302,7 +327,7 @@ describe("SearchablePalette footer", () => {
       const initialDialog = document.body.querySelector("[role='dialog']");
       expect(initialDialog).not.toBeNull();
       const initialKbds = Array.from(initialDialog!.querySelectorAll("kbd"));
-      // Footer kbd entries are: "↵", "↑", "↓", "Esc". Grab the primary "↵".
+      // The footer carries exactly one chip now — the "↵" action.
       const initialPrimaryKbd = initialKbds.find((kbd) => kbd.textContent === "↵");
       expect(initialPrimaryKbd).toBeDefined();
 
