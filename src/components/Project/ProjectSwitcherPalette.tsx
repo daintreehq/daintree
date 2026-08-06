@@ -1210,14 +1210,12 @@ function ScratchSection({
 /**
  * Every hint here is project-only, so a highlighted scratch row drops them
  * rather than naming affordances it doesn't have: ⌘↵ falls back to a plain
- * switch, ⌘⌫ is inert, and a search-mode scratch row carries no context menu.
+ * switch, and a search-mode scratch row carries no context menu.
  */
 function ProjectSwitcherFooter({
-  mode,
   isScratchSelected,
   onOpenPilot,
 }: {
-  mode?: ProjectSwitcherMode;
   isScratchSelected: boolean;
   onOpenPilot: () => void;
 }) {
@@ -1233,24 +1231,23 @@ function ProjectSwitcherFooter({
 
   return (
     // Container-queried rather than fixed: the same footer serves the anchored
-    // dropdown and the wider command-tier modal, and four rails do not fit the
-    // anchored box. They drop by ascending importance — the passive
-    // "Right-click for more" first, then "Remove" — so the Enter action and
-    // "All agents" (the only affordance with no other entry point) survive
-    // longest. Tailwind needs each variant written out, so they are literal.
+    // dropdown and the wider command-tier modal, and the passive "Right-click
+    // for more" does not fit the anchored box — so it drops there and the Enter
+    // action and "All agents" (the only affordance with no other entry point)
+    // survive. Tailwind needs each variant written out, so it is a literal.
+    //
+    // There is deliberately no ⌘⌫ Remove rail. It fit the old single 484px
+    // surface, but the anchored footer is 326px: at its widest — ⌘ held, so the
+    // Enter rail reads "⌘↵ New window" — the two rails measure 251px, and a
+    // Remove rail takes that to 343px, which overflows rather than degrading.
+    // A container query cannot drop it only in the ⌘-held state, and ⌘ held is
+    // exactly when it would be worth reading. The chord itself still works; the
+    // context menu is what names it.
     <div className="@container/switcher-footer w-full flex items-center justify-between gap-3">
-      <div className="flex items-center gap-3 min-w-0">
-        <span className="shrink-0">
-          <kbd className={KBD_CLASS}>{hint.keys}</kbd>
-          <span className="ml-1.5">{hint.label}</span>
-        </span>
-        {mode !== "modal" && !isScratchSelected && (
-          <span className="text-daintree-text/50 shrink-0 @max-[420px]/switcher-footer:hidden">
-            <kbd className={KBD_CLASS}>⌘⌫</kbd>
-            <span className="ml-1.5">Remove</span>
-          </span>
-        )}
-      </div>
+      <span className="shrink-0">
+        <kbd className={KBD_CLASS}>{hint.keys}</kbd>
+        <span className="ml-1.5">{hint.label}</span>
+      </span>
       <div className="flex items-center gap-3 min-w-0">
         {/*
           The switcher answers "which project", so the fleet-wide view belongs
@@ -1569,7 +1566,6 @@ function ProjectPaletteInner({
 
       <AppPaletteDialog.Footer>
         <ProjectSwitcherFooter
-          mode={mode}
           isScratchSelected={activeResult?.kind === "scratch"}
           onOpenPilot={() => {
             onClose();
@@ -1698,8 +1694,8 @@ function DropdownContent({
         // better behaviour and worth adopting — but as its own change, not
         // folded silently into an extraction.
         restoreFocusOnPointerDismiss
-        // Width comes from the shell, so the dropdown and the ⌘P modal of this
-        // same palette resolve to one surface.
+        // Padding only — width comes from the shell's tier above, which is what
+        // splits this box from its ⌘P twin.
         className="p-0"
         data-testid="project-switcher-palette"
         align={dropdownAlign}
