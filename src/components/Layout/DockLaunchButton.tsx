@@ -612,12 +612,19 @@ function DockLaunchOption({
   // What the row conveys visually, in one string — the option is what
   // `aria-activedescendant` points at, and its children (the trailing qualifier,
   // the pin's own state) stop being announced with it once the name is stated
-  // explicitly. The warning is deliberately NOT folded in: `title` alongside an
-  // `aria-label` computes as the description, so repeating it here would
-  // announce it twice.
+  // explicitly. The pin verb rides here for the same reason the toolbar
+  // launcher gives its rows an `sr-only` sibling: children of `role="option"`
+  // are presentational, so the pin button's own label never reaches a screen
+  // reader — the phrase states both what Alt+P does and, through the verb,
+  // whether the row is already pinned. `aria-keyshortcuts` stays alongside it as
+  // the machine-readable half. The warning is deliberately NOT folded in:
+  // `title` alongside an `aria-label` computes as the description, so repeating
+  // it here would announce it twice.
   const optionLabel = [
     qualifier ? `${displayName}, ${qualifier}` : displayName,
-    pinTarget?.onToolbar ? "Pinned to toolbar" : undefined,
+    pinTarget
+      ? `Press Alt+P to ${pinTarget.onToolbar ? "unpin from" : "pin to"} toolbar`
+      : undefined,
   ]
     .filter(Boolean)
     .join(". ");

@@ -1618,14 +1618,31 @@ describe("DockLaunchButton", () => {
       expect(pin.tabIndex).toBe(-1);
     });
 
-    it("says so in the option's own name when a row is pinned", () => {
-      // `aria-activedescendant` announces the option, not its children, so the
-      // pin's state has to reach the name or it is never announced at all.
+    it("names the pin shortcut's effect in the option's own name, flipped by state", () => {
+      // Children of `role="option"` are presentational, so the pin button's own
+      // label never reaches a screen reader — without the verb in the option's
+      // name a user hears only a bare "Alt+P" and cannot tell a pinned row from
+      // an unpinned one.
       mockToolbarLayout = { pinnedButtons: {}, leftButtons: ["claude"], rightButtons: [] };
       const { container } = renderButton();
 
-      expect(rowFor(container, "Claude").getAttribute("aria-label")).toContain("Pinned to toolbar");
-      expect(rowFor(container, "Gemini").getAttribute("aria-label")).not.toContain("Pinned");
+      const pinned = rowFor(container, "Claude").getAttribute("aria-label") ?? "";
+      const unpinned = rowFor(container, "Gemini").getAttribute("aria-label") ?? "";
+
+      expect(pinned).toContain("Press Alt+P to unpin from toolbar");
+      expect(unpinned).toContain("Press Alt+P to pin to toolbar");
+      expect(pinned).not.toContain("pin to toolbar");
+      expect(unpinned).not.toContain("unpin from toolbar");
+    });
+
+    it("leaves the pin phrase off rows that cannot be pinned", () => {
+      // The phrase is a promise about a key that works — a recipe row has no
+      // pin target, so announcing Alt+P there would send the user nowhere.
+      mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+      const { container } = renderButton();
+
+      expect(rowFor(container, "My recipe").getAttribute("aria-label")).not.toContain("Alt+P");
+      expect(rowFor(container, "My recipe").getAttribute("aria-keyshortcuts")).toBeNull();
     });
 
     it("leaves the unavailable-agent warning to the description, not the name", () => {
