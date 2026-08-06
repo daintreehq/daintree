@@ -135,6 +135,7 @@ const toggleButtonVisibilityMock = vi.fn();
 // (the `mock*` bindings below are fine because they are only read at call time).
 const updateWorktreePresetMock = vi.fn(() => Promise.resolve());
 const updateAgentMock = vi.fn(() => Promise.resolve());
+const refreshAvailabilityMock = vi.fn(() => Promise.resolve());
 
 vi.mock("@/store/agentSettingsStore", () => {
   const getState = () => ({
@@ -193,8 +194,9 @@ vi.mock("@/store/cliAvailabilityStore", () => {
   const getState = () => ({
     availability: mockAgentAvailability,
     hasRealData: true,
-    // Re-probed when the launcher opens; throttled in the real store.
-    refresh: () => Promise.resolve(),
+    // Re-probed when the launcher opens and on view visibility changes;
+    // throttled in the real store.
+    refresh: refreshAvailabilityMock,
   });
   return {
     useCliAvailabilityStore: Object.assign(
@@ -203,6 +205,24 @@ vi.mock("@/store/cliAvailabilityStore", () => {
     ),
   };
 });
+
+// Onboarding state feeds useLauncherDiscovery, whose rules are asserted in
+// useLauncherDiscovery.test.tsx. Pinned here so the trigger's badge depends on
+// nothing but the availability fixture: the real store hydrates on a microtask
+// and keeps its `loaded` flag for the rest of the file.
+let mockSeenAgentIds: string[] = [];
+vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
+  NEW_AGENT_TTL_MS: 14 * 24 * 60 * 60 * 1000,
+  useAgentDiscoveryOnboarding: () => ({
+    loaded: true,
+    seenAgentIds: mockSeenAgentIds,
+    availabilityFirstSeen: {},
+    // Dismissed, so the welcome card never suppresses the cue.
+    welcomeCardDismissed: true,
+    markAgentsSeen: vi.fn(),
+    recordAgentFirstSeen: vi.fn(),
+  }),
+}));
 
 vi.mock("@/store/toolbarPreferencesStore", () => {
   const getState = () => ({
@@ -409,6 +429,8 @@ beforeEach(() => {
   popoverModal = undefined;
   mockAgentSettings = { agents: {} };
   mockAgentAvailability = {};
+  mockSeenAgentIds = [];
+  refreshAvailabilityMock.mockClear();
   mockToolbarLayout = { pinnedButtons: {}, leftButtons: [], rightButtons: [] };
   setAgentPinnedMock.mockReset();
   setPanelButtonOnToolbarMock.mockReset();
@@ -424,6 +446,66 @@ describe("DockLaunchButton", () => {
   it("renders a launch button with accessible label", () => {
     const { getByLabelText } = renderButton();
     expect(getByLabelText("Open launcher")).toBeTruthy();
+  });
+
+  describe("discovery badge", () => {
+    beforeEach(() => {
+      // A launchable agent nobody has acted on yet — the one input that turns
+      // the cue on. What makes an agent "new" is useLauncherDiscovery's job.
+      mockAgentAvailability = { claude: "ready" };
+    });
+
+    it("announces detected agents on the toolbar trigger and lights the dot", () => {
+      const { getByLabelText, getByTestId } = renderButton({ placement: "toolbar" });
+
+      expect(getByLabelText("Launcher — new agents detected")).toBeTruthy();
+      expect(getByTestId("launcher-discovery-badge").getAttribute("data-visible")).toBe("true");
+    });
+
+    it("keeps the plain label and darkens the dot once the agent has been seen", () => {
+      mockSeenAgentIds = ["claude"];
+      const { getByLabelText, getByTestId } = renderButton({ placement: "toolbar" });
+
+      expect(getByLabelText("Launcher")).toBeTruthy();
+      expect(getByTestId("launcher-discovery-badge").getAttribute("data-visible")).toBe("false");
+    });
+
+    it("leaves the dock trigger unbadged for the same discovery state", () => {
+      // The dock rail carries no cue of its own; badging both would announce
+      // the same detection twice.
+      const { getByLabelText, queryByTestId } = renderButton({ placement: "dock" });
+
+      expect(getByLabelText("Open launcher")).toBeTruthy();
+      expect(queryByTestId("launcher-discovery-badge")).toBeNull();
+    });
+  });
+
+  describe("availability re-probing", () => {
+    it("re-probes when the launcher opens, not merely on mount", () => {
+      renderButton();
+      expect(refreshAvailabilityMock).not.toHaveBeenCalled();
+
+      act(() => popoverOpenChangeSpy!(true));
+      expect(refreshAvailabilityMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("watches visibilitychange from the toolbar placement only", () => {
+      const toolbar = renderButton({ placement: "toolbar" });
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(refreshAvailabilityMock).toHaveBeenCalledTimes(1);
+      toolbar.unmount();
+
+      refreshAvailabilityMock.mockClear();
+      renderButton({ placement: "dock" });
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      // Both launchers are mounted at once, so a dock listener would double
+      // every probe on resume for no extra signal.
+      expect(refreshAvailabilityMock).not.toHaveBeenCalled();
+    });
   });
 
   it("renders sectioned labels for agents, both panel destinations, and recipes", () => {

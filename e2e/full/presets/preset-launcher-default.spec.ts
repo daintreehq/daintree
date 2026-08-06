@@ -22,15 +22,13 @@ let fakeBinDir: string;
 /**
  * Tests 101–106: launcher default-launch behavior.
  *
- * A fake `claude` binary is placed on PATH so Claude is detected as a
- * launchable agent and the tray actually renders its split-button — without
- * it the assertions would never run on CI (no real Claude install).
+ * A fake `claude` binary is placed on PATH so Claude is detected as a launchable agent and the launcher actually renders its row — without it the assertions would never run on CI (no real Claude install).
  *
  * These tests verify that:
- * - The tray shows a split-button (submenu trigger) when an agent has presets.
- * - Clicking the left-area text (not the chevron) dispatches a default launch
- *   and closes the tray without opening the submenu.
- * - Hovering the chevron area opens the submenu and lists all presets.
+ * - An agent with no presets renders as a plain row, with no disclosure to expand.
+ * - An agent with presets advertises the disclosure on its own row (`aria-expanded`).
+ * - Right Arrow expands the presets in place as sibling option rows — Default first, then every CCR and custom preset.
+ * - Activating the agent row launches its default and closes the launcher, without expanding anything.
  */
 function writeFakeAgent(): void {
   const scriptPath =
