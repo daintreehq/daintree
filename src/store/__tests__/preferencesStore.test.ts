@@ -885,21 +885,21 @@ describe("preferencesStore migration", () => {
       // Hydration sanitizes too, so a blob-in/state-out test passes even with
       // the migration branch deleted. Drive `migrate` directly to pin it.
       const store = await loadStore();
-      const migrated = store.persist
-        .getOptions()
-        .migrate?.({ dockDensity: "compact" }, 14) as Record<string, unknown>;
+      // Awaited rather than asserted: `migrate` is typed `S | Promise<S>`, and
+      // awaiting narrows it without an unsafe cast.
+      const migrated = await store.persist.getOptions().migrate?.({ dockDensity: "compact" }, 14);
 
-      expect(migrated.hasSeenActionPalettePrefixHint).toBe(false);
-      expect(migrated.dockDensity).toBe("compact");
+      expect(migrated?.hasSeenActionPalettePrefixHint).toBe(false);
+      expect(migrated?.dockDensity).toBe("compact");
     });
 
     it("does not re-teach a user who already dismissed it before the upgrade", async () => {
       const store = await loadStore();
-      const migrated = store.persist
+      const migrated = await store.persist
         .getOptions()
-        .migrate?.({ hasSeenActionPalettePrefixHint: true }, 14) as Record<string, unknown>;
+        .migrate?.({ hasSeenActionPalettePrefixHint: true }, 14);
 
-      expect(migrated.hasSeenActionPalettePrefixHint).toBe(true);
+      expect(migrated?.hasSeenActionPalettePrefixHint).toBe(true);
     });
 
     it("treats a corrupt value as unseen rather than as truthy", async () => {
