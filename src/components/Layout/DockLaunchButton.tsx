@@ -37,6 +37,7 @@ import { dispatchToolbarVisibility } from "@/lib/toolbarVisibilityDispatch";
 import { normalizeKeyForBinding } from "@/services/keybindingUtils";
 import { useKeybindingDisplay } from "@/hooks";
 import { TOOLBAR_PIN_LABEL, TOOLBAR_UNPIN_LABEL } from "./toolbarMenuStrings";
+import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
 import { useLauncherDiscovery } from "./useLauncherDiscovery";
 import {
@@ -565,14 +566,28 @@ export function DockLaunchButton({
       activateDockLaunchItem(
         item,
         { cwd, activeWorktreeId, recipeContext, onLaunchAgent: launchAgent, source: "menu" },
-        // A preset child launches its own preset; a parent that HAS presets
-        // launches the explicit Default rather than inheriting the saved one,
-        // matching the split trigger this replaced. An agent with no presets
-        // passes undefined and keeps its saved default.
-        row.kind === "preset" ? row.preset.presetId : rowHasPresets(row) ? null : undefined
+        // A preset child always launches its own preset. What a PARENT row means
+        // is the one thing placement decides, because the two hosts disagreed
+        // before one component served both:
+        //
+        //   toolbar — explicit Default (`null`), which also clears the saved
+        //     preset. That is what the split trigger's left half did, and the
+        //     behaviour #11691 named as having to come across.
+        //   dock — inherit the saved preset (`undefined`). The dock never
+        //     offered presets at all, so its rows launched whatever was saved,
+        //     and making a plain click silently reset that would be a
+        //     regression nobody asked for.
+        //
+        // Explicit Default stays one keystroke away in the dock — it is the
+        // first row of the expansion.
+        row.kind === "preset"
+          ? row.preset.presetId
+          : placement === "toolbar" && rowHasPresets(row)
+            ? null
+            : undefined
       );
     },
-    [activeWorktreeId, closeLauncher, cwd, launchAgent, recipeContext]
+    [activeWorktreeId, closeLauncher, cwd, launchAgent, placement, recipeContext]
   );
 
   const collapsePresets = useCallback(
@@ -624,26 +639,31 @@ export function DockLaunchButton({
       }
       // ArrowRight opens an agent's presets as sibling rows, ArrowLeft closes
       // them again — the flat-list equivalent of the submenu this replaced.
-      // Only with the caret at the end of the query, so the arrows still move
-      // the text cursor while there is text to move through.
-      if (event.key === "ArrowRight" && selectedRow && rowHasPresets(selectedRow)) {
-        const input = inputRef.current;
-        const atEnd = !input || input.selectionStart === input.value.length;
-        if (atEnd) {
-          event.preventDefault();
-          event.stopPropagation();
-          pendingExpandRef.current = selectedRow.rowKey;
-          setExpandedPresetParentKey(selectedRow.rowKey);
-          return;
-        }
+      //
+      // The caret only gets a say when the keystroke actually landed in the
+      // search box: this handler also serves the results region, where the
+      // input's caret is wherever typing left it and would otherwise veto the
+      // arrows for no visible reason. A non-empty selection is a text range the
+      // arrow should collapse, so it never counts as being at either edge.
+      const input = inputRef.current;
+      const caretOwnsEvent = input !== null && event.target === input;
+      const hasTextSelection = caretOwnsEvent && input.selectionStart !== input.selectionEnd;
+      const caretAtEnd =
+        !caretOwnsEvent || (!hasTextSelection && input.selectionStart === input.value.length);
+      const caretAtStart = !caretOwnsEvent || (!hasTextSelection && input.selectionStart === 0);
+
+      if (event.key === "ArrowRight" && selectedRow && rowHasPresets(selectedRow) && caretAtEnd) {
+        event.preventDefault();
+        event.stopPropagation();
+        pendingExpandRef.current = selectedRow.rowKey;
+        setExpandedPresetParentKey(selectedRow.rowKey);
+        return;
       }
-      if (event.key === "ArrowLeft" && selectedRow && expandedPresetParentKey) {
+      if (event.key === "ArrowLeft" && selectedRow && expandedPresetParentKey && caretAtStart) {
         const isInExpansion =
           selectedRow.rowKey === expandedPresetParentKey ||
           (selectedRow.kind === "preset" && selectedRow.parentRowKey === expandedPresetParentKey);
-        const input = inputRef.current;
-        const atStart = !input || input.selectionStart === 0;
-        if (isInExpansion && atStart) {
+        if (isInExpansion) {
           event.preventDefault();
           event.stopPropagation();
           collapsePresets(selectedRow);
@@ -844,6 +864,17 @@ export function DockLaunchButton({
           activeDescendant={activeDescendant}
           onNavigationKeyDown={handleNavigationKeyDown}
         >
+          {agentInventoryState === "loading" && (
+            // Before the first real availability result, "no agents installed"
+            // and "still detecting" are indistinguishable — say which it is
+            // rather than letting the list read as an empty agent inventory.
+            <div
+              data-testid="dock-launcher-loading"
+              className="px-2.5 py-1.5 text-xs text-daintree-text/60"
+            >
+              Checking agents…
+            </div>
+          )}
           {results.length === 0 ? (
             <AppPaletteDialog.Empty query={query} emptyMessage="Nothing to launch" />
           ) : (
@@ -997,7 +1028,18 @@ function DockLaunchOption({
   // plugin agent has no `agent.<id>` action to bind at all.
   const shortcutAgentId =
     row.kind === "item" && agent && isBuiltInAgentId(agent.id) ? agent.id : null;
-  const displayCombo = useKeybindingDisplay(shortcutAgentId ? `agent.${shortcutAgentId}` : "");
+  // Panels have bindings too, and the old menu showed them. Resolved through the
+  // kind→button map and the fixed panel list, which is where that action id
+  // lives — a launcher row is keyed by panel KIND, and the binding is on the
+  // action behind the button.
+  const panelActionId =
+    row.kind === "item" && item?.category === "panel"
+      ? (LAUNCHER_PANEL_ITEMS.find((p) => p.id === getLauncherPanelButtonIdForKind(item.kindId))
+          ?.actionId ?? "")
+      : "";
+  const displayCombo = useKeybindingDisplay(
+    shortcutAgentId ? `agent.${shortcutAgentId}` : panelActionId
+  );
 
   // A filtered row must carry the same warnings as its unfiltered twin: a
   // blocked agent that silently opens Settings, or a shadowed recipe that
@@ -1027,9 +1069,9 @@ function DockLaunchOption({
     row.kind === "cue"
       ? undefined
       : row.kind === "preset"
-        ? row.preset.isSelected
-          ? "Current"
-          : undefined
+        ? [row.groupLabel, row.preset.isSelected ? "Current" : undefined]
+            .filter(Boolean)
+            .join(" · ") || undefined
         : disabledReason !== undefined
           ? disabledReason
           : item!.category === "panel"
@@ -1040,7 +1082,7 @@ function DockLaunchOption({
               ? item!.isShadowed
                 ? `${item!.scopeLabel} · Overridden by Team`
                 : item!.scopeLabel
-              : row.band === "needs-setup" || row.band === "available-agents"
+              : item!.agentBand !== "launch"
                 ? "Setup"
                 : "Agent";
 
@@ -1080,6 +1122,17 @@ function DockLaunchOption({
           className={cn(PALETTE_SECTION_LABEL_CLASS, "px-2 pt-2 pb-1 first:pt-0")}
         >
           {DOCK_LAUNCH_BAND_LABELS[row.band]}
+        </div>
+      )}
+      {row.kind === "preset" && row.groupLabel && (
+        <div
+          // Same rule as the band heading above: decorative, because the row's
+          // own accessible name already states which group it belongs to.
+          aria-hidden="true"
+          data-testid="dock-launcher-preset-group"
+          className={cn(PALETTE_SECTION_LABEL_CLASS, "px-2 pt-2 pb-1 pl-7")}
+        >
+          {row.groupLabel}
         </div>
       )}
       {/* A div, not a button: the pin control is a real button and one cannot

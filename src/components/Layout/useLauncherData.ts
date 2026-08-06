@@ -10,7 +10,7 @@ import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
 import { sortAgentsByToolbarPin } from "@/lib/agentMenuOrder";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { isAssistantOnlyAgentId, LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
-import { isAgentInstalled } from "@shared/utils/agentAvailability";
+import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type { DockLaunchAgent, DockLaunchInventoryState } from "./dockLaunchItems";
 import type { RecipeContext } from "@/utils/recipeVariables";
 
@@ -98,14 +98,22 @@ export function useLauncherData(): LauncherData {
       };
     }
 
+    // Ordered and counted over the LAUNCHABLE subset, not everything installed:
+    // the Pinned/Other split slices the launchable group, so a pinned agent that
+    // is merely installed (blocked, or mid-setup) would push the boundary one
+    // row down and label an unpinned agent as pinned. The rest keep their order
+    // behind it — they render under their own setup band, where position within
+    // the group carries no meaning.
+    const launchable = installed.filter((agent) => isAgentLaunchable(agent.availability));
+    const notLaunchable = installed.filter((agent) => !isAgentLaunchable(agent.availability));
     const { sorted, pinnedCount } = sortAgentsByToolbarPin(
-      installed,
+      launchable,
       leftButtons,
       agentSettings,
       rightButtons
     );
     return {
-      agents: sorted,
+      agents: [...sorted, ...notLaunchable],
       pinnedCount,
       agentInventoryState: (isAvailabilityLoading
         ? "loading"

@@ -551,6 +551,24 @@ describe("preset rows", () => {
     expect(new Set(expanded.map((row) => row.rowKey)).size).toBe(expanded.length);
   });
 
+  it("keeps the synthetic Default distinct from a preset whose id is literally 'default'", () => {
+    // Mistral ships exactly such a preset. One shared key spelling would make
+    // two rows collide — they highlight together and `aria-activedescendant`
+    // resolves to whichever rendered last.
+    const agent: DockLaunchAgent = {
+      id: "mistral",
+      name: "Mistral",
+      availability: "ready",
+      presetChoices: buildPresetChoices([{ id: "default", name: "Default" }], new Set(), undefined),
+    };
+    const model = build({ agents: [agent] });
+    const expanded = insertExpandedPresetRows(model.browseRows, "agent:mistral");
+    const presetKeys = expanded.filter((row) => row.kind === "preset").map((row) => row.rowKey);
+
+    expect(presetKeys).toHaveLength(2);
+    expect(new Set(presetKeys).size).toBe(2);
+  });
+
   it("splices the preset rows immediately after their parent", () => {
     const agent: DockLaunchAgent = {
       id: "claude",

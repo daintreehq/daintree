@@ -162,6 +162,14 @@ export const DOCK_LAUNCH_BAND_LABELS: Record<DockLaunchBandId, string> = {
 /** A row that runs something other than a launchable item. */
 export type DockLaunchCueId = "create-recipe" | "setup-agents" | "manage-agents";
 
+/** Heading for each named provenance group, matching the old preset submenu. */
+export const DOCK_LAUNCH_PRESET_GROUP_LABELS: Record<DockLaunchPresetGroup, string> = {
+  default: "",
+  ccr: "CCR Routes",
+  project: "Project Shared",
+  custom: "Custom",
+};
+
 export const DOCK_LAUNCH_CUE_LABELS: Record<DockLaunchCueId, string> = {
   "create-recipe": "Create a recipe",
   "setup-agents": "Set up agents",
@@ -200,6 +208,12 @@ export type DockLaunchRow =
        */
       parentRowKey: string;
       preset: DockLaunchPresetChoice;
+      /**
+       * Provenance heading, stamped on the first row of each named group and
+       * only when more than one exists — with a single group the heading would
+       * just restate what every row under it already is.
+       */
+      groupLabel?: string;
     });
 
 /** Narrowing helper — the item rows are the only ones carrying a launchable item. */
@@ -264,13 +278,31 @@ export function buildPresetRows(parentRow: DockLaunchRow): DockLaunchRow[] {
   if (item.category !== "agent") return [];
   const choices = item.agent.presetChoices;
   if (!choices || choices.length === 0) return [];
+  // Headings only earn their space when they tell two groups apart — the old
+  // submenu applied exactly this rule.
+  const namedGroups = new Set(
+    choices.filter((choice) => choice.presetId !== null).map((choice) => choice.group)
+  );
+  const showGroupLabels = namedGroups.size > 1;
+  const labelled = new Set<DockLaunchPresetGroup>();
+
   return choices.map((preset) => ({
     kind: "preset" as const,
-    rowKey: `preset:${parentRow.rowKey}:${preset.presetId ?? "default"}`,
+    // The synthetic Default and a real preset live in separate key namespaces:
+    // Mistral ships a preset whose id is literally "default", and a shared
+    // spelling would collide — two rows with one id highlight together and
+    // leave `aria-activedescendant` pointing at whichever rendered last.
+    rowKey: `preset:${parentRow.rowKey}:${
+      preset.presetId === null ? "sentinel:default" : `id:${preset.presetId}`
+    }`,
     band: "presets" as const,
     item,
     parentRowKey: parentRow.rowKey,
     preset,
+    groupLabel:
+      showGroupLabels && preset.presetId !== null && !labelled.has(preset.group)
+        ? (labelled.add(preset.group), DOCK_LAUNCH_PRESET_GROUP_LABELS[preset.group])
+        : undefined,
   }));
 }
 

@@ -160,6 +160,14 @@ vi.mock("@/config/agents", () => ({
   getAgentIds: () => ["claude", "gemini"],
 }));
 
+// Real bindings keyed by action id, so a row asserting a hint proves the row
+// resolved the right ACTION — not merely that some string rendered.
+const mockKeybindings: Record<string, string> = {};
+vi.mock("@/hooks", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useKeybindingDisplay: (actionId: string) => mockKeybindings[actionId] ?? "",
+}));
+
 vi.mock("@/components/KeyboardShortcuts", () => ({
   AgentShortcutCapture: ({
     agentId,
@@ -409,6 +417,7 @@ beforeEach(() => {
   updateWorktreePresetMock.mockReset();
   updateAgentMock.mockReset();
   mockMergedPresets = [];
+  for (const key of Object.keys(mockKeybindings)) delete mockKeybindings[key];
 });
 
 describe("DockLaunchButton", () => {
@@ -1948,12 +1957,16 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       expect(container.querySelectorAll('[role="option"][aria-selected="true"]')).toHaveLength(1);
     });
 
-    it("launches the explicit default from the parent and the chosen id from a child", () => {
+    it("launches the explicit default from a toolbar parent and the chosen id from a child", () => {
       const onLaunchAgent = vi.fn();
-      const { container } = renderButton({ agents: READY, onLaunchAgent });
+      const { container } = renderButton({
+        agents: READY,
+        onLaunchAgent,
+        placement: "toolbar",
+      });
 
-      // A parent that HAS presets launches `null` — the sentinel that clears a
-      // saved preset — rather than inheriting one the user didn't pick.
+      // The toolbar's parent row means explicit Default — `null`, the sentinel
+      // that clears a saved preset — matching the split trigger it replaced.
       fireEvent.click(rowByName(container, "Claude"));
       expect(onLaunchAgent).toHaveBeenCalledWith("claude", null);
 
@@ -1964,12 +1977,54 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       expect(onLaunchAgent).toHaveBeenCalledWith("claude", "fast");
     });
 
+    it("inherits the saved preset from a dock parent row", () => {
+      // The dock never offered presets, so its rows launched whatever was
+      // saved. A plain click must not silently reset that — explicit Default
+      // is still reachable as the first row of the expansion.
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({ agents: READY, onLaunchAgent, placement: "dock" });
+
+      fireEvent.click(rowByName(container, "Claude"));
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
+
+      // ...and the Default row still reaches the explicit sentinel.
+      onLaunchAgent.mockReset();
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+      fireEvent.click(presetRows(container)[0]!);
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", null);
+    });
+
     it("passes undefined for an agent with no presets so its saved default resolves", () => {
       mockMergedPresets = [];
       const onLaunchAgent = vi.fn();
-      const { container } = renderButton({ agents: READY, onLaunchAgent });
+      const { container } = renderButton({
+        agents: READY,
+        onLaunchAgent,
+        placement: "toolbar",
+      });
       fireEvent.click(rowByName(container, "Claude"));
       expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
+    });
+
+    it("leaves a text selection to the arrow keys instead of collapsing presets", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+
+      fireEvent.change(input, { target: { value: "claude" } });
+      input.setSelectionRange(6, 6);
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      expect(presetRows(container).length).toBeGreaterThan(0);
+
+      // A range selection is text the arrow should collapse, so it counts as
+      // being at neither edge — ArrowLeft belongs to the caret, not the list.
+      input.setSelectionRange(0, 6);
+      fireEvent.keyDown(input, { key: "ArrowLeft" });
+      expect(presetRows(container).length).toBeGreaterThan(0);
+
+      // With the caret genuinely at the start, it collapses.
+      input.setSelectionRange(0, 0);
+      fireEvent.keyDown(input, { key: "ArrowLeft" });
+      expect(presetRows(container)).toHaveLength(0);
     });
 
     it("collapses the expansion when the query changes", () => {
@@ -2105,6 +2160,125 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       )!;
       fireEvent.click(pin);
       expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("file-browser", true);
+    });
+  });
+
+  describe("restored menu affordances", () => {
+    it("shows a panel row's shortcut, resolved through its own action", () => {
+      // The launcher row is keyed by panel KIND; the binding lives on the action
+      // behind that kind's toolbar button. A row resolving the wrong action
+      // would render nothing, or another panel's combo.
+      mockKeybindings["agent.terminal"] = "⌘⌥T";
+      mockKeybindings["worktree.openFileBrowserPanel"] = "⌘⌥E";
+      const { container } = renderButton({ agents: READY });
+
+      expect(rowByName(container, "Terminal").textContent).toContain("⌘⌥T");
+      expect(rowByName(container, "File Browser").textContent).toContain("⌘⌥E");
+      // ...and a row with no binding renders no stray hint.
+      expect(rowByName(container, "Browser").textContent).not.toContain("⌘");
+    });
+
+    it("shows an agent row's own binding", () => {
+      mockKeybindings["agent.claude"] = "⌘1";
+      const { container } = renderButton({ agents: READY });
+      expect(rowByName(container, "Claude").textContent).toContain("⌘1");
+    });
+
+    it("says it is still detecting rather than showing an empty agent inventory", () => {
+      const { container, queryByTestId } = renderButton({
+        agents: [],
+        agentInventoryState: "loading",
+      });
+      expect(queryByTestId("dock-launcher-loading")).toBeTruthy();
+      expect(container.textContent).toContain("Checking agents");
+    });
+
+    it("drops the detecting notice once the inventory is real", () => {
+      const { queryByTestId } = renderButton({
+        agents: READY,
+        agentInventoryState: "installed",
+      });
+      expect(queryByTestId("dock-launcher-loading")).toBeNull();
+    });
+
+    it("heads each preset provenance group only when more than one exists", () => {
+      mockMergedPresets = [
+        { id: "ccr-fast", name: "CCR: Fast" },
+        { id: "mine", name: "Mine" },
+      ];
+      const { container } = renderButton({ agents: READY });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      const headings = Array.from(
+        container.querySelectorAll('[data-testid="dock-launcher-preset-group"]')
+      ).map((el) => el.textContent);
+      expect(headings).toEqual(["CCR Routes", "Custom"]);
+    });
+
+    it("omits provenance headings when every preset shares one group", () => {
+      mockMergedPresets = [
+        { id: "a", name: "Alpha" },
+        { id: "b", name: "Beta" },
+      ];
+      const { container } = renderButton({ agents: READY });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      // One group — a heading would just restate what every row under it is.
+      expect(container.querySelectorAll('[data-testid="dock-launcher-preset-group"]')).toHaveLength(
+        0
+      );
+    });
+  });
+
+  describe("preset persistence", () => {
+    beforeEach(() => {
+      mockMergedPresets = [{ id: "fast", name: "Fast" }];
+    });
+
+    it("clears the saved preset when the toolbar launches explicit Default", () => {
+      const { container } = renderButton({
+        agents: READY,
+        placement: "toolbar",
+        activeWorktreeId: "wt-1",
+      });
+      fireEvent.click(rowByName(container, "Claude"));
+
+      // Both halves of "explicit default": the agent-level preset and the
+      // worktree-scoped override.
+      expect(updateAgentMock).toHaveBeenCalledWith("claude", { presetId: undefined });
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-1", undefined);
+    });
+
+    it("persists a chosen preset to the active worktree", () => {
+      const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+      fireEvent.click(presetRows(container)[1]!);
+
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-1", "fast");
+      // A named pick is not a reset, so the agent-level preset is left alone.
+      expect(updateAgentMock).not.toHaveBeenCalled();
+    });
+
+    it("writes no scope when there is no active worktree", () => {
+      const { container } = renderButton({
+        agents: READY,
+        placement: "toolbar",
+        activeWorktreeId: null,
+      });
+      fireEvent.click(rowByName(container, "Claude"));
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+    });
+
+    it("persists nothing when a dock row inherits its saved preset", () => {
+      const { container } = renderButton({
+        agents: READY,
+        placement: "dock",
+        activeWorktreeId: "wt-1",
+      });
+      fireEvent.click(rowByName(container, "Claude"));
+
+      expect(updateAgentMock).not.toHaveBeenCalled();
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
     });
   });
 
