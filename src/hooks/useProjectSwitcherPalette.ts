@@ -101,17 +101,24 @@ export const PROJECT_SECTION_ORDER = [
 export type ProjectSectionKey = (typeof PROJECT_SECTION_ORDER)[number];
 
 /**
- * Header text per band. `current` is deliberately unlabelled.
+ * Header text per band.
+ *
+ * `current` went unlabelled while the keyboard cursor was the loudest thing on
+ * the surface — position alone read as "you are here" next to an accent-painted
+ * row. Once the cursor calmed to a neutral fill (#11686) the two stopped being
+ * telling apart, and the band that says where you are is the one that has to
+ * say so out loud (#11692). "Current project", not "Current": the word on its
+ * own could be read as the current *selection*, which is the other signal.
  *
  * "Other projects", not "Recent" or "Frequent": the band is the residual
  * catch-all — frecency-ordered, holding never-opened projects and acknowledged
  * completions alike — so any label naming a sort order would be a lie the row
- * timestamps immediately expose. "Running" requires live agents; projects with
+ * contents immediately expose. "Running" requires live agents; projects with
  * only bare processes fall through to Pinned/Other, where their status line
  * still says "Process running".
  */
-export const PROJECT_SECTION_LABELS: Record<ProjectSectionKey, string | null> = {
-  current: null,
+export const PROJECT_SECTION_LABELS: Record<ProjectSectionKey, string> = {
+  current: "Current project",
   attention: "Needs attention",
   pinned: "Pinned",
   running: "Running",
@@ -121,9 +128,9 @@ export const PROJECT_SECTION_LABELS: Record<ProjectSectionKey, string | null> = 
 
 /**
  * Rows the Other band needs before its sort control is worth advertising
- * (#11455). Below this the order is self-evident from the rows themselves, so
- * the control would be chrome naming something nobody asked about. The
- * preference still applies — only the visible affordance is gated.
+ * (#11455). Below this there is too little order to be worth naming, so the
+ * control would be chrome answering a question nobody asked. The preference
+ * still applies — only the visible affordance is gated.
  */
 export const OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS = 4;
 
@@ -637,7 +644,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     if (!isOpen) return;
     // Pull a fresh agent-status snapshot on open so rows show live status
     // immediately instead of waiting for the next passive broadcast, which
-    // would otherwise leave them falling back to a stale relative timestamp.
+    // would otherwise leave a busy project rendering as a silent, idle row.
     //
     // Both stores are awaited because the pull covers scratch rows too (#11518)
     // — the push channel is best-effort, so this is the only guaranteed
@@ -700,8 +707,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         });
       })
       .catch(() => {
-        // Project load or stats refresh failed; rows fall back to the relative
-        // timestamp. This background freshness pull must never surface an error.
+        // Project load or stats refresh failed; rows just render without a
+        // status line. This background freshness pull must never surface an
+        // error.
       });
   }, [isOpen, loadProjects, loadScratches]);
 

@@ -35,6 +35,11 @@ export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
   review: "bg-activity-completed",
   working: "bg-activity-active animate-activity-pulse",
   running: "bg-status-success",
+  // Hollow, because "finished" and "suspended" are settled states rather than
+  // live ones. It used to sit on every dormant row too, which made a ring the
+  // most common mark in the list and left it competing with the filled dots
+  // that mean something — dormant rows draw no dot at all now (#11692), so the
+  // ring is back to marking the two muted states that earned a line.
   muted: "border border-daintree-text/20",
 };
 
@@ -52,11 +57,23 @@ export interface ProjectRowStatus {
   tone: ProjectRowTone;
   /**
    * Disambiguating path fragment, present only when this project's folder name
-   * collides with another registered project's. Rendered as a trailing segment
-   * so identical-looking monorepo siblings can be told apart without giving
-   * every row a second line of chrome it doesn't need.
+   * collides with another registered project's, so identical-looking monorepo
+   * siblings can be told apart without giving every row a second line of chrome
+   * it doesn't need. Trails the status sentence where there is one, and stands
+   * alone on a row that has gone quiet — it describes which project this is,
+   * not what it is doing, so it outlives the status line.
    */
   pathHint?: string;
+  /**
+   * Set only by the opened-time fallback — the line a row shows when it has
+   * nothing else to say (#11692). Callers use it to drop both the status line
+   * and the leading dot, so an ordinary row is one line with no mark on it.
+   *
+   * Deliberately not derived from `tone`. `muted` also carries "Agent finished
+   * · 2h ago" and "Suspended to free memory", which are facts a row earned and
+   * keeps — a tone check would silently delete them along with the timestamps.
+   */
+  isDormantFallback?: true;
 }
 
 /** Compact duration for a wait that is already minutes old. Sub-minute reads as "just now". */
@@ -242,20 +259,23 @@ function getWorkspaceActivityStatus(
 }
 
 /**
- * Dormant fallback shared by both kinds.
+ * Dormant fallback shared by both kinds, flagged so callers can decline it.
  *
  * "Opened", explicitly: the browse band is frecency-ordered, so a bare "13h ago"
  * read as a sort key it isn't. The verb turns it back into what it is — one
- * useful fact about the row.
+ * useful fact about the row. Still the weakest thing a row can say, though, and
+ * on twenty rows at once it is twenty timestamps nobody reads; the switcher
+ * takes the flag and shows nothing (#11692). The text stays here because a
+ * surface with room for it should still say it the same way.
  */
 function getOpenedStatus(lastOpened: number): WorkspaceActivityStatus {
   if (lastOpened > 0) {
-    return { text: `Opened ${formatTimeAgo(lastOpened)}`, tone: "muted" };
+    return { text: `Opened ${formatTimeAgo(lastOpened)}`, tone: "muted", isDormantFallback: true };
   }
-  return { text: "Not opened yet", tone: "muted" };
+  return { text: "Not opened yet", tone: "muted", isDormantFallback: true };
 }
 
-/** The one status line a project row shows. */
+/** The one status line a project row has to show, if it shows one at all. */
 export function getProjectRowStatus(
   project: SearchableProject,
   nowMs: number = Date.now()
@@ -283,7 +303,8 @@ export function getProjectRowStatus(
 }
 
 /**
- * The one status line a scratch row shows (#11518).
+ * The one status line a scratch row has to show, if it shows one at all
+ * (#11518).
  *
  * Same activity sentences and tones a project gets — the point of the shared
  * core — minus the states a scratch has no concept of. There is no `isMissing`
