@@ -31,6 +31,7 @@ vi.mock("@/store/paletteStore", () => ({
 }));
 
 import { SearchablePalette } from "../SearchablePalette";
+import type { PaletteSurfaceTier } from "../AppPaletteDialog";
 
 interface Item {
   id: string;
@@ -49,6 +50,7 @@ interface RenderArgs {
   footer?: React.ReactNode;
   getFooter?: (selectedItem: Item | null) => React.ReactNode;
   getActionLabel?: (selectedItem: Item | null) => string;
+  tier?: PaletteSurfaceTier;
 }
 
 function renderPalette({
@@ -57,6 +59,7 @@ function renderPalette({
   footer,
   getFooter,
   getActionLabel,
+  tier = "command",
 }: RenderArgs = {}) {
   return render(
     <SearchablePalette<Item>
@@ -77,7 +80,7 @@ function renderPalette({
       )}
       label="Test"
       ariaLabel="Test palette"
-      tier="command"
+      tier={tier}
       footer={footer}
       getFooter={getFooter}
       getActionLabel={getActionLabel}
@@ -130,15 +133,31 @@ describe("SearchablePalette footer", () => {
     expect(getByTestId("static-footer").textContent).toBe("static");
   });
 
+  it("forwards its tier to the shell instead of pinning one", () => {
+    // SearchablePalette renders the dialog itself, so a hardcoded or dropped
+    // tier here would leave the shell's own tier tests green while every
+    // anchored consumer — SendToAgent, Worktree, QuickCreate — silently came
+    // out at command width.
+    const widthFor = (tier: "anchored" | "command") => {
+      const { unmount } = renderPalette({ tier });
+      const dialog = document.body.querySelector("[role='dialog']");
+      const match = /(?:^|\s)w-\[(\d+)px\]/.exec(dialog?.className ?? "");
+      unmount();
+      expect(match, `no w-[Npx] class for the ${tier} tier`).not.toBeNull();
+      return Number(match![1]);
+    };
+
+    expect(widthFor("anchored")).toBeLessThan(widthFor("command"));
+  });
+
   it("renders no footer band at all when no footer source is provided", () => {
     renderPalette();
 
-    // Not merely "no hint text": the band itself must be absent. A palette that
-    // has nothing to say about Enter should not spend a bordered strip saying
-    // so, and an empty wrapper would still draw its top border and padding.
+    // This fixture passes no `shortcut` and no `emptyShortcut`, so the footer
+    // is the palette's only source of `kbd` chips — their absence is the band's
+    // absence. (`AppPaletteDialog.Footer` covers the wrapper itself directly.)
     expect(document.body.querySelector("kbd")).toBeNull();
     expect(document.body.textContent).not.toContain("to select");
-    expect(document.body.querySelector(".border-t")).toBeNull();
   });
 
   it("does not render an aria-live region for the footer", () => {
@@ -217,7 +236,7 @@ describe("SearchablePalette footer", () => {
     renderPalette({ footer: false, getActionLabel: () => "Switch terminal" });
     expect(document.body.textContent).not.toContain("to switch terminal");
     expect(document.body.textContent).not.toContain("to select");
-    expect(document.body.querySelector(".border-t")).toBeNull();
+    expect(document.body.querySelector("kbd")).toBeNull();
   });
 
   it("getActionLabel updates when selectedIndex moves to a different item", () => {

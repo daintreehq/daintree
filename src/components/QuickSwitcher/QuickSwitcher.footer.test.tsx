@@ -112,10 +112,14 @@ describe("QuickSwitcher dynamic footer hint", () => {
 
     // Nothing is selected, so there is no action to name — and a footer with
     // nothing contextual to say has no reason to occupy a bordered band.
+    //
+    // Asserted on the contextual text rather than on `kbd` anywhere in the
+    // document: this palette also renders a header shortcut chip, which only
+    // stays invisible here because the keybinding hooks are mocked empty. The
+    // wrapper's own absence is covered directly in AppPaletteDialog.test.tsx.
     expect(screen.queryByText("to select")).toBeNull();
     expect(screen.queryByText("to switch terminal")).toBeNull();
     expect(screen.queryByText("to switch worktree")).toBeNull();
-    expect(document.body.querySelector("kbd")).toBeNull();
   });
 
   it("updates the footer when selection moves between item types", () => {
@@ -165,7 +169,6 @@ describe("QuickSwitcher dynamic footer hint", () => {
     rerender(<QuickSwitcher {...baseProps} results={[]} selectedIndex={-1} />);
     expect(screen.queryByText("to switch terminal")).toBeNull();
     expect(screen.queryByText("to select")).toBeNull();
-    expect(document.body.querySelector("kbd")).toBeNull();
   });
 
   it("wires aria-describedby on each row to the footer hint id", () => {

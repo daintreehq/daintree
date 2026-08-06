@@ -517,6 +517,16 @@ interface AppPaletteFooterProps {
   className?: string;
 }
 
+/**
+ * The values React renders as nothing. `getFooter` returning `[]` from a
+ * `.map()` over zero contextual actions is the realistic case — it is not
+ * nullish, so a plain `== null` guard would draw the band around nothing.
+ */
+function rendersNothing(node: React.ReactNode): boolean {
+  if (node == null || typeof node === "boolean" || node === "") return true;
+  return Array.isArray(node) && node.every(rendersNothing);
+}
+
 AppPaletteDialog.Footer = function AppPaletteFooter({
   children,
   className,
@@ -527,7 +537,7 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
   // to. Returning null rather than an empty wrapper matters because callers
   // render <Footer> unconditionally and pass content that resolves per
   // selection — an empty div would still draw the top border and padding.
-  if (children == null || children === false) return null;
+  if (rendersNothing(children)) return null;
   return (
     <div
       className={cn(

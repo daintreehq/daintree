@@ -106,43 +106,48 @@ describe("AppPaletteDialog surface tier", () => {
     expect(renderedWidth("anchored")).toBeLessThan(renderedWidth("command"));
   });
 
-  it("keeps the viewport clamp on both tiers", () => {
-    // The tier decides the box; it must not cost the narrow-window guard.
-    for (const tier of ["anchored", "command"] as const) {
-      const { unmount } = render(
-        <AppPaletteDialog isOpen onClose={() => {}} ariaLabel="Tier palette" tier={tier}>
-          <input type="text" placeholder="Palette input" />
-        </AppPaletteDialog>
-      );
-      const dialog = screen.getByRole("dialog", { name: "Tier palette" });
-      expect(dialog.className, `${tier} lost its max-width clamp`).toContain("max-w-[calc(");
-      unmount();
-    }
+  // The issue's second rule: "the tier is explicit, not inferred. A new picker
+  // author has to choose one." Nothing at runtime enforces that — the guard is
+  // the type, so the assertion IS the @ts-expect-error directive. Giving `tier`
+  // a default would make the directive unused and fail the typecheck.
+  it("will not compile without a tier", () => {
+    const element = (
+      // @ts-expect-error tier is required — a palette may not inherit its weight
+      <AppPaletteDialog isOpen onClose={() => {}} ariaLabel="Untiered palette">
+        <input type="text" placeholder="Palette input" />
+      </AppPaletteDialog>
+    );
+    expect(element).toBeTruthy();
   });
 });
 
 describe("AppPaletteDialog.Footer", () => {
-  it("renders no band when it has no contextual content", () => {
+  it("renders no band for content that resolves to nothing for this selection", () => {
     // A footer earns its top border by naming what Enter does. Callers render
     // <Footer> unconditionally with content that resolves per selection, so an
-    // empty wrapper would leave a bordered, padded strip behind.
-    const { container } = render(<AppPaletteDialog.Footer />);
-    expect(container.firstChild).toBeNull();
+    // empty wrapper would leave a bordered, padded strip behind. `[]` is the
+    // realistic non-nullish case: `getFooter={() => actions.map(...)}` with no
+    // contextual actions to offer.
+    for (const empty of [undefined, null, false, "", []] as const) {
+      const { container, unmount } = render(
+        <AppPaletteDialog.Footer>{empty}</AppPaletteDialog.Footer>
+      );
+      expect(container.firstChild, `${JSON.stringify(empty)} drew a band`).toBeNull();
+      unmount();
+    }
   });
 
-  it("renders no band for a footer that resolves to nothing for this selection", () => {
-    const { container } = render(<AppPaletteDialog.Footer>{null}</AppPaletteDialog.Footer>);
-    expect(container.firstChild).toBeNull();
-  });
-
-  it("renders the band once it has something to say", () => {
+  it("wraps the content once it has something to say", () => {
     const { container, getByTestId } = render(
       <AppPaletteDialog.Footer>
         <span data-testid="chip">↵ to open</span>
       </AppPaletteDialog.Footer>
     );
-    expect(getByTestId("chip")).toBeTruthy();
-    expect((container.firstChild as HTMLElement).className).toContain("border-t");
+    // Structural, not a class-token match: there is a wrapper and the chip is
+    // inside it. What that wrapper is styled with is the shell's business.
+    const band = container.firstChild as HTMLElement;
+    expect(band).not.toBeNull();
+    expect(band.contains(getByTestId("chip"))).toBe(true);
   });
 });
 

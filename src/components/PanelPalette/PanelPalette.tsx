@@ -138,7 +138,7 @@ export function PanelPalette({
           <PanelKindIcon iconId={kind.iconId} color={kind.color} size={16} />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-daintree-text">
+          <div className="text-sm font-medium text-daintree-text truncate">
             <HighlightedText
               text={kind.name}
               indices={findMatchIndices(matchesById.get(kind.id), "name")}

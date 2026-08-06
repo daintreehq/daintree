@@ -35,11 +35,13 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
         aria-selected={isSelected}
         role="option"
       >
-        <div className="flex items-center justify-between text-sm">
-          <span className="font-medium text-daintree-text">{worktree.name}</span>
-          <div className="flex items-center gap-2 text-xs text-daintree-text/60">
+        <div className="flex items-center justify-between gap-2 text-sm">
+          {/* Both sides truncate: a long branch name used to have the width to
+              spare, and on the anchored tier it does not. */}
+          <span className="font-medium text-daintree-text truncate">{worktree.name}</span>
+          <div className="flex items-center gap-2 min-w-0 text-xs text-daintree-text/60">
             {worktree.branch && (
-              <span className="font-mono text-daintree-text/70">{worktree.branch}</span>
+              <span className="font-mono text-daintree-text/70 truncate">{worktree.branch}</span>
             )}
             {isActive && (
               <span className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-[var(--color-state-active)]/15 text-[var(--color-state-active)] text-[11px] font-semibold">

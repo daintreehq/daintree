@@ -1232,20 +1232,26 @@ function ProjectSwitcherFooter({
       : { keys: "↵", label: "Switch" };
 
   return (
-    <div className="w-full flex items-center justify-between">
-      <div className="flex items-center gap-3">
-        <span>
+    // Container-queried rather than fixed: the same footer serves the anchored
+    // dropdown and the wider command-tier modal, and four rails do not fit the
+    // anchored box. They drop by ascending importance — the passive
+    // "Right-click for more" first, then "Remove" — so the Enter action and
+    // "All agents" (the only affordance with no other entry point) survive
+    // longest. Tailwind needs each variant written out, so they are literal.
+    <div className="@container/switcher-footer w-full flex items-center justify-between gap-3">
+      <div className="flex items-center gap-3 min-w-0">
+        <span className="shrink-0">
           <kbd className={KBD_CLASS}>{hint.keys}</kbd>
           <span className="ml-1.5">{hint.label}</span>
         </span>
         {mode !== "modal" && !isScratchSelected && (
-          <span className="text-daintree-text/50">
+          <span className="text-daintree-text/50 shrink-0 @max-[420px]/switcher-footer:hidden">
             <kbd className={KBD_CLASS}>⌘⌫</kbd>
             <span className="ml-1.5">Remove</span>
           </span>
         )}
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 min-w-0">
         {/*
           The switcher answers "which project", so the fleet-wide view belongs
           beside it rather than inside its list: adding a row would put a
@@ -1255,14 +1261,18 @@ function ProjectSwitcherFooter({
         <button
           type="button"
           onClick={onOpenPilot}
-          className="inline-flex items-center text-daintree-text/50 transition-colors duration-150 ease-out hover:text-daintree-text"
+          className="inline-flex items-center shrink-0 text-daintree-text/50 transition-colors duration-150 ease-out hover:text-daintree-text"
           data-testid="project-switcher-open-pilot"
           {...(pilotShortcut ? { "aria-keyshortcuts": pilotShortcut } : {})}
         >
           {pilotShortcut && <KbdChord shortcut={pilotShortcut} />}
           <span className={pilotShortcut ? "ml-1.5" : undefined}>All agents</span>
         </button>
-        {!isScratchSelected && <span className="text-daintree-text/50">Right-click for more</span>}
+        {!isScratchSelected && (
+          <span className="text-daintree-text/50 shrink-0 @max-[520px]/switcher-footer:hidden">
+            Right-click for more
+          </span>
+        )}
       </div>
     </div>
   );
