@@ -138,8 +138,8 @@ test.describe.serial("Presets: Custom Add (13–24)", () => {
 
     // Submenu-trigger rows render in the tray only for unpinned, launchable
     // agents. The fake `claude` binary on PATH (beforeAll) makes Claude
-    // launchable; unpin it here so the tray builds a SplitLaunchItem rather
-    // than routing Claude to the main toolbar.
+    // launchable; unpin it here so Claude stays a launcher row rather than
+    // being routed to a button of its own on the main toolbar.
     await setClaudePinned(ctx.window, false);
 
     const closeButton = ctx.window.locator(SEL.settings.closeButton);
@@ -149,18 +149,20 @@ test.describe.serial("Presets: Custom Add (13–24)", () => {
 
     const trayButton = ctx.window.locator('[aria-label^="Launcher"]');
     await trayButton.click();
-    const submenuTrigger = ctx.window.locator('[data-testid="submenu-trigger"]', {
-      hasText: "Claude",
+    // Flat preset rows (#11691): narrow to Claude, then Right Arrow expands its
+    // presets as sibling options in the same list.
+    const search = ctx.window.getByRole("combobox", {
+      name: "Search agents, panels, and recipes",
     });
-    await expect(submenuTrigger).toBeVisible({ timeout: T_LONG });
-    await submenuTrigger.press("ArrowRight");
-    const submenuContent = ctx.window.locator('[data-testid="submenu-content"]');
-    await expect(submenuContent).toBeVisible({ timeout: T_SHORT });
-    // Preset name renders as a text node inside DropdownMenuItem (not inside
-    // a span). Use getByText so the matcher walks both nodes and spans.
-    await expect(submenuContent.getByText("New preset").first()).toBeVisible({
-      timeout: T_SHORT,
+    await expect(search).toBeVisible({ timeout: T_LONG });
+    await search.fill("Claude");
+    await expect(ctx.window.locator(SEL.preset.trayLaunchPresetParent).first()).toBeVisible({
+      timeout: T_LONG,
     });
+    await search.press("ArrowRight");
+    await expect(
+      ctx.window.locator(SEL.preset.trayLaunchPresetItem, { hasText: "New preset" })
+    ).toBeVisible({ timeout: T_SHORT });
 
     await ctx.window.mouse.click(10, 10);
     await setClaudePinned(ctx.window, true);

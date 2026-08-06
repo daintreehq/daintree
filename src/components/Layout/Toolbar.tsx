@@ -48,11 +48,10 @@ import {
   groupPluginToolbarButtons,
   type PluginTrayGroup,
 } from "./PluginTrayButton";
-import {
-  LAUNCHER_PANEL_ITEMS,
-  LauncherMenuButton,
-  deriveAgentDominantStates,
-} from "./LauncherMenuButton";
+import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
+import { deriveAgentDominantStates } from "@/lib/agentDominantStates";
+import { DockLaunchButton } from "./DockLaunchButton";
+import { useLauncherData } from "./useLauncherData";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -598,7 +597,7 @@ export function Toolbar({
   // composite map (would risk the selector-identity churn of lesson #3730).
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
   // Per-agent dominant state across panels in the active worktree, used to draw
-  // the agent-state dot on overflow menu items. Shares LauncherMenuButton's
+  // the agent-state dot on overflow menu items. Shares the launcher's
   // derivation so the overflow dot matches the visible agent button; computed
   // inside useShallow so agent ticks that don't change a dominant state don't
   // re-render the whole toolbar (issue #7451 pattern).
@@ -723,6 +722,26 @@ export function Toolbar({
           action: { label: "Retry", onClick: openFileBrowser },
         });
       });
+  }, []);
+
+  // The shared launcher's own inventory and workspace context (#11691). The
+  // toolbar had none of this before — its launcher owned every store read
+  // itself — so it comes from the same hook the dock uses.
+  const launcherData = useLauncherData();
+
+  // Agents launched from the toolbar keep going through `agent.launch` with no
+  // location override, so they land where they always have. The dock's copy of
+  // the launcher passes its own callback and keeps landing in the dock — the
+  // shared component decides how a row looks, never where it opens.
+  const launchAgentFromToolbar = useCallback((agentId: string, presetId?: string | null) => {
+    void actionService.dispatch(
+      "agent.launch",
+      // `null` is the explicit-default sentinel and must survive into the
+      // payload; `undefined` must leave the key off so the saved preset still
+      // resolves. A `!= null` test here would collapse the two.
+      { agentId, ...(presetId !== undefined ? { presetId } : {}) },
+      { source: "user" }
+    );
   }, []);
 
   const handleOpenProjectSettings = useCallback(() => {
@@ -1010,12 +1029,18 @@ export function Toolbar({
         // Always available, unlike the plugin tray: its inventory is fixed, so
         // there is no empty state. Individual rows gate themselves instead.
         render: () => (
-          <LauncherMenuButton
+          <DockLaunchButton
             key="launcher"
-            agentAvailability={agentAvailability}
-            hasWorkspace={hasWorkspace}
-            hasProject={!!currentProject}
-            onOpenFileBrowser={openFileBrowser}
+            placement="toolbar"
+            agents={launcherData.agents}
+            pinnedCount={launcherData.pinnedCount}
+            agentInventoryState={launcherData.agentInventoryState}
+            hasWorkspace={launcherData.hasWorkspace}
+            hasProject={launcherData.hasProject}
+            activeWorktreeId={launcherData.activeWorktreeId}
+            cwd={launcherData.cwd}
+            recipeContext={launcherData.recipeContext}
+            onLaunchAgent={launchAgentFromToolbar}
             data-toolbar-item=""
           />
         ),
@@ -1306,6 +1331,8 @@ export function Toolbar({
       agentAvailability,
       effectiveAgentSettings,
       onLaunchAgent,
+      launcherData,
+      launchAgentFromToolbar,
       sidebarShortcut,
       sidebarAriaShortcut,
       sidebarHintHover,

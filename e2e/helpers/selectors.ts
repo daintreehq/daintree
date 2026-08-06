@@ -381,8 +381,10 @@ export const SEL = {
     deleteButton: '[aria-label^="Delete"]',
     duplicateButton: '[aria-label^="Duplicate"]',
     toolbarChevron: '[aria-label^="Choose"][aria-label$="preset"]',
-    trayLaunchPresetSubmenu: '[data-testid="submenu-trigger"]',
-    trayLaunchPresetItem: '[data-testid="submenu-content"] [role="menuitem"]',
+    // Presets are flat sibling options now, opened with Right Arrow rather than
+    // a submenu (#11691) — the parent row announces itself with aria-expanded.
+    trayLaunchPresetParent: '[role="option"][data-row-kind="item"][aria-expanded]',
+    trayLaunchPresetItem: '[role="option"][data-row-kind="preset"]',
     contextPresetSubmenu: '[role="menu"]:text("Launch with Preset")',
     defaultOption: '[data-testid="preset-option-default"]',
     customPresetOption: '[data-testid="preset-selector-listbox"] [role="option"]',

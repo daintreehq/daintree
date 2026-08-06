@@ -27,6 +27,8 @@ let popoverPointerDownOutsideSpy: (() => void) | null = null;
 let popoverEscapeKeyDownSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let popoverOpenAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let popoverOpenChangeSpy: ((open: boolean) => void) | null = null;
+/** Which side the content anchored on — the one thing placement changes. */
+let popoverSide: string | undefined;
 let popoverModal: boolean | undefined = undefined;
 
 // See dockLaunchItems.test.ts — avoid the real registry's eager TerminalPane import.
@@ -40,10 +42,18 @@ vi.mock("@/registry", () => ({
   getPanelKindDefinitionsSnapshot: () => 0,
 }));
 
+// Callable as well as static: the launcher subscribes for the running pip and
+// `activateDockLaunchItem` reaches the same store through `getState`.
+const panelStoreState = {
+  addPanel: addPanelMock,
+  panelsById: { "panel-1": { location: "grid" } },
+  panelIds: [] as string[],
+};
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: {
-    getState: () => ({ addPanel: addPanelMock, panelsById: { "panel-1": { location: "grid" } } }),
-  },
+  usePanelStore: Object.assign(
+    (selector: (s: typeof panelStoreState) => unknown) => selector(panelStoreState),
+    { getState: () => panelStoreState }
+  ),
 }));
 
 vi.mock("@/components/PanelPalette/PanelKindIcon", () => ({
@@ -78,8 +88,18 @@ const getSortedActionMruListMock = () => mockMruEntries;
 
 vi.mock("@/store/actionMruStore", () => ({
   useActionMruStore: Object.assign(
-    (selector: (s: { getSortedActionMruList: () => typeof mockMruEntries }) => unknown) =>
-      selector({ getSortedActionMruList: getSortedActionMruListMock }),
+    (
+      selector: (s: {
+        getSortedActionMruList: () => typeof mockMruEntries;
+        actionUsageEntries: Map<string, unknown>;
+      }) => unknown
+    ) =>
+      selector({
+        getSortedActionMruList: getSortedActionMruListMock,
+        // Subscribed by the model purely to invalidate the recency band, so it
+        // must be non-empty or the getter is short-circuited away.
+        actionUsageEntries: new Map([["seed", { uses: [1] }]]),
+      }),
     {
       getState: () => ({ recordActionMru: recordActionMruMock }),
     }
@@ -113,8 +133,17 @@ const toggleButtonVisibilityMock = vi.fn();
 // reader is declared INSIDE its factory — `vi.mock` is hoisted above every
 // top-level const, so referencing one at factory-evaluation time is a TDZ error
 // (the `mock*` bindings below are fine because they are only read at call time).
+const updateWorktreePresetMock = vi.fn(() => Promise.resolve());
+const updateAgentMock = vi.fn(() => Promise.resolve());
+const refreshAvailabilityMock = vi.fn(() => Promise.resolve());
+
 vi.mock("@/store/agentSettingsStore", () => {
-  const getState = () => ({ settings: mockAgentSettings, setAgentPinned: setAgentPinnedMock });
+  const getState = () => ({
+    settings: mockAgentSettings,
+    setAgentPinned: setAgentPinnedMock,
+    updateWorktreePreset: updateWorktreePresetMock,
+    updateAgent: updateAgentMock,
+  });
   return {
     useAgentSettingsStore: Object.assign(
       (selector: (s: ReturnType<typeof getState>) => unknown) => selector(getState()),
@@ -123,8 +152,52 @@ vi.mock("@/store/agentSettingsStore", () => {
   };
 });
 
+// Presets the launcher expands into sibling rows. Controlled per test.
+let mockMergedPresets: Array<{ id: string; name: string; displayTitle?: string; color?: string }> =
+  [];
+vi.mock("@/config/agents", () => ({
+  getMergedPresets: () => mockMergedPresets,
+  getAgentConfig: (id: string) => ({ id, name: id, icon: undefined }),
+  getAgentIds: () => ["claude", "gemini"],
+}));
+
+// Real bindings keyed by action id, so a row asserting a hint proves the row
+// resolved the right ACTION — not merely that some string rendered.
+const mockKeybindings: Record<string, string> = {};
+vi.mock("@/hooks", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useKeybindingDisplay: (actionId: string) => mockKeybindings[actionId] ?? "",
+}));
+
+vi.mock("@/components/KeyboardShortcuts", () => ({
+  AgentShortcutCapture: ({
+    agentId,
+    onCapture,
+    onCancel,
+  }: {
+    agentId: string;
+    onCapture: (combo: string) => void;
+    onCancel: () => void;
+  }) => (
+    <div data-testid={`capture-widget-${agentId}`}>
+      <button type="button" onClick={() => onCapture("Ctrl+Shift+9")}>
+        capture
+      </button>
+      <button type="button" onClick={onCancel}>
+        cancel
+      </button>
+    </div>
+  ),
+}));
+
 vi.mock("@/store/cliAvailabilityStore", () => {
-  const getState = () => ({ availability: mockAgentAvailability });
+  const getState = () => ({
+    availability: mockAgentAvailability,
+    hasRealData: true,
+    // Re-probed when the launcher opens and on view visibility changes;
+    // throttled in the real store.
+    refresh: refreshAvailabilityMock,
+  });
   return {
     useCliAvailabilityStore: Object.assign(
       (selector: (s: ReturnType<typeof getState>) => unknown) => selector(getState()),
@@ -132,6 +205,24 @@ vi.mock("@/store/cliAvailabilityStore", () => {
     ),
   };
 });
+
+// Onboarding state feeds useLauncherDiscovery, whose rules are asserted in
+// useLauncherDiscovery.test.tsx. Pinned here so the trigger's badge depends on
+// nothing but the availability fixture: the real store hydrates on a microtask
+// and keeps its `loaded` flag for the rest of the file.
+let mockSeenAgentIds: string[] = [];
+vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
+  NEW_AGENT_TTL_MS: 14 * 24 * 60 * 60 * 1000,
+  useAgentDiscoveryOnboarding: () => ({
+    loaded: true,
+    seenAgentIds: mockSeenAgentIds,
+    availabilityFirstSeen: {},
+    // Dismissed, so the welcome card never suppresses the cue.
+    welcomeCardDismissed: true,
+    markAgentsSeen: vi.fn(),
+    recordAgentFirstSeen: vi.fn(),
+  }),
+}));
 
 vi.mock("@/store/toolbarPreferencesStore", () => {
   const getState = () => ({
@@ -190,8 +281,10 @@ vi.mock("@/components/ui/popover", () => ({
     onFocus,
     onKeyDown,
     onMouseDown,
+    side,
   }: {
     children: ReactNode;
+    side?: string;
     onOpenAutoFocus?: (e: { preventDefault: () => void }) => void;
     onCloseAutoFocus?: (e: { preventDefault: () => void }) => void;
     onPointerDownOutside?: () => void;
@@ -204,6 +297,7 @@ vi.mock("@/components/ui/popover", () => ({
     popoverCloseAutoFocusSpy = onCloseAutoFocus ?? null;
     popoverPointerDownOutsideSpy = onPointerDownOutside ?? null;
     popoverEscapeKeyDownSpy = onEscapeKeyDown ?? null;
+    popoverSide = side;
     // Radix renders FocusScope/DismissableLayer with asChild, so these land on
     // the same node the focus trap parks focus on. tabIndex mirrors that.
     return (
@@ -331,14 +425,21 @@ beforeEach(() => {
   popoverEscapeKeyDownSpy = null;
   popoverOpenAutoFocusSpy = null;
   popoverOpenChangeSpy = null;
+  popoverSide = undefined;
   popoverModal = undefined;
   mockAgentSettings = { agents: {} };
   mockAgentAvailability = {};
+  mockSeenAgentIds = [];
+  refreshAvailabilityMock.mockClear();
   mockToolbarLayout = { pinnedButtons: {}, leftButtons: [], rightButtons: [] };
   setAgentPinnedMock.mockReset();
   setPanelButtonOnToolbarMock.mockReset();
   positionAgentButtonMock.mockReset();
   toggleButtonVisibilityMock.mockReset();
+  updateWorktreePresetMock.mockReset();
+  updateAgentMock.mockReset();
+  mockMergedPresets = [];
+  for (const key of Object.keys(mockKeybindings)) delete mockKeybindings[key];
 });
 
 describe("DockLaunchButton", () => {
@@ -347,26 +448,103 @@ describe("DockLaunchButton", () => {
     expect(getByLabelText("Open launcher")).toBeTruthy();
   });
 
+  describe("discovery badge", () => {
+    beforeEach(() => {
+      // A launchable agent nobody has acted on yet — the one input that turns
+      // the cue on. What makes an agent "new" is useLauncherDiscovery's job.
+      mockAgentAvailability = { claude: "ready" };
+    });
+
+    it("announces detected agents on the toolbar trigger and lights the dot", () => {
+      const { getByLabelText, getByTestId } = renderButton({ placement: "toolbar" });
+
+      expect(getByLabelText("Launcher — new agents detected")).toBeTruthy();
+      expect(getByTestId("launcher-discovery-badge").getAttribute("data-visible")).toBe("true");
+    });
+
+    it("keeps the plain label and darkens the dot once the agent has been seen", () => {
+      mockSeenAgentIds = ["claude"];
+      const { getByLabelText, getByTestId } = renderButton({ placement: "toolbar" });
+
+      expect(getByLabelText("Launcher")).toBeTruthy();
+      expect(getByTestId("launcher-discovery-badge").getAttribute("data-visible")).toBe("false");
+    });
+
+    it("leaves the dock trigger unbadged for the same discovery state", () => {
+      // The dock rail carries no cue of its own; badging both would announce
+      // the same detection twice.
+      const { getByLabelText, queryByTestId } = renderButton({ placement: "dock" });
+
+      expect(getByLabelText("Open launcher")).toBeTruthy();
+      expect(queryByTestId("launcher-discovery-badge")).toBeNull();
+    });
+  });
+
+  describe("availability re-probing", () => {
+    it("re-probes when the launcher opens, not merely on mount", () => {
+      renderButton();
+      expect(refreshAvailabilityMock).not.toHaveBeenCalled();
+
+      act(() => popoverOpenChangeSpy!(true));
+      expect(refreshAvailabilityMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("watches visibilitychange from the toolbar placement only", () => {
+      const toolbar = renderButton({ placement: "toolbar" });
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(refreshAvailabilityMock).toHaveBeenCalledTimes(1);
+      toolbar.unmount();
+
+      refreshAvailabilityMock.mockClear();
+      renderButton({ placement: "dock" });
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      // Both launchers are mounted at once, so a dock listener would double
+      // every probe on resume for no extra signal.
+      expect(refreshAvailabilityMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("renders sectioned labels for agents, both panel destinations, and recipes", () => {
     mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
     const { getAllByTestId } = renderButton();
 
     const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
-    expect(labels).toEqual(["Launch agent", "Open in dock", "Open in grid", "Launch recipe"]);
+    // Gemini is blocked in the fixture, so it lands under its own setup band
+    // rather than being offered as a launch; "More" carries the footer cue.
+    expect(labels).toEqual([
+      "Launch agent",
+      "Open in dock",
+      "Open in grid",
+      "Launch recipe",
+      "Needs setup",
+      "More",
+    ]);
   });
 
   it("splits agents into Pinned/Other groups when pinnedCount is a strict subset", () => {
-    const { getAllByTestId, container } = renderButton({ pinnedCount: 1 });
+    // Two LAUNCHABLE agents: the split is counted against the launchable group,
+    // so a blocked second agent would leave "Other" describing nothing.
+    const { getAllByTestId, container } = renderButton({
+      pinnedCount: 1,
+      agents: [
+        { id: "claude", name: "Claude", availability: "ready" },
+        { id: "codex", name: "Codex", availability: "ready" },
+      ],
+    });
 
     const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
     expect(labels.slice(0, 2)).toEqual(["Pinned", "Other"]);
 
     // Assert document order so a regression that puts both agents under one
-    // group (or swaps them) is caught: Pinned → Claude → Other → Gemini.
+    // group (or swaps them) is caught: Pinned → Claude → Other → Codex.
     const text = container.textContent ?? "";
     expect(text.indexOf("Pinned")).toBeLessThan(text.indexOf("Claude"));
     expect(text.indexOf("Claude")).toBeLessThan(text.indexOf("Other"));
-    expect(text.indexOf("Other")).toBeLessThan(text.indexOf("Gemini"));
+    expect(text.indexOf("Other")).toBeLessThan(text.indexOf("Codex"));
   });
 
   it("keeps a flat Launch agent group when all agents are pinned", () => {
@@ -380,7 +558,7 @@ describe("DockLaunchButton", () => {
     const { getByText } = renderButton({ onLaunchAgent });
 
     fireEvent.click(getByText("Claude"));
-    expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+    expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     expect(actionDispatchMock).not.toHaveBeenCalled();
     // The dock launch path must record MRU so the agent surfaces in the
     // recency band on the next open (previously this path recorded nothing).
@@ -430,7 +608,7 @@ describe("DockLaunchButton", () => {
     });
 
     fireEvent.click(getByText("Codex"));
-    expect(onLaunchAgent).toHaveBeenCalledWith("codex");
+    expect(onLaunchAgent).toHaveBeenCalledWith("codex", undefined);
     // Soft dim and settings tooltip must not leak onto a launchable row.
     expect(getByText("Codex").getAttribute("title")).toBeNull();
   });
@@ -627,7 +805,7 @@ describe("DockLaunchButton", () => {
       fireEvent.change(input, { target: { value: "claude" } });
       fireEvent.keyDown(input, { key: "Enter" });
 
-      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     });
 
     it("Enter launches the top result", () => {
@@ -638,7 +816,7 @@ describe("DockLaunchButton", () => {
       fireEvent.change(input, { target: { value: "claude" } });
       fireEvent.keyDown(input, { key: "Enter" });
 
-      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     });
 
     it("Enter activates the row moved to by ArrowDown, not the first one", () => {
@@ -712,7 +890,7 @@ describe("DockLaunchButton", () => {
 
       // Claude is the first agent and the first browse row.
       fireEvent.keyDown(input, { key: "Enter" });
-      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     });
 
     it("keeps the recency band navigable without highlighting its twin", () => {
@@ -899,7 +1077,7 @@ describe("DockLaunchButton", () => {
       // Back to Claude, the one launchable agent in this fixture.
       fireEvent.keyDown(content, { key: "Home" });
       fireEvent.keyDown(content, { key: "Enter" });
-      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     });
 
     it("does not double-handle a key the input already consumed", () => {
@@ -1347,7 +1525,7 @@ describe("DockLaunchButton", () => {
       const codexElement = getAllByText("Codex")[0];
       expect(codexElement).toBeDefined();
       fireEvent.click(codexElement!);
-      expect(onLaunchAgent).toHaveBeenCalledWith("codex");
+      expect(onLaunchAgent).toHaveBeenCalledWith("codex", undefined);
       expect(recordActionMruMock).toHaveBeenCalledWith("agent.codex");
     });
 
@@ -1667,7 +1845,16 @@ describe("DockLaunchButton", () => {
       const pinnable = rowFor(container, "Claude");
       const notPinnable = rowFor(container, "My recipe");
       expect(pinControl(notPinnable)).toBeNull();
-      expect(notPinnable.children.length).toBe(pinnable.children.length);
+      // Both reserved slots are present on both rows even when empty — that is
+      // what keeps the two qualifiers ending on the same edge. Asserted on the
+      // slots themselves rather than a child count, because an agent row also
+      // carries a keyboard-shortcut hint that a recipe row never can.
+      const slotsOf = (row: HTMLElement) =>
+        Array.from(row.querySelectorAll("[data-launcher-slot]")).map((el) =>
+          el.getAttribute("data-launcher-slot")
+        );
+      expect(slotsOf(notPinnable)).toEqual(slotsOf(pinnable));
+      expect(slotsOf(notPinnable)).toEqual(["shortcut", "pin"]);
       expect(notPinnable.lastElementChild?.tagName).toBe(pinnable.lastElementChild?.tagName);
     });
 
@@ -1680,7 +1867,7 @@ describe("DockLaunchButton", () => {
 
       fireEvent.click(rowFor(container, "Claude"));
 
-      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     });
 
     it("survives a render before agent settings have hydrated", () => {
@@ -1781,6 +1968,430 @@ describe("DockLaunchButton", () => {
         expect(setAgentPinnedMock).not.toHaveBeenCalled();
         expect(setPanelButtonOnToolbarMock).not.toHaveBeenCalled();
       });
+    });
+  });
+});
+
+// Coverage migrated from the deleted `LauncherMenuButton` suite: the affordances
+// #11691 required to survive the swap, re-expressed against the flat
+// search-first list that replaced the Radix menu.
+describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
+  const READY = [{ id: "claude", name: "Claude", availability: "ready" as const }];
+
+  function rowByName(container: HTMLElement, name: string): HTMLElement {
+    const row = options(container).find((o) =>
+      o.getAttribute("aria-label")?.startsWith(`${name},`)
+    );
+    if (!row) throw new Error(`no row for ${name}`);
+    return row;
+  }
+  const presetRows = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll<HTMLElement>('[role="option"][data-row-kind="preset"]'));
+
+  describe("preset rows", () => {
+    beforeEach(() => {
+      mockMergedPresets = [
+        { id: "fast", name: "Fast" },
+        { id: "slow", name: "Slow" },
+      ];
+    });
+
+    it("does not expand until asked, and keeps presets out of the flat list", () => {
+      const { container } = renderButton({ agents: READY });
+      expect(presetRows(container)).toHaveLength(0);
+      // The row advertises what it can do rather than doing it.
+      expect(rowByName(container, "Claude").getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("expands into sibling options on ArrowRight and collapses on ArrowLeft", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      // Default plus both named presets, as siblings in the same listbox.
+      expect(presetRows(container).map((r) => r.textContent)).toEqual([
+        expect.stringContaining("Default"),
+        expect.stringContaining("Fast"),
+        expect.stringContaining("Slow"),
+      ]);
+      expect(rowByName(container, "Claude").getAttribute("aria-expanded")).toBe("true");
+
+      fireEvent.keyDown(input, { key: "ArrowLeft" });
+      expect(presetRows(container)).toHaveLength(0);
+    });
+
+    it("selects the first preset once the expansion has rendered", () => {
+      // The selection cannot move in the same handler that expands: the rows it
+      // would point at do not exist yet.
+      const { container } = renderButton({ agents: READY });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+      expect(selectedOption(container)?.textContent).toContain("Default");
+    });
+
+    it("keeps every expanded row in one navigation space", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      // Arrowing down from Default reaches the next preset, not a nested list.
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(selectedOption(container)?.textContent).toContain("Fast");
+      // Exactly one option is ever selected across the whole flat list.
+      expect(container.querySelectorAll('[role="option"][aria-selected="true"]')).toHaveLength(1);
+    });
+
+    it("launches the explicit default from a toolbar parent and the chosen id from a child", () => {
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({
+        agents: READY,
+        onLaunchAgent,
+        placement: "toolbar",
+      });
+
+      // The toolbar's parent row means explicit Default — `null`, the sentinel
+      // that clears a saved preset — matching the split trigger it replaced.
+      fireEvent.click(rowByName(container, "Claude"));
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", null);
+
+      onLaunchAgent.mockReset();
+      const { container: c2 } = renderButton({ agents: READY, onLaunchAgent });
+      fireEvent.keyDown(searchInput(c2), { key: "ArrowRight" });
+      fireEvent.click(presetRows(c2)[1]!);
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", "fast");
+    });
+
+    it("inherits the saved preset from a dock parent row", () => {
+      // The dock never offered presets, so its rows launched whatever was
+      // saved. A plain click must not silently reset that — explicit Default
+      // is still reachable as the first row of the expansion.
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({ agents: READY, onLaunchAgent, placement: "dock" });
+
+      fireEvent.click(rowByName(container, "Claude"));
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
+
+      // ...and the Default row still reaches the explicit sentinel.
+      onLaunchAgent.mockReset();
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+      fireEvent.click(presetRows(container)[0]!);
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", null);
+    });
+
+    it("passes undefined for an agent with no presets so its saved default resolves", () => {
+      mockMergedPresets = [];
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({
+        agents: READY,
+        onLaunchAgent,
+        placement: "toolbar",
+      });
+      fireEvent.click(rowByName(container, "Claude"));
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
+    });
+
+    it("leaves a text selection to the arrow keys instead of collapsing presets", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+
+      fireEvent.change(input, { target: { value: "claude" } });
+      input.setSelectionRange(6, 6);
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      expect(presetRows(container).length).toBeGreaterThan(0);
+
+      // A range selection is text the arrow should collapse, so it counts as
+      // being at neither edge — ArrowLeft belongs to the caret, not the list.
+      input.setSelectionRange(0, 6);
+      fireEvent.keyDown(input, { key: "ArrowLeft" });
+      expect(presetRows(container).length).toBeGreaterThan(0);
+
+      // With the caret genuinely at the start, it collapses.
+      input.setSelectionRange(0, 0);
+      fireEvent.keyDown(input, { key: "ArrowLeft" });
+      expect(presetRows(container)).toHaveLength(0);
+    });
+
+    it("collapses the expansion when the query changes", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      expect(presetRows(container).length).toBeGreaterThan(0);
+
+      fireEvent.change(input, { target: { value: "term" } });
+      expect(presetRows(container)).toHaveLength(0);
+    });
+
+    it("leaves ArrowRight to the caret while there is text to move through", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+      fireEvent.change(input, { target: { value: "claude" } });
+      input.setSelectionRange(0, 0);
+
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      expect(presetRows(container)).toHaveLength(0);
+    });
+  });
+
+  describe("shortcut capture", () => {
+    const openCapture = (container: HTMLElement) => {
+      const edit = rowByName(container, "Claude").querySelector<HTMLButtonElement>(
+        '[data-testid="launcher-shortcut-edit-claude"]'
+      );
+      fireEvent.click(edit!);
+    };
+
+    it("replaces the row with a recorder that is not an option", () => {
+      const { container } = renderButton({ agents: READY });
+      openCapture(container);
+
+      expect(container.querySelector('[data-testid="capture-widget-claude"]')).toBeTruthy();
+      // The recorder's controls have to be reachable, which they cannot be
+      // inside a `role="option"` — its children are presentational.
+      expect(
+        options(container).some((o) => o.getAttribute("aria-label")?.startsWith("Claude,"))
+      ).toBe(false);
+    });
+
+    it("stops recorder keystrokes from reaching the list behind it", () => {
+      const { container } = renderButton({ agents: READY });
+      openCapture(container);
+      const widget = container.querySelector('[data-testid="capture-widget-claude"]')!;
+
+      // Fired ON the recorder, not the container: a container-only assertion
+      // passes even when the row lets keys through.
+      const before = selectedOption(container)?.id;
+      fireEvent.keyDown(widget, { key: "ArrowDown", bubbles: true });
+      expect(selectedOption(container)?.id).toBe(before);
+    });
+
+    it("cancels in place on Escape and leaves the launcher open", () => {
+      const { container } = renderButton({ agents: READY });
+      openCapture(container);
+      expect(container.querySelector('[data-testid="capture-widget-claude"]')).toBeTruthy();
+
+      // The shell runs the consumer veto ahead of its own query-clear rule.
+      const event = { preventDefault: vi.fn(), defaultPrevented: false };
+      popoverEscapeKeyDownSpy?.(event as unknown as KeyboardEvent);
+      expect(event.preventDefault).toHaveBeenCalled();
+    });
+
+    it("clears the recorder when the launcher closes", () => {
+      const { container } = renderButton({ agents: READY });
+      openCapture(container);
+      act(() => popoverOpenChangeSpy!(false));
+      // Reset on the single close path, so a half-open recording can't survive
+      // into the next open.
+      expect(container.querySelector('[data-testid="capture-widget-claude"]')).toBeNull();
+    });
+
+    it("saves through the keybinding action and closes on success", async () => {
+      const { container } = renderButton({ agents: READY });
+      openCapture(container);
+      const capture = container.querySelector('[data-testid="capture-widget-claude"]')!;
+
+      await act(async () => {
+        fireEvent.click(capture.querySelector("button")!);
+      });
+      expect(actionDispatchMock).toHaveBeenCalledWith(
+        "keybinding.setOverride",
+        { actionId: "agent.claude", combo: ["Ctrl+Shift+9"] },
+        { source: "user" }
+      );
+    });
+
+    it("stays open when the save is refused", async () => {
+      actionDispatchMock.mockResolvedValue({ ok: false, error: new Error("nope") });
+      const { container } = renderButton({ agents: READY });
+      openCapture(container);
+
+      await act(async () => {
+        fireEvent.click(
+          container.querySelector('[data-testid="capture-widget-claude"]')!.querySelector("button")!
+        );
+      });
+      expect(container.querySelector('[data-testid="capture-widget-claude"]')).toBeTruthy();
+    });
+  });
+
+  describe("disabled rows stay reachable", () => {
+    it("marks a gated panel aria-disabled while leaving it selectable and pinnable", () => {
+      const { container } = renderButton({ agents: READY, hasWorkspace: false });
+      const row = rowByName(container, "File Browser");
+
+      expect(row.getAttribute("aria-disabled")).toBe("true");
+      // Reachable: it is still an option, so arrow keys land on it...
+      expect(options(container)).toContain(row);
+      // ...and its pin is still there, which is the whole reason it stays.
+      expect(row.querySelector("button[aria-pressed]")).toBeTruthy();
+    });
+
+    it("opens nothing and stays open when a gated row is activated", () => {
+      const { container } = renderButton({ agents: READY, hasWorkspace: false });
+      // A typed query is the observable proxy for the close path: every close
+      // runs through `closeLauncher`, which clears it. A press that opened
+      // nothing must not read as a launch that closed.
+      fireEvent.change(searchInput(container), { target: { value: "file" } });
+      fireEvent.click(rowByName(container, "File Browser"));
+
+      expect(addPanelMock).not.toHaveBeenCalled();
+      expect(searchInput(container).value).toBe("file");
+    });
+
+    it("still pins a gated row", () => {
+      const { container } = renderButton({ agents: READY, hasWorkspace: false });
+      const pin = rowByName(container, "File Browser").querySelector<HTMLButtonElement>(
+        "button[aria-pressed]"
+      )!;
+      fireEvent.click(pin);
+      expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("file-browser", true);
+    });
+  });
+
+  describe("restored menu affordances", () => {
+    it("shows a panel row's shortcut, resolved through its own action", () => {
+      // The launcher row is keyed by panel KIND; the binding lives on the action
+      // behind that kind's toolbar button. A row resolving the wrong action
+      // would render nothing, or another panel's combo.
+      mockKeybindings["agent.terminal"] = "⌘⌥T";
+      mockKeybindings["worktree.openFileBrowserPanel"] = "⌘⌥E";
+      const { container } = renderButton({ agents: READY });
+
+      expect(rowByName(container, "Terminal").textContent).toContain("⌘⌥T");
+      expect(rowByName(container, "File Browser").textContent).toContain("⌘⌥E");
+      // ...and a row with no binding renders no stray hint.
+      expect(rowByName(container, "Browser").textContent).not.toContain("⌘");
+    });
+
+    it("shows an agent row's own binding", () => {
+      mockKeybindings["agent.claude"] = "⌘1";
+      const { container } = renderButton({ agents: READY });
+      expect(rowByName(container, "Claude").textContent).toContain("⌘1");
+    });
+
+    it("says it is still detecting rather than showing an empty agent inventory", () => {
+      const { container, queryByTestId } = renderButton({
+        agents: [],
+        agentInventoryState: "loading",
+      });
+      expect(queryByTestId("dock-launcher-loading")).toBeTruthy();
+      expect(container.textContent).toContain("Checking agents");
+    });
+
+    it("drops the detecting notice once the inventory is real", () => {
+      const { queryByTestId } = renderButton({
+        agents: READY,
+        agentInventoryState: "installed",
+      });
+      expect(queryByTestId("dock-launcher-loading")).toBeNull();
+    });
+
+    it("heads each preset provenance group only when more than one exists", () => {
+      mockMergedPresets = [
+        { id: "ccr-fast", name: "CCR: Fast" },
+        { id: "mine", name: "Mine" },
+      ];
+      const { container } = renderButton({ agents: READY });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      const headings = Array.from(
+        container.querySelectorAll('[data-testid="dock-launcher-preset-group"]')
+      ).map((el) => el.textContent);
+      expect(headings).toEqual(["CCR Routes", "Custom"]);
+    });
+
+    it("omits provenance headings when every preset shares one group", () => {
+      mockMergedPresets = [
+        { id: "a", name: "Alpha" },
+        { id: "b", name: "Beta" },
+      ];
+      const { container } = renderButton({ agents: READY });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      // One group — a heading would just restate what every row under it is.
+      expect(container.querySelectorAll('[data-testid="dock-launcher-preset-group"]')).toHaveLength(
+        0
+      );
+    });
+  });
+
+  describe("preset persistence", () => {
+    beforeEach(() => {
+      mockMergedPresets = [{ id: "fast", name: "Fast" }];
+    });
+
+    it("clears the saved preset when the toolbar launches explicit Default", () => {
+      const { container } = renderButton({
+        agents: READY,
+        placement: "toolbar",
+        activeWorktreeId: "wt-1",
+      });
+      fireEvent.click(rowByName(container, "Claude"));
+
+      // Both halves of "explicit default": the agent-level preset and the
+      // worktree-scoped override.
+      expect(updateAgentMock).toHaveBeenCalledWith("claude", { presetId: undefined });
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-1", undefined);
+    });
+
+    it("persists a chosen preset to the active worktree", () => {
+      const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+      fireEvent.click(presetRows(container)[1]!);
+
+      expect(updateWorktreePresetMock).toHaveBeenCalledWith("claude", "wt-1", "fast");
+      // A named pick is not a reset, so the agent-level preset is left alone.
+      expect(updateAgentMock).not.toHaveBeenCalled();
+    });
+
+    it("writes no scope when there is no active worktree", () => {
+      const { container } = renderButton({
+        agents: READY,
+        placement: "toolbar",
+        activeWorktreeId: null,
+      });
+      fireEvent.click(rowByName(container, "Claude"));
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+    });
+
+    it("persists nothing when a dock row inherits its saved preset", () => {
+      const { container } = renderButton({
+        agents: READY,
+        placement: "dock",
+        activeWorktreeId: "wt-1",
+      });
+      fireEvent.click(rowByName(container, "Claude"));
+
+      expect(updateAgentMock).not.toHaveBeenCalled();
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("placement variants", () => {
+    it("anchors below the trigger in the toolbar and above it in the dock", () => {
+      expect(renderButton({ placement: "toolbar" }).container).toBeTruthy();
+      expect(popoverSide).toBe("bottom");
+      expect(renderButton({ placement: "dock" }).container).toBeTruthy();
+      expect(popoverSide).toBe("top");
+    });
+
+    it("forwards data-toolbar-item so the toolbar's roving focus can see it", () => {
+      const { getByLabelText } = renderButton({
+        placement: "toolbar",
+        "data-toolbar-item": "",
+      });
+      expect(getByLabelText("Launcher").hasAttribute("data-toolbar-item")).toBe(true);
+    });
+
+    it("leaves the dock trigger out of the toolbar sweep", () => {
+      const { getByLabelText } = renderButton({ placement: "dock" });
+      expect(getByLabelText("Open launcher").hasAttribute("data-toolbar-item")).toBe(false);
+    });
+
+    it("offers the same inventory in both placements", () => {
+      const names = (c: HTMLElement) =>
+        options(c).map((o) => o.getAttribute("aria-label")?.split(",")[0]);
+      const toolbar = names(renderButton({ agents: READY, placement: "toolbar" }).container);
+      const dock = names(renderButton({ agents: READY, placement: "dock" }).container);
+      // One launcher, two placements, same inventory — the issue's end state.
+      expect(new Set(toolbar)).toEqual(new Set(dock));
     });
   });
 });

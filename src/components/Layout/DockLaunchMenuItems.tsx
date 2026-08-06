@@ -96,7 +96,13 @@ export function DockLaunchMenuItems({
         className={!isLaunchable ? "opacity-70" : undefined}
         title={!isLaunchable ? settingsTooltip : undefined}
         onSelect={() =>
-          activate({ category: "agent", key: `agent:${agent.id}`, name: agent.name, agent })
+          activate({
+            category: "agent",
+            key: `agent:${agent.id}`,
+            name: agent.name,
+            agent,
+            agentBand: isLaunchable ? "launch" : "needs-setup",
+          })
         }
       >
         {Icon ? (

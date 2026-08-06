@@ -102,8 +102,8 @@ describe("Toolbar keyboard navigation — issue #2814", () => {
       );
     });
 
-    it("passes data-toolbar-item to LauncherMenuButton", () => {
-      expect(source).toMatch(/<LauncherMenuButton[\s\S]*?data-toolbar-item=""/);
+    it("passes data-toolbar-item to the launcher", () => {
+      expect(source).toMatch(/<DockLaunchButton[\s\S]*?data-toolbar-item=""/);
     });
 
     it("passes data-toolbar-item to VoiceRecordingToolbarButton", () => {
