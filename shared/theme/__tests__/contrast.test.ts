@@ -390,36 +390,73 @@ describe("getThemeContrastWarnings", () => {
     }
   });
 
+  // The dark palette surface is the sidebar at 94% over whatever the palette
+  // floats above, so these fixtures pin every backdrop to the sidebar's own
+  // colour to isolate the pair under test from that blend.
+  function makeFlatDarkScheme(overrides: Partial<AppColorSchemeTokens>): AppColorScheme {
+    return makeScheme({
+      "surface-sidebar": "#000000" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-grid": "#000000" as AppColorSchemeTokens["surface-grid"],
+      "surface-canvas": "#000000" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel": "#000000" as AppColorSchemeTokens["surface-panel"],
+      "surface-panel-elevated": "#000000" as AppColorSchemeTokens["surface-panel-elevated"],
+      ...overrides,
+    });
+  }
+
   it("fails an outline that clears the surrounding surface but not the row fill it encloses", () => {
     // The row lifts towards the outline on dark, so the surface pair is the
     // permissive one — an outline can pass it while vanishing into the fill it
     // actually borders. #5A5A5A is 3.04:1 on black and 1.52:1 on #767676.
-    const scheme = makeScheme({
-      "surface-sidebar": "#000000" as AppColorSchemeTokens["surface-sidebar"],
+    const scheme = makeFlatDarkScheme({
       "overlay-raised": "#767676" as AppColorSchemeTokens["overlay-raised"],
       "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
     });
-    const warnings = getThemeContrastWarnings(scheme);
-    expect(
-      warnings.filter((w) => w.message.includes("selection-outline against the selected row fill"))
-    ).toHaveLength(1);
-    expect(
-      warnings.filter((w) => w.message.includes("selection-outline against the surrounding"))
-    ).toHaveLength(0);
+    const failure = getThemeContrastWarnings(scheme).find((w) =>
+      w.message.includes("selection-outline against")
+    );
+    expect(failure?.message).toContain("the selected row fill");
+  });
+
+  it("scores the dark palette surface as translucent, not as the solid sidebar", () => {
+    // #5A5A5A clears 3:1 on a solid black sidebar, but the palette floats at 94%
+    // over the app, and admitting 6% of a bright plane behind it drops the pair
+    // below the floor. Scoring only the solid token would call this compliant.
+    const scheme = makeFlatDarkScheme({
+      "surface-panel-elevated": "#FFFFFF" as AppColorSchemeTokens["surface-panel-elevated"],
+      "overlay-raised": "#000000" as AppColorSchemeTokens["overlay-raised"],
+      "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
+    });
+    const failure = getThemeContrastWarnings(scheme).find((w) =>
+      w.message.includes("selection-outline against")
+    );
+    expect(failure?.message).toContain("the surrounding palette surface");
   });
 
   it("composites an rgba outline over the row fill rather than reading its raw alpha", () => {
     // At face value #FFFFFF would be 21:1 on this fill; at 10% alpha the pixel
     // that actually renders is ~#2C2C2C, which is nowhere near 3:1.
-    const scheme = makeScheme({
-      "surface-sidebar": "#141414" as AppColorSchemeTokens["surface-sidebar"],
+    const scheme = makeFlatDarkScheme({
       "overlay-raised": "#1E1E1E" as AppColorSchemeTokens["overlay-raised"],
       "selection-outline": "rgba(255, 255, 255, 0.1)" as AppColorSchemeTokens["selection-outline"],
     });
-    const warnings = getThemeContrastWarnings(scheme);
-    expect(
-      warnings.filter((w) => w.message.includes("selection-outline against the selected row fill"))
-    ).toHaveLength(1);
+    const failures = getThemeContrastWarnings(scheme).filter((w) =>
+      w.message.includes("selection-outline against")
+    );
+    expect(failures).toHaveLength(1);
+  });
+
+  it("composites an alpha-hex outline instead of reading it as opaque", () => {
+    // `#FFFFFF10` is 6% white. Treating the hex as opaque would score it 21:1
+    // and pass; the pixel that renders is ~#151515 on this fill.
+    const scheme = makeFlatDarkScheme({
+      "overlay-raised": "#0E0E0E" as AppColorSchemeTokens["overlay-raised"],
+      "selection-outline": "#FFFFFF10" as AppColorSchemeTokens["selection-outline"],
+    });
+    const failures = getThemeContrastWarnings(scheme).filter((w) =>
+      w.message.includes("selection-outline against")
+    );
+    expect(failures).toHaveLength(1);
   });
 
   it("reports the palette selection check as unevaluable when the outline is not hex or rgba", () => {

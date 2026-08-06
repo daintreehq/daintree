@@ -84,7 +84,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 
 The accent border and the 2px accent rail this recipe used to prescribe were removed in #11686: they put accent on the row, its rail and the focused input at once, breaking the one-load-bearing-signal rule. The palette input's focus lift draws the same `selection-outline` (ring at half strength), so the field and the selected row stay one treatment — change them together.
 
-`palette-row` is a forced-colors hook, not styling. Under `forced-colors: active` the fill is discarded, so `src/index.css` redraws the row from `SelectedItem`/`SelectedItemText`; the marker scopes that to palette rows, since `[role="option"]` is also used by the file pane, the settings selectors and the agent/forge dropdowns.
+`palette-row` is a forced-colors hook, not styling. Under `forced-colors: active` both the fill and the outline are stripped, so `src/index.css` falls back to a 2px `SelectedItem` outline. Deliberately an outline rather than a `SelectedItem` fill: these rows carry independently surfaced children (theme "Active" badges, action category chips, panel-kind icons with inline colour) that the engine maps to the forced palette on their own, and a fill would leave them painting `CanvasText` on `SelectedItem` — a pair with no contrast guarantee. The marker scopes the rule to palette rows, since `[role="option"]` is also used by the file pane, the settings selectors and the agent/forge dropdowns.
 
 ---
 

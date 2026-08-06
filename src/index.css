@@ -2586,21 +2586,20 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     outline-offset: -2px;
   }
 
-  /* The palette selected row is a raised fill plus a neutral outline, and the
-     fill is discarded here, so it redraws from the system selected-item pair.
-     Scoped to the `.palette-row` marker rather than [role="option"], which the
-     file pane, the settings selectors and the agent/forge dropdowns also use.
-     The descendant rule is load-bearing: children that set their own colour are
-     force-mapped to CanvasText independently of the row, which lands unreadable
-     on a SelectedItem fill. */
+  /* The palette selected row is a raised fill plus a neutral outline, both
+     stripped here, so it falls back to a system outline like the Radix rule
+     above. Deliberately an outline and not a SelectedItem fill: these rows carry
+     independently surfaced children (theme "Active" badges, action category
+     chips, panel-kind icons with inline colour), and the engine maps each of
+     those to the forced palette on its own — a fill would leave them painting
+     CanvasText-on-SelectedItem, a pair with no contrast guarantee. An outline
+     leaves the whole subtree on its Canvas/CanvasText pair and still marks the
+     row. Scoped to the `.palette-row` marker rather than [role="option"], which
+     the file pane, the settings selectors and the agent/forge dropdowns use
+     too. */
   .palette-row[aria-selected="true"] {
-    background-color: SelectedItem;
-    border-color: SelectedItem;
-  }
-
-  .palette-row[aria-selected="true"],
-  .palette-row[aria-selected="true"] * {
-    color: SelectedItemText;
+    outline: 2px solid SelectedItem;
+    outline-offset: -2px;
   }
 
   /* Macro-focus regions use a Tailwind ring (box-shadow) which is removed here.

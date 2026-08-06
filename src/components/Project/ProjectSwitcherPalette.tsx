@@ -438,7 +438,7 @@ function ProjectListItem({
  *
  * "Scratch" rides the secondary line rather than a chip: origin has to be
  * unambiguous, but it is not the row's headline, and a pill here would be a
- * second emphasis signal competing with the selection stripe.
+ * second emphasis signal competing with the selected row's own treatment.
  *
  * Action-free on purpose. Rename, save-as-project and delete are browse-mode
  * management — an inline rename editor would have to live inside the array the

@@ -591,9 +591,10 @@ function DefaultKeyboardHints() {
 // over the dock launcher's popover.
 //
 // The focus lift that pairs with it draws `selection-outline`, the same token
-// `PALETTE_ROW_CLASS` uses for the selected row, with the ring at half strength
-// so the field reads as the quieter half of one treatment rather than a second
-// colour; change them together. Neutral rather than accent (#11686): the row,
+// and the same strength `PALETTE_ROW_CLASS` uses for the selected row, so the
+// focused field and the selected row read as one treatment; the ring is that
+// colour again at half alpha, a halo around the border rather than a second
+// signal. Change them together. Neutral rather than accent (#11686): the row,
 // its old rail and this field were three accent signals in one focus region.
 // Tailwind needs the variants written out at each use site, so they live inline
 // below.
