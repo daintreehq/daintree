@@ -141,6 +141,16 @@ interface PreferencesState {
   fileBrowserAlwaysHiddenPatterns: string[];
   setFileBrowserAlwaysHiddenPatterns: (patterns: string[]) => void;
   resetFileBrowserAlwaysHiddenPatterns: () => void;
+  /**
+   * Whether the action palette's prefix table (`>` `@` `#` `:` `/`) has already
+   * had its one showing. Teaching content, not a setting — it earns a first
+   * opening and then stops being chrome every later open has to scroll past
+   * (#11690). Deliberately monotonic `false → true`: a view count would lose
+   * concurrent increments across project views, where this only ever converges
+   * on "seen".
+   */
+  hasSeenActionPalettePrefixHint: boolean;
+  markActionPalettePrefixHintSeen: () => void;
 }
 
 function isDockDensity(value: unknown): value is DockDensity {
@@ -210,6 +220,12 @@ function sanitizePersistedPreferences(
   }
   sanitized.skipPushConfirmByWorktreePath = validatedSkip;
 
+  // A non-boolean here would be truthy for any hand-edited string, retiring the
+  // hint for a user who never saw it.
+  if (typeof sanitized.hasSeenActionPalettePrefixHint !== "boolean") {
+    sanitized.hasSeenActionPalettePrefixHint = false;
+  }
+
   return sanitized;
 }
 
@@ -235,6 +251,7 @@ type PreferencesPersistedState = Pick<
   | "lastSelectedWorktreeRecipeIdByProject"
   | "skipPushConfirmByWorktreePath"
   | "fileBrowserAlwaysHiddenPatterns"
+  | "hasSeenActionPalettePrefixHint"
 >;
 
 const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
@@ -258,6 +275,7 @@ const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
   lastSelectedWorktreeRecipeIdByProject: {},
   skipPushConfirmByWorktreePath: {},
   fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN],
+  hasSeenActionPalettePrefixHint: false,
 };
 
 function coerceBool(value: unknown, fallback: boolean): boolean {
@@ -328,6 +346,10 @@ function toPreferencesPersisted(
     skipPushConfirmByWorktreePath: normalizeSkipMap(raw.skipPushConfirmByWorktreePath),
     fileBrowserAlwaysHiddenPatterns: sanitizeAlwaysHiddenPatterns(
       raw.fileBrowserAlwaysHiddenPatterns
+    ),
+    hasSeenActionPalettePrefixHint: coerceBool(
+      raw.hasSeenActionPalettePrefixHint,
+      d.hasSeenActionPalettePrefixHint
     ),
   };
 }
@@ -441,6 +463,14 @@ function mergePreferencesPersistedWrite({
         inc.fileBrowserAlwaysHiddenPatterns,
         disk.fileBrowserAlwaysHiddenPatterns
       ),
+      // A view that hydrated before a sibling marked the hint seen still holds
+      // `false`; without the writer-delta guard its next unrelated preference
+      // write would hand the user the hint a second time.
+      hasSeenActionPalettePrefixHint: pickFieldByWriterDelta(
+        base.hasSeenActionPalettePrefixHint,
+        inc.hasSeenActionPalettePrefixHint,
+        disk.hasSeenActionPalettePrefixHint
+      ),
     },
   };
 }
@@ -514,13 +544,15 @@ export const usePreferencesStore = create<PreferencesState>()(
         set({ fileBrowserAlwaysHiddenPatterns: sanitizeAlwaysHiddenPatterns(patterns) }),
       resetFileBrowserAlwaysHiddenPatterns: () =>
         set({ fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN] }),
+      hasSeenActionPalettePrefixHint: false,
+      markActionPalettePrefixHintSeen: () => set({ hasSeenActionPalettePrefixHint: true }),
     }),
     {
       name: "daintree-preferences",
       storage: createSafeJSONStorage<PreferencesPersistedState>({
         mergeOnWrite: mergePreferencesPersistedWrite,
       }),
-      version: 14,
+      version: 15,
       // Explicit persisted subset — matches the pre-existing default (setters are
       // dropped by JSON serialization); named so the write merge (#11351) has a
       // typed persisted shape to reconcile.
@@ -545,6 +577,7 @@ export const usePreferencesStore = create<PreferencesState>()(
         lastSelectedWorktreeRecipeIdByProject: state.lastSelectedWorktreeRecipeIdByProject,
         skipPushConfirmByWorktreePath: state.skipPushConfirmByWorktreePath,
         fileBrowserAlwaysHiddenPatterns: state.fileBrowserAlwaysHiddenPatterns,
+        hasSeenActionPalettePrefixHint: state.hasSeenActionPalettePrefixHint,
       }),
       // Runs on every hydration (unlike `migrate`, which Zustand skips when the
       // persisted version matches). Closed-set normalisation lives here so a
@@ -658,6 +691,14 @@ export const usePreferencesStore = create<PreferencesState>()(
             persisted.projectSwitcherOtherSortMode = DEFAULT_OTHER_PROJECTS_SORT_MODE;
           }
         }
+        if (version < 15 && isRecord(persisted)) {
+          // Existing users have never been shown the decaying prefix hint, so
+          // they get their one showing on the next action-palette open rather
+          // than inheriting "seen" from an absent key.
+          if (typeof persisted.hasSeenActionPalettePrefixHint !== "boolean") {
+            persisted.hasSeenActionPalettePrefixHint = false;
+          }
+        }
         return persisted as PreferencesState;
       },
     }
@@ -668,5 +709,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; fileBrowserAlwaysHiddenPatterns: string[] }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean }",
 });

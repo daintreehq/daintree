@@ -19,6 +19,7 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
       showProjectPulse?: boolean;
       reduceAnimations?: boolean;
       dockDensity?: string;
+      hasSeenActionPalettePrefixHint?: boolean;
       [key: string]: unknown;
     };
   };
@@ -155,6 +156,26 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     const written = readBlob(backing);
     expect(written.state.projectSwitcherOtherSortMode).toBe("alphabetical");
     expect(written.state.reduceAnimations).toBe(true);
+  });
+
+  it("does not re-teach the palette prefix hint a sibling view already spent", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setDockDensity("normal");
+
+    // Another project view showed the hint and retired it.
+    const disk = readBlob(backing);
+    disk.state.hasSeenActionPalettePrefixHint = true;
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    // This view still holds the pre-hydration `false`. Without the writer-delta
+    // guard its unrelated write would hand the user the hint a second time.
+    store.getState().setDockDensity("compact");
+
+    const written = readBlob(backing);
+    expect(written.state.hasSeenActionPalettePrefixHint).toBe(true);
+    expect(written.state.dockDensity).toBe("compact");
   });
 
   it("does not resurrect a recipe entry this view cleared, and keeps a sibling's", async () => {

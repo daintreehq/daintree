@@ -61,6 +61,7 @@ import type {
   UseActionPaletteReturn,
 } from "@/hooks/useActionPalette";
 import { usePaletteStore } from "@/store/paletteStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
 
 function makeItem(id: string, title: string): ActionPaletteItemType {
   return {
@@ -144,10 +145,15 @@ describe("ActionPalette", () => {
   beforeEach(() => {
     lastSearchablePaletteProps.current = null;
     usePaletteStore.setState({ activePaletteId: "action" });
+    // Real store, not a mock: the prefix hint's whole behaviour is that a
+    // render writes state a later render reads, so a non-reactive fixture would
+    // only ever prove the selector was called.
+    usePreferencesStore.setState({ hasSeenActionPalettePrefixHint: false });
   });
 
   afterEach(() => {
     usePaletteStore.setState({ activePaletteId: null });
+    usePreferencesStore.setState({ hasSeenActionPalettePrefixHint: false });
   });
 
   it("does not render the empty message when a typed query has zero matches", () => {
@@ -359,6 +365,9 @@ describe("ActionPalette", () => {
   });
 
   describe("prefix discoverability footer", () => {
+    const prefixRow = () => screen.queryByLabelText("Prefix shortcuts");
+    const seen = () => usePreferencesStore.getState().hasSeenActionPalettePrefixHint;
+
     it("renders the prefix table in the default empty-query footer", () => {
       render(<ActionPalette {...baseProps} />);
       // One chip per prefix — labels are lowercased for mid-sentence rendering.
@@ -378,16 +387,59 @@ describe("ActionPalette", () => {
           totalResults={1}
         />
       );
-      expect(screen.queryByText("worktrees")).toBeNull();
+      expect(prefixRow()).toBeNull();
     });
 
     it("hides the prefix table while a mode chip is active", () => {
       render(<ActionPalette {...baseProps} />);
       // Sanity: prefix row visible before any prefix is typed.
-      expect(screen.getByText("worktrees")).toBeTruthy();
+      expect(prefixRow()).toBeTruthy();
       fireKey(">");
       // Activating commands mode replaces the row with the mode-scoped hint.
-      expect(screen.queryByText("worktrees")).toBeNull();
+      expect(prefixRow()).toBeNull();
+    });
+
+    it("keeps the row for the whole opening when a query is typed and cleared", () => {
+      const { rerender } = render(<ActionPalette {...baseProps} />);
+      rerender(<ActionPalette {...baseProps} query="al" />);
+      expect(prefixRow()).toBeNull();
+      // Typing is not what spends the hint — only closing the palette is, so
+      // clearing the buffer inside the same opening brings the row back.
+      rerender(<ActionPalette {...baseProps} query="" />);
+      expect(prefixRow()).toBeTruthy();
+      expect(seen()).toBe(false);
+    });
+
+    it("retires the row once the opening that showed it closes", () => {
+      const { rerender } = render(<ActionPalette {...baseProps} />);
+      expect(prefixRow()).toBeTruthy();
+
+      rerender(<ActionPalette {...baseProps} isOpen={false} />);
+      expect(seen()).toBe(true);
+
+      rerender(<ActionPalette {...baseProps} isOpen />);
+      expect(prefixRow()).toBeNull();
+    });
+
+    it("suppresses the row for a user who has already seen it", () => {
+      usePreferencesStore.setState({ hasSeenActionPalettePrefixHint: true });
+      render(<ActionPalette {...baseProps} />);
+      expect(prefixRow()).toBeNull();
+    });
+
+    it("does not spend the hint on an opening that never showed the row", () => {
+      // Opened straight into a query — the row never rendered, so closing has
+      // nothing to consume and the next empty open still teaches.
+      const { rerender } = render(<ActionPalette {...baseProps} query="al" />);
+      rerender(<ActionPalette {...baseProps} query="al" isOpen={false} />);
+      expect(seen()).toBe(false);
+    });
+
+    it("keeps the scope-exit hint but not the close convention in commands mode", () => {
+      render(<ActionPalette {...baseProps} />);
+      fireKey(">");
+      expect(screen.getByText("exit scope")).toBeTruthy();
+      expect(screen.queryByText("close")).toBeNull();
     });
   });
 

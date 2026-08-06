@@ -360,9 +360,13 @@ function RunRow({
 }
 
 /**
- * `actionLabel` is null when nothing is listed, and the key hints go with it —
- * a footer offering "↵ Open" over a loading or empty list is chrome promising
- * a key that visibly does nothing.
+ * `actionLabel` is null when nothing is listed, and the hint goes with it — a
+ * footer offering "↵ Open" over a loading or empty list is chrome promising a
+ * key that visibly does nothing.
+ *
+ * What Enter does to the highlighted row is the whole of the left edge. Arrow
+ * keys moving a selection is a convention every list already teaches, so the
+ * footer no longer spends a slot restating it.
  *
  * `onShowDemand` turns the demand sentence into the control it was already
  * implying. "2 agents need you" stated a fact the surface gave no way to act
@@ -385,16 +389,10 @@ function PilotFooter({
     <div className="flex w-full items-center justify-between gap-3">
       <div className="flex items-center gap-3">
         {actionLabel !== null && (
-          <>
-            <span>
-              <kbd className={KBD_CLASS}>↵</kbd>
-              <span className="ml-1.5">{actionLabel}</span>
-            </span>
-            <span className="text-daintree-text/50">
-              <kbd className={KBD_CLASS}>↑↓</kbd>
-              <span className="ml-1.5">Navigate</span>
-            </span>
-          </>
+          <span>
+            <kbd className={KBD_CLASS}>↵</kbd>
+            <span className="ml-1.5">{actionLabel}</span>
+          </span>
         )}
       </div>
       {summary &&
