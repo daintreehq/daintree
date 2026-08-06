@@ -265,11 +265,12 @@ export function FileTreeView({
     ]
   );
 
-  // Keep the cursor on screen when it moves by keyboard. Runs after commit,
-  // never during render: an abandoned concurrent render would otherwise scroll
-  // for state that never committed, and suppress the scroll on the render that
-  // did. `auto` only scrolls when the row is actually outside the viewport, so
-  // clicking a visible row never yanks the list.
+  // Keep the cursor on screen when it moves. Runs after commit, never during
+  // render: an abandoned concurrent render would otherwise scroll for state
+  // that never committed, and suppress the scroll on the render that did.
+  // `scrollIntoView` leaves an already-visible row alone, so clicking a visible
+  // row never yanks the list; `auto` only picks an instant jump over a smooth
+  // one.
   //
   // Only two changes are worth revealing: the cursor moving to another row, and
   // a cursor that had no row acquiring one — a restored cursor on mount, or a
@@ -279,9 +280,9 @@ export function FileTreeView({
   // and scrolling for that drags the view off the folder the user just opened
   // (#11684). Live refreshes and re-sorts shift indices the same way.
   const previousCursorRef = useRef<{ path: string | null; found: boolean }>({
-    path: cursorPath,
-    // Never found to begin with, so a cursor that already resolves on the first
-    // commit still reads as newly appearing and gets revealed.
+    // Starts unfound so a cursor that already resolves on the first commit
+    // still reads as newly appearing and gets revealed.
+    path: null,
     found: false,
   });
   useEffect(() => {

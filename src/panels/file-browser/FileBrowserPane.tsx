@@ -1492,6 +1492,14 @@ export function FileBrowserPane({
           </div>
         )}
         <FileTreeView
+          // Keyed per panel for the same reason the cursor sync above carries
+          // an id: a tab group renders one unkeyed `GridPanel`, so two file
+          // browsers share this instance. Unkeyed, the tree also inherits the
+          // other panel's scroll position and its record of where the cursor
+          // last sat — and a cursor naming the same path in both panels then
+          // reads as one that never moved, so the second panel opens without
+          // revealing it.
+          key={id}
           rows={rows}
           cursorPath={cursorPath}
           // What the other column is showing, so the tree can mark it. Only
