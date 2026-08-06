@@ -51,6 +51,57 @@ describe("useSearchablePalette", () => {
     expect(result.current.selectedIndex).toBe(-1);
   });
 
+  describe("query-sensitive maxResults", () => {
+    const items: PaletteItem[] = Array.from({ length: 25 }, (_, i) => ({
+      id: `item-${i}`,
+      name: `Item ${i}`,
+    }));
+    // Uncapped while browsing, capped once the user searches.
+    const byQuery = (query: string) => (query.trim() ? 20 : Number.POSITIVE_INFINITY);
+
+    it("applies the limit the function returns for the current query", () => {
+      const { result } = renderHook(() =>
+        useSearchablePalette<PaletteItem>({ items, maxResults: byQuery })
+      );
+
+      expect(result.current.results).toHaveLength(items.length);
+
+      act(() => result.current.setQuery("item"));
+
+      expect(result.current.results).toHaveLength(20);
+      expect(result.current.totalResults).toBe(items.length);
+    });
+
+    it("hands back the filter's own array when nothing is sliced off", () => {
+      // The action palette pairs section descriptors with the exact array its
+      // filter produced, so an untruncated pass must preserve that identity.
+      const filtered: PaletteItem[] = items.slice(0, 3);
+      const { result } = renderHook(() =>
+        useSearchablePalette<PaletteItem>({
+          items,
+          filterFn: () => filtered,
+          maxResults: byQuery,
+        })
+      );
+
+      expect(result.current.results).toBe(filtered);
+    });
+
+    it("copies rather than aliases the filter's array once truncation applies", () => {
+      const filtered: PaletteItem[] = items;
+      const { result } = renderHook(() =>
+        useSearchablePalette<PaletteItem>({
+          items,
+          filterFn: () => filtered,
+          maxResults: 5,
+        })
+      );
+
+      expect(result.current.results).not.toBe(filtered);
+      expect(result.current.results).toHaveLength(5);
+    });
+  });
+
   describe("totalResults", () => {
     it("exposes total count before slicing when results exceed maxResults", () => {
       const items: PaletteItem[] = Array.from({ length: 25 }, (_, i) => ({

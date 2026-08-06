@@ -8,7 +8,15 @@ export interface UseSearchablePaletteOptions<T> {
   items: T[];
   fuseOptions?: IFuseOptions<T>;
   filterFn?: (items: T[], query: string) => T[];
-  maxResults?: number;
+  /**
+   * Cap on rendered results. Pass a function to vary the cap by query — the
+   * action palette uncaps its empty-query browse inventory while keeping the
+   * search path at 20. Resolved against the *deferred* query, the same one
+   * `filterFn` sees, so the cap never disagrees with the results it slices.
+   * Use a stable (module-level or memoized) function; an inline arrow
+   * re-runs the filter memo on every render.
+   */
+  maxResults?: number | ((query: string) => number);
   /** Return false to skip item during keyboard navigation (e.g. disabled items) */
   canNavigate?: (item: T) => boolean;
   /** Reset selected index when results change. Default: true */
@@ -122,8 +130,15 @@ export function useSearchablePalette<T>(
       filtered = items;
     }
 
+    const limit = typeof maxResults === "function" ? maxResults(deferredQuery) : maxResults;
+
     return {
-      results: filtered.slice(0, maxResults),
+      // Return `filtered` itself when nothing is cut. Beyond skipping a copy of
+      // a several-hundred-entry list on every render, this preserves the array
+      // identity `filterFn` returned, which lets a caller recognise its own
+      // memoized result set — the action palette pairs its section descriptors
+      // with the exact array that produced them that way.
+      results: filtered.length <= limit ? filtered : filtered.slice(0, limit),
       totalResults: filtered.length,
       matchesById: matches,
     };
@@ -227,11 +242,19 @@ export function useSearchablePalette<T>(
       setLocalIsOpen(true);
     }
     setQuery("");
+    // Drop the follow anchor: an explicit open/close is a fresh start, not a
+    // result-set change to be tracked through. Leaving it set lets the
+    // reconcile effect chase the previously selected id into the next result
+    // set — harmless when that set was a short recents rail, but the action
+    // palette's empty-query inventory contains nearly every action, so the
+    // last search hit is almost always in there and reopening would land
+    // selection deep in the list instead of at the top.
+    selectedItemIdRef.current = null;
     // Reset to the first navigable item (not blindly 0) so that
     // palettes with disabled leading items start on the correct row.
     const firstNav = canNavigate && results.length > 0 ? findNavigable(0, 1) : 0;
-    updateSelectedIndex(firstNav);
-  }, [paletteId, canNavigate, results.length, findNavigable, updateSelectedIndex]);
+    setSelectedIndex(firstNav);
+  }, [paletteId, canNavigate, results.length, findNavigable]);
 
   const close = useCallback(() => {
     if (paletteId != null) {
@@ -240,8 +263,9 @@ export function useSearchablePalette<T>(
       setLocalIsOpen(false);
     }
     setQuery("");
-    updateSelectedIndex(0);
-  }, [paletteId, updateSelectedIndex]);
+    selectedItemIdRef.current = null;
+    setSelectedIndex(0);
+  }, [paletteId]);
 
   const toggle = useCallback(() => {
     if (isOpen) {

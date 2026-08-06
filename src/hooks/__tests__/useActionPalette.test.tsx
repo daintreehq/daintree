@@ -67,6 +67,25 @@ function makeEntry(
   return { id, title, description: "", category, kind: "command", enabled, danger };
 }
 
+type PaletteLike = {
+  results: { id: string }[];
+  sections: readonly { id: string; label: string; start: number; count: number }[];
+};
+
+/** Ids of the rows a named section covers, or [] when the section isn't rendered. */
+function sectionIds(palette: PaletteLike, sectionId: string): string[] {
+  const section = palette.sections.find((s) => s.id === sectionId);
+  if (!section) return [];
+  return palette.results.slice(section.start, section.start + section.count).map((r) => r.id);
+}
+
+/** Ids of every row below Favorites and Recently used, in render order. */
+function browseIds(palette: PaletteLike): string[] {
+  return palette.sections
+    .filter((s) => s.id.startsWith("category:"))
+    .flatMap((s) => palette.results.slice(s.start, s.start + s.count).map((r) => r.id));
+}
+
 describe("useActionPalette", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -112,7 +131,7 @@ describe("useActionPalette", () => {
     });
   });
 
-  it("returns empty results with empty query and empty MRU so the hint can render", async () => {
+  it("browses the whole inventory with an empty query and empty MRU", async () => {
     listMock.mockReturnValue([
       makeEntry("c.action", "Charlie"),
       makeEntry("a.action", "Alpha"),
@@ -129,12 +148,17 @@ describe("useActionPalette", () => {
       expect(result.current.isOpen).toBe(true);
     });
 
-    expect(result.current.results).toEqual([]);
-    expect(result.current.totalResults).toBe(0);
-    expect(result.current.isShowingRecentlyUsed).toBe(false);
+    // Nothing pinned and nothing used yet, so every action is reachable by
+    // scrolling — sorted by title within its category, not by registry order.
+    await waitFor(() => {
+      expect(browseIds(result.current)).toEqual(["a.action", "b.action", "c.action"]);
+    });
+    expect(sectionIds(result.current, "favorites")).toEqual([]);
+    expect(sectionIds(result.current, "recently-used")).toEqual([]);
+    expect(result.current.totalResults).toBe(3);
   });
 
-  it("surfaces only recently-used actions on the empty query state", async () => {
+  it("puts recently-used actions above the rest of the inventory", async () => {
     listMock.mockReturnValue([
       makeEntry("c.action", "Charlie"),
       makeEntry("a.action", "Alpha"),
@@ -150,11 +174,145 @@ describe("useActionPalette", () => {
     });
 
     await waitFor(() => {
+      expect(result.current.results.length).toBe(3);
+    });
+
+    expect(sectionIds(result.current, "recently-used")).toEqual(["b.action", "c.action"]);
+    // The recents band no longer terminates the list: what wasn't promoted is
+    // still browsable below it.
+    expect(browseIds(result.current)).toEqual(["a.action"]);
+    expect(result.current.results.map((r) => r.id)).toEqual(["b.action", "c.action", "a.action"]);
+  });
+
+  it("labels a section for every run of results, covering them with no gaps or overlaps", async () => {
+    listMock.mockReturnValue([
+      makeEntry("t.one", "Terminal one", true, "terminal"),
+      makeEntry("g.one", "Git one", true, "git"),
+      makeEntry("w.one", "Worktree one", true, "worktree"),
+      makeEntry("p.one", "Pinned one", true, "git"),
+      makeEntry("r.one", "Recent one", true, "terminal"),
+    ]);
+
+    useActionMruStore.getState().hydrateActionMru(["r.one"]);
+    useActionPrefsStore.getState().pinAction("p.one");
+
+    const { result } = renderHook(() => useActionPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => {
+      expect(result.current.results.length).toBe(5);
+    });
+
+    const { sections, results } = result.current;
+    // Contiguous and total: every row belongs to exactly one section.
+    let cursor = 0;
+    for (const section of sections) {
+      expect(section.start).toBe(cursor);
+      expect(section.count).toBeGreaterThan(0);
+      cursor += section.count;
+    }
+    expect(cursor).toBe(results.length);
+
+    // Curated category order puts worktrees ahead of git ahead of terminals,
+    // independent of the order the manifest listed them in.
+    expect(sections.map((s) => s.id)).toEqual([
+      "favorites",
+      "recently-used",
+      "category:worktree",
+      "category:git",
+      "category:terminal",
+    ]);
+    expect(sections.map((s) => s.label)).toEqual([
+      "Favorites",
+      "Recently used",
+      "Worktrees",
+      "Git",
+      "Terminals",
+    ]);
+  });
+
+  it("lists every eligible action exactly once across all sections", async () => {
+    const entries = [
+      makeEntry("a.action", "Alpha", true, "git"),
+      makeEntry("b.action", "Bravo", true, "terminal"),
+      makeEntry("c.action", "Charlie", true, "git"),
+      makeEntry("d.action", "Delta", true, "worktree"),
+    ];
+    listMock.mockReturnValue(entries);
+
+    // Pin one and recently-use another so both promotion paths are exercised.
+    useActionMruStore.getState().hydrateActionMru(["b.action"]);
+    useActionPrefsStore.getState().pinAction("c.action");
+
+    const { result } = renderHook(() => useActionPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => {
+      expect(result.current.results.length).toBe(entries.length);
+    });
+
+    const ids = result.current.results.map((r) => r.id);
+    // A duplicated id would collide on React keys, the `action-option-{id}`
+    // DOM id behind aria-activedescendant, and the selection-follow lookup.
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.slice().sort()).toEqual(entries.map((e) => e.id).sort());
+  });
+
+  it("keeps the browse order fixed when frecency changes", async () => {
+    const entries = [
+      makeEntry("a.action", "Alpha", true, "git"),
+      makeEntry("b.action", "Bravo", true, "git"),
+      makeEntry("c.action", "Charlie", true, "git"),
+    ];
+    listMock.mockReturnValue(entries);
+
+    const { result, rerender } = renderHook(() => useActionPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => {
+      expect(browseIds(result.current)).toEqual(["a.action", "b.action", "c.action"]);
+    });
+
+    // Using an action promotes it into Recently used, but must not reshuffle
+    // what remains below — a browse list that reorders itself isn't browsable.
+    act(() => {
+      useActionMruStore.getState().recordActionMru("c.action");
+    });
+    rerender();
+
+    await waitFor(() => {
+      expect(sectionIds(result.current, "recently-used")).toEqual(["c.action"]);
+    });
+    expect(browseIds(result.current)).toEqual(["a.action", "b.action"]);
+  });
+
+  it("groups unknown categories after known ones without dropping their actions", async () => {
+    listMock.mockReturnValue([
+      makeEntry("plug.one", "Plugin thing", true, "acmePlugin"),
+      makeEntry("git.one", "Git thing", true, "git"),
+    ]);
+
+    const { result } = renderHook(() => useActionPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => {
       expect(result.current.results.length).toBe(2);
     });
 
-    expect(result.current.results.map((r) => r.id)).toEqual(["b.action", "c.action"]);
-    expect(result.current.isShowingRecentlyUsed).toBe(true);
+    expect(result.current.sections.map((s) => s.label)).toEqual(["Git", "Acme plugin"]);
+    expect(browseIds(result.current)).toEqual(["git.one", "plug.one"]);
   });
 
   it("keeps disabled MRU actions below enabled MRU actions on the empty state", async () => {
@@ -178,7 +336,11 @@ describe("useActionPalette", () => {
       expect(result.current.results.length).toBe(3);
     });
 
-    expect(result.current.results.map((r) => r.id)).toEqual(["c.action", "a.action", "b.action"]);
+    expect(sectionIds(result.current, "recently-used")).toEqual([
+      "c.action",
+      "a.action",
+      "b.action",
+    ]);
   });
 
   it("ignores stale MRU ids that no longer exist in the action manifest", async () => {
@@ -198,10 +360,10 @@ describe("useActionPalette", () => {
       expect(result.current.results.length).toBe(2);
     });
 
-    expect(result.current.results.map((r) => r.id)).toEqual(["b.action", "a.action"]);
+    expect(sectionIds(result.current, "recently-used")).toEqual(["b.action", "a.action"]);
   });
 
-  it("caps recently-used results at 10 entries", async () => {
+  it("caps the recents band well short of the inventory and browses the overflow", async () => {
     const entries = Array.from({ length: 15 }, (_, i) =>
       makeEntry(`action.${i.toString().padStart(2, "0")}`, `Action ${i}`)
     );
@@ -216,10 +378,24 @@ describe("useActionPalette", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.results.length).toBe(10);
+      expect(result.current.results.length).toBe(entries.length);
     });
 
-    expect(result.current.isShowingRecentlyUsed).toBe(true);
+    const recents = sectionIds(result.current, "recently-used");
+    // The band is a short recall rail, not the whole list — it must leave room
+    // for the categories below it.
+    expect(recents.length).toBeGreaterThan(0);
+    expect(recents.length).toBeLessThan(entries.length / 2);
+    expect(recents).toEqual(entries.slice(0, recents.length).map((e) => e.id));
+
+    // MRU entries past the cap aren't lost — they're browsable below. Compare
+    // as sets: the browse rail is title-sorted, which is not the MRU order.
+    expect(browseIds(result.current).sort()).toEqual(
+      entries
+        .slice(recents.length)
+        .map((e) => e.id)
+        .sort()
+    );
   });
 
   it("does not let disabled MRU entries crowd out enabled ones at the cap boundary", async () => {
@@ -244,14 +420,14 @@ describe("useActionPalette", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.results.length).toBe(10);
+      expect(result.current.results.length).toBe(disabled.length + enabled.length);
     });
 
-    // All 7 enabled entries must appear (no disabled item displaces them),
-    // followed by the first 3 disabled by MRU order.
-    const ids = result.current.results.map((r) => r.id);
-    expect(ids.slice(0, 7)).toEqual(enabled.map((e) => e.id));
-    expect(ids.slice(7)).toEqual(disabled.slice(0, 3).map((e) => e.id));
+    // Every slot in the capped band goes to an enabled action; no disabled
+    // item displaces one despite leading the MRU order.
+    const recents = sectionIds(result.current, "recently-used");
+    expect(recents).toEqual(enabled.slice(0, recents.length).map((e) => e.id));
+    expect(recents.every((id) => id.startsWith("enabled."))).toBe(true);
   });
 
   it("treats whitespace-only query as the recently-used branch", async () => {
@@ -272,11 +448,10 @@ describe("useActionPalette", () => {
       expect(result.current.results.length).toBe(2);
     });
 
-    expect(result.current.results.map((r) => r.id)).toEqual(["b.action", "a.action"]);
-    expect(result.current.isShowingRecentlyUsed).toBe(true);
+    expect(sectionIds(result.current, "recently-used")).toEqual(["b.action", "a.action"]);
   });
 
-  it("clears the recently-used flag once the user starts typing", async () => {
+  it("drops the section grouping once the user starts typing", async () => {
     listMock.mockReturnValue([makeEntry("a.action", "Alpha"), makeEntry("b.action", "Bravo")]);
     useActionMruStore.getState().hydrateActionMru(["a.action"]);
 
@@ -284,13 +459,45 @@ describe("useActionPalette", () => {
 
     act(() => result.current.open());
 
-    await waitFor(() => expect(result.current.isShowingRecentlyUsed).toBe(true));
+    await waitFor(() => expect(result.current.sections.length).toBeGreaterThan(0));
 
     act(() => result.current.setQuery("brav"));
 
-    await waitFor(() => expect(result.current.isShowingRecentlyUsed).toBe(false), {
+    // Ranking replaces grouping: a relevance-ordered list has no stable
+    // category runs to label.
+    await waitFor(() => expect(result.current.sections).toEqual([]), { timeout: 2000 });
+
+    act(() => result.current.setQuery(""));
+
+    await waitFor(() => expect(result.current.sections.length).toBeGreaterThan(0), {
       timeout: 2000,
     });
+  });
+
+  it("caps a typed search while reporting the true match count, and uncaps browsing", async () => {
+    // More actions than the search cap, all matching the same query.
+    const entries = Array.from({ length: 26 }, (_, i) =>
+      makeEntry(`match.${i.toString().padStart(2, "0")}`, `Matchable ${i}`)
+    );
+    listMock.mockReturnValue(entries);
+
+    const { result } = renderHook(() => useActionPalette());
+
+    act(() => result.current.open());
+
+    // The browse rail is the inventory, so it is not capped.
+    await waitFor(() => expect(result.current.results.length).toBe(entries.length));
+
+    act(() => result.current.setQuery("matchable"));
+
+    await waitFor(() => expect(result.current.results.length).toBeLessThan(entries.length), {
+      timeout: 2000,
+    });
+
+    // The cap trims what is rendered but must not falsify the total, or the
+    // "N more results not shown" notice silently stops firing.
+    expect(result.current.totalResults).toBe(entries.length);
+    expect(result.current.results.length).toBeLessThan(result.current.totalResults);
   });
 
   it("records frecency when executeAction is called on enabled item", async () => {
@@ -993,7 +1200,8 @@ describe("useActionPalette", () => {
       });
 
       expect(result.current.results.map((r) => r.id)).toEqual(["a.action", "b.action", "c.action"]);
-      expect(result.current.pinnedCount).toBe(1);
+      expect(sectionIds(result.current, "favorites")).toEqual(["a.action"]);
+      expect(sectionIds(result.current, "recently-used")).toEqual(["b.action", "c.action"]);
     });
 
     it("does not duplicate a pinned id that also appears in MRU", async () => {
@@ -1009,10 +1217,11 @@ describe("useActionPalette", () => {
       await waitFor(() => expect(result.current.results.length).toBe(2));
 
       expect(result.current.results.map((r) => r.id)).toEqual(["a.action", "b.action"]);
-      expect(result.current.pinnedCount).toBe(1);
+      expect(sectionIds(result.current, "favorites")).toEqual(["a.action"]);
+      expect(sectionIds(result.current, "recently-used")).toEqual(["b.action"]);
     });
 
-    it("hides actions from the Recently used rail while keeping them in MRU", async () => {
+    it("hides actions from the Recently used rail while keeping them browsable", async () => {
       listMock.mockReturnValue([
         makeEntry("a.action", "Alpha"),
         makeEntry("b.action", "Bravo"),
@@ -1026,11 +1235,12 @@ describe("useActionPalette", () => {
 
       act(() => result.current.open());
 
-      await waitFor(() => expect(result.current.results.length).toBe(2));
+      await waitFor(() => expect(result.current.results.length).toBe(3));
 
-      const ids = result.current.results.map((r) => r.id);
-      expect(ids).not.toContain("b.action");
-      expect(ids).toEqual(["a.action", "c.action"]);
+      // Hiding demotes an action out of frecency; it doesn't retire it, so it
+      // stays reachable in its category.
+      expect(sectionIds(result.current, "recently-used")).toEqual(["a.action", "c.action"]);
+      expect(browseIds(result.current)).toEqual(["b.action"]);
     });
 
     it("refuses to pin a danger:'confirm' action and returns false", async () => {
@@ -1090,6 +1300,29 @@ describe("useActionPalette", () => {
       expect(ids).toEqual(["a.action"]);
     });
 
+    it("keeps danger:'confirm' actions off the browse rail but findable by search", async () => {
+      listMock.mockReturnValue([
+        makeEntry("a.action", "Alpha", true, "worktree"),
+        makeEntry("worktree.delete", "Delete worktree", true, "worktree", "confirm"),
+      ]);
+
+      const { result } = renderHook(() => useActionPalette());
+
+      act(() => result.current.open());
+
+      // Scrolling an inventory isn't naming a destructive action, so the
+      // empty-query rail stays confirm-free — as Favorites and Recently used
+      // already are.
+      await waitFor(() => expect(browseIds(result.current)).toEqual(["a.action"]));
+
+      act(() => result.current.setQuery("delete worktree"));
+
+      await waitFor(
+        () => expect(result.current.results.map((r) => r.id)).toContain("worktree.delete"),
+        { timeout: 2000 }
+      );
+    });
+
     it("ignores hidden ids during typed search (only the empty-query rail evicts)", async () => {
       listMock.mockReturnValue([makeEntry("a.action", "Alpha"), makeEntry("b.action", "Bravo")]);
       useActionPrefsStore.getState().hideAction("a.action");
@@ -1108,7 +1341,7 @@ describe("useActionPalette", () => {
       expect(result.current.results.map((r) => r.id)).toContain("a.action");
     });
 
-    it("pinnedCount is 0 during typed search even when pinned items are in results", async () => {
+    it("reports no sections during typed search even when pinned items are in results", async () => {
       listMock.mockReturnValue([makeEntry("a.action", "Alpha"), makeEntry("b.action", "Bravo")]);
       useActionPrefsStore.getState().pinAction("a.action");
 
@@ -1121,7 +1354,62 @@ describe("useActionPalette", () => {
         timeout: 2000,
       });
 
-      expect(result.current.pinnedCount).toBe(0);
+      expect(result.current.sections).toEqual([]);
+    });
+
+    it("keeps selectedIndex inside results when the list collapses under a query", async () => {
+      const entries = Array.from({ length: 30 }, (_, i) =>
+        makeEntry(`action.${i.toString().padStart(2, "0")}`, `Action ${i}`)
+      );
+      listMock.mockReturnValue(entries);
+
+      const { result } = renderHook(() => useActionPalette());
+
+      act(() => result.current.open());
+
+      await waitFor(() => expect(result.current.results.length).toBe(entries.length));
+
+      // Select deep in the browse list, then narrow to a much shorter set. The
+      // stored index is reconciled an effect later, so the read must not hand
+      // out an index past the end in the meantime.
+      act(() => result.current.setSelectedIndex(entries.length - 1));
+      act(() => result.current.setQuery("Action 7"));
+
+      await waitFor(() => expect(result.current.results.length).toBeLessThan(entries.length), {
+        timeout: 2000,
+      });
+
+      expect(result.current.selectedIndex).toBeGreaterThanOrEqual(0);
+      expect(result.current.selectedIndex).toBeLessThan(result.current.results.length);
+      // The clamped index must name a real row, so Enter can't silently no-op.
+      expect(result.current.results[result.current.selectedIndex]).toBeDefined();
+    });
+
+    it("reopens at the top of the browse rail instead of chasing the last search hit", async () => {
+      const entries = [
+        makeEntry("a.action", "Alpha", true, "git"),
+        makeEntry("m.action", "Mike", true, "git"),
+        makeEntry("z.action", "Zulu", true, "git"),
+      ];
+      listMock.mockReturnValue(entries);
+
+      const { result } = renderHook(() => useActionPalette());
+
+      act(() => result.current.open());
+      act(() => result.current.setQuery("zulu"));
+
+      await waitFor(() => expect(result.current.results.map((r) => r.id)).toEqual(["z.action"]), {
+        timeout: 2000,
+      });
+
+      act(() => result.current.close());
+      act(() => result.current.open());
+
+      await waitFor(() => expect(result.current.results.length).toBe(entries.length));
+
+      // Without clearing the follow anchor on close, reconciliation would chase
+      // "z.action" into the inventory and land selection at the bottom.
+      expect(result.current.selectedIndex).toBe(0);
     });
   });
 
