@@ -81,6 +81,27 @@ describe("useSearchablePalette", () => {
     expect(result.current.selectedIndex).toBe(1);
   });
 
+  it("keeps the selection anchor consistent across back-to-back updates in one tick", () => {
+    // The index and its anchor id are mirrored in refs that the reconcile
+    // effect trusts to agree. Resolving them through a setState updater would
+    // put those writes in the render phase, where React can re-run or discard
+    // them; two moves in a single tick is the cheap way to prove each write
+    // lands exactly once and in order.
+    const items: PaletteItem[] = ["a", "b", "c"].map((id) => ({ id, name: id }));
+
+    const { result } = renderHook(() =>
+      useSearchablePalette<PaletteItem>({ items, maxResults: 20 })
+    );
+
+    act(() => {
+      result.current.selectNext();
+      result.current.selectNext();
+    });
+
+    expect(result.current.selectedIndex).toBe(2);
+    expect(result.current.results[result.current.selectedIndex]?.id).toBe("c");
+  });
+
   it("steps from the visible row when the stored index is out of range", () => {
     const items: PaletteItem[] = [
       { id: "a", name: "a" },

@@ -191,15 +191,19 @@ export function useSearchablePalette<T>(
 
   const updateSelectedIndex = useCallback(
     (next: number | ((prev: number) => number)): void => {
-      setSelectedIndex((prev) => {
-        const value = typeof next === "function" ? next(prev) : next;
-        const item = results[value];
-        if (item != null) {
-          selectedItemIdRef.current = getItemId(item);
-        }
-        selectedIndexRef.current = value;
-        return value;
-      });
+      // Resolved against the ref rather than inside a setState updater. An
+      // updater runs during render and React may re-run or discard one while
+      // re-basing work, which would leave these refs describing a selection
+      // that never committed — and the reconcile effect below trusts them to
+      // agree with each other. Every write lands here, so the ref is as current
+      // as the state it mirrors.
+      const value = typeof next === "function" ? next(selectedIndexRef.current) : next;
+      const item = results[value];
+      if (item != null) {
+        selectedItemIdRef.current = getItemId(item);
+      }
+      selectedIndexRef.current = value;
+      setSelectedIndex(value);
     },
     [results, getItemId]
   );

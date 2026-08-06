@@ -426,6 +426,11 @@ export function ActionPalette({
             onUnpin={unpinAction}
             onHide={hideAction}
             footerHintId={footerHintId}
+            // Redundant on this path — the search body has no headers to throw
+            // the count off — but stated anyway so a row announces the same way
+            // whichever body rendered it.
+            posInSet={index + 1}
+            setSize={results.length}
           />
         );
       }}
