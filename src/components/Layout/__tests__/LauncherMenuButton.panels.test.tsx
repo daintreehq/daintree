@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   LAUNCHER_PANEL_BUTTON_IDS,
+  LAUNCHER_PANEL_KIND_TO_BUTTON_ID,
+  getLauncherPanelButtonIdForKind,
   isPanelButtonOnToolbar,
   isLauncherPanelButtonId,
 } from "@shared/types/toolbar";
@@ -51,6 +53,47 @@ describe("isPanelButtonOnToolbar", () => {
     }
     expect(isLauncherPanelButtonId("launcher")).toBe(false);
     expect(isLauncherPanelButtonId("claude")).toBe(false);
+  });
+});
+
+describe("getLauncherPanelButtonIdForKind", () => {
+  it("resolves the dev preview kind to the button id it does not share a name with", () => {
+    // The one pair where the panel-kind vocabulary and the toolbar vocabulary
+    // disagree. A surface testing `isLauncherPanelButtonId(kindId)` instead
+    // drops this row and reports nothing.
+    expect(getLauncherPanelButtonIdForKind("dev-preview")).toBe("dev-server");
+    expect(getLauncherPanelButtonIdForKind("dev-server")).toBeUndefined();
+  });
+
+  it("resolves every mapped kind to an id the toolbar list recognises", () => {
+    // The map is the only thing standing between a launcher row and a write to
+    // a button id nothing renders.
+    for (const kindId of Object.keys(LAUNCHER_PANEL_KIND_TO_BUTTON_ID)) {
+      const buttonId = getLauncherPanelButtonIdForKind(kindId);
+      expect(buttonId).toBeDefined();
+      expect(isLauncherPanelButtonId(buttonId!)).toBe(true);
+    }
+  });
+
+  it("covers every pinnable button id, so no panel row is left unpinnable", () => {
+    const mapped = new Set(Object.values(LAUNCHER_PANEL_KIND_TO_BUTTON_ID));
+    expect([...LAUNCHER_PANEL_BUTTON_IDS].filter((id) => !mapped.has(id))).toEqual([]);
+  });
+
+  it("returns undefined for kinds with no toolbar button", () => {
+    // Panel kinds that ship in the launcher but have no button: they need a
+    // resolver that says so rather than one that throws or guesses.
+    expect(getLauncherPanelButtonIdForKind("review")).toBeUndefined();
+    expect(getLauncherPanelButtonIdForKind("diff")).toBeUndefined();
+    expect(getLauncherPanelButtonIdForKind("file")).toBeUndefined();
+    expect(getLauncherPanelButtonIdForKind("some-plugin-kind")).toBeUndefined();
+  });
+
+  it("does not resolve inherited Object properties as button ids", () => {
+    // A plugin kind is an arbitrary string reaching a plain-object lookup.
+    expect(getLauncherPanelButtonIdForKind("constructor")).toBeUndefined();
+    expect(getLauncherPanelButtonIdForKind("toString")).toBeUndefined();
+    expect(getLauncherPanelButtonIdForKind("__proto__")).toBeUndefined();
   });
 });
 

@@ -153,7 +153,11 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   const agentAvailability = useCliAvailabilityStore((s) => s.availability);
+  // Both side arrays: either one renders an agent button, so `pinnedCount` has
+  // to count them both or the launcher's Pinned band disagrees with the pin icon
+  // on its own rows.
   const leftButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.leftButtons));
+  const rightButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.rightButtons));
   const setDockDensity = usePreferencesStore((s) => s.setDockDensity);
 
   // Narrow dock subscriptions (#10908). Subscribing to the whole `panelsById`
@@ -291,8 +295,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           availability: agentAvailability?.[id],
         };
       });
-    return sortAgentsByToolbarPin(agents, leftButtons, agentSettings);
-  }, [agentAvailability, agentSettings, leftButtons]);
+    return sortAgentsByToolbarPin(agents, leftButtons, agentSettings, rightButtons);
+  }, [agentAvailability, agentSettings, leftButtons, rightButtons]);
 
   const recipeContext = activeWorktree
     ? {

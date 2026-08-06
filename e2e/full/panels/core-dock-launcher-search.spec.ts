@@ -212,4 +212,57 @@ test.describe.serial("Core: Dock launcher search", () => {
       .poll(() => getDockPanelIds(window).then((ids) => ids.length), { timeout: T_MEDIUM })
       .toBe(dockBefore + 1);
   });
+
+  // #11689 — the per-row pin. The unit suite mocks the Popover away, so the one
+  // thing it structurally cannot see is how a nested control's pointer events
+  // interact with the real DismissableLayer: stopping propagation on pointerdown
+  // there costs the layer the event it uses to classify the NEXT outside click,
+  // and the launcher then takes two clicks to dismiss.
+  test("pinning from a row leaves the launcher usable and still dismissable in one click", async () => {
+    const { window, app } = ctx;
+    await ensureWindowFocused(app);
+
+    await openLauncher(window);
+    await searchBox(window).fill("browser");
+
+    const row = window.locator(OPTION).filter({ hasText: "Browser" }).first();
+    const pin = row.locator("button[aria-pressed]");
+    await expect(pin).toHaveAttribute("aria-pressed", "false", { timeout: T_MEDIUM });
+
+    await pin.click();
+
+    // Pinning is a change to the list, not an exit from it: the popover stays
+    // open, the query survives, and focus never left the search box.
+    await expect(searchBox(window)).toBeVisible();
+    await expect(searchBox(window)).toHaveValue("browser");
+    expect(await searchBoxHasFocus(window)).toBe(true);
+    await expect(pin).toHaveAttribute("aria-pressed", "true", { timeout: T_MEDIUM });
+
+    // The point of the affordance: the toolbar button beside the launcher is
+    // how a pin becomes visible. The write is optimistic through an async IPC,
+    // so this waits rather than asserting on the first frame.
+    await expect(window.locator('[aria-label="Open browser"]')).toBeAttached({
+      timeout: T_MEDIUM,
+    });
+
+    // The regression: ONE outside click must dismiss.
+    await window.locator("#dock-container").click({ position: { x: 5, y: 5 } });
+    await expect(searchBox(window)).not.toBeVisible({ timeout: T_MEDIUM });
+
+    // Leave the toolbar as this suite found it — later specs share the window.
+    await openLauncher(window);
+    await searchBox(window).fill("browser");
+    const pinAgain = window
+      .locator(OPTION)
+      .filter({ hasText: "Browser" })
+      .first()
+      .locator("button[aria-pressed]");
+    await expect(pinAgain).toHaveAttribute("aria-pressed", "true", { timeout: T_MEDIUM });
+    await pinAgain.click();
+    await expect(pinAgain).toHaveAttribute("aria-pressed", "false", { timeout: T_MEDIUM });
+    await window.keyboard.press("Escape");
+    await window.keyboard.press("Escape");
+    await expect(searchBox(window)).not.toBeVisible({ timeout: T_MEDIUM });
+    await window.waitForTimeout(T_SETTLE);
+  });
 });

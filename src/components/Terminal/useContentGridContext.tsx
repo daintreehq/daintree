@@ -323,10 +323,11 @@ export function useContentGridContext({
   const showProjectPulse = usePreferencesStore((state) => state.showProjectPulse);
   const currentProject = useProjectStore((state) => state.currentProject);
   const isAvailabilityInitialized = useCliAvailabilityStore((s) => s.isInitialized);
-  // `useShallow` is mandatory on the `leftButtons` array slice — a bare
-  // selector returns a new array reference every store tick and would
-  // invalidate this hook's "use memo" block on any unrelated toolbar update.
+  // `useShallow` is mandatory on both side-array slices — a bare selector
+  // returns a new array reference every store tick and would invalidate this
+  // hook's "use memo" block on any unrelated toolbar update.
   const leftButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.leftButtons));
+  const rightButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.rightButtons));
   const agentSettings = useAgentSettingsStore((s) => s.settings);
   // Re-derive grid agents when a plugin loads/unloads mid-session so its agents
   // appear / disappear with current icon/name/color (#9879).
@@ -773,8 +774,15 @@ export function useContentGridContext({
           availability: agentAvailability?.[id],
         };
       });
-    return sortAgentsByToolbarPin(agents, leftButtons, agentSettings);
-  }, [agentAvailability, gridSelectedAgentIds, leftButtons, agentSettings, pluginAgentRegistry]);
+    return sortAgentsByToolbarPin(agents, leftButtons, agentSettings, rightButtons);
+  }, [
+    agentAvailability,
+    gridSelectedAgentIds,
+    leftButtons,
+    rightButtons,
+    agentSettings,
+    pluginAgentRegistry,
+  ]);
 
   const handleGridLaunch = useCallback(
     (agentId: string) => {

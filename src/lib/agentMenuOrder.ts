@@ -1,6 +1,7 @@
 import type { AgentSettings } from "@shared/types/agentSettings";
 import type { AgentAvailabilityState } from "@shared/types";
-import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
+import { isAgentButtonOnToolbar } from "@shared/utils/agentPinned";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
 
 /** Minimal shape needed to order an agent against the toolbar pin state. */
 export interface PinnableAgent {
@@ -13,12 +14,22 @@ export interface PinnableAgent {
  * present them: toolbar-pinned agents first (in toolbar `leftButtons` order),
  * then the remaining agents in their incoming order.
  *
- * "Pinned to toolbar" follows the tri-state resolver `isAgentToolbarVisible`
- * (explicit pin wins, then live CLI availability) so the menu grouping always
- * matches what the toolbar actually shows. `leftButtons` supplies the order
- * only — an agent visible in the toolbar but absent from `leftButtons` (e.g.
- * explicitly pinned but never dragged into the rail) sorts to the end of the
- * pinned group via a stable sort.
+ * "Pinned to toolbar" follows `isAgentButtonOnToolbar` — the same resolver the
+ * launcher's pin affordance reads — so the band an agent sits under and the pin
+ * icon on its row can never contradict each other. It deliberately is NOT
+ * `isAgentToolbarVisible`: that one resolves an unset pin to "the binary is
+ * installed", which stopped meaning "has a toolbar button" when #11680 dropped
+ * the `LAUNCHABLE_AGENT_IDS` spread from `DEFAULT_LEFT_BUTTONS`. Under the old
+ * predicate a fresh profile's installed-but-unpositioned agent landed under
+ * "Pinned" wearing an unfilled pin.
+ *
+ * Both side arrays decide the position, because either one renders a button;
+ * `leftButtons` supplies the order only — an agent on the toolbar but absent
+ * from it (explicitly pinned, never positioned) sorts to the end of the pinned
+ * group via a stable sort.
+ *
+ * Only built-in agents can be pinned: a plugin or user-defined agent has no
+ * toolbar button id to write, so it can never be in the pinned group.
  *
  * Returns the concatenated array plus `pinnedCount` so callers can render a
  * separator + labels between the two groups without re-deriving the split.
@@ -26,18 +37,30 @@ export interface PinnableAgent {
 export function sortAgentsByToolbarPin<T extends PinnableAgent>(
   agents: ReadonlyArray<T>,
   leftButtons: readonly string[],
-  agentSettings: AgentSettings | null | undefined
+  agentSettings: AgentSettings | null | undefined,
+  // Required rather than defaulted: a caller that forgets it would silently
+  // demote every right-side agent out of the pinned group, and there is no
+  // value of this argument that is safe to guess.
+  rightButtons: readonly string[]
 ): { sorted: T[]; pinnedCount: number } {
   const order = new Map<string, number>();
   for (let i = 0; i < leftButtons.length; i++) {
     const id = leftButtons[i]!;
     if (!order.has(id)) order.set(id, i);
   }
+  const positioned = new Set<string>([...leftButtons, ...rightButtons]);
 
   const pinned: T[] = [];
   const unpinned: T[] = [];
   for (const agent of agents) {
-    if (isAgentToolbarVisible(agentSettings?.agents?.[agent.id], agent.availability)) {
+    const onToolbar =
+      isBuiltInAgentId(agent.id) &&
+      isAgentButtonOnToolbar(
+        agentSettings?.agents?.[agent.id],
+        agent.availability,
+        positioned.has(agent.id)
+      );
+    if (onToolbar) {
       pinned.push(agent);
     } else {
       unpinned.push(agent);
