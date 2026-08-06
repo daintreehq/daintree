@@ -100,6 +100,26 @@ describe("runAgentCompileCacheCleanup discovery", () => {
     expect(await exists(path.join(root, "claude", "stray.txt"))).toBe(true);
   });
 
+  it("never descends through a symlinked agent directory", async () => {
+    // The sweep deletes recursively, so an agent entry that is a symlink must
+    // never become an intermediate path component — it would take `fs.rm`
+    // straight out of the cache root.
+    const outside = path.join(root, "..", `outside-${path.basename(root)}`);
+    await fs.mkdir(path.join(outside, "v20-old"), { recursive: true });
+    const ancient = new Date(NOW - 400 * DAY_MS);
+    await fs.utimes(path.join(outside, "v20-old"), ancient, ancient);
+    await fs.symlink(outside, path.join(root, "claude"));
+
+    try {
+      const result = await runAgentCompileCacheCleanup(NOW, root, TTL_ONLY);
+
+      expect(result.candidates).toBe(0);
+      expect(await exists(path.join(outside, "v20-old"))).toBe(true);
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it("sweeps agent directories that are no longer in the injection allowlist", async () => {
     // A retired agent id must not strand its cache forever.
     await seedVersionDir("retired-agent", "v22.0.0-x64-abc-501", { ageDays: 90 });

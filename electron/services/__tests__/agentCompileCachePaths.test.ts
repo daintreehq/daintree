@@ -44,6 +44,7 @@ describe("getAgentCompileCacheDir", () => {
     ["a trailing forward slash", "claude/"],
     ["a trailing backslash", "claude\\"],
     ["an embedded NUL", "claude\0evil"],
+    ["a Windows drive-relative id", "C:claude"],
   ])("returns null for %s", (_label, agentId) => {
     expect(getAgentCompileCacheDir(USER_DATA, agentId)).toBeNull();
   });

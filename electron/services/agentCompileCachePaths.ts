@@ -31,8 +31,10 @@ export function getAgentCompileCacheDir(userDataPath: string, agentId: string): 
   // Reject on the RAW id, before normalization: `./claude`, `/claude` and
   // `claude/` all normalize to the same immediate child as `claude`, so a
   // containment check alone would silently accept several spellings of one
-  // agent — different ids mapping to one cache directory.
-  if (/[/\\\0]/.test(agentId) || agentId === "." || agentId === "..") return null;
+  // agent — different ids mapping to one cache directory. The colon covers
+  // Windows drive-relative ids like `C:claude`, which is not a portable
+  // directory component at all.
+  if (/[/\\:\0]/.test(agentId) || agentId === "." || agentId === "..") return null;
   const root = path.normalize(getAgentCompileCacheRoot(userDataPath));
   const candidate = path.normalize(path.join(root, agentId));
   if (!candidate.startsWith(root + path.sep)) return null;

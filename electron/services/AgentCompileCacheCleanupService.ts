@@ -148,6 +148,15 @@ async function discoverVersionDirs(root: string): Promise<Discovery> {
   // otherwise strand its cache forever.
   for (const agentName of await listSubdirectories(root)) {
     const agentDir = path.join(root, agentName);
+    // Re-check the agent component too, not just the version directory below
+    // it: an agent directory swapped for a symlink after the root listing would
+    // otherwise be an intermediate path component that both `lstat` and
+    // `fs.rm` follow straight out of the cache.
+    try {
+      if (!(await fs.lstat(agentDir)).isDirectory()) continue;
+    } catch {
+      continue;
+    }
     const versionNames = await listSubdirectories(agentDir);
     if (versionNames.length === 0) {
       emptyAgentDirs.push(agentDir);
@@ -159,8 +168,13 @@ async function discoverVersionDirs(root: string): Promise<Discovery> {
         const stats = await fs.lstat(versionDir);
         if (!stats.isDirectory()) continue;
         versionDirs.push({ path: versionDir, agentDir, mtimeMs: stats.mtimeMs });
-      } catch {
-        // Vanished or unreadable between listing and stat — skip it.
+      } catch (error) {
+        // A vanished entry is ordinary churn, but an unreadable one hides a
+        // whole cache directory from the sweep — say so rather than let a
+        // multi-gigabyte tree go silently unreclaimed.
+        if (!isNodeError(error) || error.code !== "ENOENT") {
+          logError(`[AgentCompileCacheCleanup] Failed to stat ${versionDir}`, error);
+        }
       }
     }
   }
