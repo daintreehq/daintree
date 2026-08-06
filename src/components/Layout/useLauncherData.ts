@@ -113,26 +113,47 @@ export function useLauncherData(): LauncherData {
     };
   }, [agentAvailability, agentSettings, isAvailabilityLoading, leftButtons, rightButtons]);
 
-  const recipeContext = activeWorktree
-    ? {
-        issueNumber: activeWorktree.issueNumber,
-        prNumber: activeWorktree.linked?.pr?.ref.number,
-        branchName: activeWorktree.branch,
-        worktreePath: activeWorktree.path,
-      }
-    : undefined;
+  const recipeContext = useMemo(
+    () =>
+      activeWorktree
+        ? {
+            issueNumber: activeWorktree.issueNumber,
+            prNumber: activeWorktree.linked?.pr?.ref.number,
+            branchName: activeWorktree.branch,
+            worktreePath: activeWorktree.path,
+          }
+        : undefined,
+    [activeWorktree]
+  );
 
-  return {
-    agents,
-    pinnedCount,
-    agentInventoryState,
-    activeWorktreeId,
-    cwd,
-    recipeContext,
-    // A workspace of any kind — the file browser browses the project or scratch
-    // root when no worktree is selected (#11482), so gating it on a project
-    // would disable it in exactly the worktree-less workspaces where it works.
-    hasWorkspace: Boolean(currentProject || currentScratch),
-    hasProject: Boolean(currentProject),
-  };
+  // Memoized as a whole so a consumer can depend on the result itself rather
+  // than spreading seven fields into its own dependency list — `Toolbar` builds
+  // its button registry in a memo, and a fresh object every render would rebuild
+  // the entire toolbar on every store tick.
+  return useMemo(
+    () => ({
+      agents,
+      pinnedCount,
+      agentInventoryState,
+      activeWorktreeId,
+      cwd,
+      recipeContext,
+      // A workspace of any kind — the file browser browses the project or
+      // scratch root when no worktree is selected (#11482), so gating it on a
+      // project would disable it in exactly the worktree-less workspaces where
+      // it works.
+      hasWorkspace: Boolean(currentProject || currentScratch),
+      hasProject: Boolean(currentProject),
+    }),
+    [
+      agents,
+      pinnedCount,
+      agentInventoryState,
+      activeWorktreeId,
+      cwd,
+      recipeContext,
+      currentProject,
+      currentScratch,
+    ]
+  );
 }

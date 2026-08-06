@@ -27,6 +27,8 @@ let popoverPointerDownOutsideSpy: (() => void) | null = null;
 let popoverEscapeKeyDownSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let popoverOpenAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let popoverOpenChangeSpy: ((open: boolean) => void) | null = null;
+/** Which side the content anchored on — the one thing placement changes. */
+let popoverSide: string | undefined;
 let popoverModal: boolean | undefined = undefined;
 
 // See dockLaunchItems.test.ts — avoid the real registry's eager TerminalPane import.
@@ -251,8 +253,10 @@ vi.mock("@/components/ui/popover", () => ({
     onFocus,
     onKeyDown,
     onMouseDown,
+    side,
   }: {
     children: ReactNode;
+    side?: string;
     onOpenAutoFocus?: (e: { preventDefault: () => void }) => void;
     onCloseAutoFocus?: (e: { preventDefault: () => void }) => void;
     onPointerDownOutside?: () => void;
@@ -265,6 +269,7 @@ vi.mock("@/components/ui/popover", () => ({
     popoverCloseAutoFocusSpy = onCloseAutoFocus ?? null;
     popoverPointerDownOutsideSpy = onPointerDownOutside ?? null;
     popoverEscapeKeyDownSpy = onEscapeKeyDown ?? null;
+    popoverSide = side;
     // Radix renders FocusScope/DismissableLayer with asChild, so these land on
     // the same node the focus trap parks focus on. tabIndex mirrors that.
     return (
@@ -392,6 +397,7 @@ beforeEach(() => {
   popoverEscapeKeyDownSpy = null;
   popoverOpenAutoFocusSpy = null;
   popoverOpenChangeSpy = null;
+  popoverSide = undefined;
   popoverModal = undefined;
   mockAgentSettings = { agents: {} };
   mockAgentAvailability = {};
@@ -1871,6 +1877,265 @@ describe("DockLaunchButton", () => {
         expect(setAgentPinnedMock).not.toHaveBeenCalled();
         expect(setPanelButtonOnToolbarMock).not.toHaveBeenCalled();
       });
+    });
+  });
+});
+
+// Coverage migrated from the deleted `LauncherMenuButton` suite: the affordances
+// #11691 required to survive the swap, re-expressed against the flat
+// search-first list that replaced the Radix menu.
+describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
+  const READY = [{ id: "claude", name: "Claude", availability: "ready" as const }];
+
+  function rowByName(container: HTMLElement, name: string): HTMLElement {
+    const row = options(container).find((o) =>
+      o.getAttribute("aria-label")?.startsWith(`${name},`)
+    );
+    if (!row) throw new Error(`no row for ${name}`);
+    return row;
+  }
+  const presetRows = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll<HTMLElement>('[role="option"][data-row-kind="preset"]'));
+
+  describe("preset rows", () => {
+    beforeEach(() => {
+      mockMergedPresets = [
+        { id: "fast", name: "Fast" },
+        { id: "slow", name: "Slow" },
+      ];
+    });
+
+    it("does not expand until asked, and keeps presets out of the flat list", () => {
+      const { container } = renderButton({ agents: READY });
+      expect(presetRows(container)).toHaveLength(0);
+      // The row advertises what it can do rather than doing it.
+      expect(rowByName(container, "Claude").getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("expands into sibling options on ArrowRight and collapses on ArrowLeft", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      // Default plus both named presets, as siblings in the same listbox.
+      expect(presetRows(container).map((r) => r.textContent)).toEqual([
+        expect.stringContaining("Default"),
+        expect.stringContaining("Fast"),
+        expect.stringContaining("Slow"),
+      ]);
+      expect(rowByName(container, "Claude").getAttribute("aria-expanded")).toBe("true");
+
+      fireEvent.keyDown(input, { key: "ArrowLeft" });
+      expect(presetRows(container)).toHaveLength(0);
+    });
+
+    it("selects the first preset once the expansion has rendered", () => {
+      // The selection cannot move in the same handler that expands: the rows it
+      // would point at do not exist yet.
+      const { container } = renderButton({ agents: READY });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+      expect(selectedOption(container)?.textContent).toContain("Default");
+    });
+
+    it("keeps every expanded row in one navigation space", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      // Arrowing down from Default reaches the next preset, not a nested list.
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(selectedOption(container)?.textContent).toContain("Fast");
+      // Exactly one option is ever selected across the whole flat list.
+      expect(container.querySelectorAll('[role="option"][aria-selected="true"]')).toHaveLength(1);
+    });
+
+    it("launches the explicit default from the parent and the chosen id from a child", () => {
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({ agents: READY, onLaunchAgent });
+
+      // A parent that HAS presets launches `null` — the sentinel that clears a
+      // saved preset — rather than inheriting one the user didn't pick.
+      fireEvent.click(rowByName(container, "Claude"));
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", null);
+
+      onLaunchAgent.mockReset();
+      const { container: c2 } = renderButton({ agents: READY, onLaunchAgent });
+      fireEvent.keyDown(searchInput(c2), { key: "ArrowRight" });
+      fireEvent.click(presetRows(c2)[1]!);
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", "fast");
+    });
+
+    it("passes undefined for an agent with no presets so its saved default resolves", () => {
+      mockMergedPresets = [];
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({ agents: READY, onLaunchAgent });
+      fireEvent.click(rowByName(container, "Claude"));
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
+    });
+
+    it("collapses the expansion when the query changes", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      expect(presetRows(container).length).toBeGreaterThan(0);
+
+      fireEvent.change(input, { target: { value: "term" } });
+      expect(presetRows(container)).toHaveLength(0);
+    });
+
+    it("leaves ArrowRight to the caret while there is text to move through", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+      fireEvent.change(input, { target: { value: "claude" } });
+      input.setSelectionRange(0, 0);
+
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      expect(presetRows(container)).toHaveLength(0);
+    });
+  });
+
+  describe("shortcut capture", () => {
+    const openCapture = (container: HTMLElement) => {
+      const edit = rowByName(container, "Claude").querySelector<HTMLButtonElement>(
+        '[data-testid="launcher-shortcut-edit-claude"]'
+      );
+      fireEvent.click(edit!);
+    };
+
+    it("replaces the row with a recorder that is not an option", () => {
+      const { container } = renderButton({ agents: READY });
+      openCapture(container);
+
+      expect(container.querySelector('[data-testid="capture-widget-claude"]')).toBeTruthy();
+      // The recorder's controls have to be reachable, which they cannot be
+      // inside a `role="option"` — its children are presentational.
+      expect(
+        options(container).some((o) => o.getAttribute("aria-label")?.startsWith("Claude,"))
+      ).toBe(false);
+    });
+
+    it("stops recorder keystrokes from reaching the list behind it", () => {
+      const { container } = renderButton({ agents: READY });
+      openCapture(container);
+      const widget = container.querySelector('[data-testid="capture-widget-claude"]')!;
+
+      // Fired ON the recorder, not the container: a container-only assertion
+      // passes even when the row lets keys through.
+      const before = selectedOption(container)?.id;
+      fireEvent.keyDown(widget, { key: "ArrowDown", bubbles: true });
+      expect(selectedOption(container)?.id).toBe(before);
+    });
+
+    it("cancels in place on Escape and leaves the launcher open", () => {
+      const { container } = renderButton({ agents: READY });
+      openCapture(container);
+      expect(container.querySelector('[data-testid="capture-widget-claude"]')).toBeTruthy();
+
+      // The shell runs the consumer veto ahead of its own query-clear rule.
+      const event = { preventDefault: vi.fn(), defaultPrevented: false };
+      popoverEscapeKeyDownSpy?.(event as unknown as KeyboardEvent);
+      expect(event.preventDefault).toHaveBeenCalled();
+    });
+
+    it("clears the recorder when the launcher closes", () => {
+      const { container } = renderButton({ agents: READY });
+      openCapture(container);
+      act(() => popoverOpenChangeSpy!(false));
+      // Reset on the single close path, so a half-open recording can't survive
+      // into the next open.
+      expect(container.querySelector('[data-testid="capture-widget-claude"]')).toBeNull();
+    });
+
+    it("saves through the keybinding action and closes on success", async () => {
+      const { container } = renderButton({ agents: READY });
+      openCapture(container);
+      const capture = container.querySelector('[data-testid="capture-widget-claude"]')!;
+
+      await act(async () => {
+        fireEvent.click(capture.querySelector("button")!);
+      });
+      expect(actionDispatchMock).toHaveBeenCalledWith(
+        "keybinding.setOverride",
+        { actionId: "agent.claude", combo: ["Ctrl+Shift+9"] },
+        { source: "user" }
+      );
+    });
+
+    it("stays open when the save is refused", async () => {
+      actionDispatchMock.mockResolvedValue({ ok: false, error: new Error("nope") });
+      const { container } = renderButton({ agents: READY });
+      openCapture(container);
+
+      await act(async () => {
+        fireEvent.click(
+          container.querySelector('[data-testid="capture-widget-claude"]')!.querySelector("button")!
+        );
+      });
+      expect(container.querySelector('[data-testid="capture-widget-claude"]')).toBeTruthy();
+    });
+  });
+
+  describe("disabled rows stay reachable", () => {
+    it("marks a gated panel aria-disabled while leaving it selectable and pinnable", () => {
+      const { container } = renderButton({ agents: READY, hasWorkspace: false });
+      const row = rowByName(container, "File Browser");
+
+      expect(row.getAttribute("aria-disabled")).toBe("true");
+      // Reachable: it is still an option, so arrow keys land on it...
+      expect(options(container)).toContain(row);
+      // ...and its pin is still there, which is the whole reason it stays.
+      expect(row.querySelector("button[aria-pressed]")).toBeTruthy();
+    });
+
+    it("opens nothing and stays open when a gated row is activated", () => {
+      const { container } = renderButton({ agents: READY, hasWorkspace: false });
+      // A typed query is the observable proxy for the close path: every close
+      // runs through `closeLauncher`, which clears it. A press that opened
+      // nothing must not read as a launch that closed.
+      fireEvent.change(searchInput(container), { target: { value: "file" } });
+      fireEvent.click(rowByName(container, "File Browser"));
+
+      expect(addPanelMock).not.toHaveBeenCalled();
+      expect(searchInput(container).value).toBe("file");
+    });
+
+    it("still pins a gated row", () => {
+      const { container } = renderButton({ agents: READY, hasWorkspace: false });
+      const pin = rowByName(container, "File Browser").querySelector<HTMLButtonElement>(
+        "button[aria-pressed]"
+      )!;
+      fireEvent.click(pin);
+      expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("file-browser", true);
+    });
+  });
+
+  describe("placement variants", () => {
+    it("anchors below the trigger in the toolbar and above it in the dock", () => {
+      expect(renderButton({ placement: "toolbar" }).container).toBeTruthy();
+      expect(popoverSide).toBe("bottom");
+      expect(renderButton({ placement: "dock" }).container).toBeTruthy();
+      expect(popoverSide).toBe("top");
+    });
+
+    it("forwards data-toolbar-item so the toolbar's roving focus can see it", () => {
+      const { getByLabelText } = renderButton({
+        placement: "toolbar",
+        "data-toolbar-item": "",
+      });
+      expect(getByLabelText("Launcher").hasAttribute("data-toolbar-item")).toBe(true);
+    });
+
+    it("leaves the dock trigger out of the toolbar sweep", () => {
+      const { getByLabelText } = renderButton({ placement: "dock" });
+      expect(getByLabelText("Open launcher").hasAttribute("data-toolbar-item")).toBe(false);
+    });
+
+    it("offers the same inventory in both placements", () => {
+      const names = (c: HTMLElement) =>
+        options(c).map((o) => o.getAttribute("aria-label")?.split(",")[0]);
+      const toolbar = names(renderButton({ agents: READY, placement: "toolbar" }).container);
+      const dock = names(renderButton({ agents: READY, placement: "dock" }).container);
+      // One launcher, two placements, same inventory — the issue's end state.
+      expect(new Set(toolbar)).toEqual(new Set(dock));
     });
   });
 });

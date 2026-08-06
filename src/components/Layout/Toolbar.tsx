@@ -1331,6 +1331,8 @@ export function Toolbar({
       agentAvailability,
       effectiveAgentSettings,
       onLaunchAgent,
+      launcherData,
+      launchAgentFromToolbar,
       sidebarShortcut,
       sidebarAriaShortcut,
       sidebarHintHover,
