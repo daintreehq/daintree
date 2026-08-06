@@ -52,13 +52,6 @@ const DOCK_LAUNCH_FUSE_OPTIONS: IFuseOptions<DockLaunchItem> = {
 const SEARCH_RESULT_CAP = 30;
 
 /**
- * Swallows the second half of a pointer-then-click pair on one row, and a held
- * Alt+P. Keyed per target below, not one timestamp for the whole launcher, so
- * two different rows toggled in quick succession both land.
- */
-const PIN_ACTION_GUARD_MS = 50;
-
-/**
  * A row that can be pinned to the toolbar, resolved to the id the write path
  * actually takes. Agents and panels keep separate stores behind the one
  * affordance — `null` means the row has no toolbar representation at all
@@ -165,17 +158,13 @@ export function DockLaunchButton({
     [agentSettings, leftButtons, pinnedButtons, rightButtons]
   );
 
-  // Keyed on the item key rather than the row key, deliberately: the recency
-  // band repeats agents that also appear under Pinned/Other, and those two rows
-  // are one logical target that must not be toggled twice.
-  const lastPinActionAt = useRef(new Map<string, number>());
+  // Deliberately undebounced, unlike `LauncherMenuButton`'s `guardPinAction`.
+  // That one exists because a Radix menu item synthesizes a pointer/click pair
+  // that both reach the same handler; here only `click` toggles, and the
+  // keyboard path guards itself on `event.repeat`. A time window would only
+  // ever discard a real second intent — pin, then immediately unpin.
   const togglePin = useCallback(
     (target: DockLaunchPinTarget) => {
-      const now = Date.now();
-      if (now - (lastPinActionAt.current.get(target.key) ?? -Infinity) < PIN_ACTION_GUARD_MS)
-        return;
-      lastPinActionAt.current.set(target.key, now);
-
       if (target.category === "agent") {
         // Through the shared dispatcher, not `setAgentPinned` directly: it is
         // what also gives a newly-pinned agent a toolbar position, and it is
@@ -622,6 +611,17 @@ function DockLaunchOption({
           ? `${item.scopeLabel} · Overridden by Team`
           : item.scopeLabel
         : "Agent";
+  // Everything the sighted user reads off this row, in one string — the option
+  // is what `aria-activedescendant` points at, and its children (the trailing
+  // qualifier, the pin's own state, the warning tooltip) are not announced with
+  // it once the name is stated explicitly.
+  const optionLabel = [
+    qualifier ? `${displayName}, ${qualifier}` : displayName,
+    pinTarget?.onToolbar ? "pinned to toolbar" : undefined,
+    title,
+  ]
+    .filter(Boolean)
+    .join(". ");
 
   return (
     <>
@@ -637,17 +637,23 @@ function DockLaunchOption({
         </div>
       )}
       {/* A div, not a button: the pin control is a real button and one cannot
-          nest inside another. Same split as ActionPaletteItem, which is where
-          this palette family already solved a secondary action on an option. */}
+          nest inside another. Activation stays on the option itself rather than
+          moving to an inner button — the row owns its padding and the reserved
+          pin column, and an inner button would only cover its own content box,
+          leaving the rest of a row that highlights as one thing inert. */}
       <div
         id={optionId}
         role="option"
         aria-selected={isSelected}
         // Stated, not computed from content: the pin button is a child, so a
         // content-derived name would end every pinnable row with "Pin to
-        // toolbar: X". The destination stays in the name because it is the part
-        // that says where activating lands you.
-        aria-label={qualifier ? `${displayName}, ${qualifier}` : displayName}
+        // toolbar: X". Everything the row conveys visually is folded back in
+        // here instead, because `aria-activedescendant` announces this node and
+        // nothing else — the destination, the pin state, and the warning that
+        // this row opens Settings rather than launching.
+        aria-label={optionLabel}
+        aria-keyshortcuts={pinTarget ? "Alt+P" : undefined}
+        title={title}
         // Keeps DOM focus on the search box when a row is clicked or hovered,
         // so typing never lands anywhere else. preventDefault only — stopping
         // propagation here would hide the pointerdown from Radix's
@@ -655,6 +661,7 @@ function DockLaunchOption({
         // click as a dismissal.
         onPointerDown={(event) => event.preventDefault()}
         onPointerEnter={() => onHover(index)}
+        onClick={() => onActivate(row)}
         className={cn(
           PALETTE_ROW_CLASS,
           "group relative w-full flex items-center px-2 py-1.5 rounded-[var(--radius-md)] text-left text-sm",
@@ -662,22 +669,11 @@ function DockLaunchOption({
           isDimmed && "opacity-70"
         )}
       >
-        <button
-          type="button"
-          tabIndex={-1}
-          // Stays on the inner button rather than the row: it explains what
-          // activating does, and the row now has a second control that does
-          // something else entirely.
-          title={title}
-          onClick={() => onActivate(row)}
-          className="flex-1 min-w-0 flex items-center bg-transparent border-0 p-0 text-left"
-        >
-          <DockLaunchOptionIcon row={row} />
-          <span className="truncate">{displayName}</span>
-          {qualifier && (
-            <span className="ml-auto pl-2 text-[11px] text-text-muted shrink-0">{qualifier}</span>
-          )}
-        </button>
+        <DockLaunchOptionIcon row={row} />
+        <span className="truncate">{displayName}</span>
+        {qualifier && (
+          <span className="ml-auto pl-2 text-[11px] text-text-muted shrink-0">{qualifier}</span>
+        )}
 
         {/* The slot is reserved on every row, not just pinnable ones. Opacity
             hides the control without releasing its box, so a recipe and an agent
@@ -691,10 +687,12 @@ function DockLaunchOption({
               aria-pressed={pinTarget.onToolbar}
               aria-keyshortcuts="Alt+P"
               title={`${pinTarget.onToolbar ? TOOLBAR_UNPIN_LABEL : TOOLBAR_PIN_LABEL} (Alt+P)`}
-              // preventDefault keeps focus on the search box; stopPropagation is
-              // deliberately absent here and present on the click below, so the
-              // pin never reaches `onActivate` while Radix still sees the
-              // pointer sequence it needs.
+              // preventDefault keeps focus on the search box. stopPropagation
+              // belongs on the click below and nowhere else: the row's own
+              // onClick is an ancestor of this one, so the pin must stop the
+              // click — but stopping the POINTERDOWN would hide it from Radix's
+              // DismissableLayer, which needs to see it to classify the next
+              // outside click as a dismissal.
               onPointerDown={(event) => event.preventDefault()}
               onClick={(event) => {
                 event.preventDefault();

@@ -225,8 +225,9 @@ test.describe.serial("Core: Dock launcher search", () => {
     await openLauncher(window);
     await searchBox(window).fill("browser");
 
-    const row = window.locator(OPTION).filter({ hasText: "Browser" }).first();
-    const pin = row.locator("button[aria-pressed]");
+    // By the option's own accessible name, anchored at the start — `hasText`
+    // is a substring match and "browser" also ranks File Browser.
+    const pin = window.locator(`${OPTION}[aria-label^="Browser,"] button[aria-pressed]`);
     await expect(pin).toHaveAttribute("aria-pressed", "false", { timeout: T_MEDIUM });
 
     await pin.click();
@@ -245,21 +246,25 @@ test.describe.serial("Core: Dock launcher search", () => {
       timeout: T_MEDIUM,
     });
 
-    // The regression: ONE outside click must dismiss.
-    await window.locator("#dock-container").click({ position: { x: 5, y: 5 } });
+    // The regression: ONE outside click must dismiss. Measured off the
+    // popover's own box rather than a fixed point — the launcher anchors
+    // `side="top" align="start"` to the dock's left edge, so any hard-coded
+    // dock coordinate risks landing on the trigger (which toggles by its own
+    // path and would prove nothing about the dismiss layer).
+    const surface = await window.locator(SEARCH_BOX).boundingBox();
+    if (!surface) throw new Error("launcher surface has no box");
+    await window.mouse.click(surface.x + surface.width + 240, surface.y);
     await expect(searchBox(window)).not.toBeVisible({ timeout: T_MEDIUM });
 
-    // Leave the toolbar as this suite found it — later specs share the window.
+    // Leave the toolbar as this suite found it — the describe block is serial
+    // and later specs share this window.
     await openLauncher(window);
     await searchBox(window).fill("browser");
-    const pinAgain = window
-      .locator(OPTION)
-      .filter({ hasText: "Browser" })
-      .first()
-      .locator("button[aria-pressed]");
+    const pinAgain = window.locator(`${OPTION}[aria-label^="Browser,"] button[aria-pressed]`);
     await expect(pinAgain).toHaveAttribute("aria-pressed", "true", { timeout: T_MEDIUM });
     await pinAgain.click();
     await expect(pinAgain).toHaveAttribute("aria-pressed", "false", { timeout: T_MEDIUM });
+    // Two presses: the first clears the populated query, the second closes.
     await window.keyboard.press("Escape");
     await window.keyboard.press("Escape");
     await expect(searchBox(window)).not.toBeVisible({ timeout: T_MEDIUM });
