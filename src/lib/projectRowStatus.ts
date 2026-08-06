@@ -57,9 +57,11 @@ export interface ProjectRowStatus {
   tone: ProjectRowTone;
   /**
    * Disambiguating path fragment, present only when this project's folder name
-   * collides with another registered project's. Rendered as a trailing segment
-   * so identical-looking monorepo siblings can be told apart without giving
-   * every row a second line of chrome it doesn't need.
+   * collides with another registered project's, so identical-looking monorepo
+   * siblings can be told apart without giving every row a second line of chrome
+   * it doesn't need. Trails the status sentence where there is one, and stands
+   * alone on a row that has gone quiet — it describes which project this is,
+   * not what it is doing, so it outlives the status line.
    */
   pathHint?: string;
   /**

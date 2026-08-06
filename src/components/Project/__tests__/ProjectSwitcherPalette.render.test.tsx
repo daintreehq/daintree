@@ -357,9 +357,13 @@ describe("ProjectSwitcherPalette status dot", () => {
     expect(screen.queryByTestId("workspace-status-dot")).toBeNull();
   });
 
-  // The dot's width is reserved whether or not it draws, so a mostly-quiet list
-  // keeps one column of tiles rather than two.
-  it("holds the indicator column open on an unmarked row", () => {
+  /*
+   * Structural only — jsdom does no layout, so this pins that the slot element
+   * survives on a quiet row, not that it still measures 6px. What it rules out
+   * is the tempting simplification: dropping the whole slot instead of just its
+   * dot, which would pull every quiet row's tile left of the busy ones.
+   */
+  it("keeps the indicator slot on an unmarked row and empties it instead", () => {
     render(
       <ProjectSwitcherPalette
         {...baseProps}
@@ -370,17 +374,14 @@ describe("ProjectSwitcherPalette status dot", () => {
       />
     );
 
+    const slotIn = (row: HTMLElement) => row.querySelector("[data-testid='workspace-status-slot']");
     const busy = screen.getByRole("option", { name: /Busy/ });
     const quiet = screen.getByRole("option", { name: /Quiet/ });
-    // Same number of leading children before the identity tile: the quiet row
-    // drops the dot inside its slot, not the slot itself.
-    expect(quiet.children.length).toBe(busy.children.length);
-    expect(
-      busy.firstElementChild!.querySelector("[data-testid='workspace-status-dot']")
-    ).toBeTruthy();
-    expect(
-      quiet.firstElementChild!.querySelector("[data-testid='workspace-status-dot']")
-    ).toBeNull();
+
+    expect(slotIn(busy)).toBeTruthy();
+    expect(slotIn(quiet)).toBeTruthy();
+    expect(slotIn(busy)!.querySelector("[data-testid='workspace-status-dot']")).toBeTruthy();
+    expect(slotIn(quiet)!.querySelector("[data-testid='workspace-status-dot']")).toBeNull();
   });
 });
 
@@ -411,6 +412,9 @@ describe("ProjectSwitcherPalette status conveyance", () => {
     const row = screen.getByText("Directory not found").closest('[role="option"]');
     expect(row).toBeTruthy();
     expect(row!.getAttribute("aria-disabled")).toBeNull();
+    // A folder that has gone missing is the loudest thing a row can report, so
+    // it keeps both the line and the mark the quiet rows gave up.
+    expect(screen.getByTestId("workspace-status-dot")).toBeTruthy();
     fireEvent.click(row!);
     expect(onSelect).toHaveBeenCalled();
   });
@@ -504,6 +508,32 @@ describe("ProjectSwitcherPalette current-project marker", () => {
     expect(current.getAttribute("aria-current")).toBe("true");
     // Only the one row says it — the word is a marker, not decoration.
     expect(screen.queryByRole("option", { name: /Other Project, current/ })).toBeNull();
+  });
+
+  // The two changes meet on this row: the project you are in is usually the one
+  // with nothing running, so the marker has to survive the collapse that takes
+  // its status line and dot away.
+  it("still marks the current project when it is the quietest row in the list", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={[
+          makeProject({
+            id: "active",
+            name: "Active Project",
+            isActive: true,
+            section: "current",
+            lastOpened: Date.now() - 2 * 3600000,
+          }),
+        ]}
+      />
+    );
+
+    const row = screen.getByRole("option", { name: /Active Project, current/ });
+    expect(row.getAttribute("aria-current")).toBe("true");
+    expect(within(row).queryByTestId("workspace-status-dot")).toBeNull();
+    expect(screen.queryByText(/^Opened /)).toBeNull();
+    expect(screen.getByRole("group", { name: "Current project" })).toBeTruthy();
   });
 
   // The header is chrome, not a row. Arrow keys walk `results`, and a label
@@ -1080,12 +1110,17 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     expect(screen.getByText("· Scratch")).toBeTruthy();
   });
 
-  it("marks the scratch you are in without claiming the Enter target", () => {
+  // The lone ranked result is also the cursor, so this is the both-at-once
+  // case: the two attributes describe different facts that happen to coincide,
+  // and each still has to be stated.
+  it("marks the scratch you are in even while it is also the Enter target", () => {
     render(<ProjectSwitcherPalette {...rankedProps({ isActive: true })} />);
 
-    const row = screen.getByRole("option", { name: /Spike notes/ });
+    // Queried by accessible name, not textContent — that is what proves the
+    // hidden word actually names the option rather than just sitting in it.
+    const row = screen.getByRole("option", { name: /Spike notes.*current/ });
     expect(row.getAttribute("aria-current")).toBe("true");
-    expect(row.textContent).toContain(", current");
+    expect(row.getAttribute("aria-selected")).toBe("true");
   });
 
   it("keeps the cleanup countdown beside the status line", () => {
@@ -1125,13 +1160,17 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     expect(screen.getByTestId("scratch-cleanup-countdown")).toBeTruthy();
   });
 
-  it("marks the pinned scratch you are in", () => {
+  // This list has no roving cursor, so `aria-selected` is free to mean "the one
+  // you're in" and says it alone — a second attribute for the same fact would
+  // have a reader announce one state as two.
+  it("marks the pinned scratch you are in without doubling the signal", () => {
     render(<ProjectSwitcherPalette {...browseProps({ isActive: true })} />);
 
     const row = within(screen.getByRole("listbox", { name: "Scratch workspaces" })).getByRole(
       "option"
     );
-    expect(row.getAttribute("aria-current")).toBe("true");
+    expect(row.getAttribute("aria-selected")).toBe("true");
+    expect(row.getAttribute("aria-current")).toBeNull();
   });
 
   // The tick lives at the palette level, not inside the project list. Moved

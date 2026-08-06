@@ -217,7 +217,7 @@ interface ProjectListItemProps {
  */
 function StatusDot({ status }: { status: ProjectRowStatus }) {
   return (
-    <div className="w-1.5 shrink-0">
+    <div className="w-1.5 shrink-0" data-testid="workspace-status-slot">
       {!status.isDormantFallback && (
         <div
           className={cn("w-1.5 h-1.5 rounded-full", ROW_DOT_CLASS[status.tone])}
@@ -342,20 +342,24 @@ function ProjectListItem({
           >
             {project.name}
           </span>
-          {isProjectNotificationsMuted && (
-            <BellOff
-              className="w-3.5 h-3.5 text-daintree-text/40 shrink-0 ml-1"
-              aria-label="Notifications muted for this project"
-            />
-          )}
           {/*
            * The band header above says which row this is, but a screen reader
            * arrowing straight onto the option may never hear the group boundary
            * — and `aria-current` itself goes unannounced inside a listbox often
            * enough that it can't be the only carrier. In the name it is always
            * read, and one extra word on one row is a cheap way to be sure.
+           *
+           * Directly after the name, before the bell: the name is what it
+           * qualifies, and read after the muted-notifications label it would
+           * attach itself to the wrong noun.
            */}
           {project.isActive && <span className="sr-only">, current</span>}
+          {isProjectNotificationsMuted && (
+            <BellOff
+              className="w-3.5 h-3.5 text-daintree-text/40 shrink-0 ml-1"
+              aria-label="Notifications muted for this project"
+            />
+          )}
         </div>
 
         {/*
@@ -482,9 +486,9 @@ function ProjectListItem({
  * selection, so it carries the shared `project-option-` id the scroll query and
  * `aria-activedescendant` resolve against, and stays out of the tab order.
  *
- * "Scratch" rides the secondary line rather than a chip: origin has to be
- * unambiguous, but it is not the row's headline, and a pill here would be a
- * second emphasis signal competing with the selected row's own treatment.
+ * "Scratch" trails the name as plain muted text rather than a chip: origin has
+ * to be unambiguous, but a pill here would be a second emphasis signal
+ * competing with the selected row's own treatment.
  *
  * Action-free on purpose. Rename, save-as-project and delete are browse-mode
  * management — an inline rename editor would have to live inside the array the
@@ -1151,12 +1155,12 @@ function ScratchSection({
                           scratch.isActive ? "bg-overlay-subtle" : "hover:bg-overlay-subtle"
                         )}
                         role="option"
-                        // This list has no roving cursor of its own, so
-                        // `aria-selected` here has only ever meant "the scratch
-                        // you're in" and stays. `aria-current` names that
-                        // directly, matching how the ranked rows above say it.
+                        // No `aria-current` here, unlike the ranked rows above.
+                        // This list has no roving cursor, so `aria-selected` is
+                        // not spoken for — it has only ever meant "the scratch
+                        // you're in", which is the same fact. Saying it twice
+                        // would have a reader announce one state as two.
                         aria-selected={scratch.isActive}
-                        aria-current={scratch.isActive ? "true" : undefined}
                       >
                         <StatusDot status={status} />
                         <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">

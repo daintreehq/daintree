@@ -211,8 +211,9 @@ function sortMode(): OtherProjectsSortMode {
 describe("Other projects sort control (#11455)", () => {
   it("names the order the band is currently in", () => {
     renderPalette(4);
-    // The control's first job is naming the order — every row shows a
-    // timestamp, so an unlabelled frecency sort reads as broken.
+    // The control's first job is naming the order. The band is the residual
+    // catch-all, and since its rows stopped printing opened times (#11692)
+    // there is nothing else on screen hinting at how they are sorted.
     expect(trigger().textContent).toContain("Most used");
     expect(trigger().getAttribute("aria-label")).toContain("Most used");
   });
