@@ -52,7 +52,12 @@ function renderPalette(props: { isOpen: boolean }) {
   return render(
     <>
       <Dispatcher />
-      <AppPaletteDialog isOpen={props.isOpen} onClose={() => {}} ariaLabel="Test palette">
+      <AppPaletteDialog
+        isOpen={props.isOpen}
+        onClose={() => {}}
+        ariaLabel="Test palette"
+        tier="command"
+      >
         <input type="text" placeholder="Palette input" />
       </AppPaletteDialog>
     </>
@@ -76,12 +81,82 @@ describe("AppPaletteDialog ARIA placement", () => {
   });
 });
 
+describe("AppPaletteDialog surface tier", () => {
+  /** Pull the px value out of whichever `w-[Npx]` class the shell applied. */
+  function renderedWidth(tier: "anchored" | "command"): number {
+    const { unmount } = render(
+      <AppPaletteDialog isOpen onClose={() => {}} ariaLabel="Tier palette" tier={tier}>
+        <input type="text" placeholder="Palette input" />
+      </AppPaletteDialog>
+    );
+    const dialog = screen.getByRole("dialog", { name: "Tier palette" });
+    const match = /(?:^|\s)w-\[(\d+)px\]/.exec(dialog.className);
+    // Unmount before the next tier renders: two live dialogs would stack focus
+    // traps and escape backstops, and `getByRole` would find both.
+    unmount();
+    expect(match, `no w-[Npx] class on the ${tier} surface`).not.toBeNull();
+    return Number(match![1]);
+  }
+
+  it("gives the anchored tier a strictly narrower box than the command tier", () => {
+    // The point of the change: a launcher and a global command palette are not
+    // the same weight of surface. Compares the two rendered widths rather than
+    // asserting either literal, so re-tuning a tier inside its band is not a
+    // test edit.
+    expect(renderedWidth("anchored")).toBeLessThan(renderedWidth("command"));
+  });
+
+  // The issue's second rule: "the tier is explicit, not inferred. A new picker
+  // author has to choose one." Nothing at runtime enforces that — the guard is
+  // the type, so the assertion IS the @ts-expect-error directive. Giving `tier`
+  // a default would make the directive unused and fail the typecheck.
+  it("will not compile without a tier", () => {
+    const element = (
+      // @ts-expect-error tier is required — a palette may not inherit its weight
+      <AppPaletteDialog isOpen onClose={() => {}} ariaLabel="Untiered palette">
+        <input type="text" placeholder="Palette input" />
+      </AppPaletteDialog>
+    );
+    expect(element).toBeTruthy();
+  });
+});
+
+describe("AppPaletteDialog.Footer", () => {
+  it("renders no band for content that resolves to nothing for this selection", () => {
+    // A footer earns its top border by naming what Enter does. Callers render
+    // <Footer> unconditionally with content that resolves per selection, so an
+    // empty wrapper would leave a bordered, padded strip behind. `[]` is the
+    // realistic non-nullish case: `getFooter={() => actions.map(...)}` with no
+    // contextual actions to offer.
+    for (const empty of [undefined, null, false, "", []] as const) {
+      const { container, unmount } = render(
+        <AppPaletteDialog.Footer>{empty}</AppPaletteDialog.Footer>
+      );
+      expect(container.firstChild, `${JSON.stringify(empty)} drew a band`).toBeNull();
+      unmount();
+    }
+  });
+
+  it("wraps the content once it has something to say", () => {
+    const { container, getByTestId } = render(
+      <AppPaletteDialog.Footer>
+        <span data-testid="chip">↵ to open</span>
+      </AppPaletteDialog.Footer>
+    );
+    // Structural, not a class-token match: there is a wrapper and the chip is
+    // inside it. What that wrapper is styled with is the shell's business.
+    const band = container.firstElementChild;
+    expect(band).not.toBeNull();
+    expect(band!.contains(getByTestId("chip"))).toBe(true);
+  });
+});
+
 describe("AppPaletteDialog focus trap", () => {
   function renderTrapPalette() {
     render(
       <>
         <Dispatcher />
-        <AppPaletteDialog isOpen onClose={() => {}} ariaLabel="Trap palette">
+        <AppPaletteDialog isOpen onClose={() => {}} ariaLabel="Trap palette" tier="command">
           <input type="text" placeholder="Palette input" />
           <button type="button">Middle action</button>
           <button type="button">Last action</button>
@@ -136,7 +211,7 @@ describe("AppPaletteDialog Escape yielded by the layer underneath", () => {
   it("closes when a dock popover underneath yields Escape", () => {
     const onClose = vi.fn();
     render(
-      <AppPaletteDialog isOpen onClose={onClose} ariaLabel="Yield palette">
+      <AppPaletteDialog isOpen onClose={onClose} ariaLabel="Yield palette" tier="command">
         <input aria-label="Palette input" />
       </AppPaletteDialog>
     );
@@ -186,7 +261,7 @@ describe("AppPaletteDialog focus restore", () => {
     const onClose = vi.fn();
     animatedPresenceState.shouldRender = false;
     const { rerender } = render(
-      <AppPaletteDialog isOpen onClose={onClose} ariaLabel="Test palette">
+      <AppPaletteDialog isOpen onClose={onClose} ariaLabel="Test palette" tier="command">
         <input type="text" placeholder="Palette input" />
       </AppPaletteDialog>
     );
@@ -194,7 +269,7 @@ describe("AppPaletteDialog focus restore", () => {
 
     animatedPresenceState.shouldRender = true;
     rerender(
-      <AppPaletteDialog isOpen onClose={onClose} ariaLabel="Test palette">
+      <AppPaletteDialog isOpen onClose={onClose} ariaLabel="Test palette" tier="command">
         <input type="text" placeholder="Palette input" />
       </AppPaletteDialog>
     );
@@ -233,7 +308,7 @@ describe("AppPaletteDialog focus restore", () => {
     rerender(
       <>
         <Dispatcher />
-        <AppPaletteDialog isOpen={false} onClose={() => {}} ariaLabel="Test palette">
+        <AppPaletteDialog isOpen={false} onClose={() => {}} ariaLabel="Test palette" tier="command">
           <input type="text" placeholder="Palette input" />
         </AppPaletteDialog>
       </>
@@ -265,7 +340,7 @@ describe("AppPaletteDialog focus restore", () => {
     rerender(
       <>
         <Dispatcher />
-        <AppPaletteDialog isOpen={false} onClose={() => {}} ariaLabel="Test palette">
+        <AppPaletteDialog isOpen={false} onClose={() => {}} ariaLabel="Test palette" tier="command">
           <input type="text" placeholder="Palette input" />
         </AppPaletteDialog>
       </>
@@ -315,7 +390,7 @@ describe("AppPaletteDialog focus restore", () => {
     rerender(
       <>
         <Dispatcher />
-        <AppPaletteDialog isOpen={false} onClose={() => {}} ariaLabel="Test palette">
+        <AppPaletteDialog isOpen={false} onClose={() => {}} ariaLabel="Test palette" tier="command">
           <input type="text" placeholder="Palette input" />
         </AppPaletteDialog>
       </>
@@ -335,7 +410,7 @@ describe("AppPaletteDialog focus restore", () => {
     rerender(
       <>
         <Dispatcher />
-        <AppPaletteDialog isOpen={false} onClose={() => {}} ariaLabel="Test palette">
+        <AppPaletteDialog isOpen={false} onClose={() => {}} ariaLabel="Test palette" tier="command">
           <input type="text" placeholder="Palette input" />
         </AppPaletteDialog>
       </>
@@ -417,7 +492,7 @@ describe("AppPaletteDialog.Body results region (#11431)", () => {
     render(
       <>
         <Dispatcher />
-        <AppPaletteDialog isOpen onClose={() => {}} ariaLabel="Body palette">
+        <AppPaletteDialog isOpen onClose={() => {}} ariaLabel="Body palette" tier="command">
           <AppPaletteDialog.Body
             ariaLabel="Results"
             activeDescendant="option-b"

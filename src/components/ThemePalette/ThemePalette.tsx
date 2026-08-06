@@ -184,6 +184,7 @@ export function ThemePalette({ isOpen, onClose }: ThemePaletteProps) {
 
   return (
     <SearchablePalette<AppColorScheme>
+      tier="command"
       isOpen={isOpen}
       query={query}
       results={results}

@@ -99,7 +99,12 @@ export function NewTerminalPalette({
   const activeDescendant = selectedOption ? `new-terminal-option-${selectedOption.id}` : undefined;
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="New terminal palette">
+    <AppPaletteDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      ariaLabel="New terminal palette"
+      tier="anchored"
+    >
       <AppPaletteDialog.Header label="New terminal" shortcut={newTerminalShortcut}>
         <AppPaletteDialog.Input
           inputRef={inputRef}
@@ -145,7 +150,9 @@ export function NewTerminalPalette({
               >
                 <span className="shrink-0 text-daintree-text/70">{option.icon}</span>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-daintree-text">{option.label}</div>
+                  <div className="text-sm font-medium text-daintree-text truncate">
+                    {option.label}
+                  </div>
                   <div className="text-xs text-daintree-text/50 truncate">{option.description}</div>
                 </div>
               </button>

@@ -89,7 +89,13 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
   return {
     AppPaletteDialog: Dialog,
     KBD_CLASS: "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60",
-    PALETTE_SURFACE_WIDTH: "w-[484px]",
+    PALETTE_SURFACE_WIDTHS: {
+      // Sentinel values, not the production pixels: this mock only has to satisfy
+      // the real AppPalettePopover's width lookup, and copying the shipped
+      // classes here would couple every future resize to six mock factories.
+      anchored: "mock-anchored-width",
+      command: "mock-command-width",
+    },
   };
 });
 
@@ -554,11 +560,16 @@ describe("ProjectSwitcherPalette modal mode", () => {
     });
   });
 
-  it("shows Remove hint in dropdown mode footer", () => {
+  it("keeps the footer to the rails the anchored box can actually paint", () => {
+    // A ⌘⌫ Remove rail used to sit here and is deliberately gone: it overflows
+    // the 326px anchored footer whenever ⌘ is held, and a container query that
+    // hid it would hide it in every state the dropdown ever renders. Asserted
+    // as an absence because jsdom evaluates no container query — a presence
+    // assertion here would pass on text no user ever sees.
     render(<ProjectSwitcherPalette {...dropdownProps} results={multiProjects} />);
     const footer = screen.getByTestId("palette-footer");
-    expect(footer.textContent).toContain("Remove");
-    expect(footer.textContent).toContain("Right-click for more");
+    expect(footer.textContent).toContain("Switch");
+    expect(footer.textContent).not.toContain("Remove");
   });
 
   it("shows all projects in dropdown mode including closed ones", () => {
@@ -741,21 +752,26 @@ describe("ProjectSwitcherPalette scratch search rows", () => {
   });
 
   it("drops the project-only shortcut hints while a scratch is highlighted", () => {
+    // Run on the command tier, the only one that actually paints the
+    // context-menu rail — the anchored dropdown's footer is 326px, so the rail
+    // is container-queried away there, and jsdom evaluates no container query,
+    // which would let this pass on text the user never sees.
+    const commandSearchProps = { ...searchProps, mode: "modal" as const };
     const { rerender } = render(
-      <ProjectSwitcherPalette {...searchProps} results={[makeProject({ id: "p1" })]} />
+      <ProjectSwitcherPalette {...commandSearchProps} results={[makeProject({ id: "p1" })]} />
     );
-    expect(screen.getByTestId("palette-footer").textContent).toContain("Remove");
+    expect(screen.getByTestId("palette-footer").textContent).toContain("Right-click for more");
 
     rerender(
       <ProjectSwitcherPalette
-        {...searchProps}
+        {...commandSearchProps}
         results={[makeScratchRow({ id: "s1", name: "Spike notes" })]}
       />
     );
 
-    // ⌘⌫ removes a project and does nothing to a scratch, so advertising it
-    // here would name a key that has no effect on the highlighted row.
-    expect(screen.getByTestId("palette-footer").textContent).not.toContain("Remove");
+    // A search-mode scratch row carries no context menu, so pointing at one
+    // would name an affordance the highlighted row does not have.
+    expect(screen.getByTestId("palette-footer").textContent).not.toContain("Right-click for more");
   });
 });
 

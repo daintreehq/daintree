@@ -4,7 +4,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppPalettePopover } from "../AppPalettePopover";
-import { AppPaletteDialog } from "../AppPaletteDialog";
+import { AppPaletteDialog, type PaletteSurfaceTier } from "../AppPaletteDialog";
 import { useUIStore } from "@/store/uiStore";
 
 /**
@@ -98,6 +98,8 @@ interface HarnessProps {
   withInput?: boolean;
   /** Renders a second stamped header in a portal outside this content's DOM. */
   withNestedPortal?: boolean;
+  /** Overrides the content's surface tier; falls through to `contentOverrides`. */
+  tier?: PaletteSurfaceTier;
 }
 
 function Harness({
@@ -134,6 +136,7 @@ function Harness({
       </AppPalettePopover.Trigger>
       <AppPalettePopover.Content
         ariaLabel="Test palette"
+        tier="command"
         inputRef={inputRef}
         onClearQuery={() => setQuery("")}
         restoreFocusOnPointerDismiss={restoreFocusOnPointerDismiss}
@@ -213,6 +216,33 @@ beforeEach(() => {
   useUIStore.setState({ overlayStack: [] });
 });
 
+describe("AppPalettePopover surface tier", () => {
+  /**
+   * The popover resolves its own width rather than inheriting the modal's, so
+   * the wiring is worth its own coverage: a tier honoured by `AppPaletteDialog`
+   * and dropped here is exactly the drift this shell exists to prevent.
+   */
+  function contentWidth(tier: PaletteSurfaceTier): number {
+    const { unmount } = render(<Harness initialOpen tier={tier} />);
+    const className = typeof contentProps.className === "string" ? contentProps.className : "";
+    unmount();
+    const match = /(?:^|\s)w-\[(\d+)px\]/.exec(className);
+    expect(match, `no w-[Npx] class forwarded for the ${tier} surface`).not.toBeNull();
+    return Number(match![1]);
+  }
+
+  it("forwards a narrower box for the anchored tier than the command tier", () => {
+    expect(contentWidth("anchored")).toBeLessThan(contentWidth("command"));
+  });
+
+  it("keeps tier out of the props handed to Radix", () => {
+    // `tier` is shell vocabulary. Forwarded, it reaches the DOM as an unknown
+    // attribute and React warns on every open.
+    render(<Harness initialOpen tier="anchored" />);
+    expect(contentProps).not.toHaveProperty("tier");
+  });
+});
+
 describe("AppPalettePopover", () => {
   it("forwards the open state and the required modal choice to the popover root", () => {
     const { unmount } = render(<Harness modal={true} open={false} />);
@@ -278,7 +308,12 @@ describe("AppPalettePopover", () => {
     const inputRef = { current: null };
     expect(() =>
       render(
-        <AppPalettePopover.Content ariaLabel="Orphan" inputRef={inputRef} onClearQuery={vi.fn()}>
+        <AppPalettePopover.Content
+          ariaLabel="Orphan"
+          tier="command"
+          inputRef={inputRef}
+          onClearQuery={vi.fn()}
+        >
           <span />
         </AppPalettePopover.Content>
       )

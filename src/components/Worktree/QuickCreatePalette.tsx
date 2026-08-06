@@ -128,6 +128,7 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
 
   return (
     <SearchablePalette<QuickCreateItem>
+      tier="anchored"
       isOpen={palette.isOpen}
       query={palette.query}
       results={palette.results}

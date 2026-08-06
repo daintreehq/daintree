@@ -148,6 +148,7 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
 
   return (
     <SearchablePalette<PromptHistoryEntry>
+      tier="command"
       isOpen={isOpen}
       query={query}
       results={results}

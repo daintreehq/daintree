@@ -107,10 +107,17 @@ describe("QuickSwitcher dynamic footer hint", () => {
     expect(screen.queryByText("to switch terminal")).toBeNull();
   });
 
-  it("falls back to default hints when results are empty", () => {
+  it("drops the footer entirely when results are empty", () => {
     renderQuickSwitcher({ results: [], selectedIndex: -1 });
 
-    expect(screen.getByText("to select")).toBeTruthy();
+    // Nothing is selected, so there is no action to name — and a footer with
+    // nothing contextual to say has no reason to occupy a bordered band.
+    //
+    // Asserted on the contextual text rather than on `kbd` anywhere in the
+    // document: this palette also renders a header shortcut chip, which only
+    // stays invisible here because the keybinding hooks are mocked empty. The
+    // wrapper's own absence is covered directly in AppPaletteDialog.test.tsx.
+    expect(screen.queryByText("to select")).toBeNull();
     expect(screen.queryByText("to switch terminal")).toBeNull();
     expect(screen.queryByText("to switch worktree")).toBeNull();
   });
@@ -139,7 +146,7 @@ describe("QuickSwitcher dynamic footer hint", () => {
     expect(screen.queryByText("to switch terminal")).toBeNull();
   });
 
-  it("restores default hints when results transition from populated to empty", () => {
+  it("removes the footer when results transition from populated to empty", () => {
     const baseProps = {
       isOpen: true,
       query: "",
@@ -161,7 +168,7 @@ describe("QuickSwitcher dynamic footer hint", () => {
 
     rerender(<QuickSwitcher {...baseProps} results={[]} selectedIndex={-1} />);
     expect(screen.queryByText("to switch terminal")).toBeNull();
-    expect(screen.getByText("to select")).toBeTruthy();
+    expect(screen.queryByText("to select")).toBeNull();
   });
 
   it("wires aria-describedby on each row to the footer hint id", () => {

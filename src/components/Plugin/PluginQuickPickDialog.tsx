@@ -193,6 +193,7 @@ export function PluginQuickPickDialog() {
       resetKeys={[promptId ?? "null"]}
     >
       <SearchablePalette<PluginQuickPickItem>
+        tier="command"
         isOpen={isQuickPick}
         query={query}
         results={results}

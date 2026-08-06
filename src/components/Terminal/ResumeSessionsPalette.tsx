@@ -167,7 +167,7 @@ export function ResumeSessionsPalette() {
   const activeDescendant = selected ? `resume-session-option-${selected.id}` : undefined;
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="Resume session">
+    <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="Resume session" tier="command">
       <AppPaletteDialog.Header label="Resume session" shortcut={shortcut} isLoading={isLoading}>
         <AppPaletteDialog.Input
           inputRef={inputRef}

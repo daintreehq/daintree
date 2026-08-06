@@ -852,7 +852,7 @@ export function PilotView() {
   const actionLabel = selectedRow === null || (isFilterFocused && showFilterBar) ? null : "Open";
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="All agents">
+    <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="All agents" tier="command">
       <AppPaletteDialog.Header label="All agents" shortcut={pilotShortcut}>
         <AppPaletteDialog.Input
           inputRef={searchRef}

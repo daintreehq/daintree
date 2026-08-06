@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PALETTE_HEADER_ATTR } from "@/components/ui/paletteHeaderAttr";
-import { PALETTE_SURFACE_WIDTH } from "@/components/ui/AppPaletteDialog";
+import { PALETTE_SURFACE_WIDTHS, type PaletteSurfaceTier } from "@/components/ui/AppPaletteDialog";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
 
@@ -138,6 +138,13 @@ export interface AppPalettePopoverContentProps extends Omit<
    * the visible header and speech control can target it by the word on screen.
    */
   ariaLabel: string;
+  /**
+   * Which tier of surface this is. Required and never inferred — most anchored
+   * palettes want `"anchored"`, but the tier tracks the palette's weight rather
+   * than its host, so a genuinely global surface that happens to hang off a
+   * button still says so.
+   */
+  tier: PaletteSurfaceTier;
   /** The palette's search box. Focus is driven into it on every open. */
   inputRef: React.RefObject<HTMLInputElement | null>;
   /** Called when the first Escape spends itself clearing a non-empty query. */
@@ -182,6 +189,7 @@ export interface AppPalettePopoverContentProps extends Omit<
 
 function AppPalettePopoverContent({
   ariaLabel,
+  tier,
   inputRef,
   onClearQuery,
   restoreFocusOnPointerDismiss = false,
@@ -347,12 +355,12 @@ function AppPalettePopoverContent({
     // names and data attributes still come through untouched.
     <PopoverContent
       {...props}
-      // The family's one width, carried by the shell rather than restated at
-      // each anchor — an anchored palette and the modal form of the same
-      // palette (the project switcher renders both) have to resolve to the same
-      // surface. `cn` merges, so a palette that genuinely needs another width
-      // can still pass one.
-      className={cn(PALETTE_SURFACE_WIDTH, className)}
+      // The tier's width, carried by the shell rather than restated at each
+      // anchor, and resolved from the same map the modal form reads — a
+      // palette on a given tier is the same box whichever host it opens in.
+      // `cn` merges, so a palette that genuinely needs another width can still
+      // pass one.
+      className={cn(PALETTE_SURFACE_WIDTHS[tier], className)}
       aria-label={ariaLabel}
       // Radix does not set this itself. `aria-modal="false"` is noise, so the
       // non-modal form carries nothing rather than a negation.

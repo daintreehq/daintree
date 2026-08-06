@@ -92,7 +92,17 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
   Dialog.Footer = Footer;
   Dialog.Divider = (props: React.HTMLAttributes<HTMLDivElement>) => <div {...props} />;
 
-  return { AppPaletteDialog: Dialog, KBD_CLASS: "kbd", PALETTE_SURFACE_WIDTH: "w-[484px]" };
+  return {
+    AppPaletteDialog: Dialog,
+    KBD_CLASS: "kbd",
+    PALETTE_SURFACE_WIDTHS: {
+      // Sentinel values, not the production pixels: this mock only has to satisfy
+      // the real AppPalettePopover's width lookup, and copying the shipped
+      // classes here would couple every future resize to six mock factories.
+      anchored: "mock-anchored-width",
+      command: "mock-command-width",
+    },
+  };
 });
 
 vi.mock("@/components/ui/popover", () => ({

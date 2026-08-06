@@ -31,6 +31,7 @@ vi.mock("@/store/paletteStore", () => ({
 }));
 
 import { SearchablePalette } from "../SearchablePalette";
+import type { PaletteSurfaceTier } from "../AppPaletteDialog";
 
 interface Item {
   id: string;
@@ -49,6 +50,7 @@ interface RenderArgs {
   footer?: React.ReactNode;
   getFooter?: (selectedItem: Item | null) => React.ReactNode;
   getActionLabel?: (selectedItem: Item | null) => string;
+  tier?: PaletteSurfaceTier;
 }
 
 function renderPalette({
@@ -57,6 +59,7 @@ function renderPalette({
   footer,
   getFooter,
   getActionLabel,
+  tier = "command",
 }: RenderArgs = {}) {
   return render(
     <SearchablePalette<Item>
@@ -77,6 +80,7 @@ function renderPalette({
       )}
       label="Test"
       ariaLabel="Test palette"
+      tier={tier}
       footer={footer}
       getFooter={getFooter}
       getActionLabel={getActionLabel}
@@ -129,10 +133,31 @@ describe("SearchablePalette footer", () => {
     expect(getByTestId("static-footer").textContent).toBe("static");
   });
 
-  it("falls back to default keyboard hints when neither prop is provided", () => {
+  it("forwards its tier to the shell instead of pinning one", () => {
+    // SearchablePalette renders the dialog itself, so a hardcoded or dropped
+    // tier here would leave the shell's own tier tests green while every
+    // anchored consumer — SendToAgent, Worktree, QuickCreate — silently came
+    // out at command width.
+    const widthFor = (tier: "anchored" | "command") => {
+      const { unmount } = renderPalette({ tier });
+      const dialog = document.body.querySelector("[role='dialog']");
+      const match = /(?:^|\s)w-\[(\d+)px\]/.exec(dialog?.className ?? "");
+      unmount();
+      expect(match, `no w-[Npx] class for the ${tier} tier`).not.toBeNull();
+      return Number(match![1]);
+    };
+
+    expect(widthFor("anchored")).toBeLessThan(widthFor("command"));
+  });
+
+  it("renders no footer band at all when no footer source is provided", () => {
     renderPalette();
 
-    expect(document.body.textContent).toContain("to select");
+    // This fixture passes no `shortcut` and no `emptyShortcut`, so the footer
+    // is the palette's only source of `kbd` chips — their absence is the band's
+    // absence. (`AppPaletteDialog.Footer` covers the wrapper itself directly.)
+    expect(document.body.querySelector("kbd")).toBeNull();
+    expect(document.body.textContent).not.toContain("to select");
   });
 
   it("does not render an aria-live region for the footer", () => {
@@ -149,7 +174,7 @@ describe("SearchablePalette footer", () => {
     expect(footerContainer?.querySelector("[aria-live]")).toBeNull();
   });
 
-  it("getActionLabel composes a custom verb into the default footer hint", () => {
+  it("getActionLabel composes a custom verb into the footer hint", () => {
     renderPalette({
       selectedIndex: 1,
       getActionLabel: (item) => (item ? `Switch to ${item.label}` : "Switch"),
@@ -157,6 +182,21 @@ describe("SearchablePalette footer", () => {
 
     expect(document.body.textContent).toContain("to switch to bravo");
     expect(document.body.textContent).not.toContain("to select");
+  });
+
+  it("getActionLabel renders one contextual chip, not a navigation lesson", () => {
+    renderPalette({
+      selectedIndex: 1,
+      getActionLabel: (item) => (item ? `Switch to ${item.label}` : "Switch"),
+    });
+
+    // The footer names what Enter does and stops there. `↑↓` and `Esc` are
+    // conventions every picker in the app shares, so restating them per surface
+    // is chrome that teaches nothing.
+    const keys = Array.from(document.body.querySelectorAll("kbd"), (el) => el.textContent);
+    expect(keys).toEqual(["↵"]);
+    expect(document.body.textContent).not.toContain("navigate");
+    expect(document.body.textContent).not.toContain("close");
   });
 
   it("getActionLabel receives null when results are empty", () => {
@@ -192,10 +232,11 @@ describe("SearchablePalette footer", () => {
     expect(document.body.textContent).toContain("to select");
   });
 
-  it("explicit footer={false} suppresses both the action-label path and the default hints", () => {
+  it("explicit footer={false} suppresses the action-label path and renders no band", () => {
     renderPalette({ footer: false, getActionLabel: () => "Switch terminal" });
     expect(document.body.textContent).not.toContain("to switch terminal");
     expect(document.body.textContent).not.toContain("to select");
+    expect(document.body.querySelector("kbd")).toBeNull();
   });
 
   it("getActionLabel updates when selectedIndex moves to a different item", () => {
@@ -219,6 +260,7 @@ describe("SearchablePalette footer", () => {
         )}
         label="Test"
         ariaLabel="Test palette"
+        tier="command"
         getActionLabel={fn}
       />
     );
@@ -243,6 +285,7 @@ describe("SearchablePalette footer", () => {
         )}
         label="Test"
         ariaLabel="Test palette"
+        tier="command"
         getActionLabel={fn}
       />
     );
@@ -281,6 +324,7 @@ describe("SearchablePalette footer", () => {
           )}
           label="Test"
           ariaLabel="Test palette"
+          tier="command"
           getActionLabel={getActionLabel}
         />
       );
@@ -302,7 +346,7 @@ describe("SearchablePalette footer", () => {
       const initialDialog = document.body.querySelector("[role='dialog']");
       expect(initialDialog).not.toBeNull();
       const initialKbds = Array.from(initialDialog!.querySelectorAll("kbd"));
-      // Footer kbd entries are: "↵", "↑", "↓", "Esc". Grab the primary "↵".
+      // The footer carries exactly one chip now — the "↵" action.
       const initialPrimaryKbd = initialKbds.find((kbd) => kbd.textContent === "↵");
       expect(initialPrimaryKbd).toBeDefined();
 

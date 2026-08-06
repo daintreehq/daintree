@@ -396,6 +396,7 @@ export function ActionPalette({
 
   return (
     <SearchablePalette<ActionPaletteItemType>
+      tier="command"
       isOpen={isOpen}
       query={query}
       results={results}
