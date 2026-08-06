@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
 import { render, screen, within, fireEvent, act } from "@testing-library/react";
 
 const originalScrollIntoView = Element.prototype.scrollIntoView;
@@ -138,6 +138,7 @@ import type {
   SearchableScratch,
 } from "@/hooks/useProjectSwitcherPalette";
 import { SCRATCH_CLEANUP_TTL_MS } from "@shared/config/scratchCleanup";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 
 const { ProjectSwitcherPalette } = await import("../ProjectSwitcherPalette");
 
@@ -466,6 +467,12 @@ describe("ProjectSwitcherPalette clone repo button", () => {
  * said with a band header, `aria-current`, and a word in the accessible name.
  */
 describe("ProjectSwitcherPalette current-project marker", () => {
+  // The override map is module state on a real store — left set, it would mute
+  // every later fixture that reuses the default project id.
+  afterEach(() => {
+    useProjectSettingsStore.setState({ notificationOverridesByProjectId: {} });
+  });
+
   const currentAndOther = [
     makeProject({ id: "active", name: "Active Project", isActive: true, section: "current" }),
     makeProject({ id: "other", name: "Other Project", section: "other" }),
@@ -534,6 +541,45 @@ describe("ProjectSwitcherPalette current-project marker", () => {
     expect(within(row).queryByTestId("workspace-status-dot")).toBeNull();
     expect(screen.queryByText(/^Opened /)).toBeNull();
     expect(screen.getByRole("group", { name: "Current project" })).toBeTruthy();
+  });
+
+  /*
+   * The row's name is assembled from adjacent nodes, and a labelled icon
+   * concatenates straight onto whatever precedes it — so a muted current
+   * project once named as "…, currentNotifications muted…". Both markers have
+   * to survive together, separated, in either order of arrival.
+   */
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ])("keeps the name readable with isActive=%s muted=%s", (isActive, muted) => {
+    useProjectSettingsStore.setState({
+      notificationOverridesByProjectId: muted
+        ? { "proj-1": { completedEnabled: false, waitingEnabled: false } }
+        : {},
+    });
+
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={[
+          makeProject({ name: "Payments", isActive, section: isActive ? "current" : "other" }),
+        ]}
+      />
+    );
+
+    // Asserted against the accessible NAME, not textContent — the bell is an
+    // SVG carrying an aria-label, so it contributes nothing to the latter and
+    // the run-together bug is invisible there.
+    const marked = screen.queryByRole("option", { name: /Payments, current\b/ }) !== null;
+    expect(marked).toBe(isActive);
+    // A word ending immediately before the bell's label means the two fused
+    // into one — "Payments, currentNotifications muted…". A punctuated join is
+    // fine; the name-computation polyfill trims each node, so the separator
+    // reliably survives as the comma rather than as the space after it.
+    expect(screen.queryByRole("option", { name: /[A-Za-z]Notifications muted/ })).toBeNull();
   });
 
   // The header is chrome, not a row. Arrow keys walk `results`, and a label
@@ -668,11 +714,15 @@ describe("ProjectSwitcherPalette modal mode", () => {
       .map((el) => el.textContent?.trim())
       .filter(
         (text): text is string =>
-          text === "Pinned" || text === "Running" || text === "Other projects"
+          text === "Current project" ||
+          text === "Pinned" ||
+          text === "Running" ||
+          text === "Other projects"
       );
-    // Pinned above Running: an explicit pin outranks the operational fact
-    // that something is executing.
-    expect(headers[0]).toBe("Pinned");
+    // The band you are in leads, then Pinned above Running: an explicit pin
+    // outranks the operational fact that something is executing.
+    expect(headers[0]).toBe("Current project");
+    expect(headers[1]).toBe("Pinned");
     expect(headers).toContain("Running");
     expect(headers).toContain("Other projects");
   });
@@ -815,12 +865,15 @@ describe("ProjectSwitcherPalette scratch search rows", () => {
     ];
     render(<ProjectSwitcherPalette {...searchProps} results={rows} selectedIndex={0} />);
 
-    expect(screen.getByRole("option", { name: /Spike one/ }).getAttribute("aria-selected")).toBe(
-      "true"
-    );
-    expect(screen.getByRole("option", { name: /Spike two/ }).getAttribute("aria-selected")).toBe(
-      "false"
-    );
+    const cursor = screen.getByRole("option", { name: /Spike one/ });
+    const active = screen.getByRole("option", { name: /Spike two/ });
+
+    expect(cursor.getAttribute("aria-selected")).toBe("true");
+    expect(active.getAttribute("aria-selected")).toBe("false");
+    // The other half of the same contract: the row Enter would act on is not
+    // the one you are in, and each says only its own fact (#11692).
+    expect(active.getAttribute("aria-current")).toBe("true");
+    expect(cursor.getAttribute("aria-current")).toBeNull();
   });
 
   it("keeps a scratch row out of the tab order so the arrow keys stay in charge", () => {

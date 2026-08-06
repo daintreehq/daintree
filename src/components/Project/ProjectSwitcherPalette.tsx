@@ -343,11 +343,11 @@ function ProjectListItem({
             {project.name}
           </span>
           {/*
-           * The band header above says which row this is, but a screen reader
-           * arrowing straight onto the option may never hear the group boundary
-           * — and `aria-current` itself goes unannounced inside a listbox often
-           * enough that it can't be the only carrier. In the name it is always
-           * read, and one extra word on one row is a cheap way to be sure.
+           * Said in the name, not just in `aria-current`. In browse the band
+           * header carries it, but search drops the bands entirely — and even
+           * in browse a reader arrowing straight onto the option may never hear
+           * the group boundary, while `aria-current` itself goes unannounced
+           * inside a listbox often enough that it can't be the only carrier.
            *
            * Directly after the name, before the bell: the name is what it
            * qualifies, and read after the muted-notifications label it would
@@ -355,10 +355,18 @@ function ProjectListItem({
            */}
           {project.isActive && <span className="sr-only">, current</span>}
           {isProjectNotificationsMuted && (
-            <BellOff
-              className="w-3.5 h-3.5 text-daintree-text/40 shrink-0 ml-1"
-              aria-label="Notifications muted for this project"
-            />
+            <>
+              {/*
+               * The icon's label is concatenated straight onto whatever
+               * precedes it, so without this the name runs together as
+               * "Payments, currentNotifications muted…".
+               */}
+              <span className="sr-only">, </span>
+              <BellOff
+                className="w-3.5 h-3.5 text-daintree-text/40 shrink-0 ml-1"
+                aria-label="Notifications muted for this project"
+              />
+            </>
           )}
         </div>
 

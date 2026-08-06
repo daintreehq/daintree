@@ -275,7 +275,7 @@ function getOpenedStatus(lastOpened: number): WorkspaceActivityStatus {
   return { text: "Not opened yet", tone: "muted", isDormantFallback: true };
 }
 
-/** The one status line a project row shows. */
+/** The one status line a project row has to show, if it shows one at all. */
 export function getProjectRowStatus(
   project: SearchableProject,
   nowMs: number = Date.now()
@@ -303,7 +303,8 @@ export function getProjectRowStatus(
 }
 
 /**
- * The one status line a scratch row shows (#11518).
+ * The one status line a scratch row has to show, if it shows one at all
+ * (#11518).
  *
  * Same activity sentences and tones a project gets — the point of the shared
  * core — minus the states a scratch has no concept of. There is no `isMissing`
