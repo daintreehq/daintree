@@ -21,22 +21,22 @@ import { cn } from "@/lib/utils";
  * treatment from this.
  */
 export const PALETTE_ROW_CLASS = cn(
-  // `relative` is the rail's containing block; the transparent border reserves
-  // the selected border's width so the row cannot shift when it arrives.
-  "relative border border-transparent transition-colors",
-  // The outline is the rail's own colour at /40 — one anchor drawn twice, not
-  // two signals. It shares that /40 with the palette input's focus border
-  // (`AppPaletteDialog`), so both land on the same rendered green and the
-  // surface reads as one treatment rather than two strengths; change them
-  // together. /25 was tried and sat inside the noise of the neutral border it
-  // replaced. Every theme's accent drives it, so the outline and the rail can
-  // never disagree about what colour "selected" is.
-  "aria-selected:bg-overlay-raised aria-selected:border-daintree-accent/40 aria-selected:text-daintree-text",
-  // The rail is always laid out and only its opacity changes. Toggling
-  // `content` instead gave the pseudo-element nothing to transition from.
-  "before:absolute before:top-2 before:bottom-2 before:left-0 before:w-[2px] before:rounded-r",
-  "before:bg-daintree-accent before:opacity-0 before:transition-opacity before:content-['']",
-  "aria-selected:before:opacity-100"
+  // `palette-row` is not styling — it is the handle the `forced-colors: active`
+  // block in `index.css` needs. There the raised fill is discarded and the row
+  // has to redraw itself from system keywords, and `[role="option"]` is far too
+  // broad a hook: the file pane, the settings selectors and the agent/forge
+  // dropdowns all use it too. The transparent resting border reserves the
+  // selected border's width so the row cannot shift when it arrives.
+  "palette-row border border-transparent transition-colors",
+  // Neutral, not accent (#11686). The fill alone can't be the indicator — it
+  // clears about 1.1-1.2:1 against the palette surface — so `selection-outline`
+  // carries WCAG 1.4.11 at 3:1 for the pair. It is the same token the palette
+  // input's focus border uses (`AppPaletteDialog`), so the focused field and the
+  // selected row are one treatment at two strengths rather than two colours;
+  // change them together. Earlier attempts at a neutral outline failed because
+  // they reused the resting border ladder, which is tuned for separation and
+  // sits inside its own noise when asked to be the only signal.
+  "aria-selected:bg-overlay-raised aria-selected:border-selection-outline aria-selected:text-daintree-text"
 );
 
 /**

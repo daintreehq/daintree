@@ -566,6 +566,10 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
     }
   }
 
+  // Palette selected-row indicator (#11686) — the outline is the whole non-text
+  // signal there, so it carries 1.4.11 on its own.
+  warnings.push(...getPaletteSelectionWarnings(scheme));
+
   // Terminal ANSI / syntax legibility and distinctness — OKLab-based because
   // the terminal background is always dark and WCAG ratios are unreliable there.
   warnings.push(...getTerminalSyntaxWarnings(scheme));
@@ -581,6 +585,151 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
 // literal here could silently drift from the pair everything else is derived from.
 const ACCENT_MIN_CONTRAST = ACCENT_CONTRAST_PAIR.minimum;
 const ACCENT_OUTLINE_MIN_CONTRAST = 3.0;
+
+// What sits behind an unselected palette row, per `.surface-overlay`
+// (index.css). Rows are transparent until selected, so this is also the
+// unselected row's colour.
+//
+// Light forces the floating surface opaque, so `surface-panel-elevated` is
+// exact. Dark leaves it at 94% over whatever the palette floats above, and
+// every plane except the grid is *lighter* than the sidebar — so the solid
+// sidebar is the flattering end of the range, not the conservative one. The
+// backdrop isn't knowable here, so we score against all of them and keep the
+// worst: a lighter backdrop lifts the surface and the fill together and closes
+// the gap the outline has to hold.
+const DARK_PALETTE_BACKDROPS: AppThemeTokenKey[] = [
+  "surface-grid",
+  "surface-canvas",
+  "surface-panel",
+  "surface-panel-elevated",
+];
+const DARK_PALETTE_SURFACE_OPACITY = 0.94;
+
+// Every colour the palette surface can actually render as, worst case last.
+function resolvePaletteSurfaces(scheme: AppColorScheme): string[] | null {
+  if (scheme.type === "light") {
+    const elevated = scheme.tokens["surface-panel-elevated"];
+    return isHexColor(elevated) ? [elevated] : null;
+  }
+  const sidebar = scheme.tokens["surface-sidebar"];
+  if (!isHexColor(sidebar)) return null;
+  // The solid sidebar stays in the running: performance mode and
+  // `prefers-contrast: more` both drop the material and render it opaque.
+  return [
+    sidebar,
+    ...DARK_PALETTE_BACKDROPS.map((key) => scheme.tokens[key])
+      .filter(isHexColor)
+      .map((backdrop) => blendOverBackground(sidebar, backdrop, DARK_PALETTE_SURFACE_OPACITY)),
+  ];
+}
+
+const SELECTION_OUTLINE_MIN_CONTRAST = 3.0;
+
+// The pixel a token actually paints when it lands on `backdrop`. Tokens reach us
+// as an opaque hex, an alpha hex (`#RGBA`/`#RRGGBBAA`, which `isHexColor` accepts
+// and `relativeLuminance` would otherwise read as opaque and pass on a ratio the
+// user never sees), or an `rgba()` wash. Anything else — a `color-mix()` from a
+// partially-specified import — is not evaluable by this math, and says so rather
+// than guessing.
+function resolveOverBackdrop(value: string, backdrop: string): string | null {
+  if (isHexColor(value)) {
+    const alphaHex = splitHexAlpha(value);
+    return alphaHex ? blendOverBackground(alphaHex.hex, backdrop, alphaHex.opacity) : value;
+  }
+  const rgba = parseRgba(value);
+  if (!rgba) return null;
+  return blendOverBackground(rgba.hex, backdrop, rgba.opacity);
+}
+
+// Splits `#RGBA`/`#RRGGBBAA` into its opaque colour and alpha. Returns null for
+// the 3- and 6-digit forms, which are already opaque.
+function splitHexAlpha(hex: string): { hex: string; opacity: number } | null {
+  // `isHexColor` trims before validating, so a padded token reaches us intact —
+  // slicing without trimming would leave the alpha digits unrecognised and the
+  // colour would take the opaque path.
+  const body = hex.trim().slice(1);
+  if (body.length === 4) {
+    return {
+      hex: `#${body.slice(0, 3)}`,
+      opacity: parseInt(body[3]!.repeat(2), 16) / 255,
+    };
+  }
+  if (body.length === 8) {
+    return {
+      hex: `#${body.slice(0, 6)}`,
+      opacity: parseInt(body.slice(6), 16) / 255,
+    };
+  }
+  return null;
+}
+
+// WCAG 1.4.11 for the palette selected row. The raised fill clears barely
+// 1.1-1.2:1 against the surface in every built-in theme, so it cannot be the
+// indicator; `selection-outline` is, and it has to hold 3:1 against BOTH
+// neighbours it touches. The fill is the binding one — on dark the row lifts
+// *towards* the outline, so the pair that looks safe against the surrounding
+// surface can still fail against the row it encloses.
+function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+  const outlineToken = scheme.tokens["selection-outline"];
+  const fillToken = scheme.tokens["overlay-raised"];
+
+  const surfaces = resolvePaletteSurfaces(scheme);
+  if (surfaces === null) {
+    warnings.push({
+      kind: "unevaluable",
+      message: `Cannot evaluate palette selection contrast: the palette surface for a ${scheme.type} theme is not a hex color`,
+    });
+    return warnings;
+  }
+
+  // Collapse the backdrops but not the pairs: every candidate surface is the
+  // same surface behind a different plane, so warning per plane would be five
+  // spellings of one problem — but "invisible against the row" and "invisible
+  // against the surface" are separate faults, and reporting only the worse one
+  // would send an author to fix half the problem.
+  const worstByLabel = new Map<string, number>();
+
+  for (const surface of surfaces) {
+    const fill = resolveOverBackdrop(fillToken, surface);
+    if (fill === null) {
+      warnings.push({
+        kind: "unevaluable",
+        message: `Cannot evaluate palette selection contrast: overlay-raised="${fillToken}" is neither hex nor rgba()`,
+      });
+      return warnings;
+    }
+
+    const outline = resolveOverBackdrop(outlineToken, fill);
+    if (outline === null) {
+      warnings.push({
+        kind: "unevaluable",
+        message: `Cannot evaluate palette selection contrast: selection-outline="${outlineToken}" is neither hex nor rgba()`,
+      });
+      return warnings;
+    }
+
+    for (const [label, against] of [
+      ["the selected row fill", fill],
+      ["the surrounding palette surface", surface],
+    ] as const) {
+      const ratio = contrastRatio(outline, against);
+      const seen = worstByLabel.get(label);
+      if (seen === undefined || ratio < seen) worstByLabel.set(label, ratio);
+    }
+  }
+
+  for (const [label, ratio] of worstByLabel) {
+    if (ratio < SELECTION_OUTLINE_MIN_CONTRAST) {
+      warnings.push({
+        kind: "low-contrast",
+        message: `selection-outline against ${label} is ${ratio.toFixed(2)}:1; target is ${SELECTION_OUTLINE_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
+      });
+    }
+  }
+
+  return warnings;
+}
 
 // Structured result describing how an accent override fails its contrast gate, so
 // the theme picker can render a specific, actionable warning instead of a generic

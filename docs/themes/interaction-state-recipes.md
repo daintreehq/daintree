@@ -34,7 +34,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 "hover:bg-overlay-subtle hover:text-daintree-text";
 ```
 
-**Usage:** For selected state, use `aria-selected:bg-overlay-raised aria-selected:border-overlay` with a `before:` pseudo-element for the 2px accent rail (`aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2 aria-selected:before:w-[2px] aria-selected:before:bg-daintree-accent`). The raised token follows the `bondi.ts` "elevate-to-select for menu/palette rows" rationale (#9727) — `overlay-soft` is sub-threshold on near-white surfaces. Used in `QuickSwitcherItem.tsx`.
+**Usage:** For selected state, use the shared `PALETTE_ROW_CLASS` (`src/components/ui/paletteRowStyles.ts`) rather than respelling it — see [Selected State (List Item)](#selected-state-list-item). The raised token follows the `bondi.ts` "elevate-to-select for menu/palette rows" rationale (#9727) — `overlay-soft` is sub-threshold on near-white surfaces. Used in `QuickSwitcherItem.tsx`.
 
 ---
 
@@ -72,13 +72,19 @@ This document maps each interactive component role to its canonical Tailwind cla
 
 ### Selected State (List Item)
 
-**Role:** Selected list item in a picker. Uses background fill with accent rail via pseudo-element.
+**Role:** Selected list item in a picker. A raised neutral fill plus a neutral hairline — no accent, no rail.
 
 ```tsx
-"aria-selected:bg-overlay-raised aria-selected:border-overlay aria-selected:text-daintree-text aria-selected:before:absolute aria-selected:before:left-0 aria-selected:before:top-2 aria-selected:before:bottom-2 aria-selected:before:w-[2px] aria-selected:before:bg-daintree-accent aria-selected:before:content-['']";
+"palette-row border border-transparent transition-colors aria-selected:bg-overlay-raised aria-selected:border-selection-outline aria-selected:text-daintree-text";
 ```
 
-**Usage:** Selected items do not add hover overlay — the background fill and accent rail provide sufficient state distinction. Unselected items get `hover:bg-overlay-subtle`. Used in `QuickSwitcherItem.tsx`.
+**Usage:** Do not respell this — import `PALETTE_ROW_CLASS` from `src/components/ui/paletteRowStyles.ts`, which 16 palette surfaces already share. Selected items do not add hover overlay; unselected items get `hover:bg-overlay-subtle`.
+
+`selection-outline` is its own semantic token, not a member of the resting border ladder, because it is the row's only non-text indicator and so carries WCAG 1.4.11 alone: `overlay-raised` clears only ~1.1-1.2:1 against the palette surface, far short of 3:1. It is derived from each theme's `text-primary` (42% dark / 53% light) and gated at 3:1 against _both_ the selected fill and the surrounding surface by `getThemeContrastWarnings`. The fill is the binding pair — on dark the row lifts toward the outline, so an outline that looks safe against the surface can still vanish into the row it encloses.
+
+The accent border and the 2px accent rail this recipe used to prescribe were removed in #11686: they put accent on the row, its rail and the focused input at once, breaking the one-load-bearing-signal rule. The palette input's focus lift draws the same `selection-outline` (ring at half strength), so the field and the selected row stay one treatment — change them together.
+
+`palette-row` is a forced-colors hook, not styling. Under `forced-colors: active` both the fill and the outline are stripped, so `src/index.css` falls back to a 2px `SelectedItem` outline. Deliberately an outline rather than a `SelectedItem` fill: these rows carry independently surfaced children (theme "Active" badges, action category chips, panel-kind icons with inline colour) that the engine maps to the forced palette on their own, and a fill would leave them painting `CanvasText` on `SelectedItem` — a pair with no contrast guarantee. The marker scopes the rule to palette rows, since `[role="option"]` is also used by the file pane, the settings selectors and the agent/forge dropdowns.
 
 ---
 

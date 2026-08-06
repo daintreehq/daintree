@@ -26,8 +26,8 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
         id={`worktree-option-${worktree.id}`}
         onClick={onClick}
         className={cn(
-          // Was a hand-rolled copy of the shared row, so it kept the neutral
-          // selected border after the family moved to the accent one.
+          // Was a hand-rolled copy of the shared row and drifted out of step
+          // with it; takes the selected treatment from the family now.
           PALETTE_ROW_CLASS,
           "group w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5",
           "bg-daintree-bg hover:bg-surface"

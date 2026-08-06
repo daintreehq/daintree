@@ -90,8 +90,11 @@ Dim or disabled icons must use a solid token (`text-text-muted` for disabled/nee
 | `border-strong`      | Focused panel borders               | `white 14%`  | `black 14%`   |
 | `border-divider`     | Structural separators               | `white 5%`   | `black 4%`    |
 | `border-interactive` | Hovered/focused interactive borders | `white 20%`  | `black 10%`   |
+| `selection-outline`  | Palette selected-row hairline       | `text 42%`   | `text 53%`    |
 
 **Polarity pattern:** Dark themes use white-alpha; light themes use black-alpha.
+
+**`selection-outline` is deliberately outside that ladder.** It is derived from `text-primary` rather than the border ink, and sits 2-3x above `border-strong`, because it is the only border in the app that must satisfy WCAG 1.4.11 on its own — the raised fill it encloses clears barely 1.1-1.2:1 against the palette surface, so the outline is the whole non-text indicator. `getThemeContrastWarnings` gates it at 3:1 against both the selected fill and the surrounding surface, so retuning `text-primary` or the fill trips the theme contract rather than silently weakening the indicator. See [interaction-state-recipes.md](./interaction-state-recipes.md#selected-state-list-item).
 
 ## Accent Tokens
 
