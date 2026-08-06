@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render } from "@testing-library/react";
-import { forwardRef } from "react";
-import type { ReactNode } from "react";
+import { StrictMode, forwardRef, useImperativeHandle } from "react";
+import type { ForwardedRef, ReactNode } from "react";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { ContextMenuItem } from "@/components/ui/context-menu";
 import { FILE_DRAG_MIME, decodeFileDragPaths } from "@/lib/fileDragPayload";
@@ -19,6 +19,16 @@ vi.mock("@/lib/platform", async (importOriginal) => ({
   isMac: isMacMock,
 }));
 
+/**
+ * Scroll requests the tree makes through Virtuoso's imperative handle. The
+ * stub has to publish a handle for these to be observable at all: without one
+ * the forwarded ref stays null and `virtuosoRef.current?.scrollIntoView(...)`
+ * is swallowed by its own optional chaining.
+ */
+const { scrollIntoViewMock } = vi.hoisted(() => ({
+  scrollIntoViewMock: vi.fn<(location: { index: number; behavior?: string }) => void>(),
+}));
+
 // Render every row: the virtualization itself is not under test, and the row
 // interactions below need real DOM nodes for every item.
 vi.mock("react-virtuoso", () => ({
@@ -28,8 +38,9 @@ vi.mock("react-virtuoso", () => ({
       context: unknown;
       itemContent: (index: number, row: FlatTreeRow, context: unknown) => ReactNode;
     },
-    _ref
+    ref: ForwardedRef<{ scrollIntoView: (location: { index: number }) => void }>
   ) {
+    useImperativeHandle(ref, () => ({ scrollIntoView: scrollIntoViewMock }), []);
     return (
       <div>
         {props.data.map((row, index) => (
@@ -59,6 +70,9 @@ const BASE_PATH = "/repo";
 // One test flips to Ctrl; without this reset it would leak into the rest.
 beforeEach(() => {
   isMacMock.mockReturnValue(true);
+  // Every render with a resolvable cursor scrolls once on mount, so the count
+  // carries into the next test without this.
+  scrollIntoViewMock.mockClear();
 });
 
 function renderTree(overrides: Partial<Parameters<typeof FileTreeView>[0]> = {}) {
@@ -888,5 +902,146 @@ describe("FileTreeView git status markers", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("FileTreeView cursor reveal", () => {
+  const COLLAPSED: FlatTreeRow[] = [row("src", true), row("README.md")];
+  const EXPANDED: FlatTreeRow[] = [
+    { ...row("src", true), isExpanded: true },
+    { ...row("src/a.ts"), depth: 1 },
+    { ...row("src/b.ts"), depth: 1 },
+    row("README.md"),
+  ];
+
+  function renderCursor(rows: FlatTreeRow[], cursorPath: string | null) {
+    const props = {
+      rows,
+      cursorPath,
+      onSelect: vi.fn(),
+      onToggleExpanded: vi.fn(),
+      basePath: BASE_PATH,
+      label: "Files",
+    };
+    const utils = render(<FileTreeView {...props} />);
+    return {
+      ...utils,
+      /** Commit a new row array, and optionally a moved cursor, as the pane would. */
+      show: (nextRows: FlatTreeRow[], nextCursorPath = cursorPath) =>
+        utils.rerender(<FileTreeView {...props} rows={nextRows} cursorPath={nextCursorPath} />),
+    };
+  }
+
+  it("reveals a restored cursor on mount", () => {
+    // The cursor a restored panel comes back with is off screen as often as
+    // not, so the first commit that resolves it has to scroll.
+    renderCursor(COLLAPSED, "README.md");
+
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ index: 1, behavior: "auto" });
+  });
+
+  it("leaves the view alone when a folder above the cursor expands", () => {
+    // #11684: expanding splices rows in above a stationary cursor, so its index
+    // changes without the cursor having moved. Scrolling for that is what drags
+    // the list away from the folder the user just opened.
+    const { show } = renderCursor(COLLAPSED, "README.md");
+    scrollIntoViewMock.mockClear();
+
+    // The folder flips to expanded while its listing is still in flight...
+    show([{ ...row("src", true), isExpanded: true, isLoading: true }, row("README.md")]);
+    // ...and the children land a beat later, shifting the cursor row down.
+    show(EXPANDED);
+
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves the view alone when a second folder expands below a long first one", () => {
+    // The reported shape: open a folder with a lot of files, then open another.
+    // The first expansion is what makes the tree long enough to scroll at all,
+    // and it puts the most rows between the second folder and the cursor.
+    const srcChildren = Array.from({ length: 40 }, (_, index) => ({
+      ...row(`src/file-${index}.ts`),
+      depth: 1,
+    }));
+    const firstExpanded: FlatTreeRow[] = [
+      { ...row("src", true), isExpanded: true },
+      ...srcChildren,
+      row("lib", true),
+      row("README.md"),
+    ];
+    const bothExpanded: FlatTreeRow[] = [
+      { ...row("src", true), isExpanded: true },
+      ...srcChildren,
+      { ...row("lib", true), isExpanded: true },
+      { ...row("lib/util.ts"), depth: 1 },
+      row("README.md"),
+    ];
+    const { show } = renderCursor(firstExpanded, "README.md");
+    scrollIntoViewMock.mockClear();
+
+    show(bothExpanded);
+
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+  });
+
+  it("reveals the cursor when it moves to another row", () => {
+    // Keyboard navigation still has to keep up with the cursor — the whole
+    // reason the effect exists.
+    const { show } = renderCursor(COLLAPSED, "README.md");
+    scrollIntoViewMock.mockClear();
+
+    show(COLLAPSED, "src");
+
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ index: 0, behavior: "auto" });
+  });
+
+  it("reveals a cursor whose row only appears once its ancestors expand", () => {
+    // The reveal flow sets `cursorPath` to the target before anything expands,
+    // so the row does not exist yet and `cursorPath` never changes again. Only
+    // the row appearing marks the moment there is something to scroll to.
+    const { show } = renderCursor(COLLAPSED, "src/b.ts");
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+
+    show(EXPANDED);
+
+    expect(scrollIntoViewMock).toHaveBeenCalledWith({ index: 2, behavior: "auto" });
+  });
+
+  it("re-reveals a cursor whose row disappears and comes back", () => {
+    const { show } = renderCursor(EXPANDED, "src/b.ts");
+    scrollIntoViewMock.mockClear();
+
+    show(COLLAPSED);
+    show(EXPANDED);
+
+    expect(scrollIntoViewMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("never scrolls while no row is under the cursor", () => {
+    const { show } = renderCursor(COLLAPSED, null);
+
+    show(EXPANDED);
+
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
+  });
+
+  it("records the previous cursor after commit rather than during render", () => {
+    // The app renders under StrictMode, which runs each render twice. Tracking
+    // the previous cursor in render instead of in the effect would let the
+    // second pass mark it already seen, and the mount reveal would be lost.
+    render(
+      <StrictMode>
+        <FileTreeView
+          rows={COLLAPSED}
+          cursorPath="README.md"
+          onSelect={vi.fn()}
+          onToggleExpanded={vi.fn()}
+          basePath={BASE_PATH}
+          label="Files"
+        />
+      </StrictMode>
+    );
+
+    expect(scrollIntoViewMock).toHaveBeenCalledTimes(1);
   });
 });

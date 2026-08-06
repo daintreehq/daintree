@@ -271,10 +271,32 @@ export function FileTreeView({
   // did. `auto` only scrolls when the row is actually outside the viewport, so
   // clicking a visible row never yanks the list.
   //
-  // Keyed on the path as well as the index so a restored cursor scrolls on
-  // mount, and so a live update that shifts a row's index re-reveals it.
+  // Only two changes are worth revealing: the cursor moving to another row, and
+  // a cursor that had no row acquiring one — a restored cursor on mount, or a
+  // reveal whose ancestors expand a beat after `cursorPath` lands on the target.
+  // A bare `cursorIndex` change is neither. Expanding a folder resplices `rows`,
+  // so every row below it — including a stationary cursor — takes a new index,
+  // and scrolling for that drags the view off the folder the user just opened
+  // (#11684). Live refreshes and re-sorts shift indices the same way.
+  const previousCursorRef = useRef<{ path: string | null; found: boolean }>({
+    path: cursorPath,
+    // Never found to begin with, so a cursor that already resolves on the first
+    // commit still reads as newly appearing and gets revealed.
+    found: false,
+  });
   useEffect(() => {
-    if (cursorIndex < 0) return;
+    const previous = previousCursorRef.current;
+    const found = cursorIndex >= 0;
+    // Recorded before the early return, and in the effect rather than in render:
+    // an unreachable cursor is still the baseline the next commit compares
+    // against, and only a committed write makes "appeared" mean what it says.
+    previousCursorRef.current = { path: cursorPath, found };
+    if (!found) return;
+
+    const moved = previous.path !== cursorPath;
+    const appeared = !previous.found;
+    if (!moved && !appeared) return;
+
     virtuosoRef.current?.scrollIntoView({ index: cursorIndex, behavior: "auto" });
   }, [cursorIndex, cursorPath]);
 
