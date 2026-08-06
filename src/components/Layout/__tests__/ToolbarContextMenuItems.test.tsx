@@ -169,7 +169,7 @@ describe("ToolbarContextMenuItems", () => {
     // `actionService.dispatch`; in the test mock the source is the default
     // "user" because there's no wrapping Radix context. We only assert the
     // action id and args here — source assertion is exercised in
-    // LauncherMenuButton.test.tsx.
+    // DockLaunchButton.test.tsx.
     expect(dispatchMock).toHaveBeenCalledWith(
       "app.settings.openTab",
       { tab: "toolbar" },

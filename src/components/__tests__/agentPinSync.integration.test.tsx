@@ -52,8 +52,17 @@ vi.mock("@/store/agentSettingsStore", () => ({
 
 vi.mock("@/store/actionMruStore", () => ({
   useActionMruStore: Object.assign(
-    (selector: (s: { getSortedActionMruList: () => ActionFrecencyEntry[] }) => unknown) =>
-      selector({ getSortedActionMruList: () => [] }),
+    (
+      selector: (s: {
+        getSortedActionMruList: () => ActionFrecencyEntry[];
+        actionUsageEntries: Map<string, unknown>;
+      }) => unknown
+    ) =>
+      selector({
+        getSortedActionMruList: () => [],
+        // Subscribed by the launcher model for MRU invalidation.
+        actionUsageEntries: new Map(),
+      }),
     { getState: () => ({ recordActionMru: recordActionMruMock }) }
   ),
 }));
@@ -142,73 +151,84 @@ vi.mock("@/hooks/app/useAgentDiscoveryOnboarding", () => ({
 
 vi.mock("@/lib/colorUtils", () => ({ getBrandColorHex: (id: string) => `#${id}` }));
 
-vi.mock("@/components/ui/dropdown-menu", () => ({
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuItem: ({
-    children,
-    onSelect,
-    onKeyDown,
-    className,
-    ...props
-  }: {
-    children: React.ReactNode;
-    onSelect?: (e: Event) => void;
-    onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
-    className?: string;
-  } & React.HTMLAttributes<HTMLDivElement>) => (
-    <div
-      role="menuitem"
-      className={className}
-      onClick={(e) => onSelect?.(e as unknown as Event)}
-      onKeyDown={onKeyDown}
-      tabIndex={0}
-      {...props}
-    >
-      {children}
-    </div>
+// The launcher renders inside the anchored palette shell. Stubbed so these
+// cross-store assertions stay decoupled from Radix portalling and focus
+// management — the shell has its own suite; what matters here is that the rows
+// render and their pin control writes through the real dispatcher.
+vi.mock("@/components/ui/AppPalettePopover", () => {
+  const AppPalettePopover = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
+  AppPalettePopover.Trigger = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+  AppPalettePopover.Content = ({ children }: { children: React.ReactNode }) => (
+    <div>{children}</div>
+  );
+  return { AppPalettePopover };
+});
+
+vi.mock("@/components/ui/AppPaletteDialog", () => {
+  const AppPaletteDialog = {
+    Header: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    Input: ({
+      inputRef,
+      ...props
+    }: {
+      inputRef?: React.RefObject<HTMLInputElement | null>;
+    } & React.InputHTMLAttributes<HTMLInputElement>) => <input ref={inputRef} {...props} />,
+    Body: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+    Empty: () => <div>empty</div>,
+  };
+  return { AppPaletteDialog, PALETTE_SURFACE_WIDTHS: {} };
+});
+
+vi.mock("@/components/ui/context-menu", () => ({
+  ContextMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+}));
+
+vi.mock("@/components/Layout/ToolbarContextMenuItems", () => ({
+  ToolbarContextMenuItems: () => null,
+}));
+
+vi.mock("@/components/KeyboardShortcuts", () => ({
+  AgentShortcutCapture: () => <div data-testid="shortcut-capture" />,
+}));
+
+vi.mock("@/components/PanelPalette/PanelKindIcon", () => ({ PanelKindIcon: () => null }));
+
+// Empty map: the running pip is irrelevant to pin sync and pulling the real
+// derivation would drag the panel store's whole shape in with it.
+vi.mock("@/lib/agentDominantStates", () => ({
+  deriveAgentDominantStates: () => new Map<string, null>(),
+}));
+
+vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+
+vi.mock("@/store/paletteStore", () => ({
+  usePaletteStore: Object.assign(
+    (selector: (s: { activePaletteId: string | null }) => unknown) =>
+      selector({ activePaletteId: null }),
+    { getState: () => ({ openPalette: vi.fn(), closePalette: vi.fn() }) }
   ),
-  DropdownMenuActionItem: ({
-    actionId,
-    args,
-    children,
-    onSelect,
-    ...props
-  }: {
-    actionId: string;
-    args?: unknown;
-    children: React.ReactNode;
-    onSelect?: (e: Event) => void;
-  } & React.HTMLAttributes<HTMLDivElement>) => (
-    <div
-      role="menuitem"
-      data-action-id={actionId}
-      data-args={JSON.stringify(args)}
-      onClick={() => {
-        const fakeEvent = {
-          defaultPrevented: false,
-          preventDefault: () => {
-            (fakeEvent as { defaultPrevented: boolean }).defaultPrevented = true;
-          },
-        };
-        onSelect?.(fakeEvent as unknown as Event);
-        if (!fakeEvent.defaultPrevented) {
-          // Tests don't introspect the dispatch — they only need this row to
-          // exist so the ToolbarContextMenuItems wrapper renders.
-        }
-      }}
-      tabIndex={0}
-      {...props}
-    >
-      {children}
-    </div>
+}));
+
+vi.mock("@/store/recipeStore", () => ({
+  useRecipeStore: Object.assign(
+    (selector: (s: { recipes: unknown[] }) => unknown) => selector({ recipes: [] }),
+    { getState: () => ({ runRecipeWithResults: vi.fn() }) }
   ),
-  DropdownMenuLabel: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="menu-label">{children}</div>
-  ),
-  DropdownMenuSeparator: () => <hr />,
-  DropdownMenuShortcut: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+}));
+
+vi.mock("@/registry", () => ({
+  getSpawnablePanelKinds: () => [],
+  subscribeToPanelKindDefinitions: () => () => {},
+  getPanelKindDefinitionsSnapshot: () => 0,
+}));
+
+vi.mock("@shared/config/panelKindRegistry", () => ({
+  panelKindIsDockable: () => true,
+  getPanelKindConfig: () => undefined,
+  subscribeToPanelKindRegistry: () => () => {},
+  getPanelKindRegistrySnapshot: () => 0,
 }));
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -266,6 +286,25 @@ vi.mock("@/store", () => ({
       setAlwaysShowDevServer: vi.fn(),
       setDefaultSelection: vi.fn(),
       reset: vi.fn(),
+    }),
+}));
+
+// The launcher imports this by its own path; the `@/store` mock above only
+// covers the barrel the Settings tab reaches through.
+vi.mock("@/store/toolbarPreferencesStore", () => ({
+  useToolbarPreferencesStore: (
+    selector: (s: {
+      layout: typeof sharedToolbarLayout;
+      setPanelButtonOnToolbar: typeof setPanelButtonOnToolbarMock;
+      positionAgentButton: typeof positionAgentButtonMock;
+      toggleButtonVisibility: typeof toggleButtonVisibilityMock;
+    }) => unknown
+  ) =>
+    selector({
+      layout: sharedToolbarLayout,
+      setPanelButtonOnToolbar: setPanelButtonOnToolbarMock,
+      positionAgentButton: positionAgentButtonMock,
+      toggleButtonVisibility: toggleButtonVisibilityMock,
     }),
 }));
 
@@ -340,18 +379,64 @@ vi.mock("@/components/Settings/SettingsSwitch", () => ({
   ),
 }));
 
-import { LauncherMenuButton } from "@/components/Layout/LauncherMenuButton";
-import { LAUNCHER_PANEL_BUTTON_IDS } from "@shared/types/toolbar";
+// jsdom implements no layout, so it ships no scrollIntoView at all. The
+// launcher keeps its active row in view through it on every selection move.
+Element.prototype.scrollIntoView = vi.fn();
+
+import { DockLaunchButton } from "@/components/Layout/DockLaunchButton";
 import { ToolbarSettingsTab } from "@/components/Settings/ToolbarSettingsTab";
 
-// The launcher's Agents and Panels sections share the `launcher-row-` prefix
-// (#11680) — one affordance, one naming scheme — so the panel ids have to come
-// back out here or every count in this file gains four.
+const AGENT_NAMES: Record<string, string> = {
+  claude: "Claude",
+  gemini: "Gemini",
+  codex: "Codex",
+};
+
+// The launcher in its toolbar placement — the same component the dock renders,
+// which is the whole point of #11691. Agents are passed in the order the real
+// `useLauncherData` would produce.
+function renderLauncher(agentIds: string[]) {
+  return render(
+    <DockLaunchButton
+      placement="toolbar"
+      agents={agentIds.map((id) => ({
+        id,
+        name: AGENT_NAMES[id] ?? id,
+        availability: sharedAvailability[id as keyof CliAvailability],
+      }))}
+      onLaunchAgent={() => {}}
+      activeWorktreeId={null}
+      cwd="/repo"
+      hasWorkspace
+      hasProject
+    />
+  );
+}
+
+// Rows are `role="option"`; their agent identity is the leading text of the
+// accessible name. The pin has no test id — it is a real button, so it is found
+// the way a user finds it, by its accessible name.
 function agentRows(container: HTMLElement): string[] {
-  const panelIds = new Set<string>(LAUNCHER_PANEL_BUTTON_IDS);
-  return Array.from(container.querySelectorAll('[data-testid^="launcher-row-"]'))
-    .map((el) => el.getAttribute("data-testid")?.replace("launcher-row-", "") ?? "")
-    .filter((id) => id && !panelIds.has(id));
+  const known = new Map(Object.entries(AGENT_NAMES).map(([id, name]) => [name, id]));
+  return Array.from(container.querySelectorAll('[role="option"]'))
+    .map((el) => el.getAttribute("aria-label")?.split(",")[0]?.trim() ?? "")
+    .map((name) => known.get(name) ?? "")
+    .filter(Boolean);
+}
+
+// The verb in the label states the current state, so the pin's own accessible
+// name is the assertion target — no data attribute needed.
+function pinFor(view: ReturnType<typeof render>, id: string): HTMLElement {
+  const name = AGENT_NAMES[id] ?? id;
+  const pin = view.queryByLabelText(`Pin to toolbar: ${name}`);
+  const unpin = view.queryByLabelText(`Unpin from toolbar: ${name}`);
+  const found = pin ?? unpin;
+  if (!found) throw new Error(`no pin control for ${id}`);
+  return found;
+}
+
+function isPinned(view: ReturnType<typeof render>, id: string): boolean {
+  return pinFor(view, id).getAttribute("aria-pressed") === "true";
 }
 
 describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#5112)", () => {
@@ -385,16 +470,10 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
       codex: "ready",
     } as unknown as CliAvailability;
 
-    const tray = render(
-      <LauncherMenuButton
-        agentAvailability={availability}
-        hasWorkspace
-        hasProject
-        onOpenFileBrowser={() => {}}
-      />
-    );
+    sharedAvailability = availability;
+    const tray = renderLauncher(["claude", "gemini", "codex"]);
     expect(agentRows(tray.container)).toEqual(["claude", "gemini", "codex"]);
-    expect(tray.getByTestId("launcher-pin-claude").getAttribute("data-pinned")).toBe("true");
+    expect(isPinned(tray, "claude")).toBe(true);
     tray.unmount();
 
     const settings = render(<ToolbarSettingsTab />);
@@ -404,16 +483,9 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
     settings.unmount();
 
-    const tray2 = render(
-      <LauncherMenuButton
-        agentAvailability={availability}
-        hasWorkspace
-        hasProject
-        onOpenFileBrowser={() => {}}
-      />
-    );
+    const tray2 = renderLauncher(["claude", "gemini", "codex"]);
     expect(agentRows(tray2.container)).toEqual(["claude", "gemini", "codex"]);
-    expect(tray2.getByTestId("launcher-pin-claude").getAttribute("data-pinned")).toBe("false");
+    expect(isPinned(tray2, "claude")).toBe(false);
   });
 
   it("pinning in the tray makes the Settings > Toolbar checkbox flip to checked", () => {
@@ -435,16 +507,10 @@ describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#511
     expect(geminiSwitchA.getAttribute("aria-checked")).toBe("false");
     settings.unmount();
 
-    // User clicks the pin indicator in the tray for gemini.
-    const tray = render(
-      <LauncherMenuButton
-        agentAvailability={availability}
-        hasWorkspace
-        hasProject
-        onOpenFileBrowser={() => {}}
-      />
-    );
-    fireEvent.click(tray.getByTestId("launcher-pin-gemini"));
+    // User clicks the pin control in the launcher for gemini.
+    sharedAvailability = availability;
+    const tray = renderLauncher(["gemini", "codex"]);
+    fireEvent.click(pinFor(tray, "gemini"));
     expect(setAgentPinnedMock).toHaveBeenCalledWith("gemini", true);
     tray.unmount();
 

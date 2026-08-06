@@ -46,8 +46,18 @@ vi.mock("@/store/recipeStore", () => ({
 const getSortedActionMruListMock = () => mockMruEntries;
 vi.mock("@/store/actionMruStore", () => ({
   useActionMruStore: Object.assign(
-    (selector: (s: { getSortedActionMruList: () => typeof mockMruEntries }) => unknown) =>
-      selector({ getSortedActionMruList: getSortedActionMruListMock }),
+    (
+      selector: (s: {
+        getSortedActionMruList: () => typeof mockMruEntries;
+        actionUsageEntries: Map<string, unknown>;
+      }) => unknown
+    ) =>
+      selector({
+        getSortedActionMruList: getSortedActionMruListMock,
+        // Subscribed by the model purely to invalidate the recency band, so it
+        // must be non-empty or the getter is short-circuited away.
+        actionUsageEntries: new Map([["seed", { uses: [1] }]]),
+      }),
     { getState: () => ({ recordActionMru: recordActionMruMock }) }
   ),
 }));
@@ -132,7 +142,15 @@ describe("DockLaunchMenuItems", () => {
   });
 
   it("splits agents into Pinned/Other for a strict subset", () => {
-    const { getAllByTestId, container } = renderItems({ pinnedCount: 1 });
+    // Two LAUNCHABLE agents: the split is counted against the launchable group,
+    // so a blocked second agent would leave nothing for "Other" to hold.
+    const { getAllByTestId, container } = renderItems({
+      agents: [
+        { id: "claude", name: "Claude", availability: "ready" },
+        { id: "codex", name: "Codex", availability: "ready" },
+      ],
+      pinnedCount: 1,
+    });
 
     expect(
       getAllByTestId("label")
@@ -158,7 +176,7 @@ describe("DockLaunchMenuItems", () => {
     const { getByText } = renderItems({ onLaunchAgent });
 
     fireEvent.click(getByText("Claude"));
-    expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+    expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     expect(recordActionMruMock).toHaveBeenCalledWith("agent.claude");
   });
 

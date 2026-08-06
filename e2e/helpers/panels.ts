@@ -30,11 +30,22 @@ const toolbarButtonIds: Record<string, string> = {
  * overflow row of their own. The tray dropdown is their route. Keyed by the
  * button's aria-label, valued by the tray row's item id.
  */
-const toolbarPanelTrayItemIds: Record<string, string> = {
-  "Open browser": "browser",
-  "Open dev preview": "dev-server",
-  "Browse files": "file-browser",
+// The launcher offers panels straight from the kind registry now (#11691), so a
+// row is found by the kind's own name rather than a toolbar button id.
+const toolbarPanelTrayItemNames: Record<string, string> = {
+  "Open browser": "Browser",
+  "Open dev preview": "Dev Preview",
+  "Browse files": "File Browser",
 };
+
+/**
+ * A launcher row, matched on the leading segment of its accessible name. The
+ * rows are `role="option"` inside a search-first popover — there are no menu
+ * items or per-row test ids to key off any more.
+ */
+function launcherRow(page: Page, name: string): Locator {
+  return page.locator(`[role="option"][aria-label^="${name},"]`);
+}
 
 const toolbarShortcuts: Record<string, string> = {
   "Open terminal": `${mod}+Alt+t`,
@@ -262,16 +273,16 @@ async function clickPanelTrayItem(
   label: string,
   timeout: number
 ): Promise<boolean> {
-  const itemId = toolbarPanelTrayItemIds[label];
-  if (!itemId) return false;
+  const itemName = toolbarPanelTrayItemNames[label];
+  if (!itemName) return false;
 
   const tray = toolbar.locator('[data-toolbar-button-id="launcher"] button');
   if (!(await clickFirstVisible(tray, 1000, 500))) return false;
 
-  // The caller's timeout, not a fixed second: the dropdown primitives are
-  // lazy-loaded, so the first tray open on a cold release runner can be slower
-  // than any menu this suite has already warmed.
-  const row = page.locator(`[data-testid="launcher-row-${itemId}"]`);
+  // The caller's timeout, not a fixed second: the popover primitives are
+  // lazy-loaded, so the first launcher open on a cold release runner can be
+  // slower than any menu this suite has already warmed.
+  const row = launcherRow(page, itemName);
   if (!(await row.isVisible({ timeout }).catch(() => false))) {
     await page.keyboard.press("Escape").catch(() => undefined);
     return false;
@@ -287,14 +298,13 @@ async function clickPanelTrayItem(
 }
 
 async function hasPanelTrayItem(page: Page, toolbar: Locator, label: string): Promise<boolean> {
-  const itemId = toolbarPanelTrayItemIds[label];
-  if (!itemId) return false;
+  const itemName = toolbarPanelTrayItemNames[label];
+  if (!itemName) return false;
 
   const tray = toolbar.locator('[data-toolbar-button-id="launcher"] button');
   if (!(await clickFirstVisible(tray, 1000, 250))) return false;
 
-  const visible = await page
-    .locator(`[data-testid="launcher-row-${itemId}"]`)
+  const visible = await launcherRow(page, itemName)
     .isVisible({ timeout: 500 })
     .catch(() => false);
   await page.keyboard.press("Escape").catch(() => undefined);

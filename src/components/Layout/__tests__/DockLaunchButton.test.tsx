@@ -40,10 +40,18 @@ vi.mock("@/registry", () => ({
   getPanelKindDefinitionsSnapshot: () => 0,
 }));
 
+// Callable as well as static: the launcher subscribes for the running pip and
+// `activateDockLaunchItem` reaches the same store through `getState`.
+const panelStoreState = {
+  addPanel: addPanelMock,
+  panelsById: { "panel-1": { location: "grid" } },
+  panelIds: [] as string[],
+};
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: {
-    getState: () => ({ addPanel: addPanelMock, panelsById: { "panel-1": { location: "grid" } } }),
-  },
+  usePanelStore: Object.assign(
+    (selector: (s: typeof panelStoreState) => unknown) => selector(panelStoreState),
+    { getState: () => panelStoreState }
+  ),
 }));
 
 vi.mock("@/components/PanelPalette/PanelKindIcon", () => ({
@@ -78,8 +86,18 @@ const getSortedActionMruListMock = () => mockMruEntries;
 
 vi.mock("@/store/actionMruStore", () => ({
   useActionMruStore: Object.assign(
-    (selector: (s: { getSortedActionMruList: () => typeof mockMruEntries }) => unknown) =>
-      selector({ getSortedActionMruList: getSortedActionMruListMock }),
+    (
+      selector: (s: {
+        getSortedActionMruList: () => typeof mockMruEntries;
+        actionUsageEntries: Map<string, unknown>;
+      }) => unknown
+    ) =>
+      selector({
+        getSortedActionMruList: getSortedActionMruListMock,
+        // Subscribed by the model purely to invalidate the recency band, so it
+        // must be non-empty or the getter is short-circuited away.
+        actionUsageEntries: new Map([["seed", { uses: [1] }]]),
+      }),
     {
       getState: () => ({ recordActionMru: recordActionMruMock }),
     }
@@ -113,8 +131,16 @@ const toggleButtonVisibilityMock = vi.fn();
 // reader is declared INSIDE its factory — `vi.mock` is hoisted above every
 // top-level const, so referencing one at factory-evaluation time is a TDZ error
 // (the `mock*` bindings below are fine because they are only read at call time).
+const updateWorktreePresetMock = vi.fn(() => Promise.resolve());
+const updateAgentMock = vi.fn(() => Promise.resolve());
+
 vi.mock("@/store/agentSettingsStore", () => {
-  const getState = () => ({ settings: mockAgentSettings, setAgentPinned: setAgentPinnedMock });
+  const getState = () => ({
+    settings: mockAgentSettings,
+    setAgentPinned: setAgentPinnedMock,
+    updateWorktreePreset: updateWorktreePresetMock,
+    updateAgent: updateAgentMock,
+  });
   return {
     useAgentSettingsStore: Object.assign(
       (selector: (s: ReturnType<typeof getState>) => unknown) => selector(getState()),
@@ -123,8 +149,43 @@ vi.mock("@/store/agentSettingsStore", () => {
   };
 });
 
+// Presets the launcher expands into sibling rows. Controlled per test.
+let mockMergedPresets: Array<{ id: string; name: string; displayTitle?: string; color?: string }> =
+  [];
+vi.mock("@/config/agents", () => ({
+  getMergedPresets: () => mockMergedPresets,
+  getAgentConfig: (id: string) => ({ id, name: id, icon: undefined }),
+  getAgentIds: () => ["claude", "gemini"],
+}));
+
+vi.mock("@/components/KeyboardShortcuts", () => ({
+  AgentShortcutCapture: ({
+    agentId,
+    onCapture,
+    onCancel,
+  }: {
+    agentId: string;
+    onCapture: (combo: string) => void;
+    onCancel: () => void;
+  }) => (
+    <div data-testid={`capture-widget-${agentId}`}>
+      <button type="button" onClick={() => onCapture("Ctrl+Shift+9")}>
+        capture
+      </button>
+      <button type="button" onClick={onCancel}>
+        cancel
+      </button>
+    </div>
+  ),
+}));
+
 vi.mock("@/store/cliAvailabilityStore", () => {
-  const getState = () => ({ availability: mockAgentAvailability });
+  const getState = () => ({
+    availability: mockAgentAvailability,
+    hasRealData: true,
+    // Re-probed when the launcher opens; throttled in the real store.
+    refresh: () => Promise.resolve(),
+  });
   return {
     useCliAvailabilityStore: Object.assign(
       (selector: (s: ReturnType<typeof getState>) => unknown) => selector(getState()),
@@ -339,6 +400,9 @@ beforeEach(() => {
   setPanelButtonOnToolbarMock.mockReset();
   positionAgentButtonMock.mockReset();
   toggleButtonVisibilityMock.mockReset();
+  updateWorktreePresetMock.mockReset();
+  updateAgentMock.mockReset();
+  mockMergedPresets = [];
 });
 
 describe("DockLaunchButton", () => {
@@ -352,21 +416,38 @@ describe("DockLaunchButton", () => {
     const { getAllByTestId } = renderButton();
 
     const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
-    expect(labels).toEqual(["Launch agent", "Open in dock", "Open in grid", "Launch recipe"]);
+    // Gemini is blocked in the fixture, so it lands under its own setup band
+    // rather than being offered as a launch; "More" carries the footer cue.
+    expect(labels).toEqual([
+      "Launch agent",
+      "Open in dock",
+      "Open in grid",
+      "Launch recipe",
+      "Needs setup",
+      "More",
+    ]);
   });
 
   it("splits agents into Pinned/Other groups when pinnedCount is a strict subset", () => {
-    const { getAllByTestId, container } = renderButton({ pinnedCount: 1 });
+    // Two LAUNCHABLE agents: the split is counted against the launchable group,
+    // so a blocked second agent would leave "Other" describing nothing.
+    const { getAllByTestId, container } = renderButton({
+      pinnedCount: 1,
+      agents: [
+        { id: "claude", name: "Claude", availability: "ready" },
+        { id: "codex", name: "Codex", availability: "ready" },
+      ],
+    });
 
     const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
     expect(labels.slice(0, 2)).toEqual(["Pinned", "Other"]);
 
     // Assert document order so a regression that puts both agents under one
-    // group (or swaps them) is caught: Pinned → Claude → Other → Gemini.
+    // group (or swaps them) is caught: Pinned → Claude → Other → Codex.
     const text = container.textContent ?? "";
     expect(text.indexOf("Pinned")).toBeLessThan(text.indexOf("Claude"));
     expect(text.indexOf("Claude")).toBeLessThan(text.indexOf("Other"));
-    expect(text.indexOf("Other")).toBeLessThan(text.indexOf("Gemini"));
+    expect(text.indexOf("Other")).toBeLessThan(text.indexOf("Codex"));
   });
 
   it("keeps a flat Launch agent group when all agents are pinned", () => {
@@ -380,7 +461,7 @@ describe("DockLaunchButton", () => {
     const { getByText } = renderButton({ onLaunchAgent });
 
     fireEvent.click(getByText("Claude"));
-    expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+    expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     expect(actionDispatchMock).not.toHaveBeenCalled();
     // The dock launch path must record MRU so the agent surfaces in the
     // recency band on the next open (previously this path recorded nothing).
@@ -430,7 +511,7 @@ describe("DockLaunchButton", () => {
     });
 
     fireEvent.click(getByText("Codex"));
-    expect(onLaunchAgent).toHaveBeenCalledWith("codex");
+    expect(onLaunchAgent).toHaveBeenCalledWith("codex", undefined);
     // Soft dim and settings tooltip must not leak onto a launchable row.
     expect(getByText("Codex").getAttribute("title")).toBeNull();
   });
@@ -627,7 +708,7 @@ describe("DockLaunchButton", () => {
       fireEvent.change(input, { target: { value: "claude" } });
       fireEvent.keyDown(input, { key: "Enter" });
 
-      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     });
 
     it("Enter launches the top result", () => {
@@ -638,7 +719,7 @@ describe("DockLaunchButton", () => {
       fireEvent.change(input, { target: { value: "claude" } });
       fireEvent.keyDown(input, { key: "Enter" });
 
-      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     });
 
     it("Enter activates the row moved to by ArrowDown, not the first one", () => {
@@ -712,7 +793,7 @@ describe("DockLaunchButton", () => {
 
       // Claude is the first agent and the first browse row.
       fireEvent.keyDown(input, { key: "Enter" });
-      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     });
 
     it("keeps the recency band navigable without highlighting its twin", () => {
@@ -899,7 +980,7 @@ describe("DockLaunchButton", () => {
       // Back to Claude, the one launchable agent in this fixture.
       fireEvent.keyDown(content, { key: "Home" });
       fireEvent.keyDown(content, { key: "Enter" });
-      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     });
 
     it("does not double-handle a key the input already consumed", () => {
@@ -1347,7 +1428,7 @@ describe("DockLaunchButton", () => {
       const codexElement = getAllByText("Codex")[0];
       expect(codexElement).toBeDefined();
       fireEvent.click(codexElement!);
-      expect(onLaunchAgent).toHaveBeenCalledWith("codex");
+      expect(onLaunchAgent).toHaveBeenCalledWith("codex", undefined);
       expect(recordActionMruMock).toHaveBeenCalledWith("agent.codex");
     });
 
@@ -1667,7 +1748,16 @@ describe("DockLaunchButton", () => {
       const pinnable = rowFor(container, "Claude");
       const notPinnable = rowFor(container, "My recipe");
       expect(pinControl(notPinnable)).toBeNull();
-      expect(notPinnable.children.length).toBe(pinnable.children.length);
+      // Both reserved slots are present on both rows even when empty — that is
+      // what keeps the two qualifiers ending on the same edge. Asserted on the
+      // slots themselves rather than a child count, because an agent row also
+      // carries a keyboard-shortcut hint that a recipe row never can.
+      const slotsOf = (row: HTMLElement) =>
+        Array.from(row.querySelectorAll("[data-launcher-slot]")).map((el) =>
+          el.getAttribute("data-launcher-slot")
+        );
+      expect(slotsOf(notPinnable)).toEqual(slotsOf(pinnable));
+      expect(slotsOf(notPinnable)).toEqual(["shortcut", "pin"]);
       expect(notPinnable.lastElementChild?.tagName).toBe(pinnable.lastElementChild?.tagName);
     });
 
@@ -1680,7 +1770,7 @@ describe("DockLaunchButton", () => {
 
       fireEvent.click(rowFor(container, "Claude"));
 
-      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     });
 
     it("survives a render before agent settings have hydrated", () => {

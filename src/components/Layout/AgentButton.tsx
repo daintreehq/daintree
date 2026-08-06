@@ -112,7 +112,7 @@ interface WorktreeMenuItemsProps {
 // Grid/Dock) into one row per worktree. Row click (and keyboard Enter)
 // launches in grid; the inline Dock affordance gives mouse users the
 // secondary location without a second submenu hop, mirroring the pin
-// button pattern in LauncherMenuButton.
+// button pattern in DockLaunchButton.
 //
 // Closing-the-menu mechanics: Radix ContextMenu Root has no `open` prop,
 // so we can't use a controlled-state shortcut. Instead, the inline Dock
@@ -196,7 +196,7 @@ export function AgentButton({
   // the trigger and the tooltip would reopen on top of the freshly-launched
   // action's surfaces. Gate both halves' tooltips on controlled state and hold
   // suppression open until the next genuine pointer hover. Same pattern as
-  // LauncherMenuButton.
+  // DockLaunchButton.
   const [primaryTooltipOpen, setPrimaryTooltipOpen] = useState(false);
   const [chevronTooltipOpen, setChevronTooltipOpen] = useState(false);
   // The chevron dropdown is controlled so a label-zone click can close it

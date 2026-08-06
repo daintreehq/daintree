@@ -74,25 +74,27 @@ function launchEnv(): Record<string, string> {
 }
 
 test.describe.serial("Presets: Tray Default Launch (101–106)", () => {
-  // The open tray is the top-level role=menu that carries the always-present
-  // "Manage agents" item (the nested preset SubContent never has it). Radix's
-  // DropdownMenuContent has no accessible name, so identify it by that item
-  // rather than by role+name.
-  const trayMenu = () => ctx.window.locator('[role="menu"]').filter({ hasText: "Manage agents" });
-  const submenuContent = () => ctx.window.locator('[data-testid="submenu-content"]');
-  const claudeSubmenuTrigger = () =>
-    trayMenu().locator('[data-testid="submenu-trigger"]', { hasText: "Claude" });
+  // The launcher is a search-first popover now (#11691), not a Radix menu: it is
+  // the dialog named after its own header, and every row is an option in one
+  // flat list — presets included, once their agent is expanded.
+  const launcher = () => ctx.window.getByRole("dialog", { name: "Launch" });
+  const search = () =>
+    ctx.window.getByRole("combobox", { name: "Search agents, panels, and recipes" });
+  const claudeRow = () => launcher().locator('[role="option"][aria-label^="Claude,"]');
+  const claudeExpandable = () =>
+    launcher().locator(
+      '[role="option"][data-row-kind="item"][aria-expanded][aria-label^="Claude,"]'
+    );
+  const presetRows = () => launcher().locator(SEL.preset.trayLaunchPresetItem);
 
   const closeTray = async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const trayOpen = await trayMenu()
+      const open = await launcher()
         .isVisible({ timeout: 250 })
         .catch(() => false);
-      const submenuOpen = await submenuContent()
-        .isVisible({ timeout: 250 })
-        .catch(() => false);
-      if (!trayOpen && !submenuOpen) return;
-
+      if (!open) return;
+      // Two presses: the first spends itself clearing a non-empty query.
+      await ctx.window.keyboard.press("Escape");
       await ctx.window.keyboard.press("Escape");
       await ctx.window.waitForTimeout(T_SETTLE);
     }
@@ -101,17 +103,23 @@ test.describe.serial("Presets: Tray Default Launch (101–106)", () => {
     await ctx.window.waitForTimeout(T_SETTLE);
   };
 
+  // Opens the launcher and narrows to Claude, so the row under test is the only
+  // agent in the list regardless of what else is installed.
   const openTray = async () => {
     await closeTray();
-    const btn = ctx.window.locator(SEL.agent.trayButton);
-    await btn.click();
-    await expect(trayMenu()).toBeVisible({ timeout: T_MEDIUM });
+    await ctx.window.locator(SEL.agent.trayButton).click();
+    await expect(launcher()).toBeVisible({ timeout: T_MEDIUM });
+    await expect(search()).toBeVisible({ timeout: T_MEDIUM });
+    await search().fill("Claude");
+    await expect(claudeRow().first()).toBeVisible({ timeout: T_MEDIUM });
   };
 
-  // Opens the tray and waits until Claude renders as a launchable split-button.
+  // Opens the launcher and expands Claude's presets into sibling rows.
   const openTrayWithClaudePresets = async () => {
     await openTray();
-    await expect(claudeSubmenuTrigger()).toBeVisible({ timeout: T_MEDIUM });
+    await expect(claudeExpandable()).toBeVisible({ timeout: T_MEDIUM });
+    await search().press("ArrowRight");
+    await expect(presetRows().first()).toBeVisible({ timeout: T_MEDIUM });
   };
 
   test.beforeAll(async () => {
@@ -134,10 +142,10 @@ test.describe.serial("Presets: Tray Default Launch (101–106)", () => {
     // Gate the whole suite on Claude actually being launchable from the fake
     // binary. A hard failure here (rather than a silent per-test skip) means a
     // broken harness can never masquerade as a passing run.
-    await openTray();
-    await expect(trayMenu().locator('[data-testid="launcher-row-claude"]')).toBeVisible({
-      timeout: T_LONG,
-    });
+    await ctx.window.locator(SEL.agent.trayButton).click();
+    await expect(launcher()).toBeVisible({ timeout: T_LONG });
+    await search().fill("Claude");
+    await expect(claudeRow().first()).toBeVisible({ timeout: T_LONG });
     await closeTray();
   });
 
@@ -147,23 +155,21 @@ test.describe.serial("Presets: Tray Default Launch (101–106)", () => {
     fixtureCleanup?.();
   });
 
-  test("101. Without presets: Claude appears as a plain menu item (no chevron)", async () => {
+  test("101. Without presets: Claude appears as a plain row (no disclosure)", async () => {
     removeCcrConfig();
     await ctx.window.waitForTimeout(T_SETTLE);
 
     await openTray();
 
     // Claude is launchable, so it renders as a plain launch row...
-    await expect(trayMenu().locator('[data-testid="launcher-row-claude"]')).toBeVisible({
-      timeout: T_MEDIUM,
-    });
-    // ...and with no presets there must be no split-button submenu trigger.
-    await expect(claudeSubmenuTrigger()).toHaveCount(0);
+    await expect(claudeRow().first()).toBeVisible({ timeout: T_MEDIUM });
+    // ...and with no presets it must not advertise anything to expand.
+    await expect(claudeExpandable()).toHaveCount(0);
 
     await closeTray();
   });
 
-  test("102. With CCR presets: Claude appears as a split-button (submenu trigger)", async () => {
+  test("102. With CCR presets: Claude's row advertises an expandable preset list", async () => {
     writeCcrConfig([
       { id: "tray-a", name: "Tray Model A", model: "tray-model-a" },
       { id: "tray-b", name: "Tray Model B", model: "tray-model-b" },
@@ -174,33 +180,26 @@ test.describe.serial("Presets: Tray Default Launch (101–106)", () => {
 
     await openTray();
 
-    await expect(claudeSubmenuTrigger()).toBeVisible({ timeout: T_MEDIUM });
+    await expect(claudeExpandable()).toBeVisible({ timeout: T_MEDIUM });
 
     await closeTray();
   });
 
-  test("103. Hovering the chevron area opens the submenu", async () => {
+  test("103. Right Arrow expands the preset list in place", async () => {
     await openTrayWithClaudePresets();
 
-    // Hover the trigger to open the submenu.
-    await claudeSubmenuTrigger().hover();
-    await expect(submenuContent()).toBeVisible({ timeout: T_MEDIUM });
-
-    // "Default" is the first item — its position is a deliberate contract
-    // (the default-launch radio always leads the preset list).
-    const items = submenuContent().locator('[role^="menuitem"]');
-    await expect(items.first()).toContainText(/default/i, { timeout: T_MEDIUM });
+    // "Default" leads the preset list — its position is a deliberate contract.
+    await expect(presetRows().first()).toContainText(/default/i, { timeout: T_MEDIUM });
+    // The expansion is announced on the row it belongs to.
+    await expect(claudeExpandable()).toHaveAttribute("aria-expanded", "true");
 
     await closeTray();
   });
 
-  test("104. Submenu lists all available CCR presets", async () => {
+  test("104. The expansion lists all available CCR presets", async () => {
     await openTrayWithClaudePresets();
 
-    await claudeSubmenuTrigger().hover();
-    await expect(submenuContent()).toBeVisible({ timeout: T_MEDIUM });
-
-    const items = submenuContent().locator('[role^="menuitem"]');
+    const items = presetRows();
     await expect
       .poll(async () => (await items.allTextContents()).map((t) => t.trim()), { timeout: T_MEDIUM })
       .toEqual(
@@ -213,21 +212,19 @@ test.describe.serial("Presets: Tray Default Launch (101–106)", () => {
     await closeTray();
   });
 
-  test("105. Clicking agent name (left area) closes tray without opening submenu", async () => {
-    await openTrayWithClaudePresets();
+  test("105. Activating the agent row launches without expanding its presets", async () => {
+    await openTray();
+    await expect(claudeExpandable()).toBeVisible({ timeout: T_MEDIUM });
 
-    // Click the left-area span (text + icon, NOT the chevron).
-    const leftArea = claudeSubmenuTrigger().locator("span").first();
-    await leftArea.click({ force: true, noWaitAfter: true });
+    // The row itself launches the default — expanding is Right Arrow's job, so
+    // a plain activation must never open the list first.
+    await claudeRow().first().click({ force: true, noWaitAfter: true });
 
-    // Tray dropdown should be gone.
-    await expect(trayMenu()).not.toBeVisible({ timeout: T_MEDIUM });
-
-    // Submenu content should never have opened.
-    await expect(submenuContent()).toHaveCount(0);
+    await expect(launcher()).not.toBeVisible({ timeout: T_MEDIUM });
+    await expect(presetRows()).toHaveCount(0);
   });
 
-  test("106. Tray submenu also shows custom presets alongside CCR presets", async () => {
+  test("106. The expansion also shows custom presets alongside CCR presets", async () => {
     await navigateToAgentSettings(ctx.window, "claude");
     await addCustomPreset(ctx.window);
     await ctx.window.waitForTimeout(T_SETTLE);
@@ -236,10 +233,7 @@ test.describe.serial("Presets: Tray Default Launch (101–106)", () => {
 
     await openTrayWithClaudePresets();
 
-    await claudeSubmenuTrigger().hover();
-    await expect(submenuContent()).toBeVisible({ timeout: T_MEDIUM });
-
-    const items = submenuContent().locator('[role^="menuitem"]');
+    const items = presetRows();
     const texts = await items.allTextContents();
     // Default + 2 CCR + 1 custom = at least 4 items...
     expect(texts.length).toBeGreaterThanOrEqual(4);

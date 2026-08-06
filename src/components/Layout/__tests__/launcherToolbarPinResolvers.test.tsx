@@ -9,7 +9,7 @@ import {
 import { isAgentButtonOnToolbar } from "../../../../shared/utils/agentPinned";
 
 // The launcher's rendered Panels section is covered in
-// `LauncherMenuButton.test.tsx`, which owns the merged component's mock surface.
+// `DockLaunchButton.test.tsx`, which owns the merged component's mock surface.
 // What is left here is the pair of resolvers the launcher, Settings → Toolbar,
 // and the store's hydration repair all read — the place those three surfaces can
 // silently disagree.

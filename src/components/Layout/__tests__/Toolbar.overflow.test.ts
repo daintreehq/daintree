@@ -52,7 +52,7 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
   describe("agent-state dots", () => {
     it("derives a per-agent dominant state map scoped to the active worktree", () => {
       expect(source).toContain("agentDominantStates");
-      // Shared with LauncherMenuButton so the overflow dot matches the visible
+      // Shared with the launcher so the overflow dot matches the visible
       // agent button; computed inside useShallow so agent ticks that don't
       // change a dominant state don't re-render the toolbar.
       expect(source).toMatch(
@@ -62,7 +62,7 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
 
     it("renders the dot through a dedicated component so the keybinding hook is at component scope", () => {
       // A hook inside a .map() callback would violate the rules of hooks; the
-      // AgentOverflowItem component is the fix (mirrors LauncherMenuButton).
+      // AgentOverflowItem component is the fix (mirrors DockLaunchButton).
       expect(source).toContain("function AgentOverflowItem");
       expect(source).toContain("useKeybindingDisplay(`agent.${id}`)");
       expect(source).toContain("agentStateDotColor(dominantState)");

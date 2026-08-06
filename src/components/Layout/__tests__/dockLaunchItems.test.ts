@@ -72,10 +72,16 @@ vi.mock("@/utils/logger", () => ({
 import {
   buildDockLaunchModel,
   activateDockLaunchItem,
+  buildPresetChoices,
+  buildPresetRows,
+  getDockLaunchRowItem,
+  insertExpandedPresetRows,
+  rowHasPresets,
   RECENCY_BAND_CAP,
   type DockLaunchAgent,
   type DockLaunchItem,
   type DockLaunchPanelItem,
+  type DockLaunchRow,
 } from "../dockLaunchItems";
 import type { TerminalRecipe } from "@shared/types";
 import { PANEL_LIMIT_ERROR_SUFFIX } from "@/services/actions/definitions/panelLimitError";
@@ -83,6 +89,12 @@ import { PANEL_LIMIT_ERROR_SUFFIX } from "@/services/actions/definitions/panelLi
 const AGENTS: DockLaunchAgent[] = [
   { id: "claude", name: "Claude", availability: "ready" },
   { id: "gemini", name: "Gemini", availability: "blocked" },
+];
+
+/** Two agents that can both actually launch, for the Pinned/Other split. */
+const LAUNCHABLE_AGENTS: DockLaunchAgent[] = [
+  { id: "claude", name: "Claude", availability: "ready" },
+  { id: "codex", name: "Codex", availability: "ready" },
 ];
 
 function recipe(over: Partial<TerminalRecipe> & { id: string; name: string }): TerminalRecipe {
@@ -262,6 +274,9 @@ describe("buildDockLaunchModel — bands and recipes", () => {
     const many: DockLaunchAgent[] = Array.from({ length: overCap }, (_, i) => ({
       id: `a${i}`,
       name: `Agent ${i}`,
+      // Recency is drawn from launchable agents only — an agent that needs
+      // setup has no business in a quick-reach band.
+      availability: "ready",
     }));
     const model = build({
       agents: many,
@@ -282,10 +297,18 @@ describe("buildDockLaunchModel — bands and recipes", () => {
   });
 
   it("splits Pinned/Other only for a strict subset", () => {
-    expect(build({ pinnedCount: 1 }).showAgentGroups).toBe(true);
-    expect(build({ pinnedCount: 0 }).showAgentGroups).toBe(false);
-    expect(build({ pinnedCount: AGENTS.length }).showAgentGroups).toBe(false);
-    expect(build().showAgentGroups).toBe(false);
+    // Counted against the LAUNCHABLE agents, not every agent offered: a setup
+    // row sits in its own band, so including it would split the group one row
+    // early and leave "Other" describing nothing.
+    const two = { agents: LAUNCHABLE_AGENTS };
+    expect(build({ ...two, pinnedCount: 1 }).showAgentGroups).toBe(true);
+    expect(build({ ...two, pinnedCount: 0 }).showAgentGroups).toBe(false);
+    expect(build({ ...two, pinnedCount: LAUNCHABLE_AGENTS.length }).showAgentGroups).toBe(false);
+    expect(build(two).showAgentGroups).toBe(false);
+
+    // One launchable agent and one that needs setup: a pinnedCount of 1 covers
+    // the whole launchable group, so there is nothing to split.
+    expect(build({ pinnedCount: 1 }).showAgentGroups).toBe(false);
   });
 
   it("scopes recipes to the active worktree, keeping unscoped ones", () => {
@@ -321,13 +344,23 @@ describe("buildDockLaunchModel — browse rows", () => {
     for (const row of model.browseRows) {
       if (bands[bands.length - 1] !== row.band) bands.push(row.band);
     }
-    expect(bands).toEqual(["recent", "agents", "dock-panels", "grid-panels", "recipes"]);
+    expect(bands).toEqual([
+      "recent",
+      "agents",
+      "dock-panels",
+      "grid-panels",
+      "recipes",
+      "needs-setup",
+      "actions",
+    ]);
   });
 
   it("keys a recency row apart from its twin in the agent group", () => {
     const model = build({ mruEntries: mru });
 
-    const claudeRows = model.browseRows.filter((row) => row.item?.key === "agent:claude");
+    const claudeRows = model.browseRows.filter(
+      (row) => getDockLaunchRowItem(row)?.key === "agent:claude"
+    );
     expect(claudeRows).toHaveLength(2);
     expect(new Set(claudeRows.map((row) => row.rowKey)).size).toBe(2);
   });
@@ -344,8 +377,8 @@ describe("buildDockLaunchModel — browse rows", () => {
   });
 
   it("splits the agent bands the same way the Pinned/Other groups do", () => {
-    const model = build({ pinnedCount: 1 });
-    const bands = model.browseRows.filter((row) => row.item?.category === "agent");
+    const model = build({ agents: LAUNCHABLE_AGENTS, pinnedCount: 1 });
+    const bands = model.browseRows.filter((row) => getDockLaunchRowItem(row)?.category === "agent");
 
     expect(bands.map((row) => row.band)).toEqual(["pinned", "other"]);
   });
@@ -353,20 +386,228 @@ describe("buildDockLaunchModel — browse rows", () => {
   it("collapses the panel bands when every panel shares one destination", () => {
     const model = build({ surface: "grid" });
     const panelBands = new Set(
-      model.browseRows.filter((row) => row.item?.category === "panel").map((row) => row.band)
+      model.browseRows
+        .filter((row) => getDockLaunchRowItem(row)?.category === "panel")
+        .map((row) => row.band)
     );
     expect([...panelBands]).toEqual(["panels"]);
   });
 
   it("carries the create-recipe cue as an item-less row when there are none", () => {
+    const createRecipeRows = (model: ReturnType<typeof build>) =>
+      model.browseRows.filter((row) => row.kind === "cue" && row.cue === "create-recipe");
+
     const withNone = build();
-    const cue = withNone.browseRows.filter((row) => row.item === undefined);
-    expect(cue).toHaveLength(1);
-    expect(cue[0]!.band).toBe("recipes");
+    expect(createRecipeRows(withNone)).toHaveLength(1);
+    expect(createRecipeRows(withNone)[0]!.band).toBe("recipes");
 
     // With recipes present the cue is gone, so it can't be navigated to.
     const withSome = build({ recipes: [recipe({ id: "r-1", name: "Deploy" })] });
-    expect(withSome.browseRows.every((row) => row.item !== undefined)).toBe(true);
+    expect(createRecipeRows(withSome)).toEqual([]);
+  });
+});
+
+describe("buildDockLaunchModel — agent bands", () => {
+  it("keeps a launchable agent out of the setup bands and vice versa", () => {
+    const model = build();
+    const bandOf = (id: string) =>
+      model.browseRows.find((row) => getDockLaunchRowItem(row)?.key === `agent:${id}`)?.band;
+
+    // `gemini` is blocked in the fixture, so it must not be offered as a launch.
+    expect(bandOf("claude")).toBe("agents");
+    expect(bandOf("gemini")).toBe("needs-setup");
+  });
+
+  it("offers every agent for setup and adds the wizard cue in fallback mode", () => {
+    const model = build({ agentInventoryState: "fallback" });
+    const bands = model.browseRows.filter((row) => getDockLaunchRowItem(row)?.category === "agent");
+
+    expect(new Set(bands.map((row) => row.band))).toEqual(new Set(["available-agents"]));
+    expect(model.browseRows.some((row) => row.kind === "cue" && row.cue === "setup-agents")).toBe(
+      true
+    );
+  });
+
+  it("omits the setup wizard cue when agents are actually installed", () => {
+    const model = build();
+    expect(model.browseRows.some((row) => row.kind === "cue" && row.cue === "setup-agents")).toBe(
+      false
+    );
+  });
+
+  it("counts the Pinned split against launchable agents, not the setup rows", () => {
+    // With one pinned and only one launchable agent, splitting would leave
+    // "Other" empty — the group must collapse instead of rendering a bare label.
+    const model = build({ pinnedCount: 1 });
+    const agentBands = model.browseRows
+      .filter(
+        (row) => getDockLaunchRowItem(row)?.category === "agent" && row.band !== "needs-setup"
+      )
+      .map((row) => row.band);
+    expect(agentBands).toEqual(["agents"]);
+  });
+
+  it("drops a recently-launched agent from the recency band once it stops being launchable", () => {
+    const model = build({
+      agents: [{ id: "gemini", name: "Gemini", availability: "blocked" }],
+      mruEntries: [{ id: "agent.gemini", lastAccessedAt: 10 }],
+    });
+    expect(model.recentAgents).toEqual([]);
+    expect(model.browseRows.some((row) => row.band === "recent")).toBe(false);
+  });
+});
+
+describe("buildDockLaunchModel — panel preconditions", () => {
+  it("marks the workspace- and project-gated panels with a reason", () => {
+    const model = build({ hasWorkspace: false, hasProject: false });
+    const byKind = new Map(
+      [...model.dockPanels, ...model.gridPanels].map((item) => [item.kindId, item])
+    );
+    expect(byKind.get("file-browser")?.disabled?.reason).toBe("Needs a workspace");
+    expect(byKind.get("dev-preview")?.disabled?.reason).toBe("Needs a project");
+  });
+
+  it("leaves both rows enabled when the host doesn't state its preconditions", () => {
+    // The dock's context menu supplies neither, and must keep offering both —
+    // "not supplied" must never collapse into "false".
+    const model = build();
+    const gated = [...model.dockPanels, ...model.gridPanels].filter((item) => item.disabled);
+    expect(gated).toEqual([]);
+  });
+
+  it("keeps a disabled panel in the row list so its pin stays reachable", () => {
+    const model = build({ hasWorkspace: false });
+    const row = model.browseRows.find((r) => getDockLaunchRowItem(r)?.key === "panel:file-browser");
+    expect(row).toBeDefined();
+  });
+});
+
+describe("preset rows", () => {
+  const presets = [
+    { id: "ccr-fast", name: "CCR: Fast" },
+    { id: "team", name: "Team" },
+    { id: "mine", name: "Mine" },
+  ];
+
+  it("puts Default first and orders the named groups CCR, project, custom", () => {
+    const choices = buildPresetChoices(presets, new Set(["team"]), undefined);
+    expect(choices.map((c) => c.presetId)).toEqual([null, "ccr-fast", "team", "mine"]);
+    expect(choices.map((c) => c.group)).toEqual(["default", "ccr", "project", "custom"]);
+  });
+
+  it("lets project membership win over the ccr- prefix", () => {
+    const choices = buildPresetChoices(
+      [{ id: "ccr-shared", name: "CCR: Shared" }],
+      new Set(["ccr-shared"]),
+      undefined
+    );
+    expect(choices.find((c) => c.presetId === "ccr-shared")?.group).toBe("project");
+  });
+
+  it("selects Default exactly when no named preset is saved", () => {
+    expect(buildPresetChoices(presets, new Set(), undefined)[0]!.isSelected).toBe(true);
+    const withSaved = buildPresetChoices(presets, new Set(), "mine");
+    expect(withSaved[0]!.isSelected).toBe(false);
+    expect(withSaved.find((c) => c.presetId === "mine")?.isSelected).toBe(true);
+  });
+
+  it("strips the redundant CCR prefix only from CCR-group labels", () => {
+    const choices = buildPresetChoices(
+      [
+        { id: "ccr-fast", name: "CCR: Fast" },
+        { id: "ccr-team", name: "CCR: Team" },
+      ],
+      new Set(["ccr-team"]),
+      undefined
+    );
+    expect(choices.find((c) => c.presetId === "ccr-fast")?.label).toBe("Fast");
+    // Project-group: the heading no longer says CCR, so the name stays whole.
+    expect(choices.find((c) => c.presetId === "ccr-team")?.label).toBe("CCR: Team");
+  });
+
+  it("keys preset rows to the parent ROW so a duplicated agent expands once", () => {
+    const agent: DockLaunchAgent = {
+      id: "claude",
+      name: "Claude",
+      availability: "ready",
+      presetChoices: buildPresetChoices(presets, new Set(), undefined),
+    };
+    const model = build({
+      agents: [agent],
+      mruEntries: [{ id: "agent.claude", lastAccessedAt: 5 }],
+    });
+    const claudeRows = model.browseRows.filter(
+      (row) => getDockLaunchRowItem(row)?.key === "agent:claude"
+    );
+    expect(claudeRows).toHaveLength(2);
+
+    const expanded = insertExpandedPresetRows(model.browseRows, claudeRows[0]!.rowKey);
+    const presetRows = expanded.filter((row) => row.kind === "preset");
+    expect(presetRows).toHaveLength(4);
+    // Every preset row points at the copy that was expanded, not the other one.
+    for (const row of presetRows) {
+      expect(row.kind === "preset" && row.parentRowKey).toBe(claudeRows[0]!.rowKey);
+    }
+    expect(new Set(expanded.map((row) => row.rowKey)).size).toBe(expanded.length);
+  });
+
+  it("splices the preset rows immediately after their parent", () => {
+    const agent: DockLaunchAgent = {
+      id: "claude",
+      name: "Claude",
+      availability: "ready",
+      presetChoices: buildPresetChoices(presets, new Set(), undefined),
+    };
+    const model = build({ agents: [agent] });
+    const parentKey = "agent:claude";
+    const expanded = insertExpandedPresetRows(model.browseRows, parentKey);
+    const parentIndex = expanded.findIndex((row) => row.rowKey === parentKey);
+    expect(expanded.slice(parentIndex + 1, parentIndex + 5).every((r) => r.kind === "preset")).toBe(
+      true
+    );
+  });
+
+  it("leaves the list untouched for a row that has no presets", () => {
+    const model = build();
+    expect(insertExpandedPresetRows(model.browseRows, "agent:claude")).toEqual(model.browseRows);
+    expect(insertExpandedPresetRows(model.browseRows, null)).toEqual(model.browseRows);
+  });
+
+  it("never expands an agent that can't be launched", () => {
+    const blocked: DockLaunchRow = {
+      kind: "item",
+      rowKey: "agent:gemini",
+      band: "needs-setup",
+      item: {
+        category: "agent",
+        key: "agent:gemini",
+        name: "Gemini",
+        agentBand: "needs-setup",
+        agent: {
+          id: "gemini",
+          name: "Gemini",
+          availability: "blocked",
+          presetChoices: buildPresetChoices(presets, new Set(), undefined),
+        },
+      },
+    };
+    expect(rowHasPresets(blocked)).toBe(false);
+    // The rows themselves still build — only the keyboard affordance is gated.
+    expect(buildPresetRows(blocked)).toHaveLength(4);
+  });
+
+  it("keeps presets out of the search set so one can never rank without its agent", () => {
+    const agent: DockLaunchAgent = {
+      id: "claude",
+      name: "Claude",
+      availability: "ready",
+      presetChoices: buildPresetChoices(presets, new Set(), undefined),
+    };
+    const model = build({ agents: [agent] });
+    expect(model.searchItems.filter((item) => item.category === "agent")).toHaveLength(1);
+    // ...but the preset names are reachable through the parent's aliases.
+    const claude = model.searchItems.find((item) => item.key === "agent:claude");
+    expect(claude?.searchAliases).toEqual(expect.arrayContaining(["Fast", "Team", "Mine"]));
   });
 });
 
@@ -501,10 +742,43 @@ describe("activateDockLaunchItem", () => {
       key: "agent:claude",
       name: "Claude",
       agent: AGENTS[0]!,
+      agentBand: "launch",
     };
     activateDockLaunchItem(item, ctx);
     expect(recordActionMruMock).toHaveBeenCalledWith("agent.claude");
-    expect(ctx.onLaunchAgent).toHaveBeenCalledWith("claude");
+    expect(ctx.onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
+  });
+
+  // The three-way preset sentinel, asserted against the real activation path.
+  // `null` (explicit default) and `undefined` (inherit the saved preset) mean
+  // different things all the way down to `agent.launch`, and a `!= null` guard
+  // anywhere on that path collapses them — relaunching a saved preset when the
+  // user asked for plain.
+  it.each([
+    ["explicit default", null],
+    ["a named preset", "fast"],
+    ["no selection", undefined],
+  ])("forwards %s to the launch callback verbatim", (_label, presetId) => {
+    const item: DockLaunchItem = {
+      category: "agent",
+      key: "agent:claude",
+      name: "Claude",
+      agent: AGENTS[0]!,
+      agentBand: "launch",
+    };
+    activateDockLaunchItem(item, ctx, presetId as string | null | undefined);
+    expect(ctx.onLaunchAgent).toHaveBeenCalledWith("claude", presetId);
+  });
+
+  it("refuses a panel whose precondition is unmet without dispatching anything", () => {
+    const item: DockLaunchPanelItem = {
+      ...panelItem("file-browser"),
+      disabled: { reason: "Needs a workspace" },
+    };
+    activateDockLaunchItem(item, ctx);
+    expect(addPanelMock).not.toHaveBeenCalled();
+    expect(actionDispatchMock).not.toHaveBeenCalled();
+    expect(notifyMock).not.toHaveBeenCalled();
   });
 
   it("routes a non-launchable agent to settings without recording MRU", () => {
@@ -513,6 +787,7 @@ describe("activateDockLaunchItem", () => {
       key: "agent:gemini",
       name: "Gemini",
       agent: AGENTS[1]!,
+      agentBand: "needs-setup",
     };
     activateDockLaunchItem(item, ctx);
     expect(ctx.onLaunchAgent).not.toHaveBeenCalled();
