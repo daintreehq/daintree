@@ -145,9 +145,9 @@ describe("AppPaletteDialog.Footer", () => {
     );
     // Structural, not a class-token match: there is a wrapper and the chip is
     // inside it. What that wrapper is styled with is the shell's business.
-    const band = container.firstChild as HTMLElement;
+    const band = container.firstElementChild;
     expect(band).not.toBeNull();
-    expect(band.contains(getByTestId("chip"))).toBe(true);
+    expect(band!.contains(getByTestId("chip"))).toBe(true);
   });
 });
 
