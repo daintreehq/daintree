@@ -72,23 +72,37 @@ describe("getActionCategoryLabel", () => {
     expect(getActionCategoryLabel("somePlugin")).toBe("Some plugin");
   });
 
-  it("prefers the curated label over the humanized form where they differ", () => {
-    // `devServer` would humanize to "Dev server" too, so pick one where the
-    // curated label is not reachable by the fallback.
-    expect(getActionCategoryLabel("ui")).toBe("User interface");
-    expect(getActionCategoryLabel("ui")).not.toBe(humanizeActionCategory("ui"));
+  it("prefers the curated label over the humanized form", () => {
+    // At least one curated label must be something the fallback could never
+    // produce, or the whole map would be redundant.
+    const curated = ACTION_CATEGORY_ORDER.filter(
+      (c) => getActionCategoryLabel(c) !== humanizeActionCategory(c)
+    );
+    expect(curated.length).toBeGreaterThan(0);
+    for (const category of curated) {
+      expect(getActionCategoryLabel(category)).toBe(ACTION_CATEGORY_LABELS.get(category));
+    }
   });
 
   it("labels every ordered category", () => {
-    const unlabelled = ACTION_CATEGORY_ORDER.filter((c) => ACTION_CATEGORY_LABELS[c] === undefined);
+    const unlabelled = ACTION_CATEGORY_ORDER.filter((c) => !ACTION_CATEGORY_LABELS.has(c));
     expect(unlabelled).toEqual([]);
   });
 
   it("labels no category it does not also order", () => {
-    const unordered = Object.keys(ACTION_CATEGORY_LABELS).filter(
+    const unordered = [...ACTION_CATEGORY_LABELS.keys()].filter(
       (c) => !ACTION_CATEGORY_ORDER.includes(c)
     );
     expect(unordered).toEqual([]);
+  });
+
+  it("survives category names that collide with Object prototype keys", () => {
+    // Plugins choose their own category strings. An object-literal lookup would
+    // hand back an inherited non-string here, which becomes a section label and
+    // throws when React renders it.
+    for (const hostile of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+      expect(typeof getActionCategoryLabel(hostile)).toBe("string");
+    }
   });
 
   it("gives every ordered category a distinct label so headers are unambiguous", () => {

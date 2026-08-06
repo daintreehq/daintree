@@ -47,6 +47,7 @@ import { usePaletteStore } from "@/store/paletteStore";
 import { useActionMruStore } from "@/store/actionMruStore";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { useActionPalette } from "../useActionPalette";
+import { getActionCategoryLabel, orderActionCategories } from "@/config/actionCategoryOrder";
 
 function makeEntry(
   id: string,
@@ -216,22 +217,24 @@ describe("useActionPalette", () => {
     }
     expect(cursor).toBe(results.length);
 
-    // Curated category order puts worktrees ahead of git ahead of terminals,
-    // independent of the order the manifest listed them in.
+    // Category runs follow the shared taxonomy, not the order the manifest
+    // happened to list them in. Derived from the taxonomy rather than spelled
+    // out, so re-curating the order doesn't force an edit here — the config's
+    // own suite owns whether that order is the right one.
+    const shuffledInManifest = ["terminal", "git", "worktree"];
     expect(sections.map((s) => s.id)).toEqual([
       "favorites",
       "recently-used",
-      "category:worktree",
-      "category:git",
-      "category:terminal",
+      ...orderActionCategories(shuffledInManifest).map((c) => `category:${c}`),
     ]);
     expect(sections.map((s) => s.label)).toEqual([
       "Favorites",
       "Recently used",
-      "Worktrees",
-      "Git",
-      "Terminals",
+      ...orderActionCategories(shuffledInManifest).map(getActionCategoryLabel),
     ]);
+    // Sanity: the taxonomy really did reorder them, so the assertion above
+    // isn't trivially comparing the manifest order to itself.
+    expect(orderActionCategories(shuffledInManifest)).not.toEqual(shuffledInManifest);
   });
 
   it("lists every eligible action exactly once across all sections", async () => {
@@ -402,13 +405,16 @@ describe("useActionPalette", () => {
     const disabled = Array.from({ length: 8 }, (_, i) =>
       makeEntry(`disabled.${i}`, `Disabled ${i}`, false)
     );
-    const enabled = Array.from({ length: 7 }, (_, i) =>
+    // Deliberately fewer enabled entries than the cap, so the band has to spill
+    // into disabled ones — otherwise a band of all-enabled rows would satisfy
+    // the assertions no matter how the partition behaved.
+    const enabled = Array.from({ length: 2 }, (_, i) =>
       makeEntry(`enabled.${i}`, `Enabled ${i}`, true)
     );
     listMock.mockReturnValue([...disabled, ...enabled]);
 
-    // Order disabled first in MRU so the partition has to do real work to put
-    // enabled items above them within the 10-slot cap.
+    // Order disabled first in MRU so the partition has to do real work to lift
+    // the enabled entries above them within the cap.
     useActionMruStore
       .getState()
       .hydrateActionMru([...disabled.map((e) => e.id), ...enabled.map((e) => e.id)]);
@@ -423,11 +429,12 @@ describe("useActionPalette", () => {
       expect(result.current.results.length).toBe(disabled.length + enabled.length);
     });
 
-    // Every slot in the capped band goes to an enabled action; no disabled
-    // item displaces one despite leading the MRU order.
     const recents = sectionIds(result.current, "recently-used");
-    expect(recents).toEqual(enabled.slice(0, recents.length).map((e) => e.id));
-    expect(recents.every((id) => id.startsWith("enabled."))).toBe(true);
+    // Both enabled entries lead the band despite trailing in MRU order, and the
+    // remaining slots go to disabled ones — so the band genuinely mixes.
+    expect(recents.slice(0, enabled.length)).toEqual(enabled.map((e) => e.id));
+    expect(recents.length).toBeGreaterThan(enabled.length);
+    expect(recents.slice(enabled.length).every((id) => id.startsWith("disabled."))).toBe(true);
   });
 
   it("treats whitespace-only query as the recently-used branch", async () => {
@@ -440,15 +447,23 @@ describe("useActionPalette", () => {
       result.current.open();
     });
 
+    // Go through a real query first, so the whitespace buffer has to actively
+    // restore the browse rail rather than the assertion passing on a state the
+    // palette never left.
+    act(() => {
+      result.current.setQuery("alpha");
+    });
+
+    await waitFor(() => expect(result.current.sections).toEqual([]), { timeout: 2000 });
+
     act(() => {
       result.current.setQuery("   ");
     });
 
-    await waitFor(() => {
-      expect(result.current.results.length).toBe(2);
-    });
-
-    expect(sectionIds(result.current, "recently-used")).toEqual(["b.action", "a.action"]);
+    await waitFor(
+      () => expect(sectionIds(result.current, "recently-used")).toEqual(["b.action", "a.action"]),
+      { timeout: 2000 }
+    );
   });
 
   it("drops the section grouping once the user starts typing", async () => {
@@ -1301,9 +1316,11 @@ describe("useActionPalette", () => {
     });
 
     it("keeps danger:'confirm' actions off the browse rail but findable by search", async () => {
+      // `git.push` mirrors a real palette-eligible confirm action: all-optional
+      // args, so nothing stops it reaching the palette.
       listMock.mockReturnValue([
-        makeEntry("a.action", "Alpha", true, "worktree"),
-        makeEntry("worktree.delete", "Delete worktree", true, "worktree", "confirm"),
+        makeEntry("git.status", "Status", true, "git"),
+        makeEntry("git.push", "Push", true, "git", "confirm"),
       ]);
 
       const { result } = renderHook(() => useActionPalette());
@@ -1313,12 +1330,17 @@ describe("useActionPalette", () => {
       // Scrolling an inventory isn't naming a destructive action, so the
       // empty-query rail stays confirm-free — as Favorites and Recently used
       // already are.
-      await waitFor(() => expect(browseIds(result.current)).toEqual(["a.action"]));
+      await waitFor(() => expect(browseIds(result.current)).toEqual(["git.status"]));
+      expect(result.current.results.map((r) => r.id)).not.toContain("git.push");
 
-      act(() => result.current.setQuery("delete worktree"));
+      act(() => result.current.setQuery("push"));
 
+      // Typing the name is naming it, so search still reaches it.
       await waitFor(
-        () => expect(result.current.results.map((r) => r.id)).toContain("worktree.delete"),
+        () => {
+          expect(result.current.sections).toEqual([]);
+          expect(result.current.results.map((r) => r.id)).toContain("git.push");
+        },
         { timeout: 2000 }
       );
     });
@@ -1332,13 +1354,16 @@ describe("useActionPalette", () => {
       act(() => result.current.open());
       act(() => result.current.setQuery("alpha"));
 
-      await waitFor(() => expect(result.current.results.length).toBeGreaterThan(0), {
-        timeout: 2000,
-      });
-
-      // Hidden action still surfaces during search — the eviction only applies
-      // to the empty-query "Recently used" rail.
-      expect(result.current.results.map((r) => r.id)).toContain("a.action");
+      // Wait on the search branch specifically — empty sections prove ranking
+      // ran. Waiting on a non-empty result set would already be satisfied by
+      // the browse rail, so the assertion could never fail.
+      await waitFor(
+        () => {
+          expect(result.current.sections).toEqual([]);
+          expect(result.current.results.map((r) => r.id)).toEqual(["a.action"]);
+        },
+        { timeout: 2000 }
+      );
     });
 
     it("reports no sections during typed search even when pinned items are in results", async () => {
@@ -1348,41 +1373,60 @@ describe("useActionPalette", () => {
       const { result } = renderHook(() => useActionPalette());
 
       act(() => result.current.open());
+
+      // The pinned action gives the browse rail a Favorites section, so the
+      // assertion below only means something once it has gone away.
+      await waitFor(() => expect(sectionIds(result.current, "favorites")).toEqual(["a.action"]));
+
       act(() => result.current.setQuery("alpha"));
 
-      await waitFor(() => expect(result.current.results.length).toBeGreaterThan(0), {
-        timeout: 2000,
-      });
-
-      expect(result.current.sections).toEqual([]);
+      await waitFor(
+        () => {
+          expect(result.current.results.map((r) => r.id)).toEqual(["a.action"]);
+          expect(result.current.sections).toEqual([]);
+        },
+        { timeout: 2000 }
+      );
     });
 
-    it("keeps selectedIndex inside results when the list collapses under a query", async () => {
-      const entries = Array.from({ length: 30 }, (_, i) =>
-        makeEntry(`action.${i.toString().padStart(2, "0")}`, `Action ${i}`)
-      );
-      listMock.mockReturnValue(entries);
+    it("exposes an in-range selection when the stored index points past the results", async () => {
+      dispatchMock.mockResolvedValue({ ok: true });
+      listMock.mockReturnValue([
+        makeEntry("a.action", "Alpha", true, "git"),
+        makeEntry("b.action", "Bravo", true, "git"),
+        makeEntry("c.action", "Charlie", true, "git"),
+      ]);
 
       const { result } = renderHook(() => useActionPalette());
 
       act(() => result.current.open());
 
-      await waitFor(() => expect(result.current.results.length).toBe(entries.length));
+      await waitFor(() => expect(result.current.results.length).toBe(3));
 
-      // Select deep in the browse list, then narrow to a much shorter set. The
-      // stored index is reconciled an effect later, so the read must not hand
-      // out an index past the end in the meantime.
-      act(() => result.current.setSelectedIndex(entries.length - 1));
-      act(() => result.current.setQuery("Action 7"));
+      // Drive the stored index out of range without touching `results`, so the
+      // reconcile effect never fires and only the read-time clamp can save it.
+      // Reproduces the render-time window that typing opens for real: results
+      // shrink during render, the index catches up an effect later.
+      act(() => result.current.setSelectedIndex(99));
 
-      await waitFor(() => expect(result.current.results.length).toBeLessThan(entries.length), {
-        timeout: 2000,
-      });
+      expect(result.current.selectedIndex).toBe(0);
+      // Enter must still fire — an out-of-range index would make it a silent
+      // no-op, which is the failure this clamp exists to prevent.
+      act(() => result.current.confirmSelection());
+      expect(dispatchMock).toHaveBeenCalledWith("a.action", {}, { source: "user" });
+    });
 
-      expect(result.current.selectedIndex).toBeGreaterThanOrEqual(0);
-      expect(result.current.selectedIndex).toBeLessThan(result.current.results.length);
-      // The clamped index must name a real row, so Enter can't silently no-op.
-      expect(result.current.results[result.current.selectedIndex]).toBeDefined();
+    it("reports no selection when there is nothing to select", async () => {
+      listMock.mockReturnValue([makeEntry("a.action", "Alpha")]);
+
+      const { result } = renderHook(() => useActionPalette());
+
+      act(() => result.current.open());
+      act(() => result.current.setQuery("nothing-matches-this-xyz"));
+
+      await waitFor(() => expect(result.current.results.length).toBe(0), { timeout: 2000 });
+
+      expect(result.current.selectedIndex).toBe(-1);
     });
 
     it("reopens at the top of the browse rail instead of chasing the last search hit", async () => {

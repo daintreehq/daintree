@@ -51,6 +51,55 @@ describe("useSearchablePalette", () => {
     expect(result.current.selectedIndex).toBe(-1);
   });
 
+  it("follows the selected item through a reorder the sampled fingerprint can't see", () => {
+    // Same length, same first/middle/last ids — only the interior moves, which
+    // is exactly what pinning a row does. The change-detection fast path must
+    // not treat that as "nothing moved", or the highlight slides onto whichever
+    // row took the index and Enter runs it instead.
+    const before: PaletteItem[] = ["f", "a", "b", "c", "d", "e", "g"].map((id) => ({
+      id,
+      name: id,
+    }));
+    const after: PaletteItem[] = ["f", "b", "a", "c", "d", "e", "g"].map((id) => ({
+      id,
+      name: id,
+    }));
+
+    const { result, rerender } = renderHook(
+      ({ items }: { items: PaletteItem[] }) =>
+        useSearchablePalette<PaletteItem>({ items, maxResults: 20 }),
+      { initialProps: { items: before } }
+    );
+
+    // Select "b" at index 2.
+    act(() => result.current.setSelectedIndex(2));
+    expect(result.current.results[result.current.selectedIndex]?.id).toBe("b");
+
+    rerender({ items: after });
+
+    expect(result.current.results[result.current.selectedIndex]?.id).toBe("b");
+    expect(result.current.selectedIndex).toBe(1);
+  });
+
+  it("steps from the visible row when the stored index is out of range", () => {
+    const items: PaletteItem[] = [
+      { id: "a", name: "a" },
+      { id: "b", name: "b" },
+    ];
+
+    const { result } = renderHook(() =>
+      useSearchablePalette<PaletteItem>({ items, maxResults: 20 })
+    );
+
+    // Out of range without changing results, so nothing reconciles it. Consumers
+    // clamp this to 0 on read, so ArrowDown has to advance to 1 — computing from
+    // the raw value would wrap to 0 and appear to do nothing.
+    act(() => result.current.setSelectedIndex(99));
+    act(() => result.current.selectNext());
+
+    expect(result.current.selectedIndex).toBe(1);
+  });
+
   describe("query-sensitive maxResults", () => {
     const items: PaletteItem[] = Array.from({ length: 25 }, (_, i) => ({
       id: `item-${i}`,

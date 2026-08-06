@@ -31,6 +31,10 @@ interface ActionPaletteItemProps {
    * pattern.
    */
   footerHintId?: string;
+  /** 1-based position among the navigable rows. See the ARIA note on the row. */
+  posInSet?: number;
+  /** Total navigable rows, excluding any inert section headers. */
+  setSize?: number;
 }
 
 function ActionPaletteItemInner({
@@ -44,6 +48,8 @@ function ActionPaletteItemInner({
   onUnpin,
   onHide,
   footerHintId,
+  posInSet,
+  setSize,
 }: ActionPaletteItemProps) {
   const categoryColor = ACTION_CATEGORY_COLORS[item.category] ?? ACTION_CATEGORY_DEFAULT_COLOR;
   const [pinRejected, setPinRejected] = useState(false);
@@ -139,6 +145,13 @@ function ActionPaletteItemInner({
       role="option"
       aria-selected={isSelected}
       aria-disabled={!item.enabled}
+      // The sectioned body seeds these because it interleaves inert section
+      // headers among the rows: those headers are role="option" too (role=group
+      // loses its label under Chromium + VoiceOver), so a computed set would
+      // count them and announce "38 of 328" for the 36th real action. Stating
+      // the position explicitly keeps the count over the rows only.
+      aria-posinset={posInSet}
+      aria-setsize={setSize}
       onPointerDown={(e) => e.preventDefault()}
       onPointerMove={handleHover}
     >

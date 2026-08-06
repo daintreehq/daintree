@@ -1,6 +1,5 @@
 import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { KBD_CLASS, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
@@ -202,11 +201,14 @@ export function ActionPalette({
             onUnpin={unpinAction}
             onHide={canHide ? hideAction : undefined}
             footerHintId={footerHintId}
+            posInSet={index + 1}
+            setSize={results.length}
           />
         </div>
       );
     },
     [
+      results.length,
       pinnedActionIds,
       selectedIndex,
       handleSelect,
@@ -261,10 +263,11 @@ export function ActionPalette({
             );
           })}
         </div>
-        <PaletteOverflowNotice shown={results.length} total={totalResults} />
       </>
     );
-  }, [results, sections, isStale, totalResults, renderActionRow]);
+    // No overflow notice here: the browse rail is uncapped, so `shown` always
+    // equals `total`. The search path keeps its notice via SearchablePalette.
+  }, [results, sections, isStale, renderActionRow]);
 
   const [activeMode, setActiveMode] = useState<ActionPaletteMode | null>(null);
   // Hold the last rendered chip label across the exit animation so the chip

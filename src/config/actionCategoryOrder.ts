@@ -52,7 +52,7 @@ export const ACTION_CATEGORY_ORDER: readonly string[] = [
  * it names a surface or subsystem ("Git", "Browser"). Everything else falls
  * through `humanizeActionCategory`.
  */
-export const ACTION_CATEGORY_LABELS: Readonly<Record<string, string>> = {
+const ACTION_CATEGORY_LABEL_ENTRIES: Readonly<Record<string, string>> = {
   worktree: "Worktrees",
   panel: "Panels",
   git: "Git",
@@ -81,6 +81,16 @@ export const ACTION_CATEGORY_LABELS: Readonly<Record<string, string>> = {
   introspection: "Introspection",
 };
 
+/**
+ * Held as a Map, not the object literal. Categories are arbitrary strings —
+ * plugins pick their own — and an object lookup for `__proto__` or
+ * `constructor` returns an inherited non-string, which would end up as a
+ * section label and throw when React tried to render it.
+ */
+export const ACTION_CATEGORY_LABELS: ReadonlyMap<string, string> = new Map(
+  Object.entries(ACTION_CATEGORY_LABEL_ENTRIES)
+);
+
 const ACTION_CATEGORY_RANK: ReadonlyMap<string, number> = new Map(
   ACTION_CATEGORY_ORDER.map((category, index) => [category, index])
 );
@@ -104,7 +114,7 @@ export function humanizeActionCategory(category: string): string {
 
 /** Display label for a category, falling back to a humanized form. */
 export function getActionCategoryLabel(category: string): string {
-  return ACTION_CATEGORY_LABELS[category] ?? humanizeActionCategory(category);
+  return ACTION_CATEGORY_LABELS.get(category) ?? humanizeActionCategory(category);
 }
 
 /**

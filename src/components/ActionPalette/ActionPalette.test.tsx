@@ -155,7 +155,9 @@ describe("ActionPalette", () => {
     expect(screen.queryByText("No actions yet")).toBeNull();
   });
 
-  it("shows the empty message when no MRU exists and no query is typed", () => {
+  it("shows the empty message when the registry exposes no eligible actions", () => {
+    // No longer the empty-MRU state — that now browses the whole inventory.
+    // This is the defensive case where there is genuinely nothing to list.
     render(<ActionPalette {...baseProps} />);
     expect(screen.getByText("No actions yet")).toBeTruthy();
   });

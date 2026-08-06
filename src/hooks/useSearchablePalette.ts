@@ -185,6 +185,10 @@ export function useSearchablePalette<T>(
   // overwrite the ref before the follow lookup could use the prior ID.
   const selectedItemIdRef = useRef<string | null>(null);
 
+  // Mirrors `selectedIndex` so the reconcile effect can consult the current
+  // selection without taking it as a dependency and re-running on every move.
+  const selectedIndexRef = useRef(0);
+
   const updateSelectedIndex = useCallback(
     (next: number | ((prev: number) => number)): void => {
       setSelectedIndex((prev) => {
@@ -193,6 +197,7 @@ export function useSearchablePalette<T>(
         if (item != null) {
           selectedItemIdRef.current = getItemId(item);
         }
+        selectedIndexRef.current = value;
         return value;
       });
     },
@@ -212,8 +217,20 @@ export function useSearchablePalette<T>(
           ? results.map(getItemId).join(",")
           : `${getItemId(results[0]!)},${getItemId(results[Math.floor(length / 2)]!)},${getItemId(results[length - 1]!)}`;
     const prev = prevResultsRef.current;
-    if (ids === prev.ids && length === prev.length) return;
-    prevResultsRef.current = { ids, length };
+    if (ids === prev.ids && length === prev.length) {
+      // Sampling first/middle/last can't see an interior reorder that keeps all
+      // three in place — pinning a row lifts it above its neighbours and does
+      // exactly that. Trust the fast path only while the anchored row is still
+      // where the selection points; otherwise fall through and follow it, or
+      // the highlight silently slides onto the row that took its index and
+      // Enter runs the wrong action.
+      const anchorId = selectedItemIdRef.current;
+      if (anchorId == null) return;
+      const atSelected = results[selectedIndexRef.current];
+      if (atSelected != null && getItemId(atSelected) === anchorId) return;
+    } else {
+      prevResultsRef.current = { ids, length };
+    }
 
     // Follow the previously selected item to its new index when it's still
     // present and still navigable. This preserves the "type to narrow, glance,
@@ -253,6 +270,7 @@ export function useSearchablePalette<T>(
     // Reset to the first navigable item (not blindly 0) so that
     // palettes with disabled leading items start on the correct row.
     const firstNav = canNavigate && results.length > 0 ? findNavigable(0, 1) : 0;
+    selectedIndexRef.current = firstNav;
     setSelectedIndex(firstNav);
   }, [paletteId, canNavigate, results.length, findNavigable]);
 
@@ -264,6 +282,7 @@ export function useSearchablePalette<T>(
     }
     setQuery("");
     selectedItemIdRef.current = null;
+    selectedIndexRef.current = 0;
     setSelectedIndex(0);
   }, [paletteId]);
 
@@ -275,21 +294,32 @@ export function useSearchablePalette<T>(
     }
   }, [isOpen, open, close]);
 
+  // Stored state can briefly point past a list that just shrank — results are
+  // computed during render, the index is reconciled an effect later. Step from
+  // where the user actually sees the highlight, not from the stale value, or
+  // the first arrow press after a narrowing goes somewhere they didn't ask for.
+  const currentIndex = useCallback(
+    (prev: number) => (prev >= 0 && prev < results.length ? prev : 0),
+    [results.length]
+  );
+
   const selectPrevious = useCallback(() => {
     if (results.length === 0) return;
     updateSelectedIndex((prev) => {
-      const next = prev <= 0 ? results.length - 1 : prev - 1;
+      const from = currentIndex(prev);
+      const next = from <= 0 ? results.length - 1 : from - 1;
       return canNavigate ? findNavigable(next, -1) : next;
     });
-  }, [results.length, canNavigate, findNavigable, updateSelectedIndex]);
+  }, [results.length, canNavigate, findNavigable, updateSelectedIndex, currentIndex]);
 
   const selectNext = useCallback(() => {
     if (results.length === 0) return;
     updateSelectedIndex((prev) => {
-      const next = prev >= results.length - 1 ? 0 : prev + 1;
+      const from = currentIndex(prev);
+      const next = from >= results.length - 1 ? 0 : from + 1;
       return canNavigate ? findNavigable(next, 1) : next;
     });
-  }, [results.length, canNavigate, findNavigable, updateSelectedIndex]);
+  }, [results.length, canNavigate, findNavigable, updateSelectedIndex, currentIndex]);
 
   return {
     isOpen,
