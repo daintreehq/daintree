@@ -92,6 +92,62 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
+// Pin state. `dispatchToolbarVisibility` is deliberately NOT mocked — it is the
+// seam Settings → Toolbar shares, and mocking it would let the launcher write
+// the pin any way it liked while the suite still passed.
+let mockAgentSettings: { agents?: Record<string, { pinned?: boolean }> } | null = { agents: {} };
+let mockAgentAvailability: Record<string, string> = {};
+let mockToolbarLayout: {
+  pinnedButtons: Record<string, boolean>;
+  leftButtons: string[];
+  rightButtons: string[];
+} = { pinnedButtons: {}, leftButtons: [], rightButtons: [] };
+const setAgentPinnedMock = vi.fn();
+const setPanelButtonOnToolbarMock = vi.fn();
+const positionAgentButtonMock = vi.fn();
+const toggleButtonVisibilityMock = vi.fn();
+
+// `getState` alongside each selector: the real hooks carry Zustand's static API,
+// and a factory that omits it turns a future `useXStore.getState()` anywhere in
+// this component's import graph into an opaque collection failure. Each state
+// reader is declared INSIDE its factory — `vi.mock` is hoisted above every
+// top-level const, so referencing one at factory-evaluation time is a TDZ error
+// (the `mock*` bindings below are fine because they are only read at call time).
+vi.mock("@/store/agentSettingsStore", () => {
+  const getState = () => ({ settings: mockAgentSettings, setAgentPinned: setAgentPinnedMock });
+  return {
+    useAgentSettingsStore: Object.assign(
+      (selector: (s: ReturnType<typeof getState>) => unknown) => selector(getState()),
+      { getState }
+    ),
+  };
+});
+
+vi.mock("@/store/cliAvailabilityStore", () => {
+  const getState = () => ({ availability: mockAgentAvailability });
+  return {
+    useCliAvailabilityStore: Object.assign(
+      (selector: (s: ReturnType<typeof getState>) => unknown) => selector(getState()),
+      { getState }
+    ),
+  };
+});
+
+vi.mock("@/store/toolbarPreferencesStore", () => {
+  const getState = () => ({
+    layout: mockToolbarLayout,
+    setPanelButtonOnToolbar: setPanelButtonOnToolbarMock,
+    positionAgentButton: positionAgentButtonMock,
+    toggleButtonVisibility: toggleButtonVisibilityMock,
+  });
+  return {
+    useToolbarPreferencesStore: Object.assign(
+      (selector: (s: ReturnType<typeof getState>) => unknown) => selector(getState()),
+      { getState }
+    ),
+  };
+});
+
 // Mock UI primitives so the test focuses on this component's behavior, not
 // Radix's pointer-event semantics inside jsdom. Mirrors AgentButton.test.tsx.
 // Radix's real focus/dismiss behaviour (mount autofocus winning the lazy-chunk
@@ -239,8 +295,8 @@ function renderButton(props: Partial<Parameters<typeof DockLaunchButton>[0]> = {
 const OPTION = '[role="option"]';
 const SELECTED_OPTION = '[role="option"][aria-selected="true"]';
 
-function options(container: HTMLElement): HTMLButtonElement[] {
-  return Array.from(container.querySelectorAll<HTMLButtonElement>(OPTION));
+function options(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(OPTION));
 }
 
 function selectedOption(container: HTMLElement): HTMLElement | null {
@@ -276,6 +332,13 @@ beforeEach(() => {
   popoverOpenAutoFocusSpy = null;
   popoverOpenChangeSpy = null;
   popoverModal = undefined;
+  mockAgentSettings = { agents: {} };
+  mockAgentAvailability = {};
+  mockToolbarLayout = { pinnedButtons: {}, leftButtons: [], rightButtons: [] };
+  setAgentPinnedMock.mockReset();
+  setPanelButtonOnToolbarMock.mockReset();
+  positionAgentButtonMock.mockReset();
+  toggleButtonVisibilityMock.mockReset();
 });
 
 describe("DockLaunchButton", () => {
@@ -350,11 +413,11 @@ describe("DockLaunchButton", () => {
 
     // The name sits in its own span for truncation, so the warning lives on the
     // row itself.
-    expect(getByText("Claude").closest("button")?.getAttribute("title")).toBeNull();
-    expect(getByText("Gemini").closest("button")?.getAttribute("title")).toBe(
+    expect(getByText("Claude").closest(OPTION)?.getAttribute("title")).toBeNull();
+    expect(getByText("Gemini").closest(OPTION)?.getAttribute("title")).toBe(
       "Gemini is blocked by endpoint security. Click to configure."
     );
-    expect(getByText("Codex").closest("button")?.getAttribute("title")).toBe(
+    expect(getByText("Codex").closest(OPTION)?.getAttribute("title")).toBe(
       "Codex needs setup. Click to configure."
     );
   });
@@ -481,7 +544,7 @@ describe("DockLaunchButton", () => {
       const { container, getByText } = renderButton();
       fireEvent.change(searchInput(container), { target: { value: "gemini" } });
 
-      const row = getByText("Gemini").closest("button");
+      const row = getByText("Gemini").closest(OPTION);
       expect(row?.getAttribute("title")).toContain("blocked by endpoint security");
     });
 
@@ -1355,6 +1418,369 @@ describe("DockLaunchButton", () => {
 
       expect(selectedOption(container)).toBe(options(container)[0]);
       expect(container.querySelectorAll(SELECTED_OPTION)).toHaveLength(1);
+    });
+  });
+
+  describe("toolbar pin affordance", () => {
+    /** The option whose label text matches, whatever band it landed in. */
+    function rowFor(container: HTMLElement, name: string): HTMLElement {
+      const row = options(container).find((option) =>
+        Array.from(option.querySelectorAll("span")).some((s) => s.textContent === name)
+      );
+      if (!row) throw new Error(`no option row for ${name}`);
+      return row;
+    }
+
+    /** Structural, not by label: the pin is the row's toggle-state control. */
+    function pinControl(row: HTMLElement): HTMLButtonElement | null {
+      return row.querySelector<HTMLButtonElement>("button[aria-pressed]");
+    }
+
+    it("renders each option as a container with sibling buttons, never a nested button", () => {
+      // The structural precondition for a secondary control: a <button> cannot
+      // legally contain another, so the row itself stopped being one.
+      const { container } = renderButton();
+      for (const option of options(container)) {
+        expect(option.tagName).not.toBe("BUTTON");
+        expect(option.closest("button")).toBeNull();
+        expect(option.querySelector("button button")).toBeNull();
+      }
+    });
+
+    it("names each option without absorbing its pin button's label", () => {
+      // The pin is a child of the option, so a content-derived name would end
+      // every pinnable row with "Pin to toolbar: X" — while the destination,
+      // which is what the name is for, got buried in the middle.
+      const { container } = renderButton();
+      const claude = rowFor(container, "Claude").getAttribute("aria-label");
+
+      expect(claude).toContain("Claude");
+      expect(claude).toContain("Agent");
+      expect(claude).not.toContain("Pin");
+      expect(rowFor(container, "Review").getAttribute("aria-label")).toContain("Grid");
+    });
+
+    it("offers a pin on built-in agents and on panels that have a toolbar button", () => {
+      mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+      const { container } = renderButton();
+
+      expect(pinControl(rowFor(container, "Claude"))).toBeTruthy();
+      expect(pinControl(rowFor(container, "Terminal"))).toBeTruthy();
+      expect(pinControl(rowFor(container, "Browser"))).toBeTruthy();
+      expect(pinControl(rowFor(container, "File Browser"))).toBeTruthy();
+      // The kind is `dev-preview`, the button is `dev-server`. Testing the id
+      // directly against the toolbar list would drop exactly this row.
+      expect(pinControl(rowFor(container, "Dev Preview"))).toBeTruthy();
+    });
+
+    it("withholds the pin from rows with nothing to pin to", () => {
+      mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+      const { container } = renderButton({
+        agents: [{ id: "my-plugin-agent", name: "Plugin agent", availability: "ready" }],
+      });
+
+      expect(pinControl(rowFor(container, "My recipe"))).toBeNull();
+      expect(pinControl(rowFor(container, "Review"))).toBeNull();
+      // Not a built-in agent, so there is no toolbar button id to write.
+      expect(pinControl(rowFor(container, "Plugin agent"))).toBeNull();
+    });
+
+    it("withholds the pin from the create-recipe cue", () => {
+      mockRecipes = [];
+      const { container } = renderButton();
+      expect(pinControl(rowFor(container, "Create a recipe"))).toBeNull();
+    });
+
+    it("reports an installed agent with no toolbar position as unpinned", () => {
+      // Since #11680 an installed CLI no longer implies a toolbar slot, so the
+      // pin has to read the position too or it describes a button that is not
+      // rendered anywhere.
+      const { container } = renderButton();
+      expect(pinControl(rowFor(container, "Claude"))?.getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("reports an agent positioned on either side as pinned", () => {
+      mockToolbarLayout = { pinnedButtons: {}, leftButtons: [], rightButtons: ["claude"] };
+      const { container } = renderButton();
+      expect(pinControl(rowFor(container, "Claude"))?.getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("lets an explicit pin outrank a missing position, and an explicit hide outrank one", () => {
+      mockAgentSettings = { agents: { claude: { pinned: true }, gemini: { pinned: false } } };
+      mockToolbarLayout = { pinnedButtons: {}, leftButtons: ["gemini"], rightButtons: [] };
+      const { container } = renderButton();
+
+      expect(pinControl(rowFor(container, "Claude"))?.getAttribute("aria-pressed")).toBe("true");
+      expect(pinControl(rowFor(container, "Gemini"))?.getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("writes an agent pin through the dispatcher that also gives it a position", () => {
+      const { container } = renderButton();
+      const pin = pinControl(rowFor(container, "Claude"))!;
+      expect(pin.getAttribute("aria-pressed")).toBe("false");
+
+      fireEvent.click(pin);
+
+      // Both halves: a pin with no position renders no button at all.
+      expect(positionAgentButtonMock).toHaveBeenCalledWith("claude");
+      expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
+    });
+
+    it("unpins without asking for a new position", () => {
+      mockToolbarLayout = { pinnedButtons: {}, leftButtons: ["claude"], rightButtons: [] };
+      const { container } = renderButton();
+      const pin = pinControl(rowFor(container, "Claude"))!;
+      expect(pin.getAttribute("aria-pressed")).toBe("true");
+
+      fireEvent.click(pin);
+
+      expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", false);
+      expect(positionAgentButtonMock).not.toHaveBeenCalled();
+    });
+
+    it("writes a panel pin to the toolbar button id, not the panel kind id", () => {
+      const { container } = renderButton();
+      fireEvent.click(pinControl(rowFor(container, "Dev Preview"))!);
+
+      expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("dev-server", true);
+      expect(setAgentPinnedMock).not.toHaveBeenCalled();
+    });
+
+    it("inverts whatever the current panel state is", () => {
+      mockToolbarLayout = { pinnedButtons: { browser: true }, leftButtons: [], rightButtons: [] };
+      const { container } = renderButton();
+      const pin = pinControl(rowFor(container, "Browser"))!;
+      expect(pin.getAttribute("aria-pressed")).toBe("true");
+
+      fireEvent.click(pin);
+
+      expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("browser", false);
+    });
+
+    it("pins without launching, closing, or clearing the query", () => {
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({ onLaunchAgent });
+      fireEvent.change(searchInput(container), { target: { value: "claude" } });
+
+      fireEvent.click(pinControl(rowFor(container, "Claude"))!);
+
+      expect(setAgentPinnedMock).toHaveBeenCalled();
+      expect(onLaunchAgent).not.toHaveBeenCalled();
+      expect(recordActionMruMock).not.toHaveBeenCalled();
+      // Still open, still filtered — pinning is a change to the list, not an
+      // exit from it.
+      expect(searchInput(container).value).toBe("claude");
+    });
+
+    it("keeps focus off the pin and lets Radix see the pointer sequence", () => {
+      const { container } = renderButton();
+      const pin = pinControl(rowFor(container, "Claude"))!;
+
+      // preventDefault keeps DOM focus on the search box...
+      expect(fireEvent.pointerDown(pin)).toBe(false);
+
+      // ...but propagation must NOT be stopped, or Radix's DismissableLayer
+      // stops seeing the pointerdown it needs to classify the next outside
+      // click as a dismissal.
+      const seen = vi.fn();
+      document.addEventListener("pointerdown", seen);
+      fireEvent.pointerDown(pin);
+      document.removeEventListener("pointerdown", seen);
+      expect(seen).toHaveBeenCalled();
+    });
+
+    it("does not swallow a second click that lands immediately after the first", () => {
+      // No time-window debounce here: only `click` toggles (pointerdown does
+      // not), so there is no synthesized pair to swallow, and a window would
+      // just make a fast pin-then-unpin depend on how quickly the user moved.
+      // The store mock is not reactive, so both clicks read the same state —
+      // what this pins down is that the second one reaches the write path.
+      const { container } = renderButton();
+      const pin = pinControl(rowFor(container, "Claude"))!;
+
+      fireEvent.click(pin);
+      fireEvent.click(pin);
+
+      expect(setAgentPinnedMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("labels the pin control and keeps it out of the tab order", () => {
+      const { container } = renderButton();
+      const pin = pinControl(rowFor(container, "Claude"))!;
+
+      // Named for itself — the option's own label deliberately excludes it, so
+      // this is the only place the control says what it does.
+      expect(pin.getAttribute("aria-label")).toContain("Claude");
+      expect(pin.getAttribute("aria-keyshortcuts")).toBe("Alt+P");
+      expect(pin.getAttribute("title")).toContain("Alt+P");
+      // A second tab stop inside every row would break the palette's keyboard
+      // model, which moves selection rather than focus.
+      expect(pin.tabIndex).toBe(-1);
+    });
+
+    it("names the pin shortcut's effect in the option's own name, flipped by state", () => {
+      // Children of `role="option"` are presentational, so the pin button's own
+      // label never reaches a screen reader — without the verb in the option's
+      // name a user hears only a bare "Alt+P" and cannot tell a pinned row from
+      // an unpinned one.
+      mockToolbarLayout = { pinnedButtons: {}, leftButtons: ["claude"], rightButtons: [] };
+      const { container } = renderButton();
+
+      const pinned = rowFor(container, "Claude").getAttribute("aria-label") ?? "";
+      const unpinned = rowFor(container, "Gemini").getAttribute("aria-label") ?? "";
+
+      expect(pinned).toContain("Press Alt+P to unpin from toolbar");
+      expect(unpinned).toContain("Press Alt+P to pin to toolbar");
+      expect(pinned).not.toContain("pin to toolbar");
+      expect(unpinned).not.toContain("unpin from toolbar");
+    });
+
+    it("leaves the pin phrase off rows that cannot be pinned", () => {
+      // The phrase is a promise about a key that works — a recipe row has no
+      // pin target, so announcing Alt+P there would send the user nowhere.
+      mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+      const { container } = renderButton();
+
+      expect(rowFor(container, "My recipe").getAttribute("aria-label")).not.toContain("Alt+P");
+      expect(rowFor(container, "My recipe").getAttribute("aria-keyshortcuts")).toBeNull();
+    });
+
+    it("leaves the unavailable-agent warning to the description, not the name", () => {
+      // Gemini is blocked in the fixture. `title` beside an `aria-label`
+      // computes as the option's description, so the warning still reaches a
+      // screen reader — putting it in both would announce it twice.
+      const { container } = renderButton();
+      const row = rowFor(container, "Gemini");
+
+      expect(row.getAttribute("title")).toContain("blocked by endpoint security");
+      expect(row.getAttribute("aria-label")).not.toContain("blocked by endpoint security");
+    });
+
+    it("keeps the trailing slot on rows that cannot be pinned", () => {
+      // jsdom has no layout, so this checks the structure the alignment rests
+      // on rather than the width: an unpinnable row still ends with the same
+      // slot element, so its qualifier stops where a pinnable row's does.
+      // Dropping the slot for unpinnable rows changes the child count.
+      mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+      const { container } = renderButton();
+
+      const pinnable = rowFor(container, "Claude");
+      const notPinnable = rowFor(container, "My recipe");
+      expect(pinControl(notPinnable)).toBeNull();
+      expect(notPinnable.children.length).toBe(pinnable.children.length);
+      expect(notPinnable.lastElementChild?.tagName).toBe(pinnable.lastElementChild?.tagName);
+    });
+
+    it("activates from the row itself, not only from an inner control", () => {
+      // The row highlights as one thing, so all of it has to launch. When
+      // activation lived on an inner button it covered only its own content
+      // box, leaving the row's padding and its trailing slot inert.
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({ onLaunchAgent });
+
+      fireEvent.click(rowFor(container, "Claude"));
+
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude");
+    });
+
+    it("survives a render before agent settings have hydrated", () => {
+      mockAgentSettings = null;
+      const { container } = renderButton();
+
+      const pin = pinControl(rowFor(container, "Claude"));
+      expect(pin?.getAttribute("aria-pressed")).toBe("false");
+      fireEvent.click(pin!);
+      expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
+    });
+
+    describe("Alt+P", () => {
+      it("toggles the selected row", () => {
+        const { container } = renderButton();
+        const input = searchInput(container);
+        fireEvent.change(input, { target: { value: "claude" } });
+
+        fireEvent.keyDown(input, { key: "p", code: "KeyP", altKey: true });
+
+        expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
+      });
+
+      it("leaves a bare p to the search box", () => {
+        // The row is a type-ahead field: an unmodified P is the second letter
+        // of "python", not a command.
+        const { container } = renderButton();
+        const input = searchInput(container);
+        fireEvent.change(input, { target: { value: "claude" } });
+
+        fireEvent.keyDown(input, { key: "p", code: "KeyP" });
+
+        expect(setAgentPinnedMock).not.toHaveBeenCalled();
+      });
+
+      it("leaves the app's own Cmd/Ctrl combinations alone", () => {
+        const { container } = renderButton();
+        const input = searchInput(container);
+        fireEvent.change(input, { target: { value: "claude" } });
+
+        fireEvent.keyDown(input, { key: "p", code: "KeyP", metaKey: true });
+        fireEvent.keyDown(input, { key: "p", code: "KeyP", altKey: true, metaKey: true });
+        fireEvent.keyDown(input, { key: "p", code: "KeyP", altKey: true, shiftKey: true });
+        // AltGr on Windows/Linux synthesizes ctrl+alt and must keep producing
+        // international characters.
+        fireEvent.keyDown(input, { key: "p", code: "KeyP", altKey: true, ctrlKey: true });
+
+        expect(setAgentPinnedMock).not.toHaveBeenCalled();
+      });
+
+      it("declines a keystroke that reports AltGraph, whatever else it sets", () => {
+        // Non-US layouts reach a character through AltGr; swallowing it here
+        // would make the affected key untypable while the launcher is open.
+        // Built by hand because `getModifierState` is a prototype method — an
+        // init-dict entry is silently dropped and the key would appear plain.
+        const { container } = renderButton();
+        const input = searchInput(container);
+        fireEvent.change(input, { target: { value: "claude" } });
+
+        const event = new KeyboardEvent("keydown", {
+          key: "p",
+          code: "KeyP",
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        Object.defineProperty(event, "getModifierState", {
+          value: (mod: string) => mod === "AltGraph",
+        });
+        fireEvent(input, event);
+
+        expect(setAgentPinnedMock).not.toHaveBeenCalled();
+      });
+
+      // The physical-key mapping macOS needs (Option+P arrives as "π") belongs
+      // to `normalizeKeyForBinding`, which the launcher calls and which owns
+      // that behaviour under a mocked platform in KeybindingService.test.ts.
+      // Re-asserting it here would only prove jsdom reports a non-Mac platform.
+
+      it("does not flip repeatedly while the key is held", () => {
+        const { container } = renderButton();
+        const input = searchInput(container);
+        fireEvent.change(input, { target: { value: "claude" } });
+
+        fireEvent.keyDown(input, { key: "p", code: "KeyP", altKey: true, repeat: true });
+
+        expect(setAgentPinnedMock).not.toHaveBeenCalled();
+      });
+
+      it("does nothing when the selected row has nothing to pin", () => {
+        mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
+        const { container } = renderButton();
+        const input = searchInput(container);
+        fireEvent.change(input, { target: { value: "my recipe" } });
+
+        fireEvent.keyDown(input, { key: "p", code: "KeyP", altKey: true });
+
+        expect(setAgentPinnedMock).not.toHaveBeenCalled();
+        expect(setPanelButtonOnToolbarMock).not.toHaveBeenCalled();
+      });
     });
   });
 });

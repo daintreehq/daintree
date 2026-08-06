@@ -80,8 +80,9 @@ vi.mock("@/store/cliAvailabilityStore", () => ({
     selector({ availability: null }),
 }));
 vi.mock("@/store/toolbarPreferencesStore", () => ({
-  useToolbarPreferencesStore: (selector: (s: { layout: { leftButtons: string[] } }) => unknown) =>
-    selector({ layout: { leftButtons: [] } }),
+  useToolbarPreferencesStore: (
+    selector: (s: { layout: { leftButtons: string[]; rightButtons: string[] } }) => unknown
+  ) => selector({ layout: { leftButtons: [], rightButtons: [] } }),
 }));
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (s: { setDockDensity: () => void }) => unknown) =>

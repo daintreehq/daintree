@@ -123,6 +123,34 @@ export function isLauncherPanelButtonId(id: AnyToolbarButtonId): id is LauncherP
 }
 
 /**
+ * Panel-kind id → the toolbar button that kind pins to.
+ *
+ * The two vocabularies are not the same words. A launcher built from
+ * `panelKindRegistry` knows kinds; the toolbar knows button ids; and they agree
+ * on three of four names by coincidence rather than by contract — dev preview is
+ * the kind `dev-preview` and the button `dev-server`. Anything testing
+ * `isLauncherPanelButtonId(kindId)` therefore drops that one row silently, which
+ * is exactly the bug this map exists to make impossible.
+ *
+ * Deliberately a lookup rather than a filter: a kind that is absent here is not
+ * pinnable at all (review, file, diff and every plugin kind have no toolbar
+ * button), so "no entry" and "not pinnable" are the same answer.
+ */
+export const LAUNCHER_PANEL_KIND_TO_BUTTON_ID: Readonly<Record<string, LauncherPanelButtonId>> = {
+  terminal: "terminal",
+  "file-browser": "file-browser",
+  browser: "browser",
+  "dev-preview": "dev-server",
+};
+
+/** The toolbar button a panel kind pins to, or undefined when it has none. */
+export function getLauncherPanelButtonIdForKind(kindId: string): LauncherPanelButtonId | undefined {
+  return Object.prototype.hasOwnProperty.call(LAUNCHER_PANEL_KIND_TO_BUTTON_ID, kindId)
+    ? LAUNCHER_PANEL_KIND_TO_BUTTON_ID[kindId]
+    : undefined;
+}
+
+/**
  * Whether a launcher panel button currently has its own top-level toolbar
  * button.
  *
