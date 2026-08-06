@@ -246,11 +246,13 @@ test.describe.serial("Core: Dock launcher search", () => {
       timeout: T_MEDIUM,
     });
 
-    // The regression: ONE outside click must dismiss. Measured off the
-    // popover's own box rather than a fixed point — the launcher anchors
-    // `side="top" align="start"` to the dock's left edge, so any hard-coded
-    // dock coordinate risks landing on the trigger (which toggles by its own
-    // path and would prove nothing about the dismiss layer).
+    // The regression: ONE outside click must dismiss. Aimed relative to the
+    // search box — the launcher anchors `side="top" align="start"` to the
+    // dock's left edge, so a hard-coded dock coordinate risks landing on the
+    // trigger, which toggles by its own path and would prove nothing about the
+    // dismiss layer. `mouse.click`, not a locator click: the popover is modal,
+    // so everything outside it has pointer events disabled and Playwright's
+    // actionability check would retry rather than deliver the event.
     const surface = await window.locator(SEARCH_BOX).boundingBox();
     if (!surface) throw new Error("launcher surface has no box");
     await window.mouse.click(surface.x + surface.width + 240, surface.y);

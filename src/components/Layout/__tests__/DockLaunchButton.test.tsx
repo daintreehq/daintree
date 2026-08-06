@@ -1589,10 +1589,12 @@ describe("DockLaunchButton", () => {
       expect(seen).toHaveBeenCalled();
     });
 
-    it("lets a rapid second click through — pinning then unpinning is two intents", () => {
+    it("does not swallow a second click that lands immediately after the first", () => {
       // No time-window debounce here: only `click` toggles (pointerdown does
       // not), so there is no synthesized pair to swallow, and a window would
       // just make a fast pin-then-unpin depend on how quickly the user moved.
+      // The store mock is not reactive, so both clicks read the same state —
+      // what this pins down is that the second one reaches the write path.
       const { container } = renderButton();
       const pin = pinControl(rowFor(container, "Claude"))!;
 
@@ -1622,37 +1624,40 @@ describe("DockLaunchButton", () => {
       mockToolbarLayout = { pinnedButtons: {}, leftButtons: ["claude"], rightButtons: [] };
       const { container } = renderButton();
 
-      expect(rowFor(container, "Claude").getAttribute("aria-label")).toContain("pinned to toolbar");
-      expect(rowFor(container, "Gemini").getAttribute("aria-label")).not.toContain("pinned");
+      expect(rowFor(container, "Claude").getAttribute("aria-label")).toContain("Pinned to toolbar");
+      expect(rowFor(container, "Gemini").getAttribute("aria-label")).not.toContain("Pinned");
     });
 
-    it("keeps the unavailable-agent warning in the option's name", () => {
-      // Gemini is blocked in the fixture: activating opens Settings instead of
-      // launching, and a row that looks ordinary to a screen reader is exactly
-      // the case the warning exists for.
+    it("leaves the unavailable-agent warning to the description, not the name", () => {
+      // Gemini is blocked in the fixture. `title` beside an `aria-label`
+      // computes as the option's description, so the warning still reaches a
+      // screen reader — putting it in both would announce it twice.
       const { container } = renderButton();
-      expect(rowFor(container, "Gemini").getAttribute("aria-label")).toContain(
-        "blocked by endpoint security"
-      );
+      const row = rowFor(container, "Gemini");
+
+      expect(row.getAttribute("title")).toContain("blocked by endpoint security");
+      expect(row.getAttribute("aria-label")).not.toContain("blocked by endpoint security");
     });
 
-    it("reserves the pin column on rows that cannot be pinned", () => {
-      // Without the reserved slot the trailing qualifier on a recipe would run
-      // 20px further right than the one on an agent, and the list's right edge
-      // would comb.
+    it("keeps the trailing slot on rows that cannot be pinned", () => {
+      // jsdom has no layout, so this checks the structure the alignment rests
+      // on rather than the width: an unpinnable row still ends with the same
+      // slot element, so its qualifier stops where a pinnable row's does.
+      // Dropping the slot for unpinnable rows changes the child count.
       mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
       const { container } = renderButton();
 
       const pinnable = rowFor(container, "Claude");
       const notPinnable = rowFor(container, "My recipe");
       expect(pinControl(notPinnable)).toBeNull();
-      expect(notPinnable.lastElementChild?.className).toBe(pinnable.lastElementChild?.className);
+      expect(notPinnable.children.length).toBe(pinnable.children.length);
+      expect(notPinnable.lastElementChild?.tagName).toBe(pinnable.lastElementChild?.tagName);
     });
 
-    it("activates from anywhere on the row, including its padding", () => {
-      // The row highlights as one thing, so all of it has to launch — the old
-      // full-width row button did, and a click target narrowed to the label
-      // text would leave the padding and the pin column inert.
+    it("activates from the row itself, not only from an inner control", () => {
+      // The row highlights as one thing, so all of it has to launch. When
+      // activation lived on an inner button it covered only its own content
+      // box, leaving the row's padding and its trailing slot inert.
       const onLaunchAgent = vi.fn();
       const { container } = renderButton({ onLaunchAgent });
 

@@ -58,8 +58,8 @@ const SEARCH_RESULT_CAP = 30;
  * (recipes, the create-recipe cue, plugin panel kinds, non-built-in agents).
  */
 type DockLaunchPinTarget =
-  | { category: "agent"; key: string; id: BuiltInAgentId; name: string; onToolbar: boolean }
-  | { category: "panel"; key: string; id: LauncherPanelButtonId; name: string; onToolbar: boolean };
+  | { category: "agent"; id: BuiltInAgentId; name: string; onToolbar: boolean }
+  | { category: "panel"; id: LauncherPanelButtonId; name: string; onToolbar: boolean };
 
 interface DockLaunchButtonProps {
   agents: ReadonlyArray<DockLaunchAgent>;
@@ -124,7 +124,6 @@ export function DockLaunchButton({
         const id = item.agent.id;
         return {
           category: "agent",
-          key: item.key,
           id,
           name: item.name,
           // The array-aware resolver, not `isAgentToolbarVisible`: an installed
@@ -146,7 +145,6 @@ export function DockLaunchButton({
         if (!id) return null;
         return {
           category: "panel",
-          key: item.key,
           id,
           name: item.name,
           onToolbar: isPanelButtonOnToolbar(id, pinnedButtons, leftButtons, rightButtons),
@@ -158,11 +156,11 @@ export function DockLaunchButton({
     [agentSettings, leftButtons, pinnedButtons, rightButtons]
   );
 
-  // Deliberately undebounced, unlike `LauncherMenuButton`'s `guardPinAction`.
-  // That one exists because a Radix menu item synthesizes a pointer/click pair
-  // that both reach the same handler; here only `click` toggles, and the
-  // keyboard path guards itself on `event.repeat`. A time window would only
-  // ever discard a real second intent — pin, then immediately unpin.
+  // Deliberately undebounced, unlike `LauncherMenuButton`'s `guardPinAction`:
+  // there is nothing here for a time window to swallow. Only `click` toggles —
+  // pointerdown just suppresses focus — and the keyboard path guards itself on
+  // `event.repeat`. A window could therefore only ever discard a real second
+  // intent, which for a toggle means pin followed immediately by unpin.
   const togglePin = useCallback(
     (target: DockLaunchPinTarget) => {
       if (target.category === "agent") {
@@ -611,14 +609,15 @@ function DockLaunchOption({
           ? `${item.scopeLabel} · Overridden by Team`
           : item.scopeLabel
         : "Agent";
-  // Everything the sighted user reads off this row, in one string — the option
-  // is what `aria-activedescendant` points at, and its children (the trailing
-  // qualifier, the pin's own state, the warning tooltip) are not announced with
-  // it once the name is stated explicitly.
+  // What the row conveys visually, in one string — the option is what
+  // `aria-activedescendant` points at, and its children (the trailing qualifier,
+  // the pin's own state) stop being announced with it once the name is stated
+  // explicitly. The warning is deliberately NOT folded in: `title` alongside an
+  // `aria-label` computes as the description, so repeating it here would
+  // announce it twice.
   const optionLabel = [
     qualifier ? `${displayName}, ${qualifier}` : displayName,
-    pinTarget?.onToolbar ? "pinned to toolbar" : undefined,
-    title,
+    pinTarget?.onToolbar ? "Pinned to toolbar" : undefined,
   ]
     .filter(Boolean)
     .join(". ");
@@ -647,10 +646,9 @@ function DockLaunchOption({
         aria-selected={isSelected}
         // Stated, not computed from content: the pin button is a child, so a
         // content-derived name would end every pinnable row with "Pin to
-        // toolbar: X". Everything the row conveys visually is folded back in
-        // here instead, because `aria-activedescendant` announces this node and
-        // nothing else — the destination, the pin state, and the warning that
-        // this row opens Settings rather than launching.
+        // toolbar: X". `title` stays a sibling attribute rather than part of the
+        // name — with an `aria-label` present it computes as the description, so
+        // the warning is announced once and still shows as the mouse tooltip.
         aria-label={optionLabel}
         aria-keyshortcuts={pinTarget ? "Alt+P" : undefined}
         title={title}
