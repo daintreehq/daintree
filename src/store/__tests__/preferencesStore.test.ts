@@ -960,7 +960,9 @@ describe("preferencesStore migration", () => {
         version: number;
         state: Record<string, unknown>;
       };
-      expect(written.version).toBe(store.persist.getOptions().version);
+      // Greater-than, not equality against the configured version: comparing a
+      // written value to the same option that wrote it passes at any version.
+      expect(written.version).toBeGreaterThan(15);
       expect(written.state.keyboardLayoutConfirmationsByBinding).toEqual({ [KEY]: 1 });
     });
 

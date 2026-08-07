@@ -171,6 +171,26 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     });
   });
 
+  // Taking the higher count unconditionally would resurrect a tally another
+  // view had just cleared, permanently silencing a notice the user asked for.
+  it("does not resurrect a sibling's Undo when writing an unrelated preference", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().recordKeyboardLayoutConfirmation("nav.toggleSidebar", "Cmd+B");
+
+    // A sibling view's user clicked Undo, clearing the key on disk.
+    const disk = readBlob(backing);
+    disk.state.keyboardLayoutConfirmationsByBinding = {};
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    // This view still holds the tally, and writes something else entirely.
+    store.getState().setDockDensity("compact");
+
+    const written = readBlob(backing);
+    expect(written.state.keyboardLayoutConfirmationsByBinding).toEqual({});
+  });
+
   it("lets Undo clear a binding even when a sibling raced its count higher", async () => {
     const backing = installLocalStorage({});
     const { usePreferencesStore: store } = await import("../preferencesStore");

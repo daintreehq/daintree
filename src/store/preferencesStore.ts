@@ -371,15 +371,28 @@ function mergeConfirmationCounts(
   incoming: Record<string, number>,
   onDisk: Record<string, number>
 ): Record<string, number> {
+  // Map lookups rather than `in`/bracket reads, which see the prototype chain —
+  // the same reason `mergeRecordByWriterDelta` builds Maps from `Object.entries`.
+  const baselineMap = new Map(Object.entries(baseline));
+  const incomingMap = new Map(Object.entries(incoming));
+  const onDiskMap = new Map(Object.entries(onDisk));
   const result: Record<string, number> = {};
-  for (const [key, incomingCount] of Object.entries(incoming)) {
-    const diskCount = onDisk[key];
+
+  for (const [key, incomingCount] of incomingMap) {
+    const diskCount = onDiskMap.get(key);
+    if (baselineMap.get(key) === incomingCount) {
+      // This writer didn't touch the key, so the sibling's value stands —
+      // including its absence, which is a sibling's Undo that must survive.
+      if (diskCount !== undefined) result[key] = diskCount;
+      continue;
+    }
+    // This writer counted up. Never let its total lower a sibling's.
     result[key] = diskCount === undefined ? incomingCount : Math.max(incomingCount, diskCount);
   }
-  for (const [key, diskCount] of Object.entries(onDisk)) {
-    if (key in incoming) continue;
+  for (const [key, diskCount] of onDiskMap) {
+    if (incomingMap.has(key)) continue;
     // Held at hydration and gone now → this writer's Undo cleared it.
-    if (key in baseline) continue;
+    if (baselineMap.has(key)) continue;
     result[key] = diskCount;
   }
   return result;

@@ -77,7 +77,7 @@ export function notifyUndoableKeyboardLayoutChange(change: UndoableKeyboardLayou
 
     announce({ actionId, combo, title, message, onUndo, sequenceAtAnnouncement });
   } catch (error) {
-    logWarn("Failed to announce a keyboard layout change", error);
+    logWarn("Failed to announce a keyboard layout change", { error });
   }
 }
 

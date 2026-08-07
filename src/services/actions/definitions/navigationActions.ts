@@ -1,6 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { notifyUndoableKeyboardLayoutChange } from "../keyboardLayoutChangeFeedback";
 import { useFocusStore } from "@/store/focusStore";
+import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 
 export function registerNavigationActions(
   actions: ActionRegistry,
@@ -44,6 +45,9 @@ export function registerNavigationActions(
           // the sidebar still gone and the way back retired. Safe to pass no
           // panel state: revealing keeps whatever the store already held.
           if (useFocusStore.getState().gestureSidebarHidden) {
+            // Take the resize lock AppLayout would have taken, or the width
+            // animates without it and the terminals re-fit every frame.
+            suppressSidebarResizes();
             useFocusStore.getState().setSidebarGestureHidden(false);
           }
         },
