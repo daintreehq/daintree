@@ -105,7 +105,11 @@ function announce({
     type: "info",
     title,
     message: message(keybindingService.getDisplayCombo(actionId)),
-    duration: 5000,
+    // `transient` writes no inbox row, so this toast is the only window the
+    // Undo ever gets. Matches the palette's hide-action toast — the other
+    // transient undo — rather than the 6s info floor, because a user who just
+    // slipped mid-work needs time to notice the change and reach the action.
+    duration: 30_000,
     // Explicit, because a passive eventKind would resolve this to "low" and
     // route it to the inbox only — a silent no-op for a toast whose whole job
     // is to be seen right now.

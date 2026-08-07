@@ -101,6 +101,10 @@ describe("notifyUndoableKeyboardLayoutChange", () => {
     const { duration } = lastPayload();
     expect(duration).toBeGreaterThan(0);
     expect(Number.isFinite(duration)).toBe(true);
+    // Being transient, this toast writes no inbox row, so it is the only
+    // chance to reach the Undo — it may never dip under the documented
+    // accessibility floor for an info toast.
+    expect(duration).toBeGreaterThanOrEqual(6000);
   });
 
   it.each<ActionSource | undefined>(["user", "menu", "context-menu", "agent", "plugin", undefined])(

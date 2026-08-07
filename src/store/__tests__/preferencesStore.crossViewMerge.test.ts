@@ -208,9 +208,9 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     expect(written.state.keyboardLayoutConfirmationsByBinding).toEqual({});
   });
 
-  // Dropping this field from the merge would let a stale view resurrect a
-  // tally the user just cleared with Undo, silencing the notice they were
-  // still relying on (#11704).
+  // The generic scalar tests above pass even if this specific field is dropped
+  // from the merge, which would silently make the sort mode the one preference
+  // a stale sibling view can clobber (#11455).
   it("keeps a sibling's sort mode when this view changes an unrelated scalar", async () => {
     const backing = installLocalStorage({});
     const { usePreferencesStore: store } = await import("../preferencesStore");
