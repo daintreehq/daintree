@@ -1,4 +1,6 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import { notifyUndoableKeyboardLayoutChange } from "../keyboardLayoutChangeFeedback";
+import { useFocusStore } from "@/store/focusStore";
 
 export function registerNavigationActions(
   actions: ActionRegistry,
@@ -13,8 +15,31 @@ export function registerNavigationActions(
     danger: "safe",
     scope: "renderer",
     nonRepeatable: true,
-    run: async () => {
+    run: async (_args, ctx) => {
+      // Read the store across the callback rather than predicting the outcome:
+      // the toggle travels through a synchronous window event to AppLayout,
+      // which drops it when an overlay is open or no workspace is mounted. An
+      // observed false → true transition is the only proof the sidebar actually
+      // went away, and it costs nothing to re-derive those guards here.
+      const wasHidden = useFocusStore.getState().gestureSidebarHidden;
       callbacks.onToggleSidebar();
+      const isHidden = useFocusStore.getState().gestureSidebarHidden;
+
+      notifyUndoableKeyboardLayoutChange({
+        actionId: "nav.toggleSidebar",
+        dispatchSource: ctx?.dispatchSource,
+        changed: !wasHidden && isHidden,
+        title: "Sidebar hidden",
+        message: (displayCombo) => `${displayCombo} toggles the sidebar`,
+        onUndo: () => {
+          // The user may have brought it back themselves while the toast was up.
+          if (!useFocusStore.getState().gestureSidebarHidden) return;
+          // Back out through the same event, so AppLayout re-applies its guards,
+          // its resize suppression and the live sidebar width — rather than
+          // writing the focus store here with panel state we'd have to guess.
+          callbacks.onToggleSidebar();
+        },
+      });
     },
   }));
 

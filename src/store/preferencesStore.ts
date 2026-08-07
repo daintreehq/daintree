@@ -151,6 +151,32 @@ interface PreferencesState {
    */
   hasSeenActionPalettePrefixHint: boolean;
   markActionPalettePrefixHintSeen: () => void;
+  /**
+   * How many times a keyboard-dispatched layout change has been announced and
+   * left standing, keyed {@link keyboardLayoutBindingKey}. Each confirmation
+   * that actually surfaced counts up; using its Undo clears the action's entry,
+   * because taking the change back is evidence the keypress was a slip rather
+   * than a habit. At {@link KEYBOARD_LAYOUT_CONFIRMATION_LIMIT} the toast stops
+   * firing for that binding, so someone who hits the shortcut on purpose fifty
+   * times a day isn't told what their own key does fifty times (#11704).
+   *
+   * Keyed by combo, not by action alone: the message names the combo, so a
+   * rebind is a new thing to learn and earns a fresh allowance.
+   */
+  keyboardLayoutConfirmationsByBinding: Record<string, number>;
+  recordKeyboardLayoutConfirmation: (actionId: string, combo: string) => void;
+  clearKeyboardLayoutConfirmations: (actionId: string) => void;
+}
+
+/** Confirmations of one binding before it stops announcing itself (#11704). */
+export const KEYBOARD_LAYOUT_CONFIRMATION_LIMIT = 3;
+
+/**
+ * Storage key for a keyboard layout-change confirmation count. Mirrors
+ * `shortcutHintStore`'s `actionId@…` convention.
+ */
+export function keyboardLayoutBindingKey(actionId: string, combo: string): string {
+  return `${actionId}@${combo}`;
 }
 
 function isDockDensity(value: unknown): value is DockDensity {
@@ -226,6 +252,12 @@ function sanitizePersistedPreferences(
     sanitized.hasSeenActionPalettePrefixHint = false;
   }
 
+  // A corrupt count breaks in both directions: a NaN would nag forever, and an
+  // oversized one would silence a binding the user never confirmed.
+  sanitized.keyboardLayoutConfirmationsByBinding = normalizeConfirmationMap(
+    sanitized.keyboardLayoutConfirmationsByBinding
+  );
+
   return sanitized;
 }
 
@@ -252,6 +284,7 @@ type PreferencesPersistedState = Pick<
   | "skipPushConfirmByWorktreePath"
   | "fileBrowserAlwaysHiddenPatterns"
   | "hasSeenActionPalettePrefixHint"
+  | "keyboardLayoutConfirmationsByBinding"
 >;
 
 const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
@@ -276,6 +309,7 @@ const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
   skipPushConfirmByWorktreePath: {},
   fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN],
   hasSeenActionPalettePrefixHint: false,
+  keyboardLayoutConfirmationsByBinding: {},
 };
 
 function coerceBool(value: unknown, fallback: boolean): boolean {
@@ -302,6 +336,22 @@ function normalizeSkipMap(value: unknown): Record<string, boolean> {
   const result: Record<string, boolean> = {};
   for (const [key, entry] of Object.entries(value)) {
     if (typeof entry === "boolean") result[key] = entry;
+  }
+  return result;
+}
+
+/**
+ * Coerce the confirmation tallies to whole counts within the real range. Zero
+ * and below carry no information the absent key doesn't, so they're dropped
+ * rather than stored — which also keeps the record sparse over time.
+ */
+function normalizeConfirmationMap(value: unknown): Record<string, number> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
+  const result: Record<string, number> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "number" || !Number.isFinite(entry)) continue;
+    const clamped = Math.min(Math.floor(entry), KEYBOARD_LAYOUT_CONFIRMATION_LIMIT);
+    if (clamped > 0) result[key] = clamped;
   }
   return result;
 }
@@ -350,6 +400,9 @@ function toPreferencesPersisted(
     hasSeenActionPalettePrefixHint: coerceBool(
       raw.hasSeenActionPalettePrefixHint,
       d.hasSeenActionPalettePrefixHint
+    ),
+    keyboardLayoutConfirmationsByBinding: normalizeConfirmationMap(
+      raw.keyboardLayoutConfirmationsByBinding
     ),
   };
 }
@@ -471,6 +524,15 @@ function mergePreferencesPersistedWrite({
         inc.hasSeenActionPalettePrefixHint,
         disk.hasSeenActionPalettePrefixHint
       ),
+      // Per-binding keys, so the same rule as the two id-keyed maps: a view
+      // that confirmed one shortcut must not wipe a sibling's tally for
+      // another. Undo deletes its key, which the writer-delta diff carries
+      // through as a deletion rather than resurrecting the stale count.
+      keyboardLayoutConfirmationsByBinding: mergeRecordByWriterDelta(
+        base.keyboardLayoutConfirmationsByBinding,
+        inc.keyboardLayoutConfirmationsByBinding,
+        disk.keyboardLayoutConfirmationsByBinding
+      ),
     },
   };
 }
@@ -546,13 +608,45 @@ export const usePreferencesStore = create<PreferencesState>()(
         set({ fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN] }),
       hasSeenActionPalettePrefixHint: false,
       markActionPalettePrefixHintSeen: () => set({ hasSeenActionPalettePrefixHint: true }),
+      keyboardLayoutConfirmationsByBinding: {},
+      recordKeyboardLayoutConfirmation: (actionId, combo) =>
+        set((state) => {
+          const key = keyboardLayoutBindingKey(actionId, combo);
+          const current = state.keyboardLayoutConfirmationsByBinding[key] ?? 0;
+          if (current >= KEYBOARD_LAYOUT_CONFIRMATION_LIMIT) return state;
+          // One entry per action: a rebind supersedes the old combo's tally
+          // instead of leaving it to accumulate in persisted JSON forever.
+          const prefix = `${actionId}@`;
+          const next: Record<string, number> = {};
+          for (const [existing, count] of Object.entries(
+            state.keyboardLayoutConfirmationsByBinding
+          )) {
+            if (!existing.startsWith(prefix)) next[existing] = count;
+          }
+          next[key] = current + 1;
+          return { keyboardLayoutConfirmationsByBinding: next };
+        }),
+      clearKeyboardLayoutConfirmations: (actionId) =>
+        set((state) => {
+          const prefix = `${actionId}@`;
+          const next: Record<string, number> = {};
+          let removed = false;
+          for (const [existing, count] of Object.entries(
+            state.keyboardLayoutConfirmationsByBinding
+          )) {
+            if (existing.startsWith(prefix)) removed = true;
+            else next[existing] = count;
+          }
+          if (!removed) return state;
+          return { keyboardLayoutConfirmationsByBinding: next };
+        }),
     }),
     {
       name: "daintree-preferences",
       storage: createSafeJSONStorage<PreferencesPersistedState>({
         mergeOnWrite: mergePreferencesPersistedWrite,
       }),
-      version: 15,
+      version: 16,
       // Explicit persisted subset — matches the pre-existing default (setters are
       // dropped by JSON serialization); named so the write merge (#11351) has a
       // typed persisted shape to reconcile.
@@ -578,6 +672,7 @@ export const usePreferencesStore = create<PreferencesState>()(
         skipPushConfirmByWorktreePath: state.skipPushConfirmByWorktreePath,
         fileBrowserAlwaysHiddenPatterns: state.fileBrowserAlwaysHiddenPatterns,
         hasSeenActionPalettePrefixHint: state.hasSeenActionPalettePrefixHint,
+        keyboardLayoutConfirmationsByBinding: state.keyboardLayoutConfirmationsByBinding,
       }),
       // Runs on every hydration (unlike `migrate`, which Zustand skips when the
       // persisted version matches). Closed-set normalisation lives here so a
@@ -699,6 +794,14 @@ export const usePreferencesStore = create<PreferencesState>()(
             persisted.hasSeenActionPalettePrefixHint = false;
           }
         }
+        if (version < 16 && isRecord(persisted)) {
+          // Nobody has confirmed a keyboard layout change before this shipped,
+          // so everyone starts with the full allowance rather than inheriting
+          // silence from an absent key (#11704).
+          if (!isRecord(persisted.keyboardLayoutConfirmationsByBinding)) {
+            persisted.keyboardLayoutConfirmationsByBinding = {};
+          }
+        }
         return persisted as PreferencesState;
       },
     }
@@ -709,5 +812,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean; keyboardLayoutConfirmationsByBinding: Record<string, number> }",
 });

@@ -121,6 +121,32 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     expect(written.state.reduceAnimations).toBe(true); // sibling's change survived
   });
 
+  // Dropping this field from the merge would let a stale view resurrect a
+  // tally the user just cleared with Undo, silencing the notice they were
+  // still relying on (#11704).
+  it("keeps a sibling's shortcut confirmation and carries an Undo deletion through", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().recordKeyboardLayoutConfirmation("nav.toggleSidebar", "Cmd+B");
+
+    // Sibling view confirms a different shortcut.
+    const disk = readBlob(backing);
+    const confirmations =
+      (disk.state.keyboardLayoutConfirmationsByBinding as Record<string, number> | undefined) ?? {};
+    confirmations["nav.toggleFocusMode@Cmd+K"] = 2;
+    disk.state.keyboardLayoutConfirmationsByBinding = confirmations;
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    // This view's user reaches for Undo, which clears only its own entry.
+    store.getState().clearKeyboardLayoutConfirmations("nav.toggleSidebar");
+
+    const written = readBlob(backing);
+    expect(written.state.keyboardLayoutConfirmationsByBinding).toEqual({
+      "nav.toggleFocusMode@Cmd+K": 2,
+    });
+  });
+
   // The generic scalar tests above pass even if this specific field is dropped
   // from the merge, which would silently make the sort mode the one preference
   // a stale sibling view can clobber (#11455).
