@@ -65,7 +65,7 @@ function optionRow(
 }
 
 describe("BaseBranchCombobox in-use rows", () => {
-  it("routes a click on an in-use branch to onSelect, like the Enter key does", () => {
+  it("routes a click on an in-use branch to onSelect instead of diverting it", () => {
     const onSelect = vi.fn();
     const inUseRow = optionRow("main", { id: "main-wt", name: "main-worktree" });
     const freeRow = optionRow("develop", null);

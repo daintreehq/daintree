@@ -1185,17 +1185,20 @@ describe("NewWorktreeDialog — in-use base branch selection", () => {
     current: b.name === "develop",
   }));
 
+  const IN_USE_BRANCH = "main";
+
   function baseBranchLabel(): string {
     return document.getElementById("base-branch")?.textContent ?? "";
   }
 
-  function inUseBaseBranchOption(): HTMLElement {
+  /** Match on the row's label span so `main` never resolves to `origin/main`. */
+  function baseBranchOption(label: string): HTMLElement {
     const list = document.getElementById("branch-list");
     if (!list) throw new Error("base-branch listbox not rendered");
-    const row = Array.from(list.querySelectorAll('[role="option"]')).find((el) =>
-      el.querySelector('[title^="In use by worktree:"]')
+    const row = Array.from(list.querySelectorAll('[role="option"]')).find(
+      (el) => el.querySelector("span")?.textContent === label
     );
-    if (!row) throw new Error("no in-use branch row rendered in the base-branch listbox");
+    if (!row) throw new Error(`no base-branch row labelled "${label}"`);
     return row as HTMLElement;
   }
 
@@ -1225,16 +1228,35 @@ describe("NewWorktreeDialog — in-use base branch selection", () => {
     renderDialog({ onClose });
     await advanceTimersGradually(500);
 
-    expect(baseBranchLabel()).toContain("develop");
+    expect(baseBranchLabel()).toBe("develop (current)");
 
-    const row = inUseBaseBranchOption();
-    expect(row.textContent).toContain("main");
+    const row = baseBranchOption(IN_USE_BRANCH);
+    expect(row.querySelector('[title^="In use by worktree:"]')).not.toBeNull();
 
     await act(async () => {
       fireEvent.click(row);
     });
 
-    expect(baseBranchLabel()).toContain("main");
+    // Exact, not substring: `toContain("main")` would also accept `origin/main`.
+    expect(baseBranchLabel()).toBe(IN_USE_BRANCH);
+    expect(baseBranchOption(IN_USE_BRANCH).getAttribute("aria-selected")).toBe("true");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(mockDispatch.mock.calls.map((c) => c[0])).not.toContain("worktree.setActive");
+  });
+
+  it("reaches the same selection with Enter as with a click", async () => {
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+    await advanceTimersGradually(500);
+
+    // selectedIndex starts at 0, so Enter targets whichever row leads the list.
+    expect(baseBranchOption(IN_USE_BRANCH).getAttribute("data-option-index")).toBe("0");
+
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText("Search base branches"), { key: "Enter" });
+    });
+
+    expect(baseBranchLabel()).toBe(IN_USE_BRANCH);
     expect(onClose).not.toHaveBeenCalled();
     expect(mockDispatch.mock.calls.map((c) => c[0])).not.toContain("worktree.setActive");
   });
@@ -1261,7 +1283,7 @@ describe("NewWorktreeDialog — in-use base branch selection", () => {
     await advanceTimersGradually(1000);
 
     await act(async () => {
-      fireEvent.click(inUseBaseBranchOption());
+      fireEvent.click(baseBranchOption(IN_USE_BRANCH));
     });
 
     expect(screen.queryByTestId("new-worktree-dialog")).not.toBeNull();
