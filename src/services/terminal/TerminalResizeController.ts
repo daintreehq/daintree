@@ -68,6 +68,14 @@ export function getXtermCellDimensions(
 
 /** Narrow structural type for the private viewport scroll cache we invalidate. */
 interface XtermCoreViewportSync {
+  _renderService?: {
+    dimensions?: {
+      css?: {
+        canvas?: { height?: number };
+        cell?: { height?: number };
+      };
+    };
+  };
   _viewport?: {
     _latestYDisp?: number;
     queueSync?: (ydisp?: number) => void;
@@ -105,13 +113,49 @@ interface XtermCoreViewportSync {
  */
 function invalidateXtermViewportScrollCache(terminal: Terminal): void {
   try {
-    const viewport = (terminal as Terminal & { _core?: XtermCoreViewportSync })._core?._viewport;
+    const core = (terminal as Terminal & { _core?: XtermCoreViewportSync })._core;
+    const viewport = core?._viewport;
     if (typeof viewport?.queueSync !== "function") return;
+    if (!rendererHasAdoptedRowCount(core, terminal.rows)) return;
     viewport._latestYDisp = undefined;
     viewport.queueSync();
   } catch {
     // Private shape absent or changed — the public pin above still stands.
   }
+}
+
+/**
+ * Whether the renderer's canvas already describes `rows`.
+ *
+ * A paused renderer — a backgrounded or occluded pane — defers adopting a
+ * resize to an idle task, so its canvas height still measures the OLD row
+ * count. `_sync` divides that height into the scroll maximum it clamps
+ * against, so forcing a sync against a stale one lands the target a row short,
+ * and the scroll event that follows reports a negative delta: it would drag
+ * the buffer back into scrollback and mark it user-scrolled, which is the
+ * failure this whole helper exists to prevent. Skip until the renderer catches
+ * up; every path that reveals a pane re-runs the pin against a live renderer.
+ *
+ * Half a cell of tolerance separates "adopted" (a rounding delta) from "stale"
+ * (at least one whole row behind).
+ */
+function rendererHasAdoptedRowCount(
+  core: XtermCoreViewportSync | undefined,
+  rows: number
+): boolean {
+  const css = core?._renderService?.dimensions?.css;
+  const canvasHeight = css?.canvas?.height;
+  const cellHeight = css?.cell?.height;
+  if (
+    typeof canvasHeight !== "number" ||
+    typeof cellHeight !== "number" ||
+    !Number.isFinite(canvasHeight) ||
+    !Number.isFinite(cellHeight) ||
+    cellHeight <= 0
+  ) {
+    return false;
+  }
+  return Math.abs(canvasHeight - rows * cellHeight) < cellHeight / 2;
 }
 
 /**
@@ -719,11 +763,12 @@ export class TerminalResizeController {
    * A ROW-count resize misses in the opposite way (#11709): xterm advances
    * ybase and ydisp together as lines spill into scrollback, so the buffer
    * stays logically pinned and that relative delta is zero, while the DOM keeps
-   * its pre-resize scroll offset. Both calls are needed — the public one
-   * repairs the buffer, which a stale-cache sync would otherwise faithfully
-   * follow back into scrollback; the invalidation repairs the DOM — and in this
-   * order, since the public call can emit an `onScroll` that re-primes the very
-   * cache being cleared.
+   * its pre-resize scroll offset. The two calls repair different halves and
+   * neither subsumes the other: the public one restores follow-bottom whenever
+   * the buffer is genuinely off-bottom — a state the invalidation alone would
+   * faithfully sync the DOM *to* — and the invalidation restores the DOM when
+   * the buffer was pinned all along. The order matters: the public call can
+   * emit an `onScroll` that re-primes the very cache being cleared.
    */
   private pinToBottomAfterResize(managed: ManagedTerminal): void {
     if (managed.latestWasAtBottom && !managed.isUserScrolledBack) {

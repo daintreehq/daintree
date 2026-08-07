@@ -3142,7 +3142,13 @@ describe("TerminalResizeController", () => {
     const BASELINE_HEIGHT = 600;
     const BASELINE_ROWS = BASELINE_HEIGHT / CELL.height;
 
-    function makeManagedWithViewport(primedYDisp = 42) {
+    /**
+     * @param rendererRows the row count the renderer's canvas currently
+     * measures. Defaults to tracking the terminal (an unpaused renderer that
+     * adopted the resize); pass a fixed number to model a PAUSED renderer whose
+     * canvas still describes the pre-resize size.
+     */
+    function makeManagedWithViewport(primedYDisp = 42, rendererRows?: () => number) {
       const managed = createManagedTerminal();
       // The shared fixture's rows (24) do not correspond to its lastHeight
       // (600px / 20px = 30). Align them, or "one row shorter" is a grow.
@@ -3151,13 +3157,27 @@ describe("TerminalResizeController", () => {
       const observed: Array<{ by: string; latestYDisp: number | undefined }> = [];
       const viewport = {
         _latestYDisp: primedYDisp as number | undefined,
-        queueSync: vi.fn(() => {
+        // Mirrors xterm: a queueSync CARRYING a ydisp writes it back into the
+        // cache, which would re-prime what we just cleared. Emulating that is
+        // what makes a `queueSync(staleYDisp)` regression observable here.
+        queueSync: vi.fn((ydisp?: number) => {
+          if (ydisp !== undefined) viewport._latestYDisp = ydisp;
           observed.push({ by: "queueSync", latestYDisp: viewport._latestYDisp });
         }),
       };
+      const rowsForCanvas = rendererRows ?? (() => managed.terminal.rows);
       Object.assign(managed.terminal, {
         _core: {
-          _renderService: { dimensions: { css: { cell: CELL } } },
+          _renderService: {
+            dimensions: {
+              css: {
+                cell: CELL,
+                get canvas() {
+                  return { height: rowsForCanvas() * CELL.height };
+                },
+              },
+            },
+          },
           _viewport: viewport,
         },
         scrollToBottom: vi.fn(() => {
@@ -3204,6 +3224,23 @@ describe("TerminalResizeController", () => {
       expect(observed[1]?.latestYDisp).toBeUndefined();
       expect(viewport._latestYDisp).toBeUndefined();
       expect(viewport.queueSync).toHaveBeenCalledTimes(1);
+      // No argument: passing one writes it straight back into the cache, which
+      // would restore the stale value the clear above just removed.
+      expect(viewport.queueSync).toHaveBeenCalledWith();
+    });
+
+    it("completes the resize when queueSync throws", () => {
+      const { managed, viewport } = makeManagedWithViewport();
+      viewport.queueSync.mockImplementation(() => {
+        throw new Error("viewport disposed mid-resize");
+      });
+      const controller = makeCtl(managed);
+
+      // The DOM repair is best-effort; a disposed or renamed internal must not
+      // take the resize (or the PTY notification) down with it.
+      expect(() => shrinkOneRow(controller)).not.toThrow();
+      expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
+      expect(resizeMock).toHaveBeenCalled();
     });
 
     it("leaves a deliberately scrolled-back viewport's cache alone", () => {
@@ -3218,6 +3255,23 @@ describe("TerminalResizeController", () => {
       expect(observed).toEqual([]);
       expect(viewport._latestYDisp).toBe(42);
       expect(viewport.queueSync).not.toHaveBeenCalled();
+    });
+
+    it("holds off while a paused renderer's canvas still measures the old row count", () => {
+      // A backgrounded pane defers its renderer resize to an idle task, so the
+      // canvas height _sync clamps against is a row (or more) too tall. Forcing
+      // the sync there lands short and the resulting scroll event drags the
+      // buffer back — the exact failure this repairs. Freeze the canvas at the
+      // pre-resize row count to model that.
+      const { managed, viewport, observed } = makeManagedWithViewport(42, () => BASELINE_ROWS);
+      const controller = makeCtl(managed);
+
+      shrinkOneRow(controller);
+
+      // The public pin is unconditional; only the DOM-side repair waits.
+      expect(observed.map((o) => o.by)).toEqual(["scrollToBottom"]);
+      expect(viewport.queueSync).not.toHaveBeenCalled();
+      expect(viewport._latestYDisp).toBe(42);
     });
 
     it("still pins when the private viewport shape is missing", () => {
