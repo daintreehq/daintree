@@ -9,6 +9,7 @@ import type { PrefixSuggestion } from "../branchPrefixUtils";
 interface NewBranchInputProps {
   value: string;
   onChange: (value: string) => void;
+  onBlur: React.FocusEventHandler<HTMLInputElement>;
   isPending?: boolean;
   isCheckingBranch: boolean;
   errorField?: "base-branch" | "new-branch" | "worktree-path" | null;
@@ -27,6 +28,7 @@ interface NewBranchInputProps {
 export function NewBranchInput({
   value,
   onChange,
+  onBlur,
   isPending,
   isCheckingBranch,
   errorField,
@@ -60,6 +62,7 @@ export function NewBranchInput({
               data-testid="branch-name-input"
               value={value}
               onChange={(e) => onChange(e.target.value)}
+              onBlur={onBlur}
               onKeyDown={onPrefixKeyDown}
               placeholder="feature/add-user-auth"
               className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 font-mono text-sm"

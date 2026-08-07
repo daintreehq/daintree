@@ -203,11 +203,6 @@ export function NewWorktreeDialog({
 
   const canAssignIssue = Boolean(currentUser && selectedIssue);
 
-  const onBranchAutoResolved = useCallback(
-    (resolvedName: string) => setBranchInput(resolvedName),
-    [setBranchInput]
-  );
-
   const isExistingMode = branchMode === "existing" && !initialPR;
 
   const {
@@ -218,11 +213,11 @@ export function NewWorktreeDialog({
     branchWasAutoResolved,
     pathWasAutoResolved,
     pathTouchedRef,
+    consumeBranchResolution,
   } = useBranchValidation({
     branchInput,
     rootPath,
     isOpen,
-    onBranchAutoResolved,
     skipAvailabilityCheck: isExistingMode,
     overrideBranchName: isExistingMode ? (selectedExistingBranch ?? "") : undefined,
   });
@@ -554,7 +549,13 @@ export function NewWorktreeDialog({
 
     clearErrors();
 
-    const fullBranchName = isExistingMode ? selectedExistingBranch! : result.fullBranchName!;
+    // Submitting is an acceptance point for a pending auto-increment the user
+    // never blurred into the field, so the placeholder, dispatch, recipe and
+    // toast all name the branch the host will actually create.
+    const resolvedBranchName = isExistingMode ? null : consumeBranchResolution(branchInput);
+    const fullBranchName = isExistingMode
+      ? selectedExistingBranch!
+      : (resolvedBranchName ?? result.fullBranchName!);
 
     const snapBranchMode = branchMode;
     const snapUseExisting = snapBranchMode === "existing";
@@ -837,6 +838,14 @@ export function NewWorktreeDialog({
     [setBranchInput, markBranchInputTouched, markTouched, clearErrors]
   );
 
+  const handleBranchInputBlur = useCallback(
+    (event: React.FocusEvent<HTMLInputElement>) => {
+      const resolved = consumeBranchResolution(event.currentTarget.value);
+      if (resolved) setBranchInput(resolved);
+    },
+    [consumeBranchResolution, setBranchInput]
+  );
+
   const handleWorktreePathChange = useCallback(
     (value: string) => {
       setWorktreePath(value);
@@ -994,6 +1003,7 @@ export function NewWorktreeDialog({
               <NewBranchInput
                 value={branchInput}
                 onChange={handleBranchInputChange}
+                onBlur={handleBranchInputBlur}
                 isCheckingBranch={isCheckingBranch}
                 errorField={errors.errorField}
                 branchWasAutoResolved={branchWasAutoResolved}

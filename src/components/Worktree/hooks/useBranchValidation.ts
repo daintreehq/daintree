@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { worktreeClient } from "@/clients";
 import { logError } from "@/utils/logger";
 import { validateBranchName } from "@shared/utils/pathPattern";
@@ -12,20 +12,19 @@ export interface UseBranchValidationResult {
   branchWasAutoResolved: boolean;
   pathWasAutoResolved: boolean;
   pathTouchedRef: React.MutableRefObject<boolean>;
+  consumeBranchResolution: (currentInput: string) => string | null;
 }
 
 export function useBranchValidation({
   branchInput,
   rootPath,
   isOpen,
-  onBranchAutoResolved,
   skipAvailabilityCheck = false,
   overrideBranchName,
 }: {
   branchInput: string;
   rootPath: string;
   isOpen: boolean;
-  onBranchAutoResolved: (resolvedName: string) => void;
   skipAvailabilityCheck?: boolean;
   overrideBranchName?: string;
 }): UseBranchValidationResult {
@@ -35,6 +34,10 @@ export function useBranchValidation({
   const [branchWasAutoResolved, setBranchWasAutoResolved] = useState(false);
   const [pathWasAutoResolved, setPathWasAutoResolved] = useState(false);
   const pathTouchedRef = useRef(false);
+  // The debounce only *offers* an auto-incremented name; the caller applies it
+  // on blur/submit so the availability check can't rewrite the field mid-typing.
+  const pendingResolutionRef = useRef<{ requestedName: string; resolvedName: string } | null>(null);
+  const acceptedResolutionRef = useRef<string | null>(null);
 
   // Reset on open
   useEffect(() => {
@@ -45,6 +48,8 @@ export function useBranchValidation({
     setPathWasAutoResolved(false);
     setWorktreePath("");
     pathTouchedRef.current = false;
+    pendingResolutionRef.current = null;
+    acceptedResolutionRef.current = null;
   }, [isOpen]);
 
   // Debounced branch validation + path generation
@@ -52,6 +57,9 @@ export function useBranchValidation({
 
   useEffect(() => {
     const trimmedInput = effectiveBranchName.trim();
+
+    // Any input change invalidates a resolution computed for the previous value.
+    pendingResolutionRef.current = null;
 
     if (!trimmedInput || !rootPath) {
       setBranchWasAutoResolved(false);
@@ -64,6 +72,15 @@ export function useBranchValidation({
     if (!skipAvailabilityCheck) {
       const parsed = parseBranchInput(trimmedInput);
       const fullName = parsed.fullBranchName;
+
+      // A just-accepted name is already known available. Re-checking it would
+      // flip the loading flags back on and disable Create in the window between
+      // the blur and the click that caused it, swallowing the click. Keep the
+      // path and hint from the cycle that produced the resolution.
+      if (acceptedResolutionRef.current === fullName) {
+        acceptedResolutionRef.current = null;
+        return;
+      }
 
       if (parsed.hasPrefix && (!parsed.slug || !parsed.slug.trim())) {
         setBranchWasAutoResolved(false);
@@ -110,13 +127,13 @@ export function useBranchValidation({
             const availableBranch = branchResult.value;
             const branchResolved = availableBranch !== fullName;
             setBranchWasAutoResolved(branchResolved);
-
-            if (branchResolved) {
-              onBranchAutoResolved(availableBranch);
-            }
+            pendingResolutionRef.current = branchResolved
+              ? { requestedName: fullName, resolvedName: availableBranch }
+              : null;
           } else {
             logError("Failed to get available branch", branchResult.reason);
             setBranchWasAutoResolved(false);
+            pendingResolutionRef.current = null;
           }
 
           if (pathResult.status === "fulfilled") {
@@ -182,7 +199,26 @@ export function useBranchValidation({
       abortController.abort();
       setIsGeneratingPath(false);
     };
-  }, [effectiveBranchName, rootPath, onBranchAutoResolved, skipAvailabilityCheck]);
+  }, [effectiveBranchName, rootPath, skipAvailabilityCheck]);
+
+  // Applies the offered name only if it still matches what the field holds right
+  // now — the argument is read at acceptance time, never captured when the
+  // debounce was scheduled, so a superseded suggestion can't land.
+  const consumeBranchResolution = useCallback(
+    (currentInput: string): string | null => {
+      const pending = pendingResolutionRef.current;
+      pendingResolutionRef.current = null;
+
+      if (!pending || skipAvailabilityCheck) return null;
+      if (pending.requestedName !== parseBranchInput(currentInput.trim()).fullBranchName) {
+        return null;
+      }
+
+      acceptedResolutionRef.current = pending.resolvedName;
+      return pending.resolvedName;
+    },
+    [skipAvailabilityCheck]
+  );
 
   return {
     isCheckingBranch,
@@ -192,5 +228,6 @@ export function useBranchValidation({
     branchWasAutoResolved,
     pathWasAutoResolved,
     pathTouchedRef,
+    consumeBranchResolution,
   };
 }
