@@ -20,6 +20,7 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
       reduceAnimations?: boolean;
       dockDensity?: string;
       hasSeenActionPalettePrefixHint?: boolean;
+      keyboardLayoutConfirmationsByBinding?: Record<string, number>;
       [key: string]: unknown;
     };
   };
@@ -132,8 +133,7 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
 
     // Sibling view confirms a different shortcut.
     const disk = readBlob(backing);
-    const confirmations =
-      (disk.state.keyboardLayoutConfirmationsByBinding as Record<string, number> | undefined) ?? {};
+    const confirmations = disk.state.keyboardLayoutConfirmationsByBinding ?? {};
     confirmations["nav.toggleFocusMode@Cmd+K"] = 2;
     disk.state.keyboardLayoutConfirmationsByBinding = confirmations;
     backing.set(STORAGE_KEY, JSON.stringify(disk));

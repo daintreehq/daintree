@@ -956,14 +956,13 @@ describe("preferencesStore migration", () => {
 
       store.getState().recordKeyboardLayoutConfirmation("nav.toggleSidebar", "Cmd+B");
 
-      const written = JSON.parse(storage[STORAGE_KEY]!) as {
-        version: number;
-        state: Record<string, unknown>;
-      };
+      const written: { version?: number; state?: Record<string, unknown> } = JSON.parse(
+        storage[STORAGE_KEY]!
+      );
       // Greater-than, not equality against the configured version: comparing a
       // written value to the same option that wrote it passes at any version.
       expect(written.version).toBeGreaterThan(15);
-      expect(written.state.keyboardLayoutConfirmationsByBinding).toEqual({ [KEY]: 1 });
+      expect(written.state?.keyboardLayoutConfirmationsByBinding).toEqual({ [KEY]: 1 });
     });
 
     it("replaces a non-record blob rather than letting it reach live state", async () => {
