@@ -162,7 +162,7 @@ export interface ProjectSwitcherPaletteProps {
   onDismissDeleteScratchConfirm?: () => void;
   onConfirmDeleteScratch?: () => void;
   isDeletingScratch?: boolean;
-  /** Opens the "delete every scratch" confirmation from the section header's context menu. */
+  /** Opens the "delete every scratch" confirmation, from either the visible button or the section header's context menu. */
   onRequestDeleteAllScratches?: () => void;
   /**
    * Targets of a pending bulk-delete confirmation, frozen when it opened.
@@ -1279,6 +1279,23 @@ function ScratchSection({
                 </span>
               </button>
             ))}
+          {/*
+           * The same action as the header context menu, which nothing in the
+           * palette hinted was there (#11705). Deliberately lighter than the
+           * create button above — no icon tile, smaller type — so a standing
+           * destructive control doesn't out-weigh the benign one it sits under.
+           */}
+          {onDeleteAll && scratches.length > 0 && (
+            <button
+              type="button"
+              onClick={onDeleteAll}
+              className="w-full flex items-center gap-2 px-3 py-1.5 mt-1 rounded-[var(--radius-md)] text-left text-xs font-medium text-status-error transition-colors hover:bg-status-error/10"
+              data-testid="scratch-delete-all-button"
+            >
+              <Trash2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              Delete all scratch workspaces
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -2209,11 +2226,51 @@ export function ProjectSwitcherPalette({
             onConfirm={onConfirmDeleteAllScratches}
             isConfirmLoading={isDeletingAllScratches}
             variant="destructive"
+            // The list below scrolls, so the role has to drop from `alertdialog`
+            // to `dialog` — a reader would otherwise flatten every name into a
+            // single utterance on open.
+            hasPreview={true}
+            // Only consulted when the element that opened this has disconnected,
+            // which the context menu's item does as soon as the run empties the
+            // list (the visible button added in #11705 survives a cancel, and
+            // keeps focus itself). Without a named successor that case walks to
+            // app chrome behind a still-`aria-modal` palette, so name the search
+            // box, which outlives the delete.
+            restoreFocusTo={paletteInputRef}
           >
-            <div className="text-sm text-daintree-text/70">
-              {deleteAllScratchesConfirm.length === 1
-                ? "Its terminals will be closed and its folder deleted from disk."
-                : "Their terminals will be closed and their folders deleted from disk."}
+            <div className="space-y-3">
+              <div className="text-sm text-daintree-text/70">
+                {deleteAllScratchesConfirm.length === 1
+                  ? "Its terminals will be closed and its folder deleted from disk."
+                  : "Their terminals will be closed and their folders deleted from disk."}
+              </div>
+              {/*
+               * Named, not just counted: the action is one click from "New
+               * scratch workspace" now, so the dialog is what stands between a
+               * misclick and folders leaving disk. Every target is rendered —
+               * only the viewport is capped — because a "+N more" tail would
+               * reintroduce the count-only problem for the hidden ones. Keyed by
+               * id so two scratches sharing a name stay separate rows.
+               */}
+              <div className="max-h-40 overflow-y-auto" data-testid="scratch-delete-all-preview">
+                <ul
+                  className="space-y-0.5 text-xs text-daintree-text/70"
+                  aria-label="Scratch workspaces to delete"
+                >
+                  {/*
+                   * Wrapped rather than truncated: this list is what the user
+                   * consents against, and two long names sharing a prefix would
+                   * clip to the same string. Chromium keeps the overflowing
+                   * container keyboard-reachable on its own, and skips it when
+                   * the names happen to fit.
+                   */}
+                  {deleteAllScratchesConfirm.map((target) => (
+                    <li key={target.id} className="break-words">
+                      {target.name}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
           </ConfirmDialog>
         )}
