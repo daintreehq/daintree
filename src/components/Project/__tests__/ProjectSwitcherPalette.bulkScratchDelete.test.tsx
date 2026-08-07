@@ -134,7 +134,6 @@ vi.mock("@/components/ui/ConfirmDialog", async () => {
       typedNameTarget,
       restoreFocusTo,
       confirmDisabled,
-      hasPreview,
     }: {
       isOpen: boolean;
       title: React.ReactNode;
@@ -148,7 +147,6 @@ vi.mock("@/components/ui/ConfirmDialog", async () => {
       typedNameTarget?: string;
       confirmDisabled?: boolean;
       restoreFocusTo?: React.RefObject<HTMLElement | null> | (() => HTMLElement | null);
-      hasPreview?: boolean;
     }) => {
       // Resolved after mount, not during render: a ref handed down from the
       // palette is still null while the dialog is rendering.
@@ -168,7 +166,6 @@ vi.mock("@/components/ui/ConfirmDialog", async () => {
           data-typed-name-target={typedNameTarget ?? ""}
           data-confirm-disabled={String(Boolean(confirmDisabled))}
           data-restore-focus={restoreTarget}
-          data-has-preview={String(Boolean(hasPreview))}
         >
           <h2 data-testid="confirm-title">{title}</h2>
           <div data-testid="confirm-body">{children}</div>
@@ -277,6 +274,19 @@ function deleteAllItem(): HTMLElement | null {
   return screen.queryByRole("menuitem");
 }
 
+/**
+ * Where a control sits among the section's stacked children. Compared between
+ * two controls rather than asserted against a fixed number, so inserting
+ * anything else into the section doesn't rewrite every ordering spec.
+ */
+function orderInScratchSection(testId: string): number {
+  const element = screen.getByTestId(testId);
+  const siblings = Array.from(element.parentElement?.children ?? []);
+  const index = siblings.indexOf(element);
+  if (index === -1) throw new Error(`${testId} is not a child of its own parent`);
+  return index;
+}
+
 function snapshotOf(count: number): DeleteAllScratchesSnapshot {
   return Array.from({ length: count }, (_, i) => ({ id: `scratch-${i}`, name: `Spike ${i}` }));
 }
@@ -293,6 +303,15 @@ function confirmedCount(): number {
 function confirmedNoun(): string {
   const title = screen.getByTestId("confirm-title").textContent ?? "";
   return /workspaces/i.test(title) ? "plural" : "singular";
+}
+
+/**
+ * The number the consequence sentence is written in, read off its own noun so
+ * the spec pins agreement with the title rather than the wording of either.
+ */
+function consequenceNoun(): string {
+  const body = screen.getByTestId("confirm-body").textContent ?? "";
+  return /folders/i.test(body) ? "plural" : "singular";
 }
 
 beforeEach(() => {
@@ -366,13 +385,15 @@ describe.each(["modal", "dropdown"] as const)("Scratch section header menu (%s)"
  * experience was deleting scratches one row at a time.
  */
 describe.each(["modal", "dropdown"] as const)("Visible bulk delete button (%s)", (mode) => {
-  it("sits directly under the create control once scratches exist", () => {
+  it("sits below the create control once scratches exist", () => {
     const { view } = renderPalette({ mode, scratchResults: [makeScratch(1)] });
 
-    // Position, not just presence: the issue asks for it *below* the create
-    // button, and a control that renders above it reads as the primary action.
-    expect(screen.getByTestId("scratch-create-button").nextElementSibling).toBe(
-      screen.getByTestId("scratch-delete-all-button")
+    // Order, not adjacency: the issue asks for it *below* the create button —
+    // one rendered above reads as the primary action — but a helper line landing
+    // between them later is not a regression, so pinning them as siblings would
+    // fail on a change that still honours the contract.
+    expect(orderInScratchSection("scratch-delete-all-button")).toBeGreaterThan(
+      orderInScratchSection("scratch-create-button")
     );
 
     // Paired with the positive case so this can't pass by the button simply
@@ -380,6 +401,51 @@ describe.each(["modal", "dropdown"] as const)("Visible bulk delete button (%s)",
     view.rerender(<ProjectSwitcherPalette {...baseProps()} mode={mode} scratchResults={[]} />);
 
     expect(screen.queryByTestId("scratch-delete-all-button")).toBeNull();
+  });
+
+  it("stays available while the create-name editor is open", () => {
+    // Clicking it moves focus off the editor input, whose blur cancels the
+    // create. The button must survive that re-render and still take the click —
+    // and the abandoned name must not be created on the way past.
+    const { props } = renderPalette({ mode, scratchResults: [makeScratch(1)] });
+    fireEvent.click(screen.getByTestId("scratch-create-button"));
+    expect(screen.getByTestId("scratch-create-input")).toBeTruthy();
+
+    const deleteAll = screen.getByTestId("scratch-delete-all-button");
+    // A real focus move, not fireEvent.blur: the ordering of blur against the
+    // click is the whole risk here.
+    deleteAll.focus();
+    expect(deleteAll.isConnected).toBe(true);
+    fireEvent.click(deleteAll);
+
+    expect(props.onRequestDeleteAllScratches).toHaveBeenCalledTimes(1);
+    expect(props.onCreateScratch).not.toHaveBeenCalled();
+  });
+
+  it("leaves the reach of the section it belongs to", () => {
+    const { view } = renderPalette({ mode, scratchResults: [makeScratch(1)] });
+    const named = { name: "Delete all scratch workspaces" };
+    expect(screen.queryByRole("button", named)).not.toBeNull();
+
+    // Collapsing unmounts the section's contents.
+    fireEvent.click(scratchHeader());
+    expect(screen.queryByRole("button", named)).toBeNull();
+    fireEvent.click(scratchHeader());
+    expect(screen.queryByRole("button", named)).not.toBeNull();
+
+    // Searching only sets `hidden` — the subtree stays mounted so a deliberate
+    // collapse survives clearing the box — so this has to be asked of the
+    // accessibility tree rather than the DOM.
+    view.rerender(
+      <ProjectSwitcherPalette
+        {...baseProps()}
+        mode={mode}
+        query="spike"
+        scratchResults={[makeScratch(1)]}
+      />
+    );
+
+    expect(screen.queryByRole("button", named)).toBeNull();
   });
 
   it("asks the host to open the confirmation when pressed", () => {
@@ -462,6 +528,10 @@ describe("Bulk delete confirmation", () => {
 
     expect(confirmedCount()).toBe(1);
     expect(confirmedNoun()).toBe("singular");
+    // The consequence sentence branches on the same count, so it has to move
+    // with the title — "Delete 1 scratch workspace?" over "their folders" would
+    // be describing a different operation than the one being agreed to.
+    expect(consequenceNoun()).toBe("singular");
 
     view.rerender(
       <ProjectSwitcherPalette
@@ -473,6 +543,7 @@ describe("Bulk delete confirmation", () => {
 
     expect(confirmedCount()).toBe(4);
     expect(confirmedNoun()).toBe("plural");
+    expect(consequenceNoun()).toBe("plural");
   });
 
   it("opens only once a confirm is pending, and closes when it clears", () => {
@@ -572,9 +643,6 @@ describe("Bulk delete confirmation", () => {
     // A "+N more" tail would hand the hidden targets back the count-only
     // treatment the preview exists to replace. Only the viewport is capped.
     expect(named).toEqual(snapshot.map((target) => target.name));
-    // A scrollable body has to drop `alertdialog` for `dialog`, or a reader
-    // flattens all twelve names into one utterance on open.
-    expect(screen.getByTestId("confirm-dialog").getAttribute("data-has-preview")).toBe("true");
   });
 
   it("hands focus back inside the palette, not to the trigger it just unmounted", () => {

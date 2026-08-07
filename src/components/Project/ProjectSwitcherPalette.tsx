@@ -2230,10 +2230,12 @@ export function ProjectSwitcherPalette({
             // to `dialog` — a reader would otherwise flatten every name into a
             // single utterance on open.
             hasPreview={true}
-            // Both triggers are gone by the time this closes: the header menu's
-            // item unmounts with the last scratch, and so does the visible button
-            // (#11705). Without a named successor the restore walks to app chrome
-            // behind a still-`aria-modal` palette, so hand focus to the search box.
+            // Only consulted when the element that opened this has disconnected,
+            // which the context menu's item does as soon as the run empties the
+            // list (the visible button added in #11705 survives a cancel, and
+            // keeps focus itself). Without a named successor that case walks to
+            // app chrome behind a still-`aria-modal` palette, so name the search
+            // box, which outlives the delete.
             restoreFocusTo={paletteInputRef}
           >
             <div className="space-y-3">
@@ -2255,8 +2257,15 @@ export function ProjectSwitcherPalette({
                   className="space-y-0.5 text-xs text-daintree-text/70"
                   aria-label="Scratch workspaces to delete"
                 >
+                  {/*
+                   * Wrapped rather than truncated: this list is what the user
+                   * consents against, and two long names sharing a prefix would
+                   * clip to the same string. Chromium keeps the overflowing
+                   * container keyboard-reachable on its own, and skips it when
+                   * the names happen to fit.
+                   */}
                   {deleteAllScratchesConfirm.map((target) => (
-                    <li key={target.id} className="truncate">
+                    <li key={target.id} className="break-words">
                       {target.name}
                     </li>
                   ))}
