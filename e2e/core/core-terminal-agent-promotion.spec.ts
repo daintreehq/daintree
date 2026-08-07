@@ -361,7 +361,7 @@ test.describe.serial("Core: terminal runtime agent promotion", () => {
       const beforeIds = new Set(await getGridPanelIds(window));
       await dismissBlockingPalette(window);
       await window.locator(SEL.agent.trayButton).click();
-      await window.getByRole("menuitem", { name: "Claude" }).click();
+      await window.locator(SEL.agent.launcherRow("Claude")).first().click();
 
       const toolbarPanelId = await newestPanelId(window, beforeIds);
       const panel = window.locator(`[data-panel-id="${toolbarPanelId}"]`);

@@ -783,7 +783,13 @@ export function DockLaunchButton({
     >
       {config.hasContextMenu ? (
         <ContextMenu>
-          <ContextMenuTrigger asChild>{trigger}</ContextMenuTrigger>
+          {/* Real DOM element as the trigger child: ContextMenuTrigger's asChild
+              Slot binds onContextMenu + ref here. Wrapping <Tooltip> directly
+              drops both (Tooltip.Root is a non-DOM provider), so right-click
+              never opens the menu. Mirrors AgentButton. */}
+          <ContextMenuTrigger asChild>
+            <span className="inline-flex">{trigger}</span>
+          </ContextMenuTrigger>
           <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
             <ToolbarContextMenuItems buttonId="launcher" side="left" />
           </ContextMenuContent>

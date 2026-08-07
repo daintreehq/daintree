@@ -102,9 +102,20 @@ test.describe.serial("Core: Toolbar launcher (shared component)", () => {
   test("right click opens the toolbar context menu without opening the launcher", async () => {
     // Two Radix overlays share this trigger; the wrong one answering is the
     // failure mode nesting them introduces.
-    await ctx.window.locator(TOOLBAR_LAUNCHER).click({ button: "right" });
+    //
+    // The context-menu primitive is code-split and primes on pointer activity
+    // over the trigger, so `ContextMenuTrigger` documents that a cold
+    // right-click can miss until the chunk lands. Prime with a hover, then
+    // retry the right-click rather than asserting on a single cold one — the
+    // contract under test is which overlay answers, not how fast Radix loads.
+    const launcher = ctx.window.locator(TOOLBAR_LAUNCHER);
+    const menu = ctx.window.locator('[role="menu"]').first();
+    await launcher.hover();
+    await expect(async () => {
+      await launcher.click({ button: "right" });
+      await expect(menu).toBeVisible({ timeout: T_SHORT });
+    }).toPass({ timeout: T_MEDIUM });
 
-    await expect(ctx.window.locator('[role="menu"]').first()).toBeVisible({ timeout: T_MEDIUM });
     await expect(searchBox(ctx.window)).toHaveCount(0);
 
     await ctx.window.keyboard.press("Escape");

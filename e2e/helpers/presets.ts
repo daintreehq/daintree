@@ -371,7 +371,11 @@ export async function countPresetOptions(window: import("@playwright/test").Page
     async () => {
       const listbox = await openPresetSelector(window);
       const n = await listbox.locator('[role="option"]').count();
-      await window.locator(SEL.preset.selectorTrigger).click({ force: true, noWaitAfter: true });
+      // Escape, not a click on the trigger. The open listbox is a dismissable
+      // layer that covers its own trigger, so a click there is swallowed by the
+      // overlay and never toggles it shut — with `force` or without — leaving
+      // the listbox open for the next step to trip over.
+      await window.keyboard.press("Escape");
       await expect(listbox).not.toBeVisible({ timeout: 5000 });
       return n;
     },
@@ -478,7 +482,11 @@ export async function getPresetOptionLabels(
     async () => {
       const listbox = await openPresetSelector(window);
       const labels = await listbox.locator('[role="option"]').allTextContents();
-      await window.locator(SEL.preset.selectorTrigger).click({ force: true, noWaitAfter: true });
+      // Escape, not a click on the trigger. The open listbox is a dismissable
+      // layer that covers its own trigger, so a click there is swallowed by the
+      // overlay and never toggles it shut — with `force` or without — leaving
+      // the listbox open for the next step to trip over.
+      await window.keyboard.press("Escape");
       await expect(listbox).not.toBeVisible({ timeout: 5000 });
       return labels.map((s) => s.trim());
     },

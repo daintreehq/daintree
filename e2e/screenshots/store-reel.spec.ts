@@ -170,7 +170,7 @@ async function snap(page: Page, slug: string): Promise<string> {
 
 async function launchClaude(app: ElectronApplication, page: Page): Promise<Locator> {
   await page.locator(SEL.agent.trayButton).click();
-  await page.getByRole("menuitem", { name: "Claude" }).click();
+  await page.locator(SEL.agent.launcherRow("Claude")).first().click();
   const panel = page.locator(SEL.agent.panel).first();
   await expect(panel).toBeVisible({ timeout: 60_000 });
   void app;
@@ -179,7 +179,7 @@ async function launchClaude(app: ElectronApplication, page: Page): Promise<Locat
 
 async function launchOpenCode(page: Page): Promise<Locator> {
   await page.locator(SEL.agent.trayButton).click();
-  await page.getByRole("menuitem", { name: "OpenCode" }).click();
+  await page.locator(SEL.agent.launcherRow("OpenCode")).first().click();
   const panel = page.locator(SEL.opencodeAgent.panel).first();
   await expect(panel).toBeVisible({ timeout: 60_000 });
   return panel;

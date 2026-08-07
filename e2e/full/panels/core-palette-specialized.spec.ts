@@ -4,6 +4,7 @@ import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { getGridPanelCount, getFirstGridPanel, openTerminal } from "../../helpers/panels";
 import { ensureWindowFocused, expectTerminalFocused } from "../../helpers/focus";
+import { escapeTerminalFocus } from "../../helpers/keyboard-audit";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
@@ -122,6 +123,13 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
   test("panel palette opens via shortcut with first option selected", async () => {
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);
+
+    // Move focus off the terminal before using the shortcut. Terminals own
+    // their keys, and off macOS this binding is Ctrl+N — a control key xterm
+    // legitimately forwards to the shell, so a focused terminal eats it and the
+    // palette never opens. macOS is immune only because Cmd+N is not a key a
+    // terminal claims.
+    await escapeTerminalFocus(window);
 
     await window.keyboard.press(`${mod}+N`);
     const dialog = window.locator(SEL.panelPalette.dialog);

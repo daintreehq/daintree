@@ -257,6 +257,11 @@ export const SEL = {
     panel: '[aria-label^="Claude agent:"]',
     startButton: '[aria-label="Start Claude"]',
     trayButton: '[aria-label^="Launcher"]',
+    // The launcher replaced the tray dropdown (#11691): rows are `role="option"`
+    // in a search-first popover, not `role="menuitem"`. A row's accessible name
+    // leads with the agent name followed by a comma-separated qualifier
+    // ("Claude, Agent. …"), so match on that prefix rather than the whole label.
+    launcherRow: (name: string) => `[role="option"][aria-label^="${name},"]`,
     chromeAgentPanel: (agentId: string) => `[data-chrome-agent-id="${agentId}"]`,
     everDetectedAgentPanel: '[data-ever-detected-agent="true"]',
   },

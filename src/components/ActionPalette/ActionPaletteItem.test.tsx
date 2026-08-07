@@ -161,7 +161,7 @@ describe("ActionPaletteItem", () => {
     render(<ActionPaletteItem item={item} index={0} isSelected={false} onSelect={onSelect} />);
 
     // The row body is the button labeled with the item's title (sibling of pin/hide buttons).
-    const rowButton = screen.getByRole("button", { name: item.title });
+    const rowButton = screen.getByRole("option");
     fireEvent.click(rowButton);
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect).toHaveBeenCalledWith(item);
@@ -182,8 +182,8 @@ describe("ActionPaletteItem", () => {
       />
     );
 
-    const pinButton = screen.getByRole("button", { name: /pin .* to favorites/i });
-    const hideButton = screen.getByRole("button", { name: /hide .* from recently used/i });
+    const pinButton = screen.getByTestId("action-palette-pin");
+    const hideButton = screen.getByTestId("action-palette-hide");
     fireEvent.click(pinButton);
     fireEvent.click(hideButton);
     expect(onPin).toHaveBeenCalledTimes(1);
@@ -202,7 +202,7 @@ describe("ActionPaletteItem", () => {
         />
       );
 
-      expect(screen.getByRole("button", { name: /pin .* to favorites/i })).toBeTruthy();
+      expect(screen.getByTestId("action-palette-pin")).toBeTruthy();
     });
 
     it("renders the hide button when onHide is provided and the item is not pinned or destructive", () => {
@@ -216,7 +216,7 @@ describe("ActionPaletteItem", () => {
         />
       );
 
-      expect(screen.getByRole("button", { name: /hide .* from recently used/i })).toBeTruthy();
+      expect(screen.getByTestId("action-palette-hide")).toBeTruthy();
     });
 
     it("hides the hide button on destructive (danger:'confirm') items", () => {
@@ -230,7 +230,7 @@ describe("ActionPaletteItem", () => {
         />
       );
 
-      expect(screen.queryByRole("button", { name: /hide .* from recently used/i })).toBeNull();
+      expect(screen.queryByTestId("action-palette-hide")).toBeNull();
     });
 
     it("calls onPin and stops propagation when the pin button is clicked", () => {
@@ -246,7 +246,7 @@ describe("ActionPaletteItem", () => {
       );
 
       onSelect.mockClear();
-      const pinButton = screen.getByRole("button", { name: /pin .* to favorites/i });
+      const pinButton = screen.getByTestId("action-palette-pin");
       fireEvent.click(pinButton);
 
       expect(onPin).toHaveBeenCalledTimes(1);
@@ -265,7 +265,7 @@ describe("ActionPaletteItem", () => {
         />
       );
 
-      const pinButton = screen.getByRole("button", { name: /pin .* to favorites/i });
+      const pinButton = screen.getByTestId("action-palette-pin");
       fireEvent.click(pinButton);
 
       expect(onPin).toHaveBeenCalledTimes(1);
@@ -287,7 +287,7 @@ describe("ActionPaletteItem", () => {
         />
       );
 
-      const unpinButton = screen.getByRole("button", { name: /unpin/i });
+      const unpinButton = screen.getByTestId("action-palette-pin");
       fireEvent.click(unpinButton);
 
       expect(onUnpin).toHaveBeenCalledTimes(1);
@@ -308,7 +308,7 @@ describe("ActionPaletteItem", () => {
         />
       );
 
-      expect(screen.queryByRole("button", { name: /hide .* from recently used/i })).toBeNull();
+      expect(screen.queryByTestId("action-palette-hide")).toBeNull();
     });
   });
 
@@ -346,7 +346,9 @@ describe("ActionPaletteItem", () => {
         <ActionPaletteItem item={confirmItem()} index={0} isSelected={false} onSelect={onSelect} />
       );
 
-      expect(container.querySelector("button")?.getAttribute("aria-haspopup")).toBe("dialog");
+      expect(container.querySelector('[role="option"]')?.getAttribute("aria-haspopup")).toBe(
+        "dialog"
+      );
     });
 
     it("does not set aria-haspopup on safe-tier rows", () => {
@@ -354,7 +356,7 @@ describe("ActionPaletteItem", () => {
         <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
       );
 
-      expect(container.querySelector("button")?.getAttribute("aria-haspopup")).toBeNull();
+      expect(container.querySelector('[role="option"]')?.getAttribute("aria-haspopup")).toBeNull();
     });
 
     it("renders a TriangleAlert icon on confirm-tier rows", () => {
@@ -380,7 +382,7 @@ describe("ActionPaletteItem", () => {
         <ActionPaletteItem item={item} index={0} isSelected={true} onSelect={onSelect} />
       );
 
-      const button = container.querySelector("button");
+      const button = container.querySelector('[role="option"]');
       const expectedId = `${item.id}-danger-rationale`;
       expect(button?.getAttribute("aria-describedby")).toBe(expectedId);
 
@@ -395,7 +397,9 @@ describe("ActionPaletteItem", () => {
         <ActionPaletteItem item={item} index={0} isSelected={false} onSelect={onSelect} />
       );
 
-      expect(container.querySelector("button")?.getAttribute("aria-describedby")).toBeNull();
+      expect(
+        container.querySelector('[role="option"]')?.getAttribute("aria-describedby")
+      ).toBeNull();
       // Rationale node still in DOM (CSS-hidden) so the id target is stable across renders.
       expect(container.querySelector(`#${item.id}-danger-rationale`)).toBeTruthy();
     });
@@ -406,7 +410,7 @@ describe("ActionPaletteItem", () => {
         <ActionPaletteItem item={item} index={0} isSelected={true} onSelect={onSelect} />
       );
 
-      const button = container.querySelector("button");
+      const button = container.querySelector('[role="option"]');
       expect(button?.getAttribute("aria-describedby")).toBeNull();
       expect(container.querySelector(`#${item.id}-danger-rationale`)).toBeNull();
       // Suffix and icon still render — they gate on `danger === "confirm"`, not on rationale.
@@ -426,7 +430,7 @@ describe("ActionPaletteItem", () => {
           footerHintId="palette-footer-hint"
         />
       );
-      expect(container.querySelector("button")?.getAttribute("aria-describedby")).toBe(
+      expect(container.querySelector('[role="option"]')?.getAttribute("aria-describedby")).toBe(
         "palette-footer-hint"
       );
     });
@@ -447,7 +451,7 @@ describe("ActionPaletteItem", () => {
           footerHintId="palette-footer-hint"
         />
       );
-      expect(container.querySelector("button")?.getAttribute("aria-describedby")).toBe(
+      expect(container.querySelector('[role="option"]')?.getAttribute("aria-describedby")).toBe(
         "palette-footer-hint delete-worktree-danger-rationale"
       );
     });
@@ -456,7 +460,9 @@ describe("ActionPaletteItem", () => {
       const { container } = render(
         <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
       );
-      expect(container.querySelector("button")?.getAttribute("aria-describedby")).toBeNull();
+      expect(
+        container.querySelector('[role="option"]')?.getAttribute("aria-describedby")
+      ).toBeNull();
     });
   });
 });

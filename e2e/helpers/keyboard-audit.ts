@@ -32,8 +32,14 @@ export async function getActiveElementInfo(page: Page): Promise<ActiveElementInf
   });
 }
 
+// `textContent` is part of the identity on purpose. Plenty of real controls
+// carry no role, aria-label or test id — they take their accessible name from
+// their own text — so without it every such control collapses to the same
+// `BUTTON|||` key. A tab run across six distinct plain buttons (the empty-grid
+// launcher's chips, say) then reads as six consecutive hits on one element and
+// trips the focus-trap detector on a tab order that is in fact moving fine.
 export function elementKey(info: ActiveElementInfo): string {
-  return `${info.tagName}|${info.role ?? ""}|${info.ariaLabel ?? ""}|${info.testId ?? ""}`;
+  return `${info.tagName}|${info.role ?? ""}|${info.ariaLabel ?? ""}|${info.testId ?? ""}|${info.textContent}`;
 }
 
 export async function escapeTerminalFocus(page: Page): Promise<void> {

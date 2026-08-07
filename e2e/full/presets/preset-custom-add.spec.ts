@@ -160,8 +160,11 @@ test.describe.serial("Presets: Custom Add (13–24)", () => {
       timeout: T_LONG,
     });
     await search.press("ArrowRight");
+    // `.first()` because the flat list (#11691) renders every "New preset" this
+    // describe has accumulated as a sibling row — this step only pins that a
+    // newly-added preset reaches the launcher, not how many of them exist.
     await expect(
-      ctx.window.locator(SEL.preset.trayLaunchPresetItem, { hasText: "New preset" })
+      ctx.window.locator(SEL.preset.trayLaunchPresetItem, { hasText: "New preset" }).first()
     ).toBeVisible({ timeout: T_SHORT });
 
     await ctx.window.mouse.click(10, 10);
@@ -195,10 +198,13 @@ test.describe.serial("Presets: Custom Add (13–24)", () => {
     await goToClaudeSettings();
     await addCustomPreset(ctx.window);
     const name = "New preset";
+    // T_MEDIUM, not T_SHORT: the settings list re-renders after the add round
+    // trips through the store, and 3s is tight enough to lose the race when the
+    // whole E2E surface is running and the machine is loaded.
     await expect(
       ctx.window.locator(SEL.preset.section).locator("span", { hasText: name }).first()
     ).toBeVisible({
-      timeout: T_SHORT,
+      timeout: T_MEDIUM,
     });
     const countBefore = await getClaudeCustomPresetCount(ctx.window);
     expect(countBefore).toBeGreaterThanOrEqual(1);

@@ -39,6 +39,7 @@ const config: KnipConfig = {
     "scripts/perf/launch-ab.ts",
     "scripts/perf/memory-bench-compare.ts",
     "scripts/perf/memory-growth-compare.ts",
+    "scripts/perf/verify-baselines.ts",
 
     // why: bench-only classic script inlined by vite.config.ts via readFileSync
     // when DAINTREE_RENDER_PROBE=1 (`npm run build:e2e:bench`). Knip cannot

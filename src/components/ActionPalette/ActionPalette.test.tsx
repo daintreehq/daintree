@@ -521,11 +521,13 @@ describe("ActionPalette", () => {
 
     it("offers the hide control only on Recently used rows", () => {
       const container = renderSectionedBody();
-      const hideButtons = container.querySelectorAll('[aria-label^="Hide "]');
+      const hideButtons = container.querySelectorAll('[data-testid="action-palette-hide"]');
       // "Hide from Recently used" against a category row would promise an
       // eviction that rail can't perform.
       expect(hideButtons.length).toBe(1);
-      expect(hideButtons[0]?.getAttribute("aria-label")).toContain("Beta");
+      // The control is presentational inside `role="option"` now, so it carries
+      // no name of its own — identify it by the row it belongs to instead.
+      expect(hideButtons[0]?.closest('[role="option"]')?.textContent).toContain("Beta");
     });
   });
 });
