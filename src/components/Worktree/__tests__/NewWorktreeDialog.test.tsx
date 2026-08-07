@@ -1290,3 +1290,172 @@ describe("NewWorktreeDialog — in-use base branch selection", () => {
     expect(screen.getByTestId<HTMLInputElement>("branch-name-input").value).toBe("feature/keep-me");
   });
 });
+
+describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name === "feature/terrain" ? "feature/terrain-2" : name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockAssignIssue.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function typeBranch(value: string) {
+    const branchInput = screen.getByTestId("branch-name-input") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value } });
+    });
+    await advanceTimersGradually(500);
+    return branchInput;
+  }
+
+  it("leaves the typed name in place while flagging the conflict", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = await typeBranch("feature/terrain");
+
+    expect(branchInput.value).toBe("feature/terrain");
+    expect(screen.getByText(/auto-incremented/i)).toBeDefined();
+  });
+
+  it("does not clobber characters typed past the conflicting prefix", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = await typeBranch("feature/terrain");
+    // Resume typing from whatever the field actually holds. Replacing the value
+    // outright would mask a rewrite, since it overwrites the damage too.
+    await typeBranch(`${branchInput.value}-shadows`);
+
+    expect(branchInput.value).toBe("feature/terrain-shadows");
+    expect(screen.queryByText(/auto-incremented/i)).toBeNull();
+  });
+
+  it("applies the auto-incremented name on blur without re-checking or disabling Create", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = await typeBranch("feature/terrain");
+    const pathInput = screen.getByTestId("worktree-path-input") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: "/custom/path" } });
+    });
+    mockGetAvailableBranch.mockClear();
+    mockGetDefaultPath.mockClear();
+
+    await act(async () => {
+      fireEvent.blur(branchInput);
+    });
+
+    expect(branchInput.value).toBe("feature/terrain-2");
+    // Skipping the re-check is what keeps a hand-edited path from being
+    // regenerated out from under the user.
+    expect(pathInput.value).toBe("/custom/path");
+    // Re-checking a name we already know is free would re-disable Create in the
+    // gap between the blur and the click that caused it, swallowing the click.
+    const createButton = screen.getByTestId("create-worktree-button") as HTMLButtonElement;
+    expect(createButton.disabled).toBe(false);
+
+    await advanceTimersGradually(500);
+    expect(mockGetAvailableBranch).not.toHaveBeenCalled();
+    expect(mockGetDefaultPath).not.toHaveBeenCalled();
+  });
+
+  it("creates the auto-incremented branch when Create follows a blur", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = await typeBranch("feature/terrain");
+    // The rewrite must be the blur's doing, not the debounce's.
+    expect(branchInput.value).toBe("feature/terrain");
+
+    await act(async () => {
+      fireEvent.blur(branchInput);
+    });
+    expect(branchInput.value).toBe("feature/terrain-2");
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(mockAddPendingCreation).toHaveBeenCalledWith(
+      "/test/root-worktrees/feature/terrain",
+      expect.objectContaining({ branch: "feature/terrain-2" })
+    );
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "worktree.create",
+      expect.objectContaining({
+        options: expect.objectContaining({ newBranch: "feature/terrain-2" }),
+      }),
+      expect.anything()
+    );
+  });
+
+  it("creates the auto-incremented branch when Create fires without a blur", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = await typeBranch("feature/terrain");
+    // The field still holds what was typed — Create has to resolve it itself.
+    expect(branchInput.value).toBe("feature/terrain");
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "worktree.create",
+      expect.objectContaining({
+        options: expect.objectContaining({ newBranch: "feature/terrain-2" }),
+      }),
+      expect.anything()
+    );
+  });
+
+  it("creates the typed name when no conflict was detected", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = await typeBranch("feature/canyon");
+    await act(async () => {
+      fireEvent.blur(branchInput);
+    });
+    // Blur leaves an unconflicted name untouched.
+    expect(branchInput.value).toBe("feature/canyon");
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "worktree.create",
+      expect.objectContaining({
+        options: expect.objectContaining({ newBranch: "feature/canyon" }),
+      }),
+      expect.anything()
+    );
+  });
+});
