@@ -94,7 +94,14 @@ export const usePluginCapabilityConfirmStore = create<
   },
 
   reset: () => {
-    for (const { timer } of resolvers.values()) clearTimeout(timer);
+    // Settle every waiter before dropping it. Clearing the map alone left the
+    // gating promises pending forever, and `requestPluginCapabilityConsent`
+    // documents that its promise always settles. "rejected" is the fail-closed
+    // direction, matching drop().
+    for (const { timer, resolve } of resolvers.values()) {
+      clearTimeout(timer);
+      resolve("rejected");
+    }
     resolvers.clear();
     set({ queue: [], current: null });
   },

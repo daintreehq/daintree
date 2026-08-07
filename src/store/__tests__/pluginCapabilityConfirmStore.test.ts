@@ -128,18 +128,20 @@ describe("pluginCapabilityConfirmStore", () => {
       }
     });
 
-    it("reset clears pending timers so they never fire into a cleared store", async () => {
+    it("reset settles pending prompts fail-closed and clears their timers", async () => {
       vi.useFakeTimers();
       try {
         const p = requestPluginCapabilityConsent(req("r1"));
         __resetPluginCapabilityConfirmStoreForTesting();
 
+        // Settling is the contract: this promise gates a plugin's host call, so
+        // leaving it pending would hang that call rather than fail it closed.
+        await expect(p).resolves.toBe("rejected");
+
         await vi.advanceTimersByTimeAsync(PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS * 2);
-        // The promise stays unsettled (the timer was cleared); no leaked timer
-        // re-enqueued or re-settled anything.
+        // No leaked timer re-enqueued or re-settled anything.
         expect(usePluginCapabilityConfirmStore.getState().current).toBeNull();
         expect(vi.getTimerCount()).toBe(0);
-        void p;
       } finally {
         vi.useRealTimers();
       }

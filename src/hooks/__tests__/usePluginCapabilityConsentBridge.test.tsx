@@ -124,6 +124,23 @@ describe("usePluginCapabilityConsentBridge", () => {
     expect(acknowledgeConsent).toHaveBeenCalledTimes(2);
   });
 
+  it("ignores a re-push that arrives after the user already answered (#11708)", async () => {
+    render(<Harness />);
+    act(() => listener!(request("req-1")));
+    act(() => usePluginCapabilityConfirmStore.getState().resolveCurrent("approved-once"));
+    await waitFor(() => expect(resolveConsent).toHaveBeenCalled());
+
+    // A retry main had already put on the wire before it settled. Both this
+    // hook's record and the store's resolver are gone by now, so nothing but
+    // the retained id stops it becoming a fresh dialog for a dead request —
+    // one the consent dialog would refuse to act on twice, stranding it.
+    act(() => listener!(request("req-1")));
+
+    expect(usePluginCapabilityConfirmStore.getState().current).toBeNull();
+    expect(usePluginCapabilityConfirmStore.getState().queue).toHaveLength(0);
+    expect(resolveConsent).toHaveBeenCalledTimes(1);
+  });
+
   it("survives a remount with a prompt still in flight (#11708)", async () => {
     const { unmount } = render(<Harness />);
     act(() => listener!(request("req-1")));

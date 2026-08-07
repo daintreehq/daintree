@@ -18,11 +18,15 @@ import { requestPluginCapabilityConsent } from "@/store/pluginCapabilityConfirmS
  */
 export function usePluginCapabilityConsentBridge(): void {
   useEffect(() => {
-    // Prompts already handed to the store. Main re-pushes an unacknowledged
-    // prompt, so a re-push can race the acknowledgement it crossed on the wire;
-    // re-enqueueing it would hit the store's duplicate guard, which resolves
-    // "rejected" and would surface as a denial the user never made. Re-ack
-    // instead — the request is in the queue, which is all main is asking about.
+    // Every prompt this mount has handed to the store, kept for the mount's
+    // lifetime rather than cleared on settle. Main re-pushes an unacknowledged
+    // prompt, and a re-push already on the wire can arrive *after* the user has
+    // answered — by which point both this Set and the store's resolver map
+    // would have forgotten the id, so it would enqueue a fresh dialog for a
+    // request main has already settled. The consent dialog refuses to act twice
+    // on one requestId, so that phantom would sit there unanswerable until its
+    // own five-minute timer. Consent prompts are first-use-per-capability, so
+    // retaining ids costs nothing worth reclaiming.
     const enqueued = new Set<string>();
 
     return window.electron.events.on("plugin-capability:consent-request", (payload) => {
@@ -52,7 +56,6 @@ export function usePluginCapabilityConsentBridge(): void {
       acknowledge();
 
       void decided.then((decision) => {
-        enqueued.delete(requestId);
         return window.electron.pluginCapability
           .resolveConsent({ requestId, decision })
           .catch((err: unknown) =>
