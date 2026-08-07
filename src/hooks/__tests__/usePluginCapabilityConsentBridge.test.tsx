@@ -44,15 +44,19 @@ beforeEach(() => {
     return Promise.resolve();
   });
   resolveConsent = vi.fn(() => Promise.resolve());
-  (window as unknown as { electron: unknown }).electron = {
-    events: {
-      on: vi.fn((name: string, cb: Listener) => {
-        if (name === "plugin-capability:consent-request") listener = cb;
-        return unsubscribe;
-      }),
+  Object.defineProperty(window, "electron", {
+    configurable: true,
+    writable: true,
+    value: {
+      events: {
+        on: vi.fn((name: string, cb: Listener) => {
+          if (name === "plugin-capability:consent-request") listener = cb;
+          return unsubscribe;
+        }),
+      },
+      pluginCapability: { acknowledgeConsent, resolveConsent },
     },
-    pluginCapability: { acknowledgeConsent, resolveConsent },
-  };
+  });
 });
 
 afterEach(() => {
