@@ -184,6 +184,12 @@ export function _resetCapabilityConsentBridgeForTest(): void {
   for (const requestId of [...pendingConsents.keys()]) {
     settleConsent(requestId, "undeliverable");
   }
+  // Detach from the service too, mirroring the disposer. Clearing only the flag
+  // would leave the service holding a bridge that a later disposer then skips
+  // detaching, because the flag says it was never installed.
+  if (consentBridgeInstalled) {
+    getPluginCapabilityConsentService().setConsentBridge(null);
+  }
   consentBridgeInstalled = false;
 }
 

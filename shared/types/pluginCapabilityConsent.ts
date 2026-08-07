@@ -64,11 +64,13 @@ export type PluginCapabilityConsentDecision =
 
 /**
  * What the main-process consent bridge resolves with — every
- * {@link PluginCapabilityConsentDecision} plus `undeliverable`, which means the
- * prompt never reached a renderer that could display it (#11708): no window to
- * host it, the target view was destroyed mid-flight, the push threw, the
- * handler was torn down, or no receipt acknowledgement arrived within
- * {@link PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS}.
+ * {@link PluginCapabilityConsentDecision} plus `undeliverable`, which covers
+ * every way a prompt can fail to *reach and stay in front of* a user (#11708):
+ * no window to host it, no receipt acknowledgement within
+ * {@link PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS}, the push threw, the
+ * handler was torn down, or the renderer holding it was destroyed — before or
+ * after acknowledging. The last case did display a dialog, but it vanished
+ * unanswered, so it is grouped here rather than with the decisions.
  *
  * The split exists because `webContents.send()` to a document with no listener
  * is a silent no-op — nothing throws and nothing logs — so before #11708 an
@@ -89,11 +91,17 @@ export type PluginCapabilityConsentOutcome = PluginCapabilityConsentDecision | "
  * main-process bridge and the renderer confirm store arm an independent timer at
  * this duration.
  *
- * As with the MCP timeout, the clock starts when the prompt is *acknowledged as
- * delivered*, not when the dialog becomes visible — a queued prompt shares this
- * window rather than getting its own per-display clock. The timeout is an
- * abandonment backstop, and the rare queued-then-expired case fails closed
- * (denied), the safe direction.
+ * As with the MCP timeout, the clock starts when the prompt is raised, not when
+ * the dialog becomes visible — a queued prompt shares this window rather than
+ * getting its own per-display clock. The timeout is an abandonment backstop, and
+ * the rare queued-then-expired case fails closed (denied), the safe direction.
+ *
+ * Main and the renderer arm this independently and from slightly different
+ * origins: the renderer at enqueue, main once delivery is acknowledged. The
+ * renderer therefore expires first, by however long delivery took (bounded by
+ * {@link PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS}), and its `"timeout"`
+ * reply settles main's copy. That ordering is deliberate — a decision reply
+ * beats a main-side guess — and the skew is immaterial against five minutes.
  */
 export const PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS = 5 * 60 * 1000;
 

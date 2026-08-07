@@ -41,7 +41,7 @@ export type PluginCapabilityConsentBridge = (
  */
 export class PluginCapabilityConsentService {
   private bridge: PluginCapabilityConsentBridge | null = null;
-  private readonly inFlight = new Map<string, Promise<PluginCapabilityConsentDecision>>();
+  private readonly inFlight = new Map<string, Promise<PluginCapabilityConsentOutcome>>();
 
   constructor(private readonly consentStore: PluginCapabilityConsentStore) {}
 
@@ -108,7 +108,7 @@ export class PluginCapabilityConsentService {
       // level, not warn: unlike an abandoned dialog this is a Daintree-side
       // delivery failure, not a user behaviour (#11708).
       console.error(
-        `[PluginCapabilityConsentService] could not present the consent prompt for plugin "${pluginId}" capability "${capability}" — no renderer acknowledged it`
+        `[PluginCapabilityConsentService] could not present the consent prompt for plugin "${pluginId}" capability "${capability}" — it never reached a renderer, or the renderer holding it went away before answering`
       );
       throw new Error(
         `${PLUGIN_CAPABILITY_DENIED_PREFIX}: Daintree could not present the "${capability}" capability consent prompt for plugin "${pluginId}"`
@@ -158,7 +158,14 @@ export class PluginCapabilityConsentService {
     if (existing) return existing;
 
     const bridge = this.bridge;
-    const promise = bridge({ pluginId, pluginDisplayName, capability, declaredCapabilities })
+    // Invoke through an async wrapper so a bridge that throws *synchronously*
+    // becomes a rejection the `.catch` below can classify. Calling it bare would
+    // let that throw escape `requestOutcome` entirely, and the gated call would
+    // reject with a raw error instead of a `PERMISSION_REQUIRED:` one — still
+    // closed, but outside the contract plugins are told to expect.
+    const invoke = async () =>
+      bridge({ pluginId, pluginDisplayName, capability, declaredCapabilities });
+    const promise = invoke()
       .catch((err) => {
         console.error("[PluginCapabilityConsentService] Consent bridge threw:", err);
         return "undeliverable" as PluginCapabilityConsentOutcome;

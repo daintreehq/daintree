@@ -50,15 +50,20 @@ describe("pluginCapabilityConfirmStore", () => {
     await expect(p2).resolves.toBe("rejected");
   });
 
-  it("rejects a duplicate requestId without disturbing the live prompt", async () => {
+  it("shares one prompt between repeat requests for the same requestId (#11708)", async () => {
     const p1 = requestPluginCapabilityConsent(req("dup"));
     const dup = requestPluginCapabilityConsent(req("dup"));
-    await expect(dup).resolves.toBe("rejected");
-    // The original is still pending and current.
-    expect(usePluginCapabilityConfirmStore.getState().current?.requestId).toBe("dup");
 
+    // Main re-pushes an unacknowledged prompt, so the same id can legitimately
+    // arrive twice. It must not queue a second dialog...
+    expect(usePluginCapabilityConfirmStore.getState().current?.requestId).toBe("dup");
+    expect(usePluginCapabilityConfirmStore.getState().queue).toHaveLength(0);
+
+    // ...and must not settle early. Resolving a repeat as "rejected" would
+    // reach the plugin as a denial the user never made.
     usePluginCapabilityConfirmStore.getState().resolveCurrent("approved-and-pin");
     await expect(p1).resolves.toBe("approved-and-pin");
+    await expect(dup).resolves.toBe("approved-and-pin");
   });
 
   it("drop rejects a queued request and removes it from the queue", async () => {

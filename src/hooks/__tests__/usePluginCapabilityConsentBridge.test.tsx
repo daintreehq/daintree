@@ -124,6 +124,50 @@ describe("usePluginCapabilityConsentBridge", () => {
     expect(acknowledgeConsent).toHaveBeenCalledTimes(2);
   });
 
+  it("survives a remount with a prompt still in flight (#11708)", async () => {
+    const { unmount } = render(<Harness />);
+    act(() => listener!(request("req-1")));
+    unmount();
+
+    // The dedupe Set dies with the effect, but the store's resolver map does
+    // not — so a re-push after a remount reaches a store that already knows the
+    // request. It must share that prompt, not treat it as a collision and
+    // resolve "rejected", which would reach the plugin as a phantom denial.
+    render(<Harness />);
+    act(() => listener!(request("req-1")));
+
+    expect(resolveConsent).not.toHaveBeenCalled();
+    expect(usePluginCapabilityConfirmStore.getState().queue).toHaveLength(0);
+
+    act(() => usePluginCapabilityConfirmStore.getState().resolveCurrent("approved-and-pin"));
+    await waitFor(() =>
+      expect(resolveConsent).toHaveBeenCalledWith({
+        requestId: "req-1",
+        decision: "approved-and-pin",
+      })
+    );
+  });
+
+  it("handles a rejected reply IPC instead of leaking an unhandled rejection", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    acknowledgeConsent.mockRejectedValue(new Error("channel gone"));
+    resolveConsent.mockRejectedValue(new Error("channel gone"));
+
+    render(<Harness />);
+    act(() => listener!(request("req-1")));
+    act(() => usePluginCapabilityConfirmStore.getState().resolveCurrent("approved-once"));
+
+    // Both replies are fire-and-forget; a teardown-time rejection on either must
+    // be consumed rather than surfacing as an unrelated renderer error.
+    await waitFor(() => expect(warn).toHaveBeenCalledTimes(2));
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("failed to acknowledge"),
+        expect.stringContaining("failed to deliver decision"),
+      ])
+    );
+  });
+
   it("unsubscribes from the push on unmount", () => {
     const { unmount } = render(<Harness />);
     unmount();

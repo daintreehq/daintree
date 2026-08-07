@@ -27,8 +27,17 @@ export function usePluginCapabilityConsentBridge(): void {
 
     return window.electron.events.on("plugin-capability:consent-request", (payload) => {
       const { requestId } = payload;
-      const acknowledge = () =>
-        void window.electron.pluginCapability.acknowledgeConsent({ requestId });
+      // Both replies are fire-and-forget, but their rejections still have to be
+      // consumed — during renderer teardown the IPC call can reject, and an
+      // unhandled rejection there would surface as a renderer error unrelated to
+      // anything the user did.
+      const acknowledge = () => {
+        window.electron.pluginCapability
+          .acknowledgeConsent({ requestId })
+          .catch((err: unknown) =>
+            console.warn(`[plugin-capability] failed to acknowledge ${requestId}:`, err)
+          );
+      };
 
       if (enqueued.has(requestId)) {
         acknowledge();
@@ -44,7 +53,14 @@ export function usePluginCapabilityConsentBridge(): void {
 
       void decided.then((decision) => {
         enqueued.delete(requestId);
-        return window.electron.pluginCapability.resolveConsent({ requestId, decision });
+        return window.electron.pluginCapability
+          .resolveConsent({ requestId, decision })
+          .catch((err: unknown) =>
+            // Main keeps waiting and will eventually report a timeout. Nothing
+            // useful to retry against a renderer that is going away, but the
+            // divergence between "user decided" and "main heard" is worth a log.
+            console.warn(`[plugin-capability] failed to deliver decision for ${requestId}:`, err)
+          );
       });
     });
   }, []);

@@ -186,6 +186,13 @@ describe("pluginCapability consent bridge — routing (#11708)", () => {
     });
     const outcome = await settled;
     expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      // The shell's attempt neither approved nor changed how the real answer is
+      // reported — this is the app view's rejection, not a delivery failure.
+      expect(outcome.err.message).toContain("was denied");
+      expect(outcome.err.message).not.toContain("could not present");
+      expect(outcome.err.message).not.toContain("timed out");
+    }
 
     dispose();
   });
@@ -352,9 +359,73 @@ describe("pluginCapability consent bridge — delivery acknowledgement (#11708)"
       });
       await expect(settled).resolves.toEqual({ ok: true });
 
-      // The delivery timer was disarmed with everything else.
-      await vi.advanceTimersByTimeAsync(PLUGIN_CAPABILITY_CONSENT_DELIVERY_TIMEOUT_MS * 2);
+      // Every timer the request owned is gone. Asserting the count directly
+      // matters: a leaked timer would just fire against a deleted map entry and
+      // no-op, so advancing the clock alone proves nothing.
+      expect(vi.getTimerCount()).toBe(0);
       dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("settles undeliverable when a re-push throws after the first push succeeded", async () => {
+    vi.useFakeTimers();
+    try {
+      const dispose = registerPluginCapabilityHandlers();
+      const settled = startGatedCall();
+      expect(harness!.appWebContents.send).toHaveBeenCalledTimes(1);
+
+      // The renderer can go away between the initial push and a retry; the
+      // retry's failure path is separate code from the initial one.
+      harness!.appWebContents.send.mockImplementation(() => {
+        throw new Error("render frame was disposed");
+      });
+      await vi.advanceTimersByTimeAsync(PLUGIN_CAPABILITY_CONSENT_RESEND_INTERVAL_MS);
+
+      const outcome = await settled;
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.err.message).toContain("could not present");
+      // Settled on the retry, not by waiting out the delivery deadline.
+      expect(vi.getTimerCount()).toBe(0);
+
+      dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps concurrent prompts for different capabilities independent", async () => {
+    vi.useFakeTimers();
+    try {
+      const dispose = registerPluginCapabilityHandlers();
+      const service = getPluginCapabilityConsentService();
+      const shell = service
+        .ensureAllowed("acme.x", "Acme", "shell:exec", ["shell:exec", "git:write"])
+        .then(
+          () => ({ ok: true }) as const,
+          (err: Error) => ({ ok: false, err }) as const
+        );
+      const git = service.ensureAllowed("acme.x", "Acme", "git:write", ["shell:exec", "git:write"]);
+      git.catch(() => {});
+
+      expect(harness!.appWebContents.send).toHaveBeenCalledTimes(2);
+      const shellId = pushedRequestId(harness!.appWebContents, 0);
+      const gitId = pushedRequestId(harness!.appWebContents, 1);
+      expect(shellId).not.toBe(gitId);
+
+      // Answering one must not settle or disturb the other.
+      await handleAcknowledgeConsent(ctx(harness!.appWebContents.id), { requestId: shellId });
+      await handleResolveConsent(ctx(harness!.appWebContents.id), {
+        requestId: shellId,
+        decision: "approved-once",
+      });
+      await expect(shell).resolves.toEqual({ ok: true });
+
+      // Tearing down settles everything still pending.
+      dispose();
+      await expect(git).rejects.toThrow(/could not present/);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
