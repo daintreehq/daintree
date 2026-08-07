@@ -538,6 +538,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["plugin:validate-action-ids"]["result"]>;
   };
   pluginCapability: {
+    acknowledgeConsent(
+      ...args: IpcInvokeMap["plugin-capability:acknowledge-consent"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:acknowledge-consent"]["result"]>;
     resolveConsent(
       ...args: IpcInvokeMap["plugin-capability:resolve-consent"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:resolve-consent"]["result"]>;

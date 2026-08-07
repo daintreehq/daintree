@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { PluginCapabilityConsentService } from "../PluginCapabilityConsentService.js";
 import { PluginCapabilityConsentStore } from "../PluginCapabilityConsentStore.js";
-import type { PluginCapabilityConsentDecision } from "../../../../shared/types/pluginCapabilityConsent.js";
+import type {
+  PluginCapabilityConsentDecision,
+  PluginCapabilityConsentOutcome,
+} from "../../../../shared/types/pluginCapabilityConsent.js";
 
 function makeService() {
   let config: Record<string, unknown> = {};
@@ -18,13 +21,19 @@ function makeService() {
 const CAPS = ["shell:exec"] as const;
 
 describe("PluginCapabilityConsentService", () => {
-  it("denies (fail-closed) when no consent bridge is installed", async () => {
+  it("fails closed as undeliverable when no consent bridge is installed", async () => {
     const { service, store } = makeService();
-    await expect(service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS)).rejects.toThrow(
-      /PERMISSION_REQUIRED/
-    );
-    // A denial must not leave a grant behind.
-    expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(false);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // No bridge means no UI at all — fail closed, but don't attribute it to a
+      // user who was never asked (#11708).
+      await expect(service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS)).rejects.toThrow(
+        /PERMISSION_REQUIRED.*could not present.*shell:exec/
+      );
+      expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(false);
+    } finally {
+      error.mockRestore();
+    }
   });
 
   it("short-circuits without prompting once a capability is granted", async () => {
@@ -80,7 +89,7 @@ describe("PluginCapabilityConsentService", () => {
     try {
       service.setConsentBridge(async () => "timeout");
       await expect(service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS)).rejects.toThrow(
-        /PERMISSION_REQUIRED.*shell:exec/
+        /PERMISSION_REQUIRED.*shell:exec.*timed out/
       );
       // A timed-out prompt must not leave a grant behind.
       expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(false);
@@ -91,14 +100,56 @@ describe("PluginCapabilityConsentService", () => {
     }
   });
 
-  it("treats a thrown bridge as a rejection (fail-closed)", async () => {
-    const { service } = makeService();
-    service.setConsentBridge(async () => {
-      throw new Error("renderer blew up");
-    });
-    await expect(service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS)).rejects.toThrow(
-      /PERMISSION_REQUIRED/
-    );
+  it("treats a thrown bridge as undeliverable (fail-closed)", async () => {
+    const { service, store } = makeService();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      service.setConsentBridge(async () => {
+        throw new Error("renderer blew up");
+      });
+      await expect(service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS)).rejects.toThrow(
+        /PERMISSION_REQUIRED.*could not present/
+      );
+      expect(store.hasGrant({ pluginId: "acme.x", capability: "shell:exec" })).toBe(false);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("reports undeliverable, timeout and rejection as three distinguishable failures (#11708)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const messageFor = async (outcome: PluginCapabilityConsentOutcome): Promise<string> => {
+        const { service } = makeService();
+        service.setConsentBridge(async () => outcome);
+        try {
+          await service.ensureAllowed("acme.x", "Acme", "shell:exec", CAPS);
+          throw new Error(`expected ${outcome} to fail closed`);
+        } catch (err) {
+          return (err as Error).message;
+        }
+      };
+
+      const undeliverable = await messageFor("undeliverable");
+      const timedOut = await messageFor("timeout");
+      const rejected = await messageFor("rejected");
+
+      // All fail closed behind the prefix the SDK discriminates on...
+      for (const message of [undeliverable, timedOut, rejected]) {
+        expect(message).toContain("PERMISSION_REQUIRED");
+      }
+      // ...but a plugin author reading the error can tell what actually
+      // happened. Conflating these was the misleading half of #11708: an
+      // undelivered prompt was reported as an explicit refusal.
+      expect(new Set([undeliverable, timedOut, rejected]).size).toBe(3);
+      expect(undeliverable).not.toContain("was denied");
+      expect(timedOut).not.toContain("was denied");
+      expect(rejected).toContain("was denied");
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
   });
 
   it("coalesces concurrent first-use calls for the same (plugin, capability) onto one prompt", async () => {
