@@ -858,6 +858,121 @@ describe("preferencesStore migration", () => {
     });
   });
 
+  describe("keyboardLayoutConfirmationsByBinding (v16 migration, issue #11704)", () => {
+    const KEY = "nav.toggleSidebar@Cmd+B";
+
+    it("starts empty so a fresh install still gets told what its shortcut did", async () => {
+      const store = await loadStore();
+      expect(store.getState().keyboardLayoutConfirmationsByBinding).toEqual({});
+    });
+
+    it("counts each confirmation up to the limit and then holds", async () => {
+      const mod = await import("../preferencesStore");
+      const store = mod.usePreferencesStore;
+      const limit = mod.KEYBOARD_LAYOUT_CONFIRMATION_LIMIT;
+
+      for (let i = 0; i < limit + 2; i++) {
+        store.getState().recordKeyboardLayoutConfirmation("nav.toggleSidebar", "Cmd+B");
+      }
+
+      expect(store.getState().keyboardLayoutConfirmationsByBinding[KEY]).toBe(limit);
+    });
+
+    it("keeps one entry per action so rebinding cannot accumulate stale tallies", async () => {
+      const store = await loadStore();
+      store.getState().recordKeyboardLayoutConfirmation("nav.toggleSidebar", "Cmd+B");
+      store.getState().recordKeyboardLayoutConfirmation("nav.toggleSidebar", "Cmd+Shift+S");
+
+      expect(Object.keys(store.getState().keyboardLayoutConfirmationsByBinding)).toEqual([
+        "nav.toggleSidebar@Cmd+Shift+S",
+      ]);
+    });
+
+    it("clearing one action leaves other actions' tallies alone", async () => {
+      const store = await loadStore();
+      store.getState().recordKeyboardLayoutConfirmation("nav.toggleSidebar", "Cmd+B");
+      store.getState().recordKeyboardLayoutConfirmation("nav.toggleFocusMode", "Cmd+K");
+
+      store.getState().clearKeyboardLayoutConfirmations("nav.toggleSidebar");
+
+      expect(store.getState().keyboardLayoutConfirmationsByBinding).toEqual({
+        "nav.toggleFocusMode@Cmd+K": 1,
+      });
+    });
+
+    it("survives a reload, or the toast returns on every app start", async () => {
+      const first = await loadStore();
+      first.getState().recordKeyboardLayoutConfirmation("nav.toggleSidebar", "Cmd+B");
+
+      vi.resetModules();
+      _resetPersistedStoreRegistryForTests();
+      const reloaded = await loadStore();
+
+      expect(reloaded.getState().keyboardLayoutConfirmationsByBinding[KEY]).toBe(1);
+    });
+
+    it("supplies the field in the migration itself, not only in the sanitizer", async () => {
+      const store = await loadStore();
+      const migrated = await store.persist.getOptions().migrate?.({ dockDensity: "compact" }, 15);
+
+      expect(migrated?.keyboardLayoutConfirmationsByBinding).toEqual({});
+      expect(migrated?.dockDensity).toBe("compact");
+    });
+
+    it("drops corrupt counts rather than silencing a binding the user never confirmed", async () => {
+      // Clamping an oversized value would land it on exactly the limit, which
+      // retires the notice for someone who never saw it. Dropping the entry
+      // costs one extra toast instead — the recoverable direction.
+      setStoredState(
+        {
+          keyboardLayoutConfirmationsByBinding: {
+            [KEY]: 999,
+            "nav.toggleFocusMode@Cmd+K": "yes",
+            "nav.quickSwitcher@Cmd+P": 0,
+            "nav.focusRegion.next@Cmd+1": -2,
+            "nav.focusRegion.prev@Cmd+2": 1.5,
+          },
+        },
+        16
+      );
+      const store = await loadStore();
+
+      await vi.waitFor(() => {
+        expect(store.getState().keyboardLayoutConfirmationsByBinding).toEqual({});
+      });
+    });
+
+    it("keeps a hydrated in-range count, so the sanitizer isn't just wiping the field", async () => {
+      setStoredState({ keyboardLayoutConfirmationsByBinding: { [KEY]: 2 } }, 16);
+      const store = await loadStore();
+
+      expect(store.getState().keyboardLayoutConfirmationsByBinding).toEqual({ [KEY]: 2 });
+    });
+
+    it("hydrates a v15 blob and rewrites it at the current version", async () => {
+      setStoredState({ dockDensity: "compact" }, 15);
+      const store = await loadStore();
+      expect(store.getState().keyboardLayoutConfirmationsByBinding).toEqual({});
+
+      store.getState().recordKeyboardLayoutConfirmation("nav.toggleSidebar", "Cmd+B");
+
+      const written: { version?: number; state?: Record<string, unknown> } = JSON.parse(
+        storage[STORAGE_KEY]!
+      );
+      // Greater-than, not equality against the configured version: comparing a
+      // written value to the same option that wrote it passes at any version.
+      expect(written.version).toBeGreaterThan(15);
+      expect(written.state?.keyboardLayoutConfirmationsByBinding).toEqual({ [KEY]: 1 });
+    });
+
+    it("replaces a non-record blob rather than letting it reach live state", async () => {
+      setStoredState({ keyboardLayoutConfirmationsByBinding: "corrupt" }, 16);
+      const store = await loadStore();
+
+      expect(store.getState().keyboardLayoutConfirmationsByBinding).toEqual({});
+    });
+  });
+
   describe("hasSeenActionPalettePrefixHint (v15 migration)", () => {
     it("starts unseen so a fresh install still gets taught the prefixes", async () => {
       const store = await loadStore();
