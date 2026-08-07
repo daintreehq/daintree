@@ -1,15 +1,17 @@
 /**
  * Per-service connectivity health.
  *
- * The main process probes a fixed set of remote dependencies (GitHub, agent
- * provider APIs, the local MCP server) and publishes one snapshot keyed by
- * service. The renderer consumes this map via the `useConnectivity` hook to
- * surface degraded-mode UI affordances and "reconnected" toasts.
+ * The main process aggregates the state of dependencies it already talks to
+ * on its own account — the GitHub forge provider's token health and the local
+ * MCP server subprocess — and publishes one snapshot keyed by service. The
+ * renderer consumes this map via the `useConnectivity` hook to surface
+ * degraded-mode UI affordances and "reconnected" toasts.
  *
- * Probes are reachability-only for agent providers — Daintree does not own
- * the agent CLI's API keys, so any non-network HTTP response (including 4xx)
- * confirms the service is reachable. Only network-level errors flip a
- * service to `unreachable`.
+ * Every entry is derived from work the app is already doing; nothing here
+ * issues speculative traffic to observe a service. Agent provider APIs are
+ * deliberately absent: Daintree neither holds the agent CLI's credentials nor
+ * routes its requests, so an agent CLI reports its own upstream failures in
+ * the terminal, on the path that actually failed.
  *
  * GitHub `unhealthy` (token revoked) deliberately maps to `unknown` here,
  * not `unreachable` — token validity is a distinct concern from network
@@ -17,24 +19,20 @@
  */
 
 /** Fixed set of services that are tracked. Dev-server connectivity is per-session and lives outside this snapshot. */
-export type ConnectivityServiceKey =
-  "github" | "agent:claude" | "agent:gemini" | "agent:codex" | "mcp";
+export type ConnectivityServiceKey = "github" | "mcp";
 
 /** All known service keys in canonical order. */
 export const CONNECTIVITY_SERVICE_KEYS: readonly ConnectivityServiceKey[] = [
   "github",
-  "agent:claude",
-  "agent:gemini",
-  "agent:codex",
   "mcp",
 ] as const;
 
 /**
- * Network reachability of a service.
+ * Reachability of a service.
  *
- * - `unknown`: no probe has completed yet, or a token-validity issue (not a network failure)
- * - `reachable`: the most recent probe succeeded or returned a non-network HTTP response
- * - `unreachable`: the most recent probe failed at the transport layer (DNS, timeout, connection refused)
+ * - `unknown`: no state has been observed yet, or a token-validity issue (not a reachability failure)
+ * - `reachable`: the most recent observation found the service healthy/running
+ * - `unreachable`: the most recent observation found the service down
  */
 export type ServiceConnectivityStatus = "unknown" | "reachable" | "unreachable";
 
@@ -44,7 +42,13 @@ export interface ServiceConnectivityPayload {
   serviceKey: ConnectivityServiceKey;
   /** Current reachability status. */
   status: ServiceConnectivityStatus;
-  /** Unix epoch milliseconds at which the last probe completed (0 if no probe has run). */
+  /**
+   * Unix epoch milliseconds at which this service's state was last observed
+   * (0 if nothing has been observed yet). For `github` that's the completion
+   * of a token-health probe; for `mcp` it's when the current runtime status
+   * was observed — including the initial seed, not just later changes — and
+   * never a network round trip.
+   */
   checkedAt: number;
 }
 

@@ -24,7 +24,6 @@ const mockSetDiskSpaceInterval = vi.fn();
 const mockRefreshDiskSpace = vi.fn();
 const mockSetAppMetricsInterval = vi.fn();
 const mockRefreshAppMetrics = vi.fn();
-const mockRefreshAgentConnectivity = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../../services/DiskSpaceMonitor.js", () => ({
   setDiskSpaceMonitorPollInterval: mockSetDiskSpaceInterval,
@@ -34,10 +33,6 @@ vi.mock("../../services/DiskSpaceMonitor.js", () => ({
 vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
   setAppMetricsMonitorPollInterval: mockSetAppMetricsInterval,
   refreshAppMetricsMonitor: mockRefreshAppMetrics,
-}));
-
-vi.mock("../../services/connectivity/AgentConnectivityService.js", () => ({
-  agentConnectivityService: { refresh: mockRefreshAgentConnectivity },
 }));
 
 import { app } from "electron";
@@ -103,7 +98,6 @@ describe("WindowFocusThrottle", () => {
     mockRefreshDiskSpace.mockClear();
     mockSetAppMetricsInterval.mockClear();
     mockRefreshAppMetrics.mockClear();
-    mockRefreshAgentConnectivity.mockClear();
     // Re-import to get fresh module state
     vi.resetModules();
 
@@ -140,10 +134,6 @@ describe("WindowFocusThrottle", () => {
     vi.doMock("../../services/ProcessMemoryMonitor.js", () => ({
       setAppMetricsMonitorPollInterval: mockSetAppMetricsInterval,
       refreshAppMetricsMonitor: mockRefreshAppMetrics,
-    }));
-
-    vi.doMock("../../services/connectivity/AgentConnectivityService.js", () => ({
-      agentConnectivityService: { refresh: mockRefreshAgentConnectivity },
     }));
 
     const mod = await import("../powerMonitor.js");

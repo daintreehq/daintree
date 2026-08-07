@@ -2,10 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ServiceConnectivityRegistry } from "../ServiceConnectivityRegistry.js";
 import type { ForgeTokenHealthState } from "../../../../shared/types/forge.js";
-import type {
-  ConnectivityServiceKey,
-  ServiceConnectivityStatus,
-} from "../../../../shared/types/ipc/connectivity.js";
+import type { ConnectivityServiceKey } from "../../../../shared/types/ipc/connectivity.js";
 
 interface FakeGitHubHealth {
   state: ForgeTokenHealthState;
@@ -20,36 +17,6 @@ interface FakeMcpServer {
   listeners: Set<(running: boolean) => void>;
   onStatusChange(listener: (running: boolean) => void): () => void;
   setRunning(running: boolean): void;
-}
-
-interface FakeAgentConnectivity {
-  state: Record<
-    "claude" | "gemini" | "codex",
-    { status: ServiceConnectivityStatus; checkedAt: number }
-  >;
-  listeners: Set<
-    (change: {
-      provider: "claude" | "gemini" | "codex";
-      status: ServiceConnectivityStatus;
-      checkedAt: number;
-    }) => void
-  >;
-  getProviderState(provider: "claude" | "gemini" | "codex"): {
-    status: ServiceConnectivityStatus;
-    checkedAt: number;
-  };
-  onStateChange(
-    listener: (change: {
-      provider: "claude" | "gemini" | "codex";
-      status: ServiceConnectivityStatus;
-      checkedAt: number;
-    }) => void
-  ): () => void;
-  emit(change: {
-    provider: "claude" | "gemini" | "codex";
-    status: ServiceConnectivityStatus;
-    checkedAt: number;
-  }): void;
 }
 
 function createFakeGitHubHealth(initial: ForgeTokenHealthState): FakeGitHubHealth {
@@ -89,33 +56,9 @@ function createFakeMcpServer(initial: boolean): FakeMcpServer {
   return fake;
 }
 
-function createFakeAgentConnectivity(): FakeAgentConnectivity {
-  const fake: FakeAgentConnectivity = {
-    state: {
-      claude: { status: "unknown", checkedAt: 0 },
-      gemini: { status: "unknown", checkedAt: 0 },
-      codex: { status: "unknown", checkedAt: 0 },
-    },
-    listeners: new Set(),
-    getProviderState: (provider) => fake.state[provider],
-    onStateChange: (listener) => {
-      fake.listeners.add(listener);
-      return () => {
-        fake.listeners.delete(listener);
-      };
-    },
-    emit: (change) => {
-      fake.state[change.provider] = { status: change.status, checkedAt: change.checkedAt };
-      for (const listener of fake.listeners) listener(change);
-    },
-  };
-  return fake;
-}
-
 describe("ServiceConnectivityRegistry", () => {
   let gitHubHealth: FakeGitHubHealth;
   let mcpServer: FakeMcpServer;
-  let agentConnectivity: FakeAgentConnectivity;
   let registry: ServiceConnectivityRegistry;
   let onRecovery: ReturnType<
     typeof vi.fn<(serviceKey: ConnectivityServiceKey, label: string) => void>
@@ -128,12 +71,10 @@ describe("ServiceConnectivityRegistry", () => {
       checkedAt: 0,
     });
     mcpServer = createFakeMcpServer(false);
-    agentConnectivity = createFakeAgentConnectivity();
     onRecovery = vi.fn();
     registry = new ServiceConnectivityRegistry({
       gitHubHealth,
       mcpServer,
-      agentConnectivity,
       onRecovery,
       now: () => 1_000_000,
     });
@@ -144,13 +85,10 @@ describe("ServiceConnectivityRegistry", () => {
   });
 
   describe("getSnapshot()", () => {
-    it("returns all five service keys with status `unknown` before start()", () => {
+    it("returns every tracked service with status `unknown` before start()", () => {
       const snapshot = registry.getSnapshot();
 
       expect(snapshot.github.status).toBe("unknown");
-      expect(snapshot["agent:claude"].status).toBe("unknown");
-      expect(snapshot["agent:gemini"].status).toBe("unknown");
-      expect(snapshot["agent:codex"].status).toBe("unknown");
       expect(snapshot.mcp.status).toBe("unknown");
     });
 
@@ -171,7 +109,6 @@ describe("ServiceConnectivityRegistry", () => {
         checkedAt: 500_000,
       };
       mcpServer.isRunning = true;
-      agentConnectivity.state.claude = { status: "reachable", checkedAt: 600_000 };
       const listener = vi.fn();
       registry.onChange(listener);
 
@@ -180,7 +117,6 @@ describe("ServiceConnectivityRegistry", () => {
       const snapshot = registry.getSnapshot();
       expect(snapshot.github.status).toBe("reachable");
       expect(snapshot.mcp.status).toBe("reachable");
-      expect(snapshot["agent:claude"].status).toBe("reachable");
 
       // Seeding should NOT emit change events — those are reserved for real
       // post-start transitions.
@@ -226,16 +162,6 @@ describe("ServiceConnectivityRegistry", () => {
       mcpServer.setRunning(false);
       expect(registry.getSnapshot().mcp.status).toBe("unreachable");
     });
-
-    it("propagates agent reachability changes", () => {
-      agentConnectivity.emit({
-        provider: "gemini",
-        status: "reachable",
-        checkedAt: 1_000_000,
-      });
-
-      expect(registry.getSnapshot()["agent:gemini"].status).toBe("reachable");
-    });
   });
 
   describe("recovery notifications", () => {
@@ -266,35 +192,6 @@ describe("ServiceConnectivityRegistry", () => {
       expect(registry.getSnapshot().mcp.status).toBe("reachable");
     });
 
-    it("does NOT fire onRecovery on `unknown` → `reachable` transitions (initial probes)", () => {
-      // Default state is `unknown`. Going to `reachable` should NOT trigger
-      // a recovery toast — that would be noise on every app startup.
-      agentConnectivity.emit({
-        provider: "claude",
-        status: "reachable",
-        checkedAt: 1_000_000,
-      });
-
-      expect(onRecovery).not.toHaveBeenCalled();
-    });
-
-    it("fires onRecovery for agent providers on unreachable → reachable", () => {
-      agentConnectivity.emit({
-        provider: "claude",
-        status: "unreachable",
-        checkedAt: 1_000_000,
-      });
-      onRecovery.mockClear();
-
-      agentConnectivity.emit({
-        provider: "claude",
-        status: "reachable",
-        checkedAt: 1_000_000,
-      });
-
-      expect(onRecovery).toHaveBeenCalledWith("agent:claude", "Claude");
-    });
-
     it("does not fire onRecovery on `unhealthy` GitHub → `healthy` (token-validity flow)", () => {
       gitHubHealth.emit({ status: "unhealthy", tokenVersion: 1, checkedAt: 1_000_000 });
       onRecovery.mockClear();
@@ -314,7 +211,6 @@ describe("ServiceConnectivityRegistry", () => {
       const isolatedRegistry = new ServiceConnectivityRegistry({
         gitHubHealth,
         mcpServer,
-        agentConnectivity,
         onRecovery: throwing,
       });
       isolatedRegistry.start();

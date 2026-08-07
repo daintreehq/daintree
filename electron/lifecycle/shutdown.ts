@@ -27,10 +27,7 @@ import { getIdleTerminalNotificationService } from "../services/IdleTerminalNoti
 import { getSystemSleepService } from "../services/SystemSleepService.js";
 import { getOsDndService } from "../services/OsDndService.js";
 import { isE2EMode } from "../setup/runtimeFlags.js";
-import {
-  agentConnectivityService,
-  getServiceConnectivityRegistry,
-} from "../services/connectivity/index.js";
+import { getServiceConnectivityRegistry } from "../services/connectivity/index.js";
 import { notificationService } from "../services/NotificationService.js";
 import {
   getCcrConfigService,
@@ -512,11 +509,6 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
             console.warn("[MAIN] OsDndService.dispose failed:", err);
           }
 
-          try {
-            agentConnectivityService.dispose();
-          } catch (err) {
-            console.warn("[MAIN] agentConnectivityService.dispose failed:", err);
-          }
           try {
             getServiceConnectivityRegistry().dispose();
           } catch (err) {

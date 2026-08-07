@@ -8,7 +8,6 @@ import type { IdleTerminalNotificationService } from "../services/IdleTerminalNo
 import { CHANNELS } from "../ipc/channels.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import { getForgeProviderImplEntries } from "../services/forgeProviderRegistry.js";
-import { agentConnectivityService } from "../services/connectivity/AgentConnectivityService.js";
 import {
   setDiskSpaceMonitorPollInterval,
   refreshDiskSpaceMonitor,
@@ -113,10 +112,6 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
         // expired during a long laptop sleep would otherwise sit undetected
         // until the provider's next scheduled probe.
         refreshForgeTokenHealth({ force: true });
-        // Re-probe agent provider reachability on wake. A long sleep across a
-        // network change (Wi-Fi swap, airplane mode toggle) often invalidates
-        // the cached "reachable" state.
-        void agentConnectivityService.refresh({ force: true, reason: "resume" });
         BrowserWindow.getAllWindows().forEach((win) => {
           if (win && !win.isDestroyed()) {
             const wc = getAppWebContents(win);
@@ -277,9 +272,6 @@ function removeThrottle(): void {
   // Opportunistic token-health re-check on focus regain, gated by each
   // provider's own cooldown so rapid window switching doesn't hammer APIs.
   refreshForgeTokenHealth();
-  // Same opportunistic re-check for agent reachability — internal cooldown
-  // prevents the alt-tab path from fanning out probes.
-  void agentConnectivityService.refresh({ reason: "focus" });
 }
 
 export function setupWindowFocusThrottle(deps: WindowFocusThrottleDeps): void {

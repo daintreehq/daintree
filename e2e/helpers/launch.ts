@@ -238,7 +238,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
   // becomes ready.
   // macOS local dev: first 1–2 launches per Playwright worker can hang at
   // electron.launch's CDP handshake even though the app reaches steady-state
-  // (services start, agent connectivity probes complete). Subsequent launches
+  // (deferred services finish starting). Subsequent launches
   // in the same worker succeed immediately. Allow a single retry so a flaky
   // first launch doesn't fail the spec.
   const isCI = Boolean(process.env.CI);
