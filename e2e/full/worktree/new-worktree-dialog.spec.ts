@@ -164,4 +164,34 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     await expect(listbox).toHaveCount(0, { timeout: T_SHORT });
     await expect(trigger).toContainText(/Clone current layout/i, { timeout: T_MEDIUM });
   });
+
+  test("selecting an in-use base branch keeps the dialog open and the form intact", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    // Dirty the form first: #11714 discarded typed input by closing the dialog,
+    // so a surviving value is the observable proof the diversion is gone.
+    const branchInput = window.locator(SEL.worktree.branchNameInput);
+    await branchInput.fill("e2e-keeps-form-state");
+
+    const trigger = window.locator(SEL.worktree.baseBranchTrigger);
+    await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
+    await trigger.click();
+
+    // The popover portals to <body>, so query the listbox from the page root.
+    const listbox = window.locator(SEL.worktree.baseBranchListbox);
+    await expect(listbox).toBeVisible({ timeout: T_MEDIUM });
+
+    // withFeatureBranch checks feature/test-branch out into a linked worktree,
+    // so its row is the one carrying the "in use" badge.
+    const inUseOption = listbox.getByRole("option", { name: /feature\/test-branch/ });
+    await expect(inUseOption).toContainText("in use", { timeout: T_MEDIUM });
+    await inUseOption.click();
+
+    // #6289: gate on the portaled listbox unmounting before asserting on the trigger.
+    await expect(listbox).toHaveCount(0, { timeout: T_SHORT });
+    await expect(window.locator(SEL.worktree.newDialog)).toBeVisible();
+    await expect(trigger).toContainText("feature/test-branch", { timeout: T_MEDIUM });
+    await expect(branchInput).toHaveValue("e2e-keeps-form-state");
+  });
 });

@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
+import { useState } from "react";
 import type { BranchInfo } from "@/types/electron";
 
 vi.stubGlobal(
@@ -1172,5 +1173,120 @@ describe("NewWorktreeDialog — recipe scope visibility (#11510)", () => {
     await advanceTimersGradually(500);
 
     expect(recipePickerCalls.last?.defaultRecipeId).toBe("global-work");
+  });
+});
+
+describe("NewWorktreeDialog — in-use base branch selection", () => {
+  // `main` is in use by `main-wt` via mockWorktreeDataMap. Make `develop` the
+  // current branch so it wins deriveDefaultBaseBranch — otherwise `main` is
+  // already the default and clicking it would change nothing observable.
+  const BRANCHES_WITH_DEVELOP_CURRENT: BranchInfo[] = TEST_BRANCHES.map((b) => ({
+    ...b,
+    current: b.name === "develop",
+  }));
+
+  const IN_USE_BRANCH = "main";
+
+  function baseBranchLabel(): string {
+    return document.getElementById("base-branch")?.textContent ?? "";
+  }
+
+  /** Match on the row's label span so `main` never resolves to `origin/main`. */
+  function baseBranchOption(label: string): HTMLElement {
+    const list = document.getElementById("branch-list");
+    if (!list) throw new Error("base-branch listbox not rendered");
+    const row = Array.from(list.querySelectorAll<HTMLElement>('[role="option"]')).find(
+      (el) => el.querySelector("span")?.textContent === label
+    );
+    if (!row) throw new Error(`no base-branch row labelled "${label}"`);
+    return row;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(BRANCHES_WITH_DEVELOP_CURRENT);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockAssignIssue.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("selects an in-use branch as the base without closing the dialog or switching worktrees", async () => {
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+    await advanceTimersGradually(500);
+
+    expect(baseBranchLabel()).toBe("develop (current)");
+
+    const row = baseBranchOption(IN_USE_BRANCH);
+    expect(row.querySelector('[title^="In use by worktree:"]')).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.click(row);
+    });
+
+    // Exact, not substring: `toContain("main")` would also accept `origin/main`.
+    expect(baseBranchLabel()).toBe(IN_USE_BRANCH);
+    expect(baseBranchOption(IN_USE_BRANCH).getAttribute("aria-selected")).toBe("true");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(mockDispatch.mock.calls.map((c) => c[0])).not.toContain("worktree.setActive");
+  });
+
+  it("reaches the same selection with Enter as with a click", async () => {
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+    await advanceTimersGradually(500);
+
+    // selectedIndex starts at 0, so Enter targets whichever row leads the list.
+    expect(baseBranchOption(IN_USE_BRANCH).getAttribute("data-option-index")).toBe("0");
+
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText("Search base branches"), { key: "Enter" });
+    });
+
+    expect(baseBranchLabel()).toBe(IN_USE_BRANCH);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(mockDispatch.mock.calls.map((c) => c[0])).not.toContain("worktree.setActive");
+  });
+
+  it("preserves a typed branch name across an in-use base-branch selection", async () => {
+    // renderDialog() pins isOpen={true}, so it can never unmount and any
+    // "still mounted"/"input survived" assertion against it passes even with the
+    // bug present. Drive `isOpen` from onClose so the close actually unmounts.
+    function ControlledDialog() {
+      const [open, setOpen] = useState(true);
+      return open ? (
+        <NewWorktreeDialog isOpen onClose={() => setOpen(false)} rootPath="/test/root" />
+      ) : null;
+    }
+
+    render(<ControlledDialog />);
+    await advanceTimersGradually(500);
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/keep-me" },
+      });
+    });
+    await advanceTimersGradually(1000);
+
+    await act(async () => {
+      fireEvent.click(baseBranchOption(IN_USE_BRANCH));
+    });
+
+    expect(screen.queryByTestId("new-worktree-dialog")).not.toBeNull();
+    expect(screen.getByTestId<HTMLInputElement>("branch-name-input").value).toBe("feature/keep-me");
   });
 });

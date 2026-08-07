@@ -2,10 +2,11 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, afterEach, beforeAll, vi } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { createRef } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { BaseBranchCombobox } from "../views/BaseBranchCombobox";
+import type { BranchPickerRow, BranchWorktreeRef } from "../branchPickerUtils";
 
 class ResizeObserverStub {
   observe() {}
@@ -37,12 +38,56 @@ function renderCombobox(overrides: Partial<Parameters<typeof BaseBranchCombobox>
         branchInputRef={createRef<HTMLInputElement>()}
         branchListRef={createRef<HTMLDivElement>()}
         branchOptionsLength={0}
-        onClose={() => {}}
         {...overrides}
       />
     </TooltipProvider>
   );
 }
+
+function optionRow(
+  name: string,
+  inUseWorktree: BranchWorktreeRef | null
+): BranchPickerRow & { kind: "option" } {
+  return {
+    kind: "option",
+    name,
+    isCurrent: false,
+    isRemote: false,
+    remoteName: null,
+    labelText: name,
+    searchText: name,
+    score: 0,
+    matchRanges: [],
+    isRecent: false,
+    recentRank: 0,
+    inUseWorktree,
+  };
+}
+
+describe("BaseBranchCombobox in-use rows", () => {
+  it("routes a click on an in-use branch to onSelect instead of diverting it", () => {
+    const onSelect = vi.fn();
+    const inUseRow = optionRow("main", { id: "main-wt", name: "main-worktree" });
+    const freeRow = optionRow("develop", null);
+    renderCombobox({
+      branchRows: [inUseRow, freeRow],
+      selectableRows: [inUseRow, freeRow],
+      onSelect,
+    });
+
+    fireEvent.click(screen.getAllByRole("option")[0]!);
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect.mock.calls[0]![0]).toBe(inUseRow);
+  });
+
+  it("labels the in-use badge with the owning worktree name, not the branch name", () => {
+    const inUseRow = optionRow("main", { id: "main-wt", name: "main-worktree" });
+    renderCombobox({ branchRows: [inUseRow], selectableRows: [inUseRow] });
+
+    expect(screen.getByTitle("In use by worktree: main-worktree")).toBeTruthy();
+  });
+});
 
 describe("BaseBranchCombobox empty states", () => {
   it("renders zero-data EmptyState when no branches and no query", () => {

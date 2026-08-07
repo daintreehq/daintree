@@ -129,6 +129,8 @@ export const SEL = {
     environmentGroup: '[role="radiogroup"][aria-label="Worktree environment mode"]',
     recipeTrigger: "#recipe-selector-trigger",
     recipeListbox: "#recipe-selector",
+    baseBranchTrigger: "#base-branch",
+    baseBranchListbox: "#branch-list",
     validationError: "#validation-error",
     overviewCell: "[data-worktree-overview-cell]",
     overviewCellFor: (id: string) => `[data-worktree-overview-cell="${id}"]`,

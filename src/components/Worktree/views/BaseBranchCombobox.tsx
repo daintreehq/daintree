@@ -5,7 +5,6 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Check, ChevronsUpDown, Info, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { actionService } from "@/services/ActionService";
 import { HighlightBranchText } from "./HighlightBranchText";
 import type { BranchPickerRow } from "../branchPickerUtils";
 
@@ -26,7 +25,6 @@ interface BaseBranchComboboxProps {
   errorField?: "base-branch" | "new-branch" | "worktree-path" | null;
   branchOptionsLength: number;
   disabled?: boolean;
-  onClose: () => void;
 }
 
 export function BaseBranchCombobox({
@@ -46,7 +44,6 @@ export function BaseBranchCombobox({
   errorField,
   branchOptionsLength,
   disabled,
-  onClose,
 }: BaseBranchComboboxProps) {
   return (
     <div className="space-y-2">
@@ -163,17 +160,7 @@ export function BaseBranchCombobox({
                       data-option-index={idx}
                       role="option"
                       aria-selected={row.name === baseBranch}
-                      onClick={() => {
-                        if (row.inUseWorktree) {
-                          actionService.dispatch("worktree.setActive", {
-                            worktreeId: row.inUseWorktree.id,
-                          });
-                          onOpenChange(false);
-                          onClose();
-                          return;
-                        }
-                        onSelect(row);
-                      }}
+                      onClick={() => onSelect(row)}
                       className={cn(
                         "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
                         row.name === baseBranch && "bg-daintree-border",

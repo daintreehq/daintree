@@ -977,7 +977,6 @@ export function NewWorktreeDialog({
                 branchListRef={branchListRef}
                 errorField={errors.errorField}
                 branchOptionsLength={branchOptions.length}
-                onClose={onClose}
               />
             )}
 
