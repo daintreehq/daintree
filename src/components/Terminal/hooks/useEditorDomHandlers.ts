@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { EditorView as EditorViewFacet } from "@codemirror/view";
 import type { EditorView } from "@codemirror/view";
+import { hasFileDrag } from "@/lib/fileDragPayload";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isEnterLikeLineBreakInputEvent } from "../hybridInputEvents";
@@ -63,6 +64,17 @@ export function useEditorDomHandlers({
           // of focus events from re-renders does not churn subscribers.
           usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
           return false;
+        },
+        drop: (event) => {
+          if (!event.dataTransfer) return false;
+          // CodeMirror reads a dropped file with a FileReader and dispatches its
+          // text, which lands alongside the `@file` chip `useDragDrop` inserts
+          // when the same drop reaches the wrapper (#11710). Claiming the event
+          // retires that branch — a true return only prevents the default, so
+          // the drop still bubbles and the chip path stays the sole producer.
+          // Drags carrying no file stay CodeMirror's: dropping text still
+          // inserts text, and moving a selection within the input still moves.
+          return hasFileDrag(event.dataTransfer.types);
         },
         beforeinput: (event) => {
           const latest = latestRef.current;
