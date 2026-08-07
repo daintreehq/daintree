@@ -6,6 +6,15 @@ import {
   keyboardLayoutBindingKey,
   usePreferencesStore,
 } from "@/store/preferencesStore";
+import { logWarn } from "@/utils/logger";
+
+/**
+ * Bumped for every change reported here, announced or not. An Undo belongs to
+ * the transition that produced it: once a later change has landed, the older
+ * toast's Undo would reverse something the user has done since, so it goes
+ * inert rather than silently rolling back the wrong thing.
+ */
+let changeSequence = 0;
 
 export interface UndoableKeyboardLayoutChange {
   /** The action whose binding caused the change; also the familiarity key. */
@@ -46,19 +55,49 @@ export function notifyUndoableKeyboardLayoutChange(change: UndoableKeyboardLayou
   if (dispatchSource !== "keybinding") return;
   if (!changed) return;
 
-  // No binding means no combo to attribute the change to, which is the whole
-  // point of the notice.
-  const combo = keybindingService.getEffectiveCombo(actionId);
-  if (!combo) return;
+  changeSequence += 1;
+  const sequenceAtAnnouncement = changeSequence;
 
-  const key = keyboardLayoutBindingKey(actionId, combo);
-  if (
-    (usePreferencesStore.getState().keyboardLayoutConfirmationsByBinding[key] ?? 0) >=
-    KEYBOARD_LAYOUT_CONFIRMATION_LIMIT
-  ) {
-    return;
+  // The change itself has already happened by the time we get here, so nothing
+  // below may throw into the caller: a failed notice would turn a completed
+  // toggle into a failed action. Same reasoning as `emitShortcutHint`.
+  try {
+    // No binding means no combo to attribute the change to, which is the whole
+    // point of the notice.
+    const combo = keybindingService.getEffectiveCombo(actionId);
+    if (!combo) return;
+
+    const key = keyboardLayoutBindingKey(actionId, combo);
+    if (
+      (usePreferencesStore.getState().keyboardLayoutConfirmationsByBinding[key] ?? 0) >=
+      KEYBOARD_LAYOUT_CONFIRMATION_LIMIT
+    ) {
+      return;
+    }
+
+    announce({ actionId, combo, title, message, onUndo, sequenceAtAnnouncement });
+  } catch (error) {
+    logWarn("Failed to announce a keyboard layout change", error);
   }
+}
 
+interface Announcement {
+  actionId: ActionId;
+  combo: string;
+  title: string;
+  message: (displayCombo: string) => string;
+  onUndo: () => void;
+  sequenceAtAnnouncement: number;
+}
+
+function announce({
+  actionId,
+  combo,
+  title,
+  message,
+  onUndo,
+  sequenceAtAnnouncement,
+}: Announcement): void {
   let undoFired = false;
 
   // eslint-disable-next-line no-restricted-syntax -- notify-event-kind: ok — a transient toast cannot carry context (notify() drops the event whenever the origin surface is visible, and the inbox fallback it needs is exactly what transient skips), and no EVENT_POLICY kind describes an attribution notice.
@@ -82,6 +121,9 @@ export function notifyUndoableKeyboardLayoutChange(change: UndoableKeyboardLayou
       label: "Undo",
       onClick: () => {
         if (undoFired) return;
+        // Something changed again after this notice went up, so this Undo would
+        // roll back the newer change rather than the one it named.
+        if (sequenceAtAnnouncement !== changeSequence) return;
         undoFired = true;
         // Reaching for Undo is the evidence that this keypress was a slip, so
         // the binding goes back to announcing itself.

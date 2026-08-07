@@ -3,16 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionContext, ActionSource } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
-const notifyLayoutChange =
-  vi.fn<
-    (change: { changed: boolean; onUndo: () => void; dispatchSource?: ActionSource }) => void
-  >();
+interface LayoutChange {
+  actionId: string;
+  changed: boolean;
+  title: string;
+  message: (displayCombo: string) => string;
+  onUndo: () => void;
+  dispatchSource?: ActionSource;
+}
+
+const notifyLayoutChange = vi.fn<(change: LayoutChange) => void>();
 vi.mock("../../keyboardLayoutChangeFeedback", () => ({
-  notifyUndoableKeyboardLayoutChange: (change: {
-    changed: boolean;
-    onUndo: () => void;
-    dispatchSource?: ActionSource;
-  }) => notifyLayoutChange(change),
+  notifyUndoableKeyboardLayoutChange: (change: LayoutChange) => notifyLayoutChange(change),
 }));
 
 import { useFocusStore } from "@/store/focusStore";
@@ -199,6 +201,33 @@ describe("nav.toggleSidebar keyboard feedback (issue #11704)", () => {
 
     expect(useFocusStore.getState().gestureSidebarHidden).toBe(false);
     expect(callbacks.onToggleSidebar).toHaveBeenCalledTimes(2);
+  });
+
+  it("announces under the toggle's own identity, so familiarity is keyed correctly", async () => {
+    const { actions, callbacks } = setupActions();
+    toggleOnDispatch(callbacks);
+
+    await runToggle(actions, "keybinding");
+
+    const change = notifyLayoutChange.mock.calls[0]![0]!;
+    expect(change.actionId).toBe("nav.toggleSidebar");
+    expect(change.title).toBe("Sidebar hidden");
+    // The combo is resolved live rather than hard-coded, so a rebind still
+    // names the key the user actually pressed.
+    expect(change.message("⌃⇧S")).toContain("⌃⇧S");
+  });
+
+  it("undo restores the sidebar even when an overlay swallows the toggle event", async () => {
+    // The toast is dismissed by the click either way, so a swallowed event
+    // would leave the sidebar hidden with the promised way back gone.
+    const { actions, callbacks } = setupActions();
+    toggleOnDispatch(callbacks);
+    await runToggle(actions, "keybinding");
+
+    callbacks.onToggleSidebar.mockImplementation(() => {});
+    notifyLayoutChange.mock.calls[0]![0]!.onUndo();
+
+    expect(useFocusStore.getState().gestureSidebarHidden).toBe(false);
   });
 
   it("undo does nothing if the sidebar is already back", async () => {

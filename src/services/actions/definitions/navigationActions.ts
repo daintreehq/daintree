@@ -34,10 +34,18 @@ export function registerNavigationActions(
         onUndo: () => {
           // The user may have brought it back themselves while the toast was up.
           if (!useFocusStore.getState().gestureSidebarHidden) return;
-          // Back out through the same event, so AppLayout re-applies its guards,
-          // its resize suppression and the live sidebar width — rather than
-          // writing the focus store here with panel state we'd have to guess.
+          // Back out through the same event, so AppLayout re-applies its resize
+          // suppression and the live sidebar width — rather than writing the
+          // focus store here with panel state we'd have to guess.
           callbacks.onToggleSidebar();
+          // That event is dropped while an overlay is open, and the toast is
+          // dismissed by the click either way. Undo is a promise the user
+          // already accepted, so restore directly rather than leave them with
+          // the sidebar still gone and the way back retired. Safe to pass no
+          // panel state: revealing keeps whatever the store already held.
+          if (useFocusStore.getState().gestureSidebarHidden) {
+            useFocusStore.getState().setSidebarGestureHidden(false);
+          }
         },
       });
     },

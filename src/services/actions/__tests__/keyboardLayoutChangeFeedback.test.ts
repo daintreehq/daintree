@@ -93,6 +93,16 @@ describe("notifyUndoableKeyboardLayoutChange", () => {
     expect(payload.context).toBeUndefined();
   });
 
+  it("stays time-bound, rather than inheriting the sticky default for action toasts", () => {
+    // notify() makes action-bearing toasts stick forever (duration 0) unless
+    // the caller sets one, which would leave a permanent "Sidebar hidden" bar.
+    fire();
+
+    const { duration } = lastPayload();
+    expect(duration).toBeGreaterThan(0);
+    expect(Number.isFinite(duration)).toBe(true);
+  });
+
   it.each<ActionSource | undefined>(["user", "menu", "context-menu", "agent", "plugin", undefined])(
     "stays silent for %s dispatch, which needs no attribution",
     (dispatchSource) => {
@@ -181,12 +191,51 @@ describe("notifyUndoableKeyboardLayoutChange", () => {
   });
 
   it("clears familiarity before running the inverse, so a re-hide is announced again", () => {
-    fire();
+    // Ordering matters: the inverse may itself re-enter this module, so the
+    // allowance has to be restored by the time onUndo observes it.
+    let seenDuringUndo: Record<string, number> | undefined;
+    fire({ onUndo: () => (seenDuringUndo = { ...confirmations() }) });
+
     lastPayload().action?.onClick();
-    notifyMock.mockClear();
 
+    expect(seenDuringUndo).toEqual({});
+  });
+
+  it("ignores an Undo once a later change has superseded the notice", () => {
+    // Hide, show, hide again — all inside the 5s window. The first toast's
+    // Undo would now reverse the user's most recent, deliberate press.
+    const staleUndo = vi.fn();
+    fire({ onUndo: staleUndo });
+    const stale = lastPayload().action;
     fire();
 
-    expect(notifyMock).toHaveBeenCalledTimes(1);
+    stale?.onClick();
+
+    expect(staleUndo).not.toHaveBeenCalled();
+  });
+
+  it("still supersedes when the later change was too familiar to announce", () => {
+    const staleUndo = vi.fn();
+    fire({ onUndo: staleUndo });
+    const stale = lastPayload().action;
+    // Exhaust the allowance so the newest hide is silent but still real.
+    usePreferencesStore.setState({
+      keyboardLayoutConfirmationsByBinding: {
+        [keyboardLayoutBindingKey(ACTION_ID, "Cmd+B")]: KEYBOARD_LAYOUT_CONFIRMATION_LIMIT,
+      },
+    });
+    fire();
+
+    stale?.onClick();
+
+    expect(staleUndo).not.toHaveBeenCalled();
+  });
+
+  it("never lets a broken notification break the change that already happened", () => {
+    notifyMock.mockImplementation(() => {
+      throw new Error("toaster exploded");
+    });
+
+    expect(() => fire()).not.toThrow();
   });
 });

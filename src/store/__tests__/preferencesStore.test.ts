@@ -919,27 +919,49 @@ describe("preferencesStore migration", () => {
       expect(migrated?.dockDensity).toBe("compact");
     });
 
-    it("drops counts that would silence a binding the user never confirmed", async () => {
-      // A hand-edited or corrupt value breaks both ways: a non-number would nag
-      // forever, an oversized one retires the notice unseen.
+    it("drops corrupt counts rather than silencing a binding the user never confirmed", async () => {
+      // Clamping an oversized value would land it on exactly the limit, which
+      // retires the notice for someone who never saw it. Dropping the entry
+      // costs one extra toast instead — the recoverable direction.
       setStoredState(
         {
           keyboardLayoutConfirmationsByBinding: {
             [KEY]: 999,
             "nav.toggleFocusMode@Cmd+K": "yes",
             "nav.quickSwitcher@Cmd+P": 0,
+            "nav.focusRegion.next@Cmd+1": -2,
+            "nav.focusRegion.prev@Cmd+2": 1.5,
           },
         },
         16
       );
-      const mod = await import("../preferencesStore");
-      const store = mod.usePreferencesStore;
+      const store = await loadStore();
 
       await vi.waitFor(() => {
-        expect(store.getState().keyboardLayoutConfirmationsByBinding).toEqual({
-          [KEY]: mod.KEYBOARD_LAYOUT_CONFIRMATION_LIMIT,
-        });
+        expect(store.getState().keyboardLayoutConfirmationsByBinding).toEqual({});
       });
+    });
+
+    it("keeps a hydrated in-range count, so the sanitizer isn't just wiping the field", async () => {
+      setStoredState({ keyboardLayoutConfirmationsByBinding: { [KEY]: 2 } }, 16);
+      const store = await loadStore();
+
+      expect(store.getState().keyboardLayoutConfirmationsByBinding).toEqual({ [KEY]: 2 });
+    });
+
+    it("hydrates a v15 blob and rewrites it at the current version", async () => {
+      setStoredState({ dockDensity: "compact" }, 15);
+      const store = await loadStore();
+      expect(store.getState().keyboardLayoutConfirmationsByBinding).toEqual({});
+
+      store.getState().recordKeyboardLayoutConfirmation("nav.toggleSidebar", "Cmd+B");
+
+      const written = JSON.parse(storage[STORAGE_KEY]!) as {
+        version: number;
+        state: Record<string, unknown>;
+      };
+      expect(written.version).toBe(store.persist.getOptions().version);
+      expect(written.state.keyboardLayoutConfirmationsByBinding).toEqual({ [KEY]: 1 });
     });
 
     it("replaces a non-record blob rather than letting it reach live state", async () => {

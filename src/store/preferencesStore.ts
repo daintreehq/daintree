@@ -341,17 +341,46 @@ function normalizeSkipMap(value: unknown): Record<string, boolean> {
 }
 
 /**
- * Coerce the confirmation tallies to whole counts within the real range. Zero
- * and below carry no information the absent key doesn't, so they're dropped
- * rather than stored — which also keeps the record sparse over time.
+ * Keep only whole counts inside the real range. Out-of-range values are dropped
+ * rather than clamped: clamping an oversized one would land on exactly the
+ * limit and silence a binding the user never confirmed, which is the single
+ * failure this notice can't recover from. Erring toward showing it again costs
+ * one toast. `Number.isInteger` also rejects NaN, Infinity and fractions.
  */
 function normalizeConfirmationMap(value: unknown): Record<string, number> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
   const result: Record<string, number> = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry !== "number" || !Number.isFinite(entry)) continue;
-    const clamped = Math.min(Math.floor(entry), KEYBOARD_LAYOUT_CONFIRMATION_LIMIT);
-    if (clamped > 0) result[key] = clamped;
+    if (typeof entry !== "number" || !Number.isInteger(entry)) continue;
+    if (entry < 1 || entry > KEYBOARD_LAYOUT_CONFIRMATION_LIMIT) continue;
+    result[key] = entry;
+  }
+  return result;
+}
+
+/**
+ * Counter-aware merge for the confirmation tallies. The generic
+ * `mergeRecordByWriterDelta` is last-writer-wins per key, which is wrong for a
+ * count two project views both increment: a view still holding 1 would write it
+ * over a sibling's 3 and reopen an allowance the user had already spent. Take
+ * the higher count instead, and keep the writer-delta rule for deletions so an
+ * Undo still clears the key rather than losing to a sibling's stale tally.
+ */
+function mergeConfirmationCounts(
+  baseline: Record<string, number>,
+  incoming: Record<string, number>,
+  onDisk: Record<string, number>
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const [key, incomingCount] of Object.entries(incoming)) {
+    const diskCount = onDisk[key];
+    result[key] = diskCount === undefined ? incomingCount : Math.max(incomingCount, diskCount);
+  }
+  for (const [key, diskCount] of Object.entries(onDisk)) {
+    if (key in incoming) continue;
+    // Held at hydration and gone now → this writer's Undo cleared it.
+    if (key in baseline) continue;
+    result[key] = diskCount;
   }
   return result;
 }
@@ -524,11 +553,9 @@ function mergePreferencesPersistedWrite({
         inc.hasSeenActionPalettePrefixHint,
         disk.hasSeenActionPalettePrefixHint
       ),
-      // Per-binding keys, so the same rule as the two id-keyed maps: a view
-      // that confirmed one shortcut must not wipe a sibling's tally for
-      // another. Undo deletes its key, which the writer-delta diff carries
-      // through as a deletion rather than resurrecting the stale count.
-      keyboardLayoutConfirmationsByBinding: mergeRecordByWriterDelta(
+      // Counts rather than independent values, so this one needs the
+      // counter-aware merge — see {@link mergeConfirmationCounts}.
+      keyboardLayoutConfirmationsByBinding: mergeConfirmationCounts(
         base.keyboardLayoutConfirmationsByBinding,
         inc.keyboardLayoutConfirmationsByBinding,
         disk.keyboardLayoutConfirmationsByBinding

@@ -147,9 +147,50 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     });
   });
 
-  // The generic scalar tests above pass even if this specific field is dropped
-  // from the merge, which would silently make the sort mode the one preference
-  // a stale sibling view can clobber (#11455).
+  // A stale view incrementing the SAME binding is the case last-writer-wins
+  // gets wrong: writing its own 2 over a sibling's 3 would hand back an
+  // allowance the user already spent, and the notice would return (#11704).
+  it("never lowers a sibling's confirmation count for the same binding", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    // This view hydrated at 1.
+    store.getState().recordKeyboardLayoutConfirmation("nav.toggleSidebar", "Cmd+B");
+
+    // A sibling view raced ahead to the limit.
+    const disk = readBlob(backing);
+    disk.state.keyboardLayoutConfirmationsByBinding = { "nav.toggleSidebar@Cmd+B": 3 };
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    // This view, still holding 1, records again.
+    store.getState().recordKeyboardLayoutConfirmation("nav.toggleSidebar", "Cmd+B");
+
+    const written = readBlob(backing);
+    expect(written.state.keyboardLayoutConfirmationsByBinding).toEqual({
+      "nav.toggleSidebar@Cmd+B": 3,
+    });
+  });
+
+  it("lets Undo clear a binding even when a sibling raced its count higher", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().recordKeyboardLayoutConfirmation("nav.toggleSidebar", "Cmd+B");
+
+    const disk = readBlob(backing);
+    disk.state.keyboardLayoutConfirmationsByBinding = { "nav.toggleSidebar@Cmd+B": 3 };
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    // The user here was surprised, so the notice must come back for them.
+    store.getState().clearKeyboardLayoutConfirmations("nav.toggleSidebar");
+
+    const written = readBlob(backing);
+    expect(written.state.keyboardLayoutConfirmationsByBinding).toEqual({});
+  });
+
+  // Dropping this field from the merge would let a stale view resurrect a
+  // tally the user just cleared with Undo, silencing the notice they were
+  // still relying on (#11704).
   it("keeps a sibling's sort mode when this view changes an unrelated scalar", async () => {
     const backing = installLocalStorage({});
     const { usePreferencesStore: store } = await import("../preferencesStore");
