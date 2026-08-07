@@ -1195,11 +1195,11 @@ describe("NewWorktreeDialog — in-use base branch selection", () => {
   function baseBranchOption(label: string): HTMLElement {
     const list = document.getElementById("branch-list");
     if (!list) throw new Error("base-branch listbox not rendered");
-    const row = Array.from(list.querySelectorAll('[role="option"]')).find(
+    const row = Array.from(list.querySelectorAll<HTMLElement>('[role="option"]')).find(
       (el) => el.querySelector("span")?.textContent === label
     );
     if (!row) throw new Error(`no base-branch row labelled "${label}"`);
-    return row as HTMLElement;
+    return row;
   }
 
   beforeEach(() => {
@@ -1287,8 +1287,6 @@ describe("NewWorktreeDialog — in-use base branch selection", () => {
     });
 
     expect(screen.queryByTestId("new-worktree-dialog")).not.toBeNull();
-    expect((screen.getByTestId("branch-name-input") as HTMLInputElement).value).toBe(
-      "feature/keep-me"
-    );
+    expect(screen.getByTestId<HTMLInputElement>("branch-name-input").value).toBe("feature/keep-me");
   });
 });
