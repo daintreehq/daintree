@@ -944,6 +944,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "plugin-capability:acknowledge-consent": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityAcknowledgeConsentInput];
+    result: void;
+  };
   "plugin-capability:resolve-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
     result: void;

@@ -1,5 +1,5 @@
 import type { BuiltInPluginCapability } from "../../../shared/types/plugin.js";
-import type { PluginCapabilityConsentDecision } from "../../../shared/types/pluginCapabilityConsent.js";
+import type { PluginCapabilityConsentOutcome } from "../../../shared/types/pluginCapabilityConsent.js";
 import type { PluginCapabilityConsentStore } from "./PluginCapabilityConsentStore.js";
 
 /** Prefix on the thrown error so `useHostChannel` discriminates a denial. */
@@ -21,7 +21,7 @@ export interface PluginCapabilityConsentRequest {
 /** Bridge that owns the consent UI surface (renderer dialog). */
 export type PluginCapabilityConsentBridge = (
   request: PluginCapabilityConsentRequest
-) => Promise<PluginCapabilityConsentDecision>;
+) => Promise<PluginCapabilityConsentOutcome>;
 
 /**
  * Orchestrates just-in-time consent for a single plugin host capability
@@ -41,7 +41,7 @@ export type PluginCapabilityConsentBridge = (
  */
 export class PluginCapabilityConsentService {
   private bridge: PluginCapabilityConsentBridge | null = null;
-  private readonly inFlight = new Map<string, Promise<PluginCapabilityConsentDecision>>();
+  private readonly inFlight = new Map<string, Promise<PluginCapabilityConsentOutcome>>();
 
   constructor(private readonly consentStore: PluginCapabilityConsentStore) {}
 
@@ -72,7 +72,15 @@ export class PluginCapabilityConsentService {
   /**
    * Gate a gated host capability call. Resolves silently when the capability is
    * already granted or the user approves; throws a `PERMISSION_REQUIRED:` error
-   * when the user rejects or no consent bridge is installed.
+   * otherwise.
+   *
+   * Every failure path fails closed, but they no longer speak with one voice
+   * (#11708). Only an actual refusal says the plugin "was denied": a prompt that
+   * expired unanswered says it timed out, and a prompt that never reached a
+   * renderer says Daintree could not present it. Reporting an undelivered prompt
+   * as a denial was the misleading half of the original bug — it sent plugin
+   * authors looking for a user who had refused, and a manifest problem that
+   * didn't exist.
    */
   async ensureAllowed(
     pluginId: string,
@@ -82,25 +90,40 @@ export class PluginCapabilityConsentService {
   ): Promise<void> {
     if (this.consentStore.hasGrant({ pluginId, capability })) return;
 
-    const decision = await this.requestDecision(
+    const outcome = await this.requestOutcome(
       pluginId,
       pluginDisplayName,
       capability,
       declaredCapabilities
     );
 
-    if (decision === "approved-and-pin") {
+    if (outcome === "approved-and-pin") {
       this.consentStore.grant({ pluginId, capability });
       return;
     }
-    if (decision === "approved-once") return;
+    if (outcome === "approved-once") return;
 
-    if (decision === "timeout") {
+    if (outcome === "undeliverable") {
+      // The prompt never reached a renderer that could show it. Logged at error
+      // level, not warn: unlike an abandoned dialog this is a Daintree-side
+      // delivery failure, not a user behaviour (#11708).
+      console.error(
+        `[PluginCapabilityConsentService] could not present the consent prompt for plugin "${pluginId}" capability "${capability}" — it never reached a renderer, or the renderer holding it went away before answering`
+      );
+      throw new Error(
+        `${PLUGIN_CAPABILITY_DENIED_PREFIX}: Daintree could not present the "${capability}" capability consent prompt for plugin "${pluginId}"`
+      );
+    }
+
+    if (outcome === "timeout") {
       // Fail closed exactly like "rejected", but log distinctly so an abandoned
       // dialog is diagnosable in the operator logs rather than reading as a
       // deliberate refusal (#10841).
       console.warn(
         `[PluginCapabilityConsentService] consent prompt timed out for plugin "${pluginId}" capability "${capability}"`
+      );
+      throw new Error(
+        `${PLUGIN_CAPABILITY_DENIED_PREFIX}: the "${capability}" capability consent prompt for plugin "${pluginId}" timed out`
       );
     }
 
@@ -110,30 +133,42 @@ export class PluginCapabilityConsentService {
   }
 
   /**
-   * Resolve the user's decision for a `(pluginId, capability)`, coalescing
-   * concurrent first-use requests onto one in-flight prompt. Re-checks the grant
-   * store after awaiting a coalesced prompt so a sibling call that just got
+   * Resolve the outcome for a `(pluginId, capability)`, coalescing concurrent
+   * first-use requests onto one in-flight prompt. Re-checks the grant store
+   * after awaiting a coalesced prompt so a sibling call that just got
    * `approved-and-pin` lets the rest through without a second decision.
+   *
+   * Both non-decision paths — no bridge installed, and a bridge that throws —
+   * are delivery failures rather than refusals, so they resolve `undeliverable`
+   * (#11708). The fail-closed guarantee is unchanged; only the reported reason
+   * differs.
    */
-  private requestDecision(
+  private requestOutcome(
     pluginId: string,
     pluginDisplayName: string,
     capability: BuiltInPluginCapability,
     declaredCapabilities: readonly BuiltInPluginCapability[]
-  ): Promise<PluginCapabilityConsentDecision> {
+  ): Promise<PluginCapabilityConsentOutcome> {
     if (this.bridge === null) {
       // Fail closed — no UI to approve through.
-      return Promise.resolve("rejected");
+      return Promise.resolve("undeliverable");
     }
     const key = JSON.stringify([pluginId, capability]);
     const existing = this.inFlight.get(key);
     if (existing) return existing;
 
     const bridge = this.bridge;
-    const promise = bridge({ pluginId, pluginDisplayName, capability, declaredCapabilities })
+    // Invoke through an async wrapper so a bridge that throws *synchronously*
+    // becomes a rejection the `.catch` below can classify. Calling it bare would
+    // let that throw escape `requestOutcome` entirely, and the gated call would
+    // reject with a raw error instead of a `PERMISSION_REQUIRED:` one — still
+    // closed, but outside the contract plugins are told to expect.
+    const invoke = async () =>
+      bridge({ pluginId, pluginDisplayName, capability, declaredCapabilities });
+    const promise = invoke()
       .catch((err) => {
         console.error("[PluginCapabilityConsentService] Consent bridge threw:", err);
-        return "rejected" as PluginCapabilityConsentDecision;
+        return "undeliverable" as PluginCapabilityConsentOutcome;
       })
       .finally(() => {
         this.inFlight.delete(key);

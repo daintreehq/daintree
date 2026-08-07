@@ -29,6 +29,8 @@ interface PluginCapabilityConfirmActions {
 
 interface PendingResolver {
   resolve: (decision: PluginCapabilityConsentDecision) => void;
+  /** Kept so a repeat request for the same id can share this outcome. */
+  promise: Promise<PluginCapabilityConsentDecision>;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -92,7 +94,14 @@ export const usePluginCapabilityConfirmStore = create<
   },
 
   reset: () => {
-    for (const { timer } of resolvers.values()) clearTimeout(timer);
+    // Settle every waiter before dropping it. Clearing the map alone left the
+    // gating promises pending forever, and `requestPluginCapabilityConsent`
+    // documents that its promise always settles. "rejected" is the fail-closed
+    // direction, matching drop().
+    for (const { timer, resolve } of resolvers.values()) {
+      clearTimeout(timer);
+      resolve("rejected");
+    }
     resolvers.clear();
     set({ queue: [], current: null });
   },
@@ -102,33 +111,40 @@ export const usePluginCapabilityConfirmStore = create<
  * Push a consent prompt into the queue and return a Promise that resolves with
  * the user's decision. The returned Promise never rejects — callers branch on
  * the discriminated decision value.
+ *
+ * A `requestId` already in flight returns that request's existing promise rather
+ * than queueing a second dialog. Main deliberately re-pushes an unacknowledged
+ * prompt (#11708), so a repeat is the *same* request arriving twice, not a
+ * collision — ids are main-minted UUIDs. Treating a repeat as an error and
+ * resolving it "rejected", as this did before, surfaced to the plugin as a user
+ * denial that never happened, which is the very failure mode #11708 exists to
+ * remove.
  */
 export function requestPluginCapabilityConsent(
   item: Omit<PendingPluginCapabilityConsent, "enqueuedAt">
 ): Promise<PluginCapabilityConsentDecision> {
-  return new Promise((resolve) => {
-    if (resolvers.has(item.requestId)) {
-      console.warn(
-        `[PluginCapabilityConfirmStore] duplicate requestId rejected: ${item.requestId}`
-      );
-      resolve("rejected");
-      return;
-    }
-    const { requestId } = item;
-    // Safety net: an abandoned dialog settles itself as "timeout" so the gating
-    // promise never hangs and the stale prompt is evicted from the store. The
-    // resolver is pre-deleted before delegating state cleanup to drop(), which
-    // then finds no resolver and only advances the queue (#10841).
-    const timer = setTimeout(() => {
-      const entry = resolvers.get(requestId);
-      if (!entry) return;
-      resolvers.delete(requestId);
-      entry.resolve("timeout");
-      usePluginCapabilityConfirmStore.getState().drop(requestId);
-    }, PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS);
-    resolvers.set(requestId, { resolve, timer });
-    usePluginCapabilityConfirmStore.getState().enqueue({ ...item, enqueuedAt: Date.now() });
+  const { requestId } = item;
+  const existing = resolvers.get(requestId);
+  if (existing) return existing.promise;
+
+  let settle!: (decision: PluginCapabilityConsentDecision) => void;
+  const promise = new Promise<PluginCapabilityConsentDecision>((resolve) => {
+    settle = resolve;
   });
+  // Safety net: an abandoned dialog settles itself as "timeout" so the gating
+  // promise never hangs and the stale prompt is evicted from the store. The
+  // resolver is pre-deleted before delegating state cleanup to drop(), which
+  // then finds no resolver and only advances the queue (#10841).
+  const timer = setTimeout(() => {
+    const entry = resolvers.get(requestId);
+    if (!entry) return;
+    resolvers.delete(requestId);
+    entry.resolve("timeout");
+    usePluginCapabilityConfirmStore.getState().drop(requestId);
+  }, PLUGIN_CAPABILITY_CONSENT_TIMEOUT_MS);
+  resolvers.set(requestId, { resolve: settle, promise, timer });
+  usePluginCapabilityConfirmStore.getState().enqueue({ ...item, enqueuedAt: Date.now() });
+  return promise;
 }
 
 /** Test-only escape hatch — resets store and clears the resolver map. */
