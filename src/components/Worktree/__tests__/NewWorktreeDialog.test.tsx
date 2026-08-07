@@ -1336,8 +1336,10 @@ describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
     renderDialog();
     await advanceTimersGradually(500);
 
-    await typeBranch("feature/terrain");
-    const branchInput = await typeBranch("feature/terrain-shadows");
+    const branchInput = await typeBranch("feature/terrain");
+    // Resume typing from whatever the field actually holds. Replacing the value
+    // outright would mask a rewrite, since it overwrites the damage too.
+    await typeBranch(`${branchInput.value}-shadows`);
 
     expect(branchInput.value).toBe("feature/terrain-shadows");
     expect(screen.queryByText(/auto-incremented/i)).toBeNull();
@@ -1348,6 +1350,10 @@ describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
     await advanceTimersGradually(500);
 
     const branchInput = await typeBranch("feature/terrain");
+    const pathInput = screen.getByTestId("worktree-path-input") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: "/custom/path" } });
+    });
     mockGetAvailableBranch.mockClear();
     mockGetDefaultPath.mockClear();
 
@@ -1356,6 +1362,9 @@ describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
     });
 
     expect(branchInput.value).toBe("feature/terrain-2");
+    // Skipping the re-check is what keeps a hand-edited path from being
+    // regenerated out from under the user.
+    expect(pathInput.value).toBe("/custom/path");
     // Re-checking a name we already know is free would re-disable Create in the
     // gap between the blur and the click that caused it, swallowing the click.
     const createButton = screen.getByTestId("create-worktree-button") as HTMLButtonElement;
@@ -1371,9 +1380,14 @@ describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
     await advanceTimersGradually(500);
 
     const branchInput = await typeBranch("feature/terrain");
+    // The rewrite must be the blur's doing, not the debounce's.
+    expect(branchInput.value).toBe("feature/terrain");
+
     await act(async () => {
       fireEvent.blur(branchInput);
     });
+    expect(branchInput.value).toBe("feature/terrain-2");
+
     await act(async () => {
       fireEvent.click(screen.getByTestId("create-worktree-button"));
     });

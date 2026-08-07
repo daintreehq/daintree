@@ -73,6 +73,8 @@ describe("useBranchValidation — deferred branch resolution", () => {
     const { result } = renderValidation("feature/terrain");
     await settle();
 
+    // An offer genuinely exists — the null below is the mismatch talking.
+    expect(result.current.branchWasAutoResolved).toBe(true);
     expect(result.current.consumeBranchResolution("feature/terrain-shadows")).toBeNull();
   });
 
@@ -113,14 +115,18 @@ describe("useBranchValidation — deferred branch resolution", () => {
 
   it("discards a pending resolution as soon as the input changes", async () => {
     mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
-      Promise.resolve(name === "feature/terrain" ? "feature/terrain-2" : name)
+      Promise.resolve(`${name}-2`)
     );
     const { result, rerender } = renderValidation("feature/terrain");
     await settle();
 
-    rerender({ branchInput: "feature/terrain-shadows" });
-
+    rerender({ branchInput: "feature/canyon" });
     expect(result.current.consumeBranchResolution("feature/terrain")).toBeNull();
+
+    // The new value's own offer still lands, so the null above is invalidation
+    // rather than a consumer that never returns anything.
+    await settle();
+    expect(result.current.consumeBranchResolution("feature/canyon")).toBe("feature/canyon-2");
   });
 
   it("does not re-check a name it just handed over", async () => {
@@ -174,11 +180,13 @@ describe("useBranchValidation — deferred branch resolution", () => {
     });
     await settle();
 
+    // The path still generates, so the hook ran and skipped only the branch check.
+    expect(mockGetDefaultPath).toHaveBeenCalledWith(ROOT, "existing/branch");
     expect(mockGetAvailableBranch).not.toHaveBeenCalled();
     expect(result.current.consumeBranchResolution("feature/terrain")).toBeNull();
   });
 
-  it("drops a cached resolution when the dialog reopens", async () => {
+  it("re-checks on reopen even when the branch and root are unchanged", async () => {
     mockGetAvailableBranch.mockResolvedValue("feature/terrain-2");
     const { result, rerender } = renderHook(
       (props: { isOpen: boolean }) =>
@@ -195,6 +203,14 @@ describe("useBranchValidation — deferred branch resolution", () => {
     rerender({ isOpen: false });
     rerender({ isOpen: true });
 
+    // Reopening clears the path and the cached offer, so it has to ask again —
+    // otherwise the dialog reopens with an empty path it can never refill.
     expect(result.current.consumeBranchResolution("feature/terrain")).toBeNull();
+    mockGetAvailableBranch.mockClear();
+    mockGetDefaultPath.mockClear();
+
+    await settle();
+    expect(mockGetAvailableBranch).toHaveBeenCalledWith(ROOT, "feature/terrain");
+    expect(result.current.worktreePath).toBe("/worktrees/feature/terrain");
   });
 });

@@ -56,6 +56,10 @@ export function useBranchValidation({
   const effectiveBranchName = overrideBranchName ?? branchInput;
 
   useEffect(() => {
+    // Reopening has to re-check even when the branch and root are unchanged:
+    // the reset above cleared the path, and nothing else would refill it.
+    if (!isOpen) return;
+
     const trimmedInput = effectiveBranchName.trim();
 
     // Any input change invalidates a resolution computed for the previous value.
@@ -199,7 +203,7 @@ export function useBranchValidation({
       abortController.abort();
       setIsGeneratingPath(false);
     };
-  }, [effectiveBranchName, rootPath, skipAvailabilityCheck]);
+  }, [effectiveBranchName, rootPath, skipAvailabilityCheck, isOpen]);
 
   // Applies the offered name only if it still matches what the field holds right
   // now — the argument is read at acceptance time, never captured when the
