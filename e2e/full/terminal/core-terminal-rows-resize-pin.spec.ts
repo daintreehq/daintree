@@ -32,11 +32,18 @@ type TerminalScrollHooks = {
 };
 
 /**
- * Long enough for the animation frame that carries xterm's queued viewport
- * sync, short enough to stay inside the reconciliation watchdog's 3s sweep —
- * which measures the LIVE container and would undo the simulated grid below.
+ * Let xterm's queued refresh callback — and therefore its viewport sync — run.
+ * Two frames: the first drains the callback the resize queued, the second lets
+ * anything that callback itself scheduled land before we read.
  */
-const SYNC_FRAME_MS = 250;
+async function waitForFrames(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      })
+  );
+}
 
 function panelId(): string {
   if (!terminalPanelId) throw new Error("Could not resolve terminal panel ID");
@@ -146,7 +153,7 @@ test.describe.serial("Core: Terminal rows-only resize keeps the viewport pinned"
     // therefore run the very invalidation under test — priming afterwards is
     // what guarantees the target shrink below starts from a primed cache.
     const baselineGrid = await simulateResize(window, outputBox.width, outputBox.height);
-    await window.waitForTimeout(SYNC_FRAME_MS);
+    await waitForFrames(window);
     const baseline = await getScrollState(window);
     expect(baseline.cols).toBe(baselineGrid.cols);
     expect(baseline.baseY).toBeGreaterThan(0);
@@ -161,10 +168,10 @@ test.describe.serial("Core: Terminal rows-only resize keeps the viewport pinned"
     expect(scrolledUp.viewportY, "the -40 leg did not move off bottom").toBeLessThan(
       scrolledUp.baseY
     );
-    await window.waitForTimeout(SYNC_FRAME_MS);
+    await waitForFrames(window);
 
     const scrolledBack = await scrollLines(window, 40);
-    await window.waitForTimeout(SYNC_FRAME_MS);
+    await waitForFrames(window);
     const primed = await getScrollState(window);
     expect(primed.viewportY, "the +40 leg did not return to bottom").toBe(primed.baseY);
     expect(primed.isUserScrolledBack).toBe(false);
@@ -178,7 +185,11 @@ test.describe.serial("Core: Terminal rows-only resize keeps the viewport pinned"
     // font metric, so this shrinks by exactly one row on any platform.
     const rowPx = Math.ceil(outputBox.height / baseline.rows) + 1;
     await simulateResize(window, outputBox.width, outputBox.height - rowPx);
-    await window.waitForTimeout(SYNC_FRAME_MS);
+    // Wait for FRAMES, not wall clock. xterm's corrective sync rides an
+    // animation frame; a host-side timer that expires first would snapshot a
+    // scrollable still holding BOTH its old position and old maximum, which
+    // reads as "pinned" and would pass with the fix removed.
+    await waitForFrames(window);
 
     // ONE snapshot: the shrunken grid must still be the live grid at the moment
     // the pin is judged. Asserting these separately, or polling for eventual
@@ -191,6 +202,14 @@ test.describe.serial("Core: Terminal rows-only resize keeps the viewport pinned"
       `rows did not shrink (watchdog may have reconciled): ${detail}`
     ).toBeLessThan(baseline.rows);
     expect(after.rows, `degenerate grid: ${detail}`).toBeGreaterThan(1);
+
+    // Proof the sync actually ran: fewer rows over the same scrollback means a
+    // shorter viewport and therefore MORE room to scroll. Without this the
+    // pinned check could pass on a scrollable that never moved at all.
+    expect(
+      after.maxScrollTop ?? 0,
+      `viewport sync never applied the new dimensions: ${detail}`
+    ).toBeGreaterThan(baseline.maxScrollTop ?? 0);
 
     // The logical half holds with or without the fix; the visual half is what
     // regressed, and the two disagreeing IS the defect.

@@ -133,11 +133,20 @@ function invalidateXtermViewportScrollCache(terminal: Terminal): void {
  * against, so forcing a sync against a stale one lands the target a row short,
  * and the scroll event that follows reports a negative delta: it would drag
  * the buffer back into scrollback and mark it user-scrolled, which is the
- * failure this whole helper exists to prevent. Skip until the renderer catches
- * up; every path that reveals a pane re-runs the pin against a live renderer.
+ * failure this whole helper exists to prevent.
  *
- * Half a cell of tolerance separates "adopted" (a rounding delta) from "stale"
- * (at least one whole row behind).
+ * Skipping leaves a pane that was resized while paused with the same stale
+ * cache it has on the unfixed build — no repair, but no new damage either, and
+ * nothing re-pins it on reveal (`applyDeferredResize` early-returns once the
+ * logical grid already matches, and the watchdog sees no divergence to fix).
+ * Repairing that case needs a deferred retry this deliberately does not carry.
+ *
+ * Half a cell of tolerance separates "adopted" from "stale". Both renderers
+ * keep the residue far below it: the DOM renderer derives `css.cell.height` by
+ * dividing `css.canvas.height` by the row count, so the two agree exactly, and
+ * the WebGL renderer's independent derivation differs only by the sub-pixel
+ * rounding in its `Math.round(device / dpr)`. A stale canvas is at least one
+ * whole row out.
  */
 function rendererHasAdoptedRowCount(
   core: XtermCoreViewportSync | undefined,
