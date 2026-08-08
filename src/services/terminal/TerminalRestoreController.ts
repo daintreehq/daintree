@@ -67,15 +67,42 @@ export class TerminalRestoreController {
    * `TerminalResizeController.resizeTerminal`), so it always holds the newest
    * intended geometry (#11552).
    */
-  private beginRestoreWindow(managed: ManagedTerminal): number {
+  private beginRestoreWindow(managed: ManagedTerminal, captureGeometry?: TerminalGeometry): number {
     if (!managed.isSerializedRestoreInProgress) {
-      managed.pendingRestoreGeometry = {
-        cols: managed.terminal.cols,
-        rows: managed.terminal.rows,
-      };
+      managed.pendingRestoreGeometry = this.intendedGeometry(managed, captureGeometry);
     }
     managed.isSerializedRestoreInProgress = true;
     return ++managed.restoreWindowToken;
+  }
+
+  /**
+   * The grid this pane belongs on, as best known when a restore window opens.
+   *
+   * `terminal.cols/rows` is only evidence of the pane's real grid once xterm has
+   * been opened against a measured host. A pane that has never been opened is
+   * still on whatever it was CONSTRUCTED at, which for anything the persisted
+   * size didn't reach is xterm's 80×24 default — and seeding that made
+   * `endRestoreWindow` snap a correctly-aligned replay back onto it, then leave
+   * the still-live pane parsing a ~200-column agent into 80 columns until the
+   * user finally selected its worktree (#11718).
+   *
+   * For that parked case prefer, in order: the attach target (the persisted
+   * grid, which is where the surviving PTY already is), then the snapshot's
+   * capture grid (at least where the mirror and PTY were last agreed). Both are
+   * strictly better evidence than a constructor default. Only the SEED changes:
+   * a resize landing mid-window still overwrites this via `resizeTerminal`, so a
+   * parked resize continues to win, exactly as before.
+   */
+  private intendedGeometry(
+    managed: ManagedTerminal,
+    captureGeometry: TerminalGeometry | undefined
+  ): TerminalGeometry {
+    if (!managed.isOpened) {
+      const target = { cols: managed.targetCols, rows: managed.targetRows };
+      if (isValidTerminalGeometry(target)) return target;
+      if (isValidTerminalGeometry(captureGeometry)) return captureGeometry;
+    }
+    return { cols: managed.terminal.cols, rows: managed.terminal.rows };
   }
 
   /**
@@ -190,7 +217,7 @@ export class TerminalRestoreController {
       }
 
       const restoreGeneration = ++managed.restoreGeneration;
-      restoreWindow = this.beginRestoreWindow(managed);
+      restoreWindow = this.beginRestoreWindow(managed, captureGeometry);
       managed.lastScrollbackRestoreError = undefined;
 
       const scrollBackOffset = managed.isUserScrolledBack
@@ -254,7 +281,7 @@ export class TerminalRestoreController {
     }
 
     const restoreGeneration = ++managed.restoreGeneration;
-    const restoreWindow = this.beginRestoreWindow(managed);
+    const restoreWindow = this.beginRestoreWindow(managed, captureGeometry);
     managed.lastScrollbackRestoreError = undefined;
 
     const task = async (): Promise<boolean> => {

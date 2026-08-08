@@ -119,6 +119,10 @@ describe("TerminalRestoreController", () => {
       isSerializedRestoreInProgress: false,
       deferredOutput: [],
       isUserScrolledBack: false,
+      // These model an attached pane: `mockTerminal.cols` is a measured grid, so
+      // the restore window may seed from it. A never-opened pane is still on its
+      // constructor default and seeds from its target instead (#11718).
+      isOpened: true,
       ...overrides,
     } as unknown as ManagedTerminal;
   }

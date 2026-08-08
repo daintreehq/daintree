@@ -263,6 +263,12 @@ export interface ManagedTerminal {
    * overwritten by any resize that lands mid-replay
    * (`TerminalResizeController.resizeTerminal` parks instead of applying), and
    * drained by the restore that normalizes back. Undefined outside a restore.
+   *
+   * "The real grid" is `terminal.cols/rows` only for an OPENED pane. A pane that
+   * has never been opened was never measured, so it still sits at whatever it
+   * was constructed at; `TerminalRestoreController.intendedGeometry` seeds those
+   * from the attach target or the snapshot's capture grid instead, so a restore
+   * cannot strand a live background pane on a constructor default (#11718).
    */
   pendingRestoreGeometry?: TerminalGeometry;
   /**
