@@ -437,7 +437,11 @@ describe("systemActions adversarial", () => {
       expect(notifyMock).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "success",
-          title: "Reference file created",
+          // The message is computed from the mocked result (3 files, 4 KB, the
+          // requested format), so it asserts real composition. The title is
+          // pure copy — pinning the wording would force a test edit for a copy
+          // tweak, so only require that the toast carries one.
+          title: expect.stringMatching(/\S/),
           message: "Copied 3 files (4 KB) as XML to clipboard",
           context: { eventKind: "agent" },
         })

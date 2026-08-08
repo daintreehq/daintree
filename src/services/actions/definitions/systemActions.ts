@@ -527,7 +527,10 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
           notify({
             type: "success",
-            title: "Reference file created",
+            // Matches the title the toolbar's own copy already uses for this
+            // artifact ("context", never "reference file"), paired with the
+            // same formatCopyResultMessage body — see Toolbar.tsx.
+            title: "Context copied",
             message: formatCopyResultMessage({
               fileCount: result.fileCount,
               stats: result.stats,

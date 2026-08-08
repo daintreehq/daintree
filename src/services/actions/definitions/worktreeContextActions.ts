@@ -310,7 +310,8 @@ export function registerWorktreeContextActions(
           format: z.enum(["xml", "json", "markdown", "tree", "ndjson", "sarif"]).optional(),
           modified: z.boolean().optional(),
           includePaths: z
-            .array(z.string())
+            .array(z.string().min(1))
+            .min(1)
             .optional()
             .describe(
               "Worktree-relative minimatch patterns to scope the context to. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'."
