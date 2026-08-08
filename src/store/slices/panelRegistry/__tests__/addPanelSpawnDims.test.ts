@@ -243,7 +243,12 @@ describe("construction geometry for restored panes (#11718)", () => {
     vi.mocked(terminalInstanceService.prewarmTerminal).mockReset();
   });
 
-  /** The cols/rows the xterm constructor was actually handed for `id`. */
+  /**
+   * The options `id` was prewarmed with — spread straight into `new Terminal()`
+   * by `createManagedTerminal`, so cols/rows here are the constructor grid.
+   * (`prewarmTerminal` is mocked at this layer; the real constructor behaviour
+   * is covered against a live xterm in TerminalRestoreController.replay.test.ts.)
+   */
   async function prewarmDims(id: string): Promise<{ cols?: number; rows?: number } | undefined> {
     const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
     const call = vi
@@ -335,10 +340,35 @@ describe("construction geometry for restored panes (#11718)", () => {
     });
     await drainMicrotasks();
 
+    // All-or-nothing across every consumer — a partial application would leak
+    // the valid half into one of them.
     expect(await prewarmDims("restored-3")).not.toMatchObject({ rows: 51 });
     const spawnArgs = terminalClient.spawn.mock.calls.find(
       (call) => (call[0] as { id?: string }).id === "restored-3"
     )?.[0] as { cols: number; rows: number };
     expect(spawnArgs.rows).not.toBe(51);
+    const panel = usePanelStore.getState().panelsById["restored-3"] as PtyPanelData;
+    expect(panel.rows).not.toBe(51);
+  });
+
+  it("rejects a grid beyond the shared maximum, not just a zero one", async () => {
+    // Reachable from legacy or corrupted persisted state, and structurally
+    // different from the zero case: every field is a positive integer.
+    const { addPanel } = usePanelStore.getState();
+    await addPanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      requestedId: "restored-4",
+      cwd: "/",
+      bypassLimits: true,
+      initialTerminalGeometry: { cols: 100_000, rows: 51 },
+    });
+    await drainMicrotasks();
+
+    expect(await prewarmDims("restored-4")).not.toMatchObject({ cols: 100_000 });
+    const panel = usePanelStore.getState().panelsById["restored-4"] as PtyPanelData;
+    expect(panel.cols).toBe(80);
+    expect(panel.rows).toBe(24);
   });
 });

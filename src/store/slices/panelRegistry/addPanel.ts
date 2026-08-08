@@ -722,8 +722,8 @@ export const createAddPanelActions = (
       originalPresetId: options.originalPresetId ?? options.agentPresetId,
       agentLaunchFlags: options.agentLaunchFlags,
       env: computeEnvProvenance(options.env),
-      initialCols: 80,
-      initialRows: 24,
+      initialCols: constructionDims?.cols ?? 80,
+      initialRows: constructionDims?.rows ?? 24,
       spawnedBy: options.spawnedBy,
       resumedFromSessionId: options.agentSessionId,
     });

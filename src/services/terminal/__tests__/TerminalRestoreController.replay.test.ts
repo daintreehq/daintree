@@ -10,6 +10,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { TerminalRestoreController } from "../TerminalRestoreController";
 import type { ManagedTerminal } from "../types";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
+import { terminalClient } from "@/clients";
 
 vi.mock("@/clients", () => ({
   terminalClient: { getSerializedState: vi.fn() },
@@ -264,6 +265,83 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
 
       const live = makeTerminal(80, 24);
       const { controller } = makeController(live, { isOpened: false });
+
+      controller.restoreFromSerialized("t1", snapshot.data, snapshot);
+      await flush(live);
+      await Promise.resolve();
+
+      expect(live.cols).toBe(CAPTURE_COLS);
+      expect(live.rows).toBe(PARKED_ROWS);
+    });
+
+    it("keeps that fallback through fetchAndRestore, the path hydration uses", async () => {
+      // fetchAndRestore opens its window BEFORE the snapshot exists, and the
+      // nested restore cannot reseed an open window — so a seed computed from
+      // capture geometry would never survive this entry point. Expressing "no
+      // target" as an absent seed is what makes the two paths agree.
+      const { snapshot } = await capture(CAPTURE_COLS, WRAPPED_LINE, PARKED_ROWS);
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot);
+
+      const live = makeTerminal(80, 24);
+      const { controller } = makeController(live, { isOpened: false });
+
+      await controller.fetchAndRestore("t1");
+      await flush(live);
+      await Promise.resolve();
+
+      expect(live.cols).toBe(CAPTURE_COLS);
+      expect(live.rows).toBe(PARKED_ROWS);
+    });
+
+    it("prefers the parked target over the capture grid through fetchAndRestore", async () => {
+      const { snapshot } = await capture(CAPTURE_COLS, WRAPPED_LINE, PARKED_ROWS);
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot);
+
+      const live = makeTerminal(80, 24);
+      const { controller } = makeController(live, {
+        isOpened: false,
+        targetCols: PARKED_COLS,
+        targetRows: PARKED_ROWS,
+      });
+
+      await controller.fetchAndRestore("t1");
+      await flush(live);
+      await Promise.resolve();
+
+      expect(live.cols).toBe(PARKED_COLS);
+    });
+
+    it("applies the parked target on the incremental path too", async () => {
+      // Large snapshots take the incremental route, which opens its own window.
+      const bulk = `${WRAPPED_LINE}\r\n`.repeat(40) + WRAPPED_LINE;
+      const { snapshot } = await capture(CAPTURE_COLS, bulk, PARKED_ROWS);
+
+      const live = makeTerminal(80, 24);
+      const { controller } = makeController(live, {
+        isOpened: false,
+        targetCols: PARKED_COLS,
+        targetRows: PARKED_ROWS,
+      });
+
+      await controller.restoreFromSerializedIncremental("t1", snapshot.data, snapshot);
+      await flush(live);
+      await Promise.resolve();
+
+      expect(live.cols).toBe(PARKED_COLS);
+      expect(live.rows).toBe(PARKED_ROWS);
+    });
+
+    it("ignores a parked target that is not a grid a terminal could have had", async () => {
+      // Corrupt or legacy persisted state must not become the pane's grid; the
+      // capture grid stands instead.
+      const { snapshot } = await capture(CAPTURE_COLS, WRAPPED_LINE, PARKED_ROWS);
+
+      const live = makeTerminal(80, 24);
+      const { controller } = makeController(live, {
+        isOpened: false,
+        targetCols: 100_000,
+        targetRows: PARKED_ROWS,
+      });
 
       controller.restoreFromSerialized("t1", snapshot.data, snapshot);
       await flush(live);
