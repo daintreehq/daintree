@@ -258,6 +258,19 @@ export function mirrorNeedsResize(
 }
 
 /**
+ * Whether a session replay currently owns this mirror's grid.
+ *
+ * Callers need this to tell a mirror that has DRIFTED off the PTY grid from one
+ * deliberately parked on a capture grid: the parked mirror's live geometry is
+ * expected to disagree, and treating that as divergence produces a false report
+ * out of healthy behaviour. It also marks the resizes that will only record an
+ * intent, so callers can skip work that only pays off for a resize applying now.
+ */
+export function mirrorReplayInFlight(headlessTerminal: HeadlessTerminalType): boolean {
+  return replayWindows.has(headlessTerminal);
+}
+
+/**
  * Park `headlessTerminal` on the grid a snapshot was captured at for the
  * duration of its replay, remembering the grid to return to.
  *

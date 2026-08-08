@@ -16,6 +16,7 @@ import { Osc94Parser } from "../Osc94Parser.js";
 import { SynchronizedFrameDetector } from "../SynchronizedFrameDetector.js";
 import {
   mirrorNeedsResize,
+  mirrorReplayInFlight,
   resizeMirror,
   restoreSessionFromFile,
 } from "../terminalSessionPersistence.js";
@@ -331,12 +332,18 @@ export class AnalysisSession {
    * viewport rows), not the configured cap. Feeds the worker memory sample so
    * the governor's targeted trim ranks by real usage. Null once freed.
    */
-  bufferStats(): { bufferLines: number; cols: number; rows: number } | null {
+  bufferStats(): {
+    bufferLines: number;
+    cols: number;
+    rows: number;
+    replayInFlight: boolean;
+  } | null {
     if (this.disposed || !this.headlessTerminal) return null;
     return {
       bufferLines: this.headlessTerminal.buffer.active.length,
       cols: this.headlessTerminal.cols,
       rows: this.headlessTerminal.rows,
+      replayInFlight: mirrorReplayInFlight(this.headlessTerminal),
     };
   }
 

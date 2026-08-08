@@ -384,7 +384,9 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
       // the geometry a worker mirror is really parsing at, and so the only way
       // a silent divergence can ever be noticed (#11719).
       for (const session of sample.sessions) {
-        this.backends.get(session.terminalId)?.noteMirrorGeometry(session.cols, session.rows);
+        this.backends
+          .get(session.terminalId)
+          ?.noteMirrorGeometry(session.cols, session.rows, session.replayInFlight);
       }
       return;
     }

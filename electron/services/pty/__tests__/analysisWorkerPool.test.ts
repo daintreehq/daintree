@@ -500,7 +500,9 @@ describe("AnalysisWorkerPool", () => {
       heapUsedBytes,
       externalBytes: 5_000_000,
       sessionCount: 1,
-      sessions: [{ terminalId: "t1", bufferLines: 480, cols: 120, rows: 40 }],
+      sessions: [
+        { terminalId: "t1", bufferLines: 480, cols: 120, rows: 40, replayInFlight: false },
+      ],
       sampledAt: 111,
     });
 
@@ -515,7 +517,7 @@ describe("AnalysisWorkerPool", () => {
       expect(accounting[0].heapUsedBytes).toBe(20_000_000);
       expect(accounting[0].externalBytes).toBe(5_000_000);
       expect(accounting[0].sessions).toEqual([
-        { terminalId: "t1", bufferLines: 480, cols: 120, rows: 40 },
+        { terminalId: "t1", bufferLines: 480, cols: 120, rows: 40, replayInFlight: false },
       ]);
       expect(Number.isFinite(accounting[0].ageMs)).toBe(true);
     });
@@ -590,10 +592,15 @@ describe("AnalysisWorkerPool", () => {
 describe("WorkerAnalysisBackend feed accounting", () => {
   function stubBackend() {
     const posted: HostToWorkerMessage[] = [];
+    // A message the pool REFUSED never reached the worker. Recording it in
+    // `posted` alone would make a dropped post indistinguishable from a
+    // delivered one, so anything asserting on delivery reads `delivered`.
+    const delivered: HostToWorkerMessage[] = [];
     const control = { sendSucceeds: true };
     const pool: AnalysisPoolHost = {
       post: (_id, msg) => {
         posted.push(msg);
+        if (control.sendSucceeds) delivered.push(msg);
         return control.sendSucceeds;
       },
       request: () => Promise.resolve(null),
@@ -614,7 +621,7 @@ describe("WorkerAnalysisBackend feed accounting", () => {
     );
     backend.init();
     const dataMessages = () => posted.filter((m) => m.type === "data") as Array<{ data: string }>;
-    return { backend, control, dataMessages, posted };
+    return { backend, control, dataMessages, posted, delivered };
   }
 
   /** Push the backend above its high watermark so the next chunk is held. */
@@ -653,24 +660,78 @@ describe("WorkerAnalysisBackend feed accounting", () => {
       expect(resizeIndex).toBeGreaterThan(heldIndex);
     });
 
-    it("keeps the hold and posts no resize when the flush fails", () => {
-      const { backend, control, posted } = stubBackend();
+    it("restores an undelivered hold instead of dropping it", async () => {
+      const { backend, control, delivered } = stubBackend();
+      holdOutput(backend, "HELD");
+
+      // A serialize flushes the hold — but the post is refused, so the worker
+      // never saw it and the data is still owed.
+      control.sendSucceeds = false;
+      await backend.serialize();
+      expect(delivered.some((m) => m.type === "data" && m.data === "HELD")).toBe(false);
+
+      // Dropping it here would silently lose output; it must still be waiting.
+      control.sendSucceeds = true;
+      await backend.serialize();
+      expect(delivered.some((m) => m.type === "data" && m.data === "HELD")).toBe(true);
+    });
+
+    it("rebuilds at the new grid rather than merging output from two grids", () => {
+      const { backend, control, delivered } = stubBackend();
       const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
       holdOutput(backend, "OLD-WIDTH");
 
+      // The flush across the geometry boundary fails. Keeping the hold would
+      // let post-resize output concatenate onto it — the host coalesces held
+      // output into ONE string, so the merged blob would later parse at a
+      // single grid, which is the corruption in a new disguise.
       control.sendSucceeds = false;
       backend.resize(120, 40);
-      expect(posted.some((m) => m.type === "resize")).toBe(false);
-
-      // The hold was owed, not delivered — dropping it would lose output AND
-      // leave the resize ordered ahead of data the mirror never saw.
       control.sendSucceeds = true;
-      backend.resize(120, 40);
-      const heldIndex = posted.findIndex((m) => m.type === "data" && m.data === "OLD-WIDTH");
-      const resizeIndex = posted.findIndex((m) => m.type === "resize");
-      expect(heldIndex).toBeGreaterThanOrEqual(0);
-      expect(resizeIndex).toBeGreaterThan(heldIndex);
+      backend.feedChunk("NEW-WIDTH", { agentLive: false });
+
+      // Nothing may be delivered that carries both grids' output.
+      const merged = delivered.find(
+        (m) => m.type === "data" && m.data.includes("OLD-WIDTH") && m.data.includes("NEW-WIDTH")
+      );
+      expect(merged).toBeUndefined();
+
+      // And the recovery recreates the session at the grid actually requested,
+      // not the one the dropped resize left behind.
+      backend.resyncGeometry(120, 40);
+      const creates = delivered.filter((m) => m.type === "create") as Array<{
+        cols: number;
+        rows: number;
+      }>;
+      expect(creates.length).toBeGreaterThan(0);
+      expect(creates[creates.length - 1]).toMatchObject({ cols: 120, rows: 40 });
       consoleError.mockRestore();
+    });
+
+    it("recreates the session when the initial create never reached the worker", () => {
+      const posted: HostToWorkerMessage[] = [];
+      const control = { sendSucceeds: false };
+      const pool: AnalysisPoolHost = {
+        post: (_id, msg) => {
+          if (control.sendSucceeds) posted.push(msg);
+          return control.sendSucceeds;
+        },
+        request: () => Promise.resolve(null),
+        unregister: () => {},
+      };
+      const backend = new WorkerAnalysisBackend(
+        { terminalId: "t1", cols: 80, rows: 24, scrollback: 1000, restore: false, spawnedAt: 1 },
+        makeDelegate(),
+        pool
+      );
+      backend.init();
+
+      // The worker has no session for this terminal at all, so an
+      // `ensure-geometry` would be routed nowhere and repair nothing.
+      control.sendSucceeds = true;
+      backend.resyncGeometry(80, 24);
+      expect(posted.filter((m) => m.type === "ensure-geometry")).toHaveLength(0);
+      expect(posted.filter((m) => m.type === "create")).toHaveLength(1);
     });
 
     it("retries a dropped resize on the next re-assert of the same grid", () => {

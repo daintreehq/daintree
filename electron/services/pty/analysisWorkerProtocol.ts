@@ -121,7 +121,18 @@ export interface AnalysisWorkerMemorySample {
    * mirror is really parsing at, so this sample doubles as the divergence
    * signal for #11719 — hence rows, which buffer accounting itself never needs.
    */
-  sessions: Array<{ terminalId: string; bufferLines: number; cols: number; rows: number }>;
+  sessions: Array<{
+    terminalId: string;
+    bufferLines: number;
+    cols: number;
+    rows: number;
+    /**
+     * A session replay owns the grid right now, so `cols`/`rows` are the
+     * capture grid it is parked on rather than a grid it owes the PTY. The
+     * host must not read that expected disagreement as divergence.
+     */
+    replayInFlight: boolean;
+  }>;
   /** Worker-side epoch ms when the sample was taken. */
   sampledAt: number;
 }

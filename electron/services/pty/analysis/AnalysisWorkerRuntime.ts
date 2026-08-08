@@ -91,6 +91,7 @@ export class AnalysisWorkerRuntime {
           bufferLines: stats.bufferLines,
           cols: stats.cols,
           rows: stats.rows,
+          replayInFlight: stats.replayInFlight,
         });
       }
     }

@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
+import headless, { type Terminal as HeadlessTerminal } from "@xterm/headless";
+import serialize from "@xterm/addon-serialize";
 import { HeadlessMirrorScheduler } from "../HeadlessMirrorScheduler.js";
+
+const { Terminal } = headless;
+const { SerializeAddon } = serialize;
 
 const FEED_SLICE_CHARS = 16 * 1024;
 const AGGREGATE_INFLIGHT_CHARS = 128 * 1024;
@@ -256,22 +261,28 @@ describe("HeadlessMirrorScheduler", () => {
     it("feeds everything queued to the mirror before the resize runs", async () => {
       const scheduler = new HeadlessMirrorScheduler();
       const blocker = createParkedMirror();
-      const mirror = createParkedMirror();
+      // Record writes and the resize into ONE timeline as they happen — a
+      // sequence reconstructed afterwards would pass just as well if the
+      // resize had run first, which is the exact bug under test.
       const order: string[] = [];
+      const mirror = {
+        write(data: string) {
+          order.push(`write:${data}`);
+        },
+      };
 
       // Saturate the aggregate cap so t1's feeds are genuinely held back.
       scheduler.enqueue("blocker", blocker, "x".repeat(AGGREGATE_INFLIGHT_CHARS));
       scheduler.enqueue("t1", mirror, "old-width-A");
       scheduler.enqueue("t1", mirror, "old-width-B");
       await flushTicks();
-      expect(mirror.calls.length).toBe(0);
+      expect(order).toEqual([]);
 
       scheduler.drainThenResize("t1", mirror, () => order.push("resize"));
 
       // Every held slice reached the mirror, in order, ahead of the resize —
       // xterm's own pre-resize flushSync then parses them at the old grid.
-      order.unshift(...mirror.calls.map((c) => c.data));
-      expect(order).toEqual(["old-width-A", "old-width-B", "resize"]);
+      expect(order).toEqual(["write:old-width-A", "write:old-width-B", "resize"]);
       expect(scheduler.queuedChars("t1")).toBe(0);
     });
 
@@ -342,6 +353,49 @@ describe("HeadlessMirrorScheduler", () => {
       // The torn-down queue released its accounting rather than wedging the cap.
       expect(scheduler.queuedChars("t1")).toBe(0);
       consoleError.mockRestore();
+    });
+
+    it("makes queued output parse at the old grid, against a real xterm", async () => {
+      // The contract this whole mechanism exists for, proven on a real parser
+      // rather than a stub: bytes emitted before a resize must lay out at the
+      // width they were emitted at. Mirror stubs can only show message order.
+      const drain = (terminal: HeadlessTerminal): Promise<void> =>
+        new Promise((resolve) => terminal.write("", () => resolve()));
+      const build = () => {
+        const terminal = new Terminal({
+          cols: 40,
+          rows: 10,
+          scrollback: 200,
+          allowProposedApi: true,
+        });
+        const addon = new SerializeAddon();
+        terminal.loadAddon(addon);
+        return { terminal, addon };
+      };
+      // Wider than 40 columns, so where it wraps is entirely a function of the
+      // grid it was parsed at.
+      const content = `${"L".repeat(90)}\r\nsecond line\r\n`;
+
+      const scheduler = new HeadlessMirrorScheduler();
+      const blocker = createParkedMirror();
+      const { terminal: subject, addon: subjectAddon } = build();
+
+      // Saturate the cap so the feed is genuinely still queued at resize time.
+      scheduler.enqueue("blocker", blocker, "x".repeat(AGGREGATE_INFLIGHT_CHARS));
+      scheduler.enqueue("t1", subject, content);
+      await flushTicks();
+      expect(scheduler.queuedChars("t1")).toBeGreaterThan(0);
+
+      scheduler.drainThenResize("t1", subject, () => subject.resize(100, 10));
+      await drain(subject);
+
+      // Reference: the same bytes parsed at the old grid, then reflowed.
+      const { terminal: reference, addon: referenceAddon } = build();
+      await new Promise<void>((resolve) => reference.write(content, () => resolve()));
+      reference.resize(100, 10);
+      await drain(reference);
+
+      expect(subjectAddon.serialize()).toBe(referenceAddon.serialize());
     });
 
     it("still applies the resize for a terminal the scheduler never saw", () => {

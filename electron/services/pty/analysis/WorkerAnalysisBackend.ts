@@ -70,7 +70,7 @@ export interface WorkerAnalysisDelegate {
   getProcessState(): { hasActiveChildren: boolean; cpuUsage: number } | null;
   getAgentContext(): { agentLive: boolean; agentState?: AgentState };
   /** The grid the worker's mirror reported for this terminal (#11719). */
-  onMirrorGeometry(cols: number, rows: number): void;
+  onMirrorGeometry(cols: number, rows: number, replayInFlight: boolean): void;
 }
 
 export interface WorkerBackendSpec {
@@ -122,6 +122,10 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   // the host cannot account for. Set until a geometry-bearing post lands, so
   // the next re-assert repairs instead of short-circuiting (#11719).
   private geometryPostFailed = false;
+  // The worker may have no session for this terminal at all, because a `create`
+  // post was dropped. Distinct from geometryPostFailed: repairing this needs a
+  // fresh `create`, not an `ensure-geometry` the worker would route nowhere.
+  private sessionCreatePending = false;
   // Last grid the worker reported for this terminal's mirror, from its
   // periodic memory sample. Null until the first sample arrives.
   private observedMirrorGeometry: { cols: number; rows: number } | null = null;
@@ -146,7 +150,10 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   }
 
   init(): void {
-    this.pool.post(this.spec.terminalId, {
+    // A dropped create leaves NO session in the worker, which no amount of
+    // later `ensure-geometry` can repair — the worker routes those to a session
+    // that does not exist. Remember that so a re-assert rebuilds instead.
+    this.sessionCreatePending = !this.pool.post(this.spec.terminalId, {
       type: "create",
       terminalId: this.spec.terminalId,
       cols: this.spec.cols,
@@ -243,7 +250,17 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
    * the last one made, or a worker-reported grid that disagrees.
    */
   resyncGeometry(cols: number, rows: number): void {
-    if (this.inactive() || !this.geometryMayHaveDrifted(cols, rows)) return;
+    if (this.inactive()) return;
+    if (this.sessionCreatePending) {
+      // There may be no session in the worker to re-assert AT. Rebuild it at
+      // the requested grid instead — `ensure-geometry` would be routed to a
+      // session that does not exist and silently do nothing forever.
+      this.lastCols = cols;
+      this.lastRows = rows;
+      this.rebuildFreshSlot();
+      return;
+    }
+    if (!this.geometryMayHaveDrifted(cols, rows)) return;
     this.postGeometry("ensure-geometry", cols, rows);
   }
 
@@ -267,11 +284,21 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     // geometry right, buffer content corrupt. Every serialize path already
     // flushes first for the same ordering reason.
     if (!this.flushHeldFeed()) {
-      this.geometryPostFailed = true;
+      // The hold is stuck on the WRONG side of a geometry boundary and cannot
+      // be kept: the host coalesces held output into one string, so the
+      // post-resize output that follows would concatenate onto pre-resize
+      // output and the whole blob would later parse at one grid — the same
+      // corruption in a new disguise. There is no ordering left to preserve,
+      // so drop the analysis buffer and rebuild fresh at the new grid. Same
+      // analysis-only degradation as a feed overflow: persistence stays
+      // suppressed until real output dirties the new buffer, and the renderer
+      // path is untouched.
       console.error(
         `[WorkerAnalysisBackend] Held output could not be flushed before a ${type} for ` +
-          `${this.spec.terminalId}; skipping the geometry post to preserve ordering`
+          `${this.spec.terminalId}; rebuilding the analysis slot at ${cols}x${rows} ` +
+          `rather than merging output from two grids`
       );
+      this.rebuildFreshSlot();
       return;
     }
     this.geometryPostFailed = !this.pool.post(this.spec.terminalId, {
@@ -293,9 +320,13 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
    * — the host's only observation of what a worker mirror is really parsing at
    * (#11719).
    */
-  noteMirrorGeometry(cols: number, rows: number): void {
-    this.observedMirrorGeometry = { cols, rows };
-    this.delegate.onMirrorGeometry(cols, rows);
+  noteMirrorGeometry(cols: number, rows: number, replayInFlight = false): void {
+    // A replay parks the mirror on the capture grid with no host resize behind
+    // it, so that geometry says nothing about whether this mirror owes the PTY
+    // a resize — recording it would make `geometryMayHaveDrifted` chase a grid
+    // the replay is about to reflow away from anyway.
+    this.observedMirrorGeometry = replayInFlight ? null : { cols, rows };
+    this.delegate.onMirrorGeometry(cols, rows, replayInFlight);
   }
 
   notifyInput(data: string): void {
@@ -530,7 +561,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     // replacement; the `create` below carries the geometry instead, and a
     // dropped create leaves it unknown exactly like a dropped resize.
     this.observedMirrorGeometry = null;
-    this.geometryPostFailed = !this.pool.post(this.spec.terminalId, {
+    const created = this.pool.post(this.spec.terminalId, {
       type: "create",
       terminalId: this.spec.terminalId,
       cols: this.lastCols,
@@ -540,6 +571,11 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
       spawnedAt: this.spec.spawnedAt,
       epoch: this.feedEpoch,
     });
+    // The create carries the geometry, so landing it converges the mirror and
+    // dropping it leaves no session at all — the two failure states this slot
+    // can be in, and both are cleared by the same successful post.
+    this.geometryPostFailed = !created;
+    this.sessionCreatePending = !created;
     if (this.monitorSpec) {
       this.postAgentContext();
       // Preserve-state semantics (mirrors the in-thread preserveState path):

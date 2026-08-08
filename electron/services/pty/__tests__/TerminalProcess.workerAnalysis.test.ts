@@ -124,13 +124,13 @@ describe("TerminalProcess worker-mode analysis events", () => {
 });
 
 describe("TerminalProcess mirror geometry divergence (#11719)", () => {
-  function memorySample(cols: number, rows: number): WorkerToHostMessage {
+  function memorySample(cols: number, rows: number, replayInFlight = false): WorkerToHostMessage {
     return {
       type: "memory-sample",
       heapUsedBytes: 1,
       externalBytes: 1,
       sessionCount: 1,
-      sessions: [{ terminalId: "t1", bufferLines: 10, cols, rows }],
+      sessions: [{ terminalId: "t1", bufferLines: 10, cols, rows, replayInFlight }],
       sampledAt: 1,
     };
   }
@@ -161,7 +161,7 @@ describe("TerminalProcess mirror geometry divergence (#11719)", () => {
   });
 
   it("logs a divergence once per episode and clears it on agreement", () => {
-    const { terminal, worker } = createWorkerModeTerminal();
+    const { worker } = createWorkerModeTerminal();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const divergenceWarnings = () =>
       warn.mock.calls.filter((call) => String(call[0]).includes("Mirror grid diverged")).length;
@@ -186,11 +186,42 @@ describe("TerminalProcess mirror geometry divergence (#11719)", () => {
     // ...and a fresh split is a fresh episode.
     worker.emit("message", memorySample(120, 40));
     expect(divergenceWarnings()).toBe(2);
-    expect(terminal.getInfo().id).toBe("t1");
     warn.mockRestore();
   });
 
-  it("does not warn for a rows-only split going unnoticed", () => {
+  it("keeps retrying the repair while a split persists, unlike the log", () => {
+    const { worker } = createWorkerModeTerminal();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // Deduping the repair alongside the log would re-seal the divergence: the
+    // first repair's post can be dropped, and nothing else re-drives it.
+    worker.emit("message", memorySample(120, 40));
+    worker.emit("message", memorySample(120, 40));
+    worker.emit("message", memorySample(120, 40));
+
+    expect(
+      warn.mock.calls.filter((c) => String(c[0]).includes("Mirror grid diverged"))
+    ).toHaveLength(1);
+    expect(geometryMessages(worker).length).toBeGreaterThan(1);
+    warn.mockRestore();
+  });
+
+  it("does not report a mirror parked by a session replay", () => {
+    const { worker } = createWorkerModeTerminal();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // A replay deliberately parks the mirror on the snapshot's capture grid
+    // (#11552), so disagreement here is healthy. Crying wolf would make the
+    // log useless for the thing it exists to settle.
+    worker.emit("message", memorySample(40, 12, true));
+
+    expect(
+      warn.mock.calls.filter((c) => String(c[0]).includes("Mirror grid diverged"))
+    ).toHaveLength(0);
+    expect(geometryMessages(worker)).toHaveLength(0);
+  });
+
+  it("reports a rows-only split, which a cols-only check would miss", () => {
     const { worker } = createWorkerModeTerminal();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
