@@ -14,7 +14,12 @@ import { buildActivityMonitorOptions, buildPatternConfig } from "../terminalActi
 import { installHeadlessResponder } from "../headlessResponder.js";
 import { Osc94Parser } from "../Osc94Parser.js";
 import { SynchronizedFrameDetector } from "../SynchronizedFrameDetector.js";
-import { resizeMirror, restoreSessionFromFile } from "../terminalSessionPersistence.js";
+import {
+  mirrorNeedsResize,
+  mirrorReplayInFlight,
+  resizeMirror,
+  restoreSessionFromFile,
+} from "../terminalSessionPersistence.js";
 import {
   measureVisibleContentDelta,
   type VisibleContentSnapshot,
@@ -190,6 +195,28 @@ export class AnalysisSession {
     this.scheduleDigest();
   }
 
+  /**
+   * Repair-only geometry re-assert (#11719). The host cannot see this mirror's
+   * grid, so it re-asserts on every "PTY already at this size" call and relies
+   * on this no-op when nothing drifted — which is why none of `resize`'s
+   * monitor/temperature side effects belong here.
+   */
+  ensureGeometry(cols: number, rows: number): void {
+    if (this.disposed || !this.headlessTerminal) return;
+    if (!mirrorNeedsResize(this.headlessTerminal, cols, rows)) return;
+    console.warn(
+      `[AnalysisSession] Mirror grid diverged for ${this.terminalId}: ` +
+        `mirror ${this.headlessTerminal.cols}x${this.headlessTerminal.rows} vs pty ${cols}x${rows}; re-asserting`
+    );
+    try {
+      resizeMirror(this.headlessTerminal, cols, rows);
+    } catch (error) {
+      console.error(`[AnalysisSession] Failed to resync geometry for ${this.terminalId}:`, error);
+      return;
+    }
+    this.scheduleDigest();
+  }
+
   notifyInput(data: string): void {
     this.monitor?.onInput(data);
   }
@@ -305,11 +332,18 @@ export class AnalysisSession {
    * viewport rows), not the configured cap. Feeds the worker memory sample so
    * the governor's targeted trim ranks by real usage. Null once freed.
    */
-  bufferStats(): { bufferLines: number; cols: number } | null {
+  bufferStats(): {
+    bufferLines: number;
+    cols: number;
+    rows: number;
+    replayInFlight: boolean;
+  } | null {
     if (this.disposed || !this.headlessTerminal) return null;
     return {
       bufferLines: this.headlessTerminal.buffer.active.length,
       cols: this.headlessTerminal.cols,
+      rows: this.headlessTerminal.rows,
+      replayInFlight: mirrorReplayInFlight(this.headlessTerminal),
     };
   }
 

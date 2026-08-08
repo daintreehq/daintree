@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
+import headless, { type Terminal as HeadlessTerminal } from "@xterm/headless";
+import serialize from "@xterm/addon-serialize";
 import { HeadlessMirrorScheduler } from "../HeadlessMirrorScheduler.js";
+
+const { Terminal } = headless;
+const { SerializeAddon } = serialize;
 
 const FEED_SLICE_CHARS = 16 * 1024;
 const AGGREGATE_INFLIGHT_CHARS = 128 * 1024;
@@ -250,6 +255,159 @@ describe("HeadlessMirrorScheduler", () => {
     await flushTicks();
     expect(onParsed).not.toHaveBeenCalled();
     expect(scheduler.inFlightChars()).toBe(0);
+  });
+
+  describe("drainThenResize (#11719)", () => {
+    it("feeds everything queued to the mirror before the resize runs", async () => {
+      const scheduler = new HeadlessMirrorScheduler();
+      const blocker = createParkedMirror();
+      // Record writes and the resize into ONE timeline as they happen — a
+      // sequence reconstructed afterwards would pass just as well if the
+      // resize had run first, which is the exact bug under test.
+      const order: string[] = [];
+      const mirror = {
+        write(data: string) {
+          order.push(`write:${data}`);
+        },
+      };
+
+      // Saturate the aggregate cap so t1's feeds are genuinely held back.
+      scheduler.enqueue("blocker", blocker, "x".repeat(AGGREGATE_INFLIGHT_CHARS));
+      scheduler.enqueue("t1", mirror, "old-width-A");
+      scheduler.enqueue("t1", mirror, "old-width-B");
+      await flushTicks();
+      expect(order).toEqual([]);
+
+      scheduler.drainThenResize("t1", mirror, () => order.push("resize"));
+
+      // Every held slice reached the mirror, in order, ahead of the resize —
+      // xterm's own pre-resize flushSync then parses them at the old grid.
+      expect(order).toEqual(["write:old-width-A", "write:old-width-B", "resize"]);
+      expect(scheduler.queuedChars("t1")).toBe(0);
+    });
+
+    it("drains past the aggregate cap rather than leaving old-grid bytes queued", async () => {
+      const scheduler = new HeadlessMirrorScheduler();
+      const mirror = createParkedMirror();
+
+      // More than the cap can hold in flight at once: pacing must yield to
+      // ordering here, because no tick can run before the caller's resize.
+      const backlog = "z".repeat(AGGREGATE_INFLIGHT_CHARS * 2);
+      scheduler.enqueue("t1", mirror, backlog);
+      await flushTicks();
+      expect(scheduler.queuedChars("t1")).toBeGreaterThan(0);
+
+      scheduler.drainThenResize("t1", mirror, () => {});
+
+      expect(scheduler.queuedChars("t1")).toBe(0);
+      expect(mirror.calls.map((c) => c.data).join("")).toBe(backlog);
+    });
+
+    it("keeps output enqueued during the resize out of the mirror", () => {
+      const scheduler = new HeadlessMirrorScheduler();
+      const mirror = createEagerMirror();
+
+      // A parse callback firing inside the resize enqueues fresh post-resize
+      // output. Taking the synchronous fast path would put new-grid bytes into
+      // the write buffer xterm is still draining at the OLD grid.
+      scheduler.drainThenResize("t1", mirror, () => {
+        scheduler.enqueue("t1", mirror, "post-resize");
+      });
+
+      expect(mirror.written).not.toContain("post-resize");
+      expect(scheduler.queuedChars("t1")).toBe("post-resize".length);
+    });
+
+    it("releases output deferred by the guard on a later tick", async () => {
+      const scheduler = new HeadlessMirrorScheduler();
+      const mirror = createEagerMirror();
+
+      scheduler.drainThenResize("t1", mirror, () => {
+        scheduler.enqueue("t1", mirror, "post-resize");
+      });
+      await flushTicks();
+
+      // Deferred, not dropped — and now parsed at the new grid, which is the
+      // grid it was emitted at.
+      expect(mirror.written).toContain("post-resize");
+      expect(scheduler.queuedChars("t1")).toBe(0);
+    });
+
+    it("skips the resize when a failing write tears the queue down mid-drain", async () => {
+      const scheduler = new HeadlessMirrorScheduler();
+      const blocker = createParkedMirror();
+      const applyResize = vi.fn();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const broken = {
+        write() {
+          throw new Error("torn down");
+        },
+      };
+
+      scheduler.enqueue("blocker", blocker, "x".repeat(AGGREGATE_INFLIGHT_CHARS));
+      scheduler.enqueue("t1", broken, "queued");
+      await flushTicks();
+
+      expect(scheduler.drainThenResize("t1", broken, applyResize)).toBe(false);
+      expect(applyResize).not.toHaveBeenCalled();
+      // The torn-down queue released its accounting rather than wedging the cap.
+      expect(scheduler.queuedChars("t1")).toBe(0);
+      consoleError.mockRestore();
+    });
+
+    it("makes queued output parse at the old grid, against a real xterm", async () => {
+      // The contract this whole mechanism exists for, proven on a real parser
+      // rather than a stub: bytes emitted before a resize must lay out at the
+      // width they were emitted at. Mirror stubs can only show message order.
+      const drain = (terminal: HeadlessTerminal): Promise<void> =>
+        new Promise((resolve) => terminal.write("", () => resolve()));
+      const build = () => {
+        const terminal = new Terminal({
+          cols: 40,
+          rows: 10,
+          scrollback: 200,
+          allowProposedApi: true,
+        });
+        const addon = new SerializeAddon();
+        terminal.loadAddon(addon);
+        return { terminal, addon };
+      };
+      // Wider than 40 columns, so where it wraps is entirely a function of the
+      // grid it was parsed at.
+      const content = `${"L".repeat(90)}\r\nsecond line\r\n`;
+
+      const scheduler = new HeadlessMirrorScheduler();
+      const blocker = createParkedMirror();
+      const { terminal: subject, addon: subjectAddon } = build();
+
+      // Saturate the cap so the feed is genuinely still queued at resize time.
+      scheduler.enqueue("blocker", blocker, "x".repeat(AGGREGATE_INFLIGHT_CHARS));
+      scheduler.enqueue("t1", subject, content);
+      await flushTicks();
+      expect(scheduler.queuedChars("t1")).toBeGreaterThan(0);
+
+      scheduler.drainThenResize("t1", subject, () => subject.resize(100, 10));
+      await drain(subject);
+
+      // Reference: the same bytes parsed at the old grid, then reflowed.
+      const { terminal: reference, addon: referenceAddon } = build();
+      await new Promise<void>((resolve) => reference.write(content, () => resolve()));
+      reference.resize(100, 10);
+      await drain(reference);
+
+      expect(subjectAddon.serialize()).toBe(referenceAddon.serialize());
+    });
+
+    it("still applies the resize for a terminal the scheduler never saw", () => {
+      // Session restore writes straight to the mirror at construction, so a
+      // terminal can reach a resize with no queue registered at all.
+      const scheduler = new HeadlessMirrorScheduler();
+      const mirror = createEagerMirror();
+      const applyResize = vi.fn();
+
+      expect(scheduler.drainThenResize("never-enqueued", mirror, applyResize)).toBe(true);
+      expect(applyResize).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("recovers accounting when a mirror write throws", () => {

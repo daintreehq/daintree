@@ -326,12 +326,59 @@ describe("AnalysisWorkerRuntime", () => {
     expect(runtime.sessionCount()).toBe(0);
   });
 
+  describe("ensure-geometry (#11719)", () => {
+    const mirrorGrid = () => {
+      const session = runtime.collectMemorySample().sessions[0]!;
+      return { cols: session.cols, rows: session.rows };
+    };
+
+    it("converges a drifted mirror onto the requested grid and says so", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const before = mirrorGrid();
+
+      runtime.handleMessage({ type: "ensure-geometry", terminalId: "t1", cols: 132, rows: 40 });
+
+      expect(mirrorGrid()).toEqual({ cols: 132, rows: 40 });
+      expect(mirrorGrid()).not.toEqual(before);
+      // The worker side logs its own side of the split, so a divergence is
+      // traceable even when only worker logs are available.
+      expect(warn.mock.calls.some((c) => String(c[0]).includes("Mirror grid diverged"))).toBe(true);
+      warn.mockRestore();
+    });
+
+    it("touches nothing once the mirror already holds that grid", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const settled = mirrorGrid();
+      // Content whose wrapping is a function of the grid, so a needless
+      // resize() would be visible as a reflow even at identical dimensions.
+      sendData(`${"W".repeat(200)}\r\n`);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const before = runtime.collectMemorySample().sessions[0]!.bufferLines;
+
+      // The host re-asserts on every "PTY already at this size" call, so the
+      // converged case must cost nothing and say nothing.
+      runtime.handleMessage({
+        type: "ensure-geometry",
+        terminalId: "t1",
+        cols: settled.cols,
+        rows: settled.rows,
+      });
+
+      expect(mirrorGrid()).toEqual(settled);
+      expect(runtime.collectMemorySample().sessions[0]!.bufferLines).toBe(before);
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+  });
+
   describe("memory sampling", () => {
     it("reports isolate memory and real buffer occupancy that grows with output", async () => {
       // Freshly created 24-row terminal: the buffer holds only the viewport.
       const initial = runtime.collectMemorySample();
       expect(initial.sessionCount).toBe(1);
-      expect(initial.sessions).toEqual([{ terminalId: "t1", bufferLines: 24, cols: 80 }]);
+      expect(initial.sessions).toEqual([
+        { terminalId: "t1", bufferLines: 24, cols: 80, rows: 24, replayInFlight: false },
+      ]);
       expect(initial.heapUsedBytes).toBeGreaterThan(0);
       expect(initial.externalBytes).toBeGreaterThan(0);
 
