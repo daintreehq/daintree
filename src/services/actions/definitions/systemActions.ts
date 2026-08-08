@@ -7,9 +7,12 @@ import {
   withProjectLocation,
   requireWorktreePath,
   requireWorktreeId,
+  requireExplicitWorktreeForAgentDispatch,
   resolveProjectLocation,
 } from "./locationArgs";
 import { z } from "zod";
+import { notify } from "@/lib/notify";
+import { formatCopyResultMessage } from "@/lib/formatCopyResult";
 import {
   artifactClient,
   cliAvailabilityClient,
@@ -466,28 +469,33 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generateAndCopyFile",
       title: "Generate And Copy Context",
       description:
-        "Bundle a worktree's context to a file and put it on the system clipboard, replacing whatever the user currently has copied. What lands there is platform-dependent: macOS and Linux copy the file itself, Windows copies its path as text. The bundle is never returned inline — check the budget flags to tell whether it was complete.",
+        "Bundle a worktree's context to a file and put it on the system clipboard, replacing what the user had copied. Selection can mix exact files with globs, so this assembles a curated bundle of scattered related files, their supporting code and tests, rather than the whole worktree. Agent and MCP callers must name the worktree instead of relying on whichever is active. macOS and Linux copy the file, Windows its path. Never returned inline; check the budget flags for completeness.",
       category: "copyTree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
       // run() resolves the target from ctx.activeWorktreeId and throws when none
       // is active. Disable-with-reason in the palette rather than letting the
-      // pick produce a "No active worktree" error toast.
+      // pick produce a "No active worktree" error toast. Palette picks dispatch
+      // with source "user", so the agent-only explicit-target guard below never
+      // applies to them and this fallback stays intact.
       palette: {
         mode: "requireContext",
         isReady: (ctx) => Boolean(ctx.activeWorktreeId),
         reason: "Open a worktree to generate its context",
       },
-      argsSchema: z
-        .object({
-          worktreeId: z
-            .string()
-            .optional()
-            .describe("Worktree ID. Defaults to the active worktree."),
-          options: CopyTreeOptionsSchema.optional(),
-        })
-        .optional(),
+      argsSchema: withWorktreeLocation({
+        options: CopyTreeOptionsSchema.optional().describe(
+          "Selection, exclusion, formatting, and size-budget settings for the bundle."
+        ),
+      }).optional(),
+      // `destructiveHint` is otherwise derived from `danger === "confirm"`, so
+      // this would advertise as non-destructive while `actionRiskBand` already
+      // classifies it `destructive-local`. It replaces the clipboard, which has
+      // no inverse — the annotation should say so to a caller deciding whether
+      // to ask first. `danger` stays "safe": the issue wants an assistant-driven
+      // copy to land like a manual one, not behind a confirm dialog.
+      mcpAnnotations: { destructiveHint: true, idempotentHint: false },
       resultSchema: z.object({
         filePath: z.string(),
         fileCount: z.number(),
@@ -496,11 +504,51 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       }),
       mcpOutputSchema: true,
       run: async (args, ctx: ActionContext) => {
-        const worktreeId = args?.worktreeId ?? ctx.activeWorktreeId;
-        if (!worktreeId) throw new Error("No active worktree");
-        const result = await copyTreeClient.generateAndCopyFile(worktreeId, args?.options);
+        requireExplicitWorktreeForAgentDispatch("copyTree.generateAndCopyFile", args, ctx);
+        const result = await copyTreeClient.generateAndCopyFile(
+          requireWorktreeId(args, ctx),
+          args?.options
+        );
         throwOnCopyTreeFailure(result);
         const { filePath, outputBytes } = requireGeneratedFile(result);
+        // Only an agent/MCP caller gets a toast, and only after the copy has
+        // actually landed. A person who triggered this themselves already knows
+        // their clipboard changed; a headless caller replaced it with nothing on
+        // screen to say so, which is the one case worth interrupting for
+        // (#11722). Ordered after the failure checks so a failed generate or a
+        // failed clipboard write can never announce success.
+        if (ctx.dispatchSource === "agent") {
+          // No `context.worktreeId` here, deliberately: notify() suppresses a
+          // high-priority toast into the inbox when context names the worktree
+          // the user is already looking at, and an agent copying the ACTIVE
+          // worktree is the common case — passing it would silence exactly the
+          // toast this adds. A clipboard overwrite is invisible no matter which
+          // worktree is on screen, so the origin-surface rule doesn't hold here.
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+          notify({
+            type: "success",
+            // Matches the title the toolbar's own copy already uses for this
+            // artifact ("context", never "reference file"), paired with the
+            // same formatCopyResultMessage body — see Toolbar.tsx.
+            title: "Context copied",
+            message: formatCopyResultMessage({
+              fileCount: result.fileCount,
+              stats: result.stats,
+              format: args?.options?.format,
+            }),
+            // Its own bucket. The key otherwise falls back to `type`, putting
+            // every "success" toast in the app in one bucket — three unrelated
+            // ones would swallow this into a generic overflow row and lose the
+            // message that says what is on the clipboard.
+            rateLimitKey: "copyTree.generateAndCopyFile",
+            // "agent", not "completed": both route identically (active → high),
+            // but "completed" owns the `completedEnabled` setting, which gates
+            // only main-process completion watches and never a renderer
+            // notify() — so it would offer a "silence completed notifications"
+            // affordance that leaves these copies firing anyway.
+            context: { eventKind: "agent" },
+          });
+        }
         return {
           filePath,
           fileCount: result.fileCount,

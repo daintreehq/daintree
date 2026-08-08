@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ActionContext } from "@shared/types/actions";
+import type { ActionContext, ActionId } from "@shared/types/actions";
 import { getWorktreePathIndex, getProjectPathIndex } from "@/store/storeAccessors";
 import { paginationShape, foldPagination, type PaginationOptions } from "./schemas";
 
@@ -353,6 +353,45 @@ export function requireWorktreeId(
     throw new Error("Unknown worktree — no open worktree matches that path.");
   }
   throw new Error("No active worktree — supply `worktreeId` or `worktreePath`.");
+}
+
+/**
+ * Fail closed when an agent/MCP caller omits the worktree it means to act on.
+ *
+ * The worktree twin of `requireExplicitTerminalIdForAgentDispatch`, and it
+ * exists for the same reason: {@link resolveWorktreeLocation} falls back to the
+ * active worktree, which is right for a keybinding or a palette pick — the
+ * person can see which worktree is active — and wrong for a headless caller,
+ * which cannot. An agent that curated a file list against one folder must
+ * assert that folder rather than inherit whatever happens to be focused when
+ * the call lands (#11722).
+ *
+ * Deliberately `=== "agent"` rather than `!isForegroundDispatch(source)`: that
+ * helper is an allowlist that fails *open* for an absent source, so reusing it
+ * here would reject every dispatch carrying no context at all — including the
+ * bare `run(args, {})` shape used throughout the action unit tests. `"plugin"`
+ * keeps today's fallback; closing that is a separate capability call.
+ *
+ * Reads the RAW selectors, never the resolved location: `resolveWorktreeLocation`
+ * has already substituted `ctx.activeWorktreeId` by the time it returns, so a
+ * guard placed after it could never tell an explicit target from an inherited
+ * one. Legacy path aliases are not consulted either — no tool that takes one
+ * uses this guard, and folding them in here would duplicate the collapse that
+ * the schema transform already owns.
+ *
+ * Binding only: an explicitly named worktree that doesn't exist still reaches
+ * `requireWorktreeId`'s existing unknown-worktree error, unchanged.
+ */
+export function requireExplicitWorktreeForAgentDispatch(
+  actionId: ActionId,
+  args: WorktreeLocationArgs | undefined,
+  ctx: ActionContext
+): void {
+  if (ctx.dispatchSource === "agent" && !args?.worktreeId && !args?.worktreePath) {
+    throw new Error(
+      `${actionId} requires an explicit \`worktreeId\` or \`worktreePath\` when dispatched by an agent or MCP client — pass the \`id\` or \`path\` from the worktree-listing capability.`
+    );
+  }
 }
 
 /**

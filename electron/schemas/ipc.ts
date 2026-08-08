@@ -473,10 +473,15 @@ export const CopyTreeFormatSchema = z.enum(["xml", "json", "markdown", "tree", "
 export const CopyTreeOptionsSchema = z
   .object({
     format: CopyTreeFormatSchema.optional(),
-    filter: z.union([z.string(), z.array(z.string())]).optional(),
+    // `filter`/`includePaths` are one selection set and are unioned in
+    // CopyTreeService. Non-empty at both levels, like `scopePaths` below: an
+    // empty list or a blank entry leaves the selection empty, which the SDK
+    // reads as "no filter" — i.e. the whole worktree. Rejecting them here keeps
+    // a malformed narrow request from widening into a full-repo copy.
+    filter: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
     exclude: z.union([z.string(), z.array(z.string())]).optional(),
     always: z.array(z.string()).optional(),
-    includePaths: z.array(z.string()).optional(),
+    includePaths: z.array(z.string().min(1)).min(1).optional(),
     // Non-empty at both levels: an empty list or a blank entry would resolve to
     // the worktree root, turning a folder copy into a whole-worktree copy that
     // no caller asked for. Absent still means "no scoping".

@@ -9,6 +9,7 @@ import {
   resolveProjectLocation,
   requireWorktreePath,
   requireWorktreeId,
+  requireExplicitWorktreeForAgentDispatch,
   requireProjectPath,
 } from "../locationArgs";
 import { withPagination, PaginatedResultSchema, decodeIndexCursor } from "../schemas";
@@ -396,5 +397,57 @@ describe("PaginatedResultSchema", () => {
     const schema = PaginatedResultSchema(z.object({ id: z.string() }));
     expect(schema.safeParse({ items: [], hasMore: false, nextCursor: null }).success).toBe(true);
     expect(schema.safeParse({ items: [], hasMore: false }).success).toBe(false);
+  });
+});
+
+describe("requireExplicitWorktreeForAgentDispatch", () => {
+  const agentCtx: ActionContext = { dispatchSource: "agent", activeWorktreeId: "wt-active" };
+  const call =
+    (args: Parameters<typeof requireExplicitWorktreeForAgentDispatch>[1], ctx = agentCtx) =>
+    (): void =>
+      requireExplicitWorktreeForAgentDispatch("copyTree.generateAndCopyFile", args, ctx);
+
+  it("rejects an agent dispatch that names no worktree, even when one is active", () => {
+    // The whole point: an active worktree must NOT satisfy the guard, or a
+    // headless caller silently inherits whatever the user happens to be on.
+    expect(call(undefined)).toThrow(/requires an explicit/);
+    expect(call({})).toThrow(/requires an explicit/);
+  });
+
+  it("names the action and both accepted selectors so the agent can self-correct", () => {
+    // The semantic elements an agent needs to recover, not the sentence itself:
+    // pinning the exact wording would force a test edit for a copy tweak.
+    const thrown = call(undefined);
+
+    expect(thrown).toThrow("copyTree.generateAndCopyFile");
+    expect(thrown).toThrow("worktreeId");
+    expect(thrown).toThrow("worktreePath");
+    // Points at where to get one, and says who the rule applies to.
+    expect(thrown).toThrow(/worktree-listing capability/i);
+    expect(thrown).toThrow(/agent or MCP/i);
+  });
+
+  it("accepts either explicit selector", () => {
+    expect(call({ worktreeId: "wt-1" })).not.toThrow();
+    expect(call({ worktreePath: "/repo/feature" })).not.toThrow();
+  });
+
+  it("ignores a blank selector rather than treating it as explicit", () => {
+    // `.min(1)` in the schema rejects these first, but the guard is exported and
+    // must not be the layer that accepts an empty string as a named target.
+    expect(call({ worktreeId: "" })).toThrow(/requires an explicit/);
+    expect(call({ worktreePath: "" })).toThrow(/requires an explicit/);
+  });
+
+  it("leaves every non-agent dispatch on the active-worktree fallback", () => {
+    // Includes the source-less shape used by action unit tests and by any
+    // dispatch that carries no context at all — the guard must fail open there,
+    // which is why it compares to "agent" instead of negating an allowlist.
+    for (const source of ["user", "keybinding", "plugin", undefined] as const) {
+      expect(
+        call(undefined, { dispatchSource: source, activeWorktreeId: "wt-active" })
+      ).not.toThrow();
+    }
+    expect(call(undefined, {})).not.toThrow();
   });
 });

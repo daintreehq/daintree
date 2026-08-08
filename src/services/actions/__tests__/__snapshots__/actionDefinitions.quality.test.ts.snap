@@ -952,7 +952,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "copyTree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Bundle a worktree's context to a file and put it on the system clipboard, replacing whatever the user currently has copied. What lands there is platform-dependent: macOS and Linux copy the file itself, Windows copies its path as text. The bundle is never returned inline — check the budget flags to tell whether it was complete.",
+    "description": "Bundle a worktree's context to a file and put it on the system clipboard, replacing what the user had copied. Selection can mix exact files with globs, so this assembles a curated bundle of scattered related files, their supporting code and tests, rather than the whole worktree. Agent and MCP callers must name the worktree instead of relying on whichever is active. macOS and Linux copy the file, Windows its path. Never returned inline; check the budget flags for completeness.",
     "examples": undefined,
     "id": "copyTree.generateAndCopyFile",
     "keywords": undefined,

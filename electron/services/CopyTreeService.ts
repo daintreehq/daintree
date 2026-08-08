@@ -595,6 +595,48 @@ class CopyTreeService {
     }
   }
 
+  /**
+   * Union `includePaths` and `filter` into the SDK's single `filter`.
+   *
+   * These are two spellings of one selection set. They collapsed with `||`
+   * before, so `includePaths` silently won and a caller that split its selection
+   * across both — literal files in one, globs in the other — lost half of it
+   * with no error and no diagnostic. That split is the natural shape for a
+   * curated bundle assembled by an assistant, which is how the loss surfaced
+   * (#11722).
+   *
+   * `includePaths` goes first so a single-field call keeps the order it had.
+   * Duplicates are dropped to keep the advertised pattern list tidy — the SDK
+   * stops at the first matching pattern per file, so this changes the selected
+   * set for nobody.
+   *
+   * Only the both-absent case yields `undefined` ("no selection, take the whole
+   * worktree"). A supplied-but-unmatchable selection is passed through as-is,
+   * NOT normalized away: the SDK reads a missing filter as all-files, so dropping
+   * a blank pattern here would turn "the caller asked for something that matches
+   * nothing" into "copy the entire worktree" — inverting a fail-closed selection
+   * into a fail-open one, and putting a whole repo on the clipboard when an
+   * assistant emits a malformed list.
+   *
+   * Precondition, enforced at both validated boundaries (`CopyTreeOptionsSchema`
+   * in the renderer action definitions and its twin in `electron/schemas/ipc.ts`):
+   * a supplied selection is non-empty and carries no blank entries. Those reject
+   * rather than normalize, so a caller is told what was wrong instead of quietly
+   * receiving everything — an empty array reaching this point would read as "no
+   * filter" one layer down and copy the whole worktree.
+   */
+  private static mergeSelectionPatterns(
+    includePaths: string[] | undefined,
+    filter: string | string[] | undefined
+  ): string[] | undefined {
+    if (includePaths === undefined && filter === undefined) return undefined;
+    const merged = [
+      ...(includePaths ?? []),
+      ...(filter === undefined ? [] : Array.isArray(filter) ? filter : [filter]),
+    ];
+    return Array.from(new Set(merged));
+  }
+
   private buildSdkOptions(options: CopyTreeOptions, signal: AbortSignal): SdkCopyOptions {
     return {
       signal,
@@ -603,7 +645,7 @@ class CopyTreeService {
       quiet: true,
       format: options.format || "xml",
 
-      filter: options.includePaths || options.filter || undefined,
+      filter: CopyTreeService.mergeSelectionPatterns(options.includePaths, options.filter),
       // Literal paths, not patterns, and orthogonal to `filter`: the walk starts
       // here but the ignore stack is still built from the root down, so a folder
       // copy drops what a whole-project copy would have dropped. Both

@@ -259,10 +259,32 @@ export function PaginatedResultSchema<T extends z.ZodTypeAny>(item: T) {
 
 export const CopyTreeOptionsSchema = z.object({
   format: z.enum(["xml", "json", "markdown", "tree", "ndjson", "sarif"]).optional(),
-  filter: z.union([z.string(), z.array(z.string())]).optional(),
+  // `filter` and `includePaths` are two spellings of one selection set, and both
+  // feed the SDK's single `filter`. They used to collapse with `||`, so a caller
+  // that put literal files in one and globs in the other silently lost the
+  // second — the exact shape a curated bundle takes (#11722). They are unioned
+  // now, and say so here, since the union is only discoverable from these
+  // descriptions on the MCP wire.
+  // Non-empty at both levels, like `scopePaths` below. An empty list and a
+  // blank entry both leave the selection empty, and an empty selection reads as
+  // "no filter" to the SDK — i.e. the whole worktree. Accepting either would
+  // turn a malformed narrow request into a full-repo copy onto the clipboard,
+  // so they are rejected here rather than normalized away downstream.
+  filter: z
+    .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
+    .optional()
+    .describe(
+      "Selects which files to include, as worktree-relative glob patterns or exact paths. Combined with `includePaths` when both are given; omit both to include the whole worktree."
+    ),
   exclude: z.union([z.string(), z.array(z.string())]).optional(),
   always: z.array(z.string()).optional(),
-  includePaths: z.array(z.string()).optional(),
+  includePaths: z
+    .array(z.string().min(1))
+    .min(1)
+    .optional()
+    .describe(
+      "Selects which files to include, as worktree-relative exact paths or glob patterns. Use this to assemble a curated bundle of scattered files — sources, their supporting code, and their tests — in one call. Combined with `filter` when both are given. Unlike `scopePaths` this does not restrict traversal, so patterns may match anywhere in the worktree."
+    ),
   // An empty list or blank entry would resolve to the worktree root — a folder
   // copy that silently became a whole-worktree copy. Absent means no scoping.
   scopePaths: z
