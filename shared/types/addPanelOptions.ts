@@ -16,6 +16,7 @@ import type { AgentState, AgentId, WaitingReason } from "./agent.js";
 import type { TerminalSpawnSource, AddPanelFocusPolicy } from "./panel.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { ActionContext } from "./actions.js";
+import type { TerminalGeometry } from "./terminal.js";
 
 /** Fields shared by all panel creation requests */
 export interface AddPanelOptionsBase {
@@ -174,6 +175,23 @@ export interface AddPanelOptionsBase {
    * launch path captures its own snapshot via `help.provisionSession` instead.
    */
   actionContext?: ActionContext;
+  /**
+   * Grid this PTY panel is known to already be on, supplied by hydration from
+   * the persisted `terminalSizes` entry. Used as the xterm CONSTRUCTOR size so a
+   * restored pane is born on its real grid.
+   *
+   * A restored pane in a non-selected worktree is prewarmed but never attached,
+   * so nothing ever fits it, yet it stays content-live and parses whatever the
+   * surviving PTY streams. Born at xterm's 80×24 default it commits every
+   * cursor-addressed repaint from a ~200-column agent into an 80-column grid,
+   * and the damage is real cell data that no later fit or Redraw can undo
+   * (#11718). Renderer-side only: the PTY it reconnects to is already on this
+   * grid, so nothing on this path may resize it.
+   *
+   * Transient — hydration-only, never persisted, and never a reason to move a
+   * surviving PTY. A real fit supersedes it normally once the pane attaches.
+   */
+  initialTerminalGeometry?: TerminalGeometry;
 }
 
 /**

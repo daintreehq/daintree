@@ -38,8 +38,33 @@ import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
+import { isValidTerminalGeometry } from "@shared/types/terminal";
+import type { TerminalGeometry } from "@shared/types/terminal";
 
 type AddPanelFn = HydrationOptions["addPanel"];
+
+/**
+ * The persisted grid for a saved pane, keyed by the id it was persisted under —
+ * resolvable BEFORE `addPanel`, which is the whole point.
+ *
+ * `setTargetSize` after the fact only parks the size for the next attach, and a
+ * pane restored into a non-selected worktree never attaches: it sits prewarmed
+ * at xterm's 80×24 default parsing everything its surviving PTY streams
+ * (#11718). Feeding this into the xterm constructor instead closes the window
+ * entirely — there is no moment at which the pane exists on the wrong grid.
+ *
+ * Rejects anything not a plausible grid rather than partially defaulting: a
+ * half-valid entry would boot the pane on a geometry the PTY is not on, which
+ * is the failure being fixed.
+ */
+function resolvePersistedGeometry(
+  terminalSizes: Record<string, { cols: number; rows: number }> | undefined,
+  terminalId: string
+): TerminalGeometry | undefined {
+  if (!terminalSizes || typeof terminalSizes !== "object") return undefined;
+  const saved = terminalSizes[terminalId];
+  return isValidTerminalGeometry(saved) ? saved : undefined;
+}
 type RestoreTerminalOrderFn = NonNullable<HydrationOptions["restoreTerminalOrder"]>;
 
 /**
@@ -623,6 +648,10 @@ export async function restorePanelsPhase(
             // onto the moved worktree's new root so persisted state and a later
             // respawn don't reference the vanished path (#11388).
             rebaseMovedArgsCwd(args, movedRootsById.get(saved.id));
+            // Born on the persisted grid, not 80×24 — the reconnected PTY is
+            // already there and a hidden-worktree pane never gets fitted
+            // (#11718).
+            args.initialTerminalGeometry = resolvePersistedGeometry(terminalSizes, saved.id);
             const location = args.location as "grid" | "dock";
 
             logHydrationInfo(`[HYDRATION] Adding terminal from backend:`, {
@@ -709,6 +738,10 @@ export async function restorePanelsPhase(
                 // Rebase the reconnected PTY's live (old-path) cwd onto the
                 // moved worktree's new root, like the matched-backend path.
                 rebaseMovedArgsCwd(reconnectArgs, movedRootsById.get(saved.id));
+                reconnectArgs.initialTerminalGeometry = resolvePersistedGeometry(
+                  terminalSizes,
+                  saved.id
+                );
                 const restoredTerminalId = await addPanel(reconnectArgs);
                 restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
@@ -771,6 +804,14 @@ export async function restorePanelsPhase(
                 // worktreeId, or names a deleted one — which also keeps the
                 // respawn's cwd pointing at a directory that still exists.
                 respawnArgs.worktreeId = await resolveRestoredWorktreeId(respawnArgs.worktreeId);
+
+                // A respawn boots a NEW PTY, so this also pairs the spawn: the
+                // renderer and the PTY start on one grid instead of the pane
+                // being seeded wide while the agent paints for 80 columns.
+                respawnArgs.initialTerminalGeometry = resolvePersistedGeometry(
+                  terminalSizes,
+                  saved.id
+                );
 
                 logHydrationInfo(
                   `Respawning PTY panel: ${saved.id} (${respawnArgs.launchAgentId ? "agent" : "terminal"})`
@@ -1004,6 +1045,9 @@ export async function restorePanelsPhase(
           orphanArgs.worktreeId = effectiveActiveWorktreeId;
           orphanArgs.worktreeIdSource = "inferred";
         }
+        // Same prewarm-before-target ordering as the saved-panel paths, and an
+        // orphan can land in a worktree that is not the selected one.
+        orphanArgs.initialTerminalGeometry = resolvePersistedGeometry(terminalSizes, terminal.id);
         const restoredTerminalId = await addPanel(orphanArgs);
 
         if (terminal.activityTier) {

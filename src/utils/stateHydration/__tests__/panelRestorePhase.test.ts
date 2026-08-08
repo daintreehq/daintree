@@ -410,6 +410,77 @@ describe("restorePanelsPhase — saved panels", () => {
     await restorePanelsPhase([panel("t1")], ctx);
     expect(setTargetSizeMock).not.toHaveBeenCalled();
   });
+
+  /**
+   * The saved size must reach xterm's CONSTRUCTOR, not just the attach target
+   * (#11718). `setTargetSize` is consumed at first attach, and a pane restored
+   * into a non-selected worktree never attaches — it sits prewarmed at 80×24
+   * parsing everything its surviving PTY streams. The size is keyed by the
+   * persisted id, so it is resolvable before `addPanel`, which is the only point
+   * early enough to close the window completely.
+   */
+  const geometryPassedToAddPanel = (
+    addPanel: Mock,
+    id: string
+  ): { cols: number; rows: number } | undefined =>
+    (
+      addPanel.mock.calls.find(
+        (call) => (call[0] as { existingId?: string; requestedId?: string }).existingId === id
+      )?.[0] as { initialTerminalGeometry?: { cols: number; rows: number } }
+    )?.initialTerminalGeometry;
+
+  it("hands the saved grid to addPanel when reconnecting a matched backend terminal", async () => {
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 203, rows: 51 } } });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+    await restorePanelsPhase([panel("t1")], ctx);
+    expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toEqual({ cols: 203, rows: 51 });
+  });
+
+  it("hands the saved grid to addPanel on the reconnect-fallback path", async () => {
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 203, rows: 51 } } });
+    reconnectWithTimeoutMock.mockResolvedValue({
+      status: "found",
+      terminal: { id: "t1", cwd: "/cwd" },
+    });
+    await restorePanelsPhase([panel("t1")], ctx);
+    expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toEqual({ cols: 203, rows: 51 });
+  });
+
+  it("hands the saved grid to addPanel when respawning a dead PTY", async () => {
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 203, rows: 51 } } });
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+    await restorePanelsPhase([panel("t1")], ctx);
+    const respawnArgs = ctx.addPanel.mock.calls[0]?.[0] as {
+      initialTerminalGeometry?: { cols: number; rows: number };
+    };
+    expect(respawnArgs.initialTerminalGeometry).toEqual({ cols: 203, rows: 51 });
+  });
+
+  it("omits an invalid saved grid rather than partially defaulting it", async () => {
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 0, rows: 51 } } });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+    await restorePanelsPhase([panel("t1")], ctx);
+    expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toBeUndefined();
+  });
+
+  it("resolves the grid before addPanel, not after it returns", async () => {
+    // The ordering IS the fix: an xterm prewarmed inside addPanel has already
+    // begun parsing live PTY output by the time addPanel resolves. Read
+    // synchronously inside the mock — vitest records the args object by
+    // reference, so inspecting it afterwards cannot distinguish a value that was
+    // present on entry from one assigned after addPanel returned.
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 203, rows: 51 } } });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+    let geometryOnEntry: unknown = "addPanel was never called";
+    ctx.addPanel.mockImplementation(
+      async (args: { existingId?: string; initialTerminalGeometry?: unknown }) => {
+        geometryOnEntry = args.initialTerminalGeometry;
+        return args.existingId ?? "";
+      }
+    );
+    await restorePanelsPhase([panel("t1")], ctx);
+    expect(geometryOnEntry).toEqual({ cols: 203, rows: 51 });
+  });
 });
 
 describe("restorePanelsPhase — worktree re-home validation (#11387)", () => {
@@ -645,6 +716,21 @@ describe("restorePanelsPhase — orphan reconnection", () => {
     const { restoreTasks } = await restorePanelsPhase([], ctx);
     expect(ctx.addPanel).not.toHaveBeenCalled();
     expect(restoreTasks).toEqual([]);
+  });
+
+  it("hands an orphan's saved grid to addPanel, keyed by its backend id (#11718)", async () => {
+    // Orphans go through the same prewarm-then-target ordering as saved panels
+    // and can be attributed to a worktree that is not the selected one, so they
+    // are squarely in this bug's blast radius.
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      terminalSizes: { o1: { cols: 203, rows: 51 } },
+    });
+    ctx.backendTerminalMap.set("o1", backend("o1"));
+    await restorePanelsPhase([], ctx);
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({
+      initialTerminalGeometry: { cols: 203, rows: 51 },
+    });
   });
 });
 
