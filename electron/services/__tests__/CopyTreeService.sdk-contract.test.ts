@@ -493,9 +493,10 @@ describe("CopyTreeService against the installed CopyTree", () => {
         "src/landscape/support/nested/seed.ts",
         "tests/landscape/generator.test.ts",
       ]);
-      // Proves the decoys were walked and then filtered, rather than the walk
-      // never reaching them — without this the assertion above would also pass
-      // on a broken traversal that found nothing.
+      // Exclusion accounting: files were walked and then ruled out by the
+      // pattern, so the count above is a filtered result rather than an empty
+      // traversal. (The exact-list assertion is what proves the selection; this
+      // catches the accounting going silent.)
       expect(result.excluded?.byReason.filterPattern).toBeGreaterThan(0);
     });
 
@@ -554,29 +555,56 @@ describe("CopyTreeService against the installed CopyTree", () => {
     // `.github/workflows/**` or a dotfile config; ordinary sources and tests,
     // which is what the feature is for, are unaffected.
     //
-    // Deliberately `it.fails`: it must not encode the bug as desired behavior,
-    // and it must speak up rather than sit silent once the fix lands. When a
-    // copytree release carrying `{ dot: true }` here is published and this
-    // repo's dependency is raised to it, this test starts FAILING — at which
-    // point drop the `.fails` and keep the assertion as the regression.
-    it.fails("selects a dotfile through a curated glob", async () => {
+    // Pinned as current behavior rather than `it.fails`, which flips ANY
+    // failure to green — a broken fixture write or a renamed option would have
+    // "passed" it forever. The non-dot control is what makes this honest: it
+    // proves the glob and the traversal work, so the dotfile's absence is the
+    // upstream gap and not a typo. When a copytree release with `{ dot: true }`
+    // lands and this repo's dependency is raised to it, the second assertion
+    // starts failing — flip it to `toContain` and delete this comment.
+    it("does not reach a dotfile through a curated glob (upstream copytree gap)", async () => {
       await writeFixture("config/landscape/.defaults.json", '{"DOTFILE_SENTINEL":1}\n');
+      await writeFixture("config/landscape/visible.json", '{"CONTROL_SENTINEL":1}\n');
 
       const result = await copyTreeService.testConfig(tempDir, {
         includePaths: ["config/landscape/**"],
       });
 
-      expect((result.files ?? []).map((file) => file.path)).toContain(
-        "config/landscape/.defaults.json"
-      );
+      expect(result.error).toBeUndefined();
+      const selected = (result.files ?? []).map((file) => file.path);
+      expect(selected).toContain("config/landscape/visible.json");
+      expect(selected).not.toContain("config/landscape/.defaults.json");
     });
 
     it("still selects everything when neither field is given", async () => {
-      // Guards the merge helper's empty case: `[]` would read as "select
-      // nothing" to the SDK, so it must stay `undefined`.
       const result = await copyTreeService.testConfig(tempDir, {});
 
       expect((result.files ?? []).map((file) => file.path)).toContain("src/landscape/preview.ts");
+    });
+
+    // The merge must never widen a selection. An absent filter means "the whole
+    // worktree" to the SDK, so a supplied-but-unmatchable selection that got
+    // normalized away would put the entire repo on the user's clipboard — the
+    // opposite of what the caller asked for, and worst exactly when an
+    // assistant emits a malformed list.
+    it("copies nothing, not everything, when the selection matches nothing", async () => {
+      const result = await copyTreeService.testConfig(tempDir, {
+        includePaths: ["does/not/exist/**"],
+      });
+
+      const selected = (result.files ?? []).map((file) => file.path);
+      expect(selected).toEqual([]);
+      expect(selected).not.toContain("src/landscape/preview.ts");
+    });
+
+    it("treats a blank pattern as unmatchable rather than as no selection", async () => {
+      // The schemas reject a blank entry before this point; if one ever reaches
+      // the service it must still fail closed.
+      const result = await copyTreeService.testConfig(tempDir, { includePaths: [""] });
+
+      expect((result.files ?? []).map((file) => file.path)).not.toContain(
+        "src/landscape/preview.ts"
+      );
     });
   });
 });

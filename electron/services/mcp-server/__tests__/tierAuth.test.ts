@@ -409,10 +409,18 @@ describe("external tool surface invariants (#10701, #11537)", () => {
     );
   });
 
-  it("keeps the other copyTree tools off the external surface", () => {
-    for (const id of ["copyTree.generate", "copyTree.injectToTerminal", "copyTree.isAvailable"]) {
-      expect(builtInIds.has(id)).toBe(true);
+  it("keeps every other copyTree tool off the external surface", () => {
+    // Derived from the registry rather than listed by hand: a hardcoded list
+    // silently stops covering any copyTree tool added later, which is exactly
+    // when this guard matters.
+    const others = [...BUILT_IN_ACTION_IDS].filter(
+      (id) => id.startsWith("copyTree.") && id !== "copyTree.generateAndCopyFile"
+    );
+
+    expect(others.length).toBeGreaterThan(0);
+    for (const id of others) {
       expect(isTierPermitted("external", id)).toBe(false);
+      expect(shouldExposeTool(makeEntry({ id }), "external")).toBe(false);
     }
   });
 

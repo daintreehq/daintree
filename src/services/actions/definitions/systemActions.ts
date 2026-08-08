@@ -489,6 +489,13 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           "Selection, exclusion, formatting, and size-budget settings for the bundle."
         ),
       }).optional(),
+      // `destructiveHint` is otherwise derived from `danger === "confirm"`, so
+      // this would advertise as non-destructive while `actionRiskBand` already
+      // classifies it `destructive-local`. It replaces the clipboard, which has
+      // no inverse — the annotation should say so to a caller deciding whether
+      // to ask first. `danger` stays "safe": the issue wants an assistant-driven
+      // copy to land like a manual one, not behind a confirm dialog.
+      mcpAnnotations: { destructiveHint: true, idempotentHint: false },
       resultSchema: z.object({
         filePath: z.string(),
         fileCount: z.number(),
@@ -526,7 +533,17 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
               stats: result.stats,
               format: args?.options?.format,
             }),
-            context: { eventKind: "completed" },
+            // Its own bucket. The key otherwise falls back to `type`, putting
+            // every "success" toast in the app in one bucket — three unrelated
+            // ones would swallow this into a generic overflow row and lose the
+            // message that says what is on the clipboard.
+            rateLimitKey: "copyTree.generateAndCopyFile",
+            // "agent", not "completed": both route identically (active → high),
+            // but "completed" owns the `completedEnabled` setting, which gates
+            // only main-process completion watches and never a renderer
+            // notify() — so it would offer a "silence completed notifications"
+            // affordance that leaves these copies firing anyway.
+            context: { eventKind: "agent" },
           });
         }
         return {

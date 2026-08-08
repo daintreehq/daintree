@@ -415,9 +415,16 @@ describe("requireExplicitWorktreeForAgentDispatch", () => {
   });
 
   it("names the action and both accepted selectors so the agent can self-correct", () => {
-    expect(call(undefined)).toThrow(
-      "copyTree.generateAndCopyFile requires an explicit `worktreeId` or `worktreePath` when dispatched by an agent or MCP client — pass the `id` or `path` from the worktree-listing capability."
-    );
+    // The semantic elements an agent needs to recover, not the sentence itself:
+    // pinning the exact wording would force a test edit for a copy tweak.
+    const thrown = call(undefined);
+
+    expect(thrown).toThrow("copyTree.generateAndCopyFile");
+    expect(thrown).toThrow("worktreeId");
+    expect(thrown).toThrow("worktreePath");
+    // Points at where to get one, and says who the rule applies to.
+    expect(thrown).toThrow(/worktree-listing capability/i);
+    expect(thrown).toThrow(/agent or MCP/i);
   });
 
   it("accepts either explicit selector", () => {

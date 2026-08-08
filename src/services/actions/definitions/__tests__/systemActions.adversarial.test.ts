@@ -346,6 +346,54 @@ describe("systemActions adversarial", () => {
       );
     });
 
+    it("forwards the curated selection to the client untouched", async () => {
+      // Without this, swapping the call for `generateAndCopyFile(id, undefined)`
+      // leaves every other test here green while external callers silently lose
+      // their selection and copy the whole worktree.
+      const { getDef, run } = setupActions();
+      const options = {
+        includePaths: ["src/landscape/generator.ts"],
+        filter: ["tests/landscape/*.test.ts"],
+        format: "markdown" as const,
+      };
+      await run(
+        "copyTree.generateAndCopyFile",
+        { worktreeId: "wt-1", options },
+        { dispatchSource: "agent" }
+      );
+      expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith("wt-1", options);
+
+      // And the schema actually admits that shape — `run()` is called directly
+      // here, so the transform would otherwise never be exercised.
+      const schema = getDef("copyTree.generateAndCopyFile").argsSchema;
+      expect(schema?.safeParse({ worktreePath: "/repo/landscape", options }).success).toBe(true);
+    });
+
+    it("rejects a blank selection entry instead of widening it to the whole worktree", async () => {
+      // An empty selection reads as "everything" downstream, so a blank must be
+      // a validation error rather than something quietly dropped.
+      const schema = setupActions().getDef("copyTree.generateAndCopyFile").argsSchema;
+      expect(schema?.safeParse({ options: { includePaths: [""] } }).success).toBe(false);
+      expect(schema?.safeParse({ options: { filter: [""] } }).success).toBe(false);
+      expect(schema?.safeParse({ options: { filter: "" } }).success).toBe(false);
+    });
+
+    it("refuses an explicit worktreePath that matches no open worktree", async () => {
+      // Must not fall back to the active worktree: the agent named a target,
+      // and quietly copying a different one is the failure this guards.
+      setWorktreePathIndexAccessor(() => new Map([["wt-known", "/repo/known"]]));
+      const { run } = setupActions();
+      await expect(
+        run(
+          "copyTree.generateAndCopyFile",
+          { worktreePath: "/repo/gone" },
+          { dispatchSource: "agent", activeWorktreeId: "wt-active" }
+        )
+      ).rejects.toThrow(/no open worktree matches that path/i);
+      expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
     it("refuses an agent dispatch that names no worktree, before touching the clipboard", async () => {
       const { run } = setupActions();
       await expect(
@@ -373,8 +421,35 @@ describe("systemActions adversarial", () => {
           type: "success",
           title: "Reference file created",
           message: "Copied 3 files (4 KB) as XML to clipboard",
-          context: { eventKind: "completed" },
+          context: { eventKind: "agent" },
         })
+      );
+    });
+
+    it("gives the toast its own rate-limit bucket", async () => {
+      // Falling back to the `type` key would pool this with every other success
+      // toast in the app, so an unrelated burst could replace the one message
+      // that says what is now on the clipboard.
+      const { run } = setupActions();
+      await run(
+        "copyTree.generateAndCopyFile",
+        { worktreeId: "wt-1" },
+        { dispatchSource: "agent" }
+      );
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ rateLimitKey: "copyTree.generateAndCopyFile" })
+      );
+    });
+
+    it("describes the copy without a format when none was requested", async () => {
+      const { run } = setupActions();
+      await run(
+        "copyTree.generateAndCopyFile",
+        { worktreeId: "wt-1" },
+        { dispatchSource: "agent" }
+      );
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Copied 3 files (4 KB) to clipboard" })
       );
     });
 
@@ -390,10 +465,10 @@ describe("systemActions adversarial", () => {
         { worktreeId: "wt-active" },
         { dispatchSource: "agent", activeWorktreeId: "wt-active" }
       );
-      // `toEqual` on the whole context (not `objectContaining` on it) is what
-      // proves the absence: an added `worktreeId` would fail this.
+      // The nested `context` is a plain object, so it is compared by deep
+      // equality rather than partially: an added `worktreeId` fails this.
       expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ context: { eventKind: "completed" } })
+        expect.objectContaining({ context: { eventKind: "agent" } })
       );
     });
 

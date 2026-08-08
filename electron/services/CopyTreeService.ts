@@ -605,20 +605,30 @@ class CopyTreeService {
    * curated bundle assembled by an assistant, which is how the loss surfaced
    * (#11722).
    *
-   * Order is `includePaths` first to preserve the previous precedence in the
-   * common single-field case. Duplicates are dropped because a repeated pattern
-   * is counted per match downstream; `undefined` (not `[]`) means "no
-   * selection", since an empty array reads as "select nothing" to the SDK.
+   * `includePaths` goes first so a single-field call keeps the order it had.
+   * Duplicates are dropped to keep the advertised pattern list tidy — the SDK
+   * stops at the first matching pattern per file, so this changes the selected
+   * set for nobody.
+   *
+   * Only the both-absent case yields `undefined` ("no selection, take the whole
+   * worktree"). A supplied-but-unmatchable selection is passed through as-is,
+   * NOT normalized away: the SDK reads a missing filter as all-files, so dropping
+   * a blank pattern here would turn "the caller asked for something that matches
+   * nothing" into "copy the entire worktree" — inverting a fail-closed selection
+   * into a fail-open one, and putting a whole repo on the clipboard when an
+   * assistant emits a malformed list. Blank entries are rejected by the schemas
+   * instead, where a caller gets told what was wrong.
    */
   private static mergeSelectionPatterns(
     includePaths: string[] | undefined,
     filter: string | string[] | undefined
   ): string[] | undefined {
+    if (includePaths === undefined && filter === undefined) return undefined;
     const merged = [
       ...(includePaths ?? []),
       ...(filter === undefined ? [] : Array.isArray(filter) ? filter : [filter]),
-    ].filter((pattern) => pattern.length > 0);
-    return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
+    ];
+    return Array.from(new Set(merged));
   }
 
   private buildSdkOptions(options: CopyTreeOptions, signal: AbortSignal): SdkCopyOptions {

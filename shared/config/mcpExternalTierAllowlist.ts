@@ -96,12 +96,18 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   "worktree.createWithRecipe",
   "worktree.setActive",
 
-  // Passes the selection rule above: an external agent sits in a terminal and
-  // can read files for itself, but it cannot put anything on the user's system
-  // clipboard — only Daintree can. Curating the bundle is the caller's half
-  // (it decides which files matter), delivering it is ours. Without this entry
-  // the tool is reachable only by the in-app assistant via the system tier,
-  // which contradicts the point of the feature: the same request should work
-  // whether Daintree's own assistant or Claude Code/Codex is driving (#11722).
+  // A deliberate product exception rather than a clean pass of the rule above,
+  // so it is worth stating the reasoning plainly. A caller holding
+  // `terminal.sendCommand` could pipe files through `pbcopy` itself, so this is
+  // not a capability it categorically lacks. What it cannot reproduce is the
+  // actual deliverable: one call that applies the project's own CopyTree policy
+  // (ignore rules, budgets, format) and puts a FILE on the clipboard the same
+  // way across macOS, Linux and Windows. The alternative is a brittle
+  // shell-and-pipe reconstruction per platform. Without the entry the feature
+  // only half exists — the in-app assistant reaches it through the system tier
+  // while Claude Code and Codex, the callers #11722 names, cannot.
+  //
+  // Its blast radius is a clipboard overwrite, which `actionRiskBand` already
+  // bands `destructive-local` and the tool advertises via `destructiveHint`.
   "copyTree.generateAndCopyFile",
 ] as const satisfies readonly BuiltInActionId[];

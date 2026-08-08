@@ -265,8 +265,12 @@ export const CopyTreeOptionsSchema = z.object({
   // second — the exact shape a curated bundle takes (#11722). They are unioned
   // now, and say so here, since the union is only discoverable from these
   // descriptions on the MCP wire.
+  // Blank entries are rejected, not ignored: a dropped blank would leave the
+  // selection empty, and an absent selection means "the whole worktree" to the
+  // SDK — so silently discarding one turns a malformed narrow request into a
+  // full-repo copy. Same reasoning as `scopePaths` below.
   filter: z
-    .union([z.string(), z.array(z.string())])
+    .union([z.string().min(1), z.array(z.string().min(1))])
     .optional()
     .describe(
       "Selects which files to include, as worktree-relative glob patterns or exact paths. Combined with `includePaths` when both are given; omit both to include the whole worktree."
@@ -274,7 +278,7 @@ export const CopyTreeOptionsSchema = z.object({
   exclude: z.union([z.string(), z.array(z.string())]).optional(),
   always: z.array(z.string()).optional(),
   includePaths: z
-    .array(z.string())
+    .array(z.string().min(1))
     .optional()
     .describe(
       "Selects which files to include, as worktree-relative exact paths or glob patterns. Use this to assemble a curated bundle of scattered files — sources, their supporting code, and their tests — in one call. Combined with `filter` when both are given. Unlike `scopePaths` this does not restrict traversal, so patterns may match anywhere in the worktree."
