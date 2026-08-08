@@ -595,6 +595,32 @@ class CopyTreeService {
     }
   }
 
+  /**
+   * Union `includePaths` and `filter` into the SDK's single `filter`.
+   *
+   * These are two spellings of one selection set. They collapsed with `||`
+   * before, so `includePaths` silently won and a caller that split its selection
+   * across both — literal files in one, globs in the other — lost half of it
+   * with no error and no diagnostic. That split is the natural shape for a
+   * curated bundle assembled by an assistant, which is how the loss surfaced
+   * (#11722).
+   *
+   * Order is `includePaths` first to preserve the previous precedence in the
+   * common single-field case. Duplicates are dropped because a repeated pattern
+   * is counted per match downstream; `undefined` (not `[]`) means "no
+   * selection", since an empty array reads as "select nothing" to the SDK.
+   */
+  private static mergeSelectionPatterns(
+    includePaths: string[] | undefined,
+    filter: string | string[] | undefined
+  ): string[] | undefined {
+    const merged = [
+      ...(includePaths ?? []),
+      ...(filter === undefined ? [] : Array.isArray(filter) ? filter : [filter]),
+    ].filter((pattern) => pattern.length > 0);
+    return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
+  }
+
   private buildSdkOptions(options: CopyTreeOptions, signal: AbortSignal): SdkCopyOptions {
     return {
       signal,
@@ -603,7 +629,7 @@ class CopyTreeService {
       quiet: true,
       format: options.format || "xml",
 
-      filter: options.includePaths || options.filter || undefined,
+      filter: CopyTreeService.mergeSelectionPatterns(options.includePaths, options.filter),
       // Literal paths, not patterns, and orthogonal to `filter`: the walk starts
       // here but the ignore stack is still built from the root down, so a folder
       // copy drops what a whole-project copy would have dropped. Both

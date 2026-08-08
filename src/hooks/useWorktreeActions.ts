@@ -4,26 +4,16 @@ import { useErrorStore, type ErrorRecord } from "@/store";
 import { useRecipeStore } from "@/store/recipeStore";
 import { logError } from "@/utils/logger";
 import { useNotificationStore } from "@/store/notificationStore";
-import { formatBytes } from "@/lib/formatBytes";
+import { formatCopyResultMessage } from "@/lib/formatCopyResult";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionSource } from "@shared/types/actions";
 import type { CopyTreeBudgetStats, CopyTreeExclusionReason } from "@shared/types/ipc/copyTree";
 
-export function formatCopyResultMessage(payload: {
-  fileCount: number;
-  stats?: { totalSize?: number } | null;
-  format?: string;
-}): string {
-  const fileCount =
-    typeof payload.fileCount === "number" && Number.isFinite(payload.fileCount)
-      ? payload.fileCount
-      : 0;
-  const stats = payload.stats ?? undefined;
-  const sizeStr = stats?.totalSize ? formatBytes(stats.totalSize) : "";
-  const formatStr = payload.format ? ` as ${payload.format.toUpperCase()}` : "";
-  return `Copied ${fileCount} files${sizeStr ? ` (${sizeStr})` : ""}${formatStr} to clipboard`;
-}
+// Moved to a leaf module so the copyTree action definitions can share it
+// without closing an import cycle through `actionService` below (#11722).
+// Re-exported because this was its public home.
+export { formatCopyResultMessage };
 
 /**
  * Reasons that mean "a rule the project already lives by kept this out", as

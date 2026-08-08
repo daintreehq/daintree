@@ -95,4 +95,13 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   "worktree.getCurrent",
   "worktree.createWithRecipe",
   "worktree.setActive",
+
+  // Passes the selection rule above: an external agent sits in a terminal and
+  // can read files for itself, but it cannot put anything on the user's system
+  // clipboard — only Daintree can. Curating the bundle is the caller's half
+  // (it decides which files matter), delivering it is ours. Without this entry
+  // the tool is reachable only by the in-app assistant via the system tier,
+  // which contradicts the point of the feature: the same request should work
+  // whether Daintree's own assistant or Claude Code/Codex is driving (#11722).
+  "copyTree.generateAndCopyFile",
 ] as const satisfies readonly BuiltInActionId[];

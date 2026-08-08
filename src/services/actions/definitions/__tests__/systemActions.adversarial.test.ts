@@ -37,6 +37,10 @@ const artifactClientMock = vi.hoisted(() => ({
   applyPatch: vi.fn(),
 }));
 
+const notifyMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+
 vi.mock("@/clients", () => ({
   filesClient: filesClientMock,
   copyTreeClient: copyTreeClientMock,
@@ -55,6 +59,10 @@ vi.mock("@/clients", () => ({
 }));
 
 import { registerSystemActions } from "../systemActions";
+import {
+  setWorktreePathIndexAccessor,
+  resetStoreAccessorsForTesting,
+} from "@/store/storeAccessors";
 
 function setupActions(): {
   run: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
@@ -90,6 +98,9 @@ const COPY_TREE_RESULT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The worktree path index leaks across files otherwise, so a later suite
+  // would inherit whichever map the last path-resolution test installed.
+  resetStoreAccessorsForTesting();
   for (const fn of Object.values(filesClientMock)) fn.mockResolvedValue(undefined);
   for (const fn of Object.values(copyTreeClientMock)) fn.mockResolvedValue(undefined);
   for (const fn of Object.values(slashCommandsClientMock)) fn.mockResolvedValue(undefined);
@@ -319,6 +330,108 @@ describe("systemActions adversarial", () => {
       await expect(
         run("copyTree.generateAndCopyFile", undefined, { activeWorktreeId: "wt-active" })
       ).rejects.toThrow("Failed to copy file to clipboard: EACCES");
+    });
+
+    it("resolves an explicit worktreePath to the id its IPC takes", async () => {
+      setWorktreePathIndexAccessor(() => new Map([["wt-landscape", "/repo/landscape"]]));
+      const { run } = setupActions();
+      await run(
+        "copyTree.generateAndCopyFile",
+        { worktreePath: "/repo/landscape" },
+        { dispatchSource: "agent", activeWorktreeId: "wt-active" }
+      );
+      expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith(
+        "wt-landscape",
+        undefined
+      );
+    });
+
+    it("refuses an agent dispatch that names no worktree, before touching the clipboard", async () => {
+      const { run } = setupActions();
+      await expect(
+        run("copyTree.generateAndCopyFile", undefined, {
+          dispatchSource: "agent",
+          activeWorktreeId: "wt-active",
+        })
+      ).rejects.toThrow(/requires an explicit/);
+      // The guard has to fire before the copy — a rejected call that already
+      // replaced the clipboard is the failure mode this exists to prevent.
+      expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("toasts once on a successful agent dispatch", async () => {
+      const { run } = setupActions();
+      await run(
+        "copyTree.generateAndCopyFile",
+        { worktreeId: "wt-1", options: { format: "xml" } },
+        { dispatchSource: "agent" }
+      );
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "success",
+          title: "Reference file created",
+          message: "Copied 3 files (4 KB) as XML to clipboard",
+          context: { eventKind: "completed" },
+        })
+      );
+    });
+
+    it("keeps the worktree out of the toast context so notify() cannot suppress it", async () => {
+      // notify() routes a high-priority toast to the inbox instead when
+      // `context.worktreeId` matches the worktree already on screen. An agent
+      // copying the ACTIVE worktree is the common case, so naming it here would
+      // silence exactly the signal this toast exists to deliver. A clipboard
+      // overwrite is invisible regardless of which worktree is displayed.
+      const { run } = setupActions();
+      await run(
+        "copyTree.generateAndCopyFile",
+        { worktreeId: "wt-active" },
+        { dispatchSource: "agent", activeWorktreeId: "wt-active" }
+      );
+      // `toEqual` on the whole context (not `objectContaining` on it) is what
+      // proves the absence: an added `worktreeId` would fail this.
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ context: { eventKind: "completed" } })
+      );
+    });
+
+    it("stays silent for a user-driven copy and for a source-less dispatch", async () => {
+      const { run } = setupActions();
+      await run("copyTree.generateAndCopyFile", undefined, {
+        dispatchSource: "user",
+        activeWorktreeId: "wt-active",
+      });
+      await run("copyTree.generateAndCopyFile", undefined, { activeWorktreeId: "wt-active" });
+      // The person pressed the button; their clipboard changing is not news.
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("never announces success when the copy failed", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generateAndCopyFile.mockResolvedValueOnce({
+        content: "",
+        fileCount: 0,
+        error: "Failed to copy file to clipboard: EACCES",
+      });
+      await expect(
+        run("copyTree.generateAndCopyFile", { worktreeId: "wt-1" }, { dispatchSource: "agent" })
+      ).rejects.toThrow("EACCES");
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("never announces success when no file came back", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generateAndCopyFile.mockResolvedValueOnce({
+        content: "",
+        fileCount: 3,
+        // No filePath: the clipboard write had nothing to point at.
+      });
+      await expect(
+        run("copyTree.generateAndCopyFile", { worktreeId: "wt-1" }, { dispatchSource: "agent" })
+      ).rejects.toThrow();
+      expect(notifyMock).not.toHaveBeenCalled();
     });
   });
 

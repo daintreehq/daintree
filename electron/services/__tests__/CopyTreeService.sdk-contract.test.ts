@@ -450,4 +450,133 @@ describe("CopyTreeService against the installed CopyTree", () => {
       expect(nodes.map((node) => node.name)).not.toContain("logs");
     });
   });
+
+  // The shape an assistant produces when asked for "everything relevant to X,
+  // including supporting files and tests" (#11722): a handful of exact paths
+  // mixed with globs, scattered across the tree rather than under one subtree.
+  // `scopePaths` cannot express it — it takes literal subtrees and recomputes
+  // budgets over them — so this rides entirely on `includePaths`/`filter`.
+  describe("curated mixed selection", () => {
+    async function writeFixture(relativePath: string, contents: string) {
+      const absolute = path.join(tempDir, relativePath);
+      await fs.mkdir(path.dirname(absolute), { recursive: true });
+      await fs.writeFile(absolute, contents);
+    }
+
+    beforeEach(async () => {
+      await writeFixture("src/landscape/generator.ts", "export const GENERATOR_SENTINEL = 1;\n");
+      await writeFixture("src/landscape/support/math.ts", "export const SUPPORT_SENTINEL = 1;\n");
+      await writeFixture(
+        "src/landscape/support/nested/seed.ts",
+        "export const NESTED_SENTINEL = 1;\n"
+      );
+      await writeFixture("tests/landscape/generator.test.ts", "export const TEST_SENTINEL = 1;\n");
+      // Decoys: same tree, same extensions, deliberately unselected.
+      await writeFixture("src/landscape/preview.ts", "export const PREVIEW_DECOY = 1;\n");
+      await writeFixture("tests/terrain.test.ts", "export const TERRAIN_DECOY = 1;\n");
+      await writeFixture("docs/landscape.md", "# decoy\n");
+    });
+
+    const CURATED = [
+      "src/landscape/generator.ts",
+      "src/landscape/support/**/*.ts",
+      "tests/landscape/*.test.ts",
+    ];
+
+    it("selects exact paths and globs together, and nothing else", async () => {
+      const result = await copyTreeService.testConfig(tempDir, { includePaths: CURATED });
+
+      expect(result.error).toBeUndefined();
+      expect((result.files ?? []).map((file) => file.path).sort()).toEqual([
+        "src/landscape/generator.ts",
+        "src/landscape/support/math.ts",
+        "src/landscape/support/nested/seed.ts",
+        "tests/landscape/generator.test.ts",
+      ]);
+      // Proves the decoys were walked and then filtered, rather than the walk
+      // never reaching them — without this the assertion above would also pass
+      // on a broken traversal that found nothing.
+      expect(result.excluded?.byReason.filterPattern).toBeGreaterThan(0);
+    });
+
+    it("carries the curated files, and only those, into a real generated bundle", async () => {
+      const result = await copyTreeService.generate(tempDir, { includePaths: CURATED });
+
+      expect(result.error).toBeUndefined();
+      expect(result.fileCount).toBe(4);
+      for (const sentinel of [
+        "GENERATOR_SENTINEL",
+        "SUPPORT_SENTINEL",
+        "NESTED_SENTINEL",
+        "TEST_SENTINEL",
+      ]) {
+        expect(result.content).toContain(sentinel);
+      }
+      for (const decoy of ["PREVIEW_DECOY", "TERRAIN_DECOY"]) {
+        expect(result.content).not.toContain(decoy);
+      }
+    });
+
+    // The regression for the `||` collapse: `includePaths` used to win outright,
+    // so a caller that split its selection across both fields silently lost the
+    // `filter` half with no error and no diagnostic (#11722).
+    it("unions includePaths with filter instead of letting one win", async () => {
+      const result = await copyTreeService.testConfig(tempDir, {
+        includePaths: ["src/landscape/generator.ts"],
+        filter: ["tests/landscape/*.test.ts"],
+      });
+
+      expect(result.error).toBeUndefined();
+      expect((result.files ?? []).map((file) => file.path).sort()).toEqual([
+        "src/landscape/generator.ts",
+        "tests/landscape/generator.test.ts",
+      ]);
+    });
+
+    it("accepts a bare string filter alongside includePaths", async () => {
+      const result = await copyTreeService.testConfig(tempDir, {
+        includePaths: ["src/landscape/generator.ts"],
+        filter: "tests/landscape/*.test.ts",
+      });
+
+      expect((result.files ?? []).map((file) => file.path).sort()).toEqual([
+        "src/landscape/generator.ts",
+        "tests/landscape/generator.test.ts",
+      ]);
+    });
+
+    // KNOWN UPSTREAM GAP, not a Daintree one: a curated glob cannot reach a
+    // dotfile. CopyTree 0.17 builds its include matcher as
+    // `micromatch.matcher(this.patterns)` (FileDiscoveryStage.js:485) with no
+    // `dot: true`, while the force-include matcher three lines up
+    // (FileDiscoveryStage.js:472) sets it — so `always` sees dotfiles and
+    // `filter`/`includePaths` do not. That costs a curated bundle things like
+    // `.github/workflows/**` or a dotfile config; ordinary sources and tests,
+    // which is what the feature is for, are unaffected.
+    //
+    // Deliberately `it.fails`: it must not encode the bug as desired behavior,
+    // and it must speak up rather than sit silent once the fix lands. When a
+    // copytree release carrying `{ dot: true }` here is published and this
+    // repo's dependency is raised to it, this test starts FAILING — at which
+    // point drop the `.fails` and keep the assertion as the regression.
+    it.fails("selects a dotfile through a curated glob", async () => {
+      await writeFixture("config/landscape/.defaults.json", '{"DOTFILE_SENTINEL":1}\n');
+
+      const result = await copyTreeService.testConfig(tempDir, {
+        includePaths: ["config/landscape/**"],
+      });
+
+      expect((result.files ?? []).map((file) => file.path)).toContain(
+        "config/landscape/.defaults.json"
+      );
+    });
+
+    it("still selects everything when neither field is given", async () => {
+      // Guards the merge helper's empty case: `[]` would read as "select
+      // nothing" to the SDK, so it must stay `undefined`.
+      const result = await copyTreeService.testConfig(tempDir, {});
+
+      expect((result.files ?? []).map((file) => file.path)).toContain("src/landscape/preview.ts");
+    });
+  });
 });
