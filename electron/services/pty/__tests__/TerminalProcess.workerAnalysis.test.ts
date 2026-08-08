@@ -122,3 +122,84 @@ describe("TerminalProcess worker-mode analysis events", () => {
     expect(agentStateService.handleActivityState).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("TerminalProcess mirror geometry divergence (#11719)", () => {
+  function memorySample(cols: number, rows: number): WorkerToHostMessage {
+    return {
+      type: "memory-sample",
+      heapUsedBytes: 1,
+      externalBytes: 1,
+      sessionCount: 1,
+      sessions: [{ terminalId: "t1", bufferLines: 10, cols, rows }],
+      sampledAt: 1,
+    };
+  }
+
+  function geometryMessages(worker: FakeWorker) {
+    return worker.posted.filter((m) => m.type === "resize" || m.type === "ensure-geometry");
+  }
+
+  it("re-asserts the grid when the PTY is already at the requested size", () => {
+    const { terminal, worker } = createWorkerModeTerminal();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // The mock PTY is 80x24, so this takes the "unchanged" branch — the only
+    // branch a re-assertion of the current size ever reaches.
+    expect(terminal.resize(80, 24).outcome).toBe("unchanged");
+    // Nothing has said the mirror drifted, so no worker traffic is generated.
+    expect(geometryMessages(worker)).toHaveLength(0);
+
+    // The worker reports a mirror on a different grid.
+    worker.emit("message", memorySample(120, 40));
+    expect(geometryMessages(worker)).toHaveLength(1);
+
+    // And a later re-assertion is still able to repair, rather than being
+    // short-circuited by the PTY dims already matching.
+    expect(terminal.resize(80, 24).outcome).toBe("unchanged");
+    expect(geometryMessages(worker).length).toBeGreaterThan(1);
+    warn.mockRestore();
+  });
+
+  it("logs a divergence once per episode and clears it on agreement", () => {
+    const { terminal, worker } = createWorkerModeTerminal();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const divergenceWarnings = () =>
+      warn.mock.calls.filter((call) => String(call[0]).includes("Mirror grid diverged")).length;
+
+    worker.emit("message", memorySample(120, 40));
+    expect(divergenceWarnings()).toBe(1);
+    const logged = String(warn.mock.calls[warn.mock.calls.length - 1]![0]);
+    // Both grids in one line: the whole point is settling the next report from
+    // a user's log rather than from code archaeology.
+    expect(logged).toContain("120x40");
+    expect(logged).toContain("80x24");
+
+    // The check rides the sample cadence, so an unchanged split must not
+    // re-log on every tick.
+    worker.emit("message", memorySample(120, 40));
+    expect(divergenceWarnings()).toBe(1);
+
+    // Converged: the episode closes...
+    worker.emit("message", memorySample(80, 24));
+    expect(divergenceWarnings()).toBe(1);
+
+    // ...and a fresh split is a fresh episode.
+    worker.emit("message", memorySample(120, 40));
+    expect(divergenceWarnings()).toBe(2);
+    expect(terminal.getInfo().id).toBe("t1");
+    warn.mockRestore();
+  });
+
+  it("does not warn for a rows-only split going unnoticed", () => {
+    const { worker } = createWorkerModeTerminal();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // Columns agree; rows do not. Cols-only diagnostics would call this healthy
+    // even though cursor addressing and full-screen TUIs are already corrupt.
+    worker.emit("message", memorySample(80, 40));
+    expect(
+      warn.mock.calls.filter((call) => String(call[0]).includes("Mirror grid diverged")).length
+    ).toBe(1);
+    warn.mockRestore();
+  });
+});

@@ -69,6 +69,8 @@ export interface WorkerAnalysisDelegate {
   onPtyResponse(data: string): void;
   getProcessState(): { hasActiveChildren: boolean; cpuUsage: number } | null;
   getAgentContext(): { agentLive: boolean; agentState?: AgentState };
+  /** The grid the worker's mirror reported for this terminal (#11719). */
+  onMirrorGeometry(cols: number, rows: number): void;
 }
 
 export interface WorkerBackendSpec {
@@ -116,6 +118,13 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   // loss, feed overflow); stamped on create/data and echoed in data-ack so a
   // late ack from a superseded generation can't debit the fresh ledger.
   private feedEpoch = 0;
+  // A geometry post that never reached the worker leaves its mirror on a grid
+  // the host cannot account for. Set until a geometry-bearing post lands, so
+  // the next re-assert repairs instead of short-circuiting (#11719).
+  private geometryPostFailed = false;
+  // Last grid the worker reported for this terminal's mirror, from its
+  // periodic memory sample. Null until the first sample arrives.
+  private observedMirrorGeometry: { cols: number; rows: number } | null = null;
 
   constructor(
     private readonly spec: WorkerBackendSpec,
@@ -176,7 +185,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
   // Posts a data message stamped with the current epoch, crediting outstanding
   // bytes ONLY when the worker actually received it (a no-op/failed post must
   // not leave phantom outstanding bytes that never ack).
-  private postData(data: string, flags: AnalysisChunkFlags): void {
+  private postData(data: string, flags: AnalysisChunkFlags): boolean {
     const sent = this.pool.post(this.spec.terminalId, {
       type: "data",
       terminalId: this.spec.terminalId,
@@ -187,17 +196,28 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     if (sent) {
       this.outstandingFeedBytes += data.length;
     }
+    return sent;
   }
 
   // Force-posts any host-side hold, regardless of the low watermark. Called
   // before every serialize request so the per-terminal barrier in the worker
   // runtime orders request-after-data — otherwise a request would overtake the
   // coalesced hold and serialize a buffer missing up to the whole hold.
-  private flushHeldFeed(): void {
-    if (this.heldFeed === null || this.inactive()) return;
+  //
+  // Returns whether the hold actually reached the worker. A failed post leaves
+  // the data owed, so it goes back on the hold rather than being dropped — and
+  // the caller must not proceed with the op it was ordering itself ahead of
+  // (#11719): a resize posted after a failed flush is exactly the inversion the
+  // flush exists to prevent, with the output lost on top.
+  private flushHeldFeed(): boolean {
+    if (this.heldFeed === null || this.inactive()) return true;
     const held = this.heldFeed;
     this.heldFeed = null;
-    this.postData(held.data, held.flags);
+    if (this.postData(held.data, held.flags)) return true;
+    // Nothing can have appended in between — postData is synchronous — so the
+    // hold is restored whole, keeping later chunks behind it in FIFO order.
+    this.heldFeed = held;
+    return false;
   }
 
   feedPrelude(data: string): void {
@@ -211,14 +231,71 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
 
   resize(cols: number, rows: number): void {
     if (this.inactive()) return;
+    this.postGeometry("resize", cols, rows);
+  }
+
+  /**
+   * Repair-only geometry re-assert (#11719). The host cannot read the worker's
+   * mirror grid, so convergence can only be driven by posting — but posting on
+   * every routine re-assertion would force the held feed out and defeat flow
+   * control. Post only when something the host CAN see says the mirror is, or
+   * may be, off: a geometry post that never landed, a request that differs from
+   * the last one made, or a worker-reported grid that disagrees.
+   */
+  resyncGeometry(cols: number, rows: number): void {
+    if (this.inactive() || !this.geometryMayHaveDrifted(cols, rows)) return;
+    this.postGeometry("ensure-geometry", cols, rows);
+  }
+
+  private geometryMayHaveDrifted(cols: number, rows: number): boolean {
+    if (this.geometryPostFailed) return true;
+    if (this.lastCols !== cols || this.lastRows !== rows) return true;
+    // The worker's own periodic sample is the only ground truth available.
+    const observed = this.observedMirrorGeometry;
+    return observed !== null && (observed.cols !== cols || observed.rows !== rows);
+  }
+
+  private postGeometry(type: "resize" | "ensure-geometry", cols: number, rows: number): void {
+    // Intent, not confirmation: a fresh-slot rebuild recreates the session at
+    // these dims, so they must record what was asked for even when the post
+    // below is dropped.
     this.lastCols = cols;
     this.lastRows = rows;
-    this.pool.post(this.spec.terminalId, {
-      type: "resize",
+    // Output coalesced above the high watermark was emitted at the OLD grid.
+    // Posting the resize while it is still held here lets the resize overtake
+    // up to the whole hold, which the mirror then parses at the new width —
+    // geometry right, buffer content corrupt. Every serialize path already
+    // flushes first for the same ordering reason.
+    if (!this.flushHeldFeed()) {
+      this.geometryPostFailed = true;
+      console.error(
+        `[WorkerAnalysisBackend] Held output could not be flushed before a ${type} for ` +
+          `${this.spec.terminalId}; skipping the geometry post to preserve ordering`
+      );
+      return;
+    }
+    this.geometryPostFailed = !this.pool.post(this.spec.terminalId, {
+      type,
       terminalId: this.spec.terminalId,
       cols,
       rows,
     });
+    if (this.geometryPostFailed) {
+      console.error(
+        `[WorkerAnalysisBackend] Mirror ${type} to ${cols}x${rows} was dropped for ` +
+          `${this.spec.terminalId}; its grid is unconfirmed until the next re-assert`
+      );
+    }
+  }
+
+  /**
+   * The mirror grid this terminal's worker reported in its last memory sample
+   * — the host's only observation of what a worker mirror is really parsing at
+   * (#11719).
+   */
+  noteMirrorGeometry(cols: number, rows: number): void {
+    this.observedMirrorGeometry = { cols, rows };
+    this.delegate.onMirrorGeometry(cols, rows);
   }
 
   notifyInput(data: string): void {
@@ -449,7 +526,11 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
     this.viewportLines = [];
     this.cursorLine = null;
     this.persistSuppressed = true;
-    this.pool.post(this.spec.terminalId, {
+    // The old mirror is gone, so its last reported grid says nothing about the
+    // replacement; the `create` below carries the geometry instead, and a
+    // dropped create leaves it unknown exactly like a dropped resize.
+    this.observedMirrorGeometry = null;
+    this.geometryPostFailed = !this.pool.post(this.spec.terminalId, {
       type: "create",
       terminalId: this.spec.terminalId,
       cols: this.lastCols,

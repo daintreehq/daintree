@@ -326,12 +326,48 @@ describe("AnalysisWorkerRuntime", () => {
     expect(runtime.sessionCount()).toBe(0);
   });
 
+  describe("ensure-geometry (#11719)", () => {
+    const mirrorGrid = () => {
+      const session = runtime.collectMemorySample().sessions[0]!;
+      return { cols: session.cols, rows: session.rows };
+    };
+
+    it("converges a drifted mirror onto the requested grid", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const before = mirrorGrid();
+
+      runtime.handleMessage({ type: "ensure-geometry", terminalId: "t1", cols: 132, rows: 40 });
+
+      expect(mirrorGrid()).toEqual({ cols: 132, rows: 40 });
+      expect(mirrorGrid()).not.toEqual(before);
+      warn.mockRestore();
+    });
+
+    it("is silent and inert once the mirror already holds that grid", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const settled = mirrorGrid();
+
+      // The host re-asserts on every "PTY already at this size" call, so the
+      // converged case must cost nothing and say nothing.
+      runtime.handleMessage({
+        type: "ensure-geometry",
+        terminalId: "t1",
+        cols: settled.cols,
+        rows: settled.rows,
+      });
+
+      expect(mirrorGrid()).toEqual(settled);
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
+    });
+  });
+
   describe("memory sampling", () => {
     it("reports isolate memory and real buffer occupancy that grows with output", async () => {
       // Freshly created 24-row terminal: the buffer holds only the viewport.
       const initial = runtime.collectMemorySample();
       expect(initial.sessionCount).toBe(1);
-      expect(initial.sessions).toEqual([{ terminalId: "t1", bufferLines: 24, cols: 80 }]);
+      expect(initial.sessions).toEqual([{ terminalId: "t1", bufferLines: 24, cols: 80, rows: 24 }]);
       expect(initial.heapUsedBytes).toBeGreaterThan(0);
       expect(initial.externalBytes).toBeGreaterThan(0);
 

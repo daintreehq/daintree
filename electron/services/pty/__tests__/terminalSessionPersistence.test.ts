@@ -11,6 +11,7 @@ import {
   getSessionPath,
   persistSessionSnapshotAsync,
   persistSessionSnapshotSync,
+  mirrorNeedsResize,
   resizeMirror,
   restoreSessionFromFile,
   deleteSessionFile,
@@ -427,6 +428,31 @@ describe("terminalSessionPersistence", () => {
       source.options.reflowCursorLine = false;
       await drain(source);
       expect(payloadRows(mirror)).toEqual(payloadRows(source));
+    });
+
+    it("reports a stale parked target as needing a resize (#11719)", async () => {
+      const { snapshot } = await captureAt(40, 10, WRAPPED_LINE);
+      persistSessionSnapshotSync("term-parked-target", snapshot);
+
+      const mirror = new Terminal({ cols: 100, rows: 10, scrollback: 200, allowProposedApi: true });
+      expect(restoreSessionFromFile(mirror, "term-parked-target").restored).toBe(true);
+
+      // Parked at the capture grid: the live grid is 40x10, but what the mirror
+      // will actually end up on is the replay TARGET. A geometry check that
+      // only compares the live grid would call this converged and skip the
+      // re-assert, and the replay would then reflow to the stale target.
+      resizeMirror(mirror, 132, 20);
+      expect([mirror.cols, mirror.rows]).toEqual([40, 10]);
+      expect(mirrorNeedsResize(mirror, 132, 20)).toBe(false);
+      expect(mirrorNeedsResize(mirror, 90, 30)).toBe(true);
+      // The live grid matching is not enough while a window is open.
+      expect(mirrorNeedsResize(mirror, 40, 10)).toBe(true);
+
+      await drain(mirror);
+      // Window closed: the live grid is the answer again.
+      expect(mirrorNeedsResize(mirror, 132, 20)).toBe(false);
+      expect(mirrorNeedsResize(mirror, 132, 21)).toBe(true);
+      expect(mirrorNeedsResize(mirror, 133, 20)).toBe(true);
     });
 
     it("applies a resize immediately once no replay is in flight", async () => {

@@ -380,6 +380,12 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
       if (this.disposed || slot.worker !== worker || !slot.alive) return;
       const { type: _type, ...sample } = msg;
       slot.memorySample = { ...sample, receivedAt: Date.now() };
+      // Each session carries its mirror's live grid — the host's only view of
+      // the geometry a worker mirror is really parsing at, and so the only way
+      // a silent divergence can ever be noticed (#11719).
+      for (const session of sample.sessions) {
+        this.backends.get(session.terminalId)?.noteMirrorGeometry(session.cols, session.rows);
+      }
       return;
     }
     if (msg.type === "response") {

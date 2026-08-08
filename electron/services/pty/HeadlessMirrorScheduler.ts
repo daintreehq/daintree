@@ -99,6 +99,9 @@ export class HeadlessMirrorScheduler {
   // the id AFTER the last fully-budget-consuming queue so a hot terminal can't
   // monopolize successive ticks.
   private nextServeId: string | null = null;
+  // Terminal currently inside drainForResize(). While set, enqueue() for that
+  // id must never take the synchronous fast path — see drainForResize().
+  private drainingForResizeId: string | null = null;
 
   /**
    * Queue `data` for the terminal's mirror. `onParsed` fires after the entire
@@ -119,6 +122,7 @@ export class HeadlessMirrorScheduler {
     const slices = sliceFeed(data, onParsed);
     if (
       queue.slices.length === 0 &&
+      id !== this.drainingForResizeId &&
       this.aggregateInFlightChars + data.length <= AGGREGATE_INFLIGHT_CHARS
     ) {
       for (const slice of slices) {
@@ -153,6 +157,62 @@ export class HeadlessMirrorScheduler {
     queue.expedite = true;
     queue.slices.push({ data: "", onParsed: onFlushed });
     this.scheduleTick();
+  }
+
+  /**
+   * Hand every slice still queued for `id` to the mirror, synchronously, then
+   * run `applyResize` with this terminal's queue held closed (#11719).
+   *
+   * Why the resize is passed in rather than done by the caller afterwards: the
+   * two steps are one atomic ordering contract, and holding the queue closed
+   * across BOTH is the whole point. xterm's `Terminal.resize()` calls
+   * `WriteBuffer.flushSync()` before it reflows, so bytes already inside the
+   * mirror's own write buffer parse at the PRE-resize grid — correct, since
+   * that is the grid they were emitted at. Bytes still held HERE would instead
+   * be fed after the reflow and parse at the new grid, which is the buffer
+   * corruption this fixes.
+   *
+   * Why not `flush()`: its callback fires from inside a mirror write callback,
+   * and resizing there re-enters `flushSync` while xterm is mid-`_innerWrite`;
+   * and it drains over `setImmediate` ticks, so post-resize output can queue
+   * behind the sentinel and reach the write buffer before the resize lands —
+   * getting parsed at the old grid, the same corruption mirrored.
+   *
+   * Deliberately ignores both pacing bounds. The per-tick fairness budget and
+   * the aggregate in-flight cap exist to stop mirrors monopolising the event
+   * loop, and neither can be honoured here: no other tick can run between the
+   * drain and the resize without breaking the ordering. The aggregate ledger
+   * goes temporarily over cap and is repaid in full when the resize's
+   * `flushSync` fires the parse callbacks.
+   *
+   * Returns false when a failing write tore the queue down mid-drain, in which
+   * case the mirror is disposing and `applyResize` is skipped.
+   */
+  drainThenResize(id: string, mirror: MirrorWritable, applyResize: () => void): boolean {
+    const queue = this.queues.get(id);
+    // The guard spans the resize as well as the drain: `flushSync` fires parse
+    // callbacks synchronously, and one of those synchronously enqueueing fresh
+    // (post-resize) output would otherwise take the fast path straight into the
+    // write buffer xterm is still draining — parsing new-grid bytes at the old
+    // grid.
+    this.drainingForResizeId = id;
+    try {
+      if (queue) {
+        queue.mirror = mirror;
+        while (queue.slices.length > 0) {
+          const slice = queue.slices.shift()!;
+          this.feedSlice(id, queue, slice);
+          if (queue.cleared) return false;
+        }
+        queue.expedite = false;
+      }
+      applyResize();
+    } finally {
+      this.drainingForResizeId = null;
+    }
+    // Deferred output parked by the guard still needs a tick to be released.
+    if (this.hasPendingSlices()) this.scheduleTick();
+    return true;
   }
 
   /**

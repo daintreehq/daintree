@@ -76,6 +76,7 @@ function makeDelegate(): WorkerAnalysisDelegate {
     onPtyResponse: vi.fn(),
     getProcessState: () => null,
     getAgentContext: () => ({ agentLive: false, agentState: undefined }),
+    onMirrorGeometry: vi.fn(),
   };
 }
 
@@ -499,7 +500,7 @@ describe("AnalysisWorkerPool", () => {
       heapUsedBytes,
       externalBytes: 5_000_000,
       sessionCount: 1,
-      sessions: [{ terminalId: "t1", bufferLines: 480, cols: 120 }],
+      sessions: [{ terminalId: "t1", bufferLines: 480, cols: 120, rows: 40 }],
       sampledAt: 111,
     });
 
@@ -513,7 +514,9 @@ describe("AnalysisWorkerPool", () => {
       expect(accounting[0].alive).toBe(true);
       expect(accounting[0].heapUsedBytes).toBe(20_000_000);
       expect(accounting[0].externalBytes).toBe(5_000_000);
-      expect(accounting[0].sessions).toEqual([{ terminalId: "t1", bufferLines: 480, cols: 120 }]);
+      expect(accounting[0].sessions).toEqual([
+        { terminalId: "t1", bufferLines: 480, cols: 120, rows: 40 },
+      ]);
       expect(Number.isFinite(accounting[0].ageMs)).toBe(true);
     });
 
@@ -611,7 +614,13 @@ describe("WorkerAnalysisBackend feed accounting", () => {
     );
     backend.init();
     const dataMessages = () => posted.filter((m) => m.type === "data") as Array<{ data: string }>;
-    return { backend, control, dataMessages };
+    return { backend, control, dataMessages, posted };
+  }
+
+  /** Push the backend above its high watermark so the next chunk is held. */
+  function holdOutput(backend: WorkerAnalysisBackend, held: string) {
+    backend.feedChunk("A".repeat(200), { agentLive: false });
+    backend.feedChunk(held, { agentLive: false });
   }
 
   it("credits outstanding bytes only when the post was actually sent", () => {
@@ -626,5 +635,76 @@ describe("WorkerAnalysisBackend feed accounting", () => {
     // Outstanding is still 0, so this posts rather than coalescing into a hold.
     backend.feedChunk("Y".repeat(10), { agentLive: false });
     expect(dataMessages().some((m) => m.data.startsWith("Y"))).toBe(true);
+  });
+
+  describe("geometry ordering (#11719)", () => {
+    it("flushes held output ahead of a resize so it parses at the old grid", () => {
+      const { backend, posted } = stubBackend();
+      holdOutput(backend, "OLD-WIDTH");
+
+      backend.resize(120, 40);
+
+      // The hold was emitted at the old grid. If the resize overtakes it the
+      // mirror parses old-width output at the new width — geometry right,
+      // buffer corrupt.
+      const heldIndex = posted.findIndex((m) => m.type === "data" && m.data === "OLD-WIDTH");
+      const resizeIndex = posted.findIndex((m) => m.type === "resize");
+      expect(heldIndex).toBeGreaterThanOrEqual(0);
+      expect(resizeIndex).toBeGreaterThan(heldIndex);
+    });
+
+    it("keeps the hold and posts no resize when the flush fails", () => {
+      const { backend, control, posted } = stubBackend();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      holdOutput(backend, "OLD-WIDTH");
+
+      control.sendSucceeds = false;
+      backend.resize(120, 40);
+      expect(posted.some((m) => m.type === "resize")).toBe(false);
+
+      // The hold was owed, not delivered — dropping it would lose output AND
+      // leave the resize ordered ahead of data the mirror never saw.
+      control.sendSucceeds = true;
+      backend.resize(120, 40);
+      const heldIndex = posted.findIndex((m) => m.type === "data" && m.data === "OLD-WIDTH");
+      const resizeIndex = posted.findIndex((m) => m.type === "resize");
+      expect(heldIndex).toBeGreaterThanOrEqual(0);
+      expect(resizeIndex).toBeGreaterThan(heldIndex);
+      consoleError.mockRestore();
+    });
+
+    it("retries a dropped resize on the next re-assert of the same grid", () => {
+      const { backend, control, posted } = stubBackend();
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      control.sendSucceeds = false;
+      backend.resize(120, 40);
+      control.sendSucceeds = true;
+
+      // Same grid re-asserted. Without tracking the dropped post this looks
+      // like a no-op and the mirror stays diverged forever.
+      backend.resyncGeometry(120, 40);
+      expect(posted.filter((m) => m.type === "ensure-geometry")).toHaveLength(1);
+
+      // Now that a geometry post has landed, further re-asserts are free.
+      backend.resyncGeometry(120, 40);
+      expect(posted.filter((m) => m.type === "ensure-geometry")).toHaveLength(1);
+      consoleError.mockRestore();
+    });
+
+    it("re-asserts when the worker reports a grid the host did not ask for", () => {
+      const { backend, posted } = stubBackend();
+      backend.resize(120, 40);
+
+      // Believed converged: nothing to do.
+      backend.resyncGeometry(120, 40);
+      expect(posted.some((m) => m.type === "ensure-geometry")).toBe(false);
+
+      // The worker's own sample says otherwise — a rows-only split still
+      // corrupts cursor addressing, so it must count.
+      backend.noteMirrorGeometry(120, 24);
+      backend.resyncGeometry(120, 40);
+      expect(posted.filter((m) => m.type === "ensure-geometry")).toHaveLength(1);
+    });
   });
 });
