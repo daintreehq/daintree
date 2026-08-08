@@ -598,13 +598,22 @@ describe("CopyTreeService against the installed CopyTree", () => {
     });
 
     it("treats a blank pattern as unmatchable rather than as no selection", async () => {
-      // The schemas reject a blank entry before this point; if one ever reaches
-      // the service it must still fail closed.
+      // Both validated boundaries reject a blank entry before this point; if one
+      // ever reaches the service it must still fail closed rather than widen.
       const result = await copyTreeService.testConfig(tempDir, { includePaths: [""] });
 
       expect((result.files ?? []).map((file) => file.path)).not.toContain(
         "src/landscape/preview.ts"
       );
+    });
+
+    // An empty array cannot express "select nothing" to the SDK — it reads as
+    // "no filter" and copies everything — which is why the schemas reject it
+    // rather than the service trying to render it harmless.
+    it("documents that an empty selection array would widen, hence the schema guard", async () => {
+      const result = await copyTreeService.testConfig(tempDir, { includePaths: [] });
+
+      expect((result.files ?? []).map((file) => file.path)).toContain("src/landscape/preview.ts");
     });
   });
 });

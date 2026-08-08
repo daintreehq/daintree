@@ -363,19 +363,37 @@ describe("systemActions adversarial", () => {
       );
       expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith("wt-1", options);
 
-      // And the schema actually admits that shape — `run()` is called directly
-      // here, so the transform would otherwise never be exercised.
-      const schema = getDef("copyTree.generateAndCopyFile").argsSchema;
-      expect(schema?.safeParse({ worktreePath: "/repo/landscape", options }).success).toBe(true);
+      // And the selection SURVIVES the schema transform — `run()` is called
+      // directly here, so the transform is otherwise never exercised. Asserting
+      // the parsed output rather than `.success`: zod strips unknown keys and
+      // still succeeds, so a dropped field would pass a success-only check
+      // while real dispatch copied the whole worktree.
+      const parsed = getDef("copyTree.generateAndCopyFile").argsSchema?.parse({
+        worktreePath: "/repo/landscape",
+        options,
+      });
+      expect(parsed).toEqual({ worktreePath: "/repo/landscape", options });
     });
 
     it("rejects a blank selection entry instead of widening it to the whole worktree", async () => {
       // An empty selection reads as "everything" downstream, so a blank must be
       // a validation error rather than something quietly dropped.
       const schema = setupActions().getDef("copyTree.generateAndCopyFile").argsSchema;
-      expect(schema?.safeParse({ options: { includePaths: [""] } }).success).toBe(false);
-      expect(schema?.safeParse({ options: { filter: [""] } }).success).toBe(false);
-      expect(schema?.safeParse({ options: { filter: "" } }).success).toBe(false);
+      // A blank entry and an empty list fail the same way: both leave nothing
+      // selected, and nothing selected means everything one layer down.
+      for (const options of [
+        { includePaths: [""] },
+        { includePaths: [] },
+        { includePaths: ["src/a.ts", ""] },
+        { filter: [""] },
+        { filter: [] },
+        { filter: "" },
+      ]) {
+        expect(schema?.safeParse({ options }).success).toBe(false);
+      }
+      // The valid shapes still pass, so the guard above isn't rejecting everything.
+      expect(schema?.safeParse({ options: { includePaths: ["src/a.ts"] } }).success).toBe(true);
+      expect(schema?.safeParse({ options: { filter: "src/**" } }).success).toBe(true);
     });
 
     it("refuses an explicit worktreePath that matches no open worktree", async () => {
@@ -426,19 +444,22 @@ describe("systemActions adversarial", () => {
       );
     });
 
-    it("gives the toast its own rate-limit bucket", async () => {
-      // Falling back to the `type` key would pool this with every other success
-      // toast in the app, so an unrelated burst could replace the one message
-      // that says what is now on the clipboard.
+    it("gives the toast a bucket of its own rather than the shared fallback", async () => {
+      // notify() derives the bucket from `rateLimitKey ?? correlationId ??
+      // context.projectId ?? context.worktreeId ?? type`. With none of those set
+      // it lands on `type` — pooling this with every other success toast in the
+      // app, where an unrelated burst replaces the one message saying what is
+      // now on the clipboard. The invariant is "not the shared bucket", not any
+      // particular string.
       const { run } = setupActions();
       await run(
         "copyTree.generateAndCopyFile",
         { worktreeId: "wt-1" },
         { dispatchSource: "agent" }
       );
-      expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ rateLimitKey: "copyTree.generateAndCopyFile" })
-      );
+      const payload = notifyMock.mock.calls[0]?.[0] as { rateLimitKey?: string; type: string };
+      expect(payload.rateLimitKey).toBeTruthy();
+      expect(payload.rateLimitKey).not.toBe(payload.type);
     });
 
     it("describes the copy without a format when none was requested", async () => {

@@ -616,8 +616,14 @@ class CopyTreeService {
    * a blank pattern here would turn "the caller asked for something that matches
    * nothing" into "copy the entire worktree" — inverting a fail-closed selection
    * into a fail-open one, and putting a whole repo on the clipboard when an
-   * assistant emits a malformed list. Blank entries are rejected by the schemas
-   * instead, where a caller gets told what was wrong.
+   * assistant emits a malformed list.
+   *
+   * Precondition, enforced at both validated boundaries (`CopyTreeOptionsSchema`
+   * in the renderer action definitions and its twin in `electron/schemas/ipc.ts`):
+   * a supplied selection is non-empty and carries no blank entries. Those reject
+   * rather than normalize, so a caller is told what was wrong instead of quietly
+   * receiving everything — an empty array reaching this point would read as "no
+   * filter" one layer down and copy the whole worktree.
    */
   private static mergeSelectionPatterns(
     includePaths: string[] | undefined,
