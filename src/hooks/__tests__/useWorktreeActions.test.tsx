@@ -60,29 +60,53 @@ describe("useWorktreeActions", () => {
     vi.clearAllMocks();
   });
 
-  it("uses safe fallback when copyTree payload omits fileCount", async () => {
+  const worktree: WorktreeState = {
+    id: "wt-1",
+    worktreeId: "wt-1",
+    path: "/repo/wt-1",
+    name: "wt-1",
+    branch: "main",
+    isCurrent: false,
+    isMainWorktree: true,
+    worktreeChanges: null,
+    lastActivityTimestamp: null,
+  };
+
+  it("dispatches worktree.copyTree and leaves the completion toast to the action", async () => {
+    // The hook used to format and return the result string for the toolbar to
+    // render inline. Completion feedback now belongs to the action, which is
+    // the only layer the keybinding and palette routes also pass through — so
+    // the hook must neither return a message nor raise its own toast (#11735).
+    dispatchMock.mockResolvedValueOnce({ ok: true, result: {} });
+
+    const { result } = renderHook(() => useWorktreeActions());
+
+    await expect(result.current.handleCopyTree(worktree)).resolves.toBeUndefined();
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.copyTree",
+      { worktreeId: "wt-1" },
+      { source: "user" }
+    );
+    expect(addNotificationMock).not.toHaveBeenCalled();
+    expect(updateNotificationMock).not.toHaveBeenCalled();
+  });
+
+  it("records a failed copy in the error store without rejecting", async () => {
     dispatchMock.mockResolvedValueOnce({
-      ok: true,
-      result: {},
+      ok: false,
+      error: { message: "permission denied" },
     });
 
     const { result } = renderHook(() => useWorktreeActions());
 
-    const worktree: WorktreeState = {
-      id: "wt-1",
-      worktreeId: "wt-1",
-      path: "/repo/wt-1",
-      name: "wt-1",
-      branch: "main",
-      isCurrent: false,
-      isMainWorktree: true,
-      worktreeChanges: null,
-      lastActivityTimestamp: null,
-    };
+    await expect(result.current.handleCopyTree(worktree)).resolves.toBeUndefined();
 
-    const message = await result.current.handleCopyTree(worktree);
-
-    expect(message).toBe("Copied 0 files to clipboard");
+    // "permission" routes to the filesystem bucket rather than the default
+    // "process" one — the branch is what this asserts, not the literal string.
+    expect(addErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "filesystem", context: { worktreeId: "wt-1" } })
+    );
   });
 
   it("handleLaunchAgent dispatches agent.launch through the ActionService", () => {
@@ -128,6 +152,36 @@ describe("formatCopyResultMessage", () => {
     expect(formatCopyResultMessage({} as { fileCount: number })).toBe(
       "Copied 0 files to clipboard"
     );
+  });
+
+  // The destination decides the verb and the trailing phrase. `copyTree.generate`
+  // writes a temp file and `injectToTerminal` streams into a PTY — neither
+  // touches the clipboard, so the default wording would be false there (#11735).
+  it("swaps verb and destination for a terminal injection", () => {
+    expect(
+      formatCopyResultMessage(
+        { fileCount: 42, stats: { totalSize: 1024 }, format: "xml" },
+        "terminal"
+      )
+    ).toBe("Injected 42 files (1 KB) as XML into terminal");
+  });
+
+  it("swaps verb and destination for a generated bundle", () => {
+    expect(
+      formatCopyResultMessage(
+        { fileCount: 42, stats: { totalSize: 1024 }, format: "xml" },
+        "temporary-file"
+      )
+    ).toBe("Bundled 42 files (1 KB) as XML into a temporary file");
+  });
+
+  it("says nothing about the clipboard for a non-clipboard destination", () => {
+    // Guards the whole set at once: a destination that forgot to override the
+    // suffix would still claim the bundle reached the clipboard.
+    for (const destination of ["terminal", "temporary-file"] as const) {
+      expect(formatCopyResultMessage({ fileCount: 1 }, destination)).not.toContain("clipboard");
+      expect(formatCopyResultMessage({ fileCount: 1 }, destination)).not.toContain("Copied");
+    }
   });
 });
 

@@ -313,6 +313,84 @@ describe("systemActions adversarial", () => {
         contentTruncated: true,
       });
     });
+
+    it("announces the bundle without claiming it reached the clipboard", async () => {
+      // This action writes a temp file and never touches the clipboard, so it
+      // needs its own verb and destination rather than the copy wording (#11735).
+      const { run } = setupActions();
+      await run(
+        "copyTree.generate",
+        { options: { format: "xml" } },
+        {
+          activeWorktreeId: "wt-active",
+        }
+      );
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const payload = notifyMock.mock.calls[0]?.[0] as { message: string; type: string };
+      expect(payload.type).toBe("success");
+      expect(payload.message).toBe("Bundled 3 files (4 KB) as XML into a temporary file");
+      expect(payload.message).not.toContain("clipboard");
+    });
+
+    it("is the one copy-tree completion that never reaches the toast surface", async () => {
+      // `copyTree.generate` is kind "query", so useActionPalette — which drops
+      // everything but kind "command" — never surfaces it: no human route at
+      // all, only MCP and the in-app assistant, where it sits in the lowest
+      // tier beside pure reads like file.read. It writes a temp file and hands
+      // the path back to the caller, so nothing the user owns changes, unlike
+      // generateAndCopyFile (replaces the clipboard) and injectToTerminal
+      // (writes into a live terminal). Asserted as a partition over all three
+      // so what's pinned is the distinction between them, not one literal.
+      const { run } = setupActions();
+      const ctx = { activeWorktreeId: "wt-active" };
+      const cases: [id: string, args: unknown][] = [
+        ["copyTree.generate", undefined],
+        ["copyTree.generateAndCopyFile", undefined],
+        ["copyTree.injectToTerminal", { terminalId: "t-1" }],
+      ];
+
+      const inboxOnly: string[] = [];
+      const interrupting: string[] = [];
+      for (const [id, args] of cases) {
+        notifyMock.mockClear();
+        await run(id, args, ctx);
+        // Guards the partition: an action that stopped announcing entirely
+        // would otherwise be silently filed under "interrupting".
+        expect(notifyMock).toHaveBeenCalledTimes(1);
+        const { priority } = notifyMock.mock.calls[0]?.[0] as { priority?: string };
+        (priority === "low" ? inboxOnly : interrupting).push(id);
+      }
+
+      expect(inboxOnly).toEqual(["copyTree.generate"]);
+      expect(interrupting).toEqual(["copyTree.generateAndCopyFile", "copyTree.injectToTerminal"]);
+    });
+
+    it("never announces a generate that failed", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generate.mockResolvedValueOnce({
+        content: "",
+        fileCount: 0,
+        error: "copytree exited with code 1",
+      });
+      await expect(
+        run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" })
+      ).rejects.toThrow();
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("never announces a bundle that produced no file", async () => {
+      // requireGeneratedFile throws when filePath is missing; announcing before
+      // that check would promise a bundle the caller cannot read.
+      const { run } = setupActions();
+      copyTreeClientMock.generate.mockResolvedValueOnce({
+        content: "",
+        fileCount: 3,
+      });
+      await expect(
+        run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" })
+      ).rejects.toThrow();
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
   });
 
   describe("copyTree.generateAndCopyFile", () => {
@@ -520,15 +598,27 @@ describe("systemActions adversarial", () => {
       );
     });
 
-    it("stays silent for a user-driven copy and for a source-less dispatch", async () => {
+    it.each([
+      ["a user-driven dispatch", { dispatchSource: "user" as const }],
+      ["a source-less dispatch", {}],
+    ])("announces the copy for %s too", async (_label, sourceCtx) => {
+      // Inverted in #11735. The old agent-only gate assumed a human already
+      // knows their clipboard changed — true of a button with inline feedback,
+      // but this action's only human route is the command palette, which shows
+      // nothing at all. Silence there was the bug, not the feature.
       const { run } = setupActions();
       await run("copyTree.generateAndCopyFile", undefined, {
-        dispatchSource: "user",
+        ...sourceCtx,
         activeWorktreeId: "wt-active",
       });
-      await run("copyTree.generateAndCopyFile", undefined, { activeWorktreeId: "wt-active" });
-      // The person pressed the button; their clipboard changing is not news.
-      expect(notifyMock).not.toHaveBeenCalled();
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "success",
+          message: "Copied 3 files (4 KB) to clipboard",
+          context: { eventKind: "agent" },
+        })
+      );
     });
 
     it("never announces success when the copy failed", async () => {
@@ -615,6 +705,75 @@ describe("systemActions adversarial", () => {
       await expect(
         run("copyTree.injectToTerminal", { terminalId: "t-1" }, { activeWorktreeId: "wt-active" })
       ).rejects.toThrow("Terminal closed during injection");
+    });
+
+    it("announces the injection in terminal wording, never clipboard wording", async () => {
+      // The bundle streams into a PTY and never reaches the clipboard, so the
+      // default "copied … to clipboard" phrasing would be plainly false (#11735).
+      const { run } = setupActions();
+      await run(
+        "copyTree.injectToTerminal",
+        { terminalId: "t-1", options: { format: "xml" } },
+        { activeWorktreeId: "wt-active" }
+      );
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const payload = notifyMock.mock.calls[0]?.[0] as { message: string; type: string };
+      expect(payload.type).toBe("success");
+      expect(payload.message).toBe("Injected 3 files (4 KB) as XML into terminal");
+      expect(payload.message).not.toContain("clipboard");
+    });
+
+    it("never announces an injection that failed", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.injectToTerminal.mockResolvedValueOnce({
+        content: "",
+        fileCount: 0,
+        error: "Terminal closed during injection",
+      });
+      await expect(
+        run("copyTree.injectToTerminal", { terminalId: "t-1" }, { activeWorktreeId: "wt-active" })
+      ).rejects.toThrow();
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("copyTree completion toasts share one contract", () => {
+    // Each action needs its own rate-limit bucket: notify() falls back to
+    // `type` when none is set, which would pool all three with every other
+    // success toast in the app and let an unrelated burst swallow the message.
+    // Naming the worktree in context would let notify() divert the toast to the
+    // inbox whenever the target is already on screen — the common case.
+    const CASES = [
+      ["copyTree.generate", undefined],
+      ["copyTree.generateAndCopyFile", undefined],
+      ["copyTree.injectToTerminal", { terminalId: "t-1" }],
+    ] as const;
+
+    it("gives each action a distinct bucket that is not the shared fallback", async () => {
+      const keys: string[] = [];
+      for (const [actionId, args] of CASES) {
+        notifyMock.mockClear();
+        const { run } = setupActions();
+        await run(actionId, args, { activeWorktreeId: "wt-active" });
+        const payload = notifyMock.mock.calls[0]?.[0] as { rateLimitKey?: string; type: string };
+        expect(payload.rateLimitKey).toBeTruthy();
+        expect(payload.rateLimitKey).not.toBe(payload.type);
+        keys.push(payload.rateLimitKey!);
+      }
+      expect(new Set(keys).size).toBe(CASES.length);
+    });
+
+    it("keeps the worktree out of every toast context so notify() cannot suppress it", async () => {
+      for (const [actionId, args] of CASES) {
+        notifyMock.mockClear();
+        const { run } = setupActions();
+        await run(actionId, args, { activeWorktreeId: "wt-active" });
+        // `context` is a plain object, so this compares by deep equality — an
+        // added `worktreeId` fails here.
+        expect(notifyMock).toHaveBeenCalledWith(
+          expect.objectContaining({ context: { eventKind: "agent" } })
+        );
+      }
     });
   });
 

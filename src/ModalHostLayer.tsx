@@ -630,7 +630,6 @@ export function ModalHostLayer({
               activeWorktreeId={activeWorktreeId}
               focusedWorktreeId={focusedWorktreeId}
               onSelectWorktree={selectWorktree}
-              onCopyTree={overviewWorktreeActions.handleCopyTree}
               onOpenEditor={overviewWorktreeActions.handleOpenEditor}
               onSaveLayout={undefined}
               onLaunchAgent={overviewWorktreeActions.handleLaunchAgent}

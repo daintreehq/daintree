@@ -10,6 +10,10 @@ const LAUNCHER_BUTTON_PATH = path.resolve(__dirname, "../ToolbarLauncherButton.t
 const AGENT_BUTTON_PATH = path.resolve(__dirname, "../AgentButton.tsx");
 const VOICE_RECORDING_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
 const PLUGIN_TRAY_PATH = path.resolve(__dirname, "../PluginTrayButton.tsx");
+const COPY_TREE_ACTION_PATH = path.resolve(
+  __dirname,
+  "../../../services/actions/definitions/worktreeContextActions.ts"
+);
 const TOOLBAR_CSS_PATH = path.resolve(__dirname, "../../../styles/components/toolbar.css");
 
 describe("Toolbar shortcut tooltips — issue #3443", () => {
@@ -210,31 +214,61 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(source).toContain("const showCopyingSpinner = useDohertyGate(isCopyingTree);");
     });
 
-    it("renders the spinner glyph gated on showCopyingSpinner, not raw isCopyingTree", () => {
-      expect(source).toContain(
-        "{showCopyingSpinner ? <Spinner /> : treeCopied ? <Check /> : <Folders />}"
-      );
-      expect(source).not.toContain(
-        "{isCopyingTree ? <Spinner /> : treeCopied ? <Check /> : <Folders />}"
-      );
-    });
-
-    it("uses sentence-case 'Context copied' aria-label", () => {
-      expect(source).toContain('"Context copied"');
-      expect(source).not.toContain('"Context Copied"');
-    });
-
-    it("keeps text-status-success in the treeCopied branch but drops the bg tint — issue #9822", () => {
-      // Scoped to the copy-tree render block so unrelated `bg-status-success/10`
-      // uses (e.g. ghost-success hover) don't false-positive the negative.
+    it("gates the spinner glyph on showCopyingSpinner, not raw isCopyingTree", () => {
       const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
       expect(copyTreeBlock).not.toBeNull();
-      const treeCopiedBranch = copyTreeBlock![0].match(
-        /treeCopied[\s\S]{0,200}?"text-daintree-text"/
-      );
-      expect(treeCopiedBranch).not.toBeNull();
-      expect(treeCopiedBranch![0]).toContain("text-status-success");
-      expect(treeCopiedBranch![0]).not.toContain("bg-status-success/10");
+      // The Doherty gate is the point: the raw in-flight flag must never drive
+      // the glyph directly, or a sub-400ms copy flashes a spinner.
+      expect(copyTreeBlock![0]).toMatch(/showCopyingSpinner \?\s*<Spinner \/>/);
+      expect(copyTreeBlock![0]).not.toMatch(/isCopyingTree \?\s*<Spinner \/>/);
+      expect(copyTreeBlock![0]).toContain("<Folders />");
+    });
+
+    it("carries no inline completion feedback — the toast owns it (issue #11735)", () => {
+      // The button used to swap in a check icon and force its tooltip open for
+      // two seconds. That feedback was invisible from the overflow menu and had
+      // no counterpart on any other copy-tree route, so it moved to the
+      // `worktree.copyTree` completion toast. Only the in-flight spinner stays.
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      expect(copyTreeBlock![0]).not.toContain("treeCopied");
+      expect(copyTreeBlock![0]).not.toContain("<Check />");
+      expect(copyTreeBlock![0]).not.toContain("text-status-success");
+      // A controlled `open` prop is what forced the tooltip; the plain <Tooltip>
+      // must stay uncontrolled.
+      expect(copyTreeBlock![0]).not.toMatch(/<Tooltip\s+open=/);
+      expect(copyTreeBlock![0]).not.toContain('role="status"');
+    });
+
+    it("skips the hover hint, matching the action's suppressShortcutHint opt-out", async () => {
+      // Relational, across two files: `suppressShortcutHint` only blocks the
+      // hint ActionService emits after dispatch, and its own contract says an
+      // opted-out button must skip `useShortcutHintHover` too — the hover path
+      // teaches the same hint and a shown one survives the click, landing
+      // beside the completion toast in the same corner. Reading the action
+      // definition here is what makes this an agreement check rather than a
+      // restatement of either side.
+      const definitionSource = await fs.readFile(COPY_TREE_ACTION_PATH, "utf-8");
+      const copyTreeAction = definitionSource.match(/id: "worktree\.copyTree"[\s\S]*?run: async/);
+      expect(copyTreeAction).not.toBeNull();
+      if (!copyTreeAction![0].includes("suppressShortcutHint: true")) return;
+
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      expect(copyTreeBlock![0]).not.toMatch(/\{\.\.\.\w*[Hh]intHover\}/);
+    });
+
+    it("retires the inline-feedback state and its reset timer entirely", () => {
+      // Component-wide, not block-scoped: leftover state or a dangling timeout
+      // would keep the removed behavior alive outside the render block.
+      for (const symbol of [
+        "treeCopied",
+        "copyFeedback",
+        "treeCopyTimeoutRef",
+        "COPY_TREE_FEEDBACK_RESET_MS",
+      ]) {
+        expect(source).not.toContain(symbol);
+      }
     });
   });
 

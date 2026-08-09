@@ -455,6 +455,44 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         );
         throwOnCopyTreeFailure(result);
         const { filePath, outputBytes } = requireGeneratedFile(result);
+        // "generated"/"bundled", never "copied": this writes a temp file and
+        // never touches the clipboard, so the clipboard wording would be false.
+        // Ordered after both failure checks so a bundle that never landed can't
+        // announce success. No `context.worktreeId` — see the note on
+        // generateAndCopyFile below (#11735).
+        //
+        // `priority: "low"` — inbox only, no toast, unlike the other two
+        // copy-tree completions. This action is `kind: "query"`, so
+        // `useActionPalette` (which drops everything but `kind: "command"`)
+        // never surfaces it: there is no human route at all, only MCP and the
+        // in-app assistant, and it sits in WORKBENCH_TIER_TOOLS beside pure
+        // reads like `file.read` and `worktree.list`. It writes a temp file and
+        // hands the path back to the calling agent — nothing the user owns
+        // changes, which is exactly what justifies the toast on
+        // generateAndCopyFile, whose whole point is that it silently replaces
+        // the clipboard. A toast is the most-restricted surface, and for a
+        // routine agent read it fails the notify() gate on "helpful next
+        // step?": the user never sees the temp path and can do nothing with it.
+        // Low keeps the durable "an agent bundled the codebase" inbox row
+        // without interrupting. It is also why this call carries no
+        // `notify-no-action` opt-out where its two siblings below do:
+        // `priority: "low"` is itself one of the sanctioned exits from the
+        // unprotected-success-toast rule, so a disable here would be dead.
+        notify({
+          type: "success",
+          title: "Context generated",
+          message: formatCopyResultMessage(
+            {
+              fileCount: result.fileCount,
+              stats: result.stats,
+              format: args?.options?.format,
+            },
+            "temporary-file"
+          ),
+          priority: "low",
+          rateLimitKey: "copyTree.generate",
+          context: { eventKind: "agent" },
+        });
         // Projected explicitly rather than passed through. Dispatch does parse
         // results against `resultSchema` now (#11539), but building the result
         // here is still what keeps the bundle off the wire: a parse would reject
@@ -526,44 +564,44 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         );
         throwOnCopyTreeFailure(result);
         const { filePath, outputBytes } = requireGeneratedFile(result);
-        // Only an agent/MCP caller gets a toast, and only after the copy has
-        // actually landed. A person who triggered this themselves already knows
-        // their clipboard changed; a headless caller replaced it with nothing on
-        // screen to say so, which is the one case worth interrupting for
-        // (#11722). Ordered after the failure checks so a failed generate or a
-        // failed clipboard write can never announce success.
-        if (ctx.dispatchSource === "agent") {
-          // No `context.worktreeId` here, deliberately: notify() suppresses a
-          // high-priority toast into the inbox when context names the worktree
-          // the user is already looking at, and an agent copying the ACTIVE
-          // worktree is the common case — passing it would silence exactly the
-          // toast this adds. A clipboard overwrite is invisible no matter which
-          // worktree is on screen, so the origin-surface rule doesn't hold here.
-          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-          notify({
-            type: "success",
-            // Matches the title the toolbar's own copy already uses for this
-            // artifact ("context", never "reference file"), paired with the
-            // same formatCopyResultMessage body — see Toolbar.tsx.
-            title: "Context copied",
-            message: formatCopyResultMessage({
-              fileCount: result.fileCount,
-              stats: result.stats,
-              format: args?.options?.format,
-            }),
-            // Its own bucket. The key otherwise falls back to `type`, putting
-            // every "success" toast in the app in one bucket — three unrelated
-            // ones would swallow this into a generic overflow row and lose the
-            // message that says what is on the clipboard.
-            rateLimitKey: "copyTree.generateAndCopyFile",
-            // "agent", not "completed": both route identically (active → high),
-            // but "completed" owns the `completedEnabled` setting, which gates
-            // only main-process completion watches and never a renderer
-            // notify() — so it would offer a "silence completed notifications"
-            // affordance that leaves these copies firing anyway.
-            context: { eventKind: "agent" },
-          });
-        }
+        // Announced for every dispatch source, not just agents. The old
+        // agent-only gate assumed a person who triggered this already knows
+        // their clipboard changed — true of a button with inline feedback, but
+        // this action's only human route is the command palette, which leaves
+        // nothing on screen at all (#11735). Ordered after the failure checks so
+        // a failed generate or a failed clipboard write can never announce
+        // success.
+        //
+        // No `context.worktreeId` here, deliberately: notify() suppresses a
+        // high-priority toast into the inbox when context names the worktree
+        // the user is already looking at, and copying the ACTIVE worktree is the
+        // common case — passing it would silence exactly this toast. A clipboard
+        // overwrite is invisible no matter which worktree is on screen, so the
+        // origin-surface rule doesn't hold here.
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "success",
+          // Matches the title every other copy-tree completion uses for this
+          // artifact ("context", never "reference file"), paired with the same
+          // formatCopyResultMessage body — see worktreeContextActions.ts.
+          title: "Context copied",
+          message: formatCopyResultMessage({
+            fileCount: result.fileCount,
+            stats: result.stats,
+            format: args?.options?.format,
+          }),
+          // Its own bucket. The key otherwise falls back to `type`, putting
+          // every "success" toast in the app in one bucket — three unrelated
+          // ones would swallow this into a generic overflow row and lose the
+          // message that says what is on the clipboard.
+          rateLimitKey: "copyTree.generateAndCopyFile",
+          // "agent", not "completed": both route identically (active → high),
+          // but "completed" owns the `completedEnabled` setting, which gates
+          // only main-process completion watches and never a renderer
+          // notify() — so it would offer a "silence completed notifications"
+          // affordance that leaves these copies firing anyway.
+          context: { eventKind: "agent" },
+        });
         return {
           filePath,
           fileCount: result.fileCount,
@@ -607,6 +645,27 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource)
         );
         throwOnCopyTreeFailure(result);
+        // "injected … into terminal", not "copied": the bundle streams into a
+        // PTY and never reaches the clipboard. Ordered after the failure check.
+        // No `context.worktreeId` — see the note on generateAndCopyFile above.
+        // The renderer's own injection path (`useContextInjection`) calls the
+        // client directly and carries its own key, so the two never stack
+        // (#11735).
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "success",
+          title: "Context injected",
+          message: formatCopyResultMessage(
+            {
+              fileCount: result.fileCount,
+              stats: result.stats,
+              format: options?.format,
+            },
+            "terminal"
+          ),
+          rateLimitKey: "copyTree.injectToTerminal",
+          context: { eventKind: "agent" },
+        });
         return {
           fileCount: result.fileCount,
           ...(result.stats ? { stats: projectCopyTreeStats(result.stats) } : {}),

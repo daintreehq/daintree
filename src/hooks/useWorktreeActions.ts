@@ -4,63 +4,32 @@ import { useErrorStore, type ErrorRecord } from "@/store";
 import { useRecipeStore } from "@/store/recipeStore";
 import { logError } from "@/utils/logger";
 import { useNotificationStore } from "@/store/notificationStore";
-import { formatCopyResultMessage } from "@/lib/formatCopyResult";
+import { describeEmptyFolderCopy, formatCopyResultMessage } from "@/lib/formatCopyResult";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionSource } from "@shared/types/actions";
 import type { CopyTreeRunSource } from "@shared/types";
-import type { CopyTreeBudgetStats, CopyTreeExclusionReason } from "@shared/types/ipc/copyTree";
+import type { CopyTreeBudgetStats } from "@shared/types/ipc/copyTree";
 
-// Moved to a leaf module so the copyTree action definitions can share it
-// without closing an import cycle through `actionService` below (#11722).
-// Re-exported because this was its public home.
-export { formatCopyResultMessage };
-
-/**
- * Reasons that mean "a rule the project already lives by kept this out", as
- * opposed to a limit the user set in Daintree's own context settings. Only
- * used to explain a zero-file folder copy — the SDK's `scopeFilter` reason is
- * declared but never emitted, so nothing may wait on it.
- */
-const IGNORE_RULE_REASONS: CopyTreeExclusionReason[] = [
-  "gitignore",
-  "copytreeignore",
-  "globalGitignore",
-  "gitInfoExclude",
-  "configExclude",
-];
+// Both live in a leaf module: `formatCopyResultMessage` because the copyTree
+// action definitions need it and importing it from here would close a cycle
+// through `actionService` below (#11722), and `describeEmptyFolderCopy` to keep
+// the two CopyTree result formatters together. Re-exported from their original
+// public home so existing importers are unaffected.
+export { describeEmptyFolderCopy, formatCopyResultMessage };
 
 /**
- * Why a folder copy came back empty. Without this the toast reports "Copied 0
- * files", which reads as a failure for the common case of right-clicking a
- * folder that the project ignores wholesale (`node_modules`, `dist`).
+ * Copy a worktree's context with an in-place spinner-to-result toast.
+ *
+ * `source` is narrowed to the literal `"context-menu"` rather than the full
+ * `ActionSource` on purpose: `worktree.copyTree` raises its own completion
+ * toast for every other dispatch source and skips this one precisely because
+ * this helper already owns the feedback. Any other source would double-toast,
+ * so the compiler — not a convention — is what rules it out (#11735).
  */
-export function describeEmptyFolderCopy(stats?: CopyTreeBudgetStats | null): string {
-  const byReason = stats?.excluded?.byReason;
-  const total = stats?.excluded?.total ?? 0;
-
-  if (total <= 0) {
-    return "This folder doesn't contain any files";
-  }
-
-  // Nothing was ruled out — the files couldn't be opened at all, which usually
-  // means the folder moved or its permissions changed since the tree was read.
-  if ((byReason?.unreadable ?? 0) === total) {
-    return "The files in this folder couldn't be read";
-  }
-
-  const ignored = IGNORE_RULE_REASONS.reduce((sum, reason) => sum + (byReason?.[reason] ?? 0), 0);
-
-  // Only claim a single cause when it accounts for every exclusion; a mixed set
-  // gets the neutral wording rather than a confident half-truth.
-  return ignored === total
-    ? "Every file in this folder is excluded by an ignore rule"
-    : "Every file in this folder was excluded by ignore rules or context settings";
-}
-
 export async function copyContextWithFeedback(
   worktreeId: string,
-  source: ActionSource,
+  source: Extract<ActionSource, "context-menu">,
   options?: { modified?: boolean; includePaths?: string[]; scopePaths?: string[] },
   // Which surface this is. `source` can't answer it — the worktree card and the
   // file browser both dispatch as "context-menu" — so callers that know say so.
@@ -131,6 +100,9 @@ export async function copyContextWithFeedback(
 
     store.updateNotification(toastId, {
       type: "success",
+      // Same title every other copy-tree completion now uses, so the context
+      // menu doesn't read as a different feature from the toolbar (#11735).
+      title: "Context copied",
       message: formatCopyResultMessage(payload),
       duration: 3000,
       dismissed: false,
@@ -175,7 +147,7 @@ export interface WorktreeActions {
   handleCopyTree: (
     worktree: WorktreeSnapshot,
     copyTreeRunSource?: CopyTreeRunSource
-  ) => Promise<string | undefined>;
+  ) => Promise<void>;
   handleOpenEditor: (worktree: WorktreeSnapshot) => void;
   handleOpenIssue: (worktree: WorktreeSnapshot) => void;
   handleOpenPR: (worktree: WorktreeSnapshot) => void;
@@ -188,11 +160,11 @@ export function useWorktreeActions({
 }: UseWorktreeActionsOptions = {}): WorktreeActions {
   const addError = useErrorStore((state) => state.addError);
 
+  // Resolves once the copy has settled; the completion toast belongs to the
+  // `worktree.copyTree` action so the keybinding and palette routes — which
+  // never reach this hook — are covered by the same call (#11735).
   const handleCopyTree = useCallback(
-    async (
-      worktree: WorktreeSnapshot,
-      copyTreeRunSource?: CopyTreeRunSource
-    ): Promise<string | undefined> => {
+    async (worktree: WorktreeSnapshot, copyTreeRunSource?: CopyTreeRunSource): Promise<void> => {
       try {
         const result = await actionService.dispatch(
           "worktree.copyTree",
@@ -202,17 +174,6 @@ export function useWorktreeActions({
         if (!result.ok) {
           throw new Error(result.error.message);
         }
-
-        if (!result.result) {
-          return undefined;
-        }
-
-        const payload = result.result as {
-          fileCount: number;
-          stats?: { totalSize?: number } | null;
-          format?: string;
-        };
-        return formatCopyResultMessage(payload);
       } catch (e) {
         const message = formatErrorMessage(e, "Failed to copy context to clipboard");
         const details = e instanceof Error ? e.stack : undefined;
@@ -241,7 +202,6 @@ export function useWorktreeActions({
         });
 
         logError("Failed to copy context", undefined, { message });
-        return undefined;
       }
     },
     [addError]
