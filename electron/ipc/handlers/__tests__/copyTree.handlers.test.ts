@@ -46,6 +46,20 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
+// Typed to the production signature so a parameter change fails at compile time
+// rather than silently leaving the assertions below asserting the wrong shape.
+const copyTreeHistoryMock = vi.hoisted(() => ({
+  recordCopyTreeRun:
+    vi.fn<
+      (
+        projectId: string | null,
+        input: import("../../../../shared/types/ipc/copyTreeHistory.js").CopyTreeHistoryAppendInput
+      ) => Promise<void>
+    >(),
+}));
+
+vi.mock("../../../services/copyTreeHistoryService.js", () => copyTreeHistoryMock);
+
 vi.mock("../../../window/windowRef.js", () => ({
   getProjectViewManager: windowRefMock.getProjectViewManager,
   setProjectViewManager: vi.fn(),
@@ -55,6 +69,7 @@ vi.mock("../../../window/windowRef.js", () => ({
   setMainWindow: vi.fn(),
 }));
 
+import type { CopyTreeHistoryAppendInput } from "../../../../shared/types/ipc/copyTreeHistory.js";
 import { CHANNELS } from "../../channels.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import { contextDir, _resetReservedPathsForTests } from "../../../services/copyTreeOutputFile.js";
@@ -1158,5 +1173,214 @@ describe("nextChunkBoundary", () => {
       }
     }
     expect(i).toBe(content.length);
+  });
+});
+
+describe("copy-tree run history recording", () => {
+  const PROJECT_ID = "a1b2c3d4".repeat(8);
+  let tmpRoot: string;
+
+  /**
+   * Register the handlers against a workspace host that reports a completed
+   * run. `overrides` shapes what the host returns so a test can drive the
+   * failure paths.
+   */
+  function makeService(overrides: Record<string, unknown> = {}, hasTerminal = true) {
+    const generateContext = vi.fn(
+      async (_root: string, _options: unknown, _onProgress: unknown, outputPath?: string) => {
+        const body = "<files/>";
+        if (outputPath) {
+          await nodeFs.writeFile(outputPath, body, { encoding: "utf8", mode: 0o600 });
+        }
+        return {
+          content: body,
+          fileCount: 12,
+          ...(outputPath
+            ? { filePath: outputPath, outputBytes: Buffer.byteLength(body, "utf8") }
+            : {}),
+          stats: { totalSize: 345, duration: 67 },
+          ...overrides,
+        };
+      }
+    );
+
+    browserWindowMock.fromWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
+    ipcMainMock.handle.mockClear();
+    registerCopyTreeHandlers({
+      mainWindow: {
+        isDestroyed: () => false,
+        webContents: { isDestroyed: () => false, send: vi.fn() },
+      },
+      ptyClient: { hasTerminal: vi.fn(() => hasTerminal), write: vi.fn() },
+      worktreeService: {
+        getAllStatesAsync: vi.fn(async () => [
+          { id: "wt-1", path: "/repos/daintree", branch: "main" },
+        ]),
+        generateContext,
+        testConfig: vi.fn(),
+        getContextFileTree: vi.fn(),
+      },
+    } as never);
+    return generateContext;
+  }
+
+  function lastRecordedRun(): [string | null, CopyTreeHistoryAppendInput] {
+    const calls = copyTreeHistoryMock.recordCopyTreeRun.mock.calls;
+    const last = calls[calls.length - 1];
+    if (!last) throw new Error("recordCopyTreeRun was never called");
+    return last;
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    _resetRateLimitQueuesForTest();
+    _resetReservedPathsForTests();
+    copyTreeHistoryMock.recordCopyTreeRun.mockReset().mockResolvedValue(undefined);
+    tmpRoot = await nodeFs.mkdtemp(nodePath.join(nodeOs.tmpdir(), "daintree-history-"));
+    vi.stubEnv("TMPDIR", tmpRoot);
+    vi.stubEnv("TEMP", tmpRoot);
+    vi.stubEnv("TMP", tmpRoot);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(PROJECT_ID);
+    projectStoreMock.getProjectById.mockReturnValue(null);
+    projectStoreMock.getProjectSettings.mockReset();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await nodeFs.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("records a generate run once, against the resolved project", async () => {
+    makeService();
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    await handler(mockSender, { worktreeId: "wt-1", source: "toolbar" });
+
+    expect(copyTreeHistoryMock.recordCopyTreeRun).toHaveBeenCalledTimes(1);
+    const [projectId, input] = lastRecordedRun();
+    expect(projectId).toBe(PROJECT_ID);
+    expect(input).toMatchObject({
+      source: "toolbar",
+      worktreeId: "wt-1",
+      stats: { fileCount: 12, totalSize: 345, duration: 67 },
+    });
+  });
+
+  it("records a clipboard run once", async () => {
+    makeService();
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE);
+
+    await handler(mockSender, { worktreeId: "wt-1", source: "worktree-card" });
+
+    expect(copyTreeHistoryMock.recordCopyTreeRun).toHaveBeenCalledTimes(1);
+    expect(lastRecordedRun()[1]).toMatchObject({ source: "worktree-card" });
+  });
+
+  it("records an injection run — same intent, different delivery", async () => {
+    makeService();
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_INJECT);
+
+    await handler(mockSender, { terminalId: "t-1", worktreeId: "wt-1", source: "mcp" });
+
+    expect(copyTreeHistoryMock.recordCopyTreeRun).toHaveBeenCalledTimes(1);
+    expect(lastRecordedRun()[1]).toMatchObject({ source: "mcp", worktreeId: "wt-1" });
+  });
+
+  it("stores the caller's runtime options, not the settings-merged ones", async () => {
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      excludedPaths: ["vendor"],
+      copyTreeSettings: { maxContextSize: 4242, alwaysInclude: ["*.md"] },
+    });
+    projectStoreMock.getProjectById.mockReturnValue({ id: PROJECT_ID, status: "open" });
+    windowRefMock.getProjectViewManager.mockReturnValue({
+      getProjectIdForWebContents: () => PROJECT_ID,
+    });
+    const generateContext = makeService();
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    await handler(mockSender, {
+      worktreeId: "wt-1",
+      options: { modified: true },
+      source: "toolbar",
+    });
+
+    // The host really did receive the merged options...
+    const mergedOptions = generateContext.mock.calls[0][1] as Record<string, unknown>;
+    expect(mergedOptions.maxTotalSize).toBe(4242);
+    // ...while the record keeps only what the caller asked for, so a re-run
+    // picks up whatever the project settings say at that later time.
+    expect(lastRecordedRun()[1].options).toEqual({ modified: true });
+  });
+
+  it("records an absent source as unknown rather than guessing a surface", async () => {
+    makeService();
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    await handler(mockSender, { worktreeId: "wt-1" });
+
+    expect(lastRecordedRun()[1]).toMatchObject({ source: "unknown", options: {} });
+  });
+
+  it("records the file count even when the host reported no stats", async () => {
+    makeService({ stats: undefined });
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    await handler(mockSender, { worktreeId: "wt-1" });
+
+    expect(lastRecordedRun()[1].stats).toEqual({
+      fileCount: 12,
+      totalSize: undefined,
+      duration: undefined,
+    });
+  });
+
+  it("does not record a failed generation", async () => {
+    makeService({ error: "Failed to generate context" });
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    await handler(mockSender, { worktreeId: "wt-1" });
+
+    expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
+  });
+
+  it("does not record a run whose worktree could not be found", async () => {
+    makeService();
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    await handler(mockSender, { worktreeId: "wt-missing" });
+
+    expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
+  });
+
+  it("does not record an injection into a terminal that no longer exists", async () => {
+    makeService({}, false);
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_INJECT);
+
+    await handler(mockSender, { terminalId: "t-gone", worktreeId: "wt-1" });
+
+    expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
+  });
+
+  it("does not record a rejected payload", async () => {
+    makeService();
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    await handler(mockSender, { worktreeId: "wt-1", source: "not-a-surface" });
+
+    expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
+  });
+
+  it("still returns the copy result when recording rejects", async () => {
+    // recordCopyTreeRun swallows its own failures, but the handler must not
+    // depend on that: a rejection here must not turn a delivered copy into an
+    // error the user sees.
+    copyTreeHistoryMock.recordCopyTreeRun.mockRejectedValue(new Error("disk on fire"));
+    makeService();
+    const handler = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+
+    const result = (await handler(mockSender, { worktreeId: "wt-1" })) as Record<string, unknown>;
+
+    expect(result.error).toBeUndefined();
+    expect(result.fileCount).toBe(12);
   });
 });

@@ -1,3 +1,5 @@
+import type { CopyTreeRunSource } from "./copyTreeHistory.js";
+
 /** CopyTree generation options */
 export interface CopyTreeOptions {
   /** Output format */
@@ -64,11 +66,23 @@ export interface CopyTreeGeneratePayload {
    * context-generation setting.
    */
   includeContent?: boolean;
+  /**
+   * Which surface asked for the run, recorded in the project's copy-tree
+   * history (#11732).
+   *
+   * Optional, and never part of the dedupe key: it describes the caller, not
+   * the context to build, so omitting it changes nothing about the bundle. A
+   * caller that doesn't identify itself is recorded as `unknown` rather than
+   * being attributed to a surface it didn't come from.
+   */
+  source?: CopyTreeRunSource;
 }
 
 export interface CopyTreeGenerateAndCopyFilePayload {
   worktreeId: string;
   options?: CopyTreeOptions;
+  /** See {@link CopyTreeGeneratePayload.source}. */
+  source?: CopyTreeRunSource;
 }
 
 /** Payload for injecting CopyTree context to terminal */
@@ -78,6 +92,8 @@ export interface CopyTreeInjectPayload {
   options?: CopyTreeOptions;
   /** Unique identifier for this injection operation (for per-operation cancellation) */
   injectionId?: string;
+  /** See {@link CopyTreeGeneratePayload.source}. */
+  source?: CopyTreeRunSource;
 }
 
 /** Payload for cancelling a specific injection operation */

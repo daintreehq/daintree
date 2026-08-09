@@ -3,8 +3,19 @@ import type { TerminalRecipe } from "../types/index.js";
 import fs from "fs/promises";
 import { existsSync } from "fs";
 import { resilientRename, resilientAtomicWriteFile } from "../utils/fs.js";
-import { getProjectStateDir, recipesFilePath } from "./projectStorePaths.js";
+import {
+  getProjectStateDir,
+  recipesFilePath,
+  copyTreeHistoryFilePath,
+} from "./projectStorePaths.js";
 import { TerminalRecipeSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
+import { decodeCopyTreeHistoryFile, encodeCopyTreeHistoryFile } from "./copyTreeHistoryCodec.js";
+import { applyCopyTreeRun } from "./copyTreeHistoryLog.js";
+import { randomUUID } from "crypto";
+import type {
+  CopyTreeHistoryAppendInput,
+  CopyTreeHistoryRecord,
+} from "../../shared/types/ipc/copyTreeHistory.js";
 
 export const RECIPES_SCHEMA_VERSION = 1;
 
@@ -16,6 +27,10 @@ export class ProjectFileStore {
   // read the same on-disk snapshot and the last write silently clobbers the
   // other. Mirrors ProjectStateManager.enqueueProjectStateUpdate.
   private readonly recipesWriteQueues = new Map<string, Promise<void>>();
+
+  // Same reasoning, separate chain: a copy-tree run must not wait behind a
+  // recipe import, and the two files never appear in one another's updaters.
+  private readonly copyTreeHistoryWriteQueues = new Map<string, Promise<void>>();
 
   // --- Recipes ---
 
@@ -255,5 +270,150 @@ export class ProjectFileStore {
       const recipes = await this.getRecipes(projectId);
       return recipes.filter((r) => r.id !== recipeId);
     });
+  }
+
+  // --- Copy-tree run history (#11732) ---
+
+  /**
+   * Read the project's copy-tree history, newest-first.
+   *
+   * Takes a turn in the write queue even though it mutates nothing itself:
+   * {@link readCopyTreeHistory} quarantines an unreadable file, so two
+   * unserialized readers — or a reader racing the append's own read — can both
+   * decide to rename it, and whichever loses gets `ENOENT` and fails. Queuing
+   * makes the quarantine happen exactly once, and also means a caller reads
+   * committed state rather than a snapshot a pending append is about to replace.
+   */
+  async getCopyTreeHistory(projectId: string): Promise<CopyTreeHistoryRecord[]> {
+    let records: CopyTreeHistoryRecord[] = [];
+    await this.enqueueCopyTreeHistoryUpdate(projectId, async () => {
+      records = await this.readCopyTreeHistory(projectId);
+      return null;
+    });
+    return records;
+  }
+
+  /**
+   * Fold a completed run into the project's history and return the committed
+   * snapshot.
+   *
+   * Lives here rather than in ProjectStore so the read, the dedupe fold and the
+   * write all happen inside one queued turn using the unqueued read — a caller
+   * composing this from the outside would have to reach for
+   * {@link getCopyTreeHistory}, which takes its own turn and would deadlock
+   * behind the turn awaiting it.
+   */
+  async appendCopyTreeRun(
+    projectId: string,
+    input: CopyTreeHistoryAppendInput
+  ): Promise<CopyTreeHistoryRecord[]> {
+    let snapshot: CopyTreeHistoryRecord[] = [];
+    await this.enqueueCopyTreeHistoryUpdate(projectId, async () => {
+      const current = await this.readCopyTreeHistory(projectId);
+      snapshot = applyCopyTreeRun(current, input, { id: randomUUID(), now: Date.now() });
+      return snapshot;
+    });
+    return snapshot;
+  }
+
+  /**
+   * Unqueued read. A missing file is an empty history. A damaged or
+   * newer-than-us file is quarantined by rename and reported empty — but if the
+   * rename itself fails this **throws** rather than returning `[]`. Returning
+   * empty there would let the next append write a fresh file straight over data
+   * we failed to preserve, which is the one outcome quarantining exists to
+   * prevent.
+   *
+   * Private because calling it outside the queue reintroduces the double-
+   * quarantine race described on {@link getCopyTreeHistory}.
+   */
+  private async readCopyTreeHistory(projectId: string): Promise<CopyTreeHistoryRecord[]> {
+    const filePath = copyTreeHistoryFilePath(this.projectsConfigDir, projectId);
+    if (!filePath) {
+      return [];
+    }
+
+    let content: string;
+    try {
+      content = await fs.readFile(filePath, "utf-8");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    }
+
+    const decoded = decodeCopyTreeHistoryFile(content);
+    if (decoded.ok) {
+      return decoded.records;
+    }
+
+    const quarantinePath =
+      decoded.reason === "future-version"
+        ? `${filePath}.future-v${decoded.onDiskVersion}`
+        : `${filePath}.corrupted.${Date.now()}`;
+    const target = existsSync(quarantinePath) ? `${quarantinePath}.${Date.now()}` : quarantinePath;
+
+    await resilientRename(filePath, target);
+    console.warn(
+      `[ProjectFileStore] copy-tree history for ${projectId} was unreadable (${decoded.reason}); quarantined to ${target}`
+    );
+    return [];
+  }
+
+  /**
+   * Serialize copy-tree history read-modify-write cycles per project, so two
+   * runs completing in the same tick cannot both read the pre-write snapshot and
+   * have the later write silently drop the earlier one's dedupe bump.
+   *
+   * Same three load-bearing details as {@link enqueueRecipesUpdate}, and the
+   * same rule for updaters: read through the unqueued {@link getCopyTreeHistory}
+   * and never re-enter this queue for the same project.
+   */
+  enqueueCopyTreeHistoryUpdate(
+    projectId: string,
+    updater: () => CopyTreeHistoryRecord[] | null | Promise<CopyTreeHistoryRecord[] | null>
+  ): Promise<void> {
+    const current = this.copyTreeHistoryWriteQueues.get(projectId) ?? Promise.resolve();
+    const next = current
+      .catch(() => {})
+      .then(async () => {
+        const updated = await updater();
+        if (updated !== null) {
+          await this.saveCopyTreeHistoryInner(projectId, updated);
+        }
+      });
+    this.copyTreeHistoryWriteQueues.set(projectId, next);
+    const cleanup = () => {
+      if (this.copyTreeHistoryWriteQueues.get(projectId) === next) {
+        this.copyTreeHistoryWriteQueues.delete(projectId);
+      }
+    };
+    next.then(cleanup, cleanup);
+    return next;
+  }
+
+  private async saveCopyTreeHistoryInner(
+    projectId: string,
+    records: CopyTreeHistoryRecord[]
+  ): Promise<void> {
+    const stateDir = getProjectStateDir(this.projectsConfigDir, projectId);
+    const filePath = copyTreeHistoryFilePath(this.projectsConfigDir, projectId);
+    if (!stateDir || !filePath) {
+      throw new Error(`Invalid project ID: ${projectId}`);
+    }
+
+    const jsonString = encodeCopyTreeHistoryFile(records);
+
+    try {
+      await resilientAtomicWriteFile(filePath, jsonString, "utf-8");
+    } catch (error) {
+      const isEnoent = error instanceof Error && "code" in error && error.code === "ENOENT";
+      if (!isEnoent) {
+        throw error;
+      }
+      await fs.mkdir(stateDir, { recursive: true });
+      await resilientAtomicWriteFile(filePath, jsonString, "utf-8");
+    }
   }
 }

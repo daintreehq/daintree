@@ -166,6 +166,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./connectivity.js").ServiceConnectivitySnapshot;
   };
+  "copy-tree-history:get-records": {
+    args: [];
+    result: import("./copyTreeHistory.js").CopyTreeHistoryRecord[];
+  };
   "demo:annotate": {
     args: [payload: import("./demo.js").DemoAnnotatePayload];
     result: import("./demo.js").DemoAnnotateResult;

@@ -655,7 +655,15 @@ describe("workflow.startWorkOnIssue", () => {
       "claude",
       expect.objectContaining({ worktreeId: "wt-new", cwd: "/repo/feature/issue-6609-add-tools" })
     );
-    expect(copyTreeClientMock.injectToTerminal).toHaveBeenCalledWith("term-1", "wt-new");
+    expect(copyTreeClientMock.injectToTerminal).toHaveBeenCalledWith(
+      "term-1",
+      "wt-new",
+      undefined,
+      undefined,
+      // Workflow creation is its own surface in the run history (#11732) — not
+      // a toolbar copy and not an agent tool call.
+      "workflow"
+    );
     expect(result.terminalId).toBe("term-1");
     expect(result.contextInjected).toBe(true);
     expect(result.recipeLaunched).toBe(false);

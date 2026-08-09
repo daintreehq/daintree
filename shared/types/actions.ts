@@ -1,6 +1,7 @@
 import type { BuiltInKeyAction } from "./keymap.js";
 import type { BuiltInRuntimeActionId } from "../config/actionIds.js";
 import type { z } from "zod";
+import type { CopyTreeRunSource } from "./ipc/copyTreeHistory.js";
 
 export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu" | "plugin";
 
@@ -129,6 +130,18 @@ export interface ActionContext {
    * use it to grant capabilities one source otherwise lacks.
    */
   dispatchSource?: ActionSource;
+  /**
+   * Which UI surface triggered a copy-tree run, for the project's copy-tree
+   * history (#11732). Set by `ActionService.dispatch` from the matching
+   * {@link ActionDispatchOptions} field.
+   *
+   * Deliberately here and not in any action's `argsSchema`: it exists because
+   * `dispatchSource` cannot separate the worktree card from the file browser
+   * (both `"context-menu"`), and putting it in args would publish it on the MCP
+   * tool surface where an agent could label its own runs as a user's click.
+   * Purely descriptive — it grants nothing and gates nothing.
+   */
+  copyTreeRunSource?: CopyTreeRunSource;
 }
 
 export type InferActionArgs<S extends z.ZodTypeAny | undefined> = [S] extends [z.ZodTypeAny]
@@ -406,6 +419,8 @@ export interface ActionDispatchOptions {
    * Used by agent dispatch to bind context at dispatch time and prevent confused-deputy attacks.
    */
   contextOverride?: ActionContext;
+  /** See {@link ActionContext.copyTreeRunSource}. */
+  copyTreeRunSource?: CopyTreeRunSource;
 }
 
 export interface ActionDispatchPayload {

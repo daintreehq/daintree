@@ -942,6 +942,10 @@ export const CHANNELS = {
   RUN_HISTORY_APPEND: "run-history:append",
   RUN_HISTORY_CLEAR: "run-history:clear",
 
+  // Copy-tree run history (#11732). Read-only: the main process records a run
+  // where it completes, so there is no append channel to forge entries through.
+  COPY_TREE_HISTORY_GET_RECORDS: "copy-tree-history:get-records",
+
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
   PLUGIN_INSTALL: "plugin:install",

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { BUILT_IN_PANEL_KINDS, panelKindHasPty } from "../../shared/config/panelKindRegistry.js";
 import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
 import { MAX_TERMINAL_GRID_DIMENSION } from "../../shared/types/terminal.js";
+import { COPY_TREE_RUN_SOURCES } from "../../shared/types/ipc/copyTreeHistory.js";
 import {
   ASSISTANT_HOST_PROTOCOL_VERSION,
   type AssistantHostEvent,
@@ -497,6 +498,14 @@ export const CopyTreeOptionsSchema = z
   })
   .optional();
 
+/**
+ * Which surface asked for a copy-tree run (#11732). Left `.optional()` rather
+ * than given a `.default()` so the schema keeps describing omission honestly —
+ * the main handler is what maps an absent source to `unknown`, and it is the
+ * only writer of the history.
+ */
+export const CopyTreeRunSourceSchema = z.enum(COPY_TREE_RUN_SOURCES);
+
 export const CopyTreeGeneratePayloadSchema = z.object({
   worktreeId: z.string().min(1),
   options: CopyTreeOptionsSchema,
@@ -505,11 +514,13 @@ export const CopyTreeGeneratePayloadSchema = z.object({
   // CopyTreeOptionsSchema: the destination is chosen by the main process, so a
   // tool call can never turn into an arbitrary file write.
   includeContent: z.boolean().optional(),
+  source: CopyTreeRunSourceSchema.optional(),
 });
 
 export const CopyTreeGenerateAndCopyFilePayloadSchema = z.object({
   worktreeId: z.string().min(1),
   options: CopyTreeOptionsSchema,
+  source: CopyTreeRunSourceSchema.optional(),
 });
 
 export const CopyTreeInjectPayloadSchema = z.object({
@@ -517,6 +528,7 @@ export const CopyTreeInjectPayloadSchema = z.object({
   worktreeId: z.string().min(1),
   options: CopyTreeOptionsSchema,
   injectionId: z.string().min(1).optional(),
+  source: CopyTreeRunSourceSchema.optional(),
 });
 
 export const CopyTreeCancelPayloadSchema = z.object({

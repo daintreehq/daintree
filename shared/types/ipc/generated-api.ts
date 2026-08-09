@@ -85,6 +85,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["connectivity:get-state"]["args"]
     ): Promise<IpcInvokeMap["connectivity:get-state"]["result"]>;
   };
+  copyTreeHistory: {
+    getRecords(
+      ...args: IpcInvokeMap["copy-tree-history:get-records"]["args"]
+    ): Promise<IpcInvokeMap["copy-tree-history:get-records"]["result"]>;
+  };
   devPreview: {
     ensure(
       ...args: IpcInvokeMap["dev-preview:ensure"]["args"]

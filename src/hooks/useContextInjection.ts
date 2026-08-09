@@ -382,7 +382,8 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           activeTerminal,
           worktreeId,
           options,
-          injectionUuid
+          injectionUuid,
+          "terminal"
         );
 
         if (result.error) {
