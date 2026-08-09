@@ -756,9 +756,13 @@ describe("initGlobalServices task ordering", () => {
 
     const pending = Promise.resolve(run!());
     try {
-      // Yield past the deferred `import()` so the task reaches its first real
-      // await, without letting initialize() complete.
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Poll until the task has actually entered initialize(), rather than
+      // assuming one macrotask outruns the deferred `import()` — that holds only
+      // when a previous test already warmed the module, so this test would be
+      // order-dependent (and pool-dependent) if run alone.
+      for (let i = 0; i < 200 && pluginInitialize.mock.calls.length === 0; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
 
       // The scan is demonstrably still in flight...
       expect(pluginInitialize).toHaveBeenCalledTimes(1);

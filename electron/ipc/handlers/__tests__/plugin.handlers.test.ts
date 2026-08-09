@@ -353,7 +353,12 @@ describe("registerPluginHandlers", () => {
     // — that would mint a second module namespace on every first mount.
     mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
     await expect(handler({}, "acme.demo.viewer")).resolves.toBeUndefined();
-    expect(mockActivatePluginForView).toHaveBeenCalledWith("acme.demo.viewer", false);
+    // The behavioral half — the kind is forwarded and recovery is NOT requested.
+    // Asserted as "falsy" rather than literal `false` so normalizing to
+    // `undefined` stays green: what matters is that a first mount can't burn a
+    // second module namespace, not which falsy value expresses that.
+    expect(mockActivatePluginForView.mock.calls[0]![0]).toBe("acme.demo.viewer");
+    expect(mockActivatePluginForView.mock.calls[0]![1]).toBeFalsy();
 
     // Failure: the handler throws so the IPC call rejects and the renderer's
     // PluginViewHost surfaces the real activation cause. The thrown message
@@ -381,6 +386,13 @@ describe("registerPluginHandlers", () => {
     // resolves — the renderer falls back to the path it already has.
     mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
     await expect(handler({}, "acme.demo.viewer", true)).resolves.toBeUndefined();
+
+    // Only a real `true` requests recovery. A truthy non-boolean arriving over
+    // IPC must not mint a namespace, so the flag is compared by identity rather
+    // than coerced.
+    mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
+    await handler({}, "acme.demo.viewer", "yes");
+    expect(mockActivatePluginForView.mock.calls.at(-1)![1]).toBe(false);
   });
 
   it("PLUGIN_INSTALL_FROM_FILE returns cancelled when the picker is dismissed", async () => {

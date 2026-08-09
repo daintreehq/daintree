@@ -85,14 +85,30 @@ const PLUGIN_VIEW_IMPORT_TIMEOUT_MS = 10_000;
  * plain remount. Tracked in a WeakSet rather than a flag on the error so the
  * error object the boundary logs and displays stays untouched.
  */
-const importStageFailures = new WeakSet<object>();
+const importStageFailures = new WeakSet<WeakKey>();
 
-function markImportStageFailure(err: unknown): void {
-  if (typeof err === "object" && err !== null) importStageFailures.add(err);
+function isWeakKey(value: unknown): value is WeakKey {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
+}
+
+/**
+ * Mark a module-fetch failure and return the value to throw. A module is free to
+ * `throw "boom"` (or `null`) during evaluation, and `import()` rejects with that
+ * exact value — which cannot key a WeakSet. Those rejections are wrapped in a
+ * real Error carrying the original as `cause`, so the classification survives
+ * and the boundary gets something it can actually render. Object and function
+ * rejections are marked in place, leaving the error identity untouched.
+ */
+function markImportStageFailure(err: unknown): unknown {
+  const marked = isWeakKey(err)
+    ? err
+    : new Error(`Plugin view module failed to load: ${String(err)}`, { cause: err });
+  importStageFailures.add(marked);
+  return marked;
 }
 
 function isImportStageFailure(err: unknown): boolean {
-  return typeof err === "object" && err !== null && importStageFailures.has(err);
+  return isWeakKey(err) && importStageFailures.has(err);
 }
 
 /**
@@ -258,8 +274,7 @@ export function makePluginViewContent(
           try {
             return await import(/* @vite-ignore */ recoveryComponentPath ?? componentPath);
           } catch (err) {
-            markImportStageFailure(err);
-            throw err;
+            throw markImportStageFailure(err);
           }
         })().finally(() => {
           if (timeoutId !== undefined) clearTimeout(timeoutId);
@@ -271,11 +286,21 @@ export function makePluginViewContent(
             // so if it eventually fails it poisons this specifier behind our
             // back. Retrying on a fresh generation sidesteps that entirely,
             // which is why the timeout is safe to leave uncancelled (#11728).
-            const timeoutError = new Error(
-              `Plugin "${pluginId}" view module at ${recoveryComponentPath ?? componentPath} timed out after ${PLUGIN_VIEW_IMPORT_TIMEOUT_MS}ms`
+            //
+            // Deliberately conservative: a timeout can also mean activation
+            // stalled, in which case the specifier was never touched and the
+            // extra generation is unnecessary. Harmless — main mints at most one
+            // per plugin load either way. Not unit-tested, because driving the
+            // real timer needs fake timers around a live `lazy` factory, which
+            // leaves an unhandled rejection from the uncancelled loser; the
+            // marking is a superset that can only over-recover, never fail.
+            reject(
+              markImportStageFailure(
+                new Error(
+                  `Plugin "${pluginId}" view module at ${recoveryComponentPath ?? componentPath} timed out after ${PLUGIN_VIEW_IMPORT_TIMEOUT_MS}ms`
+                )
+              )
             );
-            markImportStageFailure(timeoutError);
-            reject(timeoutError);
           }, PLUGIN_VIEW_IMPORT_TIMEOUT_MS);
         }),
       ]);

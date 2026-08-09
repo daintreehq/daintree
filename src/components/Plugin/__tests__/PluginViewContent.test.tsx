@@ -495,6 +495,69 @@ describe("makePluginViewContent", () => {
     }
   });
 
+  it("classifies a module that rejects with a non-object value as import-stage (#11728)", async () => {
+    // A plugin module is free to `throw "boom"` at evaluation, and `import()`
+    // rejects with that exact primitive — which cannot key the WeakSet the
+    // classification uses. That failure still poisons the specifier, so it must
+    // still earn a fresh generation; the primitive is wrapped in a real Error
+    // (preserving the original as `cause`) rather than silently misclassified.
+    const recoveryPath = "data:text/javascript,export default () => null";
+    const activateForView = vi.fn((_kindId: string, recover?: boolean) =>
+      Promise.resolve(recover === true ? recoveryPath : undefined)
+    );
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { plugin: { onPanelKindsChanged: onPanelKindsChangedMock, activateForView } },
+    });
+
+    const factories: Array<() => Promise<unknown>> = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: (factory: () => Promise<unknown>) => {
+          factories.push(factory);
+          return function StubView() {
+            return <div data-testid="plugin-view" />;
+          };
+        },
+      };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      // A real module that throws a bare string on evaluation.
+      const Content = makePluginViewContent(
+        makeContentConfig({ componentPath: 'data:text/javascript,throw "boom"' })
+      );
+
+      render(<Content panelId="panel-primitive" />);
+      await waitFor(() => expect(factories).not.toHaveLength(0));
+
+      const thrown = await factories.at(-1)!().then(
+        () => null,
+        (err: unknown) => err
+      );
+      // Wrapped, not passed through raw — a bare string would also render badly
+      // in the diagnostics fallback.
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).cause).toBe("boom");
+
+      const countBeforeRetry = factories.length;
+      act(() => boundaryProps.last!.onError!(thrown as Error, { componentStack: "" }));
+      act(() => boundaryProps.last!.onReset!());
+      await waitFor(() => expect(factories.length).toBeGreaterThan(countBeforeRetry));
+
+      // The classification survived the wrap, so recovery is requested.
+      const recovered = await factories.at(-1)!();
+      expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard", true]);
+      expect(recovered).toHaveProperty("default");
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
   it("aborts the outgoing signal on retry and the post-retry signal on kind removal", async () => {
     // Regression guard for the renderer-first teardown contract (#9501/#10512).
     // Two failure modes, both invisible to a "doesn't throw" assertion: (1) a

@@ -197,7 +197,14 @@ async function handleInstall(
 ): Promise<PluginInstallResult> {
   const invalid = await validateDntrArchivePath(archivePath);
   if (invalid) return invalid;
-  return (await getPluginService()).installPlugin(archivePath, opts);
+  const service = await getPluginService();
+  // Same init gate as `handleInstallFromPath` (#11280): `initialize()` assumes no
+  // install overlaps it — its sweep deletes staging dirs and the blocklist is
+  // still unset. It also keeps the #11728 addressability invariant intact, since
+  // an install that beat the deferred task here would publish panel kinds while
+  // the `plugin://` resolver was still the 404-everything placeholder.
+  await service.waitForInit();
+  return service.installPlugin(archivePath, opts);
 }
 
 // Job ids are renderer-minted UUIDs used only as a correlation key. Bound the
@@ -507,7 +514,10 @@ export async function handleInstallFromUrl(
       return failed("fetch_failed", "Couldn't download the plugin from that URL.");
     }
 
-    return (await getPluginService()).installPlugin(tempPath, {
+    const service = await getPluginService();
+    // See `handleInstall` — the same init gate, for the same two reasons.
+    await service.waitForInit();
+    return service.installPlugin(tempPath, {
       source: "url",
       originalUrl: trimmed,
       ...(jobId === undefined ? {} : { jobId }),
