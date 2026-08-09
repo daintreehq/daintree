@@ -23,13 +23,22 @@ import type { CopyTreeOptions } from "../types/ipc/copyTree.js";
  * future option whose order *is* significant then keeps its order by default
  * instead of being silently canonicalized into a different run.
  */
-const UNORDERED_ARRAY_FIELDS = new Set<keyof CopyTreeOptions>([
-  "filter",
-  "exclude",
-  "always",
-  "includePaths",
-  "scopePaths",
-]);
+const UNORDERED_ARRAY_FIELDS = new Set<keyof CopyTreeOptions>(["exclude", "always", "scopePaths"]);
+
+/**
+ * `filter` and `includePaths` are two spellings of one thing. `CopyTreeService`
+ * unions them into the SDK's single `filter` set, and `mergeCopyTreeOptions`
+ * back-fills neither from project settings, so the two carry no independent
+ * meaning by the time a run happens. Hashing them separately would file the
+ * same run under two history entries.
+ */
+const SELECTION_FIELDS = ["filter", "includePaths"] as const;
+
+function toArray(value: unknown): string[] | null {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value as string[];
+  return null;
+}
 
 /**
  * Normalize runtime options into the object that gets hashed for the dedupe
@@ -37,8 +46,9 @@ const UNORDERED_ARRAY_FIELDS = new Set<keyof CopyTreeOptions>([
  * merge time), while an explicit empty array is preserved — it blocks that
  * back-fill and so means something different from omission.
  *
- * Only the shape is normalized here; key ordering is handled downstream by the
- * stable hash.
+ * The result is a hash input, not a usable options object: the selection fields
+ * are folded into one synthetic key. Only the shape is normalized here; key
+ * ordering is handled downstream by the stable hash.
  */
 export function canonicalizeCopyTreeOptions(options?: CopyTreeOptions): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -46,14 +56,15 @@ export function canonicalizeCopyTreeOptions(options?: CopyTreeOptions): Record<s
 
   for (const [key, value] of Object.entries(options)) {
     if (value === undefined) continue;
+    if ((SELECTION_FIELDS as readonly string[]).includes(key)) continue;
 
     if (!UNORDERED_ARRAY_FIELDS.has(key as keyof CopyTreeOptions)) {
       out[key] = value;
       continue;
     }
 
-    const list = typeof value === "string" ? [value] : value;
-    if (!Array.isArray(list)) {
+    const list = toArray(value);
+    if (!list) {
       // Shape the schema should have rejected. Keep it verbatim rather than
       // coercing, so two genuinely different malformed inputs stay distinct.
       out[key] = value;
@@ -61,6 +72,19 @@ export function canonicalizeCopyTreeOptions(options?: CopyTreeOptions): Record<s
     }
 
     out[key] = [...new Set(list)].sort();
+  }
+
+  const selection: string[] = [];
+  let hasSelection = false;
+  for (const field of SELECTION_FIELDS) {
+    const value = options[field];
+    if (value === undefined) continue;
+    hasSelection = true;
+    const list = toArray(value);
+    if (list) selection.push(...list);
+  }
+  if (hasSelection) {
+    out.selection = [...new Set(selection)].sort();
   }
 
   return out;
@@ -76,18 +100,33 @@ function toList(value: string | string[] | undefined): string[] {
  * stable across two runs that dedupe together) plus a count of the rest.
  */
 function labelList(values: string[], render: (value: string) => string): string | null {
-  const sorted = [...new Set(values)].sort();
-  const first = sorted.find((value) => render(value).length > 0);
-  if (first === undefined) return null;
+  // Deduplicate on the source value, not the rendered one: two folders that
+  // share a basename (`src/a`, `lib/a`) are two selections, and collapsing them
+  // would under-report the count rather than merely being ambiguous.
+  const rendered = [...new Set(values)]
+    .sort()
+    .map(render)
+    .filter((label) => label.length > 0);
+  if (rendered.length === 0) return null;
 
-  const label = render(first);
-  return sorted.length > 1 ? `${label} +${sorted.length - 1} more` : label;
+  return rendered.length > 1 ? `${rendered[0]} +${rendered.length - 1} more` : rendered[0];
 }
 
+/**
+ * Bound the stored name without cutting through a character. A plain `slice`
+ * splits a surrogate pair — an emoji straddling the limit would persist as a
+ * lone surrogate, which renders as a replacement glyph and breaks equality
+ * against the same name derived elsewhere.
+ */
 function truncateName(name: string): string {
-  return name.length > COPY_TREE_HISTORY_NAME_MAX_LENGTH
-    ? `${name.slice(0, COPY_TREE_HISTORY_NAME_MAX_LENGTH - 1).trimEnd()}…`
-    : name;
+  if (name.length <= COPY_TREE_HISTORY_NAME_MAX_LENGTH) return name;
+
+  let out = "";
+  for (const char of name) {
+    if (out.length + char.length > COPY_TREE_HISTORY_NAME_MAX_LENGTH - 1) break;
+    out += char;
+  }
+  return `${out.trimEnd()}…`;
 }
 
 /**

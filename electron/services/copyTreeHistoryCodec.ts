@@ -1,5 +1,6 @@
 import { CopyTreeHistoryFileSchema } from "../schemas/copyTreeHistory.js";
 import {
+  COPY_TREE_HISTORY_MAX_RECORDS,
   COPY_TREE_HISTORY_SCHEMA_VERSION,
   type CopyTreeHistoryRecord,
 } from "../../shared/types/ipc/copyTreeHistory.js";
@@ -41,13 +42,22 @@ export function decodeCopyTreeHistoryFile(raw: string): CopyTreeHistoryDecodeRes
   if (rawVersion > COPY_TREE_HISTORY_SCHEMA_VERSION) {
     return { ok: false, reason: "future-version", onDiskVersion: rawVersion };
   }
+  // Nothing ever wrote a version below the current one, so an older number is
+  // not a file to migrate — it is a file something else produced. Accepting it
+  // would read a stranger's shape through today's schema.
+  if (rawVersion < COPY_TREE_HISTORY_SCHEMA_VERSION) {
+    return { ok: false, reason: "corrupt" };
+  }
 
   const result = CopyTreeHistoryFileSchema.safeParse(parsed);
   if (!result.success) {
     return { ok: false, reason: "corrupt" };
   }
 
-  return { ok: true, records: result.data.records };
+  // The writer never emits more than the cap, but a hand-edited file can hold
+  // any number and every record is cloned across IPC on each push. Records are
+  // newest-first, so the head is the set worth keeping.
+  return { ok: true, records: result.data.records.slice(0, COPY_TREE_HISTORY_MAX_RECORDS) };
 }
 
 /**

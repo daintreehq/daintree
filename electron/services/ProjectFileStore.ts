@@ -10,7 +10,12 @@ import {
 } from "./projectStorePaths.js";
 import { TerminalRecipeSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
 import { decodeCopyTreeHistoryFile, encodeCopyTreeHistoryFile } from "./copyTreeHistoryCodec.js";
-import type { CopyTreeHistoryRecord } from "../../shared/types/ipc/copyTreeHistory.js";
+import { applyCopyTreeRun } from "./copyTreeHistoryLog.js";
+import { randomUUID } from "crypto";
+import type {
+  CopyTreeHistoryAppendInput,
+  CopyTreeHistoryRecord,
+} from "../../shared/types/ipc/copyTreeHistory.js";
 
 export const RECIPES_SCHEMA_VERSION = 1;
 
@@ -272,13 +277,57 @@ export class ProjectFileStore {
   /**
    * Read the project's copy-tree history, newest-first.
    *
-   * A missing file is an empty history. A damaged or newer-than-us file is
-   * quarantined by rename and reported empty — but if the rename itself fails
-   * this **throws** rather than returning `[]`. Returning empty there would let
-   * the next append write a fresh file straight over data we failed to preserve,
-   * which is the one outcome quarantining exists to prevent.
+   * Takes a turn in the write queue even though it mutates nothing itself:
+   * {@link readCopyTreeHistory} quarantines an unreadable file, so two
+   * unserialized readers — or a reader racing the append's own read — can both
+   * decide to rename it, and whichever loses gets `ENOENT` and fails. Queuing
+   * makes the quarantine happen exactly once, and also means a caller reads
+   * committed state rather than a snapshot a pending append is about to replace.
    */
   async getCopyTreeHistory(projectId: string): Promise<CopyTreeHistoryRecord[]> {
+    let records: CopyTreeHistoryRecord[] = [];
+    await this.enqueueCopyTreeHistoryUpdate(projectId, async () => {
+      records = await this.readCopyTreeHistory(projectId);
+      return null;
+    });
+    return records;
+  }
+
+  /**
+   * Fold a completed run into the project's history and return the committed
+   * snapshot.
+   *
+   * Lives here rather than in ProjectStore so the read, the dedupe fold and the
+   * write all happen inside one queued turn using the unqueued read — a caller
+   * composing this from the outside would have to reach for
+   * {@link getCopyTreeHistory}, which takes its own turn and would deadlock
+   * behind the turn awaiting it.
+   */
+  async appendCopyTreeRun(
+    projectId: string,
+    input: CopyTreeHistoryAppendInput
+  ): Promise<CopyTreeHistoryRecord[]> {
+    let snapshot: CopyTreeHistoryRecord[] = [];
+    await this.enqueueCopyTreeHistoryUpdate(projectId, async () => {
+      const current = await this.readCopyTreeHistory(projectId);
+      snapshot = applyCopyTreeRun(current, input, { id: randomUUID(), now: Date.now() });
+      return snapshot;
+    });
+    return snapshot;
+  }
+
+  /**
+   * Unqueued read. A missing file is an empty history. A damaged or
+   * newer-than-us file is quarantined by rename and reported empty — but if the
+   * rename itself fails this **throws** rather than returning `[]`. Returning
+   * empty there would let the next append write a fresh file straight over data
+   * we failed to preserve, which is the one outcome quarantining exists to
+   * prevent.
+   *
+   * Private because calling it outside the queue reintroduces the double-
+   * quarantine race described on {@link getCopyTreeHistory}.
+   */
+  private async readCopyTreeHistory(projectId: string): Promise<CopyTreeHistoryRecord[]> {
     const filePath = copyTreeHistoryFilePath(this.projectsConfigDir, projectId);
     if (!filePath) {
       return [];

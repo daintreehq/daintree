@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo, useStat
 import { X, FilterX, AlertTriangle, Trash2, GitBranch } from "lucide-react";
 import { Layers, Plug } from "@/components/icons";
 import { cn } from "@/lib/utils";
+import type { CopyTreeRunSource } from "@shared/types";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
@@ -48,7 +49,10 @@ interface OverviewWorktreeCardProps {
   totalWorktreeCount: number;
   variant?: "sidebar" | "grid";
   onSelectWorktree: (worktreeId: string) => void;
-  onCopyTree: (worktree: WorktreeSnapshot) => Promise<string | undefined> | void;
+  onCopyTree: (
+    worktree: WorktreeSnapshot,
+    copyTreeRunSource?: CopyTreeRunSource
+  ) => Promise<string | undefined> | void;
   onOpenEditor: (worktree: WorktreeSnapshot) => void;
   onSaveLayout?: (worktree: WorktreeSnapshot) => void;
   onLaunchAgent?: (worktreeId: string, agentId: string) => void;
@@ -97,7 +101,7 @@ function OverviewWorktreeCard({
   }, [onSelectWorktree, onClose, worktreeId]);
 
   const handleCopyTree = useCallback(
-    () => worktree && onCopyTree(worktree),
+    () => worktree && onCopyTree(worktree, "worktree-card"),
     [worktree, onCopyTree]
   );
   const handleOpenEditor = useCallback(
@@ -188,7 +192,10 @@ export interface WorktreeOverviewModalProps {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
   onSelectWorktree: (worktreeId: string) => void;
-  onCopyTree: (worktree: WorktreeSnapshot) => Promise<string | undefined> | void;
+  onCopyTree: (
+    worktree: WorktreeSnapshot,
+    copyTreeRunSource?: CopyTreeRunSource
+  ) => Promise<string | undefined> | void;
   onOpenEditor: (worktree: WorktreeSnapshot) => void;
   onSaveLayout?: (worktree: WorktreeSnapshot) => void;
   onLaunchAgent?: (worktreeId: string, agentId: string) => void;

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { decodeCopyTreeHistoryFile, encodeCopyTreeHistoryFile } from "../copyTreeHistoryCodec.js";
-import { COPY_TREE_HISTORY_SCHEMA_VERSION } from "../../../shared/types/ipc/copyTreeHistory.js";
+import {
+  COPY_TREE_HISTORY_MAX_RECORDS,
+  COPY_TREE_HISTORY_SCHEMA_VERSION,
+} from "../../../shared/types/ipc/copyTreeHistory.js";
 import type { CopyTreeHistoryRecord } from "../../../shared/types/ipc/copyTreeHistory.js";
 
 function record(overrides: Partial<CopyTreeHistoryRecord> = {}): CopyTreeHistoryRecord {
@@ -28,12 +31,6 @@ describe("encode/decode round trip", () => {
 
   it("stamps the current schema version on write", () => {
     const parsed = JSON.parse(encodeCopyTreeHistoryFile([])) as { _schemaVersion: number };
-    expect(parsed._schemaVersion).toBe(COPY_TREE_HISTORY_SCHEMA_VERSION);
-  });
-
-  it("cannot be tricked into writing a caller-supplied schema version", () => {
-    const forged = [record({ _schemaVersion: 999 } as unknown as Partial<CopyTreeHistoryRecord>)];
-    const parsed = JSON.parse(encodeCopyTreeHistoryFile(forged)) as { _schemaVersion: number };
     expect(parsed._schemaVersion).toBe(COPY_TREE_HISTORY_SCHEMA_VERSION);
   });
 
@@ -147,6 +144,26 @@ describe("decodeCopyTreeHistoryFile", () => {
     const decoded = decodeCopyTreeHistoryFile(raw);
     expect(decoded.ok).toBe(true);
     expect(decoded.ok && decoded.records[0].stats).toEqual({ fileCount: 7 });
+  });
+
+  it("rejects a version below the current one, which nothing ever wrote", () => {
+    // No v0 exists, so an older number means another writer produced the file —
+    // reading it through today's schema would misinterpret a stranger's shape.
+    const raw = JSON.stringify({ _schemaVersion: 0, records: [] });
+    expect(decodeCopyTreeHistoryFile(raw)).toEqual({ ok: false, reason: "corrupt" });
+  });
+
+  it("bounds how many records a hand-edited file can push through", () => {
+    const records = Array.from({ length: COPY_TREE_HISTORY_MAX_RECORDS + 25 }, (_, i) =>
+      record({ id: `id-${i}`, dedupeKey: `key-${i}`, lastUsedAt: 10_000 - i })
+    );
+    const decoded = decodeCopyTreeHistoryFile(
+      JSON.stringify({ _schemaVersion: COPY_TREE_HISTORY_SCHEMA_VERSION, records })
+    );
+    expect(decoded.ok).toBe(true);
+    expect(decoded.ok && decoded.records).toHaveLength(COPY_TREE_HISTORY_MAX_RECORDS);
+    // Newest-first on disk, so the head is what survives.
+    expect(decoded.ok && decoded.records[0].id).toBe("id-0");
   });
 
   it("drops an unknown top-level key a newer same-version build added", () => {

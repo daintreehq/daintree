@@ -34,6 +34,8 @@ describe("canonicalizeCopyTreeOptions", () => {
       scopePaths: ["c", "d"],
     });
     expect(forwards).toEqual(backwards);
+    // ...and the ordering really was the only difference.
+    expect(forwards).not.toEqual(canonicalizeCopyTreeOptions({ scopePaths: ["c", "d"] }));
   });
 
   it("drops duplicates within an unordered field", () => {
@@ -69,11 +71,22 @@ describe("canonicalizeCopyTreeOptions", () => {
     );
   });
 
-  it("does not treat filter and includePaths as interchangeable", () => {
-    // They union into one selection set downstream, but only `filter` suppresses
-    // the project-setting filter — so the two runtime shapes are not the same run.
-    expect(canonicalizeCopyTreeOptions({ filter: ["src/**"] })).not.toEqual(
+  it("treats filter and includePaths as one selection set", () => {
+    // CopyTreeService.mergeSelectionPatterns unions them into the SDK's single
+    // `filter`, and mergeCopyTreeOptions back-fills neither from project
+    // settings — so the two spellings request the identical run and must not
+    // occupy two history rows.
+    expect(canonicalizeCopyTreeOptions({ filter: ["src/**"] })).toEqual(
       canonicalizeCopyTreeOptions({ includePaths: ["src/**"] })
+    );
+    expect(canonicalizeCopyTreeOptions({ filter: "a", includePaths: ["b"] })).toEqual(
+      canonicalizeCopyTreeOptions({ filter: ["b", "a"] })
+    );
+  });
+
+  it("still separates a selection from no selection at all", () => {
+    expect(canonicalizeCopyTreeOptions({ filter: ["src/**"] })).not.toEqual(
+      canonicalizeCopyTreeOptions({})
     );
   });
 
@@ -135,9 +148,52 @@ describe("deriveCopyTreeRunName", () => {
     expect(deriveCopyTreeRunName({ scopePaths: ["/"], modified: true })).toBe("Modified files");
   });
 
-  it("bounds the derived name", () => {
-    const name = deriveCopyTreeRunName({ filter: "x".repeat(500) });
+  it("bounds the derived name and keeps its prefix", () => {
+    const name = deriveCopyTreeRunName({ filter: `${"x".repeat(500)}yz` });
     expect(name.length).toBeLessThanOrEqual(COPY_TREE_HISTORY_NAME_MAX_LENGTH);
+    expect(name.startsWith("xxx")).toBe(true);
+    expect(name.endsWith("…")).toBe(true);
+  });
+
+  it("leaves a name exactly at the limit untouched", () => {
+    const exact = "x".repeat(COPY_TREE_HISTORY_NAME_MAX_LENGTH);
+    expect(deriveCopyTreeRunName({ filter: exact })).toBe(exact);
+    expect(deriveCopyTreeRunName({ filter: `${exact}y` })).not.toBe(`${exact}y`);
+  });
+
+  it("never truncates through a surrogate pair", () => {
+    // A lone high surrogate renders as a replacement glyph and breaks equality
+    // against the same name derived elsewhere.
+    for (let pad = 0; pad < 6; pad++) {
+      const name = deriveCopyTreeRunName({
+        filter: `${"x".repeat(COPY_TREE_HISTORY_NAME_MAX_LENGTH - 4 + pad)}${"🌳".repeat(6)}`,
+      });
+      expect(name.length).toBeLessThanOrEqual(COPY_TREE_HISTORY_NAME_MAX_LENGTH);
+      for (const char of name) {
+        const code = char.codePointAt(0) as number;
+        expect(code >= 0xd800 && code <= 0xdfff).toBe(false);
+      }
+    }
+  });
+
+  it("names a picker selection after the chosen file", () => {
+    expect(deriveCopyTreeRunName({ includePaths: ["src/lib/utils.ts"] })).toBe("utils.ts");
+    expect(deriveCopyTreeRunName({ includePaths: ["src/a.ts", "src/b.ts"] })).toBe("a.ts +1 more");
+  });
+
+  it("prefers a scoped folder over a picker selection", () => {
+    expect(deriveCopyTreeRunName({ scopePaths: ["src/panels"], includePaths: ["a.ts"] })).toBe(
+      "panels"
+    );
+  });
+
+  it("falls through a whitespace-only filter rather than labelling a run with blanks", () => {
+    expect(deriveCopyTreeRunName({ filter: "   ", modified: true })).toBe("Modified files");
+    expect(deriveCopyTreeRunName({ filter: ["  ", "\t"] })).toBe("Full context");
+  });
+
+  it("trims a filter used as the label", () => {
+    expect(deriveCopyTreeRunName({ filter: "  **/*.ts  " })).toBe("**/*.ts");
   });
 });
 

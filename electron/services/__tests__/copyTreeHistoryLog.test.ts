@@ -197,6 +197,34 @@ describe("applyCopyTreeRun", () => {
     expect(keptRefs).not.toContain("ref-1");
   });
 
+  it("lets one explicit name replace another", () => {
+    let records = applyCopyTreeRun([], input({ name: "First name" }), { id: "id-1", now: 1 });
+    records = applyCopyTreeRun(records, input({ name: "Second name" }), { id: "id-2", now: 2 });
+    expect(records).toHaveLength(1);
+    expect(records[0].name).toBe("Second name");
+    expect(records[0].id).toBe("id-1");
+  });
+
+  it("does not evict the run that just happened when the clock has moved backwards", () => {
+    let records: CopyTreeHistoryRecord[] = [];
+    for (let i = 0; i < COPY_TREE_HISTORY_MAX_RECORDS; i++) {
+      records = applyCopyTreeRun(records, input({ options: { changed: `ref-${i}` } }), {
+        id: `id-${i}`,
+        now: 1_000_000 + i,
+      });
+    }
+
+    // A clock correction lands this run before everything already stored.
+    records = applyCopyTreeRun(records, input({ options: { changed: "after-rollback" } }), {
+      id: "id-rollback",
+      now: 1,
+    });
+
+    expect(records.map((r) => (r.options as CopyTreeOptions).changed)).toContain("after-rollback");
+    expect(records[0].id).toBe("id-rollback");
+    expect(records).toHaveLength(COPY_TREE_HISTORY_MAX_RECORDS);
+  });
+
   it("stores the caller's options verbatim", () => {
     const options = { scopePaths: ["src/z", "src/a"], format: "markdown" as const };
     const [record] = applyCopyTreeRun([], input({ options }), { id: "id-1", now: 1 });
@@ -210,9 +238,9 @@ describe("applyCopyTreeRun", () => {
     expect(first).toEqual(snapshot);
   });
 
-  it("ignores a stale entry order on disk when deciding what to evict", () => {
-    // A hand-edited or partially-written file can arrive out of order; eviction
-    // must still drop the least recently used entry, not the last in the array.
+  it("reorders a history that arrived out of order on disk", () => {
+    // A hand-edited file can be out of order; the fold must re-establish
+    // newest-first so the tail really is the eviction candidate.
     const stale: CopyTreeHistoryRecord[] = [
       {
         id: "old",

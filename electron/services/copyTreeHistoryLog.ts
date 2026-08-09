@@ -49,6 +49,13 @@ export function applyCopyTreeRun(
   const existing = records.find((record) => record.dedupeKey === dedupeKey);
   const suppliedName = input.name?.trim();
 
+  // Never stamp a run as older than something already on disk. `Date.now()` can
+  // move backwards across a clock correction or a DST-adjacent system change,
+  // and a stored future timestamp has the same effect — either would sort the
+  // run that just happened below all 20 existing records and evict it on the
+  // spot, which is the exact opposite of what recency is for.
+  const now = Math.max(stamp.now, ...records.map((record) => record.lastUsedAt), 0);
+
   const updated: CopyTreeHistoryRecord = existing
     ? {
         ...existing,
@@ -57,7 +64,7 @@ export function applyCopyTreeRun(
         source: input.source,
         worktreeId: input.worktreeId,
         stats: input.stats,
-        lastUsedAt: stamp.now,
+        lastUsedAt: now,
         runCount: existing.runCount + 1,
       }
     : {
@@ -68,8 +75,8 @@ export function applyCopyTreeRun(
         source: input.source,
         worktreeId: input.worktreeId,
         stats: input.stats,
-        createdAt: stamp.now,
-        lastUsedAt: stamp.now,
+        createdAt: now,
+        lastUsedAt: now,
         runCount: 1,
       };
 

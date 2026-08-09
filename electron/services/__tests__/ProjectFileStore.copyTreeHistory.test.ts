@@ -59,27 +59,23 @@ function installDiskModel(writeDelayMs = 0): Map<string, string> {
   return disk;
 }
 
-/** Mirrors ProjectStore.appendCopyTreeRun: read, fold and write in one turn. */
+/**
+ * Drive the REAL production coordinator. Ids and timestamps are minted inside
+ * it, so the assertions below key off content rather than a supplied id — a
+ * test-owned reimplementation of the fold would stay green if the production
+ * one stopped queueing its read.
+ */
 function append(
   store: ProjectFileStore,
   projectId: string,
-  id: string,
-  now: number,
   overrides: Partial<CopyTreeHistoryAppendInput> = {}
-): Promise<void> {
-  return store.enqueueCopyTreeHistoryUpdate(projectId, async () => {
-    const current = await store.getCopyTreeHistory(projectId);
-    return applyCopyTreeRun(
-      current,
-      {
-        options: {},
-        source: "toolbar",
-        worktreeId: "wt-1",
-        stats: { fileCount: 1 },
-        ...overrides,
-      },
-      { id, now }
-    );
+): Promise<CopyTreeHistoryRecord[]> {
+  return store.appendCopyTreeRun(projectId, {
+    options: {},
+    source: "toolbar",
+    worktreeId: "wt-1",
+    stats: { fileCount: 1 },
+    ...overrides,
   });
 }
 
@@ -124,22 +120,19 @@ describe("ProjectFileStore copy-tree history", () => {
     const disk = installDiskModel(5);
 
     await Promise.all([
-      append(store, VALID_ID, "id-1", 1_000, { options: { modified: true } }),
-      append(store, VALID_ID, "id-2", 2_000, { options: { changed: "develop" } }),
+      append(store, VALID_ID, { options: { modified: true } }),
+      append(store, VALID_ID, { options: { changed: "develop" } }),
     ]);
 
     const records = readDisk(disk, VALID_ID);
     expect(records).toHaveLength(2);
-    expect(records.map((r) => r.id).sort()).toEqual(["id-1", "id-2"]);
+    expect(records.map((r) => r.name).sort()).toEqual(["Changed since develop", "Modified files"]);
   });
 
   it("collapses two concurrent appends of identical options into one bumped entry", async () => {
     const disk = installDiskModel(5);
 
-    await Promise.all([
-      append(store, VALID_ID, "id-1", 1_000),
-      append(store, VALID_ID, "id-2", 2_000),
-    ]);
+    await Promise.all([append(store, VALID_ID), append(store, VALID_ID)]);
 
     const records = readDisk(disk, VALID_ID);
     expect(records).toHaveLength(1);
@@ -152,12 +145,31 @@ describe("ProjectFileStore copy-tree history", () => {
     const disk = installDiskModel(5);
 
     await Promise.all([
-      append(store, VALID_ID, "id-1", 1_000),
-      append(store, OTHER_ID, "id-2", 1_000),
+      append(store, VALID_ID, { worktreeId: "wt-a" }),
+      append(store, OTHER_ID, { worktreeId: "wt-b" }),
     ]);
 
-    expect(readDisk(disk, VALID_ID).map((r) => r.id)).toEqual(["id-1"]);
-    expect(readDisk(disk, OTHER_ID).map((r) => r.id)).toEqual(["id-2"]);
+    expect(readDisk(disk, VALID_ID).map((r) => r.worktreeId)).toEqual(["wt-a"]);
+    expect(readDisk(disk, OTHER_ID).map((r) => r.worktreeId)).toEqual(["wt-b"]);
+  });
+
+  it("does not make one project wait behind another project's in-flight write", async () => {
+    // A single global queue would satisfy the isolation test above. This one
+    // fails unless the queues are genuinely keyed per project.
+    installDiskModel();
+    let releaseA: () => void = () => {};
+    const blocked = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    utilsMock.resilientAtomicWriteFile.mockImplementation(async (filePath: string) => {
+      if (filePath === historyFilePath(VALID_ID)) await blocked;
+    });
+
+    const slow = append(store, VALID_ID);
+    await expect(append(store, OTHER_ID)).resolves.toHaveLength(1);
+
+    releaseA();
+    await slow;
   });
 
   it("does not let a failed update poison the next one in the chain", async () => {
@@ -166,11 +178,11 @@ describe("ProjectFileStore copy-tree history", () => {
     const failing = store.enqueueCopyTreeHistoryUpdate(VALID_ID, () => {
       throw new Error("updater blew up");
     });
-    const following = append(store, VALID_ID, "id-2", 2_000);
+    const following = append(store, VALID_ID, { worktreeId: "wt-after" });
 
     await expect(failing).rejects.toThrow("updater blew up");
-    await expect(following).resolves.toBeUndefined();
-    expect(readDisk(disk, VALID_ID).map((r) => r.id)).toEqual(["id-2"]);
+    await expect(following).resolves.toHaveLength(1);
+    expect(readDisk(disk, VALID_ID).map((r) => r.worktreeId)).toEqual(["wt-after"]);
   });
 
   it("skips the write when the updater returns null", async () => {
@@ -193,22 +205,55 @@ describe("ProjectFileStore copy-tree history", () => {
       }
     );
 
-    await append(store, VALID_ID, "id-1", 1_000);
+    await append(store, VALID_ID);
 
     expect(fsMock.mkdir).toHaveBeenCalledWith(path.join(CONFIG_DIR, VALID_ID), { recursive: true });
-    expect(readDisk(disk, VALID_ID).map((r) => r.id)).toEqual(["id-1"]);
+    expect(readDisk(disk, VALID_ID)).toHaveLength(1);
   });
 
   it("quarantines a damaged file by renaming it, never by deleting it", async () => {
-    installDiskModel();
-    fsMock.readFile.mockResolvedValue("{ not json");
+    const disk = installDiskModel();
+    const damaged = "{ not json";
+    disk.set(historyFilePath(VALID_ID), damaged);
+    // Model the rename so the assertion is about where the BYTES ended up, not
+    // merely that a rename was requested.
+    utilsMock.resilientRename.mockImplementation(async (from: string, to: string) => {
+      const content = disk.get(from);
+      if (content === undefined) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      disk.delete(from);
+      disk.set(to, content);
+    });
 
     await expect(store.getCopyTreeHistory(VALID_ID)).resolves.toEqual([]);
 
-    expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
     const [from, to] = utilsMock.resilientRename.mock.calls[0] as [string, string];
     expect(from).toBe(historyFilePath(VALID_ID));
     expect(to.startsWith(`${historyFilePath(VALID_ID)}.corrupted.`)).toBe(true);
+    expect(disk.get(to)).toBe(damaged);
+    expect(disk.has(historyFilePath(VALID_ID))).toBe(false);
+  });
+
+  it("quarantines an unreadable file exactly once when a read and an append race it", async () => {
+    // Both see the damage; whichever renames second would hit ENOENT and fail,
+    // losing a completed run. Serializing the quarantine-capable read is what
+    // makes only one of them attempt it.
+    const disk = installDiskModel();
+    disk.set(historyFilePath(VALID_ID), "{ not json");
+    utilsMock.resilientRename.mockImplementation(async (from: string, to: string) => {
+      const content = disk.get(from);
+      if (content === undefined) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      disk.delete(from);
+      disk.set(to, content);
+    });
+
+    const [, appended] = await Promise.all([
+      store.getCopyTreeHistory(VALID_ID),
+      append(store, VALID_ID, { worktreeId: "wt-raced" }),
+    ]);
+
+    expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
+    expect(appended).toHaveLength(1);
+    expect(readDisk(disk, VALID_ID).map((r) => r.worktreeId)).toEqual(["wt-raced"]);
   });
 
   it("quarantines a newer app's file under a name that records its version", async () => {
@@ -244,14 +289,14 @@ describe("ProjectFileStore copy-tree history", () => {
     fsMock.readFile.mockResolvedValue("{ not json");
     utilsMock.resilientRename.mockRejectedValue(new Error("EPERM"));
 
-    await expect(append(store, VALID_ID, "id-1", 1_000)).rejects.toThrow("EPERM");
+    await expect(append(store, VALID_ID)).rejects.toThrow("EPERM");
     expect(utilsMock.resilientAtomicWriteFile).not.toHaveBeenCalled();
   });
 
   it("reads back what a previous append wrote", async () => {
     installDiskModel();
 
-    await append(store, VALID_ID, "id-1", 1_000, { options: { modified: true } });
+    await append(store, VALID_ID, { options: { modified: true } });
     const records = await store.getCopyTreeHistory(VALID_ID);
 
     expect(records).toHaveLength(1);
@@ -263,15 +308,15 @@ describe("ProjectFileStore copy-tree history", () => {
     const disk = installDiskModel();
     disk.set(historyFilePath(VALID_ID), "{ not json");
 
-    await append(store, VALID_ID, "id-1", 1_000);
+    await append(store, VALID_ID);
 
     expect(utilsMock.resilientRename).toHaveBeenCalledTimes(1);
-    expect(readDisk(disk, VALID_ID).map((r) => r.id)).toEqual(["id-1"]);
+    expect(readDisk(disk, VALID_ID)).toHaveLength(1);
   });
 
   it("writes the versioned envelope, not a bare array", async () => {
     const disk = installDiskModel();
-    await append(store, VALID_ID, "id-1", 1_000);
+    await append(store, VALID_ID);
 
     const parsed = JSON.parse(disk.get(historyFilePath(VALID_ID)) as string) as {
       _schemaVersion: number;

@@ -46,8 +46,16 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
+// Typed to the production signature so a parameter change fails at compile time
+// rather than silently leaving the assertions below asserting the wrong shape.
 const copyTreeHistoryMock = vi.hoisted(() => ({
-  recordCopyTreeRun: vi.fn<() => Promise<void>>(async () => {}),
+  recordCopyTreeRun:
+    vi.fn<
+      (
+        projectId: string | null,
+        input: import("../../../../shared/types/ipc/copyTreeHistory.js").CopyTreeHistoryAppendInput
+      ) => Promise<void>
+    >(),
 }));
 
 vi.mock("../../../services/copyTreeHistoryService.js", () => copyTreeHistoryMock);
@@ -1168,7 +1176,7 @@ describe("nextChunkBoundary", () => {
 });
 
 describe("copy-tree run history recording", () => {
-  const PROJECT_ID = "p".repeat(64);
+  const PROJECT_ID = "a1b2c3d4".repeat(8);
   let tmpRoot: string;
 
   /**

@@ -515,6 +515,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       return result;
     }
 
+    // Recorded on generation, not on the clipboard write below. The bundle now
+    // exists and its path rides back even when the clipboard step throws, so a
+    // run the user would most want to retry is exactly the one that must not be
+    // missing from the history.
+    await recordCompletedCopyTreeRun(settingsProjectId, validated, result);
+
     const filePath = result.filePath;
 
     try {
@@ -544,11 +550,6 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       }
 
       console.log(`[${traceId}] Copied context file to clipboard: ${filePath}`);
-
-      // Only the clean path records: the catch below still returns a usable
-      // file path, but the copy the user asked for did not happen, so it does
-      // not belong in a history whose entries are meant to be re-run.
-      await recordCompletedCopyTreeRun(settingsProjectId, validated, result);
 
       return {
         content: "",
