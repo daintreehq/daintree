@@ -117,6 +117,52 @@ describe("argument descriptions carry the semantics prose no longer states", () 
     expect(scope).toMatch(/empty list is rejected|rejected rather than/i);
   });
 
+  // #11731: a caller sent `includePaths: ["src/worldgen", ...]`, every directory
+  // existed, and the call returned zero files with no error — then burned 13
+  // rounds guessing. Both spellings of the selection feed the SDK's single
+  // `filter`, which matches against FILE paths, so a bare directory matches
+  // nothing. The wire description is the only place that rule can be learned,
+  // and a caller reads the description of whichever field it reached for.
+  it.each(["includePaths", "filter"])(
+    "warns on %s that a folder needs a glob, and where a folder belongs instead",
+    (field) => {
+      const description = emit(CopyTreeOptionsSchema).properties?.[field]?.description ?? "";
+
+      expect(description).toMatch(/patterns match file paths/i);
+      // Both halves of the contrast, not just the rule: "a folder needs a glob"
+      // is advice a caller cannot act on without seeing the two forms side by
+      // side, which is exactly what the working `worktree.copyTree` text shows.
+      expect(description).toContain("src/panels/**");
+      expect(description).toMatch(/not 'src\/panels'/);
+      // The redirect matters as much as the warning — the caller's real intent
+      // was a folder, and `scopePaths` is the field that takes one.
+      expect(description).toMatch(/scopePaths/);
+    }
+  );
+
+  it("keeps the union and traversal guidance the folder rule was added beside", () => {
+    const includePaths = emit(CopyTreeOptionsSchema).properties?.includePaths?.description ?? "";
+
+    // Regression guard on the reword itself. None of this is recoverable from
+    // anywhere else on the wire: #11722's union with `filter` is invisible from
+    // the types, and the traversal contrast is what stops a caller reaching for
+    // `scopePaths` when it genuinely wants patterns matched worktree-wide.
+    expect(includePaths).toMatch(/curated bundle/i);
+    expect(includePaths).toMatch(/combined with `filter`/i);
+    expect(includePaths).toMatch(/does not restrict traversal/i);
+  });
+
+  it("says a scope path is literal, so the folder rule does not carry over to it", () => {
+    const scope = emit(CopyTreeOptionsSchema).properties?.scopePaths?.description ?? "";
+
+    // The inverse trap, and the one the fix above could create: a caller that
+    // has just learned "a folder needs a glob" carries '/**' over to the field
+    // that walks literal paths, where it matches nothing either.
+    expect(scope).toMatch(/not glob patterns/i);
+    expect(scope).toMatch(/literal file or directory paths/i);
+    expect(scope).toMatch(/prefer this over[^.]*folder/i);
+  });
+
   it("keeps the terminal-id contract on the hand-written wait schema", () => {
     // A hand-written JSON Schema rather than a zod conversion, so none of the
     // propagation above applies to it. Note this constant is NOT what the

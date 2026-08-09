@@ -234,6 +234,10 @@ describe("CopyTreeService against the installed CopyTree", () => {
       // The renderer's "why is this empty" toast reads byReason, so a pruned
       // folder has to be accounted for rather than vanishing silently.
       expect(result.excluded?.total).toBeGreaterThan(0);
+      // No pattern was supplied and none could have run — the walk was already
+      // empty. Naming a selector here would send a caller to fix the one part
+      // of its request that was correct (#11731).
+      expect(result.unmatchedSelector).toBeUndefined();
     });
 
     it("reports a scoped path that doesn't exist as a sanitized error", async () => {
@@ -498,6 +502,40 @@ describe("CopyTreeService against the installed CopyTree", () => {
       // traversal. (The exact-list assertion is what proves the selection; this
       // catches the accounting going silent.)
       expect(result.excluded?.byReason.filterPattern).toBeGreaterThan(0);
+      // ...and that same count is why blame is gated on `noFilesMatched` too:
+      // this run succeeded, so nothing is to blame for it (#11731).
+      expect(result.unmatchedSelector).toBeUndefined();
+    });
+
+    // The failure #11731 traced, reproduced against the real SDK: every path a
+    // caller sent named a directory that exists, and the run came back empty
+    // with no error and nothing to correct.
+    it("blames the patterns when a bare directory selects nothing", async () => {
+      const result = await copyTreeService.testConfig(tempDir, {
+        includePaths: ["src/landscape"],
+      });
+
+      // The directory is real — the same fixture the curated selection above
+      // pulls four files out of — so "no such path" is not the explanation.
+      expect(result.error).toBeUndefined();
+      expect(result.includedFiles).toBe(0);
+      expect(result.noFilesMatched).toBe(true);
+      // Files reached the pattern check and every one was rejected there, which
+      // is what makes the patterns rather than the traversal the culprit.
+      expect(result.excluded?.byReason.filterPattern).toBeGreaterThan(0);
+      expect(result.unmatchedSelector).toBe("includePaths");
+    });
+
+    it("blames neither selector when the glob form of the same folder works", async () => {
+      // The remedy the description now prescribes has to actually be the
+      // remedy, or the hint sends callers somewhere that fails the same way.
+      const result = await copyTreeService.testConfig(tempDir, {
+        includePaths: ["src/landscape/**"],
+      });
+
+      expect(result.includedFiles).toBeGreaterThan(0);
+      expect(result.noFilesMatched).toBeFalsy();
+      expect(result.unmatchedSelector).toBeUndefined();
     });
 
     it("carries the curated files, and only those, into a real generated bundle", async () => {

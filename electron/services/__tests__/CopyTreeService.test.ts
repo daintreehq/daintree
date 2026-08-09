@@ -509,6 +509,113 @@ describe("CopyTreeService", () => {
       expect(result.excluded).toEqual({ total: 2, byReason: { sizeGate: 1, gitignore: 1 } });
     });
 
+    // #11731: `noFilesMatched: true` alone left a caller that had passed a bare
+    // directory to `includePaths` with nothing to correct, so it guessed at the
+    // option shape for 13 rounds. The blame is derived rather than reported by
+    // the SDK: `filterPattern` counts files the walker produced and the include
+    // patterns then rejected, so a non-zero count on an empty run proves the
+    // patterns emptied it. The real-SDK direction of that claim is pinned in
+    // CopyTreeService.sdk-contract.test.ts; these rows pin the mapping.
+    describe("blaming a selector for an empty run", () => {
+      function mockEmptyRun(byReason: Record<string, number>) {
+        copyMock.mockResolvedValue({
+          output: "",
+          outputFormatVersion: null,
+          manifest: [],
+          stats: {
+            totalFiles: 0,
+            totalSize: 0,
+            duration: 1,
+            estimatedOutputChars: 0,
+            estimatedTokens: 0,
+            noFilesMatched: true,
+            excluded: {
+              total: Object.values(byReason).reduce((sum, count) => sum + count, 0),
+              byReason,
+            },
+          },
+        });
+      }
+
+      // Named the way the CALLER spelled it. Both spellings collapse into one
+      // SDK `filter` before it runs, so telling a caller that only ever sent
+      // `includePaths` that its `filter` missed would name a field it never set.
+      it.each([
+        { supplied: { includePaths: ["src/panels"] }, expected: "includePaths" },
+        { supplied: { filter: "src/panels" }, expected: "filter" },
+        { supplied: { filter: ["src/panels"] }, expected: "filter" },
+        {
+          supplied: { includePaths: ["src/panels"], filter: "docs" },
+          expected: "filterAndIncludePaths",
+        },
+      ])("names $expected when that is what was supplied", async ({ supplied, expected }) => {
+        mockEmptyRun({ filterPattern: 4 });
+
+        const result = await copyTreeService.testConfig(tempDir, supplied);
+
+        expect(result.noFilesMatched).toBe(true);
+        expect(result.unmatchedSelector).toBe(expected);
+      });
+
+      it("stays quiet when the patterns never got the chance to reject anything", async () => {
+        // Zero `filterPattern` means nothing survived the walk to reach the
+        // pattern check — an empty scope, an empty repo, a `modified` run with
+        // no changes. Blaming the patterns there would send a caller to rewrite
+        // the one part of its request that was fine.
+        mockEmptyRun({ scopeFilter: 2 });
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          includePaths: ["src/**"],
+          scopePaths: ["empty"],
+        });
+
+        expect(result.noFilesMatched).toBe(true);
+        expect(result.unmatchedSelector).toBeUndefined();
+      });
+
+      it("stays quiet on a successful narrow selection, where the count is normal", async () => {
+        // Every file outside a narrow selection is booked as `filterPattern`, so
+        // the count alone flags healthy runs. `noFilesMatched` is the other half
+        // of the gate for exactly this row.
+        copyMock.mockResolvedValue({
+          output: "",
+          outputFormatVersion: null,
+          manifest: [{ path: "a.ts", size: 10, outcome: "included" }],
+          stats: {
+            totalFiles: 1,
+            totalSize: 10,
+            duration: 1,
+            estimatedOutputChars: 0,
+            estimatedTokens: 0,
+            noFilesMatched: false,
+            excluded: { total: 9, byReason: { filterPattern: 9 } },
+          },
+        });
+
+        const result = await copyTreeService.testConfig(tempDir, { includePaths: ["a.ts"] });
+
+        expect(result.unmatchedSelector).toBeUndefined();
+      });
+
+      it("stays quiet when no selector was supplied at all", async () => {
+        // A whole-worktree copy of an empty directory has nothing to blame.
+        mockEmptyRun({ filterPattern: 3 });
+
+        const result = await copyTreeService.testConfig(tempDir);
+
+        expect(result.noFilesMatched).toBe(true);
+        expect(result.unmatchedSelector).toBeUndefined();
+      });
+
+      it("reaches the generated bundle, not just the dry run", async () => {
+        mockEmptyRun({ filterPattern: 4 });
+
+        const result = await copyTreeService.generate(tempDir, { includePaths: ["src/panels"] });
+
+        expect(result.stats?.unmatchedSelector).toBe("includePaths");
+      });
+    });
+
     it("surfaces which budget truncated the run", async () => {
       copyMock.mockResolvedValue({
         output: "",

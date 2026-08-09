@@ -15,6 +15,7 @@ import type {
   CopyTreeBudgetStats,
   CopyTreeExclusionReason,
   CopyTreeExclusionSummary,
+  CopyTreeUnmatchedSelector,
   FileTreeNode,
 } from "../../shared/types/ipc/copyTree.js";
 import { fileTreeService } from "./FileTreeService.js";
@@ -182,11 +183,16 @@ class CopyTreeService {
         progressThrottleMs: 100,
       };
 
+      // Captured from the request rather than from `sdkOptions`, which has
+      // already unioned the two spellings into one `filter`.
+      const suppliedSelector = CopyTreeService.suppliedPatternSelector(options);
+
       if (outputPath) {
         return await this.streamToFile(
           copytree.copyStream,
           rootPath,
           sdkOptions,
+          suppliedSelector,
           outputPath,
           controller
         );
@@ -202,7 +208,7 @@ class CopyTreeService {
         stats: {
           totalSize: result.stats.totalSize,
           duration: result.stats.duration,
-          ...this.mapBudgetStats(result.stats),
+          ...this.mapBudgetStats(result.stats, suppliedSelector),
         },
       };
     } catch (error: unknown) {
@@ -233,6 +239,7 @@ class CopyTreeService {
     copyStream: (typeof import("copytree"))["copyStream"],
     rootPath: string,
     sdkOptions: SdkCopyOptions,
+    suppliedSelector: CopyTreeUnmatchedSelector | undefined,
     outputPath: string,
     controller: AbortController
   ): Promise<CopyTreeResult> {
@@ -316,7 +323,7 @@ class CopyTreeService {
         stats: {
           totalSize: finished.stats.totalSize,
           duration: finished.stats.duration,
-          ...this.mapBudgetStats(finished.stats),
+          ...this.mapBudgetStats(finished.stats, suppliedSelector),
         },
       };
     } catch (error) {
@@ -386,7 +393,7 @@ class CopyTreeService {
         includedFiles: included.length,
         includedSize: included.reduce((total, entry) => total + entry.size, 0),
         files: included,
-        ...this.mapBudgetStats(result.stats),
+        ...this.mapBudgetStats(result.stats, CopyTreeService.suppliedPatternSelector(options)),
       };
     } catch (error: unknown) {
       return {
@@ -637,6 +644,47 @@ class CopyTreeService {
     return Array.from(new Set(merged));
   }
 
+  /**
+   * Name the pattern selectors this request supplied, the way it spelled them.
+   *
+   * Read before `mergeSelectionPatterns` collapses the two into one SDK
+   * `filter`, because afterwards they are indistinguishable — and a caller who
+   * only ever sent `includePaths` should not be told its `filter` missed. When
+   * both carry patterns neither can be singled out, so the pair is reported.
+   */
+  private static suppliedPatternSelector(
+    options: CopyTreeOptions
+  ): CopyTreeUnmatchedSelector | undefined {
+    const hasIncludePaths = (options.includePaths?.length ?? 0) > 0;
+    const filter = options.filter;
+    const hasFilter = Array.isArray(filter) ? filter.length > 0 : (filter?.length ?? 0) > 0;
+
+    if (hasIncludePaths && hasFilter) return "filterAndIncludePaths";
+    if (hasIncludePaths) return "includePaths";
+    if (hasFilter) return "filter";
+    return undefined;
+  }
+
+  /**
+   * Blame the supplied patterns for an empty run, but only when they earned it.
+   *
+   * `filterPattern` counts files the walker produced and the include patterns
+   * then rejected. The walker prunes by scope, gitignore and config excludes as
+   * it goes and tests include patterns first among its per-file checks, so a
+   * non-zero count is proof that real files reached the patterns and none
+   * survived — never that the subtree was empty to begin with. Gated on
+   * `noFilesMatched` as well because that same count is ordinary on a
+   * SUCCESSFUL narrow selection: every file outside the selection is booked
+   * there, and reporting it then would flag healthy runs.
+   */
+  private static deriveUnmatchedSelector(
+    stats: CopyResult["stats"],
+    supplied: CopyTreeUnmatchedSelector | undefined
+  ): CopyTreeUnmatchedSelector | undefined {
+    if (supplied === undefined || stats.noFilesMatched !== true) return undefined;
+    return (stats.excluded?.byReason?.filterPattern ?? 0) > 0 ? supplied : undefined;
+  }
+
   private buildSdkOptions(options: CopyTreeOptions, signal: AbortSignal): SdkCopyOptions {
     return {
       signal,
@@ -681,11 +729,15 @@ class CopyTreeService {
     };
   }
 
-  private mapBudgetStats(stats: CopyResult["stats"]): CopyTreeBudgetStats {
+  private mapBudgetStats(
+    stats: CopyResult["stats"],
+    suppliedSelector: CopyTreeUnmatchedSelector | undefined
+  ): CopyTreeBudgetStats {
     return {
       estimatedOutputChars: stats.estimatedOutputChars,
       estimatedTokens: stats.estimatedTokens,
       noFilesMatched: stats.noFilesMatched,
+      unmatchedSelector: CopyTreeService.deriveUnmatchedSelector(stats, suppliedSelector),
       excluded: this.mapExclusions(stats.excluded),
       truncated: stats.truncated,
       truncatedCount: stats.truncatedCount,

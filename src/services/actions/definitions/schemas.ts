@@ -274,7 +274,7 @@ export const CopyTreeOptionsSchema = z.object({
     .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
     .optional()
     .describe(
-      "Selects which files to include, as worktree-relative glob patterns or exact paths. Combined with `includePaths` when both are given; omit both to include the whole worktree."
+      "Selects which files to include, as worktree-relative exact file paths or glob patterns. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'; prefer `scopePaths` when selecting a folder. Combined with `includePaths` when both are given; omit both to include the whole worktree."
     ),
   exclude: z.union([z.string(), z.array(z.string())]).optional(),
   always: z.array(z.string()).optional(),
@@ -283,7 +283,7 @@ export const CopyTreeOptionsSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Selects which files to include, as worktree-relative exact paths or glob patterns. Use this to assemble a curated bundle of scattered files — sources, their supporting code, and their tests — in one call. Combined with `filter` when both are given. Unlike `scopePaths` this does not restrict traversal, so patterns may match anywhere in the worktree."
+      "Selects which files to include, as worktree-relative exact file paths or glob patterns. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'; prefer `scopePaths` when selecting a folder. Use this to assemble a curated bundle of scattered files — sources, their supporting code, and their tests — in one call. Combined with `filter` when both are given. Unlike `scopePaths` this does not restrict traversal, so patterns may match anywhere in the worktree."
     ),
   // An empty list or blank entry would resolve to the worktree root — a folder
   // copy that silently became a whole-worktree copy. Absent means no scoping.
@@ -292,7 +292,7 @@ export const CopyTreeOptionsSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Restricts the copy to these subtrees, relative to the worktree root. Omit to include the whole worktree; supplying an empty list is rejected rather than treated as no scoping, since that would silently copy everything."
+      "Restricts the copy to these subtrees, as worktree-relative literal file or directory paths to walk — not glob patterns, so pass 'src/panels', not 'src/panels/**'. Prefer this over `filter` or `includePaths` when selecting a folder. Omit to include the whole worktree; supplying an empty list is rejected rather than treated as no scoping, since that would silently copy everything."
     ),
   modified: z.boolean().optional(),
   changed: z.string().optional(),

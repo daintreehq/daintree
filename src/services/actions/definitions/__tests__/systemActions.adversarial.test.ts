@@ -615,4 +615,87 @@ describe("systemActions adversarial", () => {
       ).rejects.toThrow("Terminal closed during injection");
     });
   });
+
+  // #11731. An empty bundle used to arrive as `noFilesMatched: true` and nothing
+  // else, so a caller that had passed a bare directory could not tell which of
+  // its fields to correct. All three actions project the same stats, and all
+  // three are the MCP surface a caller hits, so a hint on one of them is a hint
+  // two thirds of callers never see.
+  describe("empty-result attribution across the copyTree actions", () => {
+    const EMPTY_RUN = {
+      content: "",
+      fileCount: 0,
+      filePath: "/tmp/daintree-context/repo-main-x.xml",
+      outputBytes: 460,
+      stats: {
+        totalSize: 0,
+        duration: 1800,
+        noFilesMatched: true,
+        unmatchedSelector: "includePaths" as const,
+        // Present on the IPC result, and deliberately NOT forwarded: the
+        // per-reason breakdown is the bulk #11528 took off this surface, and
+        // `unmatchedSelector` exists so a caller never needs it.
+        excluded: { total: 42, byReason: { filterPattern: 42 } },
+      },
+    };
+
+    const CASES = [
+      { id: "copyTree.generate", mock: copyTreeClientMock.generate, args: undefined },
+      {
+        id: "copyTree.generateAndCopyFile",
+        mock: copyTreeClientMock.generateAndCopyFile,
+        args: { worktreeId: "wt-active" },
+      },
+      {
+        id: "copyTree.injectToTerminal",
+        mock: copyTreeClientMock.injectToTerminal,
+        args: { terminalId: "t-1" },
+      },
+    ];
+
+    it.each(CASES)(
+      "$id names the selector that missed and drops the breakdown",
+      async ({ id, mock, args }) => {
+        const { run, getDef } = setupActions();
+        mock.mockResolvedValueOnce({ ...EMPTY_RUN });
+
+        const result = (await run(id, args, { activeWorktreeId: "wt-active" })) as {
+          stats?: Record<string, unknown>;
+        };
+
+        expect(result.stats).toMatchObject({
+          noFilesMatched: true,
+          unmatchedSelector: "includePaths",
+        });
+        expect(result.stats).not.toHaveProperty("excluded");
+
+        // Parsed through the action's own resultSchema, not just inspected:
+        // dispatch parses results (#11539), so a field the projection returns but
+        // the schema never declared is a field the caller is never sent — and an
+        // enum out of step with the shared tuple would fail the call outright.
+        const resultSchema = getDef(id).resultSchema;
+        expect(resultSchema).toBeDefined();
+        expect(resultSchema?.parse(result)).toMatchObject({
+          stats: { unmatchedSelector: "includePaths" },
+        });
+      }
+    );
+
+    it("omits the hint entirely when nothing was to blame", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generate.mockResolvedValueOnce({
+        ...EMPTY_RUN,
+        stats: { totalSize: 0, duration: 1800, noFilesMatched: true },
+      });
+
+      const result = (await run("copyTree.generate", undefined, {
+        activeWorktreeId: "wt-active",
+      })) as { stats?: Record<string, unknown> };
+
+      // Absent rather than null: an empty scope or an empty worktree has no
+      // selector at fault, and a present-but-empty field reads as one.
+      expect(result.stats).not.toHaveProperty("unmatchedSelector");
+      expect(result.stats).toMatchObject({ noFilesMatched: true });
+    });
+  });
 });

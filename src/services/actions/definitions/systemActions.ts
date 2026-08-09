@@ -24,6 +24,7 @@ import {
 } from "@/clients";
 import { cancelContextInjection } from "@/hooks/useContextInjection";
 import type { CopyTreeResult } from "@shared/types";
+import { COPY_TREE_UNMATCHED_SELECTORS } from "@shared/types/ipc/copyTree";
 
 /**
  * The generation numbers every CopyTree action reports.
@@ -42,6 +43,16 @@ const CopyTreeStatsSchema = z
     duration: z.number(),
     estimatedTokens: z.number().optional().describe("Rough token count, accurate to about ±20%"),
     noFilesMatched: z.boolean().optional().describe("Nothing matched — a valid outcome, not error"),
+    // Still a scalar, so it stays on the right side of #11528's line: it names
+    // the field to fix rather than shipping the per-reason breakdown a caller
+    // would have to interpret. Without it `noFilesMatched` says only that the
+    // bundle is empty, and the caller guesses at the option shape (#11731).
+    unmatchedSelector: z
+      .enum(COPY_TREE_UNMATCHED_SELECTORS)
+      .optional()
+      .describe(
+        "Which supplied selector matched no files. For a folder, add '/**' to the pattern or use scopePaths instead."
+      ),
     truncated: z.boolean().optional().describe("A budget dropped or cut short some files"),
     truncatedCount: z.number().optional(),
     truncatedBy: z
@@ -80,6 +91,7 @@ function projectCopyTreeStats(stats: NonNullable<CopyTreeResult["stats"]>) {
     duration: stats.duration,
     ...(stats.estimatedTokens !== undefined && { estimatedTokens: stats.estimatedTokens }),
     ...(stats.noFilesMatched !== undefined && { noFilesMatched: stats.noFilesMatched }),
+    ...(stats.unmatchedSelector !== undefined && { unmatchedSelector: stats.unmatchedSelector }),
     ...(stats.truncated !== undefined && { truncated: stats.truncated }),
     ...(stats.truncatedCount !== undefined && { truncatedCount: stats.truncatedCount }),
     ...(stats.truncatedBy !== undefined && { truncatedBy: stats.truncatedBy }),
