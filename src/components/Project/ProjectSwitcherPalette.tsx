@@ -1326,18 +1326,17 @@ function ProjectSwitcherFooter({
 
   return (
     // Container-queried rather than fixed: the same footer serves the anchored
-    // dropdown and the wider command-tier modal. "Right-click for more" is the
-    // passive rail — it names no key and points at what a right-click already
-    // discovers — so it is the one that drops on the narrower tier, leaving the
-    // Enter action and "All agents" (the only affordance with no other entry
-    // point). Tailwind needs each variant written out, so it is a literal.
+    // dropdown and the wider command-tier modal. "Right-click for more" names
+    // no key and is the lowest-priority rail, so it is the one that drops on
+    // the narrower tier, leaving the Enter action and "All agents" (the only
+    // affordance with no other entry point). Tailwind needs each variant
+    // written out, so it is a literal.
     //
-    // There is deliberately no ⌘⌫ Remove rail, and widening the anchored tier
-    // back to 484px (#11736) does not earn it one: the rail was cut for what it
-    // says, not only for the room it took. A footer names what Enter does for
-    // the current selection, and removing a project is destructive — it belongs
-    // where it can be confirmed, which is the row's context menu. The chord
-    // still works; the footer is just not what teaches it.
+    // There is no ⌘⌫ Remove rail. It was cut while the anchored tier was 352px
+    // and the rail overflowed; #11736 widened that tier back to 484px, so the
+    // room objection is gone and restoring it is a live option — just not one a
+    // width fix should decide. Remove stays reachable from the row's context
+    // menu and from ⌘⌫ itself, and both open the same confirmation.
     <div className="@container/switcher-footer w-full flex items-center justify-between gap-3">
       <span className="shrink-0">
         <kbd className={KBD_CLASS}>{hint.keys}</kbd>

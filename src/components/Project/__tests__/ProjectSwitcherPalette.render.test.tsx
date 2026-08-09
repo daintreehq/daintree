@@ -781,12 +781,11 @@ describe("ProjectSwitcherPalette modal mode", () => {
     });
   });
 
-  it("keeps the footer to the rails the switcher means to name", () => {
-    // A ⌘⌫ Remove rail used to sit here and is deliberately gone: the footer
-    // names what Enter does for the selection, and a destructive action belongs
-    // where it can be confirmed — the row's context menu. Asserted as an
-    // absence because jsdom evaluates no container query — a presence assertion
-    // here would pass on text no user ever sees.
+  it("keeps the footer to the rails the switcher currently names", () => {
+    // A ⌘⌫ Remove rail used to sit here and is gone: it overflowed the footer
+    // while the anchored tier was 352px, and #11736's widening has not brought
+    // it back. Asserted as an absence because jsdom evaluates no container
+    // query — a presence assertion here would pass on text no user ever sees.
     render(<ProjectSwitcherPalette {...dropdownProps} results={multiProjects} />);
     const footer = screen.getByTestId("palette-footer");
     expect(footer.textContent).toContain("Switch");

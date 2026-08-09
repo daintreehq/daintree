@@ -41,17 +41,18 @@ import {
 export { KBD_CLASS };
 
 /**
- * How much box a palette earns. A launcher hanging off a toolbar button and a
- * global command palette are not the same kind of surface: the anchored tier
- * stays visibly narrower because it hangs off a control and reads as that
- * control's menu, while the command tier is the centred surface the window
- * defers to.
+ * How much box a palette earns. A picker scoped to one question — launch what,
+ * switch where — and a global command palette are not the same kind of surface:
+ * the anchored tier stays visibly narrower, while the command tier is the one
+ * the whole window defers to. Scope, not hosting: most anchored palettes are
+ * centred dialogs like their command siblings, and only the dock launcher and
+ * the project switcher hang off a trigger.
  *
  * Narrower is a step down, not a squeeze. An anchored palette carries the same
  * rows as its command twin — titles, paths, a status line — so the tier is
  * sized to that content and not to its chrome. #11736 was the cost of getting
- * that wrong: sized as a menu, the switcher's dropdown could not hold what it
- * was still being asked to show.
+ * that wrong: sized as if it were a menu, the switcher's dropdown could not
+ * hold what it was still being asked to show.
  *
  * Two tiers, not a free width per palette — palettes open from the same
  * keyboard reflex and often in sequence, so unconstrained per-surface sizing
