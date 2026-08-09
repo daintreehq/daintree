@@ -1663,7 +1663,10 @@ const NON_WRAPPING_WHITE_SPACE = new Set(["nowrap", "pre"]);
 function refusesToWrap(decls: Record<string, string>): boolean {
   const whiteSpace = decls["white-space"];
   if (whiteSpace?.split(/\s+/).some((t) => NON_WRAPPING_WHITE_SPACE.has(t))) return true;
-  return decls["text-wrap"] === "nowrap" || decls["text-wrap-mode"] === "nowrap";
+  // `text-wrap` is itself a shorthand (`<mode> <style>`, e.g. `nowrap pretty`).
+  return [decls["text-wrap"], decls["text-wrap-mode"]].some(
+    (v) => v?.split(/\s+/).includes("nowrap") ?? false
+  );
 }
 
 // Collapsing values would render `@"a  b.ts"` and `@"a b.ts"` identically — the
@@ -1683,22 +1686,29 @@ function clipsText(decls: Record<string, string>): boolean {
 
 // Content- or container-derived sizes let a chip use the width it is given; a
 // fixed length or sub-full percentage caps it regardless of available space.
-const UNCAPPED_INLINE_SIZES = new Set([
-  "none",
+const UNCAPPED_SIZES = new Set([
   "auto",
   "100%",
   "fit-content",
-  "min-content",
-  "max-content",
   "stretch",
   "-webkit-fill-available",
 ]);
 
+// A max-* cap only constrains when it can resolve below the content's width, so
+// `none` and `max-content` leave the chip free where a definite `width` would not.
+const UNCAPPED_MAX_SIZES = new Set([...UNCAPPED_SIZES, "none", "max-content"]);
+
 function capsInlineSize(decls: Record<string, string>): boolean {
-  return ["max-width", "width", "max-inline-size", "inline-size"].some((prop) => {
+  const capped = (prop: string, uncapped: Set<string>) => {
     const value = decls[prop];
-    return value !== undefined && !UNCAPPED_INLINE_SIZES.has(value);
-  });
+    return value !== undefined && !uncapped.has(value);
+  };
+  return (
+    capped("width", UNCAPPED_SIZES) ||
+    capped("inline-size", UNCAPPED_SIZES) ||
+    capped("max-width", UNCAPPED_MAX_SIZES) ||
+    capped("max-inline-size", UNCAPPED_MAX_SIZES)
+  );
 }
 
 // Only these zero the min-content contribution, which is what lets a chip
