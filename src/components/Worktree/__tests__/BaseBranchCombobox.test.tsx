@@ -96,12 +96,20 @@ describe("BaseBranchCombobox in-use rows", () => {
 });
 
 describe("BaseBranchCombobox panel wiring", () => {
-  it("forwards base-mode copy and ids into the shared panel", () => {
-    renderCombobox([optionRow("main")]);
+  it("wires the search field to its own listbox and cursor row", () => {
+    // Relationships, not literal ids: the ids themselves are contracts of the
+    // dialog and e2e suites, which address them directly.
+    renderCombobox([optionRow("main"), optionRow("develop")]);
 
-    expect(screen.getByLabelText("Search base branches")).toBeTruthy();
-    expect(document.getElementById("branch-list")).not.toBeNull();
-    expect(screen.getAllByRole("option")[0]!.id).toBe("branch-option-0");
+    const search = screen.getByLabelText("Search base branches");
+    const listbox = screen.getByRole("listbox");
+    const cursor = screen
+      .getAllByRole("option")
+      .find((el) => el.getAttribute("aria-selected") === "true");
+
+    expect(search.getAttribute("aria-controls")).toBe(listbox.id);
+    expect(cursor!.id).not.toBe("");
+    expect(search.getAttribute("aria-activedescendant")).toBe(cursor!.id);
   });
 
   it("marks the checked-out branch, which only base mode can offer", () => {

@@ -42,7 +42,7 @@ function getSelectableRows(rows: BranchPickerRow[]) {
 }
 
 function namesFor(query: string, branches: readonly BranchOption[]): string[] {
-  const rows = buildBranchRows(branches, {
+  const { rows } = buildBranchRows(branches, {
     query,
     recentBranchNames: [],
     worktreeByBranch: new Map(),
@@ -174,18 +174,19 @@ describe("branchPickerUtils", () => {
 
     describe("empty query (MRU sorting)", () => {
       it("returns all branches without section header when no recent branches", () => {
-        const rows = buildBranchRows(branches, {
+        const { rows } = buildBranchRows(branches, {
           query: "",
           recentBranchNames: [],
           worktreeByBranch: new Map(),
         });
         const selectable = getSelectableRows(rows);
         expect(selectable).toHaveLength(5);
+        expect(rows.length).toBeGreaterThan(0);
         expect(rows.every((r) => r.kind === "option")).toBe(true);
       });
 
       it("shows recent branches first with section header", () => {
-        const rows = buildBranchRows(branches, {
+        const { rows } = buildBranchRows(branches, {
           query: "",
           recentBranchNames: ["feature/auth", "main"],
           worktreeByBranch: new Map(),
@@ -201,7 +202,7 @@ describe("branchPickerUtils", () => {
       });
 
       it("respects MRU order for recent branches", () => {
-        const rows = buildBranchRows(branches, {
+        const { rows } = buildBranchRows(branches, {
           query: "",
           recentBranchNames: ["bugfix/login-crash", "feature/auth"],
           worktreeByBranch: new Map(),
@@ -213,7 +214,7 @@ describe("branchPickerUtils", () => {
       });
 
       it("ignores recent branch names that don't exist in the branch list", () => {
-        const rows = buildBranchRows(branches, {
+        const { rows } = buildBranchRows(branches, {
           query: "",
           recentBranchNames: ["nonexistent", "feature/auth"],
           worktreeByBranch: new Map(),
@@ -227,7 +228,7 @@ describe("branchPickerUtils", () => {
 
       it("caps at emptyQueryLimit", () => {
         const manyBranches = Array.from({ length: 600 }, (_, i) => makeBranchOption(`branch-${i}`));
-        const rows = buildBranchRows(manyBranches, {
+        const { rows } = buildBranchRows(manyBranches, {
           query: "",
           recentBranchNames: [],
           worktreeByBranch: new Map(),
@@ -241,7 +242,7 @@ describe("branchPickerUtils", () => {
         // Every branch is "recent", so an implementation that budgets only the
         // non-recent tail would render all 600 while the footnote claims fewer.
         const manyBranches = Array.from({ length: 600 }, (_, i) => makeBranchOption(`branch-${i}`));
-        const rows = buildBranchRows(manyBranches, {
+        const { rows } = buildBranchRows(manyBranches, {
           query: "",
           recentBranchNames: manyBranches.map((b) => b.name),
           worktreeByBranch: new Map(),
@@ -298,14 +299,14 @@ describe("branchPickerUtils", () => {
             query: "auth",
             recentBranchNames: [],
             worktreeByBranch: new Map(),
-          })
+          }).rows
         );
 
         expect(row!.matchRanges.length).toBeGreaterThan(0);
         const highlighted = row!.matchRanges
           .map(([start, end]) => row!.name.substring(start, end + 1))
           .join("");
-        expect(highlighted).toContain("au");
+        expect(highlighted).toContain("auth");
       });
 
       it("returns empty for no matches", () => {
@@ -313,7 +314,7 @@ describe("branchPickerUtils", () => {
       });
 
       it("no section headers in search results", () => {
-        const rows = buildBranchRows(branches, {
+        const { rows } = buildBranchRows(branches, {
           query: "feature",
           recentBranchNames: ["feature/auth"],
           worktreeByBranch: new Map(),
@@ -322,13 +323,28 @@ describe("branchPickerUtils", () => {
       });
 
       it("ranks a name-prefix match above an interior one", () => {
+        // The prefix match is deliberately LAST in source order, so a matcher with
+        // no ranking at all would fail this.
         const candidates = [
           makeBranchOption("release/x"),
-          makeBranchOption("fix/one"),
           makeBranchOption("hotfix/two"),
+          makeBranchOption("fix/one"),
         ];
         // Single character takes the literal path, where prefix beats interior.
         expect(namesFor("f", candidates)[0]).toBe("fix/one");
+      });
+
+      it("keeps the best-ranked literal matches when the result cap bites", () => {
+        // Single character, so this is the literal matcher, where prefix beats
+        // interior. The one prefix match sits past the 200-row cap in source
+        // order, so slicing before sorting would discard it entirely.
+        const filler = Array.from({ length: 400 }, (_, i) => makeBranchOption(`zz-f-${i}`));
+        const candidates = [...filler, makeBranchOption("f-wins")];
+
+        const names = namesFor("f", candidates);
+
+        expect(names).toHaveLength(200);
+        expect(names[0]).toBe("f-wins");
       });
     });
 
@@ -386,6 +402,18 @@ describe("branchPickerUtils", () => {
         expect(namesFor("foo|bar", specialBranches)).toHaveLength(0);
       });
 
+      it.each([
+        ["=", "=equals/branch"],
+        ["'", "'quote/branch"],
+        ['"', '"dquote/branch'],
+        ["^", "^caret/branch"],
+      ])("treats a leading %s as text rather than an operator", (_operator, branchName) => {
+        // Each of these is an extended-search operator; dropping any one from the
+        // routing regex would let fuse reinterpret the query instead of matching it.
+        const candidates = [...specialBranches, makeBranchOption(branchName)];
+        expect(namesFor(branchName, candidates)).toEqual([branchName]);
+      });
+
       it("matches branches with dots and underscores", () => {
         expect(namesFor("foo.bar", specialBranches)[0]).toBe("feature/foo.bar");
       });
@@ -396,7 +424,7 @@ describe("branchPickerUtils", () => {
         const wt = makeWorktreeState("feature/auth");
         const worktreeByBranch = new Map([["feature/auth", wt]]);
 
-        const rows = buildBranchRows(branches, {
+        const { rows } = buildBranchRows(branches, {
           query: "",
           recentBranchNames: [],
           worktreeByBranch,
@@ -407,18 +435,20 @@ describe("branchPickerUtils", () => {
       });
 
       it("leaves inUseWorktree null for non-in-use branches", () => {
-        const rows = buildBranchRows(branches, {
+        const { rows } = buildBranchRows(branches, {
           query: "",
           recentBranchNames: [],
           worktreeByBranch: new Map(),
         });
 
-        expect(getSelectableRows(rows).every((r) => r.inUseWorktree === null)).toBe(true);
+        const selectable = getSelectableRows(rows);
+        expect(selectable.length).toBeGreaterThan(0);
+        expect(selectable.every((r) => r.inUseWorktree === null)).toBe(true);
       });
 
       it("attaches worktree state in search results", () => {
         const wt = makeWorktreeState("feature/auth");
-        const rows = buildBranchRows(branches, {
+        const { rows } = buildBranchRows(branches, {
           query: "auth",
           recentBranchNames: [],
           worktreeByBranch: new Map([["feature/auth", wt]]),
@@ -430,7 +460,7 @@ describe("branchPickerUtils", () => {
 
     describe("edge cases", () => {
       it("handles empty branch list", () => {
-        const rows = buildBranchRows([], {
+        const { rows } = buildBranchRows([], {
           query: "",
           recentBranchNames: [],
           worktreeByBranch: new Map(),
@@ -439,7 +469,7 @@ describe("branchPickerUtils", () => {
       });
 
       it("handles empty branch list with query", () => {
-        const rows = buildBranchRows([], {
+        const { rows } = buildBranchRows([], {
           query: "test",
           recentBranchNames: [],
           worktreeByBranch: new Map(),
@@ -448,12 +478,47 @@ describe("branchPickerUtils", () => {
       });
 
       it("handles whitespace-only query as empty", () => {
-        const rows = buildBranchRows(branches, {
+        const { rows } = buildBranchRows(branches, {
           query: "   ",
           recentBranchNames: [],
           worktreeByBranch: new Map(),
         });
         expect(getSelectableRows(rows)).toHaveLength(5);
+      });
+
+      it("reports how many candidates qualified before the display cap", () => {
+        // What tells the panel it truncated. Without it a capped search would drop
+        // results with nothing on screen saying so.
+        const many = Array.from({ length: 600 }, (_, i) => makeBranchOption(`branch-${i}`));
+
+        const empty = buildBranchRows(many, {
+          query: "",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+          emptyQueryLimit: 500,
+        });
+        expect(getSelectableRows(empty.rows)).toHaveLength(500);
+        expect(empty.matchedTotal).toBe(600);
+
+        // 600 branches all contain "branch", so the 200-result cap bites.
+        const searched = buildBranchRows(many, {
+          query: "branch",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+        });
+        expect(getSelectableRows(searched.rows)).toHaveLength(200);
+        expect(searched.matchedTotal).toBe(600);
+      });
+
+      it("reports the matched count, not the branch count, for a narrow search", () => {
+        const result = buildBranchRows(branches, {
+          query: "feature",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+        });
+
+        expect(result.matchedTotal).toBe(getSelectableRows(result.rows).length);
+        expect(result.matchedTotal).toBeLessThan(branches.length);
       });
 
       it("carries the committer date onto rows", () => {
@@ -466,7 +531,7 @@ describe("branchPickerUtils", () => {
             query: "",
             recentBranchNames: [],
             worktreeByBranch: new Map(),
-          })
+          }).rows
         );
 
         expect(rows.find((r) => r.name === "main")!.committerDate).toBe(

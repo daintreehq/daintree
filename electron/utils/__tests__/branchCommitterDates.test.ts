@@ -13,7 +13,9 @@ import {
   readBranchCommitterDates,
 } from "../branchCommitterDates.js";
 
-const TAB = "\t";
+/** Must match the separator the helper builds its --format string with. */
+const FIELD_SEPARATOR = "\t";
+const TAB = FIELD_SEPARATOR;
 
 describe("parseBranchCommitterDates", () => {
   it("keys dates by their full refname", () => {
@@ -83,6 +85,18 @@ describe("readBranchCommitterDates", () => {
     expect(args).toContain("refs/remotes");
     // One spawn for the whole list — per-branch ahead/behind would need one each.
     expect(raw).toHaveBeenCalledTimes(1);
+
+    // The format string is a contract with git, not an internal constant: the
+    // mock returns well-formed output whatever we ask for, so without this every
+    // date test stays green while production gets nothing back. Asserting the
+    // fields and the separator the parser splits on keeps the two in step.
+    const format = args.find((arg) => arg.startsWith("--format="));
+    expect(format).toBeDefined();
+    expect(format).toContain("%(refname)");
+    expect(format).toContain("%(committerdate:iso-strict)");
+    expect(format).toContain(FIELD_SEPARATOR);
+    // Full refname, never the short form — see the local-vs-remote case below.
+    expect(format).not.toContain("%(refname:short)");
   });
 
   it("degrades to no dates when git fails, so the branch list still loads", async () => {
@@ -93,6 +107,19 @@ describe("readBranchCommitterDates", () => {
 
   it("tolerates a git client that resolves with nothing", async () => {
     const raw = vi.fn().mockResolvedValue(undefined);
+    await expect(readBranchCommitterDates({ raw })).resolves.toEqual(new Map());
+  });
+
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["a plain string", "boom"],
+    ["a bare object", {}],
+  ])("resolves even when the rejection carries %s", async (_label, reason) => {
+    // Reading `.message` off a non-Error inside the catch would throw, and this
+    // promise rejecting is precisely what the callers' Promise.all must never see.
+    const raw = vi.fn().mockRejectedValue(reason);
+
     await expect(readBranchCommitterDates({ raw })).resolves.toEqual(new Map());
   });
 });

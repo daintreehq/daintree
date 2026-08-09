@@ -129,7 +129,9 @@ describe("BranchPickerPanel row metadata", () => {
 
   it("shows the remote a branch came from", () => {
     renderPanel([optionRow("origin/main", { isRemote: true, remoteName: "origin" })]);
-    expect(options()[0]!.textContent).toContain("origin");
+    // Scoped to the metadata span: `origin/main`'s NAME contains "origin" too, so
+    // a row-wide assertion would pass with the badge deleted.
+    expect(options()[0]!.querySelector("[data-branch-meta]")!.textContent).toContain("origin");
   });
 
   it("shows how stale a branch is when git supplied a date", () => {
@@ -200,18 +202,25 @@ describe("BranchPickerPanel empty states", () => {
 
 describe("BranchPickerPanel truncation footnote", () => {
   it("reports the rows on screen against the real total", () => {
-    renderPanel([optionRow("a"), optionRow("b")], { totalCount: 732 });
+    renderPanel([optionRow("a"), optionRow("b")], { matchedTotal: 732 });
     expect(screen.getByText("Showing 2 of 732 branches — search to narrow")).toBeTruthy();
   });
 
   it("stays hidden when nothing was withheld", () => {
-    renderPanel([optionRow("a"), optionRow("b")], { totalCount: 2 });
+    renderPanel([optionRow("a"), optionRow("b")], { matchedTotal: 2 });
     expect(screen.queryByText(/Showing .* branches/)).toBeNull();
   });
 
-  it("stays hidden while searching, since the list is then query-limited not capped", () => {
-    renderPanel([optionRow("a")], { query: "a", totalCount: 732 });
-    expect(screen.queryByText(/Showing .* branches/)).toBeNull();
+  it("reports a capped search too, not just a capped full list", () => {
+    // One-character queries can now match more than the result cap, so gating the
+    // footnote on "no query" would hide that truncation entirely.
+    renderPanel([optionRow("a"), optionRow("b")], { query: "a", matchedTotal: 900 });
+    expect(screen.getByText("Showing 2 of 900 matches — keep typing to narrow")).toBeTruthy();
+  });
+
+  it("stays hidden when a search returned everything it matched", () => {
+    renderPanel([optionRow("a")], { query: "a", matchedTotal: 1 });
+    expect(screen.queryByText(/Showing \d+ of \d+/)).toBeNull();
   });
 });
 

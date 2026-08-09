@@ -137,10 +137,22 @@ function toBranchSearchResult(
   };
 }
 
+export interface BranchRowsResult {
+  rows: BranchPickerRow[];
+  /**
+   * Candidates that qualified BEFORE the display cap — every branch for an empty
+   * query, every match for a search. Compared against the rendered option count,
+   * this is what tells the panel it truncated. Without it a search capped at
+   * `RESULT_LIMIT` would hide results silently, which one-character queries made
+   * reachable for the first time.
+   */
+  matchedTotal: number;
+}
+
 export function buildBranchRows(
   branches: readonly BranchOption[],
   options: FilterBranchesOptions
-): BranchPickerRow[] {
+): BranchRowsResult {
   const { query, recentBranchNames, worktreeByBranch, emptyQueryLimit = 500 } = options;
   const trimmedQuery = query.trim();
 
@@ -149,13 +161,16 @@ export function buildBranchRows(
   recentBranchNames.forEach((name, i) => recentRankMap.set(name, i + 1));
 
   if (!trimmedQuery) {
-    return buildEmptyQueryRows(
-      branches,
-      recentSet,
-      recentRankMap,
-      worktreeByBranch,
-      emptyQueryLimit
-    );
+    return {
+      rows: buildEmptyQueryRows(
+        branches,
+        recentSet,
+        recentRankMap,
+        worktreeByBranch,
+        emptyQueryLimit
+      ),
+      matchedTotal: branches.length,
+    };
   }
 
   return buildFuzzyQueryRows(branches, trimmedQuery, recentSet, recentRankMap, worktreeByBranch);
@@ -213,6 +228,12 @@ function buildEmptyQueryRows(
 
 function nameMatchRanges(name: string, tokens: readonly string[]): BranchMatchRange[] {
   const lowerName = name.toLowerCase();
+  // Indices are found in the folded string but applied to the original, so they
+  // only line up while folding is length-preserving. It isn't universally —
+  // `"İ".toLowerCase()` is two code units — and git allows such names, so rather
+  // than highlight the wrong characters we highlight none.
+  if (lowerName.length !== name.length) return [];
+
   const ranges: BranchMatchRange[] = [];
   for (const token of tokens) {
     const at = lowerName.indexOf(token);
@@ -231,7 +252,7 @@ function nameMatchRanges(name: string, tokens: readonly string[]): BranchMatchRa
 function matchBranchesLiterally(
   branches: readonly BranchOption[],
   tokens: readonly string[]
-): { option: BranchOption; matchRanges: BranchMatchRange[] }[] {
+): { matches: { option: BranchOption; matchRanges: BranchMatchRange[] }[]; matchedTotal: number } {
   const ranked: { option: BranchOption; rank: number; matchRanges: BranchMatchRange[] }[] = [];
 
   for (const option of branches) {
@@ -244,9 +265,16 @@ function matchBranchesLiterally(
     ranked.push({ option, rank, matchRanges: nameMatchRanges(option.name, tokens) });
   }
 
-  // Index-stable: `sort` is stable in ES2019+, so equal ranks keep source order.
+  // Sort before slicing so the cap keeps the best-ranked matches, not the first
+  // ones encountered. `sort` is stable in ES2019+, so equal ranks keep source order.
   ranked.sort((a, b) => a.rank - b.rank);
-  return ranked.slice(0, RESULT_LIMIT).map(({ option, matchRanges }) => ({ option, matchRanges }));
+  return {
+    matches: ranked.slice(0, RESULT_LIMIT).map(({ option, matchRanges }) => ({
+      option,
+      matchRanges,
+    })),
+    matchedTotal: ranked.length,
+  };
 }
 
 function buildFuzzyQueryRows(
@@ -255,7 +283,7 @@ function buildFuzzyQueryRows(
   recentSet: Set<string>,
   recentRankMap: Map<string, number>,
   worktreeByBranch: ReadonlyMap<string, BranchWorktreeRef>
-): BranchPickerRow[] {
+): BranchRowsResult {
   const tokens = tokenize(query);
   const enrich = (
     option: BranchOption,
@@ -273,19 +301,28 @@ function buildFuzzyQueryRows(
   });
 
   if (needsLiteralMatch(tokens)) {
-    return matchBranchesLiterally(
+    const { matches, matchedTotal } = matchBranchesLiterally(
       branches,
       tokens.map((t) => t.toLowerCase())
-    ).map(({ option, matchRanges }) => enrich(option, 0, matchRanges));
+    );
+    return {
+      rows: matches.map(({ option, matchRanges }) => enrich(option, 0, matchRanges)),
+      matchedTotal,
+    };
   }
 
-  const results = getFuse(branches).search(query, { limit: RESULT_LIMIT });
+  // Searched unbounded, then capped here, so `matchedTotal` can report how many
+  // actually matched. Fuse's own `limit` would discard that count.
+  const results = getFuse(branches).search(query);
 
-  return results.map((result) => {
-    // Only `name` ranges are rendered: a hit that landed in `searchText`'s
-    // trailing `(current)`/`(remote)` has no counterpart in the row, which now
-    // draws those as separate badges instead of one baked string.
-    const match = result.matches?.find((m) => m.key === "name");
-    return enrich(result.item, result.score ?? 0, match?.indices ?? []);
-  });
+  return {
+    rows: results.slice(0, RESULT_LIMIT).map((result) => {
+      // Only `name` ranges are rendered: a hit that landed in `searchText`'s
+      // trailing `(current)`/`(remote)` has no counterpart in the row, which now
+      // draws those as separate badges instead of one baked string.
+      const match = result.matches?.find((m) => m.key === "name");
+      return enrich(result.item, result.score ?? 0, match?.indices ?? []);
+    }),
+    matchedTotal: results.length,
+  };
 }

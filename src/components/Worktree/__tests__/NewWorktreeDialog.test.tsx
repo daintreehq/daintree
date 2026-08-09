@@ -555,7 +555,27 @@ describe("NewWorktreeDialog — existing branch mode", () => {
       expect(existingSearch().getAttribute("aria-activedescendant")).toBe(cursor[0]!.id);
     });
 
-    it("drops the chosen branch and its query when the mode toggles away and back", async () => {
+    it("drops a typed query when the mode toggles away and back", async () => {
+      // Deliberately does NOT select a row first: selecting closes the picker,
+      // which clears the query on its own, so the assertion would hold even if
+      // the mode change reset nothing.
+      await enterExistingMode();
+
+      await type("bugfix");
+      expect(optionNames()).toEqual(["bugfix/old-fix"]);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("radio", { name: /new branch/i }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("radio", { name: /existing branch/i }));
+      });
+
+      expect((existingSearch() as HTMLInputElement).value).toBe("");
+      expect(optionNames()).toContain("develop");
+    });
+
+    it("drops the chosen branch when the mode toggles away and back", async () => {
       await enterExistingMode();
 
       await type("bugfix");
@@ -574,8 +594,6 @@ describe("NewWorktreeDialog — existing branch mode", () => {
       expect(screen.getByTestId("existing-branch-picker").textContent).toContain(
         "Select a local branch..."
       );
-      expect((existingSearch() as HTMLInputElement).value).toBe("");
-      expect(optionNames()).toContain("develop");
     });
   });
 

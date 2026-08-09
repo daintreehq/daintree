@@ -58,10 +58,19 @@ describe("ExistingBranchPicker panel wiring", () => {
     // This field used to have no key handling at all — mouse only.
     renderPicker([optionRow("develop"), optionRow("feature/existing-work")]);
 
-    // Addressed by label, not role: the trigger is a combobox too.
+    // Addressed by label, not role: the trigger is a combobox too. Asserted as
+    // relationships rather than literal ids — this field used to expose neither.
     const input = screen.getByLabelText("Search existing branches");
-    expect(input.getAttribute("aria-activedescendant")).toBe("existing-branch-option-0");
-    expect(document.getElementById("existing-branch-list")).not.toBeNull();
+    const listbox = screen.getByRole("listbox");
+    const cursor = screen
+      .getAllByRole("option")
+      .find((el) => el.getAttribute("aria-selected") === "true");
+
+    expect(input.getAttribute("aria-controls")).toBe(listbox.id);
+    expect(cursor!.id).not.toBe("");
+    expect(input.getAttribute("aria-activedescendant")).toBe(cursor!.id);
+    // Distinct from the base field's, so two mounted panels can't collide.
+    expect(listbox.id).not.toBe("branch-list");
   });
 
   it("forwards keystrokes to the controller", () => {

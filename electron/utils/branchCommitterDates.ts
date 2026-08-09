@@ -1,5 +1,6 @@
 import type { SimpleGit } from "simple-git";
 import { logDebug } from "./logger.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 /** Tab, so it can't collide with anything git allows inside a refname. */
 const FIELD_SEPARATOR = "\t";
@@ -47,7 +48,12 @@ export async function readBranchCommitterDates(
     ]);
     return parseBranchCommitterDates(raw);
   } catch (error) {
-    logDebug("Failed to read branch committer dates", { error: (error as Error).message });
+    // Formatted defensively: a rejection carrying null/undefined would make
+    // `(error as Error).message` throw here, and this promise rejecting is
+    // exactly what the callers' `Promise.all` must never see.
+    logDebug("Failed to read branch committer dates", {
+      error: formatErrorMessage(error, "unknown error"),
+    });
     return new Map();
   }
 }

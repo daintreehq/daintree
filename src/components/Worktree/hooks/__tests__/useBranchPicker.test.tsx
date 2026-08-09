@@ -22,7 +22,7 @@ const NO_WORKTREES: ReadonlyMap<string, BranchWorktreeRef> = new Map();
  */
 function renderPicker(
   args: {
-    branches?: BranchInfo[];
+    branches?: readonly BranchInfo[];
     selectedBranch?: string | null;
     recentBranchNames?: string[];
     onSelect?: (option: { name: string }) => void;
@@ -31,25 +31,41 @@ function renderPicker(
   const handle: { current: UseBranchPickerResult } = {
     current: null as unknown as UseBranchPickerResult,
   };
+  /**
+   * Every render, in order. Asserting only after `act()` cannot tell read-time
+   * clamping apart from the effect-based reset this replaced: an effect produces
+   * a stale render and then a corrected one, and `act()` flushes both before the
+   * assertion runs. The history exposes that intermediate render.
+   */
+  const renders: { query: string; activeIndex: number; count: number }[] = [];
 
-  function Harness() {
-    handle.current = useBranchPicker({
-      branches: args.branches ?? BRANCHES,
+  function Harness({ branches }: { branches: readonly BranchInfo[] }) {
+    const picker = useBranchPicker({
+      branches,
       selectedBranch: args.selectedBranch ?? null,
       recentBranchNames: args.recentBranchNames ?? [],
       worktreeByBranch: NO_WORKTREES,
       onSelect: args.onSelect ?? (() => {}),
     });
+    handle.current = picker;
+    renders.push({
+      query: picker.query,
+      activeIndex: picker.activeIndex,
+      count: picker.selectableRows.length,
+    });
     return null;
   }
 
-  const result = render(<Harness />);
-  return { handle, ...result };
+  const result = render(<Harness branches={args.branches ?? BRANCHES} />);
+  const setBranches = (branches: readonly BranchInfo[]) =>
+    result.rerender(<Harness branches={branches} />);
+  return { handle, renders, setBranches, ...result };
 }
 
-function keyEvent(key: string) {
+function keyEvent(key: string, nativeEvent: { isComposing?: boolean; keyCode?: number } = {}) {
   return {
     key,
+    nativeEvent: { isComposing: false, keyCode: 0, ...nativeEvent },
     preventDefault: vi.fn(),
     stopPropagation: vi.fn(),
   } as unknown as React.KeyboardEvent & { preventDefault: () => void; stopPropagation: () => void };
@@ -71,14 +87,93 @@ describe("useBranchPicker active index", () => {
     });
     expect(handle.current.activeIndex).toBe(3);
 
-    // "feature/a" leaves a single match, so index 3 no longer exists. Correcting
-    // this in an effect would leave one render where the highlight, the active
-    // descendant and Enter's target disagree.
     act(() => {
       handle.current.setQuery("feature/auth");
     });
 
     expect(handle.current.selectableRows).toHaveLength(1);
+    expect(handle.current.activeIndex).toBe(0);
+  });
+
+  it("never renders an out-of-range cursor, not even for one frame", () => {
+    // The invariant this whole design exists for. The previous implementation
+    // corrected the index in a `useEffect`, so the render that first carried the
+    // narrowed rows still exposed the old index — long enough for the highlight,
+    // `aria-activedescendant` and Enter's target to disagree.
+    const { handle, renders } = renderPicker();
+
+    act(() => {
+      handle.current.setActiveIndex(3);
+    });
+    act(() => {
+      handle.current.setQuery("feature/auth");
+    });
+
+    const narrowed = renders.filter((r) => r.count === 1);
+    expect(narrowed.length).toBeGreaterThan(0);
+    for (const render of narrowed) {
+      expect(render.activeIndex).toBeLessThan(render.count);
+      expect(render.activeIndex).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("clamps when the branch list itself shrinks under a parked cursor", () => {
+    // No query change here, so nothing rewinds the raw cursor — only the
+    // read-time clamp can keep the index addressable.
+    const { handle, renders, setBranches } = renderPicker();
+
+    act(() => {
+      handle.current.setActiveIndex(3);
+    });
+    expect(handle.current.activeIndex).toBe(3);
+
+    act(() => {
+      setBranches(BRANCHES.slice(0, 2));
+    });
+
+    expect(handle.current.selectableRows).toHaveLength(2);
+    expect(handle.current.activeIndex).toBe(0);
+    for (const render of renders) {
+      expect(render.activeIndex).toBeLessThan(Math.max(render.count, 1));
+    }
+  });
+
+  it("does not resurrect an out-of-range cursor when the list widens again", () => {
+    // Read-time clamping alone would hide index 3 while one row matched and then
+    // hand it back when the query cleared, jumping the cursor to an unrelated
+    // branch the user never navigated to.
+    const { handle } = renderPicker();
+
+    act(() => {
+      handle.current.setActiveIndex(3);
+    });
+    act(() => {
+      handle.current.setQuery("feature/auth");
+    });
+    expect(handle.current.activeIndex).toBe(0);
+
+    act(() => {
+      handle.current.setQuery("");
+    });
+
+    expect(handle.current.selectableRows).toHaveLength(BRANCHES.length);
+    expect(handle.current.activeIndex).toBe(0);
+  });
+
+  it("rewinds the cursor on every edit, not only when the list shrinks", () => {
+    const { handle } = renderPicker();
+
+    act(() => {
+      handle.current.setActiveIndex(1);
+    });
+    // "feature" leaves two rows, so index 1 is still in range and read-time
+    // clamping would happily keep it. Only an actual rewind returns to the top,
+    // which is what distinguishes this from the clamp above.
+    act(() => {
+      handle.current.setQuery("feature");
+    });
+
+    expect(handle.current.selectableRows).toHaveLength(2);
     expect(handle.current.activeIndex).toBe(0);
   });
 
@@ -163,6 +258,31 @@ describe("useBranchPicker keyboard", () => {
     // the form the picker is nested in.
     expect(event.preventDefault).toHaveBeenCalled();
     expect(event.stopPropagation).toHaveBeenCalled();
+  });
+
+  it("yields Enter and arrows to an in-flight IME composition", () => {
+    // Mid-composition these keys belong to the IME — Enter commits the candidate.
+    // Selecting a branch and closing the popover instead would be data loss for
+    // anyone typing CJK.
+    const onSelect = vi.fn();
+    const { handle } = renderPicker({ onSelect });
+
+    const composingEnter = keyEvent("Enter", { isComposing: true });
+    act(() => {
+      handle.current.handleKeyDown(composingEnter);
+    });
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(composingEnter.preventDefault).not.toHaveBeenCalled();
+
+    // Chromium can report 229 before `isComposing` flips true.
+    const legacyComposing = keyEvent("ArrowDown", { keyCode: 229 });
+    act(() => {
+      handle.current.handleKeyDown(legacyComposing);
+    });
+
+    expect(handle.current.activeIndex).toBe(0);
+    expect(legacyComposing.preventDefault).not.toHaveBeenCalled();
   });
 
   it("leaves keys it does not own alone", () => {
@@ -260,7 +380,9 @@ describe("useBranchPicker session state", () => {
     expect(handle.current.open).toBe(false);
   });
 
-  it("reset() clears the query without closing", () => {
+  it("closing is the whole reset, so a caller needs no second call", () => {
+    // The dialog resets a picker on mode switch and on reopen by closing it. If
+    // closing left the query behind, those call sites would silently keep it.
     const { handle } = renderPicker();
 
     act(() => {
@@ -271,12 +393,12 @@ describe("useBranchPicker session state", () => {
       handle.current.setActiveIndex(1);
     });
     act(() => {
-      handle.current.reset();
+      handle.current.setOpen(false);
     });
 
+    expect(handle.current.open).toBe(false);
     expect(handle.current.query).toBe("");
     expect(handle.current.activeIndex).toBe(0);
-    expect(handle.current.open).toBe(true);
   });
 });
 
@@ -291,14 +413,18 @@ describe("useBranchPicker selection", () => {
     expect(handle.current.selectedOption).toBeUndefined();
   });
 
-  it("counts every candidate, not just the visible rows", () => {
+  it("reports matches — not all branches — as the total while searching", () => {
+    // The footnote compares this to the rows on screen, so during a search it has
+    // to mean "matched", or a capped search would claim to have hidden branches
+    // that never matched at all.
     const { handle } = renderPicker();
+    expect(handle.current.matchedTotal).toBe(BRANCHES.length);
 
     act(() => {
       handle.current.setQuery("feature");
     });
 
-    expect(handle.current.selectableRows.length).toBeLessThan(BRANCHES.length);
-    expect(handle.current.totalCount).toBe(BRANCHES.length);
+    expect(handle.current.matchedTotal).toBe(2);
+    expect(handle.current.selectableRows).toHaveLength(2);
   });
 });

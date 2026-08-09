@@ -54,13 +54,16 @@ export function BranchPickerPanel({
     listRef,
     rows,
     selectableRows,
-    totalCount,
+    matchedTotal,
     handleKeyDown,
     handleSelect,
   } = controller;
 
   const trimmedQuery = query.trim();
-  const isTruncated = !trimmedQuery && selectableRows.length < totalCount;
+  // Covers a capped search as well as a capped full list. Search now works from
+  // the first character, so a one-character query can genuinely out-run the cap —
+  // gating this on "no query" would hide that.
+  const isTruncated = selectableRows.length < matchedTotal;
 
   let optionIndex = 0;
 
@@ -141,7 +144,11 @@ export function BranchPickerPanel({
             const index = optionIndex++;
             return (
               <BranchPickerRowItem
-                key={row.name}
+                // Namespaced by origin: a local branch named `origin/foo` and the
+                // remote-tracking `origin/foo` share a display name, and git
+                // permits both. Selection still matches on name alone — that
+                // ambiguity predates this component and is tracked separately.
+                key={`${row.isRemote ? "remote" : "local"}:${row.name}`}
                 row={row}
                 index={index}
                 optionId={`${optionIdPrefix}${index}`}
@@ -156,11 +163,11 @@ export function BranchPickerPanel({
         )}
       </ScrollShadow>
       {isTruncated && (
-        // Counted off the rows actually rendered rather than restating the cap,
-        // so the footnote can't claim a number the list doesn't show. Search now
-        // works from the first character, so "search to narrow" is sound advice.
+        // Counted off the rows actually rendered rather than restating the cap, so
+        // the footnote can't claim a number the list doesn't show.
         <div className="border-t border-daintree-border px-3 py-2 text-xs text-daintree-text/60">
-          Showing {selectableRows.length} of {totalCount} branches — search to narrow
+          Showing {selectableRows.length} of {matchedTotal}{" "}
+          {trimmedQuery ? "matches — keep typing to narrow" : "branches — search to narrow"}
         </div>
       )}
     </PopoverContent>
@@ -215,7 +222,12 @@ function BranchPickerRowItem({
       <span className="truncate font-mono">
         <HighlightedText text={row.name} indices={row.matchRanges} />
       </span>
-      <span className="flex items-center gap-2 shrink-0 text-xs text-daintree-text/60">
+      {/* `data-branch-meta` so a test can assert a badge is here rather than
+          anywhere in the row — `origin/main`'s NAME contains "origin" too. */}
+      <span
+        data-branch-meta
+        className="flex items-center gap-2 shrink-0 text-xs text-daintree-text/60"
+      >
         {showCurrentBadge && row.isCurrent && <span>current</span>}
         {row.isRemote && row.remoteName && <span>{row.remoteName}</span>}
         {lastCommit && <span>{lastCommit}</span>}

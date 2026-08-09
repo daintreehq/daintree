@@ -283,17 +283,20 @@ export function NewWorktreeDialog({
     onSelect: handleExistingBranchSelect,
   });
 
-  const resetBaseBranchPicker = baseBranchPicker.reset;
-  const resetExistingBranchPicker = existingBranchPicker.reset;
+  // Closing subsumes clearing the query and cursor, so this is the whole reset —
+  // and it also guarantees neither picker can survive a mode switch or a dialog
+  // reopen still expanded.
+  const closeBaseBranchPicker = baseBranchPicker.setOpen;
+  const closeExistingBranchPicker = existingBranchPicker.setOpen;
 
   const handleBranchModeChange = useCallback(
     (mode: BranchMode) => {
       setBranchMode(mode);
       setSelectedExistingBranch(null);
-      resetExistingBranchPicker();
+      closeExistingBranchPicker(false);
       clearErrors();
     },
-    [clearErrors, resetExistingBranchPicker]
+    [clearErrors, closeExistingBranchPicker]
   );
 
   const onSelectPrefix = useCallback(
@@ -377,8 +380,8 @@ export function NewWorktreeDialog({
     setIsDismissing(false);
     setBranchMode("new");
     setSelectedExistingBranch(null);
-    resetBaseBranchPicker();
-    resetExistingBranchPicker();
+    closeBaseBranchPicker(false);
+    closeExistingBranchPicker(false);
     setWorktreeMode("local");
     isCreatingRef.current = false;
     baseBranchTouchedRef.current = false;
@@ -488,8 +491,8 @@ export function NewWorktreeDialog({
     setFromRemote,
     setValidationError,
     clearErrors,
-    resetBaseBranchPicker,
-    resetExistingBranchPicker,
+    closeBaseBranchPicker,
+    closeExistingBranchPicker,
   ]);
 
   // Initialize worktreeMode when projectSettings loads asynchronously

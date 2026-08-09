@@ -27,11 +27,13 @@ export interface UseBranchPickerResult {
   rows: BranchPickerRow[];
   selectableRows: BranchOptionRow[];
   selectedOption: BranchOption | undefined;
-  /** Candidates before the empty-query cap — what the truncation footnote counts against. */
-  totalCount: number;
+  /**
+   * Candidates that qualified before the display cap — all branches with no
+   * query, all matches with one. The footnote compares it to the rows on screen.
+   */
+  matchedTotal: number;
   handleKeyDown: (e: React.KeyboardEvent) => void;
   handleSelect: (option: BranchOption) => void;
-  reset: () => void;
 }
 
 export interface UseBranchPickerArgs {
@@ -50,14 +52,14 @@ export function useBranchPicker({
   onSelect,
 }: UseBranchPickerArgs): UseBranchPickerResult {
   const [open, setOpenState] = useState(false);
-  const [query, setQuery] = useState("");
+  const [query, setQueryState] = useState("");
   const [cursorIndex, setCursorIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const branchOptions = useMemo(() => branches.map(toBranchOption), [branches]);
 
-  const rows = useMemo(
+  const { rows, matchedTotal } = useMemo(
     () => buildBranchRows(branchOptions, { query, recentBranchNames, worktreeByBranch }),
     [branchOptions, query, recentBranchNames, worktreeByBranch]
   );
@@ -82,21 +84,26 @@ export function useBranchPicker({
         ? 0
         : -1;
 
-  const reset = useCallback(() => {
-    setQuery("");
+  // The raw cursor is rewound on every edit, not just clamped at read time.
+  // Clamping alone hides an out-of-range index without discarding it, so
+  // narrowing to one row (rendered cursor 0) and then clearing the query would
+  // resurrect the old index and jump the cursor to an unrelated branch.
+  const setQuery = useCallback((next: string) => {
+    setQueryState(next);
     setCursorIndex(0);
   }, []);
 
-  // Assigned on every transition, not just close: Radix cancels the 120ms exit
-  // animation when the popover reopens inside it, so a reset armed only on the
-  // close path would be skipped and fire against the next session instead.
-  const setOpen = useCallback(
-    (next: boolean) => {
-      setOpenState(next);
-      reset();
-    },
-    [reset]
-  );
+  // The session is cleared on every transition, not just close: Radix cancels the
+  // 120ms exit animation when the popover reopens inside it, so a reset armed only
+  // on the close path would be skipped and fire against the next session instead.
+  //
+  // This is also the only reset the dialog needs — closing subsumes clearing, so
+  // a mode switch or a dialog reopen can't leave a picker mounted expanded.
+  const setOpen = useCallback((next: boolean) => {
+    setOpenState(next);
+    setQueryState("");
+    setCursorIndex(0);
+  }, []);
 
   // Focus the search field on open. Paired with the panel's `onOpenAutoFocus`:
   // this covers the warm path, that one covers a cold mount where the lazy Radix
@@ -124,6 +131,11 @@ export function useBranchPicker({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Mid-composition, Arrow and Enter belong to the IME: Enter commits the
+      // candidate rather than the branch. Chromium can emit 229 before
+      // `isComposing` flips, so both are checked (as in `SearchablePalette`).
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+
       // The popover portals to document.body, so an unhandled Enter or Escape
       // reaches the dialog that logically contains it. Every key this picker
       // owns stops there.
@@ -180,9 +192,8 @@ export function useBranchPicker({
     rows,
     selectableRows,
     selectedOption,
-    totalCount: branchOptions.length,
+    matchedTotal,
     handleKeyDown,
     handleSelect,
-    reset,
   };
 }

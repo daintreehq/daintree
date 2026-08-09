@@ -1,5 +1,6 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "fs";
+import { execSync } from "child_process";
 import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
@@ -28,6 +29,36 @@ function seedRecipe(dir: string): void {
       2
     )
   );
+}
+
+/**
+ * Local branches no worktree holds, so existing-branch mode has something to
+ * offer: the fixture's `main` belongs to the root worktree and
+ * `feature/test-branch` to the linked one, which leaves that list empty.
+ * Distinct first letters so a one-character query narrows to exactly one.
+ */
+const SPARE_BRANCHES = ["e2e-spare-alpha", "e2e-spare-zulu"];
+
+function seedSpareBranches(dir: string): void {
+  for (const branch of SPARE_BRANCHES) {
+    execSync(`git branch ${branch}`, { cwd: dir, stdio: "ignore" });
+  }
+}
+
+/**
+ * #11724: both panels were pinned to `w-[400px]` under a full-width trigger.
+ * Only a real layout pass can catch that, so this measures boxes rather than
+ * asserting on a class string. The listbox is the panel's only child under
+ * `p-0`, so its border box is the panel's width — and it is a selector we own
+ * rather than a Radix internal.
+ */
+async function expectPanelMatchesTrigger(trigger: Locator, listbox: Locator): Promise<void> {
+  const triggerBox = await trigger.boundingBox();
+  const panelBox = await listbox.boundingBox();
+  expect(triggerBox).not.toBeNull();
+  expect(panelBox).not.toBeNull();
+  // Sub-pixel rounding only; a hardcoded width would be off by far more.
+  expect(Math.abs(panelBox!.width - triggerBox!.width)).toBeLessThanOrEqual(2);
 }
 
 async function openDialog(window: Page): Promise<void> {
@@ -65,6 +96,7 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     });
     fixtureCleanup = cleanup;
     seedRecipe(fixture);
+    seedSpareBranches(fixture);
 
     ctx = await launchApp();
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, "New Worktree Dialog");
@@ -209,13 +241,9 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     const listbox = window.locator(SEL.worktree.baseBranchListbox);
     await expect(listbox).toBeVisible({ timeout: T_MEDIUM });
 
-    const panel = window.locator("[data-radix-popper-content-wrapper] >> nth=0");
-    const triggerBox = await trigger.boundingBox();
-    const panelBox = await panel.boundingBox();
-    expect(triggerBox).not.toBeNull();
-    expect(panelBox).not.toBeNull();
-    // Sub-pixel rounding only; a hardcoded width would be off by far more.
-    expect(Math.abs(panelBox!.width - triggerBox!.width)).toBeLessThanOrEqual(2);
+    // The listbox is the panel's only child under `p-0`, so its border box IS the
+    // panel width — and it's a selector we own, not a Radix internal.
+    await expectPanelMatchesTrigger(trigger, listbox);
 
     await window.keyboard.press("Escape");
     await expect(listbox).toHaveCount(0, { timeout: T_SHORT });
@@ -239,28 +267,52 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     const listbox = window.locator(SEL.worktree.existingBranchListbox);
     await expect(listbox).toBeVisible({ timeout: T_MEDIUM });
 
-    const panel = window.locator("[data-radix-popper-content-wrapper] >> nth=0");
-    const triggerBox = await trigger.boundingBox();
-    const panelBox = await panel.boundingBox();
-    expect(Math.abs(panelBox!.width - triggerBox!.width)).toBeLessThanOrEqual(2);
+    await expectPanelMatchesTrigger(trigger, listbox);
 
-    // A single character used to blank the list; and this field had no arrow-key
-    // or Enter handling at all.
+    // `main` belongs to the root worktree and feature/test-branch to the linked
+    // one, so the seeded spares are the only selectable candidates here.
     const search = window.getByLabel("Search existing branches");
-    await search.fill("m");
-    await expect(listbox.getByRole("option")).not.toHaveCount(0, { timeout: T_MEDIUM });
+    await expect(listbox.getByRole("option")).toHaveCount(SPARE_BRANCHES.length, {
+      timeout: T_MEDIUM,
+    });
 
-    await search.press("ArrowDown");
+    // A single character used to blank the list entirely.
+    await search.fill("z");
+    await expect(listbox.getByRole("option")).toHaveCount(1, { timeout: T_MEDIUM });
+    await expect(listbox.getByRole("option").first()).toHaveText(/e2e-spare-zulu/);
+
+    // Multi-token, which the single-Bitap-pattern search could never match.
+    await search.fill("spare alpha");
+    await expect(listbox.getByRole("option")).toHaveCount(1, { timeout: T_MEDIUM });
+
+    // This field had no arrow-key or Enter handling at all — mouse only.
+    await search.fill("");
+    await expect(listbox.getByRole("option")).toHaveCount(SPARE_BRANCHES.length, {
+      timeout: T_MEDIUM,
+    });
     const cursor = listbox.locator('[role="option"][aria-selected="true"]');
     await expect(cursor).toHaveCount(1);
-    const cursorId = await cursor.getAttribute("id");
-    expect(await search.getAttribute("aria-activedescendant")).toBe(cursorId);
+    const beforeArrow = await cursor.getAttribute("id");
 
-    const chosen = (await cursor.textContent()) ?? "";
+    await search.press("ArrowDown");
+
+    // The cursor must actually MOVE — recording whichever row is current after the
+    // key and then checking Enter picked it would pass with ArrowDown unhandled.
+    await expect(cursor).toHaveCount(1);
+    const afterArrow = await cursor.getAttribute("id");
+    expect(afterArrow).toBeTruthy();
+    expect(afterArrow).not.toBe(beforeArrow);
+    expect(await search.getAttribute("aria-activedescendant")).toBe(afterArrow);
+
+    // The row's first span is the bare branch name; its whole textContent also
+    // carries the recency badge ("just now" for these fresh branches), which the
+    // trigger deliberately does not render.
+    const chosen = ((await cursor.locator("span").first().textContent()) ?? "").trim();
+    expect(SPARE_BRANCHES).toContain(chosen);
     await search.press("Enter");
 
     await expect(listbox).toHaveCount(0, { timeout: T_SHORT });
     await expect(window.locator(SEL.worktree.newDialog)).toBeVisible();
-    await expect(trigger).toContainText(chosen.trim(), { timeout: T_MEDIUM });
+    await expect(trigger).toContainText(chosen, { timeout: T_MEDIUM });
   });
 });
