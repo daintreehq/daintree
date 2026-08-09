@@ -460,7 +460,24 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         // Ordered after both failure checks so a bundle that never landed can't
         // announce success. No `context.worktreeId` — see the note on
         // generateAndCopyFile below (#11735).
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        //
+        // `priority: "low"` — inbox only, no toast, unlike the other two
+        // copy-tree completions. This action is `kind: "query"`, so
+        // `useActionPalette` (which drops everything but `kind: "command"`)
+        // never surfaces it: there is no human route at all, only MCP and the
+        // in-app assistant, and it sits in WORKBENCH_TIER_TOOLS beside pure
+        // reads like `file.read` and `worktree.list`. It writes a temp file and
+        // hands the path back to the calling agent — nothing the user owns
+        // changes, which is exactly what justifies the toast on
+        // generateAndCopyFile, whose whole point is that it silently replaces
+        // the clipboard. A toast is the most-restricted surface, and for a
+        // routine agent read it fails the notify() gate on "helpful next
+        // step?": the user never sees the temp path and can do nothing with it.
+        // Low keeps the durable "an agent bundled the codebase" inbox row
+        // without interrupting. It is also why this call carries no
+        // `notify-no-action` opt-out where its two siblings below do:
+        // `priority: "low"` is itself one of the sanctioned exits from the
+        // unprotected-success-toast rule, so a disable here would be dead.
         notify({
           type: "success",
           title: "Context generated",
@@ -472,6 +489,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
             },
             "temporary-file"
           ),
+          priority: "low",
           rateLimitKey: "copyTree.generate",
           context: { eventKind: "agent" },
         });

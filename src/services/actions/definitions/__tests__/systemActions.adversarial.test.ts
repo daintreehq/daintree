@@ -332,6 +332,39 @@ describe("systemActions adversarial", () => {
       expect(payload.message).not.toContain("clipboard");
     });
 
+    it("is the one copy-tree completion that never reaches the toast surface", async () => {
+      // `copyTree.generate` is kind "query", so useActionPalette — which drops
+      // everything but kind "command" — never surfaces it: no human route at
+      // all, only MCP and the in-app assistant, where it sits in the lowest
+      // tier beside pure reads like file.read. It writes a temp file and hands
+      // the path back to the caller, so nothing the user owns changes, unlike
+      // generateAndCopyFile (replaces the clipboard) and injectToTerminal
+      // (writes into a live terminal). Asserted as a partition over all three
+      // so what's pinned is the distinction between them, not one literal.
+      const { run } = setupActions();
+      const ctx = { activeWorktreeId: "wt-active" };
+      const cases: [id: string, args: unknown][] = [
+        ["copyTree.generate", undefined],
+        ["copyTree.generateAndCopyFile", undefined],
+        ["copyTree.injectToTerminal", { terminalId: "t-1" }],
+      ];
+
+      const inboxOnly: string[] = [];
+      const interrupting: string[] = [];
+      for (const [id, args] of cases) {
+        notifyMock.mockClear();
+        await run(id, args, ctx);
+        // Guards the partition: an action that stopped announcing entirely
+        // would otherwise be silently filed under "interrupting".
+        expect(notifyMock).toHaveBeenCalledTimes(1);
+        const { priority } = notifyMock.mock.calls[0]?.[0] as { priority?: string };
+        (priority === "low" ? inboxOnly : interrupting).push(id);
+      }
+
+      expect(inboxOnly).toEqual(["copyTree.generate"]);
+      expect(interrupting).toEqual(["copyTree.generateAndCopyFile", "copyTree.injectToTerminal"]);
+    });
+
     it("never announces a generate that failed", async () => {
       const { run } = setupActions();
       copyTreeClientMock.generate.mockResolvedValueOnce({
