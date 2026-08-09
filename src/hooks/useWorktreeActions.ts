@@ -19,14 +19,15 @@ export { describeEmptyFolderCopy, formatCopyResultMessage };
 /**
  * Copy a worktree's context with an in-place spinner-to-result toast.
  *
- * `source` must stay `"context-menu"`: `worktree.copyTree` fires its own
- * completion toast for every other dispatch source, and skips that source
- * precisely because this helper already owns the feedback. Passing anything
- * else here double-toasts. A source-contract test pins the invariant (#11735).
+ * `source` is narrowed to the literal `"context-menu"` rather than the full
+ * `ActionSource` on purpose: `worktree.copyTree` raises its own completion
+ * toast for every other dispatch source and skips this one precisely because
+ * this helper already owns the feedback. Any other source would double-toast,
+ * so the compiler — not a convention — is what rules it out (#11735).
  */
 export async function copyContextWithFeedback(
   worktreeId: string,
-  source: ActionSource,
+  source: Extract<ActionSource, "context-menu">,
   options?: { modified?: boolean; includePaths?: string[]; scopePaths?: string[] },
   // Which surface this is. `source` can't answer it — the worktree card and the
   // file browser both dispatch as "context-menu" — so callers that know say so.

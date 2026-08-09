@@ -111,9 +111,16 @@ describe("worktree.copyTree completion toast", () => {
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
-  it("explains an empty scoped copy instead of reporting a bare zero", async () => {
-    // A folder the project ignores wholesale resolves and copies cleanly, it
-    // just yields nothing — "Copied 0 files" reads as a failure.
+  it.each([
+    ["a scoped copy", { scopePaths: ["node_modules"] }],
+    ["a glob-filtered copy", { includePaths: ["src/**/*.nope"] }],
+    ["a whole-worktree copy", {}],
+    ["a modified-files copy", { modified: true }],
+  ])("reports an empty %s as a plain count, never as a folder", async (_label, selection) => {
+    // The context-menu helper explains an empty result because it knows the
+    // user right-clicked a folder. Here the selection may be a glob or a single
+    // file, so "this folder…" would be the wrong words — and `modified` isn't a
+    // path selection at all. A count is true for every one of these.
     const { run } = setupActions();
     copyTreeClientMock.generateAndCopyFile.mockResolvedValueOnce({
       content: "",
@@ -123,31 +130,12 @@ describe("worktree.copyTree completion toast", () => {
       stats: { excluded: { total: 4, byReason: { gitignore: 4 } } },
     });
 
-    await run("worktree.copyTree", { worktreeId: "wt-1", scopePaths: ["node_modules"] });
-
-    const payload = notifyMock.mock.calls[0]?.[0] as { type: string; message: string };
-    expect(payload.type).toBe("info");
-    expect(payload.message).not.toContain("0 files");
-    expect(payload.message).toContain("ignore rule");
-  });
-
-  it("reports a whole-worktree zero as a plain count, not a folder explanation", async () => {
-    // The folder wording is only justified when the caller scoped the copy;
-    // an unscoped empty result is a different situation.
-    const { run } = setupActions();
-    copyTreeClientMock.generateAndCopyFile.mockResolvedValueOnce({
-      content: "",
-      fileCount: 0,
-      filePath: "/tmp/x.xml",
-      outputBytes: 0,
-      stats: { totalSize: 0 },
-    });
-
-    await run("worktree.copyTree", { worktreeId: "wt-1" });
+    await run("worktree.copyTree", { worktreeId: "wt-1", ...selection });
 
     const payload = notifyMock.mock.calls[0]?.[0] as { type: string; message: string };
     expect(payload.type).toBe("success");
     expect(payload.message).toContain("0 files");
+    expect(payload.message).not.toContain("folder");
   });
 
   it("keeps the worktree out of the toast context so notify() cannot suppress it", async () => {
@@ -168,11 +156,13 @@ describe("worktree.copyTree completion toast", () => {
     expect(payload.rateLimitKey).not.toBe(payload.type);
   });
 
-  it("announces once per copy through the alias, not twice", async () => {
-    // `worktree.copyContext` re-dispatches into this action. The alias must not
-    // add a toast of its own on top of the inner one.
-    const { run } = setupActions();
-    await run("worktree.copyTree", { worktreeId: "wt-1" }, { dispatchSource: "agent" });
-    expect(notifyMock).toHaveBeenCalledTimes(1);
+  it("opts out of the post-dispatch shortcut hint that would overlap its toast", () => {
+    // ShortcutHint anchors to the toolbar button at top-right and the toast
+    // lands in the same corner; 219e2908f dismissed the hint for exactly this
+    // overlap when the result still showed in a forced tooltip.
+    const actions: ActionRegistry = new Map();
+    registerWorktreeContextActions(actions, {} as unknown as ActionCallbacks);
+    const def = actions.get("worktree.copyTree")!() as AnyActionDefinition;
+    expect(def.suppressShortcutHint).toBe(true);
   });
 });

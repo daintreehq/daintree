@@ -151,16 +151,22 @@ describe("useContextInjection", () => {
       expect(payload.context).toEqual({ eventKind: "agent" });
     });
 
-    it("explains an empty selected-path injection instead of reporting a bare zero", async () => {
+    it.each([
+      ["a selected-path injection", ["node_modules"]],
+      ["a whole-context injection", undefined],
+    ])("reports an empty %s as a plain count, never as a folder", async (_label, selected) => {
+      // `selectedPaths` are file-browser selections that may be individual
+      // files, so the folder-shaped explanation the context menu uses would be
+      // the wrong words here. A count stays true whatever was selected.
       await runInjection(
         { fileCount: 0, stats: { excluded: { total: 3, byReason: { gitignore: 3 } } } },
-        ["node_modules"]
+        selected
       );
 
       const payload = notifyMock.mock.calls[0]?.[0] as { type: string; message: string };
-      expect(payload.type).toBe("info");
-      expect(payload.message).not.toContain("0 files");
-      expect(payload.message).toContain("ignore rule");
+      expect(payload.type).toBe("success");
+      expect(payload.message).toContain("0 files");
+      expect(payload.message).not.toContain("folder");
     });
 
     it("never announces an injection that failed", async () => {
@@ -172,6 +178,40 @@ describe("useContextInjection", () => {
       // Cancellation returns before the success branch; announcing would claim
       // the agent got context the user deliberately stopped.
       await runInjection({ error: "Injection cancelled" });
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("never announces a cancel that races a successful write", async () => {
+      // The other half of the cancel race: the user cancels while the write is
+      // in flight and the client still resolves successfully. Resolving with an
+      // error only covers the branch that reads the message — this covers the
+      // one that has to recheck the cancelled set after the await.
+      isAvailableMock.mockResolvedValue(true);
+      let resolveInject!: (value: { fileCount?: number; stats?: Record<string, unknown> }) => void;
+      injectMock.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveInject = resolve;
+          })
+      );
+
+      const { result } = renderHook(() => useContextInjection("term-1"));
+
+      let injectPromise!: Promise<void>;
+      act(() => {
+        injectPromise = result.current.inject("wt-1", "term-1");
+      });
+      await vi.waitFor(() => expect(injectMock).toHaveBeenCalled());
+
+      act(() => {
+        result.current.cancel();
+      });
+
+      await act(async () => {
+        resolveInject({ fileCount: 7, stats: { totalSize: 2048 } });
+        await injectPromise;
+      });
+
       expect(notifyMock).not.toHaveBeenCalled();
     });
   });

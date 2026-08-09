@@ -159,6 +159,11 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
       // are identical — a second handler could only drift from the first.
       expect(source).toMatch(/"copy-tree":\s*\(\)\s*=>\s*\{\s*void handleCopyTreeClick\(\)/);
       expect(source).not.toContain("handleCopyTreeOverflow");
+      // The visible button half of the same invariant: without this, deleting
+      // the overflow handler could pass while the button itself lost its wiring.
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      expect(copyTreeBlock![0]).toContain("onClick={handleCopyTreeClick}");
     });
 
     it("no longer raises its own copy-tree toast in the toolbar", () => {

@@ -6,7 +6,7 @@ import { isPtyPanel } from "@shared/types/panel";
 import type { AgentState, CopyTreeProgress } from "@/types";
 import { copyTreeClient } from "@/clients";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
-import { describeEmptyFolderCopy, formatCopyResultMessage } from "@/lib/formatCopyResult";
+import { formatCopyResultMessage } from "@/lib/formatCopyResult";
 import { notify } from "@/lib/notify";
 import { logDebug, logError } from "@/utils/logger";
 import { isAgentTerminal } from "@/utils/terminalType";
@@ -392,6 +392,16 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
           throw new Error(result.error);
         }
 
+        // Mirrors the pre-write check above, for the other half of the race: a
+        // cancel that lands while the write is in flight can still resolve
+        // successfully. Without this the sound, the once-flag, the DOM event
+        // and the completion toast all fire for an injection the user stopped —
+        // and the toast says so out loud, where the sound alone was ignorable.
+        if (cancelledUuids.has(injectionUuid)) {
+          logDebug("[useContextInjection] Injection cancelled during write", { injectionUuid });
+          return;
+        }
+
         const pathInfo =
           selectedPaths && selectedPaths.length > 0
             ? ` from ${selectedPaths.length} selected ${selectedPaths.length === 1 ? "path" : "paths"}`
@@ -418,22 +428,21 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         // Its own rate-limit bucket, distinct from the `copyTree.injectToTerminal`
         // action's — that action is an independent MCP-only route to the same
         // client method, so the two never stack (#11735).
-        const injectedNothingFromSelection =
-          Boolean(selectedPaths && selectedPaths.length > 0) && result.fileCount === 0;
+        // No empty-result explanation here: `selectedPaths` are file-browser
+        // selections that may be individual files, so the folder-shaped wording
+        // would be wrong. A plain count stays true whatever was selected.
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
-          type: injectedNothingFromSelection ? "info" : "success",
-          title: injectedNothingFromSelection ? "No files injected" : "Context injected",
-          message: injectedNothingFromSelection
-            ? describeEmptyFolderCopy(result.stats)
-            : formatCopyResultMessage(
-                {
-                  fileCount: result.fileCount,
-                  stats: result.stats,
-                  format: DEFAULT_COPYTREE_FORMAT,
-                },
-                "terminal"
-              ),
+          type: "success",
+          title: "Context injected",
+          message: formatCopyResultMessage(
+            {
+              fileCount: result.fileCount,
+              stats: result.stats,
+              format: DEFAULT_COPYTREE_FORMAT,
+            },
+            "terminal"
+          ),
           rateLimitKey: "contextInjection.injectToTerminal",
           // No `context.worktreeId`: notify() diverts a high-priority toast to
           // the inbox when it names the worktree already on screen — which is

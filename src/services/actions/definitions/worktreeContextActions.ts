@@ -15,7 +15,7 @@ import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
-import { describeEmptyFolderCopy, formatCopyResultMessage } from "@/lib/formatCopyResult";
+import { formatCopyResultMessage } from "@/lib/formatCopyResult";
 import { notify } from "@/lib/notify";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
@@ -307,6 +307,14 @@ export function registerWorktreeContextActions(
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      // This action now raises its own completion toast, which lands top-right —
+      // the same corner the hint anchors to on the toolbar button. 219e2908f
+      // already dismissed the hint for exactly this overlap back when the result
+      // showed in a forced tooltip; the toast inherits that conflict and says
+      // strictly more than the hint does. The hint only fires for source "user",
+      // so this costs the toolbar and palette routes nothing the toast doesn't
+      // already cover, and the keybinding route never raised one (#11735).
+      suppressShortcutHint: true,
       argsSchema: z
         .object({
           worktreeId: z.string().optional(),
@@ -365,21 +373,20 @@ export function registerWorktreeContextActions(
         // too would double-toast it. Ordered after the failure checks so a
         // failed copy can never announce success (#11735).
         if (ctx.dispatchSource !== "context-menu") {
-          const isScopedCopy = Boolean(includePaths?.length || scopePaths?.length);
-          // A folder the project ignores wholesale copies cleanly but yields
-          // nothing — say why instead of reporting a bare "Copied 0 files".
-          const emptyScopedCopy = isScopedCopy && result.fileCount === 0;
+          // Deliberately no empty-result explanation here, unlike the
+          // context-menu helper: that path knows the user right-clicked a
+          // folder, whereas `includePaths`/`scopePaths` also carry globs and
+          // individual files, so "this folder…" would be the wrong words for an
+          // unmatched pattern. A plain count stays true for every caller.
           // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
           notify({
-            type: emptyScopedCopy ? "info" : "success",
-            title: emptyScopedCopy ? "No files copied" : "Context copied",
-            message: emptyScopedCopy
-              ? describeEmptyFolderCopy(result.stats)
-              : formatCopyResultMessage({
-                  fileCount: result.fileCount,
-                  stats: result.stats,
-                  format,
-                }),
+            type: "success",
+            title: "Context copied",
+            message: formatCopyResultMessage({
+              fileCount: result.fileCount,
+              stats: result.stats,
+              format,
+            }),
             // Its own bucket. The key otherwise falls back to `type`, pooling
             // this with every other success toast in the app, where an
             // unrelated burst would swallow the one message saying what is now
