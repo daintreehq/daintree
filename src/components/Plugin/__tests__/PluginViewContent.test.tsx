@@ -32,6 +32,7 @@ interface CapturedFallbackProps {
 interface CapturedBoundaryProps {
   children: React.ReactNode;
   onReset?: () => void;
+  onError?: (error: Error, errorInfo: React.ErrorInfo) => void;
   resetKeys?: Array<string | number>;
   componentName?: string;
   fallback?: React.ComponentType<CapturedFallbackProps>;
@@ -56,7 +57,12 @@ vi.mock("@/components/ErrorBoundary", async () => {
     static getDerivedStateFromError(): { hasError: true } {
       return { hasError: true };
     }
-    componentDidCatch(): void {}
+    // Forwards to `onError` like the real boundary does — the content classifies
+    // the error there to decide whether "Try again" needs a fresh module
+    // specifier, so a stub that swallowed it would hide that branch (#11728).
+    componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
+      this.props.onError?.(error, errorInfo);
+    }
     componentDidUpdate(prev: { resetKeys?: Array<string | number> }): void {
       const next = this.props.resetKeys?.[0];
       if (this.state.hasError && next !== this.state.lastKey) {
@@ -401,6 +407,89 @@ describe("makePluginViewContent", () => {
       expect(String(cause)).not.toMatch(/is not a function/);
       // The content still mounted its (stubbed) view rather than crashing.
       expect(screen.getByTestId("plugin-view")).toBeTruthy();
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
+  it("retries an import failure on a main-minted specifier, and a render failure in place (#11728)", async () => {
+    // The bug: a rejected dynamic import is permanent for its specifier — the
+    // module map never evicts a failed entry — so the old "Try again", which
+    // minted a fresh `lazy()` around the SAME url, could never recover. Recovery
+    // has to come from main as a new view generation. But it must be requested
+    // only for import failures: a view that threw while rendering, or an
+    // activation that failed, would fail identically on a new specifier, and
+    // minting one per retry would grow the module map without bound.
+    //
+    // The replacement is a `data:` module so the second attempt genuinely
+    // resolves. That is the assertion: `plugin://acme/dashboard.js` cannot load
+    // here, so a resolved module proves the factory imported the path main
+    // returned rather than the original.
+    const recoveryPath = "data:text/javascript,export default () => null";
+    const activateForView = vi.fn((_kindId: string, recover?: boolean) =>
+      Promise.resolve(recover === true ? recoveryPath : undefined)
+    );
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { plugin: { onPanelKindsChanged: onPanelKindsChangedMock, activateForView } },
+    });
+
+    // React can run the `useState` initializer more than once on a concurrent
+    // mount, so the newest factory is the live one — indexing from 0 would drive
+    // a discarded generation.
+    const factories: Array<() => Promise<unknown>> = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: (factory: () => Promise<unknown>) => {
+          factories.push(factory);
+          return function StubView() {
+            return <div data-testid="plugin-view" />;
+          };
+        },
+      };
+    });
+
+    try {
+      const { makePluginViewContent } = await import("../PluginViewContent");
+      const Content = makePluginViewContent(makeContentConfig());
+
+      render(<Content panelId="panel-recover" />);
+      await waitFor(() => expect(factories).not.toHaveLength(0));
+
+      // First attempt: plain activation (no recovery flag), then an import that
+      // cannot resolve in this environment — exactly the shape of the bug.
+      const importError = await factories.at(-1)!().then(
+        () => null,
+        (err: unknown) => err
+      );
+      expect(importError).toBeInstanceOf(Error);
+      expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard"]);
+
+      // Hand the boundary the real rejection, then click through its "Try again".
+      const countBeforeRetry = factories.length;
+      act(() => boundaryProps.last!.onError!(importError as Error, { componentStack: "" }));
+      act(() => boundaryProps.last!.onReset!());
+      await waitFor(() => expect(factories.length).toBeGreaterThan(countBeforeRetry));
+
+      // The retry asks main for a replacement specifier...
+      const recovered = await factories.at(-1)!();
+      expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard", true]);
+      // ...and actually imports it: this only resolves via the returned url.
+      expect(recovered).toHaveProperty("default");
+
+      // Now the other half of the classification. A view that throws during
+      // render is not a poisoned specifier, so its retry must stay on the path
+      // it has rather than burning a second namespace.
+      const countBeforeRenderRetry = factories.length;
+      act(() => boundaryProps.last!.onError!(new Error("view exploded"), { componentStack: "" }));
+      act(() => boundaryProps.last!.onReset!());
+      await waitFor(() => expect(factories.length).toBeGreaterThan(countBeforeRenderRetry));
+
+      await factories.at(-1)!();
+      expect(activateForView.mock.calls.at(-1)).toEqual(["acme.dashboard"]);
     } finally {
       vi.doUnmock("react");
     }
