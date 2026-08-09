@@ -1510,7 +1510,8 @@ describe("buildInputBarTheme", () => {
     const css = readGeneratedCss([buildInputBarTheme(theme)]);
     for (const selector of [".cm-file-chip", ".cm-chip-label"]) {
       const decls = parseDeclarations(extractRuleBody(css, selector));
-      expect(clipsText(decls), `${selector} must not crop its text`).toBe(false);
+      expect(clipsText(decls), `${selector} must not clip its text`).toBe(false);
+      expect(capsInlineSize(decls), `${selector} must not cap its inline size`).toBe(false);
       expect(
         canBreakUnbrokenToken(decls),
         `${selector} must be able to break an unbroken token`
@@ -1518,13 +1519,14 @@ describe("buildInputBarTheme", () => {
     }
   });
 
-  it("keeps .cm-file-chip transformable so the entrance animation still applies", () => {
+  it("preserves whitespace runs so paths differing only by spacing stay distinct", () => {
     const css = readGeneratedCss([buildInputBarTheme(theme)]);
-    const decls = parseDeclarations(extractRuleBody(css, ".cm-file-chip"));
-    // A non-replaced `display: inline` box ignores transform, which would
-    // silently kill the chip-enter translateY.
-    expect(decls["display"]).toBeDefined();
-    expect(decls["display"]).not.toBe("inline");
+    for (const selector of [".cm-file-chip", ".cm-chip-label"]) {
+      const decls = parseDeclarations(extractRuleBody(css, selector));
+      // Quoted @tokens can carry runs of spaces; collapsing them renders two
+      // different files identically, which is the bug the crop already caused.
+      expect(preservesWhitespace(decls), `${selector} must not collapse whitespace`).toBe(true);
+    }
   });
 
   it("floors chip pills at the content line-height rather than pinning a fixed height", () => {
@@ -1540,8 +1542,11 @@ describe("buildInputBarTheme", () => {
       ".cm-selection-chip",
     ]) {
       const decls = parseDeclarations(extractRuleBody(css, selector));
-      // A fixed height makes a wrapped label spill out of the painted pill.
-      expect(decls["height"], `${selector} must not pin a fixed height`).toBeUndefined();
+      // Any pinned block size makes a wrapped label spill out of the painted
+      // pill, whichever property expresses it.
+      for (const prop of ["height", "block-size", "max-height", "max-block-size"]) {
+        expect(decls[prop], `${selector} must not pin its block size via ${prop}`).toBeUndefined();
+      }
       // The floor preserves the single-line size, so it has to track the
       // editor's line-height instead of drifting from it.
       expect(decls["min-height"], `${selector} should floor at the content line-height`).toBe(
@@ -1643,33 +1648,75 @@ function parseDeclarations(body: string): Record<string, string> {
       decls[prop] = part
         .slice(idx + 1)
         .trim()
-        .toLowerCase();
+        .toLowerCase()
+        .replace(/\s*!important$/, "");
   }
   return decls;
 }
 
-// `pre-wrap`, `pre-line` and `break-spaces` all still wrap — only these two refuse.
+// `pre-wrap`, `pre-line` and `break-spaces` all still wrap — only these refuse.
 const NON_WRAPPING_WHITE_SPACE = new Set(["nowrap", "pre"]);
 
-// Asserted behaviorally rather than against literal declarations so an
-// equivalent implementation (e.g. `word-break: break-all` in place of
-// `overflow-wrap: anywhere`) keeps passing.
+// `white-space` may be a legacy single keyword or the modern
+// `<collapse> <text-wrap>` shorthand, and `text-wrap`/`text-wrap-mode` can
+// suppress wrapping alone — so tokenize instead of comparing whole values.
+function refusesToWrap(decls: Record<string, string>): boolean {
+  const whiteSpace = decls["white-space"];
+  if (whiteSpace?.split(/\s+/).some((t) => NON_WRAPPING_WHITE_SPACE.has(t))) return true;
+  return decls["text-wrap"] === "nowrap" || decls["text-wrap-mode"] === "nowrap";
+}
+
+// Collapsing values would render `@"a  b.ts"` and `@"a b.ts"` identically — the
+// same indistinguishable-paths failure the cropping caused.
+const WHITESPACE_PRESERVING = new Set(["pre", "pre-wrap", "break-spaces", "preserve"]);
+
+function preservesWhitespace(decls: Record<string, string>): boolean {
+  return !!decls["white-space"]?.split(/\s+/).some((t) => WHITESPACE_PRESERVING.has(t));
+}
+
+// Clipping proper — declarations that hide characters outright.
 function clipsText(decls: Record<string, string>): boolean {
   if (/hidden|clip/.test(`${decls["overflow"] ?? ""} ${decls["overflow-x"] ?? ""}`)) return true;
   if ((decls["text-overflow"] ?? "clip") !== "clip") return true;
-  if (NON_WRAPPING_WHITE_SPACE.has(decls["white-space"] ?? "normal")) return true;
+  return refusesToWrap(decls);
+}
+
+// Content- or container-derived sizes let a chip use the width it is given; a
+// fixed length or sub-full percentage caps it regardless of available space.
+const UNCAPPED_INLINE_SIZES = new Set([
+  "none",
+  "auto",
+  "100%",
+  "fit-content",
+  "min-content",
+  "max-content",
+  "stretch",
+  "-webkit-fill-available",
+]);
+
+function capsInlineSize(decls: Record<string, string>): boolean {
   return ["max-width", "width", "max-inline-size", "inline-size"].some((prop) => {
     const value = decls[prop];
-    return value !== undefined && !["none", "auto", "100%"].includes(value);
+    return value !== undefined && !UNCAPPED_INLINE_SIZES.has(value);
   });
 }
+
+// Only these zero the min-content contribution, which is what lets a chip
+// shrink inside a narrow pane. `overflow-wrap: break-word` deliberately does
+// NOT qualify: it breaks glyphs but still reports the unbroken token's width as
+// min-content, so the chip would keep forcing the pane wider. Exact matches
+// rather than substring tests, so `var(--break-word-policy)` can't slip past.
+const MIN_CONTENT_ZEROING_BREAKS: ReadonlyArray<readonly [string, string]> = [
+  ["overflow-wrap", "anywhere"],
+  ["word-break", "break-all"],
+  ["word-break", "break-word"],
+];
 
 // Breaking a slash-free filename needs both a wrapping white-space and an
 // explicit break opportunity — neither alone is enough.
 function canBreakUnbrokenToken(decls: Record<string, string>): boolean {
-  if (NON_WRAPPING_WHITE_SPACE.has(decls["white-space"] ?? "normal")) return false;
-  const wrap = `${decls["overflow-wrap"] ?? ""} ${decls["word-wrap"] ?? ""}`;
-  return /anywhere|break-word/.test(wrap) || /break-all|break-word/.test(decls["word-break"] ?? "");
+  if (refusesToWrap(decls)) return false;
+  return MIN_CONTENT_ZEROING_BREAKS.some(([prop, value]) => decls[prop] === value);
 }
 
 function extractAtRuleBody(css: string, atRule: string): string {
