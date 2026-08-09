@@ -154,6 +154,52 @@ describe("mapTerminalInfo", () => {
     expect(result.lastOutputTime).toBe(222);
   });
 
+  it("reports the pty handle's live grid so restore can rebuild on it (#11718)", () => {
+    // A renderer rebuilding a pane after a view eviction constructs its xterm at
+    // 80×24 and has no other way to learn where the surviving PTY sits.
+    const ctx = createCtx();
+    const result = mapTerminalInfo(makeTerminal({ ptyProcess: { cols: 203, rows: 51 } }), ctx);
+    expect(result.ptyCols).toBe(203);
+    expect(result.ptyRows).toBe(51);
+  });
+
+  it("reports no grid for a dead record, whose last grid is not a live one", () => {
+    const ctx = createCtx();
+    const exited = mapTerminalInfo(
+      makeTerminal({ isExited: true, ptyProcess: { cols: 203, rows: 51 } }),
+      ctx
+    );
+    expect(exited.ptyCols).toBeUndefined();
+    const killed = mapTerminalInfo(
+      makeTerminal({ wasKilled: true, ptyProcess: { cols: 203, rows: 51 } }),
+      ctx
+    );
+    expect(killed.ptyCols).toBeUndefined();
+  });
+
+  it("survives a throwing native dimension getter instead of failing the query", () => {
+    // The getters are native and can throw once the pty is torn down. An
+    // uncaught throw would take out the whole response: `get-terminal` degrades
+    // to null (the record vanishes from restore) and the batch families lose an
+    // entire shard.
+    const ctx = createCtx();
+    const throwing = makeTerminal({
+      ptyProcess: {
+        get cols(): number {
+          throw new Error("pty gone");
+        },
+        get rows(): number {
+          throw new Error("pty gone");
+        },
+      },
+    });
+    const result = mapTerminalInfo(throwing, ctx);
+    expect(result.ptyCols).toBeUndefined();
+    // The rest of the payload must still map — one dead field is not a dead record.
+    expect(result.id).toBe("term-1");
+    expect(result.hasPty).toBe(true);
+  });
+
   it("narrows detectedAgentId to BuiltInAgentId, dropping unknown values", () => {
     const ctx = createCtx();
     expect(mapTerminalInfo(makeTerminal({ detectedAgentId: "claude" }), ctx).detectedAgentId).toBe(

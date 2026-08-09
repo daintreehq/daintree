@@ -192,6 +192,16 @@ export interface BackendTerminalInfo {
   title?: string;
   titleMode?: PanelTitleMode;
   cwd: string;
+  /**
+   * The grid the surviving PTY is actually on, as of this response (#11718).
+   *
+   * Authoritative for restore: a renderer rebuilding a pane (cold boot, or a
+   * project view recreated after eviction) constructs its xterm at 80×24 and
+   * has no other way to learn where the live PTY sits. Absent when the record
+   * has no pty handle left.
+   */
+  ptyCols?: number;
+  ptyRows?: number;
   agentState?: AgentState;
   /** Why the agent is waiting; only meaningful while agentState is "waiting" */
   waitingReason?: WaitingReason;
@@ -250,6 +260,9 @@ export interface TerminalReconnectResult {
   title?: string;
   titleMode?: PanelTitleMode;
   cwd?: string;
+  /** Live PTY grid — see {@link BackendTerminalInfo.ptyCols}. */
+  ptyCols?: number;
+  ptyRows?: number;
   agentState?: AgentState;
   /** Why the agent is waiting; only meaningful while agentState is "waiting" */
   waitingReason?: WaitingReason;

@@ -395,6 +395,23 @@ async function persistOutgoingProjectState(
               tabGroupDelta.removedIds
             )
           : validTabGroups;
+    // Sizes carry no delta metadata, so a full replace would drop the entries a
+    // sibling window owns for this same project — the #11350 hazard, one map
+    // over. Merge this window's grids over the existing ones instead, then drop
+    // any id the merged terminal list no longer contains so the map can't grow
+    // without bound. Without a terminal list there is nothing authoritative to
+    // prune against, so the merge stands on its own.
+    const mergedSizes =
+      validSizes === undefined
+        ? undefined
+        : (() => {
+            const merged = { ...(existing?.terminalSizes ?? {}), ...validSizes };
+            if (mergedTerminals === undefined) return merged;
+            const liveIds = new Set(mergedTerminals.map((t) => t.id));
+            return Object.fromEntries(
+              Object.entries(merged).filter(([terminalId]) => liveIds.has(terminalId))
+            );
+          })();
     const draftDelta = outgoingState.draftDelta;
     // Merge drafts by terminal id so a stale outgoing snapshot only affects the
     // drafts this window changed, preserving a sibling window's concurrent
@@ -414,7 +431,7 @@ async function persistOutgoingProjectState(
       ...(existing ?? { projectId: previousProjectId, sidebarWidth: 350, terminals: [] }),
       projectId: previousProjectId,
       ...(mergedTerminals !== undefined && { terminals: mergedTerminals }),
-      ...(validSizes !== undefined && { terminalSizes: validSizes }),
+      ...(mergedSizes !== undefined && { terminalSizes: mergedSizes }),
       ...(mergedDrafts !== undefined && { draftInputs: mergedDrafts }),
       ...(mergedTabGroups !== undefined && { tabGroups: mergedTabGroups }),
       activeWorktreeId: outgoingState.activeWorktreeId,

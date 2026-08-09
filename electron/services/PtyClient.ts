@@ -127,6 +127,9 @@ interface TerminalInfoResponse {
   titleMode?: PanelTitleMode;
   cwd: string;
   worktreeId?: string;
+  /** Live PTY grid, read off the node-pty handle when the query was served. */
+  ptyCols?: number;
+  ptyRows?: number;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;

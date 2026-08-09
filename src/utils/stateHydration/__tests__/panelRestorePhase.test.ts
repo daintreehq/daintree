@@ -393,20 +393,27 @@ describe("restorePanelsPhase — saved panels", () => {
     expect(restoreTerminalOrder).not.toHaveBeenCalled();
   });
 
-  it("applies saved terminal sizes after restore", async () => {
-    const ctx = makeContext({
-      terminalSizes: { t1: { cols: 120, rows: 40 } },
-    });
-    ctx.backendTerminalMap.set("t1", backend("t1"));
+  /**
+   * Restore geometry seeds the xterm CONSTRUCTOR and stops there. It must never
+   * be parked as an attach target: `TerminalInstanceService`'s attach rAF runs
+   * `applyResize(targetCols, targetRows)` INSTEAD of `fit(id)` when a target is
+   * parked, so parking would replace the first real container measurement with
+   * the PTY's grid — a 240-col PTY revealed in a 90-col dock would be dragged
+   * back to 240 with no SIGWINCH to follow it (the PTY is already there, so
+   * `TerminalProcess.resize` takes its "unchanged" path). Worse than the 80×24
+   * default this replaces, and only latent before because the map was empty.
+   */
+  it("does not park an attach target, so the first fit measures the real box", async () => {
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 120, rows: 40 } } });
+    ctx.backendTerminalMap.set("t1", backend("t1", { ptyCols: 240, ptyRows: 60 }));
     await restorePanelsPhase([panel("t1")], ctx);
-    expect(setTargetSizeMock).toHaveBeenCalledWith("t1", 120, 40);
+    expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toEqual({ cols: 240, rows: 60 });
+    expect(setTargetSizeMock).not.toHaveBeenCalled();
   });
 
-  it("ignores invalid (zero or non-finite) saved sizes", async () => {
-    const ctx = makeContext({
-      terminalSizes: { t1: { cols: 0, rows: 40 } },
-    });
-    ctx.backendTerminalMap.set("t1", backend("t1"));
+  it("parks no target on the respawn path either", async () => {
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 120, rows: 40 } } });
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
     await restorePanelsPhase([panel("t1")], ctx);
     expect(setTargetSizeMock).not.toHaveBeenCalled();
   });
@@ -461,6 +468,48 @@ describe("restorePanelsPhase — saved panels", () => {
     ctx.backendTerminalMap.set("t1", backend("t1"));
     await restorePanelsPhase([panel("t1")], ctx);
     expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toBeUndefined();
+  });
+
+  /**
+   * The live PTY grid outranks the persisted map (#11718 follow-up). The map is
+   * written by exactly one renderer path and was empty on disk for four months
+   * after `30ed7877f` deleted its writer; the PTY answer is read off the handle
+   * at query time and cannot go stale the same way. These assert the precedence,
+   * not the plumbing — a regression that reinstates "persisted wins" restores
+   * the original bug on every reconnect.
+   */
+  it("prefers the live PTY grid over a stale persisted size on reconnect", async () => {
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 80, rows: 24 } } });
+    ctx.backendTerminalMap.set("t1", backend("t1", { ptyCols: 203, ptyRows: 51 }));
+    await restorePanelsPhase([panel("t1")], ctx);
+    expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toEqual({ cols: 203, rows: 51 });
+  });
+
+  it("falls back to the persisted size when the PTY grid is half-reported", async () => {
+    // A partial pair is not a grid — taking `cols` alone would boot the pane on
+    // a geometry no PTY is on, which is the failure this whole path exists for.
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 203, rows: 51 } } });
+    ctx.backendTerminalMap.set("t1", backend("t1", { ptyCols: 120 }));
+    await restorePanelsPhase([panel("t1")], ctx);
+    expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toEqual({ cols: 203, rows: 51 });
+  });
+
+  it("prefers the live PTY grid on the reconnect-fallback path", async () => {
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 80, rows: 24 } } });
+    reconnectWithTimeoutMock.mockResolvedValue({
+      status: "found",
+      terminal: { id: "t1", cwd: "/cwd", ptyCols: 203, ptyRows: 51 },
+    });
+    await restorePanelsPhase([panel("t1")], ctx);
+    expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toEqual({ cols: 203, rows: 51 });
+  });
+
+  it("boots a reconnected pane on the live grid even with no persisted size at all", async () => {
+    // The state on disk today: `terminalSizes` empty for every project.
+    const ctx = makeContext({ terminalSizes: {} });
+    ctx.backendTerminalMap.set("t1", backend("t1", { ptyCols: 203, ptyRows: 51 }));
+    await restorePanelsPhase([panel("t1")], ctx);
+    expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toEqual({ cols: 203, rows: 51 });
   });
 
   it("resolves the grid before addPanel, not after it returns", async () => {
@@ -727,6 +776,20 @@ describe("restorePanelsPhase — orphan reconnection", () => {
       terminalSizes: { o1: { cols: 203, rows: 51 } },
     });
     ctx.backendTerminalMap.set("o1", backend("o1"));
+    await restorePanelsPhase([], ctx);
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({
+      initialTerminalGeometry: { cols: 203, rows: 51 },
+    });
+  });
+
+  it("prefers an orphan's live PTY grid over a stale persisted size", async () => {
+    // An orphan is by definition a LIVE backend terminal, so its own grid is
+    // available and beats whatever the renderer last believed.
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      terminalSizes: { o1: { cols: 80, rows: 24 } },
+    });
+    ctx.backendTerminalMap.set("o1", backend("o1", { ptyCols: 203, ptyRows: 51 }));
     await restorePanelsPhase([], ctx);
     expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({
       initialTerminalGeometry: { cols: 203, rows: 51 },

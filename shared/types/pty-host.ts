@@ -813,6 +813,14 @@ export interface PtyHostTerminalInfo {
   activityTier?: "active" | "background";
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
+  /**
+   * Grid the live PTY holds, read off the node-pty handle when the query was
+   * served (#11718). Absent when the handle is gone or unreadable — restore
+   * builds a reconnected pane's xterm on this, so an unknown must never be
+   * reported as a known.
+   */
+  ptyCols?: number;
+  ptyRows?: number;
   /** Captured agent session ID from graceful shutdown */
   agentSessionId?: string;
   /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */

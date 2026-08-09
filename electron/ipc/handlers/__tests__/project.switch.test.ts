@@ -1189,6 +1189,127 @@ describe("project:switch outgoing agentSessionId field merge (#11461)", () => {
   });
 });
 
+/**
+ * `terminalSizes` is what hydration reads to build a restored pane's xterm on
+ * the grid its PTY is already on (#11718). Unlike terminals/drafts it carries no
+ * delta metadata, so a blind full replace would drop a sibling window's entries
+ * — the #11350/#11352 hazard, one map over.
+ */
+describe("project:switch outgoing terminalSizes merge", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetProjectForWebContents.mockReturnValue("proj-old");
+  });
+
+  async function runSwitchWithSizes(
+    existing: Record<string, unknown>,
+    outgoingState: Record<string, unknown>
+  ): Promise<Record<string, { cols: number; rows: number }> | undefined> {
+    const mockView = {
+      webContents: { id: 100, isDestroyed: () => false, send: vi.fn() },
+    };
+    const pvm = {
+      switchTo: vi.fn().mockResolvedValue({ view: mockView, isNew: false }),
+      getProjectIdForWebContents: vi.fn(),
+    };
+    mockGetWindowForWebContents.mockReturnValue(null);
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-old");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-new",
+      name: "New Project",
+      path: "/projects/new",
+    });
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+    projectStoreMock.getProjectState.mockResolvedValue({
+      projectId: "proj-old",
+      sidebarWidth: 350,
+      terminals: [],
+      tabGroups: [],
+      ...existing,
+    });
+    projectStoreMock.saveProjectState.mockResolvedValue(undefined);
+
+    const deps = {
+      mainWindow: { id: 1 } as unknown,
+      projectViewManager: pvm,
+    } as unknown as HandlerDependencies;
+    registerProjectCrudHandlers(deps);
+
+    const handleMap = new Map<string, (...args: unknown[]) => unknown>();
+    for (const call of (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls) {
+      handleMap.set(call[0] as string, call[1] as (...args: unknown[]) => unknown);
+    }
+    const handler = handleMap.get(CHANNELS.PROJECT_SWITCH);
+    await handler!({ sender: { id: 99 } }, "proj-new", outgoingState);
+    const state = projectStoreMock.saveProjectState.mock.calls[0]?.[1] as {
+      terminalSizes?: Record<string, { cols: number; rows: number }>;
+    };
+    return state.terminalSizes;
+  }
+
+  const sizedPane = (id: string) => ({
+    id,
+    title: id,
+    kind: "terminal",
+    cwd: "/proj",
+    location: "grid",
+  });
+
+  it("merges and prunes against the DELTA-merged list, not the incoming one", async () => {
+    // One assertion covering both halves, because only their combination
+    // discriminates. The outgoing payload is a stale single-window view: it
+    // knows `t1` and nothing else. `sib` belongs to another window showing the
+    // same project and must survive; `closed` was genuinely removed and must
+    // not linger, or the map only ever grows.
+    //
+    // Pruning against the raw incoming list (`validTerminals`) instead of
+    // `mergedTerminals` would also drop `sib` — and every simpler fixture,
+    // where the incoming list happens to be complete, passes that bug.
+    const sizes = await runSwitchWithSizes(
+      {
+        terminals: [sizedPane("t1"), sizedPane("sib"), sizedPane("closed")],
+        terminalSizes: {
+          t1: { cols: 80, rows: 24 },
+          sib: { cols: 100, rows: 30 },
+          closed: { cols: 110, rows: 35 },
+        },
+      },
+      {
+        terminals: [sizedPane("t1")],
+        terminalDelta: { changedIds: ["t1"], removedIds: ["closed"] },
+        terminalSizes: { t1: { cols: 203, rows: 51 } },
+      }
+    );
+    expect(sizes).toEqual({ t1: { cols: 203, rows: 51 }, sib: { cols: 100, rows: 30 } });
+  });
+
+  it("keeps the merge but skips pruning when the payload carries no terminals", async () => {
+    // No terminal list means nothing authoritative to prune against — dropping
+    // entries here would delete grids on a drafts-only outgoing payload.
+    const sizes = await runSwitchWithSizes(
+      { terminalSizes: { sib: { cols: 100, rows: 30 } } },
+      { terminalSizes: { t1: { cols: 203, rows: 51 } } }
+    );
+    expect(sizes).toEqual({ t1: { cols: 203, rows: 51 }, sib: { cols: 100, rows: 30 } });
+  });
+
+  it("leaves the stored map untouched when the payload omits sizes", async () => {
+    const sizes = await runSwitchWithSizes(
+      { terminals: [sizedPane("t1")], terminalSizes: { t1: { cols: 203, rows: 51 } } },
+      { terminals: [sizedPane("t1")] }
+    );
+    expect(sizes).toEqual({ t1: { cols: 203, rows: 51 } });
+  });
+
+  it("drops an implausible grid from the payload", async () => {
+    const sizes = await runSwitchWithSizes(
+      { terminals: [sizedPane("t1")], terminalSizes: { t1: { cols: 80, rows: 24 } } },
+      { terminals: [sizedPane("t1")], terminalSizes: { t1: { cols: 0, rows: 51 } } }
+    );
+    expect(sizes).toEqual({ t1: { cols: 80, rows: 24 } });
+  });
+});
+
 describe("project:switch worktree-load-status (#8400)", () => {
   beforeEach(() => {
     vi.clearAllMocks();

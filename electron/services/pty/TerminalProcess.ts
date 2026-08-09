@@ -136,7 +136,7 @@ export interface TerminalProcessDependencies {
  * reports nonsense (the pty can be torn down between the resize and the
  * read-back) — an unknown geometry must never be reported as a known one.
  */
-function readPtyDimension(read: () => number, fallback: number | null): number | null {
+export function readPtyDimension(read: () => number, fallback: number | null): number | null {
   try {
     const value = read();
     return Number.isFinite(value) ? value : fallback;
