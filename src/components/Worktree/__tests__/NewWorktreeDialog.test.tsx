@@ -482,6 +482,103 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     expect(mockGetDefaultPath).toHaveBeenCalledWith("/test/root", "feature/existing-work");
   });
 
+  // The existing-branch field used to filter with a plain `includes()` and had no
+  // key handling at all, one radio toggle away from a fully navigable picker.
+  describe("existing-branch search and keyboard parity", () => {
+    async function enterExistingMode() {
+      renderDialog();
+      await advanceTimersGradually(500);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("radio", { name: /existing branch/i }));
+      });
+    }
+
+    function existingSearch(): HTMLElement {
+      return screen.getByLabelText("Search existing branches");
+    }
+
+    function optionNames(): string[] {
+      return screen.getAllByRole("option").map((el) => el.textContent ?? "");
+    }
+
+    async function type(value: string) {
+      await act(async () => {
+        fireEvent.change(existingSearch(), { target: { value } });
+      });
+    }
+
+    it("narrows on a single character instead of emptying the list", async () => {
+      await enterExistingMode();
+
+      await type("b");
+
+      // Candidates are develop, feature/existing-work, bugfix/old-fix.
+      expect(optionNames()).toContain("bugfix/old-fix");
+      expect(optionNames()).not.toContain("develop");
+    });
+
+    it("narrows on a multi-token query", async () => {
+      await enterExistingMode();
+
+      await type("exist work");
+
+      expect(optionNames()).toEqual(["feature/existing-work"]);
+    });
+
+    it("selects with arrow keys and Enter", async () => {
+      await enterExistingMode();
+      expect(optionNames()[0]).toBe("develop");
+
+      await act(async () => {
+        fireEvent.keyDown(existingSearch(), { key: "ArrowDown" });
+      });
+      await act(async () => {
+        fireEvent.keyDown(existingSearch(), { key: "Enter" });
+      });
+
+      expect(screen.getByTestId("existing-branch-picker").textContent).toContain(
+        "feature/existing-work"
+      );
+    });
+
+    it("moves one cursor that the active descendant follows", async () => {
+      await enterExistingMode();
+
+      await act(async () => {
+        fireEvent.keyDown(existingSearch(), { key: "ArrowDown" });
+      });
+
+      const cursor = screen
+        .getAllByRole("option")
+        .filter((el) => el.getAttribute("aria-selected") === "true");
+      expect(cursor).toHaveLength(1);
+      expect(existingSearch().getAttribute("aria-activedescendant")).toBe(cursor[0]!.id);
+    });
+
+    it("drops the chosen branch and its query when the mode toggles away and back", async () => {
+      await enterExistingMode();
+
+      await type("bugfix");
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole("option")[0]!);
+      });
+      expect(screen.getByTestId("existing-branch-picker").textContent).toContain("bugfix/old-fix");
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("radio", { name: /new branch/i }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("radio", { name: /existing branch/i }));
+      });
+
+      expect(screen.getByTestId("existing-branch-picker").textContent).toContain(
+        "Select a local branch..."
+      );
+      expect((existingSearch() as HTMLInputElement).value).toBe("");
+      expect(optionNames()).toContain("develop");
+    });
+  });
+
   it("hides from-remote checkbox in existing mode", async () => {
     renderDialog();
     await advanceTimersGradually(500);
@@ -1239,7 +1336,9 @@ describe("NewWorktreeDialog — in-use base branch selection", () => {
 
     // Exact, not substring: `toContain("main")` would also accept `origin/main`.
     expect(baseBranchLabel()).toBe(IN_USE_BRANCH);
-    expect(baseBranchOption(IN_USE_BRANCH).getAttribute("aria-selected")).toBe("true");
+    // `aria-current`, not `aria-selected`: the latter tracks the keyboard cursor,
+    // which sits on row 0 regardless, so it would pass without a selection.
+    expect(baseBranchOption(IN_USE_BRANCH).getAttribute("aria-current")).toBe("true");
     expect(onClose).not.toHaveBeenCalled();
     expect(mockDispatch.mock.calls.map((c) => c[0])).not.toContain("worktree.setActive");
   });

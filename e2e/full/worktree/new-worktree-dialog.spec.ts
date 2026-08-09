@@ -194,4 +194,73 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     await expect(trigger).toContainText("feature/test-branch", { timeout: T_MEDIUM });
     await expect(branchInput).toHaveValue("e2e-keeps-form-state");
   });
+
+  // #11724: both panels were pinned to 400px under a full-width trigger. Only a
+  // real layout pass can prove the fix, so this measures boxes rather than
+  // asserting on a class string.
+  test("the base-branch panel is exactly as wide as its trigger", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    const trigger = window.locator(SEL.worktree.baseBranchTrigger);
+    await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
+    await trigger.click();
+
+    const listbox = window.locator(SEL.worktree.baseBranchListbox);
+    await expect(listbox).toBeVisible({ timeout: T_MEDIUM });
+
+    const panel = window.locator("[data-radix-popper-content-wrapper] >> nth=0");
+    const triggerBox = await trigger.boundingBox();
+    const panelBox = await panel.boundingBox();
+    expect(triggerBox).not.toBeNull();
+    expect(panelBox).not.toBeNull();
+    // Sub-pixel rounding only; a hardcoded width would be off by far more.
+    expect(Math.abs(panelBox!.width - triggerBox!.width)).toBeLessThanOrEqual(2);
+
+    await window.keyboard.press("Escape");
+    await expect(listbox).toHaveCount(0, { timeout: T_SHORT });
+    // The dialog owns Escape too, so the panel must have swallowed its own.
+    await expect(window.locator(SEL.worktree.newDialog)).toBeVisible();
+  });
+
+  test("the existing-branch panel is keyboard-operable and matches its trigger", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    await window
+      .locator(SEL.worktree.branchModeGroup)
+      .getByRole("radio", { name: "Existing Branch" })
+      .click();
+
+    const trigger = window.locator(SEL.worktree.existingBranchTrigger);
+    await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
+    await trigger.click();
+
+    const listbox = window.locator(SEL.worktree.existingBranchListbox);
+    await expect(listbox).toBeVisible({ timeout: T_MEDIUM });
+
+    const panel = window.locator("[data-radix-popper-content-wrapper] >> nth=0");
+    const triggerBox = await trigger.boundingBox();
+    const panelBox = await panel.boundingBox();
+    expect(Math.abs(panelBox!.width - triggerBox!.width)).toBeLessThanOrEqual(2);
+
+    // A single character used to blank the list; and this field had no arrow-key
+    // or Enter handling at all.
+    const search = window.getByLabel("Search existing branches");
+    await search.fill("m");
+    await expect(listbox.getByRole("option")).not.toHaveCount(0, { timeout: T_MEDIUM });
+
+    await search.press("ArrowDown");
+    const cursor = listbox.locator('[role="option"][aria-selected="true"]');
+    await expect(cursor).toHaveCount(1);
+    const cursorId = await cursor.getAttribute("id");
+    expect(await search.getAttribute("aria-activedescendant")).toBe(cursorId);
+
+    const chosen = (await cursor.textContent()) ?? "";
+    await search.press("Enter");
+
+    await expect(listbox).toHaveCount(0, { timeout: T_SHORT });
+    await expect(window.locator(SEL.worktree.newDialog)).toBeVisible();
+    await expect(trigger).toContainText(chosen.trim(), { timeout: T_MEDIUM });
+  });
 });

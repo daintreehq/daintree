@@ -27,6 +27,7 @@ import { useNewWorktreeProjectSettings } from "./hooks/useNewWorktreeProjectSett
 import { useBranchInput } from "./hooks/useBranchInput";
 import { useBranchValidation } from "./hooks/useBranchValidation";
 import { useBranchPicker } from "./hooks/useBranchPicker";
+import type { BranchOption, BranchWorktreeRef } from "./branchPickerUtils";
 import { usePrefixPicker } from "./hooks/usePrefixPicker";
 import {
   useRecipePicker,
@@ -111,8 +112,7 @@ export function NewWorktreeDialog({
   const [isDismissing, setIsDismissing] = useState(false);
   const [branchMode, setBranchMode] = useState<BranchMode>("new");
   const [selectedExistingBranch, setSelectedExistingBranch] = useState<string | null>(null);
-  const [existingBranchPickerOpen, setExistingBranchPickerOpen] = useState(false);
-  const [existingBranchQuery, setExistingBranchQuery] = useState("");
+  const [recentBranchNames, setRecentBranchNames] = useState<string[]>([]);
   const [worktreeMode, setWorktreeMode] = useState<string>("local");
   const keepEditingButtonRef = useRef<HTMLButtonElement>(null);
   const isCreatingRef = useRef(false);
@@ -129,15 +129,29 @@ export function NewWorktreeDialog({
   const setLastSelectedWorktreeRecipeIdByProject = usePreferencesStore(
     (s) => s.setLastSelectedWorktreeRecipeIdByProject
   );
-  const inUseBranches = useWorktreeStore(
+  // Flattened to `[branch, id, name] x N` so the selector stays shallow-comparable
+  // while still carrying the owning worktree's identity. One source for both the
+  // base picker's "in use" badge and the existing picker's exclusion rule.
+  const worktreeBranchEntries = useWorktreeStore(
     useShallow((s) => {
-      const names: string[] = [];
+      const entries: string[] = [];
       for (const wt of s.worktrees.values()) {
-        if (wt.branch) names.push(wt.branch);
+        if (wt.branch) entries.push(wt.branch, wt.id, wt.name);
       }
-      return names.sort();
+      return entries;
     })
   );
+
+  const worktreeByBranch = useMemo(() => {
+    const map = new Map<string, BranchWorktreeRef>();
+    for (let i = 0; i < worktreeBranchEntries.length; i += 3) {
+      map.set(worktreeBranchEntries[i]!, {
+        id: worktreeBranchEntries[i + 1]!,
+        name: worktreeBranchEntries[i + 2]!,
+      });
+    }
+    return map;
+  }, [worktreeBranchEntries]);
   const recipes = useRecipeStore((s) => s.recipes);
   const runRecipeWithResults = useRecipeStore((s) => s.runRecipeWithResults);
   const currentProject = useProjectStore((s) => s.currentProject);
@@ -231,47 +245,55 @@ export function NewWorktreeDialog({
     [setFromRemote]
   );
 
-  const {
-    branchPickerOpen,
-    setBranchPickerOpen,
-    branchQuery,
-    setBranchQuery,
-    selectedIndex,
-    recentBranchNames: _recentBranchNames,
-    setRecentBranchNames,
-    branchInputRef,
-    branchListRef,
-    branchOptions,
-    branchRows,
-    selectableRows,
-    selectedBranchOption,
-    handleBranchKeyDown,
-    handleBranchSelect,
-  } = useBranchPicker({
+  const handleBaseBranchSelect = useCallback(
+    (option: BranchOption) => {
+      onSelectBranch(option.name, option.isRemote);
+    },
+    [onSelectBranch]
+  );
+
+  const baseBranchPicker = useBranchPicker({
     branches,
-    baseBranch,
-    onSelectBranch,
+    selectedBranch: baseBranch,
+    recentBranchNames,
+    worktreeByBranch,
+    onSelect: handleBaseBranchSelect,
   });
 
-  const existingBranchCandidates = useMemo(() => {
-    const inUseSet = new Set(inUseBranches);
-    return branches.filter((b) => !b.remote && !inUseSet.has(b.name));
-  }, [branches, inUseBranches]);
+  // Only branches you could actually check out here: local, and not already held
+  // by another worktree.
+  const existingBranchCandidates = useMemo(
+    () => branches.filter((b) => !b.remote && !worktreeByBranch.has(b.name)),
+    [branches, worktreeByBranch]
+  );
 
-  const filteredExistingBranches = useMemo(() => {
-    const q = existingBranchQuery.trim().toLowerCase();
-    if (!q) return existingBranchCandidates;
-    return existingBranchCandidates.filter((b) => b.name.toLowerCase().includes(q));
-  }, [existingBranchCandidates, existingBranchQuery]);
+  const handleExistingBranchSelect = useCallback(
+    (option: BranchOption) => {
+      setSelectedExistingBranch(option.name);
+      clearErrors();
+    },
+    [clearErrors]
+  );
+
+  const existingBranchPicker = useBranchPicker({
+    branches: existingBranchCandidates,
+    selectedBranch: selectedExistingBranch,
+    recentBranchNames,
+    worktreeByBranch,
+    onSelect: handleExistingBranchSelect,
+  });
+
+  const resetBaseBranchPicker = baseBranchPicker.reset;
+  const resetExistingBranchPicker = existingBranchPicker.reset;
 
   const handleBranchModeChange = useCallback(
     (mode: BranchMode) => {
       setBranchMode(mode);
       setSelectedExistingBranch(null);
-      setExistingBranchQuery("");
+      resetExistingBranchPicker();
       clearErrors();
     },
-    [clearErrors]
+    [clearErrors, resetExistingBranchPicker]
   );
 
   const onSelectPrefix = useCallback(
@@ -355,7 +377,8 @@ export function NewWorktreeDialog({
     setIsDismissing(false);
     setBranchMode("new");
     setSelectedExistingBranch(null);
-    setExistingBranchQuery("");
+    resetBaseBranchPicker();
+    resetExistingBranchPicker();
     setWorktreeMode("local");
     isCreatingRef.current = false;
     baseBranchTouchedRef.current = false;
@@ -463,9 +486,10 @@ export function NewWorktreeDialog({
     initialIssue,
     initialPR,
     setFromRemote,
-    setRecentBranchNames,
     setValidationError,
     clearErrors,
+    resetBaseBranchPicker,
+    resetExistingBranchPicker,
   ]);
 
   // Initialize worktreeMode when projectSettings loads asynchronously
@@ -892,14 +916,6 @@ export function NewWorktreeDialog({
     ]
   );
 
-  const handleExistingBranchSelect = useCallback(
-    (branchName: string) => {
-      setSelectedExistingBranch(branchName);
-      clearErrors();
-    },
-    [clearErrors]
-  );
-
   const handlePrefixSelectWrap = useCallback(
     (suggestion: { type: { prefix: string; displayName: string } }) => {
       handlePrefixSelect(suggestion.type.prefix);
@@ -972,32 +988,15 @@ export function NewWorktreeDialog({
             {!isExistingMode && (
               <BaseBranchCombobox
                 baseBranch={baseBranch}
-                branchPickerOpen={branchPickerOpen}
-                onOpenChange={setBranchPickerOpen}
-                branchQuery={branchQuery}
-                onQueryChange={setBranchQuery}
-                branchRows={branchRows}
-                selectableRows={selectableRows}
-                selectedIndex={selectedIndex}
-                selectedBranchLabel={selectedBranchOption?.labelText}
-                onKeyDown={handleBranchKeyDown}
-                onSelect={handleBranchSelect}
-                branchInputRef={branchInputRef}
-                branchListRef={branchListRef}
+                controller={baseBranchPicker}
                 errorField={errors.errorField}
-                branchOptionsLength={branchOptions.length}
               />
             )}
 
             {isExistingMode ? (
               <ExistingBranchPicker
-                open={existingBranchPickerOpen}
-                onOpenChange={setExistingBranchPickerOpen}
                 selectedBranch={selectedExistingBranch}
-                query={existingBranchQuery}
-                onQueryChange={setExistingBranchQuery}
-                filteredBranches={filteredExistingBranches}
-                onSelect={handleExistingBranchSelect}
+                controller={existingBranchPicker}
               />
             ) : (
               <NewBranchInput

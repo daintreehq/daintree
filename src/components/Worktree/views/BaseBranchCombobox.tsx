@@ -1,48 +1,21 @@
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Check, ChevronsUpDown, Info, Search } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { HighlightBranchText } from "./HighlightBranchText";
-import type { BranchPickerRow } from "../branchPickerUtils";
+import { ChevronsUpDown, Info } from "lucide-react";
+import { BranchPickerPanel } from "./BranchPickerPanel";
+import type { UseBranchPickerResult } from "../hooks/useBranchPicker";
 
 interface BaseBranchComboboxProps {
   baseBranch: string;
-  branchPickerOpen: boolean;
-  onOpenChange: (open: boolean) => void;
-  branchQuery: string;
-  onQueryChange: (query: string) => void;
-  branchRows: BranchPickerRow[];
-  selectableRows: (BranchPickerRow & { kind: "option" })[];
-  selectedIndex: number;
-  selectedBranchLabel: string | undefined;
-  onKeyDown: (e: React.KeyboardEvent) => void;
-  onSelect: (row: BranchPickerRow & { kind: "option" }) => void;
-  branchInputRef: React.RefObject<HTMLInputElement | null>;
-  branchListRef: React.RefObject<HTMLDivElement | null>;
+  controller: UseBranchPickerResult;
   errorField?: "base-branch" | "new-branch" | "worktree-path" | null;
-  branchOptionsLength: number;
   disabled?: boolean;
 }
 
 export function BaseBranchCombobox({
   baseBranch,
-  branchPickerOpen,
-  onOpenChange,
-  branchQuery,
-  onQueryChange,
-  branchRows,
-  selectableRows,
-  selectedIndex,
-  selectedBranchLabel,
-  onKeyDown,
-  onSelect,
-  branchInputRef,
-  branchListRef,
+  controller,
   errorField,
-  branchOptionsLength,
   disabled,
 }: BaseBranchComboboxProps) {
   return (
@@ -68,137 +41,37 @@ export function BaseBranchCombobox({
           </TooltipContent>
         </Tooltip>
       </div>
-      <Popover open={branchPickerOpen} onOpenChange={onOpenChange}>
+      <Popover open={controller.open} onOpenChange={controller.setOpen}>
         <PopoverTrigger asChild>
           <Button
             id="base-branch"
             variant="outline"
             role="combobox"
-            aria-expanded={branchPickerOpen}
+            aria-expanded={controller.open}
             aria-haspopup="listbox"
             aria-invalid={errorField === "base-branch" ? true : undefined}
             aria-describedby={errorField === "base-branch" ? "validation-error" : undefined}
             className="w-full justify-between bg-daintree-bg border-daintree-border text-daintree-text hover:bg-daintree-bg hover:text-daintree-text"
             disabled={disabled}
           >
-            <span className="truncate">{selectedBranchLabel || "Select base branch..."}</span>
+            {/* The trigger keeps the composed "(current)"/"(remote)" label — it has
+                one line for the whole answer. Rows draw those as badges instead. */}
+            <span className="truncate">
+              {controller.selectedOption?.labelText || "Select base branch..."}
+            </span>
             <ChevronsUpDown className="text-text-muted shrink-0" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent
-          className="w-[400px] p-0"
-          align="start"
-          onEscapeKeyDown={(e) => e.stopPropagation()}
-        >
-          <div className="flex items-center border-b border-daintree-border px-3">
-            <Search className="mr-2 h-4 w-4 text-text-muted shrink-0" />
-            <input
-              ref={branchInputRef}
-              className="flex h-10 w-full rounded-[var(--radius-md)] bg-transparent py-3 text-sm outline-hidden placeholder:text-text-placeholder disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-daintree-accent/40"
-              placeholder="Search branches..."
-              value={branchQuery}
-              onChange={(e) => onQueryChange(e.target.value)}
-              onKeyDown={onKeyDown}
-              role="combobox"
-              aria-label="Search base branches"
-              aria-autocomplete="list"
-              aria-controls="branch-list"
-              aria-expanded={branchPickerOpen}
-              aria-activedescendant={
-                selectableRows.length > 0 && selectedIndex >= 0
-                  ? `branch-option-${selectedIndex}`
-                  : undefined
-              }
-            />
-          </div>
-          <ScrollShadow
-            ref={branchListRef}
-            id="branch-list"
-            role="listbox"
-            className="max-h-[300px]"
-            scrollClassName="p-1"
-          >
-            {selectableRows.length === 0 ? (
-              branchQuery.trim() ? (
-                <EmptyState
-                  variant="filtered-empty"
-                  scale="popover"
-                  title={`No matches for "${branchQuery.trim()}"`}
-                  action={
-                    <button
-                      type="button"
-                      onClick={() => onQueryChange("")}
-                      className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
-                    >
-                      Clear search
-                    </button>
-                  }
-                />
-              ) : (
-                <EmptyState variant="zero-data" scale="popover" title="No branches available" />
-              )
-            ) : (
-              (() => {
-                let optionIndex = 0;
-                return branchRows.map((row) => {
-                  if (row.kind === "section") {
-                    return (
-                      <div
-                        key={`section-${row.label}`}
-                        role="presentation"
-                        className="px-2 py-1.5 text-[11px] font-bold tracking-wider uppercase text-daintree-text/50"
-                      >
-                        {row.label}
-                      </div>
-                    );
-                  }
-                  const idx = optionIndex++;
-                  return (
-                    <div
-                      key={row.name}
-                      id={`branch-option-${idx}`}
-                      data-option-index={idx}
-                      role="option"
-                      aria-selected={row.name === baseBranch}
-                      onClick={() => onSelect(row)}
-                      className={cn(
-                        "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
-                        row.name === baseBranch && "bg-daintree-border",
-                        idx === selectedIndex && "bg-overlay-selected"
-                      )}
-                    >
-                      <span className="truncate">
-                        <HighlightBranchText
-                          text={row.labelText}
-                          matchRanges={row.matchRanges}
-                          nameLength={row.name.length}
-                        />
-                      </span>
-                      <span className="flex items-center gap-1 shrink-0">
-                        {row.inUseWorktree && (
-                          <span
-                            className="text-xs text-status-warning"
-                            title={`In use by worktree: ${row.inUseWorktree.name}`}
-                          >
-                            in use
-                          </span>
-                        )}
-                        {row.name === baseBranch && (
-                          <Check className="h-4 w-4 text-daintree-text" />
-                        )}
-                      </span>
-                    </div>
-                  );
-                });
-              })()
-            )}
-          </ScrollShadow>
-          {!branchQuery && branchOptionsLength > 500 && (
-            <div className="border-t border-daintree-border px-3 py-2 text-xs text-daintree-text/60">
-              Showing first 500 branches. Type to search.
-            </div>
-          )}
-        </PopoverContent>
+        <BranchPickerPanel
+          controller={controller}
+          selectedBranch={baseBranch}
+          listId="branch-list"
+          optionIdPrefix="branch-option-"
+          searchPlaceholder="Search branches..."
+          searchAriaLabel="Search base branches"
+          zeroDataTitle="No branches available"
+          showCurrentBadge
+        />
       </Popover>
     </div>
   );
