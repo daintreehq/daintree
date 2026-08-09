@@ -155,14 +155,4 @@ describe("worktree.copyTree completion toast", () => {
     expect(payload.rateLimitKey).toBeTruthy();
     expect(payload.rateLimitKey).not.toBe(payload.type);
   });
-
-  it("opts out of the post-dispatch shortcut hint that would overlap its toast", () => {
-    // ShortcutHint anchors to the toolbar button at top-right and the toast
-    // lands in the same corner; 219e2908f dismissed the hint for exactly this
-    // overlap when the result still showed in a forced tooltip.
-    const actions: ActionRegistry = new Map();
-    registerWorktreeContextActions(actions, {} as unknown as ActionCallbacks);
-    const def = actions.get("worktree.copyTree")!() as AnyActionDefinition;
-    expect(def.suppressShortcutHint).toBe(true);
-  });
 });

@@ -682,7 +682,11 @@ export function Toolbar({
 
   const sidebarHintHover = useShortcutHintHover("nav.toggleSidebar");
   const devServerHintHover = useShortcutHintHover("devServer.start");
-  const copyTreeHintHover = useShortcutHintHover("worktree.copyTree");
+  // No hover hint for copy-tree: the action sets `suppressShortcutHint`, and
+  // per that field's contract an opted-out button skips this hook too — the
+  // hover path teaches the same hint the dispatch path was opted out of, and an
+  // already-shown one isn't dismissed by the click, so it would sit beside the
+  // completion toast in the same corner. The tooltip still shows the shortcut.
   const fileBrowserHintHover = useShortcutHintHover("worktree.openFileBrowserPanel");
 
   // The one launcher button whose action can legitimately refuse: it resolves
@@ -1156,7 +1160,6 @@ export function Toolbar({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
-                    {...copyTreeHintHover}
                     variant="ghost"
                     size="icon"
                     data-toolbar-item=""
@@ -1278,7 +1281,6 @@ export function Toolbar({
       sidebarHintHover,
       copyTreeShortcut,
       copyTreeAriaShortcut,
-      copyTreeHintHover,
       currentProject,
       handleCopyTreeClick,
       isCopyingTree,

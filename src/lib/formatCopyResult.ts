@@ -67,9 +67,10 @@ const IGNORE_RULE_REASONS: CopyTreeExclusionReason[] = [
  * files", which reads as a failure for the common case of right-clicking a
  * folder that the project ignores wholesale (`node_modules`, `dist`).
  *
- * Lives in this leaf module alongside `formatCopyResultMessage` so the action
- * definitions can explain a scoped zero-file result too, not just the
- * context-menu path that first needed it (#11735).
+ * Only the context-menu path uses this, and deliberately so: it is the one
+ * caller that knows a *folder* was picked. The action-level toasts take paths
+ * that may equally be globs or single files, where "this folder…" would be the
+ * wrong words, so they report a plain count instead (#11735).
  */
 export function describeEmptyFolderCopy(stats?: CopyTreeBudgetStats | null): string {
   const byReason = stats?.excluded?.byReason;

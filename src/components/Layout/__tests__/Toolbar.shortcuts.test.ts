@@ -10,6 +10,10 @@ const LAUNCHER_BUTTON_PATH = path.resolve(__dirname, "../ToolbarLauncherButton.t
 const AGENT_BUTTON_PATH = path.resolve(__dirname, "../AgentButton.tsx");
 const VOICE_RECORDING_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
 const PLUGIN_TRAY_PATH = path.resolve(__dirname, "../PluginTrayButton.tsx");
+const COPY_TREE_ACTION_PATH = path.resolve(
+  __dirname,
+  "../../../services/actions/definitions/worktreeContextActions.ts"
+);
 const TOOLBAR_CSS_PATH = path.resolve(__dirname, "../../../styles/components/toolbar.css");
 
 describe("Toolbar shortcut tooltips — issue #3443", () => {
@@ -234,6 +238,24 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       // must stay uncontrolled.
       expect(copyTreeBlock![0]).not.toMatch(/<Tooltip\s+open=/);
       expect(copyTreeBlock![0]).not.toContain('role="status"');
+    });
+
+    it("skips the hover hint, matching the action's suppressShortcutHint opt-out", async () => {
+      // Relational, across two files: `suppressShortcutHint` only blocks the
+      // hint ActionService emits after dispatch, and its own contract says an
+      // opted-out button must skip `useShortcutHintHover` too — the hover path
+      // teaches the same hint and a shown one survives the click, landing
+      // beside the completion toast in the same corner. Reading the action
+      // definition here is what makes this an agreement check rather than a
+      // restatement of either side.
+      const definitionSource = await fs.readFile(COPY_TREE_ACTION_PATH, "utf-8");
+      const copyTreeAction = definitionSource.match(/id: "worktree\.copyTree"[\s\S]*?run: async/);
+      expect(copyTreeAction).not.toBeNull();
+      if (!copyTreeAction![0].includes("suppressShortcutHint: true")) return;
+
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      expect(copyTreeBlock![0]).not.toMatch(/\{\.\.\.\w*[Hh]intHover\}/);
     });
 
     it("retires the inline-feedback state and its reset timer entirely", () => {

@@ -11,9 +11,11 @@ import type { ActionSource } from "@shared/types/actions";
 import type { CopyTreeRunSource } from "@shared/types";
 import type { CopyTreeBudgetStats } from "@shared/types/ipc/copyTree";
 
-// Both moved to a leaf module so the copyTree action definitions can share them
-// without closing an import cycle through `actionService` below (#11722,
-// #11735). Re-exported because this was their public home.
+// Both live in a leaf module: `formatCopyResultMessage` because the copyTree
+// action definitions need it and importing it from here would close a cycle
+// through `actionService` below (#11722), and `describeEmptyFolderCopy` to keep
+// the two CopyTree result formatters together. Re-exported from their original
+// public home so existing importers are unaffected.
 export { describeEmptyFolderCopy, formatCopyResultMessage };
 
 /**
