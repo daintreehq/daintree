@@ -69,6 +69,7 @@ vi.mock("../../../window/windowRef.js", () => ({
   setMainWindow: vi.fn(),
 }));
 
+import type { CopyTreeHistoryAppendInput } from "../../../../shared/types/ipc/copyTreeHistory.js";
 import { CHANNELS } from "../../channels.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
 import { contextDir, _resetReservedPathsForTests } from "../../../services/copyTreeOutputFile.js";
@@ -1223,9 +1224,11 @@ describe("copy-tree run history recording", () => {
     return generateContext;
   }
 
-  function lastRecordedRun() {
+  function lastRecordedRun(): [string | null, CopyTreeHistoryAppendInput] {
     const calls = copyTreeHistoryMock.recordCopyTreeRun.mock.calls;
-    return calls[calls.length - 1] as [string | null, Record<string, unknown>];
+    const last = calls[calls.length - 1];
+    if (!last) throw new Error("recordCopyTreeRun was never called");
+    return last;
   }
 
   beforeEach(async () => {

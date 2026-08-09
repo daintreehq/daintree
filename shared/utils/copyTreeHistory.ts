@@ -110,9 +110,14 @@ function labelList(values: string[], render: (value: string) => string): string 
     .sort()
     .map(render)
     .filter((label) => label.length > 0);
-  if (rendered.length === 0) return null;
 
-  return rendered.length > 1 ? `${rendered[0]} +${rendered.length - 1} more` : rendered[0];
+  // Destructured rather than indexed: under `noUncheckedIndexedAccess` a
+  // `rendered[0]` read stays `string | undefined` however the length was
+  // checked, and this function promises `string | null`.
+  const [first, ...rest] = rendered;
+  if (first === undefined) return null;
+
+  return rest.length > 0 ? `${first} +${rest.length} more` : first;
 }
 
 /**
