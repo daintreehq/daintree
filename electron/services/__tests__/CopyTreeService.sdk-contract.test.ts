@@ -533,9 +533,50 @@ describe("CopyTreeService against the installed CopyTree", () => {
         includePaths: ["src/landscape/**"],
       });
 
-      expect(result.includedFiles).toBeGreaterThan(0);
+      // The deepest fixture file specifically: a `/**` that regressed to direct
+      // children only would still leave `includedFiles` non-zero, so a count
+      // check alone would not notice the folder remedy half-working.
+      expect(result.files?.map((file) => file.path)).toContain(
+        "src/landscape/support/nested/seed.ts"
+      );
       expect(result.noFilesMatched).toBeFalsy();
       expect(result.unmatchedSelector).toBeUndefined();
+    });
+
+    // `noFilesMatched` is `files.length === 0` measured once the whole pipeline
+    // has run, and the size gate, the git filter and the budgets all run after
+    // the pattern check. So "some file failed the patterns" and "the run came
+    // back empty" can both be true while the patterns matched perfectly — the
+    // decoys supply the first, a later stage removes the real match. Blaming
+    // the patterns there would send a caller to rewrite the one field that
+    // worked, which is #11731 pointed the other way.
+    describe("a later stage, not the patterns, emptying the run", () => {
+      it("stays quiet when the size gate dropped the only match", async () => {
+        // The pattern selects exactly one real file; the gate then rejects it,
+        // while the unselected decoys have already been booked as filterPattern.
+        const result = await copyTreeService.testConfig(tempDir, {
+          includePaths: ["src/landscape/generator.ts"],
+          maxFileSize: 1,
+        });
+
+        expect(result.noFilesMatched).toBe(true);
+        // The precondition that makes this test meaningful: without it the run
+        // could be empty for some third reason and pass vacuously.
+        expect(result.excluded?.byReason.filterPattern).toBeGreaterThan(0);
+        expect(result.excluded?.byReason.sizeGate).toBeGreaterThan(0);
+        expect(result.unmatchedSelector).toBeUndefined();
+      });
+
+      it("stays quiet when `exclude` removed what the patterns selected", async () => {
+        const result = await copyTreeService.testConfig(tempDir, {
+          includePaths: ["src/landscape/**"],
+          exclude: ["src/landscape/**"],
+        });
+
+        expect(result.noFilesMatched).toBe(true);
+        expect(result.excluded?.byReason.filterPattern).toBeGreaterThan(0);
+        expect(result.unmatchedSelector).toBeUndefined();
+      });
     });
 
     it("carries the curated files, and only those, into a real generated bundle", async () => {

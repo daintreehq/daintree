@@ -129,11 +129,19 @@ describe("argument descriptions carry the semantics prose no longer states", () 
       const description = emit(CopyTreeOptionsSchema).properties?.[field]?.description ?? "";
 
       expect(description).toMatch(/patterns match file paths/i);
+
       // Both halves of the contrast, not just the rule: "a folder needs a glob"
       // is advice a caller cannot act on without seeing the two forms side by
       // side, which is exactly what the working `worktree.copyTree` text shows.
-      expect(description).toContain("src/panels/**");
-      expect(description).toMatch(/not 'src\/panels'/);
+      // Captured rather than compared against copied literals, so the example
+      // path can change freely but the two forms still have to be the SAME
+      // folder — text that globbed one path and warned off another would read
+      // as guidance and teach nothing.
+      const contrast = description.match(/pass '([^']+)', not '([^']+)'/);
+      expect(contrast).not.toBeNull();
+      const [, recommended, rejected] = contrast ?? [];
+      expect(recommended).toBe(`${rejected}/**`);
+
       // The redirect matters as much as the warning — the caller's real intent
       // was a folder, and `scopePaths` is the field that takes one.
       expect(description).toMatch(/scopePaths/);

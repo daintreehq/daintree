@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { COPY_TREE_UNMATCHED_SELECTORS } from "@shared/types/ipc/copyTree";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const filesClientMock = vi.hoisted(() => ({
@@ -696,6 +698,58 @@ describe("systemActions adversarial", () => {
       // selector at fault, and a present-but-empty field reads as one.
       expect(result.stats).not.toHaveProperty("unmatchedSelector");
       expect(result.stats).toMatchObject({ noFilesMatched: true });
+    });
+
+    it.each(COPY_TREE_UNMATCHED_SELECTORS)(
+      "carries %s through dispatch's result parse",
+      async (selector) => {
+        // Every member, not just the one the service happens to emit most often:
+        // dispatch parses results against `resultSchema` (#11539), so a schema
+        // narrower than the shared tuple turns a correct diagnostic into a
+        // RESULT_VALIDATION_ERROR that destroys the whole call.
+        const { run, getDef } = setupActions();
+        copyTreeClientMock.generate.mockResolvedValueOnce({
+          ...EMPTY_RUN,
+          stats: { ...EMPTY_RUN.stats, unmatchedSelector: selector },
+        });
+
+        const result = await run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" });
+
+        expect(getDef("copyTree.generate").resultSchema?.parse(result)).toMatchObject({
+          stats: { unmatchedSelector: selector },
+        });
+      }
+    );
+
+    it.each(CASES)("$id advertises the hint on the wire, not just in its return", ({ id }) => {
+      // The projection returning a field and the MCP client being TOLD about it
+      // are different surfaces: `computeSchemas` converts `resultSchema` in
+      // output mode, and a description attached to the wrong link in a zod
+      // chain is dropped there silently. Same conversion, same options.
+      const { getDef } = setupActions();
+      const def = getDef(id);
+      expect(def.mcpOutputSchema).toBe(true);
+
+      const emitted = z.toJSONSchema(def.resultSchema as z.ZodType, {
+        io: "output",
+        unrepresentable: "any",
+        reused: "inline",
+        cycles: "ref",
+        target: "draft-2020-12",
+      }) as {
+        properties?: {
+          stats?: {
+            properties?: { unmatchedSelector?: { enum?: string[]; description?: string } };
+          };
+        };
+      };
+
+      const advertised = emitted.properties?.stats?.properties?.unmatchedSelector;
+      // Derived from the shared tuple rather than a copied literal: a member
+      // added there and left out of the wire enum fails here.
+      expect(advertised?.enum).toEqual([...COPY_TREE_UNMATCHED_SELECTORS]);
+      // The value alone is not actionable — the remedy is the point.
+      expect(advertised?.description ?? "").toMatch(/scopePaths/);
     });
   });
 });

@@ -597,6 +597,76 @@ describe("CopyTreeService", () => {
         expect(result.unmatchedSelector).toBeUndefined();
       });
 
+      // `noFilesMatched` is measured after the WHOLE pipeline, so a decoy that
+      // failed the patterns and a real match that a later stage then dropped
+      // satisfy both halves of the old gate while the patterns did their job.
+      // Each reason here belongs to a stage that runs after the pattern check.
+      it.each(["sizeGate", "gitFilter", "optionExclude", "charBudget", "duplicate"])(
+        "stays quiet when %s removed a file that had already passed the patterns",
+        async (reason) => {
+          mockEmptyRun({ filterPattern: 4, [reason]: 1 });
+
+          const result = await copyTreeService.testConfig(tempDir, {
+            includePaths: ["src/panels/**"],
+          });
+
+          expect(result.noFilesMatched).toBe(true);
+          expect(result.unmatchedSelector).toBeUndefined();
+        }
+      );
+
+      it("stays quiet on a reason it has never heard of", async () => {
+        // A future SDK stage books an exclusion under a new key. Unknown has to
+        // mean "ran after the patterns" — going silent costs a caller one
+        // diagnostic, blaming the wrong field costs it the retry loop.
+        mockEmptyRun({ filterPattern: 4, someFutureStage: 1 });
+
+        const result = await copyTreeService.testConfig(tempDir, { includePaths: ["src/**"] });
+
+        expect(result.unmatchedSelector).toBeUndefined();
+      });
+
+      it.each(["gitignore", "configExclude", "scopeFilter", "testExclude", "unreadable"])(
+        "still blames the patterns when the only company is %s, pruned on the way in",
+        async (reason) => {
+          // These are booked by the walker before a file ever reaches the
+          // pattern check, so they say nothing about whether the patterns
+          // matched. Suppressing on them would silence the hint on any real
+          // repository, where a .gitignore is a given.
+          mockEmptyRun({ filterPattern: 4, [reason]: 12 });
+
+          const result = await copyTreeService.testConfig(tempDir, {
+            includePaths: ["src/panels"],
+          });
+
+          expect(result.unmatchedSelector).toBe("includePaths");
+        }
+      );
+
+      it("stays quiet when a budget truncated the run without booking a reason", async () => {
+        copyMock.mockResolvedValue({
+          output: "",
+          outputFormatVersion: null,
+          manifest: [],
+          stats: {
+            totalFiles: 0,
+            totalSize: 0,
+            duration: 1,
+            estimatedOutputChars: 0,
+            estimatedTokens: 0,
+            noFilesMatched: true,
+            excluded: { total: 4, byReason: { filterPattern: 4 } },
+            truncated: true,
+            truncatedCount: 1,
+            truncatedBy: "charLimit",
+          },
+        });
+
+        const result = await copyTreeService.testConfig(tempDir, { includePaths: ["a.ts"] });
+
+        expect(result.unmatchedSelector).toBeUndefined();
+      });
+
       it("stays quiet when no selector was supplied at all", async () => {
         // A whole-worktree copy of an empty directory has nothing to blame.
         mockEmptyRun({ filterPattern: 3 });

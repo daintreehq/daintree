@@ -655,9 +655,16 @@ class CopyTreeService {
   private static suppliedPatternSelector(
     options: CopyTreeOptions
   ): CopyTreeUnmatchedSelector | undefined {
-    const hasIncludePaths = (options.includePaths?.length ?? 0) > 0;
+    // Deliberately mirrors what `mergeSelectionPatterns` above counts as a
+    // contribution, down to the scalar case: it wraps a non-undefined string
+    // into a one-entry list, so `filter: ""` becomes the unmatchable pattern
+    // `[""]` and is very much supplied — while `filter: []` contributes nothing
+    // and leaves the SDK unfiltered. Both boundaries reject those inputs, but
+    // the direct-service path does not, and disagreeing with the merge is how
+    // the caller whose selection emptied the run gets told nothing.
     const filter = options.filter;
-    const hasFilter = Array.isArray(filter) ? filter.length > 0 : (filter?.length ?? 0) > 0;
+    const hasIncludePaths = (options.includePaths?.length ?? 0) > 0;
+    const hasFilter = Array.isArray(filter) ? filter.length > 0 : filter !== undefined;
 
     if (hasIncludePaths && hasFilter) return "filterAndIncludePaths";
     if (hasIncludePaths) return "includePaths";
@@ -666,23 +673,62 @@ class CopyTreeService {
   }
 
   /**
+   * Exclusion reasons that can only be booked BEFORE the include patterns run.
+   *
+   * The walker prunes by ignore file, config exclude and scope as it descends,
+   * so everything here happened to files that never reached the pattern check.
+   * Anything NOT on this list — a later stage, or a reason a future SDK adds —
+   * removed a file that had already passed the patterns, which is the whole
+   * point of the distinction below. Unknown reasons falling outside it is the
+   * safe direction: the hint goes quiet rather than blaming the wrong field.
+   */
+  private static readonly PRE_PATTERN_EXCLUSIONS: ReadonlySet<string> = new Set<string>([
+    "gitignore",
+    "copytreeignore",
+    "globalGitignore",
+    "gitInfoExclude",
+    "configExclude",
+    "scopeFilter",
+    "testExclude",
+    "unreadable",
+  ] satisfies CopyTreeExclusionReason[]);
+
+  /**
    * Blame the supplied patterns for an empty run, but only when they earned it.
    *
-   * `filterPattern` counts files the walker produced and the include patterns
-   * then rejected. The walker prunes by scope, gitignore and config excludes as
-   * it goes and tests include patterns first among its per-file checks, so a
-   * non-zero count is proof that real files reached the patterns and none
-   * survived — never that the subtree was empty to begin with. Gated on
-   * `noFilesMatched` as well because that same count is ordinary on a
-   * SUCCESSFUL narrow selection: every file outside the selection is booked
-   * there, and reporting it then would flag healthy runs.
+   * `filterPattern` counts files that reached the include-pattern check and
+   * failed it, so a non-zero count is necessary — but it is nowhere near
+   * sufficient. `noFilesMatched` is `files.length === 0` measured after the
+   * WHOLE pipeline, and the git filter, the file-count and total-size budgets,
+   * `exclude`, the size gate and the character limit all run after the pattern
+   * check. So a run holding one decoy file that failed the patterns and one
+   * real match that a later stage then dropped satisfies both conditions while
+   * the patterns did their job perfectly — and telling that caller to rewrite
+   * its `includePaths` sends it to fix the one part of the request that worked,
+   * which is the same failure #11731 is about, pointed the other way.
+   *
+   * A file removed after the patterns is therefore proof they matched something
+   * and disqualifies the hint. `truncated` is a second, cheap read on the same
+   * question for a budget that drops a file without booking a reason.
    */
   private static deriveUnmatchedSelector(
     stats: CopyResult["stats"],
     supplied: CopyTreeUnmatchedSelector | undefined
   ): CopyTreeUnmatchedSelector | undefined {
     if (supplied === undefined || stats.noFilesMatched !== true) return undefined;
-    return (stats.excluded?.byReason?.filterPattern ?? 0) > 0 ? supplied : undefined;
+
+    const byReason: Record<string, number> = stats.excluded?.byReason ?? {};
+    if ((byReason.filterPattern ?? 0) <= 0) return undefined;
+    if (stats.truncated === true) return undefined;
+
+    const survivedThePatterns = Object.entries(byReason).some(
+      ([reason, count]) =>
+        count > 0 &&
+        reason !== "filterPattern" &&
+        !CopyTreeService.PRE_PATTERN_EXCLUSIONS.has(reason)
+    );
+
+    return survivedThePatterns ? undefined : supplied;
   }
 
   private buildSdkOptions(options: CopyTreeOptions, signal: AbortSignal): SdkCopyOptions {
