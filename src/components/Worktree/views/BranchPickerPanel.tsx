@@ -92,13 +92,17 @@ export function BranchPickerPanel({
         inputRef.current?.focus();
       }}
     >
-      {/* Focus reads as the header rule brightening — a neutral `selection-outline`
-          lift like the palette input's, not an accent box floating in the panel. */}
-      <div className="flex items-center border-b border-daintree-border px-3 transition-colors focus-within:border-selection-outline">
+      <div className="flex items-center border-b border-daintree-border px-3">
         <Search className="mr-2 h-4 w-4 text-text-muted shrink-0" aria-hidden="true" />
         <input
           ref={inputRef}
-          className="flex h-10 w-full bg-transparent py-3 text-sm outline-hidden placeholder:text-text-placeholder disabled:cursor-not-allowed disabled:opacity-50"
+          // The field opts out of the global ring, so it owns its own indicator —
+          // required by the focus-ring fallback contract, which only exempts
+          // elements that delegate focus elsewhere, and this one is autofocused.
+          // Neutral `selection-outline` at ring-1 inset, the same token the palette
+          // input's focus border uses: the previous treatment was a 2px accent ring
+          // that read as a green box floating inside the panel (#11724).
+          className="flex h-10 w-full bg-transparent py-3 text-sm outline-hidden placeholder:text-text-placeholder disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-selection-outline/60"
           placeholder={searchPlaceholder}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
