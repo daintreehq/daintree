@@ -3181,6 +3181,9 @@ describe("createAppProtocolHandler — ASAR-safe buffered read", () => {
     const response = await handler(makeRequest());
 
     expect(response.status).toBe(404);
+    // A retry through fs.open here would look like a harmless fallback and put
+    // the asar extraction right back (#11726) — there is no second attempt.
+    expect(fs.open).not.toHaveBeenCalled();
   });
 
   it("returns 404 when the read rejects with EISDIR (directory that slipped past isFile)", async () => {
@@ -3203,6 +3206,7 @@ describe("createAppProtocolHandler — ASAR-safe buffered read", () => {
     const response = await handler(makeRequest());
 
     expect(response.status).toBe(500);
+    expect(fs.open).not.toHaveBeenCalled();
   });
 
   describe("404 diagnostics (#11635)", () => {
@@ -3277,18 +3281,20 @@ describe("createAppProtocolHandler — ASAR-safe buffered read", () => {
 
     it("reports a body-read failure as its own stage, apart from stat and not-a-file", async () => {
       const fs = await import("fs/promises");
+      // Carries a code and nothing else: errors reach us wrapped or synthesized
+      // often enough that the report has to omit the syscall fields it wasn't
+      // given rather than log them as undefined.
       vi.mocked(fs.readFile).mockRejectedValue(
-        Object.assign(new Error("nope"), { code: "EISDIR", syscall: "read" })
+        Object.assign(new Error("nope"), { code: "EISDIR" })
       );
 
       const handler = await captureHandler();
       await handler(makeRequest());
 
-      expect(await notFoundLog()).toMatchObject({
-        stage: "read",
-        code: "EISDIR",
-        syscall: "read",
-      });
+      const logged = await notFoundLog();
+      expect(logged).toMatchObject({ stage: "read", code: "EISDIR" });
+      expect(logged).not.toHaveProperty("path");
+      expect(logged).not.toHaveProperty("syscall");
     });
 
     it("logs the resolver rejection with its reason and never touches disk", async () => {
