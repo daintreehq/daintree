@@ -1505,6 +1505,50 @@ describe("buildInputBarTheme", () => {
       )
     );
   });
+
+  it("keeps file paths and chip labels fully visible instead of cropping them", () => {
+    const css = readGeneratedCss([buildInputBarTheme(theme)]);
+    for (const selector of [".cm-file-chip", ".cm-chip-label"]) {
+      const decls = parseDeclarations(extractRuleBody(css, selector));
+      expect(clipsText(decls), `${selector} must not crop its text`).toBe(false);
+      expect(
+        canBreakUnbrokenToken(decls),
+        `${selector} must be able to break an unbroken token`
+      ).toBe(true);
+    }
+  });
+
+  it("keeps .cm-file-chip transformable so the entrance animation still applies", () => {
+    const css = readGeneratedCss([buildInputBarTheme(theme)]);
+    const decls = parseDeclarations(extractRuleBody(css, ".cm-file-chip"));
+    // A non-replaced `display: inline` box ignores transform, which would
+    // silently kill the chip-enter translateY.
+    expect(decls["display"]).toBeDefined();
+    expect(decls["display"]).not.toBe("inline");
+  });
+
+  it("floors chip pills at the content line-height rather than pinning a fixed height", () => {
+    const css = readGeneratedCss([buildInputBarTheme(theme)]);
+    const contentLineHeight = parseDeclarations(extractRuleBody(css, ".cm-content"))["line-height"];
+    expect(contentLineHeight).toBeDefined();
+
+    for (const selector of [
+      ".cm-file-drop-chip",
+      ".cm-image-chip",
+      ".cm-diff-chip",
+      ".cm-terminal-chip",
+      ".cm-selection-chip",
+    ]) {
+      const decls = parseDeclarations(extractRuleBody(css, selector));
+      // A fixed height makes a wrapped label spill out of the painted pill.
+      expect(decls["height"], `${selector} must not pin a fixed height`).toBeUndefined();
+      // The floor preserves the single-line size, so it has to track the
+      // editor's line-height instead of drifting from it.
+      expect(decls["min-height"], `${selector} should floor at the content line-height`).toBe(
+        contentLineHeight
+      );
+    }
+  });
 });
 
 const ALL_CHIP_SELECTORS = [
@@ -1587,6 +1631,45 @@ function extractRuleBody(css: string, selector: string): string {
     throw new Error(`selector ${selector} not found in CSS`);
   }
   return match[1];
+}
+
+function parseDeclarations(body: string): Record<string, string> {
+  const decls: Record<string, string> = {};
+  for (const part of body.split(";")) {
+    const idx = part.indexOf(":");
+    if (idx === -1) continue;
+    const prop = part.slice(0, idx).trim().toLowerCase();
+    if (prop)
+      decls[prop] = part
+        .slice(idx + 1)
+        .trim()
+        .toLowerCase();
+  }
+  return decls;
+}
+
+// `pre-wrap`, `pre-line` and `break-spaces` all still wrap — only these two refuse.
+const NON_WRAPPING_WHITE_SPACE = new Set(["nowrap", "pre"]);
+
+// Asserted behaviorally rather than against literal declarations so an
+// equivalent implementation (e.g. `word-break: break-all` in place of
+// `overflow-wrap: anywhere`) keeps passing.
+function clipsText(decls: Record<string, string>): boolean {
+  if (/hidden|clip/.test(`${decls["overflow"] ?? ""} ${decls["overflow-x"] ?? ""}`)) return true;
+  if ((decls["text-overflow"] ?? "clip") !== "clip") return true;
+  if (NON_WRAPPING_WHITE_SPACE.has(decls["white-space"] ?? "normal")) return true;
+  return ["max-width", "width", "max-inline-size", "inline-size"].some((prop) => {
+    const value = decls[prop];
+    return value !== undefined && !["none", "auto", "100%"].includes(value);
+  });
+}
+
+// Breaking a slash-free filename needs both a wrapping white-space and an
+// explicit break opportunity — neither alone is enough.
+function canBreakUnbrokenToken(decls: Record<string, string>): boolean {
+  if (NON_WRAPPING_WHITE_SPACE.has(decls["white-space"] ?? "normal")) return false;
+  const wrap = `${decls["overflow-wrap"] ?? ""} ${decls["word-wrap"] ?? ""}`;
+  return /anywhere|break-word/.test(wrap) || /break-all|break-word/.test(decls["word-break"] ?? "");
 }
 
 function extractAtRuleBody(css: string, atRule: string): string {

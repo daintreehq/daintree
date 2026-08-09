@@ -14,7 +14,9 @@ export const TERMINAL_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width=
 const INLINE_CHIP_BASE = {
   display: "inline-flex",
   alignItems: "center",
-  height: "20px",
+  // minHeight, not height: a wrapped label has to grow the pill rather than
+  // spill out of its painted background. Single-line chips still land on 20px.
+  minHeight: "20px",
   verticalAlign: "bottom",
   whiteSpace: "nowrap",
   gap: "4px",
@@ -95,19 +97,18 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         color: c.chipColor,
         textDecoration: "underline dotted 1px",
         textUnderlineOffset: "2px",
-        // Long paths ellipsize instead of blowing out narrow panes; the hover
-        // tooltip still shows the full path.
-        maxWidth: "280px",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
+        // The full path stays visible and wraps: truncating hid the tail, so two
+        // out-of-tree files could render identically. `anywhere` (not
+        // `break-word`) also zeroes min-content, so the chip shrinks in narrow
+        // panes instead of blowing them out.
+        whiteSpace: "normal",
+        overflowWrap: "anywhere",
         verticalAlign: "bottom",
       },
       ".cm-chip-label": {
-        maxWidth: "180px",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
+        whiteSpace: "normal",
+        overflowWrap: "anywhere",
+        minWidth: "0",
       },
       ".cm-tooltip": {
         background: "transparent",
