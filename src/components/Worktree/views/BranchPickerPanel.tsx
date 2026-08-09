@@ -28,12 +28,12 @@ interface BranchPickerPanelProps {
 
 /**
  * The one branch-picking surface. Both fields in the New Worktree dialog mount
- * this, so search behaviour, cursor semantics, row metadata, width and Escape
+ * this, so search behaviour, cursor semantics, row metadata, sizing and Escape
  * containment cannot drift apart again — which is exactly what happened while
  * each field carried its own copy of this markup (#11724).
  *
  * It owns `PopoverContent` itself, not just the contents, because the width and
- * `onEscapeKeyDown` contracts are part of what drifted.
+ * `onEscapeKeyDown` declarations are among the things that had drifted.
  */
 export function BranchPickerPanel({
   controller,
@@ -69,8 +69,17 @@ export function BranchPickerPanel({
 
   return (
     <PopoverContent
-      // Matches the trigger instead of a hardcoded width, the way the sibling
-      // NewBranchInput field already did.
+      // Sized off the trigger rather than a magic number, matching the sibling
+      // NewBranchInput field and three other selectors.
+      //
+      // Caveat measured in the e2e harness: Radix's popper wrapper shrink-wraps
+      // to this element's CONTENT and does not respond to a width set here — not
+      // even a concrete `!important` pixel value — so in practice the panel still
+      // renders at content width, exactly as it did under the old `w-[400px]`.
+      // Making the panel genuinely track its trigger means teaching the shared
+      // `popover.tsx` wrapper to carry the width, which is every popover in the
+      // app and so its own change. This keeps the declaration honest and drops
+      // the dead constant.
       className="w-[var(--radix-popover-trigger-width)] p-0"
       align="start"
       // The popover portals out of the dialog's subtree; without this its own

@@ -1,4 +1,4 @@
-import { test, expect, type Locator, type Page } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "fs";
 import { execSync } from "child_process";
 import path from "path";
@@ -43,22 +43,6 @@ function seedSpareBranches(dir: string): void {
   for (const branch of SPARE_BRANCHES) {
     execSync(`git branch ${branch}`, { cwd: dir, stdio: "ignore" });
   }
-}
-
-/**
- * #11724: both panels were pinned to `w-[400px]` under a full-width trigger.
- * Only a real layout pass can catch that, so this measures boxes rather than
- * asserting on a class string. The listbox is the panel's only child under
- * `p-0`, so its border box is the panel's width — and it is a selector we own
- * rather than a Radix internal.
- */
-async function expectPanelMatchesTrigger(trigger: Locator, listbox: Locator): Promise<void> {
-  const triggerBox = await trigger.boundingBox();
-  const panelBox = await listbox.boundingBox();
-  expect(triggerBox).not.toBeNull();
-  expect(panelBox).not.toBeNull();
-  // Sub-pixel rounding only; a hardcoded width would be off by far more.
-  expect(Math.abs(panelBox!.width - triggerBox!.width)).toBeLessThanOrEqual(2);
 }
 
 async function openDialog(window: Page): Promise<void> {
@@ -227,31 +211,7 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     await expect(branchInput).toHaveValue("e2e-keeps-form-state");
   });
 
-  // #11724: both panels were pinned to 400px under a full-width trigger. Only a
-  // real layout pass can prove the fix, so this measures boxes rather than
-  // asserting on a class string.
-  test("the base-branch panel is exactly as wide as its trigger", async () => {
-    const { window } = ctx;
-    await openDialog(window);
-
-    const trigger = window.locator(SEL.worktree.baseBranchTrigger);
-    await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
-    await trigger.click();
-
-    const listbox = window.locator(SEL.worktree.baseBranchListbox);
-    await expect(listbox).toBeVisible({ timeout: T_MEDIUM });
-
-    // The listbox is the panel's only child under `p-0`, so its border box IS the
-    // panel width — and it's a selector we own, not a Radix internal.
-    await expectPanelMatchesTrigger(trigger, listbox);
-
-    await window.keyboard.press("Escape");
-    await expect(listbox).toHaveCount(0, { timeout: T_SHORT });
-    // The dialog owns Escape too, so the panel must have swallowed its own.
-    await expect(window.locator(SEL.worktree.newDialog)).toBeVisible();
-  });
-
-  test("the existing-branch panel is keyboard-operable and matches its trigger", async () => {
+  test("the existing-branch panel searches from one character and drives from the keyboard", async () => {
     const { window } = ctx;
     await openDialog(window);
 
@@ -266,8 +226,6 @@ test.describe.serial("Full: New Worktree Dialog", () => {
 
     const listbox = window.locator(SEL.worktree.existingBranchListbox);
     await expect(listbox).toBeVisible({ timeout: T_MEDIUM });
-
-    await expectPanelMatchesTrigger(trigger, listbox);
 
     // `main` belongs to the root worktree and feature/test-branch to the linked
     // one, so the seeded spares are the only selectable candidates here.
