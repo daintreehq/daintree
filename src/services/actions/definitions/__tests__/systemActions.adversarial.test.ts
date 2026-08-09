@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { COPY_TREE_UNMATCHED_SELECTORS } from "@shared/types/ipc/copyTree";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const filesClientMock = vi.hoisted(() => ({
@@ -613,6 +615,141 @@ describe("systemActions adversarial", () => {
       await expect(
         run("copyTree.injectToTerminal", { terminalId: "t-1" }, { activeWorktreeId: "wt-active" })
       ).rejects.toThrow("Terminal closed during injection");
+    });
+  });
+
+  // #11731. An empty bundle used to arrive as `noFilesMatched: true` and nothing
+  // else, so a caller that had passed a bare directory could not tell which of
+  // its fields to correct. All three actions project the same stats, and all
+  // three are the MCP surface a caller hits, so a hint on one of them is a hint
+  // two thirds of callers never see.
+  describe("empty-result attribution across the copyTree actions", () => {
+    const EMPTY_RUN = {
+      content: "",
+      fileCount: 0,
+      filePath: "/tmp/daintree-context/repo-main-x.xml",
+      outputBytes: 460,
+      stats: {
+        totalSize: 0,
+        duration: 1800,
+        noFilesMatched: true,
+        unmatchedSelector: "includePaths" as const,
+        // Present on the IPC result, and deliberately NOT forwarded: the
+        // per-reason breakdown is the bulk #11528 took off this surface, and
+        // `unmatchedSelector` exists so a caller never needs it.
+        excluded: { total: 42, byReason: { filterPattern: 42 } },
+      },
+    };
+
+    const CASES = [
+      { id: "copyTree.generate", mock: copyTreeClientMock.generate, args: undefined },
+      {
+        id: "copyTree.generateAndCopyFile",
+        mock: copyTreeClientMock.generateAndCopyFile,
+        args: { worktreeId: "wt-active" },
+      },
+      {
+        id: "copyTree.injectToTerminal",
+        mock: copyTreeClientMock.injectToTerminal,
+        args: { terminalId: "t-1" },
+      },
+    ];
+
+    it.each(CASES)(
+      "$id names the selector that missed and drops the breakdown",
+      async ({ id, mock, args }) => {
+        const { run, getDef } = setupActions();
+        mock.mockResolvedValueOnce({ ...EMPTY_RUN });
+
+        const result = (await run(id, args, { activeWorktreeId: "wt-active" })) as {
+          stats?: Record<string, unknown>;
+        };
+
+        expect(result.stats).toMatchObject({
+          noFilesMatched: true,
+          unmatchedSelector: "includePaths",
+        });
+        expect(result.stats).not.toHaveProperty("excluded");
+
+        // Parsed through the action's own resultSchema, not just inspected:
+        // dispatch parses results (#11539), so a field the projection returns but
+        // the schema never declared is a field the caller is never sent — and an
+        // enum out of step with the shared tuple would fail the call outright.
+        const resultSchema = getDef(id).resultSchema;
+        expect(resultSchema).toBeDefined();
+        expect(resultSchema?.parse(result)).toMatchObject({
+          stats: { unmatchedSelector: "includePaths" },
+        });
+      }
+    );
+
+    it("omits the hint entirely when nothing was to blame", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generate.mockResolvedValueOnce({
+        ...EMPTY_RUN,
+        stats: { totalSize: 0, duration: 1800, noFilesMatched: true },
+      });
+
+      const result = (await run("copyTree.generate", undefined, {
+        activeWorktreeId: "wt-active",
+      })) as { stats?: Record<string, unknown> };
+
+      // Absent rather than null: an empty scope or an empty worktree has no
+      // selector at fault, and a present-but-empty field reads as one.
+      expect(result.stats).not.toHaveProperty("unmatchedSelector");
+      expect(result.stats).toMatchObject({ noFilesMatched: true });
+    });
+
+    it.each(COPY_TREE_UNMATCHED_SELECTORS)(
+      "carries %s through dispatch's result parse",
+      async (selector) => {
+        // Every member, not just the one the service happens to emit most often:
+        // dispatch parses results against `resultSchema` (#11539), so a schema
+        // narrower than the shared tuple turns a correct diagnostic into a
+        // RESULT_VALIDATION_ERROR that destroys the whole call.
+        const { run, getDef } = setupActions();
+        copyTreeClientMock.generate.mockResolvedValueOnce({
+          ...EMPTY_RUN,
+          stats: { ...EMPTY_RUN.stats, unmatchedSelector: selector },
+        });
+
+        const result = await run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" });
+
+        expect(getDef("copyTree.generate").resultSchema?.parse(result)).toMatchObject({
+          stats: { unmatchedSelector: selector },
+        });
+      }
+    );
+
+    it.each(CASES)("$id advertises the hint on the wire, not just in its return", ({ id }) => {
+      // The projection returning a field and the MCP client being TOLD about it
+      // are different surfaces: `computeSchemas` converts `resultSchema` in
+      // output mode, and a description attached to the wrong link in a zod
+      // chain is dropped there silently. Same conversion, same options.
+      const { getDef } = setupActions();
+      const def = getDef(id);
+      expect(def.mcpOutputSchema).toBe(true);
+
+      const emitted = z.toJSONSchema(def.resultSchema as z.ZodType, {
+        io: "output",
+        unrepresentable: "any",
+        reused: "inline",
+        cycles: "ref",
+        target: "draft-2020-12",
+      }) as {
+        properties?: {
+          stats?: {
+            properties?: { unmatchedSelector?: { enum?: string[]; description?: string } };
+          };
+        };
+      };
+
+      const advertised = emitted.properties?.stats?.properties?.unmatchedSelector;
+      // Derived from the shared tuple rather than a copied literal: a member
+      // added there and left out of the wire enum fails here.
+      expect(advertised?.enum).toEqual([...COPY_TREE_UNMATCHED_SELECTORS]);
+      // The value alone is not actionable — the remedy is the point.
+      expect(advertised?.description ?? "").toMatch(/scopePaths/);
     });
   });
 });

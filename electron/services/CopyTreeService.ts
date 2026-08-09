@@ -15,6 +15,7 @@ import type {
   CopyTreeBudgetStats,
   CopyTreeExclusionReason,
   CopyTreeExclusionSummary,
+  CopyTreeUnmatchedSelector,
   FileTreeNode,
 } from "../../shared/types/ipc/copyTree.js";
 import { fileTreeService } from "./FileTreeService.js";
@@ -182,11 +183,16 @@ class CopyTreeService {
         progressThrottleMs: 100,
       };
 
+      // Captured from the request rather than from `sdkOptions`, which has
+      // already unioned the two spellings into one `filter`.
+      const suppliedSelector = CopyTreeService.suppliedPatternSelector(options);
+
       if (outputPath) {
         return await this.streamToFile(
           copytree.copyStream,
           rootPath,
           sdkOptions,
+          suppliedSelector,
           outputPath,
           controller
         );
@@ -202,7 +208,7 @@ class CopyTreeService {
         stats: {
           totalSize: result.stats.totalSize,
           duration: result.stats.duration,
-          ...this.mapBudgetStats(result.stats),
+          ...this.mapBudgetStats(result.stats, suppliedSelector),
         },
       };
     } catch (error: unknown) {
@@ -233,6 +239,7 @@ class CopyTreeService {
     copyStream: (typeof import("copytree"))["copyStream"],
     rootPath: string,
     sdkOptions: SdkCopyOptions,
+    suppliedSelector: CopyTreeUnmatchedSelector | undefined,
     outputPath: string,
     controller: AbortController
   ): Promise<CopyTreeResult> {
@@ -316,7 +323,7 @@ class CopyTreeService {
         stats: {
           totalSize: finished.stats.totalSize,
           duration: finished.stats.duration,
-          ...this.mapBudgetStats(finished.stats),
+          ...this.mapBudgetStats(finished.stats, suppliedSelector),
         },
       };
     } catch (error) {
@@ -386,7 +393,7 @@ class CopyTreeService {
         includedFiles: included.length,
         includedSize: included.reduce((total, entry) => total + entry.size, 0),
         files: included,
-        ...this.mapBudgetStats(result.stats),
+        ...this.mapBudgetStats(result.stats, CopyTreeService.suppliedPatternSelector(options)),
       };
     } catch (error: unknown) {
       return {
@@ -637,6 +644,111 @@ class CopyTreeService {
     return Array.from(new Set(merged));
   }
 
+  /**
+   * Name the pattern selectors this request supplied, the way it spelled them.
+   *
+   * Read before `mergeSelectionPatterns` collapses the two into one SDK
+   * `filter`, because afterwards they are indistinguishable — and a caller who
+   * only ever sent `includePaths` should not be told its `filter` missed. When
+   * both carry patterns neither can be singled out, so the pair is reported.
+   */
+  private static suppliedPatternSelector(
+    options: CopyTreeOptions
+  ): CopyTreeUnmatchedSelector | undefined {
+    // Deliberately mirrors what `mergeSelectionPatterns` above counts as a
+    // contribution, down to the scalar case: it wraps a non-undefined string
+    // into a one-entry list, so `filter: ""` becomes the unmatchable pattern
+    // `[""]` and is very much supplied — while `filter: []` contributes nothing
+    // and leaves the SDK unfiltered. Both boundaries reject those inputs, but
+    // the direct-service path does not, and disagreeing with the merge is how
+    // the caller whose selection emptied the run gets told nothing.
+    const filter = options.filter;
+    const hasIncludePaths = (options.includePaths?.length ?? 0) > 0;
+    const hasFilter = Array.isArray(filter) ? filter.length > 0 : filter !== undefined;
+
+    if (hasIncludePaths && hasFilter) return "filterAndIncludePaths";
+    if (hasIncludePaths) return "includePaths";
+    if (hasFilter) return "filter";
+    return undefined;
+  }
+
+  /**
+   * Exclusion reasons that can only be booked BEFORE the include patterns run.
+   *
+   * The walker prunes by ignore file, config exclude and scope as it descends,
+   * so everything here happened to files that never reached the pattern check.
+   * Anything NOT on this list — a later stage, or a reason a future SDK adds —
+   * removed a file that had already passed the patterns, which is the whole
+   * point of the distinction below. Unknown reasons falling outside it is the
+   * safe direction: the hint goes quiet rather than blaming the wrong field.
+   *
+   * `optionExclude` is here despite reading like a post-pattern stage, and the
+   * distinction is load-bearing rather than academic. `exclude` is installed as
+   * an ignore LAYER on the walker (`kind: 'option-exclude'`), so it prunes
+   * before the patterns are ever consulted; the later re-application in
+   * ProfileFilterStage only exists to outrank ignore negations and has nothing
+   * left to remove. Treating it as post-pattern would silence the hint on
+   * ordinary runs, because the IPC handler folds a project's `excludedPaths`
+   * and `alwaysExclude` into `exclude` whenever the caller omits it — so the
+   * one diagnostic #11731 asked for would go missing on precisely the
+   * configured real-world repositories that need it.
+   */
+  private static readonly PRE_PATTERN_EXCLUSIONS: ReadonlySet<string> = new Set<string>([
+    "gitignore",
+    "copytreeignore",
+    "globalGitignore",
+    "gitInfoExclude",
+    "configExclude",
+    "optionExclude",
+    "scopeFilter",
+    "testExclude",
+    "unreadable",
+    // Walker-emitted, and the one post-loop emitter books it for forced entries
+    // that bypass the patterns entirely — so it never implies a pattern match.
+    "symlinkEscape",
+  ] satisfies (CopyTreeExclusionReason | "symlinkEscape")[]);
+
+  /**
+   * Blame the supplied patterns for an empty run, but only when they earned it.
+   *
+   * `filterPattern` counts files that reached the include-pattern check and
+   * failed it, so a non-zero count is necessary — but it is nowhere near
+   * sufficient. `noFilesMatched` is `files.length === 0` measured after the
+   * WHOLE pipeline, and the git filter, the file-count and total-size budgets,
+   * `exclude`, the size gate and the character limit all run after the pattern
+   * check. So a run holding one decoy file that failed the patterns and one
+   * real match that a later stage then dropped satisfies both conditions while
+   * the patterns did their job perfectly — and telling that caller to rewrite
+   * its `includePaths` sends it to fix the one part of the request that worked,
+   * which is the same failure #11731 is about, pointed the other way.
+   *
+   * A file removed after the patterns is therefore proof they matched something
+   * and disqualifies the hint. `truncated` is a second, cheap read on the same
+   * question for a budget that drops a file without booking a reason. What was
+   * pruned on the way IN says nothing either way, which is what the allowlist
+   * above is for — suppressing on those would leave the hint firing only on
+   * repositories with no ignore rules and no configured excludes.
+   */
+  private static deriveUnmatchedSelector(
+    stats: CopyResult["stats"],
+    supplied: CopyTreeUnmatchedSelector | undefined
+  ): CopyTreeUnmatchedSelector | undefined {
+    if (supplied === undefined || stats.noFilesMatched !== true) return undefined;
+
+    const byReason: Record<string, number> = stats.excluded?.byReason ?? {};
+    if ((byReason.filterPattern ?? 0) <= 0) return undefined;
+    if (stats.truncated === true) return undefined;
+
+    const survivedThePatterns = Object.entries(byReason).some(
+      ([reason, count]) =>
+        count > 0 &&
+        reason !== "filterPattern" &&
+        !CopyTreeService.PRE_PATTERN_EXCLUSIONS.has(reason)
+    );
+
+    return survivedThePatterns ? undefined : supplied;
+  }
+
   private buildSdkOptions(options: CopyTreeOptions, signal: AbortSignal): SdkCopyOptions {
     return {
       signal,
@@ -681,11 +793,15 @@ class CopyTreeService {
     };
   }
 
-  private mapBudgetStats(stats: CopyResult["stats"]): CopyTreeBudgetStats {
+  private mapBudgetStats(
+    stats: CopyResult["stats"],
+    suppliedSelector: CopyTreeUnmatchedSelector | undefined
+  ): CopyTreeBudgetStats {
     return {
       estimatedOutputChars: stats.estimatedOutputChars,
       estimatedTokens: stats.estimatedTokens,
       noFilesMatched: stats.noFilesMatched,
+      unmatchedSelector: CopyTreeService.deriveUnmatchedSelector(stats, suppliedSelector),
       excluded: this.mapExclusions(stats.excluded),
       truncated: stats.truncated,
       truncatedCount: stats.truncatedCount,

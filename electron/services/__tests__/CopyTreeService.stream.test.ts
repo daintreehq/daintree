@@ -40,7 +40,10 @@ type StreamOptions = {
  * Stand in for the SDK generator: yield the given chunks, then report
  * completion exactly as `copyStream` does — only on a run that finished.
  */
-function streamYielding(chunks: string[], options: { complete?: boolean } = {}) {
+function streamYielding(
+  chunks: string[],
+  options: { complete?: boolean; stats?: typeof STATS } = {}
+) {
   return (_rootPath: string, streamOptions: StreamOptions) =>
     (async function* () {
       for (const chunk of chunks) {
@@ -50,7 +53,7 @@ function streamYielding(chunks: string[], options: { complete?: boolean } = {}) 
         streamOptions.onComplete?.({
           outputFormatVersion: "copytree-xml@1",
           manifest: [],
-          stats: STATS,
+          stats: options.stats ?? STATS,
         });
       }
     })();
@@ -113,6 +116,50 @@ describe("CopyTreeService streaming to a file", () => {
       duration: STATS.duration,
       estimatedTokens: STATS.estimatedTokens,
     });
+  });
+
+  // This is the branch production actually takes: the IPC handler passes an
+  // output path, so `copyTree.generate` and `copyTree.generateAndCopyFile` both
+  // land here rather than in the buffered `copy()` path. A selector captured in
+  // `generate()` and not threaded this far would leave two of the three
+  // advertised MCP actions without the hint (#11731).
+  it("attributes an empty streamed bundle to the selector that emptied it", async () => {
+    copyStreamMock.mockImplementation(
+      streamYielding(["<files/>"], {
+        stats: {
+          ...STATS,
+          totalFiles: 0,
+          noFilesMatched: true,
+          excluded: { total: 4, byReason: { filterPattern: 4 } },
+        },
+      })
+    );
+
+    const result = await copyTreeService.generate(
+      tempDir,
+      { includePaths: ["src/panels"], filter: "docs" },
+      undefined,
+      "op-1",
+      outputPath
+    );
+
+    // Both spellings were supplied and neither can be singled out once they are
+    // unioned, so the pair is what the caller gets.
+    expect(result.stats?.unmatchedSelector).toBe("filterAndIncludePaths");
+  });
+
+  it("leaves a streamed bundle that found files unattributed", async () => {
+    copyStreamMock.mockImplementation(streamYielding(["<files/>"]));
+
+    const result = await copyTreeService.generate(
+      tempDir,
+      { includePaths: ["src/**"] },
+      undefined,
+      "op-1",
+      outputPath
+    );
+
+    expect(result.stats?.unmatchedSelector).toBeUndefined();
   });
 
   it("publishes atomically, leaving no partial behind", async () => {

@@ -10,7 +10,12 @@ export interface CopyTreeOptions {
   exclude?: string | string[];
   always?: string[];
 
-  /** Explicit file/folder paths to include (used by file picker modal) */
+  /**
+   * Worktree-relative file paths or glob patterns to include (used by the file
+   * picker modal). Unioned into the SDK's single `filter`, which matches against
+   * FILE paths — so a bare directory name matches nothing. A folder needs a glob
+   * (`src/panels/**`), or belongs in `scopePaths` below.
+   */
   includePaths?: string[];
 
   /**
@@ -164,6 +169,26 @@ export interface CopyTreeExclusionSummary {
 /** Which budget dropped files first */
 export type CopyTreeTruncatedBy = "maxFileCount" | "maxTotalSize" | "charLimit";
 
+/**
+ * Which pattern selector a caller supplied, named the way the caller spelled it.
+ *
+ * `filter` and `includePaths` are unioned into the SDK's single `filter` before
+ * it runs, so once a run is over the two can no longer be told apart from its
+ * stats — which is why supplying both reports the pair rather than guessing.
+ *
+ * A tuple rather than a bare union: `CopyTreeStatsSchema` builds its `z.enum`
+ * from this, so the wire enum and this type cannot drift. Dispatch parses
+ * results against that schema (#11539), and a member here that the enum lacked
+ * would fail the parse and take the whole result down with it.
+ */
+export const COPY_TREE_UNMATCHED_SELECTORS = [
+  "filter",
+  "includePaths",
+  "filterAndIncludePaths",
+] as const;
+
+export type CopyTreeUnmatchedSelector = (typeof COPY_TREE_UNMATCHED_SELECTORS)[number];
+
 /** Budget and estimate reporting shared by real runs and dry runs */
 export interface CopyTreeBudgetStats {
   /**
@@ -175,6 +200,27 @@ export interface CopyTreeBudgetStats {
   estimatedTokens?: number;
   /** True when nothing matched — a valid outcome, not an error */
   noFilesMatched?: boolean;
+  /**
+   * Which supplied pattern selector emptied the run, when one did.
+   *
+   * `noFilesMatched` alone says nothing about WHICH selector missed, so a caller
+   * that passed a bare directory to `includePaths` learns only that it got
+   * nothing and is left guessing at the option shape (#11731).
+   *
+   * Set only when the run came back empty, files reached the pattern check and
+   * were rejected there, and NOTHING was removed after the patterns ran. That
+   * last condition is what keeps the hint honest: `noFilesMatched` is measured
+   * once the whole pipeline is done, and the git filter, the budgets and the
+   * size gate all run later — so a single file removed by one of those is proof
+   * the patterns matched it, and the patterns are not what emptied the run. An
+   * empty scope, an empty repo, a `modified` filter with no changes and a
+   * budget that dropped the last file therefore all leave this unset.
+   *
+   * Ignore rules, configured excludes and scope prune while the walker
+   * descends, before the patterns are consulted, so they neither set nor
+   * suppress this.
+   */
+  unmatchedSelector?: CopyTreeUnmatchedSelector;
   /** What didn't make it, and why */
   excluded?: CopyTreeExclusionSummary;
   /** Whether a budget dropped files */
