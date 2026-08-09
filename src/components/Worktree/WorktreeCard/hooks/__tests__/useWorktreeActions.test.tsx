@@ -60,7 +60,6 @@ function renderActions() {
   return renderHook(() =>
     useWorktreeActions({
       worktree: makeWorktree(),
-      onCopyTree: () => Promise.resolve(undefined),
       teardownCommands: [],
     })
   );

@@ -6,6 +6,8 @@ import { isPtyPanel } from "@shared/types/panel";
 import type { AgentState, CopyTreeProgress } from "@/types";
 import { copyTreeClient } from "@/clients";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
+import { describeEmptyFolderCopy, formatCopyResultMessage } from "@/lib/formatCopyResult";
+import { notify } from "@/lib/notify";
 import { logDebug, logError } from "@/utils/logger";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -407,6 +409,37 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
         }
         window.dispatchEvent(new CustomEvent("daintree:context-injected"));
         window.electron?.notification?.playUiEvent?.("context-injected").catch(() => {});
+
+        // Lands beside the sound, not instead of it: the pane's inline progress
+        // banner disappears on completion, leaving nothing that says how much
+        // context the agent actually received. Ordered after the `result.error`
+        // check so a failed injection can't announce success, and skipped
+        // entirely on the cancel paths above, which return before this point.
+        // Its own rate-limit bucket, distinct from the `copyTree.injectToTerminal`
+        // action's — that action is an independent MCP-only route to the same
+        // client method, so the two never stack (#11735).
+        const injectedNothingFromSelection =
+          Boolean(selectedPaths && selectedPaths.length > 0) && result.fileCount === 0;
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: injectedNothingFromSelection ? "info" : "success",
+          title: injectedNothingFromSelection ? "No files injected" : "Context injected",
+          message: injectedNothingFromSelection
+            ? describeEmptyFolderCopy(result.stats)
+            : formatCopyResultMessage(
+                {
+                  fileCount: result.fileCount,
+                  stats: result.stats,
+                  format: DEFAULT_COPYTREE_FORMAT,
+                },
+                "terminal"
+              ),
+          rateLimitKey: "contextInjection.injectToTerminal",
+          // No `context.worktreeId`: notify() diverts a high-priority toast to
+          // the inbox when it names the worktree already on screen — which is
+          // always the case here, since injection targets a visible terminal.
+          context: { eventKind: "agent" },
+        });
 
         if (currentErrorIdRef.current) {
           removeError(currentErrorIdRef.current);

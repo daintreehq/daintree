@@ -151,18 +151,20 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
     });
   });
 
-  describe("copy-tree feedback from overflow", () => {
-    it("fires a transient success toast on the overflow path", () => {
-      expect(source).toContain("handleCopyTreeOverflow");
-      expect(source).toMatch(/notify\(\{[\s\S]*?transient: true[\s\S]*?\}\)/);
+  describe("copy-tree feedback from overflow — #9821, superseded by #11735", () => {
+    it("shares one handler between the visible button and the overflow item", () => {
+      // #9821 gave overflow its own handler because the visible button's only
+      // feedback was an inline check the overflow menu couldn't show. Now that
+      // completion is a toast from the `worktree.copyTree` action, both routes
+      // are identical — a second handler could only drift from the first.
+      expect(source).toMatch(/"copy-tree":\s*\(\)\s*=>\s*\{\s*void handleCopyTreeClick\(\)/);
+      expect(source).not.toContain("handleCopyTreeOverflow");
     });
 
-    it("wires the overflow action to the toast handler, not the inline-feedback handler", () => {
-      expect(source).toMatch(/"copy-tree":\s*\(\)\s*=>\s*\{\s*void handleCopyTreeOverflow\(\)/);
-    });
-
-    it("keeps the eslint exception for an action-free notify", () => {
-      expect(source).toContain("notify-no-action: ok");
+    it("no longer raises its own copy-tree toast in the toolbar", () => {
+      // The toolbar must not re-announce what the action already announces;
+      // two toasts per press was the failure mode this consolidation prevents.
+      expect(source).not.toMatch(/notify\(\{[\s\S]{0,200}?title: "Context copied"/);
     });
   });
 

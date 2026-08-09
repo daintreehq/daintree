@@ -210,31 +210,43 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(source).toContain("const showCopyingSpinner = useDohertyGate(isCopyingTree);");
     });
 
-    it("renders the spinner glyph gated on showCopyingSpinner, not raw isCopyingTree", () => {
-      expect(source).toContain(
-        "{showCopyingSpinner ? <Spinner /> : treeCopied ? <Check /> : <Folders />}"
-      );
-      expect(source).not.toContain(
-        "{isCopyingTree ? <Spinner /> : treeCopied ? <Check /> : <Folders />}"
-      );
-    });
-
-    it("uses sentence-case 'Context copied' aria-label", () => {
-      expect(source).toContain('"Context copied"');
-      expect(source).not.toContain('"Context Copied"');
-    });
-
-    it("keeps text-status-success in the treeCopied branch but drops the bg tint — issue #9822", () => {
-      // Scoped to the copy-tree render block so unrelated `bg-status-success/10`
-      // uses (e.g. ghost-success hover) don't false-positive the negative.
+    it("gates the spinner glyph on showCopyingSpinner, not raw isCopyingTree", () => {
       const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
       expect(copyTreeBlock).not.toBeNull();
-      const treeCopiedBranch = copyTreeBlock![0].match(
-        /treeCopied[\s\S]{0,200}?"text-daintree-text"/
-      );
-      expect(treeCopiedBranch).not.toBeNull();
-      expect(treeCopiedBranch![0]).toContain("text-status-success");
-      expect(treeCopiedBranch![0]).not.toContain("bg-status-success/10");
+      // The Doherty gate is the point: the raw in-flight flag must never drive
+      // the glyph directly, or a sub-400ms copy flashes a spinner.
+      expect(copyTreeBlock![0]).toMatch(/showCopyingSpinner \?\s*<Spinner \/>/);
+      expect(copyTreeBlock![0]).not.toMatch(/isCopyingTree \?\s*<Spinner \/>/);
+      expect(copyTreeBlock![0]).toContain("<Folders />");
+    });
+
+    it("carries no inline completion feedback — the toast owns it (issue #11735)", () => {
+      // The button used to swap in a check icon and force its tooltip open for
+      // two seconds. That feedback was invisible from the overflow menu and had
+      // no counterpart on any other copy-tree route, so it moved to the
+      // `worktree.copyTree` completion toast. Only the in-flight spinner stays.
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      expect(copyTreeBlock![0]).not.toContain("treeCopied");
+      expect(copyTreeBlock![0]).not.toContain("<Check />");
+      expect(copyTreeBlock![0]).not.toContain("text-status-success");
+      // A controlled `open` prop is what forced the tooltip; the plain <Tooltip>
+      // must stay uncontrolled.
+      expect(copyTreeBlock![0]).not.toMatch(/<Tooltip\s+open=/);
+      expect(copyTreeBlock![0]).not.toContain('role="status"');
+    });
+
+    it("retires the inline-feedback state and its reset timer entirely", () => {
+      // Component-wide, not block-scoped: leftover state or a dangling timeout
+      // would keep the removed behavior alive outside the render block.
+      for (const symbol of [
+        "treeCopied",
+        "copyFeedback",
+        "treeCopyTimeoutRef",
+        "COPY_TREE_FEEDBACK_RESET_MS",
+      ]) {
+        expect(source).not.toContain(symbol);
+      }
     });
   });
 

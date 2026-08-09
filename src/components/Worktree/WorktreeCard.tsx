@@ -86,7 +86,6 @@ export interface WorktreeCardProps {
   isSingleWorktree?: boolean;
   aggregateCounts?: AggregateCounts;
   onSelect: () => void;
-  onCopyTree: () => Promise<string | undefined> | void;
   onOpenEditor: () => void;
   onSaveLayout?: () => void;
   onLaunchAgent?: (agentId: string) => void;
@@ -120,7 +119,6 @@ export function WorktreeCard({
   isSingleWorktree: _isSingleWorktree,
   aggregateCounts: _aggregateCounts,
   onSelect,
-  onCopyTree,
   onOpenEditor,
   onSaveLayout,
   onLaunchAgent,
@@ -402,7 +400,6 @@ export function WorktreeCard({
     handleResourceTeardown,
   } = useWorktreeActions({
     worktree,
-    onCopyTree,
     teardownCommands,
   });
 

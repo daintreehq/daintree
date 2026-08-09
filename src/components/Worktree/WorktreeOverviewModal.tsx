@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo, useStat
 import { X, FilterX, AlertTriangle, Trash2, GitBranch } from "lucide-react";
 import { Layers, Plug } from "@/components/icons";
 import { cn } from "@/lib/utils";
-import type { CopyTreeRunSource } from "@shared/types";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
@@ -49,10 +48,6 @@ interface OverviewWorktreeCardProps {
   totalWorktreeCount: number;
   variant?: "sidebar" | "grid";
   onSelectWorktree: (worktreeId: string) => void;
-  onCopyTree: (
-    worktree: WorktreeSnapshot,
-    copyTreeRunSource?: CopyTreeRunSource
-  ) => Promise<string | undefined> | void;
   onOpenEditor: (worktree: WorktreeSnapshot) => void;
   onSaveLayout?: (worktree: WorktreeSnapshot) => void;
   onLaunchAgent?: (worktreeId: string, agentId: string) => void;
@@ -71,7 +66,6 @@ function OverviewWorktreeCard({
   totalWorktreeCount,
   variant,
   onSelectWorktree,
-  onCopyTree,
   onOpenEditor,
   onSaveLayout,
   onLaunchAgent,
@@ -100,10 +94,6 @@ function OverviewWorktreeCard({
     onClose();
   }, [onSelectWorktree, onClose, worktreeId]);
 
-  const handleCopyTree = useCallback(
-    () => worktree && onCopyTree(worktree, "worktree-card"),
-    [worktree, onCopyTree]
-  );
   const handleOpenEditor = useCallback(
     () => worktree && onOpenEditor(worktree),
     [worktree, onOpenEditor]
@@ -131,7 +121,6 @@ function OverviewWorktreeCard({
       isFocused={worktreeId === focusedWorktreeId}
       isSingleWorktree={totalWorktreeCount === 1}
       onSelect={handleSelect}
-      onCopyTree={handleCopyTree}
       onOpenEditor={handleOpenEditor}
       onSaveLayout={onSaveLayout ? handleSaveLayout : undefined}
       onLaunchAgent={onLaunchAgent ? handleLaunchAgent : undefined}
@@ -192,10 +181,6 @@ export interface WorktreeOverviewModalProps {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
   onSelectWorktree: (worktreeId: string) => void;
-  onCopyTree: (
-    worktree: WorktreeSnapshot,
-    copyTreeRunSource?: CopyTreeRunSource
-  ) => Promise<string | undefined> | void;
   onOpenEditor: (worktree: WorktreeSnapshot) => void;
   onSaveLayout?: (worktree: WorktreeSnapshot) => void;
   onLaunchAgent?: (worktreeId: string, agentId: string) => void;
@@ -212,7 +197,6 @@ export function WorktreeOverviewModal({
   activeWorktreeId,
   focusedWorktreeId,
   onSelectWorktree,
-  onCopyTree,
   onOpenEditor,
   onSaveLayout,
   onLaunchAgent,
@@ -1140,7 +1124,6 @@ export function WorktreeOverviewModal({
                         focusedWorktreeId={focusedWorktreeId}
                         totalWorktreeCount={worktrees.length}
                         onSelectWorktree={onSelectWorktree}
-                        onCopyTree={onCopyTree}
                         onOpenEditor={onOpenEditor}
                         onSaveLayout={onSaveLayout}
                         onLaunchAgent={onLaunchAgent}
@@ -1161,7 +1144,6 @@ export function WorktreeOverviewModal({
                       focusedWorktreeId={focusedWorktreeId}
                       totalWorktreeCount={worktrees.length}
                       onSelectWorktree={onSelectWorktree}
-                      onCopyTree={onCopyTree}
                       onOpenEditor={onOpenEditor}
                       onSaveLayout={onSaveLayout}
                       onLaunchAgent={onLaunchAgent}

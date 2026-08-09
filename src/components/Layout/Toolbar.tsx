@@ -15,7 +15,6 @@ import {
   CircleDot,
   PanelLeftOpen,
   PanelLeftClose,
-  Check,
   ChevronsUpDown,
   MonitorPlay,
   Ellipsis,
@@ -38,7 +37,6 @@ import {
 import { getToolbarDividerAfterIds, orderToolbarButtonsByGroup } from "./toolbarButtonGrouping";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { cn } from "@/lib/utils";
-import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isMac, isLinux, isWindows } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
@@ -145,11 +143,6 @@ const PROJECT_SCOPED_TOOLBAR_IDS = new Set<AnyToolbarButtonId>(["dev-server", "f
 // should be added here.
 const VOICE_RECORDING_PINNED: ReadonlySet<AnyToolbarButtonId> = new Set(["voice-recording"]);
 const NO_PINNED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
-
-// How long the copy-tree button shows the green "context copied" feedback
-// before reverting to its idle state. Long enough to register the success,
-// short enough that re-clicks don't feel stuck.
-const COPY_TREE_FEEDBACK_RESET_MS = 2000;
 
 function ForgeStatsPlaceholder() {
   return (
@@ -646,11 +639,8 @@ export function Toolbar({
   const effectiveAgentSettings = liveAgentSettings ?? agentSettings;
 
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [treeCopied, setTreeCopied] = useState(false);
   const [isCopyingTree, setIsCopyingTree] = useState(false);
   const showCopyingSpinner = useDohertyGate(isCopyingTree);
-  const [copyFeedback, setCopyFeedback] = useState<string>("");
-  const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
@@ -805,65 +795,23 @@ export function Toolbar({
     return window.electron.window.onFullscreenChange(setIsFullscreen);
   }, []);
 
-  useEffect(() => {
-    return () => {
-      if (treeCopyTimeoutRef.current) {
-        clearTimeout(treeCopyTimeoutRef.current);
-      }
-    };
-  }, []);
-
   // Promise-method cleanup instead of try/finally: a statement-level finally
   // clause bails React Compiler memoization for the whole Toolbar component.
+  //
+  // Completion feedback is the `worktree.copyTree` action's toast, not inline
+  // state here. The button used to swap in a check icon and force its tooltip
+  // open, which the overflow menu couldn't show at all (#9821) and which no
+  // other copy-tree route had — so both entry points now share this handler and
+  // the one toast covers them, along with Cmd+Shift+C and the palette (#11735).
+  // The spinner stays: it reports work in flight, which the toast can't.
   const handleCopyTreeClick = useCallback(() => {
     if (isCopyingTree || !activeWorktree) return;
 
     setIsCopyingTree(true);
 
-    return handleCopyTree(activeWorktree, "toolbar")
-      .then((resultMessage) => {
-        if (!resultMessage) return;
-        setTreeCopied(true);
-        setCopyFeedback(resultMessage);
-        shortcutHintStore.getState().hide();
-
-        if (treeCopyTimeoutRef.current) {
-          clearTimeout(treeCopyTimeoutRef.current);
-        }
-
-        treeCopyTimeoutRef.current = setTimeout(() => {
-          setTreeCopied(false);
-          setCopyFeedback("");
-          treeCopyTimeoutRef.current = null;
-        }, COPY_TREE_FEEDBACK_RESET_MS);
-      })
-      .finally(() => {
-        setIsCopyingTree(false);
-      });
-  }, [isCopyingTree, activeWorktree, handleCopyTree]);
-
-  // Copy-tree invoked from the overflow menu. The visible toolbar button shows
-  // inline green-tick feedback, but that button is hidden when copy-tree is in
-  // overflow — so the overflow path surfaces a transient success toast instead
-  // (issue #9821). `transient: true` keeps it out of the inbox: the result is
-  // already on the clipboard, so no durable record is warranted.
-  const handleCopyTreeOverflow = useCallback(() => {
-    if (isCopyingTree || !activeWorktree) return;
-    setIsCopyingTree(true);
-    return handleCopyTree(activeWorktree, "toolbar")
-      .then((resultMessage) => {
-        if (!resultMessage) return;
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "success",
-          title: "Context copied",
-          message: resultMessage,
-          transient: true,
-        });
-      })
-      .finally(() => {
-        setIsCopyingTree(false);
-      });
+    return handleCopyTree(activeWorktree, "toolbar").finally(() => {
+      setIsCopyingTree(false);
+    });
   }, [isCopyingTree, activeWorktree, handleCopyTree]);
 
   const getToolbarItems = useCallback(
@@ -1205,7 +1153,7 @@ export function Toolbar({
         render: () => (
           <ContextMenu>
             <ContextMenuTrigger asChild>
-              <Tooltip open={treeCopied || undefined}>
+              <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     {...copyTreeHintHover}
@@ -1216,30 +1164,22 @@ export function Toolbar({
                     aria-disabled={isCopyingTree || !activeWorktree || undefined}
                     className={cn(
                       "toolbar-icon-button relative",
-                      treeCopied ? "text-status-success" : "text-daintree-text",
+                      "text-daintree-text",
                       isCopyingTree && "cursor-wait opacity-70",
                       "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                     )}
-                    aria-label={
-                      isCopyingTree ? "Copying…" : treeCopied ? "Context copied" : "Copy context"
-                    }
+                    aria-label={isCopyingTree ? "Copying…" : "Copy context"}
                     aria-keyshortcuts={copyTreeAriaShortcut}
                   >
-                    {showCopyingSpinner ? <Spinner /> : treeCopied ? <Check /> : <Folders />}
+                    {showCopyingSpinner ? <Spinner /> : <Folders />}
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="font-medium">
-                  {isCopyingTree ? (
-                    "Copying…"
-                  ) : treeCopied ? (
-                    <span role="status" aria-live="polite">
-                      {copyFeedback}
-                    </span>
-                  ) : !activeWorktree ? (
-                    "Open a worktree first"
-                  ) : (
-                    createTooltipContent("Copy context", copyTreeShortcut)
-                  )}
+                  {isCopyingTree
+                    ? "Copying…"
+                    : !activeWorktree
+                      ? "Open a worktree first"
+                      : createTooltipContent("Copy context", copyTreeShortcut)}
                 </TooltipContent>
               </Tooltip>
             </ContextMenuTrigger>
@@ -1344,8 +1284,6 @@ export function Toolbar({
       isCopyingTree,
       showCopyingSpinner,
       activeWorktree,
-      treeCopied,
-      copyFeedback,
       onSettings,
       onPreloadSettings,
       onToggleProblems,
@@ -1656,7 +1594,7 @@ export function Toolbar({
         void actionService.dispatch("notifications.toggle", undefined, { source: "user" });
       },
       "copy-tree": () => {
-        void handleCopyTreeOverflow();
+        void handleCopyTreeClick();
       },
       "command-palette": () => {
         void actionService.dispatch("action.palette.open", undefined, { source: "user" });
@@ -1687,7 +1625,7 @@ export function Toolbar({
     [
       onLaunchAgent,
       openFileBrowser,
-      handleCopyTreeOverflow,
+      handleCopyTreeClick,
       onSettings,
       onToggleProblems,
       pluginButtonIds,

@@ -9,16 +9,23 @@ const { addErrorMock, removeErrorMock, isAvailableMock, cancelMock, onProgressMo
     isAvailableMock: vi.fn<() => Promise<boolean>>(() => new Promise<boolean>(() => {})),
     cancelMock: vi.fn(() => undefined),
     onProgressMock: vi.fn(() => () => {}),
-    injectMock:
-      vi.fn<
-        (
-          terminalId: string,
-          worktreeId: string,
-          options: unknown,
-          injectionUuid?: string
-        ) => Promise<{ error?: string; fileCount?: number }>
-      >(),
+    injectMock: vi.fn<
+      (
+        terminalId: string,
+        worktreeId: string,
+        options: unknown,
+        injectionUuid?: string
+      ) => Promise<{
+        error?: string;
+        fileCount?: number;
+        stats?: Record<string, unknown> | null;
+      }>
+    >(),
   }));
+
+const notifyMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
 const { terminalState, usePanelStoreMock } = vi.hoisted(() => {
   const terminalState = {
@@ -93,6 +100,80 @@ describe("useContextInjection", () => {
       },
     };
     terminalState.panelIds = ["term-1"];
+  });
+
+  // Issue #11735 — a completed injection played a sound and dispatched a DOM
+  // event but showed nothing. The pane's inline progress banner disappears on
+  // completion, so nothing said how much context the agent actually received.
+  describe("completion toast", () => {
+    async function runInjection(
+      resolved: { error?: string; fileCount?: number; stats?: Record<string, unknown> | null },
+      selectedPaths?: string[]
+    ): Promise<void> {
+      isAvailableMock.mockResolvedValue(true);
+      injectMock.mockResolvedValue(resolved);
+
+      const { result } = renderHook(() => useContextInjection("term-1"));
+
+      // Awaited inside act so the success branch and the state updates that
+      // follow it flush together — a bare waitFor would leave them outside act.
+      await act(async () => {
+        await result.current.inject("wt-1", "term-1", selectedPaths);
+      });
+    }
+
+    it("announces the injection in terminal wording, never clipboard wording", async () => {
+      await runInjection({ fileCount: 7, stats: { totalSize: 2048 } });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const payload = notifyMock.mock.calls[0]?.[0] as { type: string; message: string };
+      expect(payload.type).toBe("success");
+      expect(payload.message).toContain("Injected 7 files");
+      expect(payload.message).toContain("into terminal");
+      expect(payload.message).not.toContain("clipboard");
+    });
+
+    it("keeps its own rate-limit bucket and omits the worktree from context", async () => {
+      // The `copyTree.injectToTerminal` action is an independent route to the
+      // same client method; a shared bucket would let one suppress the other.
+      // Naming the worktree would let notify() divert this to the inbox, and
+      // injection always targets a terminal that is already on screen.
+      await runInjection({ fileCount: 7, stats: { totalSize: 2048 } });
+
+      const payload = notifyMock.mock.calls[0]?.[0] as {
+        rateLimitKey?: string;
+        type: string;
+        context: Record<string, unknown>;
+      };
+      expect(payload.rateLimitKey).toBeTruthy();
+      expect(payload.rateLimitKey).not.toBe(payload.type);
+      expect(payload.rateLimitKey).not.toBe("copyTree.injectToTerminal");
+      expect(payload.context).toEqual({ eventKind: "agent" });
+    });
+
+    it("explains an empty selected-path injection instead of reporting a bare zero", async () => {
+      await runInjection(
+        { fileCount: 0, stats: { excluded: { total: 3, byReason: { gitignore: 3 } } } },
+        ["node_modules"]
+      );
+
+      const payload = notifyMock.mock.calls[0]?.[0] as { type: string; message: string };
+      expect(payload.type).toBe("info");
+      expect(payload.message).not.toContain("0 files");
+      expect(payload.message).toContain("ignore rule");
+    });
+
+    it("never announces an injection that failed", async () => {
+      await runInjection({ error: "Terminal closed during injection" });
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("never announces a cancelled injection", async () => {
+      // Cancellation returns before the success branch; announcing would claim
+      // the agent got context the user deliberately stopped.
+      await runInjection({ error: "Injection cancelled" });
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
   });
 
   it("does not throw if cancel API returns non-promise", async () => {

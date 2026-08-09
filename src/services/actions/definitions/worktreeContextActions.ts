@@ -15,6 +15,8 @@ import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
+import { describeEmptyFolderCopy, formatCopyResultMessage } from "@/lib/formatCopyResult";
+import { notify } from "@/lib/notify";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
 import { basename } from "@shared/utils/path";
@@ -353,6 +355,48 @@ export function registerWorktreeContextActions(
             throw new Error("No modified files to copy. Make some changes first.");
           }
           throw new Error(result.error);
+        }
+
+        // Every route into this action except the context menu ends here with
+        // nothing on screen to say the clipboard changed: the toolbar button,
+        // Cmd+Shift+C, the palette, the `worktree.copyContext` alias, and any
+        // agent dispatch. `copyContextWithFeedback` is the sole "context-menu"
+        // caller and updates its own spinner toast in place, so announcing here
+        // too would double-toast it. Ordered after the failure checks so a
+        // failed copy can never announce success (#11735).
+        if (ctx.dispatchSource !== "context-menu") {
+          const isScopedCopy = Boolean(includePaths?.length || scopePaths?.length);
+          // A folder the project ignores wholesale copies cleanly but yields
+          // nothing — say why instead of reporting a bare "Copied 0 files".
+          const emptyScopedCopy = isScopedCopy && result.fileCount === 0;
+          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+          notify({
+            type: emptyScopedCopy ? "info" : "success",
+            title: emptyScopedCopy ? "No files copied" : "Context copied",
+            message: emptyScopedCopy
+              ? describeEmptyFolderCopy(result.stats)
+              : formatCopyResultMessage({
+                  fileCount: result.fileCount,
+                  stats: result.stats,
+                  format,
+                }),
+            // Its own bucket. The key otherwise falls back to `type`, pooling
+            // this with every other success toast in the app, where an
+            // unrelated burst would swallow the one message saying what is now
+            // on the clipboard.
+            rateLimitKey: "worktree.copyTree",
+            // No `context.worktreeId`, deliberately: notify() diverts a
+            // high-priority toast to the inbox when context names the worktree
+            // already on screen — the common case here — which would silence
+            // exactly this signal. A clipboard overwrite is invisible whichever
+            // worktree is displayed.
+            //
+            // "agent", not "completed": both route active → high, but
+            // "completed" owns the `completedEnabled` setting, which gates only
+            // main-process completion watches and never a renderer notify() —
+            // it would offer a toggle that leaves these copies firing anyway.
+            context: { eventKind: "agent" },
+          });
         }
 
         return {
