@@ -7,6 +7,7 @@ import {
 } from "../copyTreeHistory.js";
 import { COPY_TREE_HISTORY_NAME_MAX_LENGTH } from "../../types/ipc/copyTreeHistory.js";
 import type { CopyTreeHistoryRecord } from "../../types/ipc/copyTreeHistory.js";
+import type { CopyTreeOptions } from "../../types/ipc/copyTree.js";
 
 describe("canonicalizeCopyTreeOptions", () => {
   it("collapses a string pattern and its one-element array form to the same shape", () => {
@@ -96,8 +97,18 @@ describe("canonicalizeCopyTreeOptions", () => {
     expect(options.scopePaths).toEqual(["z", "a"]);
   });
 
-  it("returns an empty object for absent options", () => {
-    expect(canonicalizeCopyTreeOptions(undefined)).toEqual({});
+  it("treats absent options the same as empty ones", () => {
+    expect(canonicalizeCopyTreeOptions(undefined)).toEqual(canonicalizeCopyTreeOptions({}));
+  });
+
+  it("keeps the folded selection in its own namespace", () => {
+    // A future real `CopyTreeOptions.selection` field must not land in the same
+    // slot as today's folded filter/includePaths, or the two would collide.
+    const folded = canonicalizeCopyTreeOptions({ filter: ["a"] });
+    const strayField = canonicalizeCopyTreeOptions({
+      selection: ["a"],
+    } as unknown as CopyTreeOptions);
+    expect(folded).not.toEqual(strayField);
   });
 });
 

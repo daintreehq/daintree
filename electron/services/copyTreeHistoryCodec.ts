@@ -64,7 +64,18 @@ export function decodeCopyTreeHistoryFile(raw: string): CopyTreeHistoryDecodeRes
  * Builds the envelope field by field rather than spreading an input object, so
  * a forged `_schemaVersion` riding along on a record set is structurally
  * incapable of reaching disk.
+ *
+ * Applies the same cap the decoder does. Without it a caller could persist more
+ * than the cap and have the surplus vanish on the next read, making the decoder
+ * the first place records disappear rather than the writer.
  */
 export function encodeCopyTreeHistoryFile(records: CopyTreeHistoryRecord[]): string {
-  return JSON.stringify({ _schemaVersion: COPY_TREE_HISTORY_SCHEMA_VERSION, records }, null, 2);
+  return JSON.stringify(
+    {
+      _schemaVersion: COPY_TREE_HISTORY_SCHEMA_VERSION,
+      records: records.slice(0, COPY_TREE_HISTORY_MAX_RECORDS),
+    },
+    null,
+    2
+  );
 }

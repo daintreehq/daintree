@@ -52,7 +52,7 @@ function toArray(value: unknown): string[] | null {
  */
 export function canonicalizeCopyTreeOptions(options?: CopyTreeOptions): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  if (!options) return out;
+  if (!options) return { options: out };
 
   for (const [key, value] of Object.entries(options)) {
     if (value === undefined) continue;
@@ -83,11 +83,14 @@ export function canonicalizeCopyTreeOptions(options?: CopyTreeOptions): Record<s
     const list = toArray(value);
     if (list) selection.push(...list);
   }
-  if (hasSelection) {
-    out.selection = [...new Set(selection)].sort();
-  }
 
-  return out;
+  // Two namespaces rather than a synthetic key alongside the real ones: a
+  // future `CopyTreeOptions.selection` field would otherwise canonicalize into
+  // the same slot as today's folded `filter`/`includePaths` and either collide
+  // with it or be overwritten by it.
+  return hasSelection
+    ? { options: out, selection: [...new Set(selection)].sort() }
+    : { options: out };
 }
 
 function toList(value: string | string[] | undefined): string[] {

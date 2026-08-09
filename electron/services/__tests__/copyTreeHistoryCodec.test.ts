@@ -153,6 +153,14 @@ describe("decodeCopyTreeHistoryFile", () => {
     expect(decodeCopyTreeHistoryFile(raw)).toEqual({ ok: false, reason: "corrupt" });
   });
 
+  it("never writes more records than it will read back", () => {
+    const records = Array.from({ length: COPY_TREE_HISTORY_MAX_RECORDS + 5 }, (_, i) =>
+      record({ id: `id-${i}`, dedupeKey: `key-${i}` })
+    );
+    const parsed = JSON.parse(encodeCopyTreeHistoryFile(records)) as { records: unknown[] };
+    expect(parsed.records).toHaveLength(COPY_TREE_HISTORY_MAX_RECORDS);
+  });
+
   it("bounds how many records a hand-edited file can push through", () => {
     const records = Array.from({ length: COPY_TREE_HISTORY_MAX_RECORDS + 25 }, (_, i) =>
       record({ id: `id-${i}`, dedupeKey: `key-${i}`, lastUsedAt: 10_000 - i })

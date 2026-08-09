@@ -75,7 +75,11 @@ export function applyCopyTreeRun(
         source: input.source,
         worktreeId: input.worktreeId,
         stats: input.stats,
-        createdAt: now,
+        // The clamp exists to order this run against the others, so only
+        // `lastUsedAt` takes it. `createdAt` answers "when did this entry first
+        // appear", and inheriting a stray future timestamp from an unrelated
+        // record would make that answer permanently wrong.
+        createdAt: Math.max(stamp.now, 0),
         lastUsedAt: now,
         runCount: 1,
       };
