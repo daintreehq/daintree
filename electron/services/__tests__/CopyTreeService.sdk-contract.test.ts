@@ -567,16 +567,31 @@ describe("CopyTreeService against the installed CopyTree", () => {
         expect(result.unmatchedSelector).toBeUndefined();
       });
 
-      it("stays quiet when `exclude` removed what the patterns selected", async () => {
-        const result = await copyTreeService.testConfig(tempDir, {
-          includePaths: ["src/landscape/**"],
-          exclude: ["src/landscape/**"],
-        });
+      // The git filter is the other post-pattern stage that can empty a run
+      // this way, but reaching it needs a real repository with a real diff.
+      // Its mapping is covered by the mocked `gitFilter` row in
+      // CopyTreeService.test.ts; the size gate above is what proves the
+      // post-pattern rule against the real pipeline, so a git fixture here
+      // would add process spawning without adding a distinct guarantee.
+    });
 
-        expect(result.noFilesMatched).toBe(true);
-        expect(result.excluded?.byReason.filterPattern).toBeGreaterThan(0);
-        expect(result.unmatchedSelector).toBeUndefined();
+    it("still blames a bare directory on a repo that has configured excludes", async () => {
+      // `exclude` is installed as an ignore LAYER on the walker, so it prunes
+      // before the patterns are consulted and proves nothing about them. It is
+      // also not optional in practice: the IPC handler folds a project's
+      // `excludedPaths` and `alwaysExclude` into `exclude` whenever the caller
+      // omits it, so treating its accounting as post-pattern would silence the
+      // #11731 diagnostic on exactly the configured repositories that need it.
+      const result = await copyTreeService.testConfig(tempDir, {
+        includePaths: ["src/landscape"],
+        exclude: ["docs/**"],
       });
+
+      expect(result.noFilesMatched).toBe(true);
+      // The precondition: the exclude really did book entries, so this is not
+      // passing because the layer never fired.
+      expect(result.excluded?.byReason.optionExclude).toBeGreaterThan(0);
+      expect(result.unmatchedSelector).toBe("includePaths");
     });
 
     it("carries the curated files, and only those, into a real generated bundle", async () => {

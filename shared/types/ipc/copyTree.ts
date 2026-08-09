@@ -210,11 +210,15 @@ export interface CopyTreeBudgetStats {
    * Set only when the run came back empty, files reached the pattern check and
    * were rejected there, and NOTHING was removed after the patterns ran. That
    * last condition is what keeps the hint honest: `noFilesMatched` is measured
-   * once the whole pipeline is done, and the git filter, the budgets, `exclude`
-   * and the size gate all run later — so a single file removed by one of those
-   * is proof the patterns matched it, and the patterns are not what emptied the
-   * run. An empty scope, an empty repo, a `modified` filter with no changes and
-   * a budget that dropped the last file therefore all leave this unset.
+   * once the whole pipeline is done, and the git filter, the budgets and the
+   * size gate all run later — so a single file removed by one of those is proof
+   * the patterns matched it, and the patterns are not what emptied the run. An
+   * empty scope, an empty repo, a `modified` filter with no changes and a
+   * budget that dropped the last file therefore all leave this unset.
+   *
+   * Ignore rules, configured excludes and scope prune while the walker
+   * descends, before the patterns are consulted, so they neither set nor
+   * suppress this.
    */
   unmatchedSelector?: CopyTreeUnmatchedSelector;
   /** What didn't make it, and why */

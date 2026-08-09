@@ -681,6 +681,17 @@ class CopyTreeService {
    * removed a file that had already passed the patterns, which is the whole
    * point of the distinction below. Unknown reasons falling outside it is the
    * safe direction: the hint goes quiet rather than blaming the wrong field.
+   *
+   * `optionExclude` is here despite reading like a post-pattern stage, and the
+   * distinction is load-bearing rather than academic. `exclude` is installed as
+   * an ignore LAYER on the walker (`kind: 'option-exclude'`), so it prunes
+   * before the patterns are ever consulted; the later re-application in
+   * ProfileFilterStage only exists to outrank ignore negations and has nothing
+   * left to remove. Treating it as post-pattern would silence the hint on
+   * ordinary runs, because the IPC handler folds a project's `excludedPaths`
+   * and `alwaysExclude` into `exclude` whenever the caller omits it — so the
+   * one diagnostic #11731 asked for would go missing on precisely the
+   * configured real-world repositories that need it.
    */
   private static readonly PRE_PATTERN_EXCLUSIONS: ReadonlySet<string> = new Set<string>([
     "gitignore",
@@ -688,10 +699,14 @@ class CopyTreeService {
     "globalGitignore",
     "gitInfoExclude",
     "configExclude",
+    "optionExclude",
     "scopeFilter",
     "testExclude",
     "unreadable",
-  ] satisfies CopyTreeExclusionReason[]);
+    // Walker-emitted, and the one post-loop emitter books it for forced entries
+    // that bypass the patterns entirely — so it never implies a pattern match.
+    "symlinkEscape",
+  ] satisfies (CopyTreeExclusionReason | "symlinkEscape")[]);
 
   /**
    * Blame the supplied patterns for an empty run, but only when they earned it.
@@ -709,7 +724,10 @@ class CopyTreeService {
    *
    * A file removed after the patterns is therefore proof they matched something
    * and disqualifies the hint. `truncated` is a second, cheap read on the same
-   * question for a budget that drops a file without booking a reason.
+   * question for a budget that drops a file without booking a reason. What was
+   * pruned on the way IN says nothing either way, which is what the allowlist
+   * above is for — suppressing on those would leave the hint firing only on
+   * repositories with no ignore rules and no configured excludes.
    */
   private static deriveUnmatchedSelector(
     stats: CopyResult["stats"],

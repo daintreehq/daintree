@@ -544,6 +544,12 @@ describe("CopyTreeService", () => {
         { supplied: { includePaths: ["src/panels"] }, expected: "includePaths" },
         { supplied: { filter: "src/panels" }, expected: "filter" },
         { supplied: { filter: ["src/panels"] }, expected: "filter" },
+        // A scalar filter is wrapped into a one-entry list by
+        // `mergeSelectionPatterns`, so even a blank one is a real, unmatchable
+        // pattern the SDK enforces. Counting it as absent here would leave the
+        // caller whose selection emptied the run with nothing to correct — the
+        // very thing this field exists to prevent.
+        { supplied: { filter: "" }, expected: "filter" },
         {
           supplied: { includePaths: ["src/panels"], filter: "docs" },
           expected: "filterAndIncludePaths",
@@ -601,7 +607,7 @@ describe("CopyTreeService", () => {
       // failed the patterns and a real match that a later stage then dropped
       // satisfy both halves of the old gate while the patterns did their job.
       // Each reason here belongs to a stage that runs after the pattern check.
-      it.each(["sizeGate", "gitFilter", "optionExclude", "charBudget", "duplicate"])(
+      it.each(["sizeGate", "gitFilter", "charBudget", "duplicate", "fileCountBudget"])(
         "stays quiet when %s removed a file that had already passed the patterns",
         async (reason) => {
           mockEmptyRun({ filterPattern: 4, [reason]: 1 });
@@ -626,7 +632,21 @@ describe("CopyTreeService", () => {
         expect(result.unmatchedSelector).toBeUndefined();
       });
 
-      it.each(["gitignore", "configExclude", "scopeFilter", "testExclude", "unreadable"])(
+      it.each([
+        "gitignore",
+        "copytreeignore",
+        "globalGitignore",
+        "gitInfoExclude",
+        "configExclude",
+        // `exclude` is a walker ignore layer, not a later stage — and the IPC
+        // handler injects a project's excludedPaths/alwaysExclude into it, so
+        // suppressing here would silence the hint on configured repositories.
+        "optionExclude",
+        "scopeFilter",
+        "testExclude",
+        "unreadable",
+        "symlinkEscape",
+      ])(
         "still blames the patterns when the only company is %s, pruned on the way in",
         async (reason) => {
           // These are booked by the walker before a file ever reaches the
