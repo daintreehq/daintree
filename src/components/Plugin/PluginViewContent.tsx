@@ -75,6 +75,27 @@ export interface PluginViewContentProps {
 const PLUGIN_VIEW_IMPORT_TIMEOUT_MS = 10_000;
 
 /**
+ * Errors raised by the `plugin://` module fetch itself (or by the timeout that
+ * fires while one is in flight), as opposed to an activation rejection or a
+ * throw from the view's own render. Only these are worth recovering with a fresh
+ * view generation: the module map keys failures by specifier and never evicts
+ * them, so re-importing the same URL after a fetch failure is guaranteed to fail
+ * again. A module that loaded but exported the wrong shape, or a view that threw
+ * while rendering, would fail identically on a new specifier — those keep the
+ * plain remount. Tracked in a WeakSet rather than a flag on the error so the
+ * error object the boundary logs and displays stays untouched.
+ */
+const importStageFailures = new WeakSet<object>();
+
+function markImportStageFailure(err: unknown): void {
+  if (typeof err === "object" && err !== null) importStageFailures.add(err);
+}
+
+function isImportStageFailure(err: unknown): boolean {
+  return typeof err === "object" && err !== null && importStageFailures.has(err);
+}
+
+/**
  * Carries the host's close callback down to the factory-scoped fallback without
  * putting it in the fallback's component identity. Default is an empty object so
  * a content instance mounted without a host (tests, a future embedder) simply
@@ -122,14 +143,18 @@ function isPluginViewModule(mod: unknown): mod is { default: ComponentType<Panel
  *     fresh state-held ref produces a new `lazy()` call so `import()` is
  *     re-evaluated rather than returning the cached failed promise.
  *
- * `componentPath` is imported verbatim. It already carries a per-load
- * generation segment minted by `buildPluginViewUrl` in main, which is what makes
- * an upgraded plugin's view actually load: V8 caches ESM module records by URL
- * and Chromium has no way to evict an entry (Vite #14438 / Chromium #350426234,
+ * `componentPath` is imported as given. It already carries a per-load generation
+ * segment minted by `buildPluginViewUrl` in main, which is what makes an
+ * upgraded plugin's view actually load: V8 caches ESM module records by URL and
+ * Chromium has no way to evict an entry (Vite #14438 / Chromium #350426234,
  * still unresolved), so only a specifier V8 has never seen re-evaluates. Never
  * add a cache-buster HERE — a per-render or per-retry parameter would grow the
- * module map without bound, which is exactly what the generation segment avoids
- * by changing only when main reloads the plugin.
+ * module map without bound. The one exception is deliberate and still
+ * main-minted: after an import-stage failure the retry asks main for a
+ * replacement URL on a second generation (#11728), because the failed entry is
+ * keyed by specifier and re-importing it can only fail again. Main allocates
+ * that generation at most once per plugin load and shares it across the plugin's
+ * views, so the bound is two namespaces per load rather than one per retry.
  */
 export function makePluginViewContent(
   config: PluginViewContentConfig
@@ -153,12 +178,12 @@ export function makePluginViewContent(
     );
 
     // Re-pull here rather than at mount, because at mount the plugin may not be
-    // listable yet: `loadPlugin` registers the panel kind (which is what mounts
-    // this content) before awaiting skill loading and entering the plugins map,
-    // and `daintree-plugin dev` never fires provenance at all. Reaching this
-    // component means the view rendered and threw, so its plugin is certainly
-    // loaded by now and this pull can see it. The pane fails closed meanwhile
-    // and upgrades in place when the snapshot lands.
+    // listable yet: `daintree-plugin dev` never fires provenance at all. (Panel
+    // kinds are now published after the plugins-map commit, so a kind that
+    // mounted this content does at least have a loaded plugin behind it —
+    // #11728.) Reaching this component means the view rendered and threw, so
+    // this pull can see it. The pane fails closed meanwhile and upgrades in
+    // place when the snapshot lands.
     const refreshPluginRuntime = usePluginRuntimeStore((s) => s.refresh);
     useEffect(() => refreshPluginRuntime(), [refreshPluginRuntime]);
 
@@ -179,7 +204,17 @@ export function makePluginViewContent(
     );
   }
 
-  const createLazyView = (): LazyExoticComponent<ComponentType<PanelViewProps>> =>
+  // Replacement specifier for `componentPath` once main has minted one, cached at
+  // factory scope so it outlives both the `lazy()` wrapper and the component
+  // instance (#11728). A remount that fell back to the poisoned original would
+  // undo the recovery, and `usePluginPanelKinds` caches this factory per
+  // (kindId, componentPath) — so every panel of this kind shares the one
+  // recovery generation, which is exactly the granularity main mints it at.
+  let recoveryComponentPath: string | undefined;
+
+  const createLazyView = (
+    requestRecoveryPath = false
+  ): LazyExoticComponent<ComponentType<PanelViewProps>> =>
     lazy<ComponentType<PanelViewProps>>(async () => {
       // Race the `plugin://` import against a timeout. A wedged protocol load
       // (handler hang, never-resolving fetch) would otherwise sit behind
@@ -205,18 +240,42 @@ export function makePluginViewContent(
           // failed (e.g. a manifest collision or an activate() throw) instead of
           // the generic import timeout the module load would otherwise produce
           // once its handlers never bound.
-          await window.electron?.plugin?.activateForView?.(kindId);
-          return import(/* @vite-ignore */ componentPath);
+          //
+          // On a retry after an import-stage failure this also asks main for a
+          // replacement URL on a fresh view generation (#11728). The previous
+          // specifier is permanently poisoned — the module map never evicts a
+          // failed entry — so recovery needs a URL V8 has never seen. Main
+          // builds it from the loaded manifest and mints the generation once per
+          // plugin load, which caps the module map at two namespaces per plugin
+          // however many times the user retries. The first attempt keeps the
+          // single-argument call so it stays a pure activation request.
+          const recovered = requestRecoveryPath
+            ? await window.electron?.plugin?.activateForView?.(kindId, true)
+            : await window.electron?.plugin?.activateForView?.(kindId);
+          if (typeof recovered === "string" && recovered.length > 0) {
+            recoveryComponentPath = recovered;
+          }
+          try {
+            return await import(/* @vite-ignore */ recoveryComponentPath ?? componentPath);
+          } catch (err) {
+            markImportStageFailure(err);
+            throw err;
+          }
         })().finally(() => {
           if (timeoutId !== undefined) clearTimeout(timeoutId);
         }),
         new Promise<never>((_, reject) => {
           timeoutId = setTimeout(() => {
-            reject(
-              new Error(
-                `Plugin "${pluginId}" view module at ${componentPath} timed out after ${PLUGIN_VIEW_IMPORT_TIMEOUT_MS}ms`
-              )
+            // Counts as an import-stage failure: the losing `import()` keeps
+            // running after this rejects (dynamic import has no cancellation),
+            // so if it eventually fails it poisons this specifier behind our
+            // back. Retrying on a fresh generation sidesteps that entirely,
+            // which is why the timeout is safe to leave uncancelled (#11728).
+            const timeoutError = new Error(
+              `Plugin "${pluginId}" view module at ${recoveryComponentPath ?? componentPath} timed out after ${PLUGIN_VIEW_IMPORT_TIMEOUT_MS}ms`
             );
+            markImportStageFailure(timeoutError);
+            reject(timeoutError);
           }, PLUGIN_VIEW_IMPORT_TIMEOUT_MS);
         }),
       ]);
@@ -317,9 +376,19 @@ export function makePluginViewContent(
 
     const closeContextValue = useMemo(() => ({ onRequestClose }), [onRequestClose]);
 
-    const handleRenderError = useCallback(() => {
-      reportViewRenderFailed(panelId, { kindId, pluginId });
-    }, [panelId]);
+    // Whether the error the boundary is currently showing came from the module
+    // fetch, which is what decides if "Try again" needs a fresh specifier from
+    // main or just a remount. A ref because only the reset handler reads it, and
+    // re-rendering on it would be pointless churn.
+    const lastErrorWasImportStage = useRef(false);
+
+    const handleRenderError = useCallback(
+      (error: Error) => {
+        lastErrorWasImportStage.current = isImportStageFailure(error);
+        reportViewRenderFailed(panelId, { kindId, pluginId });
+      },
+      [panelId]
+    );
 
     const handleReset = (): void => {
       // Abort the outgoing view's signal before swapping in a fresh controller —
@@ -330,7 +399,11 @@ export function makePluginViewContent(
       // Fresh controller for the retry so the new lazy import sees an unaborted
       // signal; the mirror effect propagates it to controllerRef for teardown.
       setController(new AbortController());
-      setLazyView(() => createLazyView());
+      // Ask main for a fresh view generation only when the module fetch is what
+      // failed (#11728) — a new `lazy()` wrapper alone cannot recover that,
+      // because the poisoned entry belongs to the specifier, not the wrapper.
+      // Activation failures and render throws still just remount.
+      setLazyView(() => createLazyView(lastErrorWasImportStage.current));
       setRetryCount((c) => c + 1);
       // The retry is under way, so the panel is no longer failed — it is loading.
       // Clearing here (rather than waiting for the next commit) keeps a worker

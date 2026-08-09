@@ -1205,6 +1205,11 @@ export class PluginService {
       dir: pluginDir,
       loadedAt: Date.now(),
       isBuiltin: opts.isBuiltin,
+      // One generation per load, shared by every view this plugin contributes,
+      // so a reload swaps the whole plugin's view modules together (#11301).
+      // Held on the plugin rather than a local so `activatePluginForView` can
+      // mint a sibling recovery generation later (#11728).
+      viewGeneration: allocatePluginViewGeneration(),
     };
 
     if (manifest.main) {
@@ -1224,10 +1229,12 @@ export class PluginService {
     // `devMode` to the provenance record so `listPlugins()` surfaces the "DEV"
     // badge (#9290). A dev plugin needs a `main` entry to run in the worker.
     //
-    // Synchronous `existsSync` on purpose: an `await` here would split the
-    // synchronous critical section between the duplicate-name check above and
-    // the `this.plugins.set` below, letting two concurrent loads of the same
-    // name both slip past dedup.
+    // Synchronous `existsSync` on purpose: it keeps this step from adding
+    // another suspension point between the duplicate-name check above and the
+    // `this.plugins.set` below. That stretch is NOT a critical section though —
+    // `await registerPluginSkills(...)` further down already splits it, so two
+    // concurrent loads of the same name can still both pass dedup. Tracked
+    // separately; closing it needs an explicit name reservation at the check.
     if (!opts.isBuiltin) {
       const isDev = existsSync(path.join(pluginDir, DEV_MARKER_FILENAME));
       if (isDev && plugin.resolvedMain) {
@@ -1245,71 +1252,6 @@ export class PluginService {
           );
         }
       }
-    }
-
-    // Index views by bare id so the panels loop can attach `componentPath` in
-    // a single registerPanelKind pass (#9229). View ids are pre-namespace; the
-    // runtime panel id is `${manifest.name}.${panel.id}`.
-    // One generation per load, shared by every view this plugin contributes, so
-    // a reload swaps the whole plugin's view modules together (#11301). Reading
-    // it here rather than per-panel also keeps a plugin's chunks in one virtual
-    // namespace, which is what lets relative imports inherit the generation.
-    const viewGeneration = allocatePluginViewGeneration();
-    const viewsByBareId = new Map<string, ViewContribution>();
-    const unmatchedViewIds = new Set<string>();
-    for (const view of manifest.contributes.views) {
-      // `location` is narrowed to `"panel"` and `componentPath` safety is
-      // enforced by `ViewContributionSchema` at manifest parse — an unsupported
-      // location or unsafe path fails validation before we reach this loop.
-      if (viewsByBareId.has(view.id)) {
-        // Two entries with the same bare id — last would silently overwrite
-        // earlier. Surface the authoring mistake; keep the first to make the
-        // outcome deterministic.
-        console.warn(
-          `[PluginService] Plugin "${manifest.name}": views has duplicate entries for id "${view.id}"; keeping the first occurrence`
-        );
-        continue;
-      }
-      viewsByBareId.set(view.id, view);
-      unmatchedViewIds.add(view.id);
-    }
-
-    for (const panel of manifest.contributes.panels) {
-      const panelId = `${manifest.name}.${panel.id}`;
-      const view = viewsByBareId.get(panel.id);
-      if (view) unmatchedViewIds.delete(panel.id);
-      registerPanelKind({
-        id: panelId,
-        name: panel.name,
-        iconId: panel.iconId,
-        color: panel.color,
-        hasPty: panel.hasPty,
-        canRestart: panel.canRestart,
-        canConvert: panel.canConvert,
-        showInPalette: panel.showInPalette,
-        // Dockable by default; only forward an explicit opt-out (or opt-in) so
-        // absence stays `undefined` and `panelKindIsDockable` applies the
-        // default. #11332.
-        ...(panel.dockable !== undefined ? { dockable: panel.dockable } : {}),
-        extensionId: manifest.name,
-        ...(view && !panel.hasPty
-          ? { componentPath: buildPluginViewUrl(manifest.name, view.componentPath, viewGeneration) }
-          : {}),
-      });
-      if (view && panel.hasPty) {
-        // A PTY panel with a matching view is contradictory — the view module
-        // would never render because TerminalPane owns the surface. Surface the
-        // collision rather than silently dropping the view.
-        console.warn(
-          `[PluginService] Plugin "${manifest.name}": views entry "${view.id}" matches a panel with hasPty=true; the view will be ignored because PTY panels are rendered by TerminalPane`
-        );
-      }
-    }
-
-    for (const orphanId of unmatchedViewIds) {
-      console.warn(
-        `[PluginService] Plugin "${manifest.name}": views entry "${orphanId}" has no matching contributes.panels entry and will be ignored`
-      );
     }
 
     for (const btn of manifest.contributes.toolbarButtons) {
@@ -1403,6 +1345,86 @@ export class PluginService {
     // inside the plugin's own init, and registerHandler/registerPluginAction
     // throw "Unknown plugin" even for a correctly loaded plugin.
     this.plugins.set(manifest.name, plugin);
+
+    // Panel kinds are published only AFTER the map commit above, with no await
+    // in between (#11728). `registerPanelKind` is what makes a panel
+    // addressable — it carries the `plugin://` `componentPath` and schedules the
+    // `plugin:panel-kinds-changed` broadcast — while `getPluginDir` (the
+    // protocol handler's resolver) reads `this.plugins`. Publishing first, as
+    // this block used to, handed the renderer a URL that the protocol could not
+    // yet resolve; any plugin with an await before the commit (a `skills`
+    // contribution alone was enough) 404'd its own view module, and a rejected
+    // dynamic import is permanent for that specifier. The map commit is now the
+    // single addressability gate, so this ordering is the invariant, not an
+    // incidental arrangement.
+    //
+    // Index views by bare id so the panels loop can attach `componentPath` in
+    // a single registerPanelKind pass (#9229). View ids are pre-namespace; the
+    // runtime panel id is `${manifest.name}.${panel.id}`. The generation lives
+    // on `plugin` (allocated at construction) so every view shares one virtual
+    // namespace, which is what lets relative imports inherit it (#11301).
+    const viewsByBareId = new Map<string, ViewContribution>();
+    const unmatchedViewIds = new Set<string>();
+    for (const view of manifest.contributes.views) {
+      // `location` is narrowed to `"panel"` and `componentPath` safety is
+      // enforced by `ViewContributionSchema` at manifest parse — an unsupported
+      // location or unsafe path fails validation before we reach this loop.
+      if (viewsByBareId.has(view.id)) {
+        // Two entries with the same bare id — last would silently overwrite
+        // earlier. Surface the authoring mistake; keep the first to make the
+        // outcome deterministic.
+        console.warn(
+          `[PluginService] Plugin "${manifest.name}": views has duplicate entries for id "${view.id}"; keeping the first occurrence`
+        );
+        continue;
+      }
+      viewsByBareId.set(view.id, view);
+      unmatchedViewIds.add(view.id);
+    }
+
+    for (const panel of manifest.contributes.panels) {
+      const panelId = `${manifest.name}.${panel.id}`;
+      const view = viewsByBareId.get(panel.id);
+      if (view) unmatchedViewIds.delete(panel.id);
+      registerPanelKind({
+        id: panelId,
+        name: panel.name,
+        iconId: panel.iconId,
+        color: panel.color,
+        hasPty: panel.hasPty,
+        canRestart: panel.canRestart,
+        canConvert: panel.canConvert,
+        showInPalette: panel.showInPalette,
+        // Dockable by default; only forward an explicit opt-out (or opt-in) so
+        // absence stays `undefined` and `panelKindIsDockable` applies the
+        // default. #11332.
+        ...(panel.dockable !== undefined ? { dockable: panel.dockable } : {}),
+        extensionId: manifest.name,
+        ...(view && !panel.hasPty
+          ? {
+              componentPath: buildPluginViewUrl(
+                manifest.name,
+                view.componentPath,
+                plugin.viewGeneration
+              ),
+            }
+          : {}),
+      });
+      if (view && panel.hasPty) {
+        // A PTY panel with a matching view is contradictory — the view module
+        // would never render because TerminalPane owns the surface. Surface the
+        // collision rather than silently dropping the view.
+        console.warn(
+          `[PluginService] Plugin "${manifest.name}": views entry "${view.id}" matches a panel with hasPty=true; the view will be ignored because PTY panels are rendered by TerminalPane`
+        );
+      }
+    }
+
+    for (const orphanId of unmatchedViewIds) {
+      console.warn(
+        `[PluginService] Plugin "${manifest.name}": views entry "${orphanId}" has no matching contributes.panels entry and will be ignored`
+      );
+    }
 
     // Plugins without a `main` entry contribute no executable code — the
     // provenance record reflects a clean load immediately. Plugins with a
@@ -2004,8 +2026,21 @@ export class PluginService {
    * `{ ok: true }` here and falls through to the renderer's generic import
    * error. Built-ins are app-bundled trusted code where this is rare; surfacing
    * it would need a separate in-memory built-in load-error map.
+   *
+   * `requestRecoveryPath` is the renderer's "my import of this view's module
+   * failed, give me a URL V8 hasn't seen" request (#11728). A rejected dynamic
+   * import is permanent for its specifier, so re-importing the published path
+   * can never recover; only a fresh generation segment can. The replacement URL
+   * is always built HERE from the loaded manifest — the renderer never supplies
+   * a path, and never appends its own cache-buster (which would grow the module
+   * map without bound). The generation is minted at most once per plugin load
+   * and shared by every view the plugin contributes, so a plugin occupies two
+   * namespaces at worst no matter how many times the user retries.
    */
-  async activatePluginForView(panelKindId: string): Promise<PluginActivationResult> {
+  async activatePluginForView(
+    panelKindId: string,
+    requestRecoveryPath = false
+  ): Promise<PluginActivationResult> {
     if (typeof panelKindId !== "string" || panelKindId.length === 0) return { ok: true };
     for (const [pluginId, plugin] of this.plugins) {
       for (const panel of plugin.manifest.contributes.panels) {
@@ -2015,7 +2050,25 @@ export class PluginService {
           if (loadError) {
             return { ok: false, error: loadError.message, stack: loadError.stack };
           }
-          return { ok: true };
+          if (!requestRecoveryPath) return { ok: true };
+          // Re-read through the map: `activatePlugin` awaited above, so an
+          // unload/disable in that window must not mint a generation onto a
+          // detached plugin object the protocol will no longer resolve.
+          const live = this.plugins.get(pluginId);
+          if (!live || live !== plugin) return { ok: true };
+          const view = panel.hasPty
+            ? undefined
+            : live.manifest.contributes.views.find((v) => v.id === panel.id);
+          if (!view) return { ok: true };
+          live.recoveryViewGeneration ??= allocatePluginViewGeneration();
+          return {
+            ok: true,
+            recoveryComponentPath: buildPluginViewUrl(
+              pluginId,
+              view.componentPath,
+              live.recoveryViewGeneration
+            ),
+          };
         }
       }
     }

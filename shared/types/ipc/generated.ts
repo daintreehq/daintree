@@ -1009,8 +1009,8 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "plugin:activate-for-view": {
-    args: [panelKindId: string];
-    result: void;
+    args: [panelKindId: string, requestRecoveryPath?: boolean | undefined];
+    result: string | undefined;
   };
   "plugin:agents-get": {
     args: [];

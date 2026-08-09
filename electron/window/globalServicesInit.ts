@@ -885,27 +885,28 @@ export async function initGlobalServices(
   // and return empty lists from internal Maps until initialize() populates them.
   // Plugin contributions broadcast on registration, so late init is renderer-safe.
   //
-  // Timing note (#10322): `initialize()` registers panel-kind contributions
-  // mid-chain, so the `plugin:panel-kinds-changed` broadcast can reach the
-  // renderer a microtask before `setPluginDirResolver()` below swaps the
-  // `plugin://` handler off its placeholder. A plugin panel restored from
-  // persisted state could therefore 404 its first asset fetch. That window is
-  // self-healing: `PluginViewHost`'s `ErrorBoundary` offers a "Try again" that
-  // re-imports once the live resolver is in place.
   registerDeferredTask({
     name: "plugin-service",
     run: async () => {
       const { pluginService } = await import("../services/PluginService.js");
+      // Point the already-registered `plugin://` handler at the live resolver
+      // BEFORE `initialize()` runs, not after (#11728). `getPluginDir` is a
+      // plain lookup in a map that exists from construction, so it is safe to
+      // call at any point — it simply returns `undefined` until a plugin
+      // registers. Wiring it after `initialize()` left the placeholder resolver
+      // live for the whole scan: `initialize()` sweeps temp dirs, fetches the
+      // blocklist over the network, then awaits three sequential `loadFromDir`
+      // passes (builtin, user, sideload), while the FIRST plugin's
+      // `registerPanelKind` already broadcast an addressable `componentPath`.
+      // Every `plugin://` module request in that window 404'd, and a rejected
+      // dynamic import is permanent for that specifier — the module map has no
+      // eviction, so "Try again" re-imported the same poisoned URL forever.
+      setPluginDirResolver((pluginId) => pluginService.getPluginDir(pluginId));
       try {
         await pluginService.initialize();
       } catch (err) {
         console.error("[MAIN] PluginService initialization failed:", err);
       }
-      // Point the already-registered `plugin://` handler at the live resolver
-      // (#10322). main.ts registers the handler before first paint with a
-      // placeholder that 404s; now that the singleton is initialized, swap in
-      // the real `getPluginDir` so plugin asset requests resolve.
-      setPluginDirResolver((pluginId) => pluginService.getPluginDir(pluginId));
       // macOS: drain any `.dntr` paths queued during cold launch (Finder
       // double-click / "Open With") and take over live open-file events now
       // that PluginService can install an approved archive. Each path is queued
