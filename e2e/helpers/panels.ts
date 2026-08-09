@@ -277,13 +277,24 @@ async function clickPanelTrayItem(
   if (!itemName) return false;
 
   const tray = toolbar.locator('[data-toolbar-button-id="launcher"] button');
-  if (!(await clickFirstVisible(tray, 1000, 500))) return false;
+  const trayReady = await tray
+    .first()
+    .waitFor({ state: "visible", timeout: Math.min(timeout, 3000) })
+    .then(() => true)
+    .catch(() => false);
+  if (!trayReady) return false;
+  if (!(await clickFirstVisible(tray, 1000, Math.min(timeout, 3000)))) return false;
 
   // The caller's timeout, not a fixed second: the popover primitives are
   // lazy-loaded, so the first launcher open on a cold release runner can be
   // slower than any menu this suite has already warmed.
   const row = launcherRow(page, itemName);
-  if (!(await row.isVisible({ timeout }).catch(() => false))) {
+  const rowReady = await row
+    .first()
+    .waitFor({ state: "visible", timeout })
+    .then(() => true)
+    .catch(() => false);
+  if (!rowReady) {
     await page.keyboard.press("Escape").catch(() => undefined);
     return false;
   }

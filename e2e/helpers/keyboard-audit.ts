@@ -43,16 +43,24 @@ export function elementKey(info: ActiveElementInfo): string {
 }
 
 export async function escapeTerminalFocus(page: Page): Promise<void> {
-  await page.keyboard.press("F6");
-  await page.waitForFunction(
-    () => {
-      const el = document.activeElement;
-      if (!el) return true;
-      const cn = typeof el.className === "string" ? el.className : "";
-      return !cn.includes("xterm-helper-textarea") && !cn.includes("cm-content");
-    },
-    { timeout: 3000 }
-  );
+  const hasEscapedTerminal = () => {
+    const el = document.activeElement;
+    if (!el) return true;
+    const cn = typeof el.className === "string" ? el.className : "";
+    return !cn.includes("xterm-helper-textarea") && !cn.includes("cm-content");
+  };
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.keyboard.press("F6");
+    try {
+      await page.waitForFunction(hasEscapedTerminal, undefined, { timeout: 1000 });
+      return;
+    } catch {
+      // A cold renderer can miss the first focus-cycle event while xterm settles.
+    }
+  }
+
+  throw new Error("F6 did not move focus out of the terminal");
 }
 
 export async function hasVisibleFocusIndicator(page: Page): Promise<boolean> {
