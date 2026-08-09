@@ -36,8 +36,8 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
         role="option"
       >
         <div className="flex items-center justify-between gap-2 text-sm">
-          {/* Both sides truncate: a long branch name used to have the width to
-              spare, and on the anchored tier it does not. */}
+          {/* Both sides truncate: branch names have no length worth trusting,
+              so no tier is wide enough to make this unnecessary. */}
           <span className="font-medium text-daintree-text truncate">{worktree.name}</span>
           <div className="flex items-center gap-2 min-w-0 text-xs text-daintree-text/60">
             {worktree.branch && (
