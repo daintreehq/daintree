@@ -620,7 +620,13 @@ export function registerWorkflowCreationActions(
             // the same check useContextInjection makes. Without it every
             // resolved call reported success, which now matters: the flag is
             // published as structuredContent rather than buried in text.
-            const injection = await copyTreeClient.injectToTerminal(terminalId, worktreeId);
+            const injection = await copyTreeClient.injectToTerminal(
+              terminalId,
+              worktreeId,
+              undefined,
+              undefined,
+              "workflow"
+            );
             contextInjected = !injection?.error;
           } catch {
             // Best-effort — agent is launched; user can re-inject manually.

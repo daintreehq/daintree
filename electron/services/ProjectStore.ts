@@ -38,6 +38,12 @@ import { ProjectSettingsManager } from "./ProjectSettingsManager.js";
 import { ProjectStateManager, type ProjectStateReadResult } from "./ProjectStateManager.js";
 import { invalidatePrefetchCache } from "./prefetchHydrateCache.js";
 import { ProjectFileStore } from "./ProjectFileStore.js";
+import { applyCopyTreeRun } from "./copyTreeHistoryLog.js";
+import type {
+  CopyTreeHistoryAppendInput,
+  CopyTreeHistoryRecord,
+} from "../../shared/types/ipc/copyTreeHistory.js";
+import { randomUUID } from "crypto";
 import { GlobalFileStore } from "./GlobalFileStore.js";
 import { ProjectIdentityFiles } from "./ProjectIdentityFiles.js";
 import {
@@ -1540,6 +1546,30 @@ export class ProjectStore {
 
   getEffectiveNotificationSettings(): NotificationSettings {
     return this.settingsManager.getEffectiveNotificationSettings(this.getCurrentProjectId());
+  }
+
+  // --- Copy-tree run history (#11732) ---
+
+  async getCopyTreeHistory(projectId: string): Promise<CopyTreeHistoryRecord[]> {
+    return this.fileStore.getCopyTreeHistory(projectId);
+  }
+
+  /**
+   * Fold a completed run into the project's history and return the committed
+   * snapshot. The read, the dedupe fold and the write all happen inside one
+   * queued turn, so concurrent runs for the same project cannot lose a bump.
+   */
+  async appendCopyTreeRun(
+    projectId: string,
+    input: CopyTreeHistoryAppendInput
+  ): Promise<CopyTreeHistoryRecord[]> {
+    let snapshot: CopyTreeHistoryRecord[] = [];
+    await this.fileStore.enqueueCopyTreeHistoryUpdate(projectId, async () => {
+      const current = await this.fileStore.getCopyTreeHistory(projectId);
+      snapshot = applyCopyTreeRun(current, input, { id: randomUUID(), now: Date.now() });
+      return snapshot;
+    });
+    return snapshot;
   }
 
   // --- Recipes ---

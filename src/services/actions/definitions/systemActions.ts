@@ -13,6 +13,7 @@ import {
 import { z } from "zod";
 import { notify } from "@/lib/notify";
 import { formatCopyResultMessage } from "@/lib/formatCopyResult";
+import { resolveCopyTreeRunSource } from "@/lib/copyTreeRunSource";
 import {
   artifactClient,
   cliAvailabilityClient,
@@ -437,7 +438,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         const result = await copyTreeClient.generate(
           requireWorktreeId(args, ctx),
           args?.options,
-          args?.includeContent
+          args?.includeContent,
+          resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource)
         );
         throwOnCopyTreeFailure(result);
         const { filePath, outputBytes } = requireGeneratedFile(result);
@@ -507,7 +509,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         requireExplicitWorktreeForAgentDispatch("copyTree.generateAndCopyFile", args, ctx);
         const result = await copyTreeClient.generateAndCopyFile(
           requireWorktreeId(args, ctx),
-          args?.options
+          args?.options,
+          resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource)
         );
         throwOnCopyTreeFailure(result);
         const { filePath, outputBytes } = requireGeneratedFile(result);
@@ -587,7 +590,9 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         const result = await copyTreeClient.injectToTerminal(
           terminalId,
           resolvedWorktreeId,
-          options
+          options,
+          undefined,
+          resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource)
         );
         throwOnCopyTreeFailure(result);
         return {

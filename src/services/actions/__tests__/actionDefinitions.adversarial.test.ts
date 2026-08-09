@@ -1125,7 +1125,8 @@ describe("worktree action hardening", () => {
 
     expect(mocks.copyTreeClient.generateAndCopyFile).toHaveBeenCalledWith(
       "wt-1",
-      expect.objectContaining({ modified: true })
+      expect.objectContaining({ modified: true }),
+      "unknown"
     );
   });
 
@@ -1168,10 +1169,13 @@ describe("worktree action hardening", () => {
 
     const result = await copyTree.run({ format: "json" }, { focusedWorktreeId: "wt-2" } as never);
 
-    expect(mocks.copyTreeClient.generateAndCopyFile).toHaveBeenCalledWith("wt-2", {
-      format: "json",
-      modified: undefined,
-    });
+    expect(mocks.copyTreeClient.generateAndCopyFile).toHaveBeenCalledWith(
+      "wt-2",
+      { format: "json", modified: undefined },
+      // No dispatch source on this bare context, and the surface is not
+      // inferable from one — recorded as unknown rather than guessed (#11732).
+      "unknown"
+    );
     expect(result).toEqual({
       worktreeId: "wt-2",
       fileCount: 4,

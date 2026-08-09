@@ -485,11 +485,11 @@ export function WorktreeCard({
   };
 
   const handleCopyContextFull = () => {
-    void copyContextWithFeedback(worktree.id, "context-menu");
+    void copyContextWithFeedback(worktree.id, "context-menu", undefined, "worktree-card");
   };
 
   const handleCopyContextModified = () => {
-    void copyContextWithFeedback(worktree.id, "context-menu", { modified: true });
+    void copyContextWithFeedback(worktree.id, "context-menu", { modified: true }, "worktree-card");
   };
 
   const { copy: copyWorktreePath } = useCopyWithFeedback();

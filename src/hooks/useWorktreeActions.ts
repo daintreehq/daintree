@@ -8,6 +8,7 @@ import { formatCopyResultMessage } from "@/lib/formatCopyResult";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionSource } from "@shared/types/actions";
+import type { CopyTreeRunSource } from "@shared/types";
 import type { CopyTreeBudgetStats, CopyTreeExclusionReason } from "@shared/types/ipc/copyTree";
 
 // Moved to a leaf module so the copyTree action definitions can share it
@@ -60,7 +61,10 @@ export function describeEmptyFolderCopy(stats?: CopyTreeBudgetStats | null): str
 export async function copyContextWithFeedback(
   worktreeId: string,
   source: ActionSource,
-  options?: { modified?: boolean; includePaths?: string[]; scopePaths?: string[] }
+  options?: { modified?: boolean; includePaths?: string[]; scopePaths?: string[] },
+  // Which surface this is. `source` can't answer it — the worktree card and the
+  // file browser both dispatch as "context-menu" — so callers that know say so.
+  copyTreeRunSource?: CopyTreeRunSource
 ): Promise<void> {
   // Direct store call: this is a spinner-then-update pattern that depends on
   // an unconditional toast id. notify() returns "" when notifications are
@@ -89,7 +93,7 @@ export async function copyContextWithFeedback(
         includePaths: options?.includePaths,
         scopePaths: options?.scopePaths,
       },
-      { source }
+      { source, copyTreeRunSource }
     );
 
     if (!result.ok) {
@@ -168,7 +172,10 @@ export interface UseWorktreeActionsOptions {
 }
 
 export interface WorktreeActions {
-  handleCopyTree: (worktree: WorktreeSnapshot) => Promise<string | undefined>;
+  handleCopyTree: (
+    worktree: WorktreeSnapshot,
+    copyTreeRunSource?: CopyTreeRunSource
+  ) => Promise<string | undefined>;
   handleOpenEditor: (worktree: WorktreeSnapshot) => void;
   handleOpenIssue: (worktree: WorktreeSnapshot) => void;
   handleOpenPR: (worktree: WorktreeSnapshot) => void;
@@ -182,12 +189,15 @@ export function useWorktreeActions({
   const addError = useErrorStore((state) => state.addError);
 
   const handleCopyTree = useCallback(
-    async (worktree: WorktreeSnapshot): Promise<string | undefined> => {
+    async (
+      worktree: WorktreeSnapshot,
+      copyTreeRunSource?: CopyTreeRunSource
+    ): Promise<string | undefined> => {
       try {
         const result = await actionService.dispatch(
           "worktree.copyTree",
           { worktreeId: worktree.id },
-          { source: "user" }
+          { source: "user", copyTreeRunSource }
         );
         if (!result.ok) {
           throw new Error(result.error.message);

@@ -545,7 +545,15 @@ export class ActionService {
       // context provider) a run-scoped context carrying the dispatch source
       // so source-aware definitions (plugin synthetic actions) can avoid
       // double-confirming an agent dispatch the MCP bridge already gated.
-      const runContext: ActionContext = { ...context, dispatchSource: source };
+      const runContext: ActionContext = {
+        ...context,
+        dispatchSource: source,
+        // Stamped from the dispatch options for the same reason as
+        // `dispatchSource`: it is the caller's own claim about which surface it
+        // is, and a definition must not be able to read a stale one left on a
+        // shared context object.
+        copyTreeRunSource: options?.copyTreeRunSource,
+      };
       const result = await definition.run(validatedArgs, runContext);
       // Enforce the action's own result contract. Zod objects strip unknown
       // keys, so this is what makes the published projection the delivered one

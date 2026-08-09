@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import { copyTreeClient, systemClient } from "@/clients";
+import { resolveCopyTreeRunSource } from "@/lib/copyTreeRunSource";
 import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore, getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
@@ -336,12 +337,16 @@ export function registerWorktreeContextActions(
 
         const format = explicitFormat ?? DEFAULT_COPYTREE_FORMAT;
 
-        const result = await copyTreeClient.generateAndCopyFile(targetWorktreeId, {
-          format,
-          modified,
-          ...(includePaths && includePaths.length > 0 ? { includePaths } : {}),
-          ...(scopePaths && scopePaths.length > 0 ? { scopePaths } : {}),
-        });
+        const result = await copyTreeClient.generateAndCopyFile(
+          targetWorktreeId,
+          {
+            format,
+            modified,
+            ...(includePaths && includePaths.length > 0 ? { includePaths } : {}),
+            ...(scopePaths && scopePaths.length > 0 ? { scopePaths } : {}),
+          },
+          resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource)
+        );
 
         if (result.error) {
           if (modified && result.error.includes("No valid files")) {
@@ -377,8 +382,14 @@ export function registerWorktreeContextActions(
           modified: z.boolean().optional(),
         })
         .optional(),
-      run: async (args) => {
-        const result = await actionService.dispatch("worktree.copyTree", args, { source: "user" });
+      run: async (args, ctx: ActionContext) => {
+        // The re-dispatch resets `source` to "user", which would otherwise
+        // erase that an agent called the alias — forward the resolved surface
+        // explicitly so the history records the real caller.
+        const result = await actionService.dispatch("worktree.copyTree", args, {
+          source: "user",
+          copyTreeRunSource: resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
+        });
         if (!result.ok) {
           throw new Error(result.error.message);
         }

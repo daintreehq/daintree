@@ -194,20 +194,35 @@ describe("systemActions adversarial", () => {
     it("falls back to ctx.activeWorktreeId when worktreeId is omitted", async () => {
       const { run } = setupActions();
       await run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" });
-      expect(copyTreeClientMock.generate).toHaveBeenCalledWith("wt-active", undefined, undefined);
+      expect(copyTreeClientMock.generate).toHaveBeenCalledWith(
+        "wt-active",
+        undefined,
+        undefined,
+        "unknown"
+      );
     });
 
     it("forwards options when provided", async () => {
       const { run } = setupActions();
       const options = { format: "xml" as const };
       await run("copyTree.generate", { options }, { activeWorktreeId: "wt-active" });
-      expect(copyTreeClientMock.generate).toHaveBeenCalledWith("wt-active", options, undefined);
+      expect(copyTreeClientMock.generate).toHaveBeenCalledWith(
+        "wt-active",
+        options,
+        undefined,
+        "unknown"
+      );
     });
 
     it("forwards the content opt-in so the head is only read when asked for", async () => {
       const { run } = setupActions();
       await run("copyTree.generate", { includeContent: true }, { activeWorktreeId: "wt-active" });
-      expect(copyTreeClientMock.generate).toHaveBeenCalledWith("wt-active", undefined, true);
+      expect(copyTreeClientMock.generate).toHaveBeenCalledWith(
+        "wt-active",
+        undefined,
+        true,
+        "unknown"
+      );
     });
 
     it("throws when worktreeId is omitted and no active worktree", async () => {
@@ -302,7 +317,11 @@ describe("systemActions adversarial", () => {
     it("falls back to ctx.activeWorktreeId when worktreeId is omitted", async () => {
       const { run } = setupActions();
       await run("copyTree.generateAndCopyFile", undefined, { activeWorktreeId: "wt-active" });
-      expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith("wt-active", undefined);
+      expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith(
+        "wt-active",
+        undefined,
+        "unknown"
+      );
     });
 
     it("returns the file handle without the bundle", async () => {
@@ -340,9 +359,11 @@ describe("systemActions adversarial", () => {
         { worktreePath: "/repo/landscape" },
         { dispatchSource: "agent", activeWorktreeId: "wt-active" }
       );
+      // An agent dispatch is recorded as an MCP-sourced run (#11732).
       expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith(
         "wt-landscape",
-        undefined
+        undefined,
+        "mcp"
       );
     });
 
@@ -361,7 +382,7 @@ describe("systemActions adversarial", () => {
         { worktreeId: "wt-1", options },
         { dispatchSource: "agent" }
       );
-      expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith("wt-1", options);
+      expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith("wt-1", options, "mcp");
 
       // And the selection SURVIVES the schema transform — `run()` is called
       // directly here, so the transform is otherwise never exercised. Asserting
@@ -546,7 +567,9 @@ describe("systemActions adversarial", () => {
       expect(copyTreeClientMock.injectToTerminal).toHaveBeenCalledWith(
         "t-1",
         "wt-active",
-        undefined
+        undefined,
+        undefined,
+        "unknown"
       );
     });
 
@@ -560,7 +583,9 @@ describe("systemActions adversarial", () => {
       expect(copyTreeClientMock.injectToTerminal).toHaveBeenCalledWith(
         "t-1",
         "wt-explicit",
-        undefined
+        undefined,
+        undefined,
+        "unknown"
       );
     });
 

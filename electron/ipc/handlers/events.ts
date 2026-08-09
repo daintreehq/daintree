@@ -82,6 +82,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "forge:remote-changed": "external",
   "plugin:bg-update-available": "external",
   "run-history:update": "external",
+  "copy-tree-history:update": "external",
   "plugin:deep-link": "external",
   "plugin:archive-install-intent": "external",
   "terminal:exit": "external",

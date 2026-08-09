@@ -25,6 +25,7 @@ import type {
   FileTreeNode,
   CopyTreeOptions,
 } from "../../types/index.js";
+import type { CopyTreeRunSource } from "../../../shared/types/ipc/copyTreeHistory.js";
 
 type CopyTreeFormat = NonNullable<CopyTreeOptions["format"]>;
 
@@ -105,6 +106,7 @@ import type {
   ProjectSettings,
 } from "../../types/index.js";
 import { projectStore } from "../../services/ProjectStore.js";
+import { recordCopyTreeRun } from "../../services/copyTreeHistoryService.js";
 import { contextInjectionTracker } from "../../services/ContextInjectionTracker.js";
 import {
   fitContentToResultBudget,
@@ -228,12 +230,53 @@ export function mergeCopyTreeOptions(
  * can be evicted while a later await is in flight, and a binding that vanishes
  * mid-request would silently drop the project's exclusions from the context.
  */
-function resolveCopyTreeProjectId(ctx: IpcContext, deps: HandlerDependencies): string | null {
+export function resolveCopyTreeProjectId(
+  ctx: IpcContext,
+  deps: HandlerDependencies
+): string | null {
   const scopedProject = resolveScopedProjectForIpcContext(ctx, deps);
   if (scopedProject === null) {
     return projectStore.getCurrentProjectId();
   }
   return scopedProject.project?.id ?? null;
+}
+
+/**
+ * Record a completed run in the project's copy-tree history (#11732).
+ *
+ * Takes the *validated* payload rather than the merged options: merging folds
+ * in live project settings, and a record that froze those in would replay a
+ * stale configuration the next time it is re-run.
+ *
+ * `projectId` must be the value captured synchronously before the handler's
+ * first await — re-resolving here would read whatever project the sender's view
+ * has since been repointed at.
+ *
+ * Awaited by its callers so the write and its snapshot push stay ordered behind
+ * the per-project queue, and swallowing here rather than only inside the service
+ * so that ordering can never cost the caller its result: by this point the
+ * bundle has already been delivered, and no bookkeeping failure may turn a
+ * completed copy into an error the user sees.
+ */
+async function recordCompletedCopyTreeRun(
+  projectId: string | null,
+  validated: { worktreeId: string; options?: CopyTreeOptions; source?: CopyTreeRunSource },
+  result: CopyTreeResult
+): Promise<void> {
+  try {
+    await recordCopyTreeRun(projectId, {
+      options: validated.options ?? {},
+      source: validated.source ?? "unknown",
+      worktreeId: validated.worktreeId,
+      stats: {
+        fileCount: result.fileCount,
+        totalSize: result.stats?.totalSize,
+        duration: result.stats?.duration,
+      },
+    });
+  } catch (error) {
+    console.warn("[CopyTree] Failed to record run in the project history:", error);
+  }
 }
 
 /** Load the CopyTree-relevant settings for a project resolved by `resolveCopyTreeProjectId`. */
@@ -371,7 +414,13 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
     const result = await generateToFile(worktree, mergedOptions, onProgress);
-    if (result.error || !result.filePath || !validated.includeContent) {
+    if (result.error) {
+      return result;
+    }
+
+    await recordCompletedCopyTreeRun(settingsProjectId, validated, result);
+
+    if (!result.filePath || !validated.includeContent) {
       return result;
     }
 
@@ -495,6 +544,11 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       }
 
       console.log(`[${traceId}] Copied context file to clipboard: ${filePath}`);
+
+      // Only the clean path records: the catch below still returns a usable
+      // file path, but the copy the user asked for did not happen, so it does
+      // not belong in a history whose entries are meant to be re-run.
+      await recordCompletedCopyTreeRun(settingsProjectId, validated, result);
 
       return {
         content: "",
@@ -660,6 +714,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       }
 
       console.log(`[${traceId}] CopyTree inject completed successfully`);
+
+      // Injection is the same intent as a copy with a different delivery, so it
+      // earns a history entry too — and dedupes against the clipboard run that
+      // used the same options.
+      await recordCompletedCopyTreeRun(settingsProjectId, validated, result);
+
       // The renderer reads only fileCount/stats; drop the (possibly multi-MB)
       // content so the contextBridge doesn't clone a second copy into the heap.
       return {

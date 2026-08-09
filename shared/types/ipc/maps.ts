@@ -1938,6 +1938,15 @@ export interface IpcEventMap {
   // run is recorded or the log is cleared.
   "run-history:update": import("./runHistory.js").RunHistoryRecord[];
 
+  // Copy-tree run history changed (main → renderer, #11732). Sent only to views
+  // bound to `projectId`, never broadcast: unlike the run-history ring this is
+  // per-project data, so the id rides along and the renderer mirror ignores a
+  // snapshot for anything but its own project.
+  "copy-tree-history:update": {
+    projectId: string;
+    records: import("./copyTreeHistory.js").CopyTreeHistoryRecord[];
+  };
+
   // `daintree://` deep-link intent (main → renderer, #9559). Delivered to the
   // primary window once it has painted; the renderer opens the Plugin Manager
   // (URL pre-filled for install, or scrolled to the plugin for open). Routing
@@ -2067,6 +2076,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:bg-update-available"
   // Run history changed (global broadcast)
   | "run-history:update"
+  // Copy-tree run history changed (project-scoped send)
+  | "copy-tree-history:update"
   // Plugin deep-link intent (targeted at the primary window)
   | "plugin:deep-link"
   // Double-clicked `.dntr` archive awaiting confirmation (targeted at the primary window)

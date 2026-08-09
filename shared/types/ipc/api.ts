@@ -102,6 +102,7 @@ import type {
   FileTreeNode,
   CopyTreeProgress,
 } from "./copyTree.js";
+import type { CopyTreeRunSource } from "./copyTreeHistory.js";
 import type {
   SystemWakePayload,
   SystemOpenInEditorPayload,
@@ -376,14 +377,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     generate(
       worktreeId: string,
       options?: CopyTreeOptions,
-      includeContent?: boolean
+      includeContent?: boolean,
+      source?: CopyTreeRunSource
     ): Promise<CopyTreeResult>;
-    generateAndCopyFile(worktreeId: string, options?: CopyTreeOptions): Promise<CopyTreeResult>;
+    generateAndCopyFile(
+      worktreeId: string,
+      options?: CopyTreeOptions,
+      source?: CopyTreeRunSource
+    ): Promise<CopyTreeResult>;
     injectToTerminal(
       terminalId: string,
       worktreeId: string,
       options?: CopyTreeOptions,
-      injectionId?: string
+      injectionId?: string,
+      source?: CopyTreeRunSource
     ): Promise<CopyTreeResult>;
     isAvailable(): Promise<boolean>;
     cancel(injectionId?: string): Promise<void>;

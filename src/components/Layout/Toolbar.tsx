@@ -820,7 +820,7 @@ export function Toolbar({
 
     setIsCopyingTree(true);
 
-    return handleCopyTree(activeWorktree)
+    return handleCopyTree(activeWorktree, "toolbar")
       .then((resultMessage) => {
         if (!resultMessage) return;
         setTreeCopied(true);
@@ -850,7 +850,7 @@ export function Toolbar({
   const handleCopyTreeOverflow = useCallback(() => {
     if (isCopyingTree || !activeWorktree) return;
     setIsCopyingTree(true);
-    return handleCopyTree(activeWorktree)
+    return handleCopyTree(activeWorktree, "toolbar")
       .then((resultMessage) => {
         if (!resultMessage) return;
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok

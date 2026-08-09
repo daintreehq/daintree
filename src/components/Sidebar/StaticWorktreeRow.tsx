@@ -54,7 +54,7 @@ function StaticWorktreeRow({
 
   const onSelect = useCallback(() => selectWorktree(worktreeId), [selectWorktree, worktreeId]);
   const onCopyTree = useCallback(
-    () => worktree && worktreeActions.handleCopyTree(worktree),
+    () => worktree && worktreeActions.handleCopyTree(worktree, "worktree-card"),
     [worktree, worktreeActions]
   );
   const onOpenEditor = useCallback(
