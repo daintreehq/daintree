@@ -10,6 +10,19 @@ import type { BranchInfo } from "@/types/electron";
 
 export type BranchOptionRow = BranchPickerRow & { kind: "option" };
 
+/**
+ * Exactly the surface the key handler reads — a structural subset every
+ * `React.KeyboardEvent` satisfies. Declaring what it actually needs (rather than
+ * the whole synthetic event) keeps the contract honest and lets callers and tests
+ * hand over a minimal object without a cast.
+ */
+export interface BranchPickerKeyEvent {
+  key: string;
+  nativeEvent: { isComposing: boolean; keyCode: number };
+  preventDefault: () => void;
+  stopPropagation: () => void;
+}
+
 export interface UseBranchPickerResult {
   open: boolean;
   setOpen: (open: boolean) => void;
@@ -32,7 +45,7 @@ export interface UseBranchPickerResult {
    * query, all matches with one. The footnote compares it to the rows on screen.
    */
   matchedTotal: number;
-  handleKeyDown: (e: React.KeyboardEvent) => void;
+  handleKeyDown: (e: BranchPickerKeyEvent) => void;
   handleSelect: (option: BranchOption) => void;
 }
 
@@ -130,7 +143,7 @@ export function useBranchPicker({
   );
 
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
+    (e: BranchPickerKeyEvent) => {
       // Mid-composition, Arrow and Enter belong to the IME: Enter commits the
       // candidate rather than the branch. Chromium can emit 229 before
       // `isComposing` flips, so both are checked (as in `SearchablePalette`).

@@ -3,7 +3,11 @@
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
-import { useBranchPicker, type UseBranchPickerResult } from "../useBranchPicker";
+import {
+  useBranchPicker,
+  type BranchPickerKeyEvent,
+  type UseBranchPickerResult,
+} from "../useBranchPicker";
 import type { BranchWorktreeRef } from "../../branchPickerUtils";
 import type { BranchInfo } from "@/types/electron";
 
@@ -28,9 +32,6 @@ function renderPicker(
     onSelect?: (option: { name: string }) => void;
   } = {}
 ) {
-  const handle: { current: UseBranchPickerResult } = {
-    current: null as unknown as UseBranchPickerResult,
-  };
   /**
    * Every render, in order. Asserting only after `act()` cannot tell read-time
    * clamping apart from the effect-based reset this replaced: an effect produces
@@ -38,37 +39,64 @@ function renderPicker(
    * assertion runs. The history exposes that intermediate render.
    */
   const renders: { query: string; activeIndex: number; count: number }[] = [];
+  let latest: UseBranchPickerResult | null = null;
 
-  function Harness({ branches }: { branches: readonly BranchInfo[] }) {
-    const picker = useBranchPicker({
-      branches,
-      selectedBranch: args.selectedBranch ?? null,
-      recentBranchNames: args.recentBranchNames ?? [],
-      worktreeByBranch: NO_WORKTREES,
-      onSelect: args.onSelect ?? (() => {}),
-    });
-    handle.current = picker;
+  // Recorded through a prop rather than by assigning to these bindings inside the
+  // component, which the react-compiler lint rightly forbids during render.
+  const record = (picker: UseBranchPickerResult): void => {
+    latest = picker;
     renders.push({
       query: picker.query,
       activeIndex: picker.activeIndex,
       count: picker.selectableRows.length,
     });
+  };
+
+  function Harness({
+    branches,
+    onRender,
+  }: {
+    branches: readonly BranchInfo[];
+    onRender: (picker: UseBranchPickerResult) => void;
+  }) {
+    onRender(
+      useBranchPicker({
+        branches,
+        selectedBranch: args.selectedBranch ?? null,
+        recentBranchNames: args.recentBranchNames ?? [],
+        worktreeByBranch: NO_WORKTREES,
+        onSelect: args.onSelect ?? (() => {}),
+      })
+    );
     return null;
   }
 
-  const result = render(<Harness branches={args.branches ?? BRANCHES} />);
+  const result = render(<Harness branches={args.branches ?? BRANCHES} onRender={record} />);
   const setBranches = (branches: readonly BranchInfo[]) =>
-    result.rerender(<Harness branches={branches} />);
+    result.rerender(<Harness branches={branches} onRender={record} />);
+
+  const handle = {
+    get current(): UseBranchPickerResult {
+      if (!latest) throw new Error("harness has not rendered yet");
+      return latest;
+    },
+  };
+
   return { handle, renders, setBranches, ...result };
 }
 
+/**
+ * `handleKeyDown` declares the structural subset it reads, so a minimal object
+ * satisfies it directly — no cast, and the compiler flags any field the handler
+ * starts depending on.
+ */
 function keyEvent(key: string, nativeEvent: { isComposing?: boolean; keyCode?: number } = {}) {
   return {
     key,
     nativeEvent: { isComposing: false, keyCode: 0, ...nativeEvent },
     preventDefault: vi.fn(),
     stopPropagation: vi.fn(),
-  } as unknown as React.KeyboardEvent & { preventDefault: () => void; stopPropagation: () => void };
+  } satisfies BranchPickerKeyEvent;
 }
 
 beforeEach(() => {
