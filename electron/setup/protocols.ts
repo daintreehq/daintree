@@ -1336,8 +1336,14 @@ export function registerPluginProtocol(getPluginDir: GetPluginDir): void {
  * import settles (#10322). `registerPluginProtocol` runs before `createWindow`
  * with a placeholder resolver that returns `undefined` (every request 404s),
  * keeping the heavy ~2900-line PluginService module off the first-paint path.
- * Once the deferred `plugin-service` task initializes the singleton, it calls
- * this to point the already-registered handler at the real `getPluginDir`. The
+ *
+ * Ordering is load-bearing (#11728): the deferred `plugin-service` task must
+ * call this immediately after importing the singleton and BEFORE `initialize()`
+ * — not after it. `getPluginDir` is a plain map lookup, safe to install at any
+ * time, whereas waiting for `initialize()` leaves the placeholder live across
+ * the whole scan, during which the first plugin already publishes an addressable
+ * `plugin://` componentPath. A 404 served in that window is permanent for that
+ * specifier in the renderer's module map. The
  * handler delegates through `resolvePluginDir`, which reads `cachedGetPluginDir`
  * live, so the swap reaches every handler already registered (default session
  * plus any per-session handlers wired during `createWindow`).

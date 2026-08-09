@@ -132,6 +132,7 @@ import type { PluginIpcContext } from "../../../shared/types/plugin.js";
 import {
   clearPanelKindRegistry,
   getPanelKindConfig,
+  onPanelKindRegistered,
 } from "../../../shared/config/panelKindRegistry.js";
 import {
   clearToolbarButtonRegistry,
@@ -296,6 +297,76 @@ describe("PluginService integration — panel contributions", () => {
       showInPalette: true,
       extensionId: "acme.panel-plugin",
     });
+  });
+
+  it("makes the plugin dir plugin://-resolvable before publishing an addressable panel (#11728)", async () => {
+    // The invariant: at the instant a panel kind carrying a `componentPath` is
+    // published, `getPluginDir` — the resolver the `plugin://` protocol handler
+    // calls — must already answer for that plugin. Publishing first handed the
+    // renderer a URL the protocol could not resolve; it 404'd, and a rejected
+    // dynamic import is permanent for that specifier, so the panel stayed broken
+    // until a full window reload.
+    //
+    // A `skills` contribution is what made this reliably reproducible: its
+    // `await` sat between the old publication point and the plugins-map commit
+    // that `getPluginDir` reads. The fixture declares one so the await is real.
+    const dir = await writePlugin("acme.gated-view", {
+      name: "acme.gated-view",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#0af" }],
+        views: [{ id: "viewer", location: "panel", componentPath: "./dist/view.js" }],
+        skills: [{ id: "s", name: "S", path: "./skills/s.md", triggers: ["s"] }],
+      },
+    });
+    await fs.mkdir(path.join(dir, "skills"), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "skills", "s.md"),
+      "---\ndescription: d\n---\n\nbody\n",
+      "utf8"
+    );
+
+    // A second plugin so the scan's `Promise.allSettled` fan-out is real: the
+    // skills-bearing plugin above suspends mid-load while this one runs to
+    // completion, which is exactly the interleaving that made the bug show up on
+    // real installs rather than as a rare flake.
+    const plainDir = await writePlugin("acme.plain-view", {
+      name: "acme.plain-view",
+      version: "1.0.0",
+      contributes: {
+        panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#fa0" }],
+        views: [{ id: "viewer", location: "panel", componentPath: "./dist/view.js" }],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+
+    // Recorded synchronously inside the registration callback — the same turn the
+    // broadcast is scheduled on, which is what the renderer ultimately reads.
+    // Asserting after initialize() would prove nothing: by then everything is in
+    // the map regardless of the order it got there.
+    const observed: Array<{ id: string; resolvedDir: string | undefined }> = [];
+    const unsubscribe = onPanelKindRegistered((config) => {
+      if (!config.componentPath || !config.extensionId) return;
+      observed.push({ id: config.id, resolvedDir: service.getPluginDir(config.extensionId) });
+    });
+
+    try {
+      await service.initialize();
+    } finally {
+      unsubscribe();
+    }
+
+    // Every addressable panel, not just the first: one plugin getting the order
+    // right while a concurrently-loading sibling does not is the actual failure.
+    expect(observed.map((o) => o.id).sort()).toEqual([
+      "acme.gated-view.viewer",
+      "acme.plain-view.viewer",
+    ]);
+    // Before the fix these were `undefined` — the panel was published while the
+    // plugin was still absent from the map `getPluginDir` reads.
+    expect(observed.find((o) => o.id === "acme.gated-view.viewer")!.resolvedDir).toBe(dir);
+    expect(observed.find((o) => o.id === "acme.plain-view.viewer")!.resolvedDir).toBe(plainDir);
   });
 
   it("registers multiple panels from one plugin with full config per panel", async () => {

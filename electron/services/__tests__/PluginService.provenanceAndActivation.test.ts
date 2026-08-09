@@ -215,6 +215,8 @@ vi.mock("../plugin/PluginDevWorkerMainBridge.js", () => ({
 import { PluginService } from "../PluginService.js";
 import { getPluginManifestSchema } from "../../schemas/plugin.js";
 import { type PluginIpcContext } from "../../../shared/types/plugin.js";
+import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
+import { stripPluginViewGeneration } from "../../../shared/utils/pluginViewUrl.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
   return {
@@ -768,6 +770,159 @@ describe("Deferred activation — activatePlugin", () => {
     } finally {
       delete (globalThis as Record<string, unknown>).__viewOwnerActivated;
     }
+  });
+
+  it("commits the plugin to the map before publishing an addressable panel (#11728)", async () => {
+    // The core invariant, asserted in a suite the PR gate actually runs — the
+    // real-registry version of this lives in PluginService.integration.test.ts,
+    // which the default vitest config excludes.
+    //
+    // `registerPanelKind` IS the publication point: it carries the `plugin://`
+    // componentPath and schedules the broadcast. Observing `getPluginDir` from
+    // inside the mock therefore samples the exact instant the renderer becomes
+    // able to request that module. Checking after `initialize()` would prove
+    // nothing — by then everything is in the map regardless of ordering.
+    //
+    // The fixture contributes a skill because its `await` is what used to sit
+    // between publication and the map commit.
+    const pluginDir = path.join(tmpDir, "view-order");
+    await fs.mkdir(path.join(pluginDir, "skills"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.view-order",
+        version: "1.0.0",
+        contributes: {
+          panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#123" }],
+          views: [{ id: "viewer", componentPath: "view.mjs", location: "panel" }],
+          skills: [{ id: "s", name: "S", path: "./skills/s.md", triggers: ["s"] }],
+        },
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "skills", "s.md"),
+      "---\ndescription: d\n---\n\nbody\n",
+      "utf8"
+    );
+
+    const service = new PluginService(tmpDir);
+    const observed: Array<{ id: string; resolvedDir: string | undefined }> = [];
+    vi.mocked(registerPanelKind).mockImplementation((config) => {
+      if (!config.componentPath || !config.extensionId) return;
+      observed.push({ id: config.id, resolvedDir: service.getPluginDir(config.extensionId) });
+    });
+
+    try {
+      await service.initialize();
+    } finally {
+      vi.mocked(registerPanelKind).mockReset();
+    }
+
+    expect(observed).toHaveLength(1);
+    expect(observed[0]!.id).toBe("acme.view-order.viewer");
+    // Before the fix this was `undefined`: the panel was published while the
+    // plugin was still absent from the map `getPluginDir` reads.
+    expect(observed[0]!.resolvedDir).toBe(pluginDir);
+  });
+
+  it("activatePluginForView mints one shared recovery view generation per load (#11728)", async () => {
+    const pluginDir = path.join(tmpDir, "view-recover");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.view-recover",
+        version: "1.0.0",
+        contributes: {
+          panels: [
+            { id: "one", name: "One", iconId: "eye", color: "#111" },
+            { id: "two", name: "Two", iconId: "pen", color: "#222" },
+            { id: "term", name: "Term", iconId: "terminal", color: "#333", hasPty: true },
+          ],
+          views: [
+            { id: "one", componentPath: "one.mjs", location: "panel" },
+            { id: "two", componentPath: "two.mjs", location: "panel" },
+          ],
+        },
+      })
+    );
+
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    // The paths actually handed to the renderer at load, read back off the
+    // registry call rather than reconstructed — reconstructing them here would
+    // just restate the implementation.
+    const published = new Map<string, string>();
+    for (const [config] of vi.mocked(registerPanelKind).mock.calls) {
+      if (config.componentPath) published.set(config.id, config.componentPath);
+    }
+    const primaryOne = published.get("acme.view-recover.one");
+    const primaryTwo = published.get("acme.view-recover.two");
+    expect(primaryOne).toBeDefined();
+    expect(primaryTwo).toBeDefined();
+
+    // No recovery requested → nothing minted. A first mount must not burn a
+    // second module namespace.
+    await expect(service.activatePluginForView("acme.view-recover.one")).resolves.toEqual({
+      ok: true,
+    });
+
+    const first = await service.activatePluginForView("acme.view-recover.one", true);
+    const second = await service.activatePluginForView("acme.view-recover.two", true);
+    const third = await service.activatePluginForView("acme.view-recover.one", true);
+
+    // Parse rather than string-match, so the assertions below are about URL
+    // structure (host, file, generation) instead of a formatting literal.
+    const parse = (url: string): { host: string; file: string; generation: number | null } => {
+      const parsed = new URL(url);
+      const stripped = stripPluginViewGeneration(parsed.pathname.slice(1));
+      return {
+        host: parsed.hostname,
+        file: stripped?.path ?? "",
+        generation: stripped?.generation ?? null,
+      };
+    };
+
+    const recoveredOne = (first as { recoveryComponentPath?: string }).recoveryComponentPath;
+    const recoveredTwo = (second as { recoveryComponentPath?: string }).recoveryComponentPath;
+    const recoveredAgain = (third as { recoveryComponentPath?: string }).recoveryComponentPath;
+    expect(recoveredOne).toBeDefined();
+    expect(recoveredTwo).toBeDefined();
+
+    const one = parse(recoveredOne!);
+    const two = parse(recoveredTwo!);
+    const primary = parse(primaryOne!);
+    const primaryB = parse(primaryTwo!);
+
+    // Both really carry a generation. Without this, a recovery URL that dropped
+    // the segment entirely would satisfy the "differs from primary" check below
+    // on `null`, and the test would bless a URL that recovers nothing.
+    expect(typeof one.generation).toBe("number");
+    expect(typeof two.generation).toBe("number");
+
+    // A URL V8 has never seen — the entire point, since the module map keys the
+    // failure by specifier and never evicts it.
+    expect(one.generation).not.toBe(primary.generation);
+    // ...addressing the same plugin and the same file behind it: only the
+    // virtual namespace changed. Without the host/file checks, returning another
+    // plugin's URL — or panel `one`'s module for panel `two` — would pass.
+    expect(one.host).toBe(primary.host);
+    expect(one.file).toBe(primary.file);
+    expect(two.host).toBe(primaryB.host);
+    expect(two.file).toBe(primaryB.file);
+    expect(one.file).not.toBe(two.file);
+
+    // One generation for the whole plugin, so a reload still swaps every view
+    // together and relative imports keep resolving within one namespace.
+    expect(two.generation).toBe(one.generation);
+    // Bounded: retrying again reuses it instead of minting a third namespace.
+    expect(recoveredAgain).toBe(recoveredOne);
+
+    // A PTY panel is rendered by TerminalPane, so there is no module to recover.
+    await expect(service.activatePluginForView("acme.view-recover.term", true)).resolves.toEqual({
+      ok: true,
+    });
   });
 
   it("activatePluginForView is a no-op for an unknown or empty panel kind id (#10523)", async () => {

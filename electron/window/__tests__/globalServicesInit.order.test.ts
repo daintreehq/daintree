@@ -711,7 +711,7 @@ describe("initGlobalServices task ordering", () => {
     expect(registeredTaskNames).toContain("plugin-service");
   });
 
-  it("plugin-service task swaps in the live plugin:// resolver after initialize() (#10322)", async () => {
+  it("plugin-service task swaps in the live plugin:// resolver (#10322)", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     await initGlobalServices(fakeRegistry);
 
@@ -728,6 +728,57 @@ describe("initGlobalServices task ordering", () => {
     const resolver = setPluginDirResolver.mock.calls[0]![0] as (id: string) => string | undefined;
     expect(resolver("acme.tool")).toBe("/plugins/acme.tool");
     expect(pluginGetPluginDir).toHaveBeenCalledWith("acme.tool");
+  });
+
+  it("plugin-service task installs the plugin:// resolver BEFORE initialize() runs (#11728)", async () => {
+    // Ordering invariant, not an incidental arrangement. `initialize()` sweeps
+    // temp dirs, fetches the blocklist over the network, then awaits three
+    // sequential `loadFromDir` passes — while the FIRST plugin it loads already
+    // broadcasts an addressable `plugin://` componentPath. Wiring the resolver
+    // afterwards left the 404-everything placeholder live for that whole span,
+    // and a rejected dynamic import is permanent for its specifier (the module
+    // map has no eviction), so a restored plugin panel could never recover.
+    // The gate is built eagerly, not inside the mock implementation, so the
+    // `finally` below can always release it — an assertion that fires before
+    // initialize() is even reached would otherwise leave the task parked on a
+    // promise nothing can resolve, turning a clear failure into a timeout.
+    let releaseInit!: () => void;
+    const initGate = new Promise<void>((resolve) => {
+      releaseInit = resolve;
+    });
+    pluginInitialize.mockImplementationOnce(() => initGate);
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("plugin-service");
+    expect(run).toBeDefined();
+
+    const pending = Promise.resolve(run!());
+    try {
+      // Poll until the task has actually entered initialize(), rather than
+      // assuming one macrotask outruns the deferred `import()` — that holds only
+      // when a previous test already warmed the module, so this test would be
+      // order-dependent (and pool-dependent) if run alone.
+      for (let i = 0; i < 200 && pluginInitialize.mock.calls.length === 0; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+
+      // The scan is demonstrably still in flight...
+      expect(pluginInitialize).toHaveBeenCalledTimes(1);
+      // ...and the resolver is already live. Before the fix this was 0.
+      expect(setPluginDirResolver).toHaveBeenCalledTimes(1);
+      // Proof the task really is parked inside initialize() rather than done:
+      // the post-initialize steps have not run yet.
+      expect(activateOpenFileInstaller).not.toHaveBeenCalled();
+    } finally {
+      releaseInit();
+      await pending;
+    }
+
+    expect(setPluginDirResolver.mock.invocationCallOrder[0]!).toBeLessThan(
+      pluginInitialize.mock.invocationCallOrder[0]!
+    );
   });
 
   it("plugin-service task drains queued open-file archives after initialize() (#10322)", async () => {

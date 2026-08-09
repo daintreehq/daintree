@@ -955,7 +955,20 @@ export interface PluginLoadError {
  * renderer throws renderer-side from `{ ok: false }` so the real activation
  * cause reaches the view's ErrorBoundary instead of a generic import timeout.
  */
-export type PluginActivationResult = { ok: true } | { ok: false; error: string; stack?: string };
+export type PluginActivationResult =
+  | {
+      ok: true;
+      /**
+       * A main-minted `plugin://` URL on a fresh view generation, returned only
+       * when the caller asked to recover from an import-stage failure (#11728).
+       * The renderer imports this instead of the poisoned specifier — a rejected
+       * dynamic import is permanent for its URL, so only a specifier V8 has
+       * never seen re-evaluates. Absent for PTY/view-less kinds and whenever no
+       * recovery was requested.
+       */
+      recoveryComponentPath?: string;
+    }
+  | { ok: false; error: string; stack?: string };
 
 /**
  * Wire envelope for every push over the `plugin:{pluginId}:{channel}` transport

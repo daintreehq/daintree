@@ -22,6 +22,20 @@ export interface LoadedPlugin {
    * in-process `import()` loader.
    */
   devMode?: boolean;
+  /**
+   * Virtual `__dtv-N` namespace segment minted once per load and shared by every
+   * view this plugin contributes (#11301), so a reload swaps the whole plugin's
+   * view modules together and relative imports inherit the generation.
+   */
+  viewGeneration: number;
+  /**
+   * Second generation, minted lazily the first time a renderer reports an
+   * import-stage failure for one of this plugin's views (#11728). A rejected
+   * dynamic import is permanent for its specifier, so recovery needs a URL V8
+   * has never seen. Allocated at most once per load and shared by every view,
+   * which bounds a plugin to two namespaces however many times the user retries.
+   */
+  recoveryViewGeneration?: number;
 }
 
 export type WorkspaceWorktreeEvent = "worktree-update" | "worktree-activated" | "worktree-removed";

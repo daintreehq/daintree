@@ -347,17 +347,52 @@ describe("registerPluginHandlers", () => {
   it("PLUGIN_ACTIVATE_FOR_VIEW resolves on success and throws the cause on failure (#10618)", async () => {
     const handler = getHandler("plugin:activate-for-view");
 
-    // Success: the handler resolves void (#6020 — IPC handlers return void on
-    // success rather than an { ok } envelope) so the renderer proceeds to import.
+    // Success: the handler resolves undefined (#6020 — IPC handlers return void
+    // on success rather than an { ok } envelope) so the renderer proceeds to
+    // import. A plain activation must NOT ask for a recovery generation (#11728)
+    // — that would mint a second module namespace on every first mount.
     mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
     await expect(handler({}, "acme.demo.viewer")).resolves.toBeUndefined();
-    expect(mockActivatePluginForView).toHaveBeenCalledWith("acme.demo.viewer");
+    // The behavioral half — the kind is forwarded and recovery is NOT requested.
+    // Asserted as "falsy" rather than literal `false` so normalizing to
+    // `undefined` stays green: what matters is that a first mount can't burn a
+    // second module namespace, not which falsy value expresses that.
+    expect(mockActivatePluginForView.mock.calls[0]![0]).toBe("acme.demo.viewer");
+    expect(mockActivatePluginForView.mock.calls[0]![1]).toBeFalsy();
 
     // Failure: the handler throws so the IPC call rejects and the renderer's
     // PluginViewHost surfaces the real activation cause. The thrown message
     // carries the underlying error text.
     mockActivatePluginForView.mockResolvedValueOnce({ ok: false, error: "activate-boom" });
     await expect(handler({}, "acme.demo.viewer")).rejects.toThrow(/activate-boom/);
+  });
+
+  it("PLUGIN_ACTIVATE_FOR_VIEW forwards a recovery request and returns the minted path (#11728)", async () => {
+    const handler = getHandler("plugin:activate-for-view");
+
+    // The renderer's retry-after-import-failure path. Only main may build the
+    // replacement URL, so the handler's job is to forward the request and hand
+    // back whatever the service minted — unchanged.
+    mockActivatePluginForView.mockResolvedValueOnce({
+      ok: true,
+      recoveryComponentPath: "plugin://acme.demo/__dtv-9/dist/view.js",
+    });
+    await expect(handler({}, "acme.demo.viewer", true)).resolves.toBe(
+      "plugin://acme.demo/__dtv-9/dist/view.js"
+    );
+    expect(mockActivatePluginForView).toHaveBeenCalledWith("acme.demo.viewer", true);
+
+    // A recovery request the service declines (PTY panel, view-less kind) still
+    // resolves — the renderer falls back to the path it already has.
+    mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
+    await expect(handler({}, "acme.demo.viewer", true)).resolves.toBeUndefined();
+
+    // Only a real `true` requests recovery. A truthy non-boolean arriving over
+    // IPC must not mint a namespace, so the flag is compared by identity rather
+    // than coerced.
+    mockActivatePluginForView.mockResolvedValueOnce({ ok: true });
+    await handler({}, "acme.demo.viewer", "yes");
+    expect(mockActivatePluginForView.mock.calls.at(-1)![1]).toBe(false);
   });
 
   it("PLUGIN_INSTALL_FROM_FILE returns cancelled when the picker is dismissed", async () => {
