@@ -131,6 +131,8 @@ export const SEL = {
     recipeListbox: "#recipe-selector",
     baseBranchTrigger: "#base-branch",
     baseBranchListbox: "#branch-list",
+    existingBranchTrigger: '[data-testid="existing-branch-picker"]',
+    existingBranchListbox: "#existing-branch-list",
     validationError: "#validation-error",
     overviewCell: "[data-worktree-overview-cell]",
     overviewCellFor: (id: string) => `[data-worktree-overview-cell="${id}"]`,

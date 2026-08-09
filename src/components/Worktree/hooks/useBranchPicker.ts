@@ -1,5 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
-import { useShallow } from "zustand/react/shallow";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
   toBranchOption,
   buildBranchRows,
@@ -7,169 +6,207 @@ import {
   type BranchPickerRow,
   type BranchWorktreeRef,
 } from "../branchPickerUtils";
-import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { BranchInfo } from "@/types/electron";
 
+export type BranchOptionRow = BranchPickerRow & { kind: "option" };
+
+/**
+ * Exactly the surface the key handler reads — a structural subset every
+ * `React.KeyboardEvent` satisfies. Declaring what it actually needs (rather than
+ * the whole synthetic event) keeps the contract honest and lets callers and tests
+ * hand over a minimal object without a cast.
+ */
+export interface BranchPickerKeyEvent {
+  key: string;
+  nativeEvent: { isComposing: boolean; keyCode: number };
+  preventDefault: () => void;
+  stopPropagation: () => void;
+}
+
 export interface UseBranchPickerResult {
-  branchPickerOpen: boolean;
-  setBranchPickerOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  branchQuery: string;
-  setBranchQuery: React.Dispatch<React.SetStateAction<string>>;
-  selectedIndex: number;
-  setSelectedIndex: React.Dispatch<React.SetStateAction<number>>;
-  recentBranchNames: string[];
-  setRecentBranchNames: React.Dispatch<React.SetStateAction<string[]>>;
-  branchInputRef: React.RefObject<HTMLInputElement | null>;
-  branchListRef: React.RefObject<HTMLDivElement | null>;
-  branchOptions: BranchOption[];
-  branchRows: BranchPickerRow[];
-  selectableRows: (BranchPickerRow & { kind: "option" })[];
-  selectedBranchOption: BranchOption | undefined;
-  handleBranchKeyDown: (e: React.KeyboardEvent) => void;
-  handleBranchSelect: (option: BranchOption) => void;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  query: string;
+  setQuery: (query: string) => void;
+  /**
+   * The one index the cursor highlight, `aria-activedescendant`, the scroll
+   * target and Enter all read. Derived at render time, never stored, so a
+   * freshly narrowed list can't leave the three disagreeing for a frame.
+   */
+  activeIndex: number;
+  setActiveIndex: (index: number) => void;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  listRef: React.RefObject<HTMLDivElement | null>;
+  rows: BranchPickerRow[];
+  selectableRows: BranchOptionRow[];
+  selectedOption: BranchOption | undefined;
+  /**
+   * Candidates that qualified before the display cap — all branches with no
+   * query, all matches with one. The footnote compares it to the rows on screen.
+   */
+  matchedTotal: number;
+  handleKeyDown: (e: BranchPickerKeyEvent) => void;
+  handleSelect: (option: BranchOption) => void;
+}
+
+export interface UseBranchPickerArgs {
+  branches: readonly BranchInfo[];
+  selectedBranch: string | null;
+  recentBranchNames: readonly string[];
+  worktreeByBranch: ReadonlyMap<string, BranchWorktreeRef>;
+  onSelect: (option: BranchOption) => void;
 }
 
 export function useBranchPicker({
   branches,
-  baseBranch,
-  onSelectBranch,
-}: {
-  branches: BranchInfo[];
-  baseBranch: string;
-  onSelectBranch: (name: string, isRemote: boolean) => void;
-}): UseBranchPickerResult {
-  const [branchPickerOpen, setBranchPickerOpen] = useState(false);
-  const [branchQuery, setBranchQuery] = useState("");
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [recentBranchNames, setRecentBranchNames] = useState<string[]>([]);
-  const branchInputRef = useRef<HTMLInputElement>(null);
-  const branchListRef = useRef<HTMLDivElement>(null);
+  selectedBranch,
+  recentBranchNames,
+  worktreeByBranch,
+  onSelect,
+}: UseBranchPickerArgs): UseBranchPickerResult {
+  const [open, setOpenState] = useState(false);
+  const [query, setQueryState] = useState("");
+  const [cursorIndex, setCursorIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const branchOptions = useMemo(() => branches.map(toBranchOption), [branches]);
 
-  const worktreeBranchEntries = useWorktreeStore(
-    useShallow((s) => {
-      const entries: string[] = [];
-      for (const wt of s.worktrees.values()) {
-        if (wt.branch) entries.push(wt.branch, wt.id, wt.name);
-      }
-      return entries;
-    })
-  );
-
-  const worktreeByBranch = useMemo(() => {
-    const map = new Map<string, BranchWorktreeRef>();
-    for (let i = 0; i < worktreeBranchEntries.length; i += 3) {
-      map.set(worktreeBranchEntries[i]!, {
-        id: worktreeBranchEntries[i + 1]!,
-        name: worktreeBranchEntries[i + 2]!,
-      });
-    }
-    return map;
-  }, [worktreeBranchEntries]);
-
-  const branchRows = useMemo(
-    () =>
-      buildBranchRows(branchOptions, {
-        query: branchQuery,
-        recentBranchNames,
-        worktreeByBranch,
-      }),
-    [branchOptions, branchQuery, recentBranchNames, worktreeByBranch]
+  const { rows, matchedTotal } = useMemo(
+    () => buildBranchRows(branchOptions, { query, recentBranchNames, worktreeByBranch }),
+    [branchOptions, query, recentBranchNames, worktreeByBranch]
   );
 
   const selectableRows = useMemo(
-    () => branchRows.filter((r): r is BranchPickerRow & { kind: "option" } => r.kind === "option"),
-    [branchRows]
+    () => rows.filter((r): r is BranchOptionRow => r.kind === "option"),
+    [rows]
   );
 
-  const selectedBranchOption = useMemo(
-    () => branchOptions.find((b) => b.name === baseBranch),
-    [branchOptions, baseBranch]
+  const selectedOption = useMemo(
+    () => (selectedBranch ? branchOptions.find((b) => b.name === selectedBranch) : undefined),
+    [branchOptions, selectedBranch]
   );
 
-  // Focus search input on open
+  // Clamped here rather than corrected by an effect: an effect runs a render
+  // after the rows shrank, so for one frame the highlight, the active descendant
+  // and Enter's target could each resolve to a different row.
+  const activeIndex =
+    cursorIndex >= 0 && cursorIndex < selectableRows.length
+      ? cursorIndex
+      : selectableRows.length > 0
+        ? 0
+        : -1;
+
+  // The raw cursor is rewound on every edit, not just clamped at read time.
+  // Clamping alone hides an out-of-range index without discarding it, so
+  // narrowing to one row (rendered cursor 0) and then clearing the query would
+  // resurrect the old index and jump the cursor to an unrelated branch.
+  const setQuery = useCallback((next: string) => {
+    setQueryState(next);
+    setCursorIndex(0);
+  }, []);
+
+  // The session is cleared on every transition, not just close: Radix cancels the
+  // 120ms exit animation when the popover reopens inside it, so a reset armed only
+  // on the close path would be skipped and fire against the next session instead.
+  //
+  // This is also the only reset the dialog needs — closing subsumes clearing, so
+  // a mode switch or a dialog reopen can't leave a picker mounted expanded.
+  const setOpen = useCallback((next: boolean) => {
+    setOpenState(next);
+    setQueryState("");
+    setCursorIndex(0);
+  }, []);
+
+  // Focus the search field on open. Paired with the panel's `onOpenAutoFocus`:
+  // this covers the warm path, that one covers a cold mount where the lazy Radix
+  // chunk lands after this effect has already run. Both are load-bearing.
   useEffect(() => {
-    if (branchPickerOpen && branchInputRef.current) {
-      requestAnimationFrame(() => {
-        branchInputRef.current?.focus();
-      });
-    }
-  }, [branchPickerOpen]);
+    if (!open) return;
+    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
 
-  // Reset query and index on open/close
   useEffect(() => {
-    setBranchQuery("");
-    setSelectedIndex(0);
-  }, [branchPickerOpen]);
+    if (!listRef.current || activeIndex < 0) return;
+    listRef.current
+      .querySelector<HTMLElement>(`[data-option-index="${activeIndex}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
 
-  // Reset index on query change
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [branchQuery]);
+  const handleSelect = useCallback(
+    (option: BranchOption) => {
+      onSelect(option);
+      setOpen(false);
+    },
+    [onSelect, setOpen]
+  );
 
-  // Scroll selected row into view
-  useEffect(() => {
-    if (branchListRef.current && selectedIndex >= 0 && selectableRows.length > 0) {
-      const el = branchListRef.current.querySelector(
-        `[data-option-index="${selectedIndex}"]`
-      ) as HTMLElement;
-      el?.scrollIntoView({ block: "nearest" });
-    }
-  }, [selectedIndex, selectableRows.length]);
+  const handleKeyDown = useCallback(
+    (e: BranchPickerKeyEvent) => {
+      // Mid-composition, Arrow and Enter belong to the IME: Enter commits the
+      // candidate rather than the branch. Chromium can emit 229 before
+      // `isComposing` flips, so both are checked (as in `SearchablePalette`).
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
 
-  const handleBranchSelect = (option: BranchOption) => {
-    onSelectBranch(option.name, option.isRemote);
-    setBranchPickerOpen(false);
-  };
+      // The popover portals to document.body, so an unhandled Enter or Escape
+      // reaches the dialog that logically contains it. Every key this picker
+      // owns stops there.
+      const consume = () => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
 
-  const handleBranchKeyDown = (e: React.KeyboardEvent) => {
-    if (selectableRows.length === 0) {
       if (e.key === "Escape") {
-        e.preventDefault();
-        setBranchPickerOpen(false);
+        consume();
+        setOpen(false);
+        return;
       }
-      return;
-    }
 
-    switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        setSelectedIndex((prev) => (prev + 1) % selectableRows.length);
-        break;
-      case "ArrowUp":
-        e.preventDefault();
-        setSelectedIndex((prev) => (prev - 1 + selectableRows.length) % selectableRows.length);
-        break;
-      case "Enter":
-        e.preventDefault();
-        if (selectableRows[selectedIndex]) {
-          handleBranchSelect(selectableRows[selectedIndex]);
+      if (selectableRows.length === 0) return;
+
+      switch (e.key) {
+        case "ArrowDown":
+          consume();
+          setCursorIndex((activeIndex + 1) % selectableRows.length);
+          break;
+        case "ArrowUp":
+          consume();
+          setCursorIndex((activeIndex - 1 + selectableRows.length) % selectableRows.length);
+          break;
+        case "Home":
+          consume();
+          setCursorIndex(0);
+          break;
+        case "End":
+          consume();
+          setCursorIndex(selectableRows.length - 1);
+          break;
+        case "Enter": {
+          consume();
+          const row = selectableRows[activeIndex];
+          if (row) handleSelect(row);
+          break;
         }
-        break;
-      case "Escape":
-        e.preventDefault();
-        setBranchPickerOpen(false);
-        break;
-    }
-  };
+      }
+    },
+    [activeIndex, handleSelect, selectableRows, setOpen]
+  );
 
   return {
-    branchPickerOpen,
-    setBranchPickerOpen,
-    branchQuery,
-    setBranchQuery,
-    selectedIndex,
-    setSelectedIndex,
-    recentBranchNames,
-    setRecentBranchNames,
-    branchInputRef,
-    branchListRef,
-    branchOptions,
-    branchRows,
+    open,
+    setOpen,
+    query,
+    setQuery,
+    activeIndex,
+    setActiveIndex: setCursorIndex,
+    inputRef,
+    listRef,
+    rows,
     selectableRows,
-    selectedBranchOption,
-    handleBranchKeyDown,
-    handleBranchSelect,
+    selectedOption,
+    matchedTotal,
+    handleKeyDown,
+    handleSelect,
   };
 }

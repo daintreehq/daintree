@@ -2,7 +2,12 @@ import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 
 interface HighlightedTextProps {
   text: string;
-  indices: readonly [number, number][] | undefined;
+  /**
+   * Readonly on both axes so fuse's own `RangeTuple` (a readonly tuple) can be
+   * handed over without a copy. The merge below only ever pushes fresh arrays,
+   * so nothing here is mutated in place.
+   */
+  indices: readonly (readonly [number, number])[] | undefined;
 }
 
 export function HighlightedText({ text, indices }: HighlightedTextProps) {

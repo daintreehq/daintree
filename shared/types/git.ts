@@ -159,6 +159,13 @@ export interface BranchInfo {
   current: boolean;
   commit: string;
   remote?: string;
+  /**
+   * ISO-8601 committer date of the branch tip, from a best-effort
+   * `for-each-ref` pass alongside `git branch -a`. Absent when that pass
+   * failed or the ref carried no date — consumers must treat it as optional
+   * enrichment, never as a required field.
+   */
+  committerDate?: string;
 }
 
 /** Options for creating a new worktree */

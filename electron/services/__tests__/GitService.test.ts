@@ -159,6 +159,52 @@ describe("GitService", () => {
     expect(branches.map((branch) => branch.name)).toEqual(["main", "origin/main"]);
   });
 
+  describe("listBranches committer dates", () => {
+    beforeEach(() => {
+      gitClientMock.branch.mockResolvedValue({
+        branches: {
+          main: { current: true, commit: "1" },
+          "remotes/origin/main": { current: false, commit: "1" },
+        },
+      });
+    });
+
+    it("attaches each branch's own tip date, matched by full ref", async () => {
+      gitClientMock.raw.mockResolvedValue(
+        [
+          "refs/heads/main\t2026-08-01T10:00:00+00:00",
+          "refs/remotes/origin/main\t2026-07-30T09:00:00+00:00",
+        ].join("\n")
+      );
+
+      const branches = await new GitService(tempDir).listBranches();
+
+      expect(Object.fromEntries(branches.map((b) => [b.name, b.committerDate]))).toEqual({
+        main: "2026-08-01T10:00:00+00:00",
+        "origin/main": "2026-07-30T09:00:00+00:00",
+      });
+    });
+
+    it("still returns the branch list when the date pass fails", async () => {
+      // The dates are optional enrichment; losing them must not turn the picker
+      // into a load error.
+      gitClientMock.raw.mockRejectedValue(new Error("for-each-ref exploded"));
+
+      const branches = await new GitService(tempDir).listBranches();
+
+      expect(branches.map((b) => b.name)).toEqual(["main", "origin/main"]);
+      expect(branches.every((b) => b.committerDate === undefined)).toBe(true);
+    });
+
+    it("leaves branches git reported no date for undated", async () => {
+      gitClientMock.raw.mockResolvedValue("refs/heads/main\t2026-08-01T10:00:00+00:00");
+
+      const branches = await new GitService(tempDir).listBranches();
+
+      expect(branches.find((b) => b.name === "origin/main")!.committerDate).toBeUndefined();
+    });
+  });
+
   it("listBranches throws GitOperationError with classified reason on failure", async () => {
     gitClientMock.branch.mockRejectedValue(new Error("fatal: not a git repository"));
     const service = new GitService(tempDir);

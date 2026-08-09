@@ -30,6 +30,7 @@ import type {
 import type { CIStatus, NormalizedPRState } from "../../shared/types/forge.js";
 import type { WorktreeChanges } from "../../shared/types/git.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
+import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import { detectWslPath, getDefaultWslDistro } from "../utils/wsl.js";
 import {
@@ -3127,7 +3128,13 @@ export class WorkspaceService {
   async listBranches(requestId: string, rootPath: string): Promise<void> {
     try {
       const git = await createHardenedGit(rootPath);
-      const summary: BranchSummary = await git.branch(["-a"]);
+      // The date pass is optional enrichment, so it settles independently:
+      // `readBranchCommitterDates` resolves to an empty map on failure rather
+      // than rejecting, which keeps a metadata error from failing the list.
+      const [summary, committerDates] = await Promise.all([
+        git.branch(["-a"]) as Promise<BranchSummary>,
+        readBranchCommitterDates(git),
+      ]);
       const branches: BranchInfo[] = [];
 
       for (const [branchName, branchDetail] of Object.entries(summary.branches)) {
@@ -3147,6 +3154,7 @@ export class WorkspaceService {
           current: branchDetail.current,
           commit: branchDetail.commit,
           remote: isRemote ? displayName.split("/")[0] : undefined,
+          committerDate: committerDates.get(branchRefName(displayName, isRemote)),
         });
       }
 

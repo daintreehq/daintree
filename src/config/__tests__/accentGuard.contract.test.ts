@@ -214,8 +214,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Worktree/WorktreeCard/WorktreeTerminalSection.tsx",
     "src/components/Worktree/WorktreeDeleteDialog.tsx",
     "src/components/Worktree/WorktreeFilterPopover.tsx",
-    "src/components/Worktree/views/ExistingBranchPicker.tsx",
-    "src/components/Worktree/views/HighlightBranchText.tsx",
     "src/components/Worktree/views/IssueSelectorView.tsx",
     "src/components/Worktree/views/RecipePickerPopover.tsx",
     "src/hooks/useUpdateListener.tsx",

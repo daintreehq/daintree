@@ -13,6 +13,7 @@ import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { parseNumstat } from "../utils/git.js";
 import type { DiffStat } from "../utils/git.js";
+import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -49,7 +50,14 @@ export class GitService {
     try {
       logDebug("Listing branches", { rootPath: this.rootPath });
 
-      const summary: BranchSummary = await (await this.getGit()).branch(["-a"]);
+      const git = await this.getGit();
+      // The date pass is optional enrichment, so it settles independently:
+      // `readBranchCommitterDates` resolves to an empty map on failure rather
+      // than rejecting, which keeps a metadata error from failing the list.
+      const [summary, committerDates] = await Promise.all([
+        git.branch(["-a"]) as Promise<BranchSummary>,
+        readBranchCommitterDates(git),
+      ]);
       const branches: BranchInfo[] = [];
 
       for (const [branchName, branchDetail] of Object.entries(summary.branches)) {
@@ -65,6 +73,7 @@ export class GitService {
           current: branchDetail.current,
           commit: branchDetail.commit,
           remote: isRemote ? displayName.split("/")[0] : undefined,
+          committerDate: committerDates.get(branchRefName(displayName, isRemote)),
         });
       }
 
