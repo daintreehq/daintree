@@ -413,11 +413,18 @@ export function NewWorktreeDialog({
         setBranches(branchList);
 
         if (initialPR?.headRef) {
-          const remoteBranchName = `origin/${initialPR.headRef}`;
-          const remoteBranch = branchList.find((b) => b.name === remoteBranchName);
+          // Any remote may carry the PR head — on a fork layout the forge is
+          // `upstream`, not `origin` (#11747). Matched as an exact
+          // `<remote>/<headRef>` rather than a suffix so a head named `x`
+          // can't match `origin/feature/x`; `origin` only breaks ties.
+          const remoteCandidates = branchList.filter(
+            (b) => b.remote && b.name === `${b.remote}/${initialPR.headRef}`
+          );
+          const remoteBranch =
+            remoteCandidates.find((b) => b.remote === "origin") ?? remoteCandidates[0];
           const localBranch = branchList.find((b) => b.name === initialPR.headRef && !b.remote);
           if (remoteBranch) {
-            setBaseBranch(remoteBranchName);
+            setBaseBranch(remoteBranch.name);
             setFromRemote(true);
             setPrBranchResolved(true);
           } else if (localBranch) {

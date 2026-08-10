@@ -173,6 +173,14 @@ export interface WorktreeSnapshot {
   baseMatchesUpstream?: boolean;
 
   /**
+   * The ref the base counts were measured against — `upstream/main`, or a bare
+   * `main` on the local fallback. Named in the badge tooltip so a multi-remote
+   * repo the resolution still gets wrong reads as obviously wrong rather than
+   * silently wrong (#11747).
+   */
+  baseCompareRef?: string | null;
+
+  /**
    * Epoch ms of the last successful background `git fetch` for this worktree's
    * repo. Mirrored from `RepoFetchCoordinator` so siblings sharing a commondir
    * see the same timestamp. `null` until the first success lands.
@@ -399,6 +407,11 @@ export type WorkspaceHostRequest =
       rootPath: string;
       prNumber: number;
       headRefName: string;
+      /**
+       * Forge remote the PR ref lives on, resolved in main. Omitted falls back
+       * to `origin` (#11747).
+       */
+      remoteName?: string;
     }
   // Git operations
   | {

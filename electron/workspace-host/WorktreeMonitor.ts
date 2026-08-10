@@ -552,6 +552,9 @@ export class WorktreeMonitor {
       get baseBehindCount() {
         return monitor.gitStatusPass.baseBehindCount;
       },
+      get baseCompareRef() {
+        return monitor.gitStatusPass.baseCompareRef;
+      },
       get baseMatchesUpstream() {
         return monitor.gitStatusPass.baseMatchesUpstream;
       },
@@ -898,6 +901,21 @@ export class WorktreeMonitor {
   setRemoteFetchUrl(url: string | undefined): void {
     if (!this._isRunning) return;
     this._remoteFetchUrl = url;
+  }
+
+  /**
+   * Remote the base-branch divergence last compared against, or `null` when it
+   * used a local ref (or hasn't run yet). Read by `WorkspaceService` so the
+   * background fetch refreshes the remote this worktree actually measures
+   * itself against instead of assuming `origin` (#11747).
+   */
+  get baseRemote(): string | null {
+    return this.baseDivergence.baseRemote;
+  }
+
+  /** Remotes this repo has, as of the divergence pass's last resolution. */
+  get availableRemotes(): readonly string[] {
+    return this.baseDivergence.availableRemotes;
   }
 
   /**

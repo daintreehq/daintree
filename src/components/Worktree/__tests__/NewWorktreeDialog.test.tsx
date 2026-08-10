@@ -786,6 +786,68 @@ describe("NewWorktreeDialog — branch list cache", () => {
     expect(document.getElementById("base-branch")?.textContent).toContain("main");
   });
 
+  it("resolves a PR head that lives on a non-origin remote without re-fetching", async () => {
+    // Fork layout: the forge is `upstream`, so the PR head is only ever
+    // tracked as `upstream/<headRef>` (#11747). Probing `origin/<headRef>`
+    // misses it and triggers a redundant fetch.
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: true, commit: "abc123" },
+      { name: "upstream/feature/test", current: false, commit: "zzz999", remote: "upstream" },
+    ]);
+    renderDialog({
+      initialPR: {
+        number: 42,
+        title: "Test PR",
+        body: "",
+        headRef: "feature/test",
+        baseRef: "main",
+        state: "open",
+        rawState: "OPEN",
+        url: "https://github.com/test/repo/pull/42",
+        author: { login: "user", avatarUrl: "", rawData: null },
+        isDraft: false,
+        merged: false,
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
+      },
+    });
+    await advanceTimersGradually(500);
+
+    expect(mockFetchPRBranch).not.toHaveBeenCalled();
+    expect(document.getElementById("base-branch")?.textContent).toContain("upstream/feature/test");
+  });
+
+  it("does not mistake a nested branch for the PR head", async () => {
+    // `origin/feature/test` must not satisfy a head named `test` — an exact
+    // `<remote>/<headRef>` match, not a suffix match.
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: true, commit: "abc123" },
+      { name: "origin/feature/test", current: false, commit: "zzz999", remote: "origin" },
+    ]);
+    renderDialog({
+      initialPR: {
+        number: 43,
+        title: "Test PR",
+        body: "",
+        headRef: "test",
+        baseRef: "main",
+        state: "open",
+        rawState: "OPEN",
+        url: "https://github.com/test/repo/pull/43",
+        author: { login: "user", avatarUrl: "", rawData: null },
+        isDraft: false,
+        merged: false,
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
+      },
+    });
+    await advanceTimersGradually(500);
+
+    expect(mockFetchPRBranch).toHaveBeenCalledWith("/test/root", 43, "test");
+  });
+
   it("bypasses the cache and keeps the skeleton for PR checkout opens", async () => {
     renderDialog();
     await advanceTimersGradually(500);

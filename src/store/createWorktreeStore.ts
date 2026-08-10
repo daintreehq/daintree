@@ -1754,6 +1754,7 @@ function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolean {
     a.baseAheadCount === b.baseAheadCount &&
     a.baseBehindCount === b.baseBehindCount &&
     a.baseMatchesUpstream === b.baseMatchesUpstream &&
+    a.baseCompareRef === b.baseCompareRef &&
     // lastGitStatusCheckedAt and workingTreeChangedAt are deliberately NOT
     // compared (like `timestamp`): both advance on events that change nothing
     // else in the snapshot, so comparing either here would force a new

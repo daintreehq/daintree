@@ -60,7 +60,7 @@ const pluginServiceMock = vi.hoisted(() => ({
 
 vi.mock("../../../services/PluginService.js", () => ({ pluginService: pluginServiceMock }));
 
-import { resolveForCwd } from "../forgeResolution.js";
+import { resolveForCwd, resolveForgeRemoteNameForCwd } from "../forgeResolution.js";
 
 const giteaEntry: ForgeProviderEntry = {
   pluginId: "acme",
@@ -518,5 +518,79 @@ describe("resolveForCwd — cwd validation", () => {
     // the next failure in the chain rather than the validation error.
     await expect(resolveForCwd("/abs/path")).rejects.toThrow("Not a git repository");
     expect(gitServiceCacheMock.getGitService).toHaveBeenCalledWith("/abs/path");
+  });
+});
+describe("resolveForgeRemoteNameForCwd", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    gitServiceCacheMock.getGitService.mockReturnValue(gitServiceMock);
+    gitServiceMock.getRemoteUrl.mockResolvedValue("https://github.com/owner/repo.git");
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      { path: "/repo", branch: "main", bare: false, isMainWorktree: true },
+    ]);
+    gitServiceMock.getRepositoryRoot.mockResolvedValue("/repo");
+    projectStoreMock.getProjectByPath.mockResolvedValue({ id: "project-1", path: "/repo" });
+    projectStoreMock.getProjectSettings.mockResolvedValue({ runCommands: [] });
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://github.com/owner/repo.git" },
+    ]);
+    registryMock.listMatchingProviders.mockReturnValue([{}]);
+  });
+
+  it("returns the remote name, not its URL", async () => {
+    // The PR-head refspec addresses the forge by remote name, so the name is
+    // the part that has to survive resolution (#11747).
+    await expect(resolveForgeRemoteNameForCwd("/repo")).resolves.toBe("origin");
+  });
+
+  it("returns the configured forgeRemote when the project names one", async () => {
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      runCommands: [],
+      forgeRemote: "upstream",
+    });
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://github.com/me/fork.git" },
+      { name: "upstream", fetchUrl: "https://github.com/owner/repo.git" },
+    ]);
+
+    await expect(resolveForgeRemoteNameForCwd("/repo")).resolves.toBe("upstream");
+  });
+
+  it("picks the provider-parseable remote when the forge is not origin", async () => {
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://internal.example/mirror.git" },
+      { name: "github", fetchUrl: "https://github.com/owner/repo.git" },
+    ]);
+    registryMock.listMatchingProviders.mockImplementation((url: string) =>
+      url.includes("github.com") ? [{}] : []
+    );
+
+    await expect(resolveForgeRemoteNameForCwd("/repo")).resolves.toBe("github");
+  });
+
+  it("propagates a stale configured remote instead of falling back to origin", async () => {
+    // PR numbers are per-repository, so substituting a remote could fetch a
+    // completely unrelated PR that happens to share the number.
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      runCommands: [],
+      forgeRemote: "gone",
+    });
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://github.com/owner/repo.git" },
+    ]);
+
+    await expect(resolveForgeRemoteNameForCwd("/repo")).rejects.toThrow(/gone/);
+  });
+
+  it("returns null for a path that is not a git repository", async () => {
+    gitServiceCacheMock.getGitService.mockReturnValue(null);
+
+    await expect(resolveForgeRemoteNameForCwd("/not-a-repo")).resolves.toBeNull();
+  });
+
+  it("returns null when the repo has no usable remote", async () => {
+    gitServiceMock.listRemotes.mockResolvedValue([]);
+
+    await expect(resolveForgeRemoteNameForCwd("/repo")).resolves.toBeNull();
   });
 });

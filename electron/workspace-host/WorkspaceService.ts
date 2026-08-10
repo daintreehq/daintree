@@ -47,6 +47,7 @@ import { WorktreeMonitor } from "./WorktreeMonitor.js";
 import { WorktreeListService } from "./WorktreeListService.js";
 import { PRIntegrationService, type PRIntegrationCallbacks } from "./PRIntegrationService.js";
 import { RepoFetchCoordinator } from "./RepoFetchCoordinator.js";
+import { planFetchRemotes } from "../../shared/utils/baseRemoteSelection.js";
 import { waitForPathExists } from "../utils/fs.js";
 import { markHostPerformance } from "../utils/hostPerformance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -356,7 +357,7 @@ export class WorkspaceService {
         // not surface as an unhandled rejection.
         void this.refreshStatusForFetchSiblings(worktreeId).catch(() => {});
       },
-      onAuthFailureConfirmed: (commonDir, reason) =>
+      onAuthFailureConfirmed: (commonDir, _remote, reason) =>
         this.handleAuthFailureConfirmed(commonDir, reason),
     });
     const prCallbacks: PRIntegrationCallbacks = {
@@ -1337,10 +1338,16 @@ export class WorkspaceService {
         onScheduleFetch: async (worktreeId, _isCurrent, force) => {
           const target = this.monitors.get(worktreeId);
           if (!target || !target.isRunning) return;
+          const { remotes, primaryRemote } = planFetchRemotes({
+            baseRemote: target.baseRemote,
+            availableRemotes: target.availableRemotes,
+          });
           const result = await this.fetchCoordinator.fetchForWorktree({
             worktreeId,
             worktreePath: target.path,
             force,
+            remotes,
+            primaryRemote,
           });
           // Skipped for "no-common-dir" (e.g. path was just removed) means we
           // have no commondir to fan out on — bail.
@@ -3169,15 +3176,31 @@ export class WorkspaceService {
     }
   }
 
+  /**
+   * Fetch a PR's head into a local branch.
+   *
+   * `remoteName` is the forge remote resolved in main (#11747) — the PR ref
+   * only exists on the repository the PR was opened against, so with GitHub
+   * configured as `upstream` a fetch from `origin` fails outright with
+   * "couldn't find remote ref". Defaults to `origin` when the caller can't
+   * resolve one, which is the pre-fix behavior.
+   *
+   * The refspec itself stays GitHub-shaped (`pull/<n>/head`, also served by
+   * Gitea and Forgejo). GitLab's `merge-requests/<n>/head` and Bitbucket's
+   * variants would need per-provider refspec mapping — a separate gap this
+   * doesn't claim to close.
+   */
   async fetchPRBranch(
     requestId: string,
     rootPath: string,
     prNumber: number,
-    headRefName: string
+    headRefName: string,
+    remoteName?: string
   ): Promise<void> {
     try {
       const git = await createAuthenticatedGit(rootPath);
-      await git.raw(["fetch", "origin", `pull/${prNumber}/head:${headRefName}`]);
+      const remote = remoteName && remoteName.length > 0 ? remoteName : "origin";
+      await git.raw(["fetch", remote, `pull/${prNumber}/head:${headRefName}`]);
       this.sendEvent({ type: "fetch-pr-branch-result", requestId, success: true });
     } catch (error) {
       const gitReason = classifyGitError(error);

@@ -257,6 +257,14 @@ export interface Worktree {
   baseMatchesUpstream?: boolean;
 
   /**
+   * The ref the base counts were measured against — `upstream/main`, or a bare
+   * `main` on the local fallback. Named in the badge tooltip so a multi-remote
+   * repo the resolution still gets wrong reads as obviously wrong rather than
+   * silently wrong (#11747).
+   */
+  baseCompareRef?: string | null;
+
+  /**
    * Epoch ms of the last successful background `git fetch` for this worktree's
    * repo. Mirrors `RepoFetchCoordinator`'s per-commondir `lastSuccessfulFetch`
    * so all sibling worktrees sharing a `.git/objects` see the same timestamp.

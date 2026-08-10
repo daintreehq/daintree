@@ -128,7 +128,7 @@ describe("RepoFetchCoordinator", () => {
     expect(f3.status).toBe("failed");
     expect(f3.authFailed).toBe(true);
     expect(onAuthFailureConfirmed).toHaveBeenCalledTimes(1);
-    expect(onAuthFailureConfirmed).toHaveBeenCalledWith("/repo/.git", "auth-failed");
+    expect(onAuthFailureConfirmed).toHaveBeenCalledWith("/repo/.git", "origin", "auth-failed");
 
     // A skip after confirmation keeps the stripe up but does not re-fire.
     const skipped = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
@@ -857,5 +857,234 @@ describe("RepoFetchCoordinator", () => {
     expect(result.networkFailed).toBe(true);
     expect(result.authFailed).toBe(false);
     expect(coord.hasFailureFor("/repo/.git")).toBe(true);
+  });
+  describe("multiple remotes", () => {
+    it("fetches only origin for a single-remote repo", async () => {
+      mockGetGitCommonDir.mockReturnValue("/repo/.git");
+      const mockGit = makeMockGit(() => Promise.resolve());
+      mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+      const coord = new RepoFetchCoordinator();
+      await coord.fetchForWorktree({
+        worktreeId: "wt1",
+        worktreePath: "/repo",
+        remotes: ["origin"],
+        primaryRemote: "origin",
+      });
+
+      const fetched = mockGit.raw.mock.calls.map((call) => call[0][1]);
+      expect(fetched).toEqual(["origin"]);
+    });
+
+    it("fetches the primary remote before the auxiliary one", async () => {
+      mockGetGitCommonDir.mockReturnValue("/repo/.git");
+      const mockGit = makeMockGit(() => Promise.resolve());
+      mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+      const coord = new RepoFetchCoordinator();
+      await coord.fetchForWorktree({
+        worktreeId: "wt1",
+        worktreePath: "/repo",
+        remotes: ["origin", "upstream"],
+        primaryRemote: "upstream",
+      });
+
+      // The primary's result is what the card renders, so it must not queue
+      // behind a slow auxiliary fetch.
+      expect(mockGit.raw.mock.calls.map((call) => call[0][1])).toEqual(["upstream", "origin"]);
+    });
+
+    it("never fetches the same remote twice in one call", async () => {
+      mockGetGitCommonDir.mockReturnValue("/repo/.git");
+      const mockGit = makeMockGit(() => Promise.resolve());
+      mockCreateBackgroundFetchGit.mockReturnValue(mockGit);
+
+      const coord = new RepoFetchCoordinator();
+      await coord.fetchForWorktree({
+        worktreeId: "wt1",
+        worktreePath: "/repo",
+        remotes: ["origin", "origin", "upstream"],
+        primaryRemote: "origin",
+      });
+
+      expect(mockGit.raw.mock.calls.map((call) => call[0][1])).toEqual(["origin", "upstream"]);
+    });
+
+    it("reports the primary remote's outcome, not an auxiliary success", async () => {
+      mockGetGitCommonDir.mockReturnValue("/repo/.git");
+      mockCreateBackgroundFetchGit.mockImplementation(() =>
+        makeMockGit(function (this: void) {
+          return Promise.resolve();
+        })
+      );
+      // upstream fails, origin succeeds.
+      mockCreateBackgroundFetchGit.mockReturnValue({
+        raw: vi
+          .fn()
+          .mockImplementation((args: string[]) =>
+            args[1] === "upstream"
+              ? Promise.reject(new Error("Could not resolve host: upstream.example"))
+              : Promise.resolve()
+          ),
+      });
+
+      const coord = new RepoFetchCoordinator();
+      const result = await coord.fetchForWorktree({
+        worktreeId: "wt1",
+        worktreePath: "/repo",
+        remotes: ["origin", "upstream"],
+        primaryRemote: "upstream",
+      });
+
+      // A healthy origin must not vouch for counts measured against upstream.
+      expect(result.status).toBe("failed");
+      expect(result.remote).toBe("upstream");
+      expect(result.lastFetchedAt).toBeNull();
+    });
+
+    it("keeps one remote's failure out of another's backoff", async () => {
+      mockGetGitCommonDir.mockReturnValue("/repo/.git");
+      mockCreateBackgroundFetchGit.mockReturnValue({
+        raw: vi
+          .fn()
+          .mockImplementation((args: string[]) =>
+            args[1] === "upstream"
+              ? Promise.reject(new Error("Authentication failed for 'https://x'"))
+              : Promise.resolve()
+          ),
+      });
+
+      const coord = new RepoFetchCoordinator();
+      await coord.fetchForWorktree({
+        worktreeId: "wt1",
+        worktreePath: "/repo",
+        remotes: ["origin", "upstream"],
+        primaryRemote: "upstream",
+      });
+
+      expect(coord.hasFailureFor("/repo/.git", "upstream")).toBe(true);
+      expect(coord.hasFailureFor("/repo/.git", "origin")).toBe(false);
+      // origin fetched cleanly, so it carries a timestamp; upstream does not.
+      expect(coord.getLastSuccessfulFetch("/repo/.git", "origin")).not.toBeNull();
+      expect(coord.getLastSuccessfulFetch("/repo/.git", "upstream")).toBeNull();
+      // The repo-wide diagnostic still reports that something is failing.
+      expect(coord.hasFailureFor("/repo/.git")).toBe(true);
+    });
+
+    it("does not let a second remote advance the first's auth retry count", async () => {
+      mockGetGitCommonDir.mockReturnValue("/repo/.git");
+      mockCreateBackgroundFetchGit.mockReturnValue(
+        makeMockGit(() => Promise.reject(new Error("Authentication failed for 'https://x'")))
+      );
+
+      const onAuthFailureConfirmed = vi.fn();
+      const coord = new RepoFetchCoordinator({ onAuthFailureConfirmed });
+
+      // Both remotes fail on every round. Confirmation must still take the
+      // full number of rounds per remote — two remotes failing once each is
+      // not the same evidence as one remote failing twice.
+      await coord.fetchForWorktree({
+        worktreeId: "wt1",
+        worktreePath: "/repo",
+        remotes: ["origin", "upstream"],
+        primaryRemote: "upstream",
+      });
+      expect(onAuthFailureConfirmed).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(5 * 60_000 + 1_000);
+      await coord.fetchForWorktree({
+        worktreeId: "wt1",
+        worktreePath: "/repo",
+        remotes: ["origin", "upstream"],
+        primaryRemote: "upstream",
+      });
+      expect(onAuthFailureConfirmed).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(15 * 60_000 + 1_000);
+      await coord.fetchForWorktree({
+        worktreeId: "wt1",
+        worktreePath: "/repo",
+        remotes: ["origin", "upstream"],
+        primaryRemote: "upstream",
+      });
+
+      // Each remote confirms on its own third round, and each reports itself.
+      const confirmedRemotes = onAuthFailureConfirmed.mock.calls.map((call) => call[1]);
+      expect(new Set(confirmedRemotes)).toEqual(new Set(["origin", "upstream"]));
+    });
+
+    it("fires one success notification per batch, not one per remote", async () => {
+      mockGetGitCommonDir.mockReturnValue("/repo/.git");
+      mockCreateBackgroundFetchGit.mockReturnValue(makeMockGit(() => Promise.resolve()));
+
+      const onFetchSuccess = vi.fn();
+      const coord = new RepoFetchCoordinator({ onFetchSuccess });
+      await coord.fetchForWorktree({
+        worktreeId: "wt1",
+        worktreePath: "/repo",
+        remotes: ["origin", "upstream"],
+        primaryRemote: "upstream",
+      });
+
+      expect(onFetchSuccess).toHaveBeenCalledTimes(1);
+    });
+
+    it("serializes every remote of a repo on one chain", async () => {
+      mockGetGitCommonDir.mockReturnValue("/repo/.git");
+      let concurrent = 0;
+      let maxConcurrent = 0;
+      mockCreateBackgroundFetchGit.mockReturnValue({
+        raw: vi.fn().mockImplementation(async () => {
+          concurrent += 1;
+          maxConcurrent = Math.max(maxConcurrent, concurrent);
+          await Promise.resolve();
+          concurrent -= 1;
+        }),
+      });
+
+      const coord = new RepoFetchCoordinator();
+      await Promise.all([
+        coord.fetchForWorktree({
+          worktreeId: "wtA",
+          worktreePath: "/repo/a",
+          remotes: ["origin", "upstream"],
+          primaryRemote: "upstream",
+        }),
+        coord.fetchForWorktree({
+          worktreeId: "wtB",
+          worktreePath: "/repo/b",
+          remotes: ["origin", "upstream"],
+          primaryRemote: "upstream",
+        }),
+      ]);
+
+      // Refs are shared through the commondir, so concurrent fetches race on
+      // packed-refs.lock regardless of which remote each one targets.
+      expect(maxConcurrent).toBe(1);
+    });
+
+    it("clears auth failures across every remote", async () => {
+      mockGetGitCommonDir.mockReturnValue("/repo/.git");
+      mockCreateBackgroundFetchGit.mockReturnValue(
+        makeMockGit(() => Promise.reject(new Error("Authentication failed for 'https://x'")))
+      );
+
+      const coord = new RepoFetchCoordinator();
+      await coord.fetchForWorktree({
+        worktreeId: "wt1",
+        worktreePath: "/repo",
+        remotes: ["origin", "upstream"],
+        primaryRemote: "upstream",
+      });
+      expect(coord.hasFailureFor("/repo/.git", "origin")).toBe(true);
+      expect(coord.hasFailureFor("/repo/.git", "upstream")).toBe(true);
+
+      // A credential refresh is not remote-specific; leaving a sibling
+      // suspended would make the user's retry look ineffective.
+      coord.clearAuthFailures();
+
+      expect(coord.hasFailureFor("/repo/.git", "origin")).toBe(false);
+      expect(coord.hasFailureFor("/repo/.git", "upstream")).toBe(false);
+    });
   });
 });
