@@ -15,7 +15,12 @@ const clipboardMock = vi.hoisted(() => ({
 
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProjectId: vi.fn<() => string | null>(() => null),
-  getProjectById: vi.fn<(projectId: string) => { id: string; status: string } | null>(() => null),
+  // `path` is load-bearing, not decoration: the worktree lookup selects a
+  // workspace host by the sender project's path (#11751), so a row without one
+  // would resolve no worktrees at all.
+  getProjectById: vi.fn<(projectId: string) => { id: string; path: string; status: string } | null>(
+    () => null
+  ),
   getProjectSettings: vi.fn<(projectId: string) => Promise<unknown>>(),
 }));
 
@@ -235,11 +240,16 @@ describe("copyTree handlers", () => {
         },
         ptyClient: { hasTerminal: vi.fn(() => false), write: vi.fn() },
         worktreeService: {
-          getAllStatesAsync: vi.fn().mockResolvedValue([{ id: "wt-1", path: "/wt-1" }]),
+          getAllStatesForProjectAsync: vi.fn().mockResolvedValue([{ id: "wt-1", path: "/wt-1" }]),
           testConfig,
         },
       } as never);
       projectStoreMock.getCurrentProjectId.mockReturnValue("proj-1" as never);
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "proj-1",
+        path: "/proj-1",
+        status: "active",
+      });
       projectStoreMock.getProjectSettings.mockResolvedValue(projectSettingsFixture as never);
       return testConfig;
     }
@@ -295,12 +305,17 @@ describe("copyTree handlers", () => {
         },
         ptyClient: { hasTerminal: vi.fn(() => false), write: vi.fn() },
         worktreeService: {
-          getAllStatesAsync: vi.fn().mockResolvedValue([{ id: "wt-1", path: "/wt-1" }]),
+          getAllStatesForProjectAsync: vi.fn().mockResolvedValue([{ id: "wt-1", path: "/wt-1" }]),
           getContextFileTree,
           getFileTree,
         },
       } as never);
       projectStoreMock.getCurrentProjectId.mockReturnValue("proj-1" as never);
+      projectStoreMock.getProjectById.mockReturnValue({
+        id: "proj-1",
+        path: "/proj-1",
+        status: "active",
+      });
       projectStoreMock.getProjectSettings.mockResolvedValue(projectSettingsFixture as never);
       return { getContextFileTree, getFileTree };
     }
@@ -399,6 +414,24 @@ describe("copyTree handlers", () => {
     const SENDER_PROJECT = "proj-sender";
     const GLOBAL_PROJECT = "proj-global";
 
+    const projectPathFor = (projectId: string) => `/repos/${projectId}`;
+    /**
+     * A worktree only that project owns. Real worktree ids are normalized
+     * absolute paths, so they never collide across projects — that uniqueness
+     * is what lets a cross-project lookup be caught (#11751).
+     */
+    const ownWorktreeIdFor = (projectId: string) => `${projectPathFor(projectId)}/own-wt`;
+
+    /**
+     * Every project also answers for the shared `wt-1` fixture the merge cases
+     * request, at its own path, so those cases keep exercising the merge rather
+     * than tripping the worktree guard.
+     */
+    const worktreesFor = (projectId: string) => [
+      { id: "wt-1", path: `${projectPathFor(projectId)}/wt-1` },
+      { id: ownWorktreeIdFor(projectId), path: `${projectPathFor(projectId)}/own-wt` },
+    ];
+
     // copyTree channels share one rate-limit bucket, and earlier tests in this
     // file exhaust it. Clear the bucket instead of advancing fake timers: each
     // vi.useFakeTimers() re-seeds from the real clock, so a fixed advance keeps
@@ -442,6 +475,22 @@ describe("copyTree handlers", () => {
       });
       const generateContext = vi.fn().mockResolvedValue({ content: "", fileCount: 1 });
       const getContextFileTree = vi.fn().mockResolvedValue([]);
+      // The window-scoped read answers for whatever project the window shows —
+      // GLOBAL_PROJECT throughout this block. Kept mocked, and kept returning a
+      // usable list, so a handler that regressed to it would *pass* its lookup
+      // and be caught by the explicit "never called" assertions rather than by
+      // an incidental crash.
+      const getAllStatesAsync = vi.fn(async () => worktreesFor(GLOBAL_PROJECT));
+      const getAllStatesForProjectAsync = vi.fn(
+        async (projectPath: string, expectedProjectId: string) => {
+          options.onWorkspaceCall?.();
+          // Mirrors the production guard: the path selects the host, the id
+          // authorizes it, and a mismatch resolves nothing.
+          return projectPath === projectPathFor(expectedProjectId)
+            ? worktreesFor(expectedProjectId)
+            : [];
+        }
+      );
 
       if (options.withSenderWindow !== false) {
         browserWindowMock.fromWebContents.mockReturnValue({
@@ -452,6 +501,7 @@ describe("copyTree handlers", () => {
 
       projectStoreMock.getProjectById.mockImplementation((projectId) => ({
         id: projectId,
+        path: projectPathFor(projectId),
         status: "active",
       }));
       projectStoreMock.getProjectSettings.mockImplementation(async (projectId) =>
@@ -466,10 +516,11 @@ describe("copyTree handlers", () => {
         },
         ptyClient: { hasTerminal: vi.fn(() => true), write: vi.fn() },
         worktreeService: {
-          getAllStatesAsync: vi.fn(async () => {
-            options.onWorkspaceCall?.();
-            return [{ id: "wt-1", path: "/wt-1" }];
-          }),
+          // Kept mocked so the assertions can prove it is never consulted: a
+          // window-scoped read answers for whatever project the window shows,
+          // which is the bug (#11751).
+          getAllStatesAsync,
+          getAllStatesForProjectAsync,
           testConfig,
           generateContext,
           getContextFileTree,
@@ -485,7 +536,13 @@ describe("copyTree handlers", () => {
         projectViewManager: options.depsPvm,
       } as never);
 
-      return { testConfig, generateContext, getContextFileTree };
+      return {
+        testConfig,
+        generateContext,
+        getContextFileTree,
+        getAllStatesAsync,
+        getAllStatesForProjectAsync,
+      };
     }
 
     /**
@@ -496,13 +553,14 @@ describe("copyTree handlers", () => {
      * (#11103, #6015), and for the file tree it would put the picker and the
      * bundle back on different settings (#11439).
      */
-    const MERGE_CALL_SITES = [
+    const SCOPED_CALL_SITES = [
       {
         channel: CHANNELS.COPYTREE_TEST_CONFIG,
         seam: "testConfig" as const,
         payload: {},
         optionsArgIndex: 1,
         acceptsRuntimeOptions: true,
+        refusalMode: "return" as const,
       },
       {
         channel: CHANNELS.COPYTREE_GENERATE,
@@ -510,6 +568,7 @@ describe("copyTree handlers", () => {
         payload: {},
         optionsArgIndex: 1,
         acceptsRuntimeOptions: true,
+        refusalMode: "return" as const,
       },
       {
         channel: CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE,
@@ -517,6 +576,7 @@ describe("copyTree handlers", () => {
         payload: {},
         optionsArgIndex: 1,
         acceptsRuntimeOptions: true,
+        refusalMode: "return" as const,
       },
       {
         channel: CHANNELS.COPYTREE_INJECT,
@@ -524,6 +584,7 @@ describe("copyTree handlers", () => {
         payload: { terminalId: "term-1" },
         optionsArgIndex: 1,
         acceptsRuntimeOptions: true,
+        refusalMode: "return" as const,
       },
       {
         // The listing takes no per-call options: it answers for the project's
@@ -534,6 +595,9 @@ describe("copyTree handlers", () => {
         payload: {},
         optionsArgIndex: 2,
         acceptsRuntimeOptions: false,
+        // The listing is the one channel that rejects rather than resolving an
+        // error field; its callers await a tree, not a result envelope.
+        refusalMode: "throw" as const,
       },
     ];
 
@@ -542,9 +606,40 @@ describe("copyTree handlers", () => {
       await handler(mockEvent, { worktreeId: "wt-1", options: {}, ...extraPayload });
     }
 
-    describe.each(MERGE_CALL_SITES)(
+    /**
+     * The message for a refused worktree, asserted through the shape that
+     * channel is contracted to use: get-file-tree rejects, the other four
+     * resolve with an `error` field. Asserting the shape rather than accepting
+     * either is the point — a handler that started throwing where the renderer
+     * expects a resolved `{ error }` would break every caller, so a helper that
+     * normalized both would hide exactly the regression worth catching.
+     */
+    async function invokeExpectingRefusal(
+      channel: string,
+      refusalMode: "throw" | "return",
+      extraPayload: Record<string, unknown>
+    ): Promise<string | undefined> {
+      const handler = getInvokeHandler(channel);
+      const call = () => handler(mockEvent, { worktreeId: "wt-1", options: {}, ...extraPayload });
+
+      if (refusalMode === "throw") {
+        return await call().then(
+          (result) => {
+            throw new Error(
+              `${channel} resolved with ${JSON.stringify(result)} but must reject on a refused worktree`
+            );
+          },
+          (error: Error) => error.message
+        );
+      }
+
+      const result = (await call()) as { error?: string } | undefined;
+      return result?.error;
+    }
+
+    describe.each(SCOPED_CALL_SITES)(
       "$channel",
-      ({ channel, seam, payload, optionsArgIndex, acceptsRuntimeOptions }) => {
+      ({ channel, seam, payload, optionsArgIndex, acceptsRuntimeOptions, refusalMode }) => {
         it("merges the sender window's project settings, not the globally current project's", async () => {
           aimGlobalSourcesAtGlobalProject();
           const seams = registerWithScope({
@@ -566,21 +661,147 @@ describe("copyTree handlers", () => {
           expect(projectStoreMock.getCurrentProjectId).not.toHaveBeenCalled();
         });
 
-        it("applies no project settings when the sender's view is unbound", async () => {
+        it("refuses the request outright when the sender's view is unbound", async () => {
           aimGlobalSourcesAtGlobalProject();
           const depsPvm = makePvm(GLOBAL_PROJECT);
           const seams = registerWithScope({ windowScopedPvm: makePvm(null), depsPvm });
 
-          await invoke(channel, payload);
+          const error = await invokeExpectingRefusal(channel, refusalMode, payload);
 
-          // An unbound view must not inherit the global current project's settings
-          // from ANY source, so nothing back-fills the empty runtime options.
-          expect(seams[seam]).toHaveBeenCalledTimes(1);
-          const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
-          expect(mergedOptions).toEqual({});
+          // An unbound view names no project, and every copyTree channel makes
+          // worktreeId mandatory — so there is nothing to resolve it against.
+          // Before #11751 this ran to completion against whichever worktree the
+          // *window* was showing, producing a bundle from a project the caller
+          // never named and with none of its settings applied.
+          expect(error).toBe("Worktree not found: wt-1");
+          expect(seams[seam]).not.toHaveBeenCalled();
+          expect(seams.getAllStatesAsync).not.toHaveBeenCalled();
+          // Still the original guarantee: no global source may be consulted.
           expect(depsPvm.getProjectIdForWebContents).not.toHaveBeenCalled();
           expect(projectStoreMock.getProjectSettings).not.toHaveBeenCalled();
           expect(projectStoreMock.getCurrentProjectId).not.toHaveBeenCalled();
+        });
+
+        it("resolves the worktree in the sender's project, not the window's", async () => {
+          aimGlobalSourcesAtGlobalProject();
+          const seams = registerWithScope({
+            windowScopedPvm: makePvm(SENDER_PROJECT),
+            depsPvm: makePvm(GLOBAL_PROJECT),
+          });
+
+          await invoke(channel, payload);
+
+          expect(seams.getAllStatesForProjectAsync).toHaveBeenCalledWith(
+            projectPathFor(SENDER_PROJECT),
+            SENDER_PROJECT
+          );
+          expect(seams.getAllStatesAsync).not.toHaveBeenCalled();
+          // The path handed downstream is the sender project's copy of wt-1 —
+          // proof the resolved snapshot, not just the lookup, came from A.
+          expect(seams[seam].mock.calls[0][0]).toBe(`${projectPathFor(SENDER_PROJECT)}/wt-1`);
+        });
+
+        it("refuses a worktree that belongs to the window's project", async () => {
+          aimGlobalSourcesAtGlobalProject();
+          const seams = registerWithScope({
+            windowScopedPvm: makePvm(SENDER_PROJECT),
+            depsPvm: makePvm(GLOBAL_PROJECT),
+          });
+
+          // Worktree ids are normalized absolute paths, so a renderer can guess
+          // a sibling project's. The window is showing GLOBAL_PROJECT, so the
+          // pre-#11751 lookup would have found this and bundled its contents.
+          const error = await invokeExpectingRefusal(channel, refusalMode, {
+            ...payload,
+            worktreeId: ownWorktreeIdFor(GLOBAL_PROJECT),
+          });
+
+          expect(error).toBe(`Worktree not found: ${ownWorktreeIdFor(GLOBAL_PROJECT)}`);
+          expect(seams[seam]).not.toHaveBeenCalled();
+          expect(seams.getAllStatesForProjectAsync).toHaveBeenCalledWith(
+            projectPathFor(SENDER_PROJECT),
+            SENDER_PROJECT
+          );
+          expect(seams.getAllStatesAsync).not.toHaveBeenCalled();
+        });
+
+        it("refuses a scratch sender, which has a workspace but no worktrees", async () => {
+          aimGlobalSourcesAtGlobalProject();
+          const seams = registerWithScope({
+            windowScopedPvm: makePvm("scratch-1"),
+            depsPvm: makePvm(GLOBAL_PROJECT),
+          });
+          // A scratch is a workspace id with no project row (#11484); scratch
+          // switching never invokes the worktree service at all.
+          //
+          // Only the scratch is rowless — every other project still resolves.
+          // Nulling the whole store instead would let a "no row, so use the
+          // current project" regression pass here while, in production, it
+          // bundled the global project's worktree.
+          projectStoreMock.getProjectById.mockImplementation((projectId) =>
+            projectId === "scratch-1"
+              ? null
+              : { id: projectId, path: projectPathFor(projectId), status: "active" }
+          );
+
+          const error = await invokeExpectingRefusal(channel, refusalMode, payload);
+
+          expect(error).toBe("Worktree not found: wt-1");
+          expect(seams[seam]).not.toHaveBeenCalled();
+          expect(seams.getAllStatesAsync).not.toHaveBeenCalled();
+          expect(seams.getAllStatesForProjectAsync).not.toHaveBeenCalled();
+          // ...and it reached for no global project to stand in for the scratch.
+          expect(projectStoreMock.getCurrentProjectId).not.toHaveBeenCalled();
+          expect(projectStoreMock.getProjectSettings).not.toHaveBeenCalled();
+        });
+
+        it("refuses a sender whose project row is closed", async () => {
+          aimGlobalSourcesAtGlobalProject();
+          const seams = registerWithScope({
+            windowScopedPvm: makePvm(SENDER_PROJECT),
+            depsPvm: makePvm(GLOBAL_PROJECT),
+          });
+          // Unlike a scratch, a closed project keeps a row *and* a valid path,
+          // so it would sail through a guard that only checked for existence.
+          // Hydrating it would resurrect a workspace the user closed.
+          projectStoreMock.getProjectById.mockImplementation((projectId) => ({
+            id: projectId,
+            path: projectPathFor(projectId),
+            status: projectId === SENDER_PROJECT ? "closed" : "active",
+          }));
+
+          const error = await invokeExpectingRefusal(channel, refusalMode, payload);
+
+          expect(error).toBe("Worktree not found: wt-1");
+          expect(seams[seam]).not.toHaveBeenCalled();
+          expect(seams.getAllStatesAsync).not.toHaveBeenCalled();
+          expect(seams.getAllStatesForProjectAsync).not.toHaveBeenCalled();
+        });
+
+        it("propagates a host read failure instead of falling back to the window", async () => {
+          aimGlobalSourcesAtGlobalProject();
+          const seams = registerWithScope({
+            windowScopedPvm: makePvm(SENDER_PROJECT),
+            depsPvm: makePvm(GLOBAL_PROJECT),
+          });
+          // A matched, ready host can reject; the scoped read does not swallow
+          // it. A "resilience" catch that retried through the window-scoped
+          // read would reopen the cross-project disclosure this fix closed, so
+          // pin that the failure surfaces and no second lookup is attempted.
+          seams.getAllStatesForProjectAsync.mockRejectedValueOnce(
+            new Error("workspace host unavailable")
+          );
+
+          await expect(
+            getInvokeHandler(channel)(mockEvent, {
+              worktreeId: "wt-1",
+              options: {},
+              ...payload,
+            })
+          ).rejects.toThrow("workspace host unavailable");
+
+          expect(seams.getAllStatesAsync).not.toHaveBeenCalled();
+          expect(seams[seam]).not.toHaveBeenCalled();
         });
 
         it("keeps the sender's project settings when the view is evicted mid-request", async () => {
@@ -598,10 +819,19 @@ describe("copyTree handlers", () => {
 
           await invoke(channel, payload);
 
+          // The eviction has to have actually happened for the rest to mean
+          // anything: if the lookup stopped triggering the hook, every
+          // assertion below would still pass without the race being run.
+          expect(boundProject).toBeNull();
           const mergedOptions = seams[seam].mock.calls[0][optionsArgIndex];
           expect(mergedOptions.exclude).toEqual(senderSettings.excludedPaths);
           expect(mergedOptions.maxTotalSize).toBe(senderSettings.copyTreeSettings.maxContextSize);
           expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(SENDER_PROJECT);
+          // The worktree came from the pinned project too, not a re-resolution.
+          expect(seams.getAllStatesForProjectAsync).toHaveBeenCalledWith(
+            projectPathFor(SENDER_PROJECT),
+            SENDER_PROJECT
+          );
         });
 
         it.runIf(acceptsRuntimeOptions)(
@@ -651,6 +881,14 @@ describe("copyTree handlers", () => {
           expect(mergedOptions.maxTotalSize).toBe(globalSettings.copyTreeSettings.maxContextSize);
           expect(mergedOptions.always).toEqual(globalSettings.copyTreeSettings.alwaysInclude);
           expect(projectStoreMock.getProjectSettings).toHaveBeenCalledWith(GLOBAL_PROJECT);
+          // The lenient fallback is deliberate, and it still resolves the
+          // worktree through the project it settled on — a senderless call must
+          // never reach the unscoped read, which unions every live host.
+          expect(seams.getAllStatesForProjectAsync).toHaveBeenCalledWith(
+            projectPathFor(GLOBAL_PROJECT),
+            GLOBAL_PROJECT
+          );
+          expect(seams.getAllStatesAsync).not.toHaveBeenCalled();
         });
       }
     );
@@ -694,7 +932,7 @@ describe("file-backed generation", () => {
       },
       ptyClient: { hasTerminal: vi.fn(() => true), write: vi.fn() },
       worktreeService: {
-        getAllStatesAsync: vi.fn(async () => [
+        getAllStatesForProjectAsync: vi.fn(async () => [
           { id: "wt-1", path: "/repos/daintree", branch: "main" },
         ]),
         generateContext,
@@ -716,9 +954,22 @@ describe("file-backed generation", () => {
     vi.stubEnv("TMPDIR", tmpRoot);
     vi.stubEnv("TEMP", tmpRoot);
     vi.stubEnv("TMP", tmpRoot);
-    projectStoreMock.getCurrentProjectId.mockReturnValue(null);
-    projectStoreMock.getProjectById.mockReturnValue(null);
+    // These cases are about the bundle's destination, not project scoping, but
+    // the worktree lookup still has to resolve — so give them a project to
+    // resolve through, with neutral settings. Leaving getProjectSettings unset
+    // would reach the same assertions through loadCopyTreeProjectSettings'
+    // catch block, testing error recovery rather than the ordinary path.
+    projectStoreMock.getCurrentProjectId.mockReturnValue("proj-file-backed");
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: "proj-file-backed",
+      path: "/repos/daintree",
+      status: "active",
+    });
     projectStoreMock.getProjectSettings.mockReset();
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      excludedPaths: [],
+      copyTreeSettings: {},
+    });
   });
 
   afterEach(async () => {
@@ -1213,7 +1464,7 @@ describe("copy-tree run history recording", () => {
       },
       ptyClient: { hasTerminal: vi.fn(() => hasTerminal), write: vi.fn() },
       worktreeService: {
-        getAllStatesAsync: vi.fn(async () => [
+        getAllStatesForProjectAsync: vi.fn(async () => [
           { id: "wt-1", path: "/repos/daintree", branch: "main" },
         ]),
         generateContext,
@@ -1241,7 +1492,13 @@ describe("copy-tree run history recording", () => {
     vi.stubEnv("TEMP", tmpRoot);
     vi.stubEnv("TMP", tmpRoot);
     projectStoreMock.getCurrentProjectId.mockReturnValue(PROJECT_ID);
-    projectStoreMock.getProjectById.mockReturnValue(null);
+    // The recorded project id comes from the same resolution the worktree
+    // lookup uses, so the row has to resolve for the run to reach the history.
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: PROJECT_ID,
+      path: "/repos/daintree",
+      status: "active",
+    });
     projectStoreMock.getProjectSettings.mockReset();
   });
 
@@ -1337,7 +1594,11 @@ describe("copy-tree run history recording", () => {
       excludedPaths: ["vendor"],
       copyTreeSettings: { maxContextSize: 4242, alwaysInclude: ["*.md"] },
     });
-    projectStoreMock.getProjectById.mockReturnValue({ id: PROJECT_ID, status: "open" });
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: PROJECT_ID,
+      path: "/repos/daintree",
+      status: "active",
+    });
     windowRefMock.getProjectViewManager.mockReturnValue({
       getProjectIdForWebContents: () => PROJECT_ID,
     });
