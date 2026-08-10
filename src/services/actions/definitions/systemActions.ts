@@ -612,7 +612,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         // button advertises a clipboard copy, and neither touches the clipboard.
         const runStore = useCopyTreeRunStore.getState();
         runStore.beginRun();
-        let result;
+        let result: CopyTreeResult;
         try {
           result = await copyTreeClient.generateAndCopyFile(
             requireWorktreeId(args, ctx),

@@ -3,6 +3,7 @@ import { defineAction } from "../defineAction";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
+import type { CopyTreeResult } from "@shared/types";
 import { copyTreeClient, systemClient } from "@/clients";
 import { resolveCopyTreeRunSource } from "@/lib/copyTreeRunSource";
 import { actionService } from "@/services/ActionService";
@@ -353,7 +354,7 @@ export function registerWorktreeContextActions(
         // no-worktree return so a refused dispatch never blips it.
         const runStore = useCopyTreeRunStore.getState();
         runStore.beginRun();
-        let result;
+        let result: CopyTreeResult;
         try {
           result = await copyTreeClient.generateAndCopyFile(
             targetWorktreeId,

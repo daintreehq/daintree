@@ -1268,8 +1268,13 @@ export function Toolbar({
                     the notice too, so Escape, a click, and the shared
                     dialog-transition dismissal can end the window early
                     instead of being overridden by the forced half of the
-                    union. */}
+                    union. The shared auto-dismiss is off while a notice is up:
+                    its timer arms on the open transition, so a completion that
+                    lands mid-hover would inherit whatever's left of the hover
+                    window instead of getting the notice's own. Hover-only opens
+                    keep the shared window. */}
                 <Tooltip
+                  autoDismiss={copyTreeNotice === null}
                   open={copyTreeTooltipHovered || copyTreeNotice !== null}
                   onOpenChange={(open) => {
                     setCopyTreeTooltipHovered(open);
