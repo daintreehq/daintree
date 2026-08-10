@@ -104,7 +104,11 @@ describe("useMcpBridge", () => {
     // the confirmation-flow tests are unaffected by the #11343 preview change.
     mocks.buildPreview.mockResolvedValue(null);
     mocks.getContext.mockReturnValue({});
-    mocks.buildGitPreview.mockResolvedValue({ branch: "main", commits: [] });
+    mocks.buildGitPreview.mockResolvedValue({
+      branch: "main",
+      destination: { remote: "origin", branch: "main" },
+      commits: [],
+    });
     __resetMcpConfirmStoreForTesting();
     manifestHandler = undefined;
     dispatchHandler = undefined;
@@ -709,6 +713,7 @@ describe("useMcpBridge", () => {
     mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
     mocks.buildGitPreview.mockResolvedValue({
       branch: "feature/x",
+      destination: { remote: "origin", branch: "feature/x" },
       commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
     });
 
@@ -730,8 +735,9 @@ describe("useMcpBridge", () => {
     await vi.waitFor(() => {
       const current = useMcpConfirmStore.getState().current;
       expect(current?.previewPending).toBe(false);
-      expect(current?.preview?.[0]).toBe("Branch: feature/x");
-      expect(current?.preview?.[1]).toContain("Fix the thing");
+      expect(current?.preview?.[0]).toBe("Destination: origin/feature/x");
+      expect(current?.preview?.[1]).toBe("Branch: feature/x");
+      expect(current?.preview?.[2]).toContain("Fix the thing");
     });
 
     useMcpConfirmStore.getState().resolveCurrent("approved");
@@ -815,6 +821,7 @@ describe("useMcpBridge", () => {
     mocks.getContext.mockReturnValue({ activeWorktreePath: "/previewed" });
     mocks.buildGitPreview.mockResolvedValue({
       branch: "feature/y",
+      destination: { remote: "origin", branch: "feature/y" },
       commits: [{ hash: "1234567890a", message: "Replay me", author: "Cy" }],
     });
 
@@ -833,8 +840,9 @@ describe("useMcpBridge", () => {
     await vi.waitFor(() => {
       const current = useMcpConfirmStore.getState().current;
       expect(current?.previewPending).toBe(false);
-      expect(current?.preview?.[0]).toBe("Branch: feature/y");
-      expect(current?.preview?.[1]).toContain("Replay me");
+      expect(current?.preview?.[0]).toBe("Destination: origin/feature/y");
+      expect(current?.preview?.[1]).toBe("Branch: feature/y");
+      expect(current?.preview?.[2]).toContain("Replay me");
     });
 
     // Live context drifts while the modal is open.
@@ -1117,7 +1125,11 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.buildPreview.mockResolvedValue(null);
-    mocks.buildGitPreview.mockResolvedValue({ branch: "main", commits: [] });
+    mocks.buildGitPreview.mockResolvedValue({
+      branch: "main",
+      destination: { remote: "origin", branch: "main" },
+      commits: [],
+    });
   });
 
   it("returns no lines when the monitor is gone (builder resolves null)", async () => {
@@ -1150,19 +1162,29 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
   it("surfaces the branch and actual commits for a git.push target", async () => {
     mocks.buildGitPreview.mockResolvedValue({
       branch: "feature/x",
+      destination: { remote: "origin", branch: "feature/x" },
       commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
     });
     const lines = await buildMcpConfirmPreview({ kind: "gitPush", cwd: "/repo" });
     expect(mocks.buildGitPreview).toHaveBeenCalledWith("/repo");
-    expect(lines[0]).toBe("Branch: feature/x");
-    expect(lines[1]).toContain("Fix the thing");
-    expect(lines[1]).toContain("Ada");
+    expect(lines[0]).toBe("Destination: origin/feature/x");
+    expect(lines[1]).toBe("Branch: feature/x");
+    expect(lines[2]).toContain("Fix the thing");
+    expect(lines[2]).toContain("Ada");
   });
 
   it("distinguishes an empty branch from an unverifiable one for git targets", async () => {
-    mocks.buildGitPreview.mockResolvedValue({ branch: "main", commits: [] });
+    mocks.buildGitPreview.mockResolvedValue({
+      branch: "main",
+      destination: { remote: "origin", branch: "main" },
+      commits: [],
+    });
     const empty = await buildMcpConfirmPreview({ kind: "gitPullRebase", cwd: "/repo" });
-    expect(empty).toEqual(["Branch: main", "No local commits to replay."]);
+    expect(empty).toEqual([
+      "Destination: origin/main",
+      "Branch: main",
+      "No local commits to replay.",
+    ]);
 
     mocks.buildGitPreview.mockRejectedValue(new Error("git exploded"));
     const failed = await buildMcpConfirmPreview({ kind: "gitPush", cwd: "/repo" });

@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
+import type { GitPushDestination } from "@shared/types/git";
 import { cn } from "@/lib/utils";
 import { GitCommit, ArrowUpFromLine, Check, CircleX } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
@@ -16,6 +17,12 @@ interface CommitPanelProps {
   isDetachedHead: boolean;
   hasConflicts: boolean;
   hasRemote: boolean;
+  /**
+   * Resolved push destination, or `null` when this branch has none (#11746).
+   * Named in the push confirm so the approver sees the repository being written
+   * to, which the branch name alone doesn't reveal in a fork workflow.
+   */
+  pushDestination: GitPushDestination | null;
   worktreePath: string;
   /** Current branch name from the staging status; surfaced in the push confirm dialog. */
   currentBranch?: string | null;
@@ -38,6 +45,7 @@ export function CommitPanel({
   isDetachedHead,
   hasConflicts,
   hasRemote,
+  pushDestination,
   worktreePath,
   currentBranch,
   commitMessage,
@@ -53,6 +61,9 @@ export function CommitPanel({
 }: CommitPanelProps) {
   const [isCommitting, setIsCommitting] = useState(false);
   const [pushConfirmOpen, setPushConfirmOpen] = useState(false);
+  const destinationLabel = pushDestination
+    ? `${pushDestination.remote}/${pushDestination.branch}`
+    : null;
   const [dontAskChecked, setDontAskChecked] = useState(false);
 
   const isProtected = isProtectedBranch(currentBranch?.toLowerCase());
@@ -444,7 +455,7 @@ export function CommitPanel({
       <ConfirmDialog
         isOpen={pushConfirmOpen}
         onClose={handleClosePushConfirm}
-        title={`Push to '${currentBranch ?? ""}'?`}
+        title={`Push to '${destinationLabel ?? currentBranch ?? ""}'?`}
         description={
           isProtected ? (
             <span>
@@ -455,7 +466,7 @@ export function CommitPanel({
             <span>Review your commit message before pushing:</span>
           )
         }
-        confirmLabel={`Push to ${currentBranch ?? "branch"}`}
+        confirmLabel={`Push to ${destinationLabel ?? currentBranch ?? "branch"}`}
         variant="default"
         zIndex="nested"
         onConfirm={handleConfirmPush}
@@ -466,7 +477,7 @@ export function CommitPanel({
               data-testid="commit-panel-push-confirm-branch"
               className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] font-mono text-daintree-text"
             >
-              {currentBranch ?? ""}
+              {destinationLabel ?? currentBranch ?? ""}
             </span>
           </div>
           <pre

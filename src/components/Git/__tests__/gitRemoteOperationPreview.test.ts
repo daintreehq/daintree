@@ -7,6 +7,7 @@ import {
 
 function stubGit(overrides: {
   currentBranch?: string | null;
+  pushDestination?: { remote: string; branch: string } | null;
   items?: Array<{ hash: string; message: string; author: { name: string } }>;
   reject?: boolean;
   rejectCommits?: boolean;
@@ -14,10 +15,14 @@ function stubGit(overrides: {
   // `??` would swallow an explicit null, which is exactly the detached-HEAD
   // case under test — key off presence instead.
   const currentBranch = "currentBranch" in overrides ? overrides.currentBranch : "main";
+  const pushDestination =
+    "pushDestination" in overrides
+      ? overrides.pushDestination
+      : { remote: "origin", branch: currentBranch ?? "main" };
   const getStagingStatus = vi.fn(() =>
     overrides.reject
       ? Promise.reject(new Error("git status failed"))
-      : Promise.resolve({ currentBranch })
+      : Promise.resolve({ currentBranch, pushDestination })
   );
   const listCommits = vi.fn(() =>
     overrides.rejectCommits
@@ -54,7 +59,22 @@ describe("buildGitRemoteOperationPreview", () => {
     const preview = await buildGitRemoteOperationPreview("/repo");
     expect(preview).toEqual({
       branch: "main",
+      destination: { remote: "origin", branch: "main" },
       commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
+    });
+  });
+
+  it("carries the resolved push destination through from the staging status", async () => {
+    stubGit({ pushDestination: { remote: "fork", branch: "release/topic" } });
+    await expect(buildGitRemoteOperationPreview("/repo")).resolves.toMatchObject({
+      destination: { remote: "fork", branch: "release/topic" },
+    });
+  });
+
+  it("preserves a null destination rather than inventing origin", async () => {
+    stubGit({ pushDestination: null });
+    await expect(buildGitRemoteOperationPreview("/repo")).resolves.toMatchObject({
+      destination: null,
     });
   });
 
@@ -82,6 +102,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
     const lines = formatGitRemoteOperationPreviewLines(
       {
         branch: "feature/x",
+        destination: { remote: "origin", branch: "feature/x" },
         commits: [
           { hash: "abcdef1234567", message: "First", author: "Ada" },
           { hash: "9876543210fed", message: "Second", author: "Bob" },
@@ -89,26 +110,57 @@ describe("formatGitRemoteOperationPreviewLines", () => {
       },
       "none"
     );
-    expect(lines[0]).toBe("Branch: feature/x");
-    expect(lines).toHaveLength(3);
-    expect(lines[1]).toContain("abcdef1");
-    expect(lines[1]).not.toContain("abcdef1234567");
-    expect(lines[1]).toContain("First");
-    expect(lines[1]).toContain("Ada");
+    expect(lines[0]).toBe("Destination: origin/feature/x");
+    expect(lines[1]).toBe("Branch: feature/x");
+    expect(lines).toHaveLength(4);
+    expect(lines[2]).toContain("abcdef1");
+    expect(lines[2]).not.toContain("abcdef1234567");
+    expect(lines[2]).toContain("First");
+    expect(lines[2]).toContain("Ada");
+  });
+
+  it("names a destination whose remote branch differs from the local one", () => {
+    // The fork case #11746 is about: the branch name alone would tell an
+    // approver nothing about which repository is being written to.
+    const lines = formatGitRemoteOperationPreviewLines(
+      {
+        branch: "topic",
+        destination: { remote: "fork", branch: "release/topic" },
+        commits: [],
+      },
+      "none"
+    );
+    expect(lines[0]).toBe("Destination: fork/release/topic");
+  });
+
+  it("warns explicitly when no push destination is configured", () => {
+    const lines = formatGitRemoteOperationPreviewLines(
+      { branch: "topic", destination: null, commits: [] },
+      "none"
+    );
+    expect(lines[0]).toContain("No push destination");
+    expect(lines[1]).toBe("Branch: topic");
   });
 
   it("treats an empty commit list as a valid loaded state, not a failure", () => {
     const lines = formatGitRemoteOperationPreviewLines(
-      { branch: "main", commits: [] },
+      { branch: "main", destination: { remote: "origin", branch: "main" }, commits: [] },
       "No local commits found on this branch."
     );
-    expect(lines).toEqual(["Branch: main", "No local commits found on this branch."]);
+    expect(lines).toEqual([
+      "Destination: origin/main",
+      "Branch: main",
+      "No local commits found on this branch.",
+    ]);
     expect(lines.join(" ")).not.toContain("Could not verify");
   });
 
   it("labels a detached HEAD instead of rendering a null branch", () => {
-    const lines = formatGitRemoteOperationPreviewLines({ branch: null, commits: [] }, "none");
-    expect(lines[0]).toBe("Branch: (detached HEAD)");
+    const lines = formatGitRemoteOperationPreviewLines(
+      { branch: null, destination: { remote: "origin", branch: "main" }, commits: [] },
+      "none"
+    );
+    expect(lines[1]).toBe("Branch: (detached HEAD)");
   });
 
   it("surfaces an explicit couldn't-verify warning for a failed fetch", () => {

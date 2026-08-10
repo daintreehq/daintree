@@ -10,6 +10,7 @@ import type { HandlerDependencies, IpcContext } from "../types.js";
 import type { PushProgressEvent } from "../../../shared/types/ipc/gitPush.js";
 import type {
   ConflictedFileEntry,
+  GitRemoteCommitPreview,
   GitStatus,
   RebaseSequence,
   RepoState,
@@ -47,6 +48,12 @@ import type {
 import { classifyGitError } from "../../../shared/utils/gitOperationErrors.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { GitOperationError } from "../../utils/errorTypes.js";
+import {
+  resolveGitPushDestination,
+  formatGitPushDestination,
+  describeUnresolvedPushDestination,
+  type ResolvedGitPushDestination,
+} from "../../utils/gitPushDestination.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -70,6 +77,44 @@ interface StagingFileEntry {
   status: GitStatus;
   insertions: number | null;
   deletions: number | null;
+}
+
+/**
+ * Resolve the push destination for a write, or refuse the write (#11746).
+ *
+ * Every remote-mutating path routes through here so that "we could not work out
+ * where this goes" can never degrade into "send it to origin" — a wrong-repo
+ * push is not recoverable. The thrown message is worded to land in the existing
+ * `config-missing` bucket, so the renderer already has a recovery hint for it.
+ */
+/**
+ * `git rev-list --count <range>`, or `null` when git can't answer — the caller
+ * shows the row count instead rather than claiming a total it doesn't have.
+ */
+async function countCommitsInRange(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  range: string
+): Promise<number> {
+  const out = await git.raw(["rev-list", "--count", range]);
+  const parsed = Number.parseInt(out.trim(), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+async function requirePushDestination(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw" | "getRemotes">,
+  branchName: string,
+  cwd: string,
+  op: string
+): Promise<ResolvedGitPushDestination> {
+  const resolution = await resolveGitPushDestination(git, branchName);
+  if (resolution.status === "resolved") return resolution.destination;
+
+  const message = describeUnresolvedPushDestination(resolution.reason, branchName);
+  throw new GitOperationError(
+    "config-missing",
+    encodeGitOperationErrorMessage("config-missing", message, { branchName }),
+    { cwd, op, rawMessage: message, branchName }
+  );
 }
 
 export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void {
@@ -231,6 +276,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     pushingCwds.add(payload.cwd);
     const git = await createAuthenticatedGit(payload.cwd);
     let branchName: string | undefined;
+    let destination: ResolvedGitPushDestination | undefined;
     const senderWindow = ctx.senderWindow;
 
     const sendProgress = (event: PushProgressEvent) => {
@@ -243,12 +289,12 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       const branch = await git.revparse(["--abbrev-ref", "HEAD"]);
       branchName = branch.trim();
 
-      let targetBranch: string | null = null;
-      try {
-        targetBranch = (await git.revparse(["--abbrev-ref", "@{upstream}"])).trim();
-      } catch {
-        targetBranch = payload.setUpstream ? `origin/${branchName}` : null;
-      }
+      // Resolved once, up front: the same destination labels the progress
+      // event, backs the `--set-upstream` argv, and pins the lease ref if the
+      // push is rejected. Refuses the push outright when git has no answer,
+      // rather than reporting one target and writing to another.
+      destination = await requirePushDestination(git, branchName, payload.cwd, "push");
+      const targetBranch = formatGitPushDestination(destination);
 
       sendProgress({
         cwd: payload.cwd,
@@ -271,23 +317,24 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         },
       });
 
+      // `<local>:<remote>` explicitly, because the remote-side branch need not
+      // share the local name — with `push.default=upstream` a local `topic` can
+      // push to `release/topic`.
+      const refspec = `${branchName}:${destination.branch}`;
+
       if (payload.setUpstream) {
-        await authGit.push(["--set-upstream", "origin", branchName]);
+        await authGit.push(["--set-upstream", destination.remote, refspec]);
       } else {
         try {
           await authGit.push();
         } catch (pushErr) {
           const msg = formatErrorMessage(pushErr, "git push failed");
           if (msg.includes("no upstream branch") || msg.includes("has no upstream")) {
-            await authGit.push(["--set-upstream", "origin", branchName]);
-            sendProgress({
-              cwd: payload.cwd,
-              stage: "target",
-              progress: null,
-              processed: null,
-              total: null,
-              targetBranch: `origin/${branchName}`,
-            });
+            // The branch has no tracking config yet — the normal state of a
+            // freshly created worktree branch. `destination` was resolved above
+            // and is either git's own answer or the repository's single remote,
+            // never a guessed `origin`, so establishing tracking to it is safe.
+            await authGit.push(["--set-upstream", destination.remote, refspec]);
           } else {
             throw pushErr;
           }
@@ -300,18 +347,21 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("git-push-error");
       }
+      if (error instanceof GitOperationError) throw error;
       const errorMessage = formatErrorMessage(error, "git push failed");
       const gitReason = classifyGitFailure(error, errorMessage);
       // Capture the lease SHA at rejection time, not at click time. A
-      // background fetch advancing `refs/remotes/origin/<branch>` between
-      // here and the user's force-push click would silently degrade
-      // `--force-with-lease` to plain `--force`. revparse may itself fail
-      // (no upstream tracking); on failure we omit leaseSha and the renderer
-      // suppresses the force-push CTA.
+      // background fetch advancing the remote-tracking ref between here and the
+      // user's force-push click would silently degrade `--force-with-lease` to
+      // plain `--force`. Reads the ref of the destination we actually pushed to
+      // (#11746) — reading origin's ref while pushing to a fork would lease
+      // against the wrong repository. revparse may itself fail (ref never
+      // fetched); on failure we omit leaseSha and the renderer suppresses the
+      // force-push CTA.
       let leaseSha: string | undefined;
-      if (gitReason === "push-rejected-outdated" && branchName) {
+      if (gitReason === "push-rejected-outdated" && branchName && destination) {
         try {
-          const sha = await git.revparse([`refs/remotes/origin/${branchName}`]);
+          const sha = await git.revparse([destination.remoteTrackingRef]);
           leaseSha = sha.trim() || undefined;
         } catch {
           leaseSha = undefined;
@@ -344,7 +394,11 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     try {
       const branch = await git.revparse(["--abbrev-ref", "HEAD"]);
       const branchName = branch.trim();
-      await git.pull("origin", branchName, ["--rebase"]);
+      // Pull from the branch's own remote, not a hardcoded origin (#11746):
+      // rebasing onto the wrong repository's history is as destructive as
+      // pushing to it.
+      const destination = await requirePushDestination(git, branchName, payload.cwd, "pull-rebase");
+      await git.pull(destination.remote, destination.branch, ["--rebase"]);
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("git-push");
       }
@@ -352,6 +406,9 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("git-push-error");
       }
+      // An unresolved push destination is already a classified, encoded
+      // GitOperationError — re-wrapping would double-encode its message.
+      if (error instanceof GitOperationError) throw error;
       const errorMessage = formatErrorMessage(error, "git pull --rebase failed");
       const gitReason = classifyGitFailure(error, errorMessage);
       throw new GitOperationError(
@@ -388,8 +445,18 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     const branchName = payload.branchName.trim();
 
     try {
-      await git.push("origin", branchName, [
-        `--force-with-lease=${branchName}:${payload.leaseSha}`,
+      const destination = await requirePushDestination(
+        git,
+        branchName,
+        payload.cwd,
+        "force-push-with-lease"
+      );
+      // The lease refname is the ref as it exists on the REMOTE side, which is
+      // not always the local branch name (#11746). Passing the local name in a
+      // triangular setup would lease against a ref that does not exist there,
+      // and git treats an unmatched lease ref as no protection at all.
+      await git.push(destination.remote, `${branchName}:${destination.branch}`, [
+        `--force-with-lease=${destination.branch}:${payload.leaseSha}`,
         "--force-if-includes",
       ]);
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
@@ -399,6 +466,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("git-push-error");
       }
+      if (error instanceof GitOperationError) throw error;
       const errorMessage = formatErrorMessage(error, "git push --force-with-lease failed");
       const gitReason = classifyGitFailure(error, errorMessage);
       throw new GitOperationError(
@@ -424,7 +492,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     cwd: string;
     branchName: string;
     limit?: number;
-  }): Promise<Array<{ hash: string; date: string; message: string; author: string }>> => {
+  }): Promise<GitRemoteCommitPreview> => {
     checkRateLimit(CHANNELS.GIT_LIST_REMOTE_COMMITS, 10, 10_000);
     validateCwd(payload?.cwd);
     if (typeof payload.branchName !== "string" || !payload.branchName.trim()) {
@@ -435,21 +503,39 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
 
     const git = await createHardenedGit(payload.cwd);
     try {
-      // No `--no-merges` — `behindCount` from `git status -b` includes merge
-      // commits, and the dialog's "N more" tail relies on the listed rows
+      // Refuse rather than preview an empty list: this read is what the D2
+      // force-push confirm shows, and "no commits to discard" from an
+      // unresolvable destination reads as "safe to proceed" (#11746).
+      const destination = await requirePushDestination(
+        git,
+        branchName,
+        payload.cwd,
+        "list-remote-commits"
+      );
+      const range = `HEAD..${destination.remoteTrackingRef}`;
+
+      // No `--no-merges` — the dialog's "N more" tail relies on the listed rows
       // matching what `--force-with-lease` would actually discard. Filtering
-      // merges here would understate the discard preview against `behindCount`.
-      const log = await git.log([
-        `--max-count=${limit}`,
-        `HEAD..refs/remotes/origin/${branchName}`,
-      ]);
-      return log.all.map((commit) => ({
-        hash: commit.hash,
-        date: commit.date,
-        message: commit.message,
-        author: commit.author_name,
-      }));
+      // merges here would understate the discard preview against `total`.
+      const log = await git.log([`--max-count=${limit}`, range]);
+      // Counted over the same range as the rows, so the tail can't be computed
+      // against a different repository's ref: `behindCount` comes from upstream
+      // status, which in a triangular workflow tracks the fetch remote while the
+      // force-push targets the push remote.
+      const total = await countCommitsInRange(git, range);
+
+      return {
+        destination: { remote: destination.remote, branch: destination.branch },
+        total,
+        commits: log.all.map((commit) => ({
+          hash: commit.hash,
+          date: commit.date,
+          message: commit.message,
+          author: commit.author_name,
+        })),
+      };
     } catch (error) {
+      if (error instanceof GitOperationError) throw error;
       const errorMessage = formatErrorMessage(error, "git log failed");
       const gitReason = classifyGitFailure(error, errorMessage);
       throw new GitOperationError(
@@ -596,6 +682,25 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       // no remotes
     }
 
+    // Best-effort: this is a general status read, so an unresolvable
+    // destination degrades to `null` here rather than failing the whole status.
+    // The confirm surfaces treat `null` as "block the write and say why"; the
+    // write handlers resolve again and refuse independently (#11746).
+    let pushDestination: StagingStatus["pushDestination"] = null;
+    if (hasRemote && currentBranch) {
+      try {
+        const resolution = await resolveGitPushDestination(git, currentBranch);
+        if (resolution.status === "resolved") {
+          pushDestination = {
+            remote: resolution.destination.remote,
+            branch: resolution.destination.branch,
+          };
+        }
+      } catch {
+        pushDestination = null;
+      }
+    }
+
     let conflictedFiles: ConflictedFileEntry[] = [];
     if (conflicted.length > 0) {
       try {
@@ -632,6 +737,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       isDetachedHead,
       currentBranch,
       hasRemote,
+      pushDestination,
       repoState,
       rebaseStep,
       rebaseTotalSteps,

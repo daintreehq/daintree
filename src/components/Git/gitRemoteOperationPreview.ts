@@ -10,6 +10,8 @@
  * surface renders, so the two can't drift apart.
  */
 
+import type { GitPushDestination } from "@shared/types/git";
+
 /** Max commits fetched and shown before the tail is collapsed. */
 export const PREVIEW_COMMIT_LIMIT = 12;
 
@@ -25,6 +27,13 @@ export interface GitRemoteOperationPreview {
   /** `null` for a detached HEAD — `getStagingStatus` reports no current branch. */
   branch: string | null;
   commits: GitPreviewCommit[];
+  /**
+   * Where the operation would actually write, as git resolved it, or `null`
+   * when it has no unambiguous answer (#11746). `null` blocks confirm: an
+   * approver can't sanction a destination nobody can name, and the main-process
+   * handler would refuse the write anyway.
+   */
+  destination: GitPushDestination | null;
 }
 
 /**
@@ -51,6 +60,7 @@ export async function buildGitRemoteOperationPreview(
   ]);
   return {
     branch: status.currentBranch,
+    destination: status.pushDestination,
     commits: commitList.items.map((c) => ({
       hash: c.hash,
       message: c.message,
@@ -76,13 +86,24 @@ export function formatGitRemoteOperationPreviewLines(
     return ["⚠ Could not verify the branch and local commits — proceed with caution."];
   }
   const branchLine = `Branch: ${preview.branch ?? "(detached HEAD)"}`;
+  // Named before the commits: which repository this writes to is the fact an
+  // approver most needs and could least infer from the args (#11746).
+  const destinationLine = preview.destination
+    ? `Destination: ${formatGitPushDestination(preview.destination)}`
+    : "⚠ No push destination is configured for this branch — this operation will be refused.";
   if (preview.commits.length === 0) {
-    return [branchLine, emptyNote];
+    return [destinationLine, branchLine, emptyNote];
   }
   return [
+    destinationLine,
     branchLine,
     ...preview.commits.map(
       (c) => `  ${c.hash.slice(0, SHORT_HASH_LEN)} ${c.message} — ${c.author}`
     ),
   ];
+}
+
+/** Human-facing `remote/branch`. */
+export function formatGitPushDestination(destination: GitPushDestination): string {
+  return `${destination.remote}/${destination.branch}`;
 }

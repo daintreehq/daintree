@@ -9,8 +9,10 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
 import {
   buildGitRemoteOperationPreview,
+  formatGitPushDestination,
   type GitPreviewCommit,
 } from "@/components/Git/gitRemoteOperationPreview";
+import type { GitPushDestination } from "@shared/types/git";
 
 const SHORT_HASH_LEN = 7;
 
@@ -28,6 +30,7 @@ function GitPullRebaseConfirmDialogInner() {
   const cwd = pendingConfirm?.cwd ?? null;
 
   const [branch, setBranch] = useState<string | null>(null);
+  const [destination, setDestination] = useState<GitPushDestination | null>(null);
   const [commits, setCommits] = useState<GitPreviewCommit[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -39,6 +42,7 @@ function GitPullRebaseConfirmDialogInner() {
     setIsLoading(true);
     setLoadError(null);
     setBranch(null);
+    setDestination(null);
     setCommits(null);
 
     safeFireAndForget(
@@ -48,6 +52,7 @@ function GitPullRebaseConfirmDialogInner() {
         .then((preview) => {
           if (requestIdRef.current !== requestId) return;
           setBranch(preview.branch);
+          setDestination(preview.destination);
           setCommits(preview.commits);
         })
         .catch((err: unknown) => {
@@ -65,6 +70,7 @@ function GitPullRebaseConfirmDialogInner() {
   useEffect(() => {
     if (!cwd) {
       setBranch(null);
+      setDestination(null);
       setCommits(null);
       setLoadError(null);
       setIsLoading(false);
@@ -85,6 +91,8 @@ function GitPullRebaseConfirmDialogInner() {
   if (!pendingConfirm) return null;
 
   const branchLabel = branch ?? "current branch";
+  const destinationLabel = destination ? formatGitPushDestination(destination) : null;
+  const isDestinationMissing = !isLoading && !loadError && destination === null;
 
   return (
     <ConfirmDialog
@@ -92,20 +100,42 @@ function GitPullRebaseConfirmDialogInner() {
       onClose={() => resolveConfirmation(false)}
       title={`Pull and rebase '${branchLabel}'?`}
       description={
-        <span>
-          Pulls the remote and replays your local commits on{" "}
-          <span className="font-mono">{branchLabel}</span> on top of it. Rebasing rewrites local
-          commit history and cannot be undone.
-        </span>
+        destinationLabel ? (
+          <span>
+            Pulls <span className="font-mono">{destinationLabel}</span> and replays your local
+            commits on <span className="font-mono">{branchLabel}</span> on top of it. Rebasing
+            rewrites local commit history and cannot be undone.
+          </span>
+        ) : (
+          <span>
+            Pulls the remote and replays your local commits on{" "}
+            <span className="font-mono">{branchLabel}</span> on top of it. Rebasing rewrites local
+            commit history and cannot be undone.
+          </span>
+        )
       }
       confirmLabel="Pull and rebase"
       cancelLabel="Cancel"
       variant="destructive"
       hasPreview={true}
       isConfirmLoading={isLoading}
-      confirmDisabled={commits === null || !!loadError}
+      // Rebasing onto the wrong repository's history is as destructive as
+      // pushing to it, so an unresolved remote blocks this too (#11746).
+      confirmDisabled={commits === null || destination === null || !!loadError}
       onConfirm={() => resolveConfirmation(true)}
     >
+      {isDestinationMissing && (
+        <div
+          className="mb-3 rounded border border-status-error/30 bg-status-error/10 px-3 py-2 text-xs text-status-error flex items-start gap-2"
+          data-testid="git-pull-rebase-no-destination"
+        >
+          <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+          <span>
+            No remote is configured for this branch. Set an upstream, or configure{" "}
+            <span className="font-mono">branch.{branchLabel}.pushRemote</span>.
+          </span>
+        </div>
+      )}
       <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
         <div className="px-3 py-2 border-b border-tint/[0.08]">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
