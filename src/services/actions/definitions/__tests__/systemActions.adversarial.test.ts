@@ -829,8 +829,21 @@ describe("systemActions adversarial", () => {
       },
     ];
 
-    const titleOf = (): string =>
-      (notifyMock.mock.calls[0]?.[0] as { title: string } | undefined)?.title ?? "";
+    // Parsed rather than asserted, matching schemaDescriptions.test.ts: a cast
+    // would declare the shape true, while a parse makes a conversion that
+    // stopped returning it fail here instead of yielding `undefined` silently.
+    const EmittedName = z.object({
+      properties: z
+        .object({
+          name: z.object({ type: z.string().optional(), description: z.string().optional() }),
+        })
+        .optional(),
+      required: z.array(z.string()).optional(),
+    });
+
+    const NotifyPayload = z.object({ title: z.string() });
+
+    const titleOf = (): string => NotifyPayload.parse(notifyMock.mock.calls[0]?.[0]).title;
 
     /**
      * The `name` property as an MCP client actually receives it.
@@ -842,18 +855,19 @@ describe("systemActions adversarial", () => {
      */
     const emitName = (id: string): { type?: string; description?: string } => {
       const schema = setupActions().getDef(id).argsSchema;
-      const emitted = z.toJSONSchema(schema!, {
-        io: "input",
-        unrepresentable: "any",
-        reused: "inline",
-        cycles: "ref",
-        target: "draft-2020-12",
-      }) as {
-        properties?: Record<string, { type?: string; description?: string }>;
-        required?: string[];
-      };
+      const emitted = EmittedName.parse(
+        z.toJSONSchema(schema!, {
+          io: "input",
+          unrepresentable: "any",
+          reused: "inline",
+          cycles: "ref",
+          target: "draft-2020-12",
+        })
+      );
       expect(emitted.required ?? []).not.toContain("name");
-      return emitted.properties?.name ?? {};
+      // `properties.name` is required by the schema above, so a tool that never
+      // advertised the field fails in the parse rather than here.
+      return emitted.properties!.name;
     };
 
     it.each(CASES)("$id advertises name as an optional described string", ({ id }) => {
@@ -879,13 +893,9 @@ describe("systemActions adversarial", () => {
       const schema = setupActions().getDef(id).argsSchema;
       // Asserting the parsed OUTPUT, not `.success`: zod strips unknown keys and
       // still reports success, so a success-only check passes on a dropped field.
-      const parsed = schema!.parse({
-        worktreeId: "wt-1",
-        terminalId: "t-1",
-        name: "Auth flow",
-      }) as {
-        name?: string;
-      };
+      const parsed = z
+        .object({ name: z.string().optional() })
+        .parse(schema!.parse({ worktreeId: "wt-1", terminalId: "t-1", name: "Auth flow" }));
       expect(parsed.name).toBe("Auth flow");
     });
 

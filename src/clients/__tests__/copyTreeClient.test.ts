@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const typedGlobal = globalThis as unknown as Record<string, unknown>;
-
 let copyTreeClient: typeof import("../copyTreeClient").copyTreeClient;
 
 let generateMock: ReturnType<typeof vi.fn>;
@@ -26,7 +24,10 @@ describe("copyTreeClient", () => {
     generateAndCopyFileMock = vi.fn().mockResolvedValue(RESULT);
     injectToTerminalMock = vi.fn().mockResolvedValue(RESULT);
 
-    typedGlobal.window = {
+    // `vi.stubGlobal` rather than assigning onto a cast `globalThis`: the client
+    // reads `window.electron` at call time, so a stub installed here is enough,
+    // and it unwinds through `unstubAllGlobals` instead of a `delete`.
+    vi.stubGlobal("window", {
       electron: {
         copyTree: {
           generate: generateMock,
@@ -34,14 +35,14 @@ describe("copyTreeClient", () => {
           injectToTerminal: injectToTerminalMock,
         },
       },
-    };
+    });
 
     const mod = await import("../copyTreeClient");
     copyTreeClient = mod.copyTreeClient;
   });
 
   afterEach(() => {
-    delete typedGlobal.window;
+    vi.unstubAllGlobals();
   });
 
   describe("generate", () => {
