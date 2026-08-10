@@ -444,6 +444,55 @@ describe("CopyTreeService", () => {
       expect(options.respectGitignore).toBe(true);
     });
 
+    // #11750: the caller-facing opt-out, and the blast radius it must NOT widen.
+    it("opens only the ignore-file escape when the caller asks for it", async () => {
+      await copyTreeService.generate(tempDir, {
+        scopePaths: ["docs"],
+        scopeIgnoresIgnoreFiles: true,
+      });
+
+      const options = sdkOptions();
+      expect(options.scopeIgnoresIgnoreFiles).toBe(true);
+      // The companion escape lifts node_modules and the configured excludes. It
+      // answers a different question and was never asked, so opting into one
+      // must never drag in the other.
+      expect(options.scopeIgnoresConfigExcludes).toBeFalsy();
+      expect(options.respectGitignore).toBe(true);
+    });
+
+    it("leaves the selection out of always, so no other exclusion layer moves", async () => {
+      await copyTreeService.generate(tempDir, {
+        scopePaths: ["docs"],
+        includePaths: ["docs/**"],
+        exclude: ["**/*.secret"],
+        scopeIgnoresIgnoreFiles: true,
+      });
+
+      const options = sdkOptions();
+      // The rejected design promoted the selection into `always`, which globs
+      // with `ignore: []` and then outranks `exclude` in ProfileFilterStage —
+      // silently resurrecting files the caller (or the project's settings)
+      // explicitly excluded. The selection has to stay in `filter` alone.
+      expect(options.always).toBeUndefined();
+      expect(options.filter).toEqual(["docs/**"]);
+      expect(options.exclude).toEqual(["**/*.secret"]);
+    });
+
+    it.each([
+      ["omitted", undefined],
+      ["explicitly false", false],
+      // Only the exact boolean opens it: the field crosses IPC from an MCP
+      // caller, so a truthy read here would let a stray string through.
+      ["a truthy non-boolean", "yes"],
+    ])("keeps the escape shut when the flag is %s", async (_label, value) => {
+      await copyTreeService.generate(tempDir, {
+        scopePaths: ["docs"],
+        ...(value === undefined ? {} : { scopeIgnoresIgnoreFiles: value as boolean }),
+      });
+
+      expect(sdkOptions().scopeIgnoresIgnoreFiles).toBe(false);
+    });
+
     it("passes the remaining budgets through untouched", async () => {
       await copyTreeService.generate(tempDir, {
         maxTotalSize: 1234,

@@ -257,57 +257,88 @@ export function PaginatedResultSchema<T extends z.ZodTypeAny>(item: T) {
   });
 }
 
-export const CopyTreeOptionsSchema = z.object({
-  format: z.enum(["xml", "json", "markdown", "tree", "ndjson", "sarif"]).optional(),
-  // `filter` and `includePaths` are two spellings of one selection set, and both
-  // feed the SDK's single `filter`. They used to collapse with `||`, so a caller
-  // that put literal files in one and globs in the other silently lost the
-  // second — the exact shape a curated bundle takes (#11722). They are unioned
-  // now, and say so here, since the union is only discoverable from these
-  // descriptions on the MCP wire.
-  // Non-empty at both levels, like `scopePaths` below. An empty list and a
-  // blank entry both leave the selection empty, and an empty selection reads as
-  // "no filter" to the SDK — i.e. the whole worktree. Accepting either would
-  // turn a malformed narrow request into a full-repo copy onto the clipboard,
-  // so they are rejected here rather than normalized away downstream.
-  filter: z
-    .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
-    .optional()
-    .describe(
-      "Selects which files to include, as worktree-relative exact file paths or glob patterns. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'; prefer `scopePaths` when selecting a folder. Combined with `includePaths` when both are given; omit both to include the whole worktree."
-    ),
-  exclude: z.union([z.string(), z.array(z.string())]).optional(),
-  always: z.array(z.string()).optional(),
-  includePaths: z
-    .array(z.string().min(1))
-    .min(1)
-    .optional()
-    .describe(
-      "Selects which files to include, as worktree-relative exact file paths or glob patterns. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'; prefer `scopePaths` when selecting a folder. Use this to assemble a curated bundle of scattered files — sources, their supporting code, and their tests — in one call. Combined with `filter` when both are given. Unlike `scopePaths` this does not restrict traversal, so patterns may match anywhere in the worktree."
-    ),
-  // An empty list or blank entry would resolve to the worktree root — a folder
-  // copy that silently became a whole-worktree copy. Absent means no scoping.
-  scopePaths: z
-    .array(z.string().min(1))
-    .min(1)
-    .optional()
-    .describe(
-      "Restricts the copy to these subtrees, as worktree-relative literal file or directory paths to walk — not glob patterns, so pass 'src/panels', not 'src/panels/**'. Prefer this over `filter` or `includePaths` when selecting a folder. Omit to include the whole worktree; supplying an empty list is rejected rather than treated as no scoping, since that would silently copy everything."
-    ),
-  modified: z.boolean().optional(),
-  changed: z.string().optional(),
-  maxFileSize: z.number().int().positive().optional(),
-  maxTotalSize: z.number().int().positive().optional(),
-  maxFileCount: z.number().int().positive().optional(),
-  withLineNumbers: z.boolean().optional(),
-  charLimit: z.number().int().positive().optional(),
-  // These actions validate against their own copy of the options schema, so a
-  // field only the IPC schema knows about is stripped before the request ever
-  // leaves the renderer. `sort` was missing here while `CopyTreeOptions` and the
-  // IPC schema both accepted it, so an MCP caller asking for a sort order
-  // silently got the default one.
-  sort: z.enum(["path", "size", "modified", "name", "extension", "depth"]).optional(),
-});
+export const CopyTreeOptionsSchema = z
+  .object({
+    format: z.enum(["xml", "json", "markdown", "tree", "ndjson", "sarif"]).optional(),
+    // `filter` and `includePaths` are two spellings of one selection set, and both
+    // feed the SDK's single `filter`. They used to collapse with `||`, so a caller
+    // that put literal files in one and globs in the other silently lost the
+    // second — the exact shape a curated bundle takes (#11722). They are unioned
+    // now, and say so here, since the union is only discoverable from these
+    // descriptions on the MCP wire.
+    // Non-empty at both levels, like `scopePaths` below. An empty list and a
+    // blank entry both leave the selection empty, and an empty selection reads as
+    // "no filter" to the SDK — i.e. the whole worktree. Accepting either would
+    // turn a malformed narrow request into a full-repo copy onto the clipboard,
+    // so they are rejected here rather than normalized away downstream.
+    filter: z
+      .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
+      .optional()
+      .describe(
+        "Selects which files to include, as worktree-relative exact file paths or glob patterns. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'; prefer `scopePaths` when selecting a folder. Combined with `includePaths` when both are given; omit both to include the whole worktree."
+      ),
+    exclude: z.union([z.string(), z.array(z.string())]).optional(),
+    // Undocumented on the wire until #11750, which is how a caller ended up
+    // hand-computing per-file patterns for it. Described now as the blunt
+    // instrument it is, so `scopeIgnoresIgnoreFiles` below reads as the narrower
+    // tool rather than a synonym.
+    always: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Force-includes matching files, overriding every exclusion layer at once: ignore files, project and config exclusions, your own `exclude`, the git filters and the per-file size gate. Only `.git` and the memory ceiling survive it, so a broad pattern here can pull in `node_modules`. Prefer `scopePaths` with `scopeIgnoresIgnoreFiles` when you only need past an ignore file."
+      ),
+    includePaths: z
+      .array(z.string().min(1))
+      .min(1)
+      .optional()
+      .describe(
+        "Selects which files to include, as worktree-relative exact file paths or glob patterns. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'; prefer `scopePaths` when selecting a folder. Use this to assemble a curated bundle of scattered files — sources, their supporting code, and their tests — in one call. Combined with `filter` when both are given. Unlike `scopePaths` this does not restrict traversal, so patterns may match anywhere in the worktree."
+      ),
+    // An empty list or blank entry would resolve to the worktree root — a folder
+    // copy that silently became a whole-worktree copy. Absent means no scoping.
+    scopePaths: z
+      .array(z.string().min(1))
+      .min(1)
+      .optional()
+      .describe(
+        "Restricts the copy to these subtrees, as worktree-relative literal file or directory paths to walk — not glob patterns, so pass 'src/panels', not 'src/panels/**'. Prefer this over `filter` or `includePaths` when selecting a folder. Omit to include the whole worktree; supplying an empty list is rejected rather than treated as no scoping, since that would silently copy everything. This restricts traversal, so `filter` and `includePaths` can only narrow within these paths and never add a file outside them."
+      ),
+    scopeIgnoresIgnoreFiles: z
+      .boolean()
+      .optional()
+      .describe(
+        "Lets `scopePaths` into subtrees an ignore file would have pruned (default false — a scoped copy returns what a whole-worktree copy would have returned). Requires `scopePaths` and is rejected without it. Set true when a path you named is being dropped by a `.copytreeignore` or `.gitignore` rule: only the rules blocking entry into each scoped path are removed, from those two ignore files. Unrelated rules in the same files, negations, and ignore files at or below the selection still apply — as do project and config exclusions such as node_modules, your own `exclude`, `.git`, the git filters, the size gate and all budgets. Scope the exact file rather than its parent folder to override a rule that lives inside the selection."
+      ),
+    modified: z.boolean().optional(),
+    changed: z.string().optional(),
+    maxFileSize: z.number().int().positive().optional(),
+    maxTotalSize: z.number().int().positive().optional(),
+    maxFileCount: z.number().int().positive().optional(),
+    withLineNumbers: z.boolean().optional(),
+    charLimit: z.number().int().positive().optional(),
+    // These actions validate against their own copy of the options schema, so a
+    // field only the IPC schema knows about is stripped before the request ever
+    // leaves the renderer. `sort` was missing here while `CopyTreeOptions` and the
+    // IPC schema both accepted it, so an MCP caller asking for a sort order
+    // silently got the default one.
+    sort: z.enum(["path", "size", "modified", "name", "extension", "depth"]).optional(),
+  })
+  // Scope-bound, so `scopeIgnoresIgnoreFiles` alone does nothing at all: the SDK
+  // only consults it while walking `scope` entries. Accepting it silently is the
+  // shape of the bug #11750 was filed about — the caller believes it asked for
+  // the ignored files back, gets a short bundle, and is told nothing. Naming the
+  // missing field costs one round trip instead. Pinned on the IPC schema too;
+  // neither derives from the other.
+  .superRefine((options, ctx) => {
+    if (options.scopeIgnoresIgnoreFiles === true && !options.scopePaths?.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["scopeIgnoresIgnoreFiles"],
+        message: "scopeIgnoresIgnoreFiles requires scopePaths",
+      });
+    }
+  });
 
 export const AgentPresetSchema = z.object({
   id: z.string(),

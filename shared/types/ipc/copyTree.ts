@@ -30,6 +30,33 @@ export interface CopyTreeOptions {
    */
   scopePaths?: string[];
 
+  /**
+   * Let `scopePaths` into subtrees an ignore file would have pruned (#11750).
+   *
+   * Absent or `false` is the default every existing caller keeps: a scoped copy
+   * returns what a whole-worktree copy would have returned for that subtree.
+   * `true` requires `scopePaths` and is rejected without it at both option
+   * schemas — the flag is scope-bound, so accepting it alone would silently do
+   * nothing, which is the failure mode the issue was filed about.
+   *
+   * The lift is surgical, and only the SDK's ignore-FILE escape is used: the
+   * rules removed are the ones standing between the worktree root and each
+   * scope entry, in the `.gitignore` and `.copytreeignore` layers only. Every
+   * unrelated rule in those same files survives, negations survive, and ignore
+   * files at or below the selection still apply — they describe the subtree the
+   * caller asked for. Project and config exclusions (`node_modules`), the
+   * caller's own `exclude`, `.git`, the git filters, the per-file size gate and
+   * every budget are untouched, because the companion `scopeIgnoresConfigExcludes`
+   * escape stays off.
+   *
+   * It cannot be narrowed to `.copytreeignore` alone: the SDK layers that file
+   * at every depth on every code path, with no option or config key to drop it
+   * (`FileDiscoveryStage`, copytree 0.17.0). Lifting the ignore-file rules
+   * blocking a named subtree is the closest thing it does expose, and unlike
+   * `always` it leaves every other exclusion layer standing.
+   */
+  scopeIgnoresIgnoreFiles?: boolean;
+
   /** Git filtering - only include files modified in working directory (staged + unstaged changes, excludes untracked files) */
   modified?: boolean;
   /** Git filtering - only include files changed since specified commit/branch */

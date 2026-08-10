@@ -219,6 +219,177 @@ describe("CopyTreeService against the installed CopyTree", () => {
       expect(paths).not.toContain("src/d/other.ts");
     });
 
+    // #11750. `.copytreeignore` is layered at every depth on every SDK code
+    // path, with no option or config key that drops it, so "bypass the ignore
+    // file" is not literally expressible. What IS exposed is the ignore-FILE
+    // escape for a named subtree, and these pin how much it lifts — because the
+    // alternative (promoting the selection into `always`) globs with
+    // `ignore: []` and then outranks the caller's own `exclude`, which is the
+    // reason it was rejected. Run against the installed package: every claim in
+    // the wire description is a claim about the SDK, not about our adapter.
+    describe("bypassing an ignore file that blocks a scoped path", () => {
+      async function buildIgnoredDocs() {
+        // One file, two rules: `docs/` stands between the root and the
+        // selection, `*.secret` does not. Both live in the same ignore file, so
+        // a bypass that dropped the file wholesale would take `*.secret` with it.
+        await fs.writeFile(path.join(tempDir, ".copytreeignore"), "docs/\n*.secret\n");
+        await fs.mkdir(path.join(tempDir, "docs"), { recursive: true });
+        await fs.writeFile(path.join(tempDir, "docs", "guide.md"), "# guide\n");
+        await fs.writeFile(path.join(tempDir, "docs", "key.secret"), "shhh\n");
+      }
+
+      it("drops the scoped folder by default, and returns it when the bypass is on", async () => {
+        await buildIgnoredDocs();
+
+        const obeyed = await copyTreeService.testConfig(tempDir, { scopePaths: ["docs"] });
+        const bypassed = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["docs"],
+          scopeIgnoresIgnoreFiles: true,
+        });
+
+        // Paired rather than asserted alone: the default half is what proves the
+        // fixture's rule actually bites, so the bypass half cannot pass for the
+        // wrong reason (an unwritten ignore file would satisfy it silently).
+        expect(obeyed.files?.map((file) => file.path) ?? []).not.toContain("docs/guide.md");
+        expect(bypassed.files?.map((file) => file.path)).toContain("docs/guide.md");
+      });
+
+      it("lifts only the rule that blocked the way in, not the rest of the file", async () => {
+        await buildIgnoredDocs();
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["docs"],
+          scopeIgnoresIgnoreFiles: true,
+        });
+
+        const paths = result.files?.map((file) => file.path) ?? [];
+        expect(paths).toContain("docs/guide.md");
+        // The whole reason this is safe: `*.secret` never stood between the root
+        // and `docs`, so it survives. Dropping the layer instead of the blocking
+        // rule would exfiltrate exactly the files an ignore file exists to hide.
+        expect(paths).not.toContain("docs/key.secret");
+      });
+
+      it("keeps honouring an ignore file that lives inside the selection", async () => {
+        await buildIgnoredDocs();
+        await fs.writeFile(path.join(tempDir, "docs", ".copytreeignore"), "draft.md\n");
+        await fs.writeFile(path.join(tempDir, "docs", "draft.md"), "# draft\n");
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["docs"],
+          scopeIgnoresIgnoreFiles: true,
+        });
+
+        const paths = result.files?.map((file) => file.path) ?? [];
+        expect(paths).toContain("docs/guide.md");
+        // Rules at or below the selection describe the subtree the caller asked
+        // for, so they are not what "let me in" was about.
+        expect(paths).not.toContain("docs/draft.md");
+      });
+
+      it("still applies the caller's own exclude inside the unblocked folder", async () => {
+        await buildIgnoredDocs();
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["docs"],
+          scopeIgnoresIgnoreFiles: true,
+          exclude: ["**/guide.md"],
+        });
+
+        // The single behaviour that ruled out force-including the selection:
+        // `always` would have resurrected this file, since ProfileFilterStage
+        // returns before it ever consults `exclude`.
+        expect(result.files?.map((file) => file.path) ?? []).not.toContain("docs/guide.md");
+      });
+
+      it("still applies the per-file size gate inside the unblocked folder", async () => {
+        await buildIgnoredDocs();
+        await fs.writeFile(path.join(tempDir, "docs", "big.md"), "x".repeat(300 * 1024));
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["docs"],
+          scopeIgnoresIgnoreFiles: true,
+          maxFileSize: 100 * 1024,
+        });
+
+        const paths = result.files?.map((file) => file.path) ?? [];
+        expect(paths).toContain("docs/guide.md");
+        // `always` lifts the gate; this must not, or "bypass an ignore file"
+        // would quietly also mean "ignore the size limit I set".
+        expect(paths).not.toContain("docs/big.md");
+      });
+
+      // Both names sit in the SDK's `globalExcludedDirectories`, and they are
+      // excluded by that config layer rather than by any ignore file — so the
+      // bypass has nothing to lift for them even when a caller scopes straight
+      // in. `build` is the one worth pinning alongside `node_modules`: it is the
+      // directory a caller is most likely to scope into expecting this flag to
+      // work, precisely because its own `.gitignore` usually names it too.
+      it.each(["node_modules", "build"])(
+        "leaves the config exclusion on %s standing, bypass or not",
+        async (excludedDir) => {
+          await fs.mkdir(path.join(tempDir, excludedDir, "nested"), { recursive: true });
+          await fs.writeFile(
+            path.join(tempDir, excludedDir, "nested", "index.js"),
+            "module.exports = 1;\n"
+          );
+
+          const result = await copyTreeService.testConfig(tempDir, {
+            scopePaths: [excludedDir],
+            scopeIgnoresIgnoreFiles: true,
+          });
+
+          // The companion `scopeIgnoresConfigExcludes` escape is deliberately
+          // never set: lifting an ignore rule is a different request from
+          // dragging a dependency tree or a build output in, and only the first
+          // one is on offer.
+          expect(result.includedFiles).toBe(0);
+        }
+      );
+
+      it("also lifts a .gitignore rule blocking the way in, which the wire text has to admit", async () => {
+        // Deliberately not a name from `globalExcludedDirectories` — `build` or
+        // `dist` would be held out by the config layer and this would pass
+        // without the ignore rule ever being consulted.
+        await fs.writeFile(path.join(tempDir, ".gitignore"), "local-notes/\n");
+        await fs.mkdir(path.join(tempDir, "local-notes"), { recursive: true });
+        await fs.writeFile(path.join(tempDir, "local-notes", "todo.md"), "# todo\n");
+
+        const obeyed = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["local-notes"],
+        });
+        const result = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["local-notes"],
+          scopeIgnoresIgnoreFiles: true,
+        });
+
+        expect(obeyed.files?.map((file) => file.path) ?? []).not.toContain("local-notes/todo.md");
+        // Pinning the over-reach, not endorsing it: the SDK's escape covers both
+        // ignore files and cannot be narrowed to `.copytreeignore`. If a future
+        // SDK separates them this test is what says the description must change.
+        expect(result.files?.map((file) => file.path)).toContain("local-notes/todo.md");
+      });
+
+      it("scopes each named file independently, so a scattered curated bundle works", async () => {
+        await buildIgnoredDocs();
+        await fs.mkdir(path.join(tempDir, "src"), { recursive: true });
+        await fs.writeFile(path.join(tempDir, "src", "gen.ts"), "export const g = 1;\n");
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["src/gen.ts", "docs/guide.md"],
+          scopeIgnoresIgnoreFiles: true,
+        });
+
+        // The issue's actual shape: source files plus a few docs the ignore file
+        // dropped. Each entry gets its own root-to-entry override, so mixing an
+        // ignored path with an ordinary one needs no per-file `always` patterns.
+        expect((result.files?.map((file) => file.path) ?? []).sort()).toEqual([
+          "docs/guide.md",
+          "src/gen.ts",
+        ]);
+      });
+    });
+
     it("explains an excluded folder as an exclusion rather than an empty result", async () => {
       await fs.mkdir(path.join(tempDir, "node_modules", "left-pad"), { recursive: true });
       await fs.writeFile(

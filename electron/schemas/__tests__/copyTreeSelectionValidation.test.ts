@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CopyTreeOptionsSchema } from "../ipc.js";
+import { CopyTreeOptionsSchema, CopyTreeTestConfigOptionsSchema } from "../ipc.js";
 
 /**
  * The IPC half of the selection guard (#11722).
@@ -42,5 +42,73 @@ describe("CopyTreeOptionsSchema selection guards", () => {
     // above must not have made the field effectively required.
     expect(parse({})).toBe(true);
     expect(parse({ format: "xml" })).toBe(true);
+  });
+});
+
+/**
+ * The ignore-file escape is scope-bound (#11750): the SDK only consults it while
+ * walking `scope` entries, so `scopeIgnoresIgnoreFiles` without `scopePaths` is
+ * inert. Accepting it would hand back a short bundle and say nothing — the exact
+ * failure the issue was filed about — so the boundary names the missing field
+ * instead. Pinned here and on the renderer action schema; neither derives from
+ * the other.
+ */
+describe("CopyTreeOptionsSchema ignore-file bypass guard", () => {
+  const parse = (options: unknown) => CopyTreeOptionsSchema.safeParse(options);
+
+  it("accepts the bypass when a scope was named", () => {
+    expect(parse({ scopePaths: ["docs"], scopeIgnoresIgnoreFiles: true }).success).toBe(true);
+  });
+
+  it("rejects the bypass when nothing scopes it, whatever else the request carries", () => {
+    for (const options of [
+      { scopeIgnoresIgnoreFiles: true },
+      // Neither pattern spelling scopes anything: both feed the SDK's `filter`,
+      // which the escape never looks at.
+      { scopeIgnoresIgnoreFiles: true, includePaths: ["docs/guide.md"] },
+      { scopeIgnoresIgnoreFiles: true, filter: ["docs/**"] },
+      // `always` is a force-include, not a selection — it would not rescue this
+      // even though it happens to defeat ignore files by other means.
+      { scopeIgnoresIgnoreFiles: true, always: ["docs/**"] },
+      { scopeIgnoresIgnoreFiles: true, modified: true },
+    ]) {
+      expect(parse(options).success).toBe(false);
+    }
+  });
+
+  it("points the failure at the flag and names what it needs", () => {
+    const result = parse({ scopeIgnoresIgnoreFiles: true });
+
+    // A caller acts on the issue, not on `success: false`. Asserting the path
+    // and the named field is what makes the rejection worth more than silence.
+    const issue = result.success ? undefined : result.error.issues[0];
+    expect(issue?.path).toEqual(["scopeIgnoresIgnoreFiles"]);
+    expect(issue?.message).toContain("scopePaths");
+  });
+
+  it("leaves every request that did not ask for the bypass alone", () => {
+    // The guard must fire on the opt-in only — never on absence, and never on
+    // the default spelled out, which builds the same bundle as omitting it.
+    expect(parse({}).success).toBe(true);
+    expect(parse({ scopeIgnoresIgnoreFiles: false }).success).toBe(true);
+    expect(parse({ includePaths: ["src/a.ts"] }).success).toBe(true);
+  });
+
+  it("applies the same rule to a test-config dry run", () => {
+    // The dry-run variant re-types six fields as nullable and is built from the
+    // same object base. A refinement attached to only one of the two would let
+    // the settings preview disagree with the run it is previewing.
+    expect(
+      CopyTreeTestConfigOptionsSchema.safeParse({ scopeIgnoresIgnoreFiles: true }).success
+    ).toBe(false);
+    expect(
+      CopyTreeTestConfigOptionsSchema.safeParse({
+        scopePaths: ["docs"],
+        scopeIgnoresIgnoreFiles: true,
+        // Cleared-field sentinel, to prove the base's nullable overrides survived
+        // being re-wrapped by the refinement.
+        always: null,
+      }).success
+    ).toBe(true);
   });
 });

@@ -85,6 +85,24 @@ describe("canonicalizeCopyTreeOptions", () => {
     );
   });
 
+  it("folds the ignore-file bypass's default spelling onto the same entry", () => {
+    // #11750. `false` is what the flag already does when absent, so the two
+    // build a byte-identical bundle. Everything else here is generic — a scalar
+    // lands in the hash verbatim — which would have filed one run under two
+    // rows the moment a caller started sending the default explicitly.
+    const scoped = { scopePaths: ["docs"] };
+
+    expect(canonicalizeCopyTreeOptions({ ...scoped, scopeIgnoresIgnoreFiles: false })).toEqual(
+      canonicalizeCopyTreeOptions(scoped)
+    );
+    // Only the default folds away. `true` selects a different set of files, so
+    // collapsing it too would hand a caller the obeyed run it was trying to
+    // get past.
+    expect(canonicalizeCopyTreeOptions({ ...scoped, scopeIgnoresIgnoreFiles: true })).not.toEqual(
+      canonicalizeCopyTreeOptions(scoped)
+    );
+  });
+
   it("still separates a selection from no selection at all", () => {
     expect(canonicalizeCopyTreeOptions({ filter: ["src/**"] })).not.toEqual(
       canonicalizeCopyTreeOptions({})

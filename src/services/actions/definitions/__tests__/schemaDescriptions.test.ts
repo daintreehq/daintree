@@ -171,6 +171,55 @@ describe("argument descriptions carry the semantics prose no longer states", () 
     expect(scope).toMatch(/prefer this over[^.]*folder/i);
   });
 
+  // #11750. The flag's whole safety story is "it lifts less than you fear", and
+  // a caller can only learn the boundary from this text — the type is a bare
+  // boolean and the SDK's own docs are not on the wire. Each assertion below is
+  // a claim `CopyTreeService.sdk-contract.test.ts` proves against the real SDK;
+  // if one of those flips, the description here is what has to change with it.
+  it("bounds what the ignore-file bypass lifts, and what it leaves standing", () => {
+    const bypass =
+      emit(CopyTreeOptionsSchema).properties?.scopeIgnoresIgnoreFiles?.description ?? "";
+
+    // Scope-bound, and refused without one — a caller that sets it alone gets a
+    // parse error, so the text has to explain the pairing before it happens.
+    expect(bypass).toMatch(/scopePaths/);
+    expect(bypass).toMatch(/rejected|requires/i);
+
+    // Both ignore files, stated. The SDK cannot narrow this to `.copytreeignore`
+    // and a description naming only that one would understate the reach.
+    expect(bypass).toMatch(/\.copytreeignore/);
+    expect(bypass).toMatch(/\.gitignore/);
+
+    // The limit that makes it safe: only the rules blocking entry are removed.
+    expect(bypass).toMatch(/only the rules/i);
+
+    // And the layers that keep applying. Without these a caller has no way to
+    // tell this apart from `always`, which lifts every one of them.
+    expect(bypass).toMatch(/node_modules/);
+    expect(bypass).toMatch(/exclude/);
+    expect(bypass).toMatch(/budget/i);
+  });
+
+  it("warns that always is the blunt instrument the bypass is not", () => {
+    const always = emit(CopyTreeOptionsSchema).properties?.always?.description ?? "";
+
+    // Undocumented on the wire until #11750, which is how a caller ended up
+    // hand-computing per-file patterns for it instead of scoping. Naming the
+    // narrower field is the half that changes behaviour — a warning with no
+    // alternative just leaves the caller where it started.
+    expect(always).toMatch(/scopeIgnoresIgnoreFiles/);
+    expect(always).toMatch(/node_modules/);
+  });
+
+  it("says a scope restricts traversal, so patterns cannot widen it", () => {
+    const scope = emit(CopyTreeOptionsSchema).properties?.scopePaths?.description ?? "";
+
+    // The composition trap the bypass makes reachable: a caller told to move its
+    // selection into `scopePaths` will keep its `includePaths` alongside, and
+    // anything outside the scope silently disappears.
+    expect(scope).toMatch(/never add a file outside|cannot add|only narrow/i);
+  });
+
   it("keeps the terminal-id contract on the hand-written wait schema", () => {
     // A hand-written JSON Schema rather than a zod conversion, so none of the
     // propagation above applies to it. Note this constant is NOT what the

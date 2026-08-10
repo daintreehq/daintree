@@ -56,6 +56,12 @@ export function canonicalizeCopyTreeOptions(options?: CopyTreeOptions): Record<s
 
   for (const [key, value] of Object.entries(options)) {
     if (value === undefined) continue;
+    // Explicit `false` is the default spelled out, and builds a byte-identical
+    // bundle to omitting it — so it must dedupe onto the same entry rather than
+    // splitting one run into two history rows (#11750). Only the exact boolean
+    // is folded away: `true` changes the bundle, and any other value is a shape
+    // the schemas rejected and stays verbatim so two malformed inputs differ.
+    if (key === "scopeIgnoresIgnoreFiles" && value === false) continue;
     if ((SELECTION_FIELDS as readonly string[]).includes(key)) continue;
 
     if (!UNORDERED_ARRAY_FIELDS.has(key as keyof CopyTreeOptions)) {
