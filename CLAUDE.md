@@ -9,6 +9,7 @@
 - **Markdown style:** Never hard-wrap prose — every paragraph/list item/table row is ONE physical line (soft wrap is the renderer's job). Applies to all `.md`. Code blocks and ASCII diagrams keep internal breaks.
 - **Codex MCP:** `mcp__codex__codex` takes `model: "gpt-5.6-sol"` unless you're aware of a newer model. Include file paths so Codex can read the code.
 - **GitHub:** Public repo `daintreehq/daintree`. Use the `gh` CLI for ALL GitHub ops — HTTP fetches fail on auth.
+- **Daintree Assistant CLI:** the in-app assistant is a separate repo, `daintreehq/assistant` (https://github.com/daintreehq/assistant) — host-side embedding contract lives there in `DAINTREE_HOST.md`; changes to the host contract belong in both repos.
 - **Branching:** Gitflow. All PRs target `develop`, NEVER `main` (release merges only).
 - **Tracked configs:** `.daintree/recipes/*.json` (recipes = saved parameterized agent-launch configs) are intentionally tracked — never remove or gitignore.
 - **Agent config boundary:** Never modify user-owned agent config (`~/.claude/`, `~/.gemini/`, user hooks, CLAUDE.md/AGENTS.md in user projects) — not even additive CLI injection like `--settings`. If a capability needs it, it's out of scope; use passive observation instead (output parsing, OSC titles, process tree, `AgentPatternDetector`-style regex). Precedent #4100.
