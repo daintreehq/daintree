@@ -52,7 +52,9 @@ function GitPullRebaseConfirmDialogInner() {
         .then((preview) => {
           if (requestIdRef.current !== requestId) return;
           setBranch(preview.branch);
-          setDestination(preview.destination);
+          // The UPSTREAM, not the push destination: this dialog confirms a
+          // rebase onto what the branch integrates from (#11746).
+          setDestination(preview.pullSource);
           setCommits(preview.commits);
         })
         .catch((err: unknown) => {
@@ -121,7 +123,7 @@ function GitPullRebaseConfirmDialogInner() {
       isConfirmLoading={isLoading}
       // Rebasing onto the wrong repository's history is as destructive as
       // pushing to it, so an unresolved remote blocks this too (#11746).
-      confirmDisabled={commits === null || destination === null || !!loadError}
+      confirmDisabled={commits === null || !destination || !!loadError}
       onConfirm={() => resolveConfirmation(true)}
     >
       {isDestinationMissing && (
@@ -131,8 +133,8 @@ function GitPullRebaseConfirmDialogInner() {
         >
           <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
           <span>
-            No remote is configured for this branch. Set an upstream, or configure{" "}
-            <span className="font-mono">branch.{branchLabel}.pushRemote</span>.
+            This branch has no upstream to rebase onto. Set one with{" "}
+            <span className="font-mono">git branch --set-upstream-to</span>, then try again.
           </span>
         </div>
       )}

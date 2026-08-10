@@ -78,8 +78,11 @@ export function ForcePushConfirmDialog({
     if (isLoading) return;
     // Block confirm when the discard preview failed to load — without it the
     // user has no visibility into what `--force-with-lease` would discard,
-    // even though the lease itself still keeps the operation safe.
-    if (loadError) return;
+    // even though the lease itself still keeps the operation safe. `preview`
+    // is checked too: on the first render after opening it is null while
+    // `isLoading` is still false, so the two guards together are what close
+    // the window on a click landing before the fetch starts.
+    if (loadError || preview === null) return;
     isExecutingRef.current = true;
     setIsPushing(true);
     try {
@@ -119,7 +122,7 @@ export function ForcePushConfirmDialog({
       variant="destructive"
       hasPreview={true}
       isConfirmLoading={isPushing}
-      confirmDisabled={isLoading || !!loadError}
+      confirmDisabled={isLoading || !!loadError || preview === null}
     >
       <div className="space-y-3 text-xs text-daintree-text/80">
         <p>

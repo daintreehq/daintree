@@ -34,6 +34,8 @@ export interface GitRemoteOperationPreview {
    * handler would refuse the write anyway.
    */
   destination: GitPushDestination | null;
+  /** Where a pull-and-rebase would integrate FROM — the upstream, not the push target. */
+  pullSource: GitPushDestination | null;
 }
 
 /**
@@ -61,6 +63,7 @@ export async function buildGitRemoteOperationPreview(
   return {
     branch: status.currentBranch,
     destination: status.pushDestination,
+    pullSource: status.pullSource,
     commits: commitList.items.map((c) => ({
       hash: c.hash,
       message: c.message,

@@ -50,6 +50,7 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { GitOperationError } from "../../utils/errorTypes.js";
 import {
   resolveGitPushDestination,
+  resolveGitUpstream,
   formatGitPushDestination,
   describeUnresolvedPushDestination,
   type ResolvedGitPushDestination,
@@ -80,16 +81,9 @@ interface StagingFileEntry {
 }
 
 /**
- * Resolve the push destination for a write, or refuse the write (#11746).
- *
- * Every remote-mutating path routes through here so that "we could not work out
- * where this goes" can never degrade into "send it to origin" — a wrong-repo
- * push is not recoverable. The thrown message is worded to land in the existing
- * `config-missing` bucket, so the renderer already has a recovery hint for it.
- */
-/**
- * `git rev-list --count <range>`, or `null` when git can't answer — the caller
- * shows the row count instead rather than claiming a total it doesn't have.
+ * `git rev-list --count <range>`. Falls back to 0 on unparseable output, which
+ * renders as "no hidden tail" rather than a wrong count — the rows themselves
+ * are still shown, so the preview degrades quietly instead of overstating.
  */
 async function countCommitsInRange(
   git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
@@ -100,13 +94,22 @@ async function countCommitsInRange(
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
+/**
+ * Resolve the push destination for a write, or refuse the write (#11746).
+ *
+ * Every remote-mutating path routes through here so that "we could not work out
+ * where this goes" can never degrade into "send it to origin" — a wrong-repo
+ * push is not recoverable. The thrown message is worded to land in the existing
+ * `config-missing` bucket, so the renderer already has a recovery hint for it.
+ */
 async function requirePushDestination(
   git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw" | "getRemotes">,
   branchName: string,
   cwd: string,
-  op: string
+  op: string,
+  resolver: typeof resolveGitPushDestination = resolveGitPushDestination
 ): Promise<ResolvedGitPushDestination> {
-  const resolution = await resolveGitPushDestination(git, branchName);
+  const resolution = await resolver(git, branchName);
   if (resolution.status === "resolved") return resolution.destination;
 
   const message = describeUnresolvedPushDestination(resolution.reason, branchName);
@@ -394,11 +397,19 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     try {
       const branch = await git.revparse(["--abbrev-ref", "HEAD"]);
       const branchName = branch.trim();
-      // Pull from the branch's own remote, not a hardcoded origin (#11746):
-      // rebasing onto the wrong repository's history is as destructive as
-      // pushing to it.
-      const destination = await requirePushDestination(git, branchName, payload.cwd, "pull-rebase");
-      await git.pull(destination.remote, destination.branch, ["--rebase"]);
+      // Pull from the branch's UPSTREAM, not a hardcoded origin (#11746) and not
+      // its push target: in a triangular workflow a branch tracks
+      // `origin/release/topic` while pushing to `fork/topic`, and `git pull`
+      // reads the upstream. Rebasing onto the wrong repository's history is as
+      // destructive as pushing to it.
+      const source = await requirePushDestination(
+        git,
+        branchName,
+        payload.cwd,
+        "pull-rebase",
+        resolveGitUpstream
+      );
+      await git.pull(source.remote, source.branch, ["--rebase"]);
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("git-push");
       }
@@ -512,7 +523,11 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         payload.cwd,
         "list-remote-commits"
       );
-      const range = `HEAD..${destination.remoteTrackingRef}`;
+      // Ranged from the branch being force-pushed, not `HEAD`: the two diverge
+      // whenever something checks out another branch between the rejected push
+      // and the confirm, and a preview measured against the wrong local branch
+      // can report "nothing to discard" for a push that discards plenty.
+      const range = `refs/heads/${branchName}..${destination.remoteTrackingRef}`;
 
       // No `--no-merges` — the dialog's "N more" tail relies on the listed rows
       // matching what `--force-with-lease` would actually discard. Filtering
@@ -687,17 +702,17 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     // The confirm surfaces treat `null` as "block the write and say why"; the
     // write handlers resolve again and refuse independently (#11746).
     let pushDestination: StagingStatus["pushDestination"] = null;
+    let pullSource: StagingStatus["pullSource"] = null;
     if (hasRemote && currentBranch) {
-      try {
-        const resolution = await resolveGitPushDestination(git, currentBranch);
-        if (resolution.status === "resolved") {
-          pushDestination = {
-            remote: resolution.destination.remote,
-            branch: resolution.destination.branch,
-          };
-        }
-      } catch {
-        pushDestination = null;
+      const [push, pull] = await Promise.all([
+        resolveGitPushDestination(git, currentBranch).catch(() => null),
+        resolveGitUpstream(git, currentBranch).catch(() => null),
+      ]);
+      if (push?.status === "resolved") {
+        pushDestination = { remote: push.destination.remote, branch: push.destination.branch };
+      }
+      if (pull?.status === "resolved") {
+        pullSource = { remote: pull.destination.remote, branch: pull.destination.branch };
       }
     }
 
@@ -738,6 +753,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       currentBranch,
       hasRemote,
       pushDestination,
+      pullSource,
       repoState,
       rebaseStep,
       rebaseTotalSteps,

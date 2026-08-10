@@ -197,7 +197,11 @@ export function CommitPanel({
       // D2 confirmation: every remote push is a shared-state mutation. Show
       // the commit message + target branch preview unless the user has opted
       // out for this worktree (#8025).
-      if (!skipPushConfirm) {
+      //
+      // The opt-out is overridden when no destination resolved (#11746): the
+      // push will be refused by the handler, and silently attempting it would
+      // leave the user with a failed write and no explanation.
+      if (!skipPushConfirm || pushDestination === null) {
         setPushConfirmOpen(true);
         return;
       }
@@ -209,6 +213,7 @@ export function CommitPanel({
     isBlocked,
     isBusy,
     hasRemote,
+    pushDestination,
     skipPushConfirm,
     focusBlocker,
     handleCommitAndPush,
@@ -467,11 +472,21 @@ export function CommitPanel({
           )
         }
         confirmLabel={`Push to ${destinationLabel ?? currentBranch ?? "branch"}`}
+        confirmDisabled={pushDestination === null}
         variant="default"
         zIndex="nested"
         onConfirm={handleConfirmPush}
       >
         <div className="flex flex-col gap-2">
+          {pushDestination === null && (
+            <div
+              className="rounded border border-status-error/30 bg-status-error/10 px-2 py-1.5 text-[11px] text-status-error"
+              data-testid="commit-panel-push-no-destination"
+            >
+              No push destination is configured for this branch. Set an upstream, or configure a
+              push remote, before pushing.
+            </div>
+          )}
           <div>
             <span
               data-testid="commit-panel-push-confirm-branch"

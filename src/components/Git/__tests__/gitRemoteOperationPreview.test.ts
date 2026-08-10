@@ -8,6 +8,7 @@ import {
 function stubGit(overrides: {
   currentBranch?: string | null;
   pushDestination?: { remote: string; branch: string } | null;
+  pullSource?: { remote: string; branch: string } | null;
   items?: Array<{ hash: string; message: string; author: { name: string } }>;
   reject?: boolean;
   rejectCommits?: boolean;
@@ -19,10 +20,14 @@ function stubGit(overrides: {
     "pushDestination" in overrides
       ? overrides.pushDestination
       : { remote: "origin", branch: currentBranch ?? "main" };
+  const pullSource =
+    "pullSource" in overrides
+      ? overrides.pullSource
+      : { remote: "origin", branch: currentBranch ?? "main" };
   const getStagingStatus = vi.fn(() =>
     overrides.reject
       ? Promise.reject(new Error("git status failed"))
-      : Promise.resolve({ currentBranch, pushDestination })
+      : Promise.resolve({ currentBranch, pushDestination, pullSource })
   );
   const listCommits = vi.fn(() =>
     overrides.rejectCommits
@@ -60,6 +65,7 @@ describe("buildGitRemoteOperationPreview", () => {
     expect(preview).toEqual({
       branch: "main",
       destination: { remote: "origin", branch: "main" },
+      pullSource: { remote: "origin", branch: "main" },
       commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
     });
   });
@@ -75,6 +81,19 @@ describe("buildGitRemoteOperationPreview", () => {
     stubGit({ pushDestination: null });
     await expect(buildGitRemoteOperationPreview("/repo")).resolves.toMatchObject({
       destination: null,
+    });
+  });
+
+  it("carries the upstream separately from the push destination", async () => {
+    // A triangular branch pulls from one repository and pushes to another; the
+    // pull-rebase confirm must name the former, not the latter (#11746).
+    stubGit({
+      pushDestination: { remote: "fork", branch: "topic" },
+      pullSource: { remote: "origin", branch: "release/topic" },
+    });
+    await expect(buildGitRemoteOperationPreview("/repo")).resolves.toMatchObject({
+      destination: { remote: "fork", branch: "topic" },
+      pullSource: { remote: "origin", branch: "release/topic" },
     });
   });
 
@@ -103,6 +122,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
       {
         branch: "feature/x",
         destination: { remote: "origin", branch: "feature/x" },
+        pullSource: { remote: "origin", branch: "feature/x" },
         commits: [
           { hash: "abcdef1234567", message: "First", author: "Ada" },
           { hash: "9876543210fed", message: "Second", author: "Bob" },
@@ -126,6 +146,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
       {
         branch: "topic",
         destination: { remote: "fork", branch: "release/topic" },
+        pullSource: { remote: "fork", branch: "release/topic" },
         commits: [],
       },
       "none"
@@ -135,7 +156,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
 
   it("warns explicitly when no push destination is configured", () => {
     const lines = formatGitRemoteOperationPreviewLines(
-      { branch: "topic", destination: null, commits: [] },
+      { branch: "topic", destination: null, pullSource: null, commits: [] },
       "none"
     );
     expect(lines[0]).toContain("No push destination");
@@ -144,7 +165,12 @@ describe("formatGitRemoteOperationPreviewLines", () => {
 
   it("treats an empty commit list as a valid loaded state, not a failure", () => {
     const lines = formatGitRemoteOperationPreviewLines(
-      { branch: "main", destination: { remote: "origin", branch: "main" }, commits: [] },
+      {
+        branch: "main",
+        destination: { remote: "origin", branch: "main" },
+        pullSource: { remote: "origin", branch: "main" },
+        commits: [],
+      },
       "No local commits found on this branch."
     );
     expect(lines).toEqual([
@@ -157,7 +183,12 @@ describe("formatGitRemoteOperationPreviewLines", () => {
 
   it("labels a detached HEAD instead of rendering a null branch", () => {
     const lines = formatGitRemoteOperationPreviewLines(
-      { branch: null, destination: { remote: "origin", branch: "main" }, commits: [] },
+      {
+        branch: null,
+        destination: { remote: "origin", branch: "main" },
+        pullSource: { remote: "origin", branch: "main" },
+        commits: [],
+      },
       "none"
     );
     expect(lines[1]).toBe("Branch: (detached HEAD)");

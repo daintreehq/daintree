@@ -60,14 +60,28 @@ const PUSH_REF = `refs/remotes/${REMOTE}/${REMOTE_BRANCH}`;
 type FakeGit = Record<string, ReturnType<typeof vi.fn>>;
 
 /** A git double whose `for-each-ref` reports the given push destination. */
-function makeGit(overrides: FakeGit = {}, forEachRef = `${REMOTE}\u0000${PUSH_REF}`): FakeGit {
+/** Upstream is a DIFFERENT remote from the push target, so pull-rebase
+ *  reading the push destination instead of the upstream would show up as a
+ *  failed assertion rather than passing by coincidence. */
+const UPSTREAM_REMOTE = "origin";
+const UPSTREAM_BRANCH = "release/topic";
+const UPSTREAM_REF = `refs/remotes/${UPSTREAM_REMOTE}/${UPSTREAM_BRANCH}`;
+
+function makeGit(
+  overrides: FakeGit = {},
+  forEachRef = `refs/heads/${LOCAL_BRANCH}\u0000${REMOTE}\u0000${PUSH_REF}`,
+  forEachRefUpstream = `refs/heads/${LOCAL_BRANCH}\u0000${UPSTREAM_REMOTE}\u0000${UPSTREAM_REF}`
+): FakeGit {
   return {
     revparse: vi.fn(async (args: string[]) => {
       if (args[0] === "--abbrev-ref" && args[1] === "HEAD") return `${LOCAL_BRANCH}\n`;
       return "aaaaaaaabbbbbbbbccccccccdddddddd\n";
     }),
     raw: vi.fn(async (args: string[]) => {
-      if (args[0] === "for-each-ref") return `${forEachRef}\n`;
+      if (args[0] === "for-each-ref") {
+        const format = args[1] ?? "";
+        return `${format.includes("upstream") ? forEachRefUpstream : forEachRef}\n`;
+      }
       if (args[0] === "rev-list") return "7\n";
       return "";
     }),
@@ -172,13 +186,14 @@ describe("git push — lease capture", () => {
 });
 
 describe("git pull --rebase — resolved destination", () => {
-  it("pulls from the resolved remote and remote-side branch", async () => {
+  it("pulls from the branch upstream, not from its push target", async () => {
     const git = makeGit();
     createAuthenticatedGitMock.mockResolvedValue(git);
 
     await getHandler("git:pull-rebase")(FAKE_EVENT, { cwd: CWD });
 
-    expect(git.pull).toHaveBeenCalledWith(REMOTE, REMOTE_BRANCH, ["--rebase"]);
+    expect(git.pull).toHaveBeenCalledWith(UPSTREAM_REMOTE, UPSTREAM_BRANCH, ["--rebase"]);
+    expect(git.pull).not.toHaveBeenCalledWith(REMOTE, REMOTE_BRANCH, ["--rebase"]);
   });
 });
 
@@ -215,7 +230,10 @@ describe("list-remote-commits — resolved destination", () => {
       limit: 5,
     })) as { destination: unknown; total: number; commits: unknown[] };
 
-    expect(git.log).toHaveBeenCalledWith(["--max-count=5", `HEAD..${PUSH_REF}`]);
+    expect(git.log).toHaveBeenCalledWith([
+      "--max-count=5",
+      `refs/heads/${LOCAL_BRANCH}..${PUSH_REF}`,
+    ]);
     expect(result.destination).toEqual({ remote: REMOTE, branch: REMOTE_BRANCH });
     expect(result.total).toBe(7);
     expect(result.commits).toHaveLength(1);
@@ -230,14 +248,22 @@ describe("list-remote-commits — resolved destination", () => {
       branchName: LOCAL_BRANCH,
     });
 
-    expect(git.raw).toHaveBeenCalledWith(["rev-list", "--count", `HEAD..${PUSH_REF}`]);
+    expect(git.raw).toHaveBeenCalledWith([
+      "rev-list",
+      "--count",
+      `refs/heads/${LOCAL_BRANCH}..${PUSH_REF}`,
+    ]);
   });
 });
 
 describe("fails closed when the destination is unresolvable", () => {
   /** Two remotes, no push config anywhere — the genuinely ambiguous case. */
   function makeUnresolvableGit(overrides: FakeGit = {}): FakeGit {
-    return makeGit(overrides, "\u0000");
+    return makeGit(
+      overrides,
+      `refs/heads/${LOCAL_BRANCH}\u0000\u0000`,
+      `refs/heads/${LOCAL_BRANCH}\u0000\u0000`
+    );
   }
 
   it("refuses to push and issues no push call", async () => {
@@ -297,7 +323,11 @@ describe("fails closed when the destination is unresolvable", () => {
   });
 
   it("still refuses when an origin remote exists but nothing selects it", async () => {
-    const git = makeGit({}, "\u0000");
+    const git = makeGit(
+      {},
+      `refs/heads/${LOCAL_BRANCH}\u0000\u0000`,
+      `refs/heads/${LOCAL_BRANCH}\u0000\u0000`
+    );
     git.getRemotes = vi.fn(async () => [
       { name: "origin", refs: { fetch: "", push: "" } },
       { name: "fork", refs: { fetch: "", push: "" } },

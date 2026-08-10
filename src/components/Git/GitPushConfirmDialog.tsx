@@ -119,7 +119,7 @@ function GitPushConfirmDialogInner() {
       isConfirmLoading={isLoading}
       // A destination nobody can name can't be approved — the handler would
       // refuse the write anyway, and guessing `origin` is the bug (#11746).
-      confirmDisabled={commits === null || destination === null || !!loadError}
+      confirmDisabled={commits === null || !destination || !!loadError}
       onConfirm={() => resolveConfirmation(true)}
     >
       {isDestinationMissing && (
@@ -129,8 +129,9 @@ function GitPushConfirmDialogInner() {
         >
           <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
           <span>
-            No push destination is configured for this branch. Set an upstream, or configure{" "}
-            <span className="font-mono">branch.{branchLabel}.pushRemote</span>.
+            This branch has no push destination, or more than one remote could be meant. Set an
+            upstream, or name one with{" "}
+            <span className="font-mono">git config branch.&lt;name&gt;.pushRemote</span>.
           </span>
         </div>
       )}

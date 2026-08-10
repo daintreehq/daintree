@@ -107,6 +107,7 @@ describe("useMcpBridge", () => {
     mocks.buildGitPreview.mockResolvedValue({
       branch: "main",
       destination: { remote: "origin", branch: "main" },
+      pullSource: { remote: "origin", branch: "main" },
       commits: [],
     });
     __resetMcpConfirmStoreForTesting();
@@ -714,6 +715,7 @@ describe("useMcpBridge", () => {
     mocks.buildGitPreview.mockResolvedValue({
       branch: "feature/x",
       destination: { remote: "origin", branch: "feature/x" },
+      pullSource: { remote: "origin", branch: "feature/x" },
       commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
     });
 
@@ -822,6 +824,7 @@ describe("useMcpBridge", () => {
     mocks.buildGitPreview.mockResolvedValue({
       branch: "feature/y",
       destination: { remote: "origin", branch: "feature/y" },
+      pullSource: { remote: "origin", branch: "feature/y" },
       commits: [{ hash: "1234567890a", message: "Replay me", author: "Cy" }],
     });
 
@@ -1128,6 +1131,7 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
     mocks.buildGitPreview.mockResolvedValue({
       branch: "main",
       destination: { remote: "origin", branch: "main" },
+      pullSource: { remote: "origin", branch: "main" },
       commits: [],
     });
   });
@@ -1163,6 +1167,7 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
     mocks.buildGitPreview.mockResolvedValue({
       branch: "feature/x",
       destination: { remote: "origin", branch: "feature/x" },
+      pullSource: { remote: "origin", branch: "feature/x" },
       commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
     });
     const lines = await buildMcpConfirmPreview({ kind: "gitPush", cwd: "/repo" });
@@ -1177,6 +1182,7 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
     mocks.buildGitPreview.mockResolvedValue({
       branch: "main",
       destination: { remote: "origin", branch: "main" },
+      pullSource: { remote: "origin", branch: "main" },
       commits: [],
     });
     const empty = await buildMcpConfirmPreview({ kind: "gitPullRebase", cwd: "/repo" });

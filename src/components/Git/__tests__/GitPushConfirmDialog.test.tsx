@@ -73,7 +73,12 @@ describe("GitPushConfirmDialog", () => {
   });
 
   it("reads the preview through the shared builder, scoped to the requested cwd", async () => {
-    mocks.buildPreview.mockResolvedValue({ branch: "feature/x", commits: [] });
+    mocks.buildPreview.mockResolvedValue({
+      branch: "feature/x",
+      destination: { remote: "origin", branch: "feature/x" },
+      pullSource: { remote: "origin", branch: "feature/x" },
+      commits: [],
+    });
     render(<GitPushConfirmDialog />);
 
     await act(async () => {
@@ -84,7 +89,12 @@ describe("GitPushConfirmDialog", () => {
   });
 
   it("blocks approval while the preview is still loading", async () => {
-    const gate = deferred<{ branch: string; commits: never[] }>();
+    const gate = deferred<{
+      branch: string;
+      destination: { remote: string; branch: string };
+      pullSource: { remote: string; branch: string };
+      commits: never[];
+    }>();
     mocks.buildPreview.mockReturnValue(gate.promise);
     render(<GitPushConfirmDialog />);
 
@@ -95,7 +105,12 @@ describe("GitPushConfirmDialog", () => {
     expect(pushButton().hasAttribute("disabled")).toBe(true);
 
     await act(async () => {
-      gate.resolve({ branch: "main", commits: [] });
+      gate.resolve({
+        branch: "main",
+        destination: { remote: "origin", branch: "main" },
+        pullSource: { remote: "origin", branch: "main" },
+        commits: [],
+      });
       await gate.promise;
     });
 
@@ -105,7 +120,12 @@ describe("GitPushConfirmDialog", () => {
   // `commits.length === 0` is a VALID loaded state — it means "nothing ahead",
   // not "still loading". Blocking on it was the #9575 failure mode.
   it("allows approval once loaded even with no commits to show", async () => {
-    mocks.buildPreview.mockResolvedValue({ branch: "main", commits: [] });
+    mocks.buildPreview.mockResolvedValue({
+      branch: "main",
+      destination: { remote: "origin", branch: "main" },
+      pullSource: { remote: "origin", branch: "main" },
+      commits: [],
+    });
     render(<GitPushConfirmDialog />);
 
     await act(async () => {
@@ -129,6 +149,8 @@ describe("GitPushConfirmDialog", () => {
 
     mocks.buildPreview.mockResolvedValue({
       branch: "main",
+      destination: { remote: "origin", branch: "main" },
+      pullSource: { remote: "origin", branch: "main" },
       commits: [{ hash: "abcdef1234", message: "Fix it", author: "Ada" }],
     });
     await act(async () => {
@@ -141,7 +163,12 @@ describe("GitPushConfirmDialog", () => {
   });
 
   it("resolves the awaited confirm promise with the user's decision", async () => {
-    mocks.buildPreview.mockResolvedValue({ branch: "main", commits: [] });
+    mocks.buildPreview.mockResolvedValue({
+      branch: "main",
+      destination: { remote: "origin", branch: "main" },
+      pullSource: { remote: "origin", branch: "main" },
+      commits: [],
+    });
     render(<GitPushConfirmDialog />);
 
     let decision: boolean | undefined;

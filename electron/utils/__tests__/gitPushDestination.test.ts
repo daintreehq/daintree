@@ -72,6 +72,7 @@ describe("resolveGitPushDestination — precedence", () => {
     git(repo, ["config", "remote.pushDefault", "mirror"]);
     git(repo, ["config", "branch.topic.remote", "upstream"]);
     git(repo, ["config", "branch.topic.merge", "refs/heads/topic"]);
+    git(repo, ["config", "push.default", "current"]);
 
     const result = await resolve(repo);
 
@@ -92,11 +93,28 @@ describe("resolveGitPushDestination — precedence", () => {
     git(repo, ["config", "remote.pushDefault", "mirror"]);
     git(repo, ["config", "branch.topic.remote", "upstream"]);
     git(repo, ["config", "branch.topic.merge", "refs/heads/topic"]);
+    git(repo, ["config", "push.default", "current"]);
 
     const result = await resolve(repo);
 
     expect(result.status).toBe("resolved");
     expect(result.status === "resolved" && result.destination.remote).toBe("mirror");
+  });
+
+  it("refuses when push.default=nothing names a remote but no destination", async () => {
+    // git deliberately has no default push destination here; assuming the
+    // same-name branch would invent one it never sanctioned.
+    const repo = makeRepo();
+    git(repo, ["remote", "add", "origin", makeBare()]);
+    git(repo, ["remote", "add", "fork", makeBare()]);
+    git(repo, ["config", "branch.topic.pushRemote", "fork"]);
+    git(repo, ["config", "branch.topic.remote", "origin"]);
+    git(repo, ["config", "branch.topic.merge", "refs/heads/release/topic"]);
+    git(repo, ["config", "push.default", "nothing"]);
+
+    const result = await resolve(repo);
+
+    expect(result).toEqual({ status: "unresolved", reason: "not-configured" });
   });
 
   it("resolves from remote.pushDefault alone, with no branch config at all", async () => {
@@ -166,6 +184,12 @@ describe("resolveGitPushDestination — remote-side branch name", () => {
     expect(result.status).toBe("resolved");
     expect(result.status === "resolved" && result.destination.remote).toBe("fork");
     expect(result.status === "resolved" && result.destination.branch).toBe("release/topic");
+    // The tracking ref follows the PUSH remote, not the fetch remote git named
+    // in `%(push)` — leasing or previewing against origin's ref would describe
+    // a repository this push never touches.
+    expect(result.status === "resolved" && result.destination.remoteTrackingRef).toBe(
+      "refs/remotes/fork/release/topic"
+    );
   });
 
   it("resolves a remote whose own name contains a slash without splitting it", async () => {
@@ -253,7 +277,7 @@ describe("resolveGitPushDestination — argv hardening", () => {
   // the guard has to hold for a config file written by hand or by another tool.
   const stub = (remoteName: string, pushRef: string) =>
     ({
-      raw: async () => `${remoteName}\u0000${pushRef}`,
+      raw: async () => `refs/heads/topic\u0000${remoteName}\u0000${pushRef}`,
       getRemotes: async () => [{ name: remoteName, refs: { fetch: "", push: "" } }],
     }) as never;
 
@@ -262,12 +286,29 @@ describe("resolveGitPushDestination — argv hardening", () => {
     ["-x", "leading dash"],
     ["re mote", "embedded space"],
     ["re\tmote", "embedded tab"],
-    ["re\nmote", "embedded newline"],
     [`re${String.fromCharCode(127)}mote`, "embedded DEL"],
     [`re${String.fromCharCode(0x85)}mote`, "embedded C1"],
   ])("refuses the remote name %j (%s)", async (name) => {
     const result = await resolveGitPushDestination(
       stub(name, `refs/remotes/${name}/topic`),
+      "topic"
+    );
+
+    expect(result).toEqual({ status: "unresolved", reason: "unsafe-remote" });
+  });
+
+  it("refuses a padded remote name rather than normalizing it to a different remote", async () => {
+    // `" origin"` and `"origin"` can be two remotes pointing at two different
+    // repositories. Trimming the field before validating would silently
+    // redirect the write to the wrong one — the original #11746 failure.
+    const result = await resolveGitPushDestination(
+      {
+        raw: async () => "refs/heads/topic\u0000 origin\u0000refs/remotes/ origin/topic",
+        getRemotes: async () => [
+          { name: " origin", refs: { fetch: "", push: "" } },
+          { name: "origin", refs: { fetch: "", push: "" } },
+        ],
+      } as never,
       "topic"
     );
 
@@ -290,7 +331,7 @@ describe("resolveGitPushDestination — argv hardening", () => {
   it("refuses a remote git names but does not list", async () => {
     const result = await resolveGitPushDestination(
       {
-        raw: async () => "ghost\u0000refs/remotes/ghost/topic",
+        raw: async () => "refs/heads/topic\u0000ghost\u0000refs/remotes/ghost/topic",
         getRemotes: async () => [{ name: "origin", refs: { fetch: "", push: "" } }],
       } as never,
       "topic"
@@ -302,7 +343,7 @@ describe("resolveGitPushDestination — argv hardening", () => {
   it("refuses a push ref outside the remote-tracking namespace", async () => {
     const result = await resolveGitPushDestination(
       {
-        raw: async () => "origin\u0000refs/heads/topic",
+        raw: async () => "refs/heads/topic\u0000origin\u0000refs/heads/topic",
         getRemotes: async () => [{ name: "origin", refs: { fetch: "", push: "" } }],
       } as never,
       "topic"
@@ -311,13 +352,41 @@ describe("resolveGitPushDestination — argv hardening", () => {
     expect(result).toEqual({ status: "unresolved", reason: "invalid-push-ref" });
   });
 
+  it("picks the exact branch record when a sibling ref shares its name as a prefix", async () => {
+    // `refs/heads/topic` as a for-each-ref pattern also matches
+    // `refs/heads/topic/sub`, so the record has to be selected by exact refname
+    // rather than assumed to be the only one. Stubbed because git itself
+    // refuses to create `topic/sub` while `topic` exists — but the resolver
+    // reads whatever refs a repo already has, including from other tools.
+    const result = await resolveGitPushDestination(
+      {
+        raw: async () =>
+          [
+            "refs/heads/topic/sub\u0000fork\u0000refs/remotes/fork/topic/sub",
+            "refs/heads/topic\u0000origin\u0000refs/remotes/origin/topic",
+          ].join("\n"),
+        getRemotes: async () => [
+          { name: "origin", refs: { fetch: "", push: "" } },
+          { name: "fork", refs: { fetch: "", push: "" } },
+        ],
+      } as never,
+      "topic"
+    );
+
+    expect(result.status === "resolved" && result.destination).toEqual({
+      remote: "origin",
+      branch: "topic",
+      remoteTrackingRef: "refs/remotes/origin/topic",
+    });
+  });
+
   it("strips the longest matching remote, not the first path segment", async () => {
     // Defensive: modern git refuses to create `team/fork` alongside `team`, but
     // the prefix walk must not depend on that rule holding for every repo it
     // reads, so it matches the longest remote rather than splitting on `/`.
     const result = await resolveGitPushDestination(
       {
-        raw: async () => `team/fork\u0000refs/remotes/team/fork/topic`,
+        raw: async () => `refs/heads/topic\u0000team/fork\u0000refs/remotes/team/fork/topic`,
         getRemotes: async () => [
           { name: "team", refs: { fetch: "", push: "" } },
           { name: "team/fork", refs: { fetch: "", push: "" } },

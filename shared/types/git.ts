@@ -180,6 +180,13 @@ export interface StagingStatus {
    * `origin`.
    */
   pushDestination: GitPushDestination | null;
+  /**
+   * Resolved upstream for `currentBranch` — where a pull-and-rebase would
+   * integrate FROM. Distinct from `pushDestination`: a triangular branch tracks
+   * `origin/release/topic` while pushing to `fork/topic`, so a pull surface that
+   * named the push destination would describe the wrong repository.
+   */
+  pullSource: GitPushDestination | null;
   /** Current in-progress repository operation, or `CLEAN`/`DIRTY`. */
   repoState: RepoState;
   /** When `repoState === "REBASING"`, the current step number (1-based). Null otherwise. */

@@ -27,6 +27,7 @@ export type GitPushDestinationUnresolvedReason =
   | "invalid-push-ref";
 
 const REMOTE_TRACKING_PREFIX = "refs/remotes/";
+const REF_HEADS_PREFIX = "refs/heads/";
 /**
  * NUL, via git's own `%00` format escape. A space would be ambiguous against
  * any value that could contain one — and the argv guard below exists precisely
@@ -112,13 +113,29 @@ export async function resolveGitPushDestination(
 
   const raw = await git.raw([
     "for-each-ref",
-    "--format=%(push:remotename)%00%(push)",
+    "--format=%(refname)%00%(push:remotename)%00%(push)",
     `refs/heads/${branchName}`,
   ]);
 
-  const [remoteField = "", pushRefField = ""] = raw.trim().split(FIELD_SEPARATOR);
-  const remote = remoteField.trim();
-  const pushRef = pushRefField.trim();
+  // `refs/heads/topic` as a pattern also matches `refs/heads/topic/sub`, so the
+  // record for the branch we asked about has to be picked out by exact refname
+  // rather than assumed to be the only one.
+  const wanted = `${REF_HEADS_PREFIX}${branchName}`;
+  const record = raw
+    .split("\n")
+    .map((line) => line.split(FIELD_SEPARATOR))
+    .find((fields) => fields[0] === wanted);
+
+  if (!record) {
+    return { status: "unresolved", reason: "not-configured" };
+  }
+
+  // Deliberately NOT trimmed: a remote named " origin" is a different remote
+  // from "origin", and normalizing the whitespace away would silently redirect
+  // the write to the wrong repository — the exact bug class #11746 is about.
+  // The guard below rejects such names outright instead.
+  const remote = record[1] ?? "";
+  const pushRef = record[2] ?? "";
 
   if (!remote) {
     return resolveUnconfigured(remotes, branchName);
@@ -132,21 +149,16 @@ export async function resolveGitPushDestination(
     return { status: "unresolved", reason: "invalid-push-ref" };
   }
 
-  // git can name the remote while leaving `%(push)` empty — notably under the
-  // default `push.default=simple` with a `pushRemote` that differs from the
-  // fetch remote, where git's documented behaviour is to act like `current` and
-  // push to the same-named branch. The repository is still git's own answer,
-  // which is the axis #11746 is about; only the branch component is unstated,
-  // and same-name is the rule git itself applies there.
+  // git can name the remote while leaving `%(push)` empty, and an empty push ref
+  // does NOT imply the remote-side branch shares the local name:
+  //   - `push.default=nothing` deliberately has no default destination at all;
+  //   - a `remote.<name>.push` refspec can map `topic` to something else
+  //     entirely (a Gerrit `refs/for/topic`, say);
+  //   - central `simple` with a differently-named upstream is an error, not a
+  //     same-name push.
+  // Refuse rather than invent a branch name — the remote alone isn't enough.
   if (!pushRef) {
-    return {
-      status: "resolved",
-      destination: {
-        remote,
-        branch: branchName,
-        remoteTrackingRef: `${REMOTE_TRACKING_PREFIX}${remote}/${branchName}`,
-      },
-    };
+    return { status: "unresolved", reason: "not-configured" };
   }
 
   const remoteBranch = stripRemotePrefix(pushRef, remotes);
@@ -156,7 +168,18 @@ export async function resolveGitPushDestination(
 
   return {
     status: "resolved",
-    destination: { remote, branch: remoteBranch, remoteTrackingRef: pushRef },
+    destination: {
+      remote,
+      branch: remoteBranch,
+      // Built from the destination rather than reusing `%(push)`: with
+      // `pushRemote=fork` and `push.default=upstream`, git renders the push ref
+      // under the FETCH remote (`refs/remotes/origin/...`) while the push goes
+      // to `fork`. Leasing or previewing against origin's ref would describe the
+      // wrong repository; if this ref doesn't exist locally the lease capture
+      // simply fails and the force-push CTA stays suppressed, which is the safe
+      // direction.
+      remoteTrackingRef: `${REMOTE_TRACKING_PREFIX}${remote}/${remoteBranch}`,
+    },
   };
 }
 
@@ -187,6 +210,69 @@ function resolveUnconfigured(
       remote,
       branch: branchName,
       remoteTrackingRef: `${REMOTE_TRACKING_PREFIX}${remote}/${branchName}`,
+    },
+  };
+}
+
+/**
+ * Resolve where `branchName` pulls FROM — its upstream, not its push target.
+ *
+ * These are the same ref in the ordinary case and genuinely different in a
+ * triangular workflow, where a branch tracks `origin/release/topic` but pushes
+ * to `fork/topic`. `git pull` reads the upstream, so a pull-and-rebase that used
+ * the push destination would rebase onto a repository the user never asked to
+ * integrate from.
+ *
+ * Fails closed on the same terms as the push resolver.
+ */
+export async function resolveGitUpstream(
+  git: Pick<SimpleGit, "raw" | "getRemotes">,
+  branchName: string
+): Promise<GitPushDestinationResolution> {
+  if (!branchName || branchName === "HEAD") {
+    return { status: "unresolved", reason: "not-configured" };
+  }
+
+  const remotes = (await git.getRemotes()).map((r) => r.name).filter((n) => n.length > 0);
+
+  const raw = await git.raw([
+    "for-each-ref",
+    "--format=%(refname)%00%(upstream:remotename)%00%(upstream)",
+    `${REF_HEADS_PREFIX}${branchName}`,
+  ]);
+
+  const wanted = `${REF_HEADS_PREFIX}${branchName}`;
+  const record = raw
+    .split("\n")
+    .map((line) => line.split(FIELD_SEPARATOR))
+    .find((fields) => fields[0] === wanted);
+
+  if (!record) return { status: "unresolved", reason: "not-configured" };
+
+  const remote = record[1] ?? "";
+  const upstreamRef = record[2] ?? "";
+
+  if (!remote || !upstreamRef) {
+    return { status: "unresolved", reason: "not-configured" };
+  }
+  if (!isSafeRemoteName(remote)) {
+    return { status: "unresolved", reason: "unsafe-remote" };
+  }
+  if (!remotes.includes(remote)) {
+    return { status: "unresolved", reason: "invalid-push-ref" };
+  }
+
+  const remoteBranch = stripRemotePrefix(upstreamRef, remotes);
+  if (!remoteBranch) {
+    return { status: "unresolved", reason: "invalid-push-ref" };
+  }
+
+  return {
+    status: "resolved",
+    destination: {
+      remote,
+      branch: remoteBranch,
+      remoteTrackingRef: `${REMOTE_TRACKING_PREFIX}${remote}/${remoteBranch}`,
     },
   };
 }
