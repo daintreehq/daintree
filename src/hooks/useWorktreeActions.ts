@@ -9,7 +9,7 @@ import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionSource } from "@shared/types/actions";
 import type { CopyTreeRunSource } from "@shared/types";
-import type { CopyTreeBudgetStats } from "@shared/types/ipc/copyTree";
+import type { CopyTreeBudgetStats, CopyTreeOptions } from "@shared/types/ipc/copyTree";
 
 // Both live in a leaf module: `formatCopyResultMessage` because the copyTree
 // action definitions need it and importing it from here would close a cycle
@@ -148,6 +148,11 @@ export interface WorktreeActions {
     worktree: WorktreeSnapshot,
     copyTreeRunSource?: CopyTreeRunSource
   ) => Promise<void>;
+  handleCopyTreeWithOptions: (
+    worktree: WorktreeSnapshot,
+    options: CopyTreeOptions,
+    copyTreeRunSource?: CopyTreeRunSource
+  ) => Promise<void>;
   handleOpenEditor: (worktree: WorktreeSnapshot) => void;
   handleOpenIssue: (worktree: WorktreeSnapshot) => void;
   handleOpenPR: (worktree: WorktreeSnapshot) => void;
@@ -159,6 +164,43 @@ export function useWorktreeActions({
   onOpenRecipeEditor,
 }: UseWorktreeActionsOptions = {}): WorktreeActions {
   const addError = useErrorStore((state) => state.addError);
+
+  // Shared failure path for both copy routes below. Classifying and recording
+  // here rather than at each call site keeps a replayed recent reporting the
+  // same way a full copy does — the user cannot tell the two routes apart, so
+  // neither should the error surface.
+  const reportCopyFailure = useCallback(
+    (worktreeId: string, e: unknown, source = "WorktreeCard"): void => {
+      const message = formatErrorMessage(e, "Failed to copy context to clipboard");
+      const details = e instanceof Error ? e.stack : undefined;
+
+      let errorType: ErrorRecord["type"] = "process";
+      if (message.includes("not available") || message.includes("not installed")) {
+        errorType = "config";
+      } else if (
+        message.includes("permission") ||
+        message.includes("EACCES") ||
+        message.includes("denied")
+      ) {
+        errorType = "filesystem";
+      }
+
+      addError({
+        type: errorType,
+        message: `Copy context failed: ${message}`,
+        details,
+        source,
+        context: {
+          worktreeId,
+        },
+        retryability: "auto",
+        correlationId: crypto.randomUUID(),
+      });
+
+      logError("Failed to copy context", undefined, { message });
+    },
+    [addError]
+  );
 
   // Resolves once the copy has settled; the completion toast belongs to the
   // `worktree.copyTree` action so the keybinding and palette routes — which
@@ -175,36 +217,58 @@ export function useWorktreeActions({
           throw new Error(result.error.message);
         }
       } catch (e) {
-        const message = formatErrorMessage(e, "Failed to copy context to clipboard");
-        const details = e instanceof Error ? e.stack : undefined;
-
-        let errorType: ErrorRecord["type"] = "process";
-        if (message.includes("not available") || message.includes("not installed")) {
-          errorType = "config";
-        } else if (
-          message.includes("permission") ||
-          message.includes("EACCES") ||
-          message.includes("denied")
-        ) {
-          errorType = "filesystem";
-        }
-
-        addError({
-          type: errorType,
-          message: `Copy context failed: ${message}`,
-          details,
-          source: "WorktreeCard",
-          context: {
-            worktreeId: worktree.id,
-          },
-          retryability: "auto",
-          correlationId: crypto.randomUUID(),
-        });
-
-        logError("Failed to copy context", undefined, { message });
+        reportCopyFailure(worktree.id, e);
       }
     },
-    [addError]
+    [reportCopyFailure]
+  );
+
+  /**
+   * Re-run a stored option set — the toolbar's recents rows (#11733).
+   *
+   * Reported against the toolbar rather than the worktree card, which is the
+   * only surface that reaches this path — the Problems panel shows that source
+   * verbatim, so inheriting the full-copy helper's label would point at a
+   * component the user never touched.
+   *
+   * Routed through `copyTree.generateAndCopyFile`, NOT `worktree.copyTree`:
+   * that action's args schema is flat and narrow (`format`, `modified`,
+   * `includePaths`, `scopePaths`), and Zod object parsing strips unknown keys
+   * without erroring — so a record carrying `filter`, `exclude`, `always`,
+   * `changed`, the size budgets, `withLineNumbers`, `charLimit` or `sort` would
+   * replay as a quietly different copy. `generateAndCopyFile` takes the whole
+   * nested options object and validates every field.
+   *
+   * `options` is passed through verbatim. An empty selection array reads as "no
+   * filter" — i.e. the whole worktree — to the SDK, so the schema rejects those
+   * at the validated boundary; normalizing them here would reintroduce exactly
+   * the fail-open this repo already fixed once.
+   *
+   * The target is the worktree the caller hands over — the active one — rather
+   * than `record.worktreeId`. The dedupe key covers options alone, so a record's
+   * `worktreeId` adopts whichever worktree ran it last: it is provenance, not a
+   * stable original target, and may name a worktree that no longer exists.
+   */
+  const handleCopyTreeWithOptions = useCallback(
+    async (
+      worktree: WorktreeSnapshot,
+      options: CopyTreeOptions,
+      copyTreeRunSource?: CopyTreeRunSource
+    ): Promise<void> => {
+      try {
+        const result = await actionService.dispatch(
+          "copyTree.generateAndCopyFile",
+          { worktreeId: worktree.id, options },
+          { source: "user", copyTreeRunSource }
+        );
+        if (!result.ok) {
+          throw new Error(result.error.message);
+        }
+      } catch (e) {
+        reportCopyFailure(worktree.id, e, "Toolbar");
+      }
+    },
+    [reportCopyFailure]
   );
 
   const handleOpenEditor = useCallback((worktree: WorktreeSnapshot) => {
@@ -266,6 +330,7 @@ export function useWorktreeActions({
   return useMemo(
     () => ({
       handleCopyTree,
+      handleCopyTreeWithOptions,
       handleOpenEditor,
       handleOpenIssue,
       handleOpenPR,
@@ -274,6 +339,7 @@ export function useWorktreeActions({
     }),
     [
       handleCopyTree,
+      handleCopyTreeWithOptions,
       handleOpenEditor,
       handleOpenIssue,
       handleOpenPR,

@@ -1,5 +1,6 @@
 import {
   Suspense,
+  lazy,
   useRef,
   useState,
   useEffect,
@@ -121,12 +122,25 @@ import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
 import { useOverflowBadgeSeverity, type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
+import { FixedDropdown } from "@/components/ui/fixed-dropdown";
+import {
+  isInsideCopyTreePanel,
+  restoreCopyTreeTriggerFocus,
+} from "@/components/CopyTree/copyTreeFocus";
+import type { CopyTreeHistoryRecord } from "@shared/types";
 
 import {
   LAUNCHABLE_AGENT_IDS,
   isBuiltInAgentId,
   type BuiltInAgentId,
 } from "@shared/config/agentIds";
+
+function preloadCopyTreeRecentsPanel() {
+  return import("@/components/CopyTree/CopyTreeRecentsPanel");
+}
+const LazyCopyTreeRecentsPanel = lazy(() =>
+  preloadCopyTreeRecentsPanel().then((m) => ({ default: m.CopyTreeRecentsPanel }))
+);
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
@@ -641,6 +655,12 @@ export function Toolbar({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isCopyingTree, setIsCopyingTree] = useState(false);
   const showCopyingSpinner = useDohertyGate(isCopyingTree);
+  // Local to the toolbar — the panel has no palette entry or action of its own,
+  // so nothing outside this component needs to open it (#11733).
+  const [copyTreeOpen, setCopyTreeOpen] = useState(false);
+  const copyTreeButtonRef = useRef<HTMLButtonElement>(null);
+  // Latch after first open so reopening never re-suspends.
+  const copyTreePanelMounted = useKeepMounted(copyTreeOpen);
 
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
@@ -664,7 +684,7 @@ export function Toolbar({
   const prevFocusedToolbarItemRef = useRef<HTMLElement | null>(null);
   const forgeStatsRef = useRef<ForgeStatsHandle>(null);
 
-  const { handleCopyTree } = useWorktreeActions();
+  const { handleCopyTree, handleCopyTreeWithOptions } = useWorktreeActions();
   const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
   const copyTreeShortcut = useKeybindingDisplay("worktree.copyTree");
   const devServerShortcut = useKeybindingDisplay("devServer.start");
@@ -817,6 +837,67 @@ export function Toolbar({
       setIsCopyingTree(false);
     });
   }, [isCopyingTree, activeWorktree, handleCopyTree]);
+
+  // Warm the panel chunk before the first click — React 19 `lazy` still shows
+  // the fallback for one frame on a cold chunk, and this dropdown's whole point
+  // is that the copy is one click deeper than it used to be.
+  useEffect(() => {
+    void preloadCopyTreeRecentsPanel();
+  }, []);
+
+  // Close and hand focus back to the trigger, but only when closing would
+  // otherwise strand it — an outside click has already moved focus somewhere the
+  // user chose, and yanking it back to the toolbar would fight that. The
+  // deferred-frame reasoning lives with the helper.
+  const closeCopyTreePanel = useCallback(() => {
+    setCopyTreeOpen(false);
+    restoreCopyTreeTriggerFocus(copyTreeButtonRef.current);
+  }, []);
+
+  // The visible button opens the panel; it no longer copies. Every immediate
+  // route is deliberately left alone: `Cmd+Shift+C` dispatches
+  // `worktree.copyTree` without passing through here at all, and the overflow
+  // item calls `handleCopyTreeClick` directly — a nested panel inside the
+  // overflow menu isn't worth it (#11733).
+  //
+  // The in-flight check matches what the button already announces: it renders
+  // `aria-disabled` while copying, and the shared Button doesn't suppress
+  // clicks on that alone, so without this the "disabled" trigger still opens a
+  // panel whose rows would all decline to run.
+  const handleCopyTreeToggle = useCallback(() => {
+    if (isCopyingTree || !activeWorktree) return;
+    setCopyTreeOpen((open) => !open);
+  }, [isCopyingTree, activeWorktree]);
+
+  // The panel's primary row: the old one-click behavior, now one click deeper.
+  const handleCopyTreeFullContext = useCallback(() => {
+    closeCopyTreePanel();
+    void handleCopyTreeClick();
+  }, [closeCopyTreePanel, handleCopyTreeClick]);
+
+  // A recents row. Replayed against the ACTIVE worktree, never the worktree
+  // stored on the record — the history dedupe key covers options alone, so a
+  // record's worktree is whichever one ran it last rather than a stable target,
+  // and it may name a worktree that has since been removed.
+  const handleCopyTreeRunRecent = useCallback(
+    (record: CopyTreeHistoryRecord) => {
+      closeCopyTreePanel();
+      if (isCopyingTree || !activeWorktree) return;
+
+      setIsCopyingTree(true);
+      void handleCopyTreeWithOptions(activeWorktree, record.options, "toolbar").finally(() => {
+        setIsCopyingTree(false);
+      });
+    },
+    [closeCopyTreePanel, isCopyingTree, activeWorktree, handleCopyTreeWithOptions]
+  );
+
+  // The anchor stops being interactive without a worktree, and the panel's rows
+  // all need one to run — leaving it open would strand a dead menu over the
+  // toolbar.
+  useEffect(() => {
+    if (!activeWorktree && copyTreeOpen) setCopyTreeOpen(false);
+  }, [activeWorktree, copyTreeOpen]);
 
   const getToolbarItems = useCallback(
     () =>
@@ -1155,41 +1236,63 @@ export function Toolbar({
       },
       "copy-tree": {
         render: () => (
-          <ContextMenu>
-            <ContextMenuTrigger asChild>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    data-toolbar-item=""
-                    onClick={handleCopyTreeClick}
-                    aria-disabled={isCopyingTree || !activeWorktree || undefined}
-                    className={cn(
-                      "toolbar-icon-button relative",
-                      "text-daintree-text",
-                      isCopyingTree && "cursor-wait opacity-70",
-                      "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                    )}
-                    aria-label={isCopyingTree ? "Copying…" : "Copy context"}
-                    aria-keyshortcuts={copyTreeAriaShortcut}
-                  >
-                    {showCopyingSpinner ? <Spinner /> : <Folders />}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="font-medium">
-                  {isCopyingTree
-                    ? "Copying…"
-                    : !activeWorktree
-                      ? "Open a worktree first"
-                      : createTooltipContent("Copy context", copyTreeShortcut)}
-                </TooltipContent>
-              </Tooltip>
-            </ContextMenuTrigger>
-            <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-              <ToolbarContextMenuItems buttonId="copy-tree" side="right" />
-            </ContextMenuContent>
-          </ContextMenu>
+          <div className="relative">
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      ref={copyTreeButtonRef}
+                      variant="ghost"
+                      size="icon"
+                      data-toolbar-item=""
+                      onClick={handleCopyTreeToggle}
+                      aria-disabled={isCopyingTree || !activeWorktree || undefined}
+                      className={cn(
+                        "toolbar-icon-button relative",
+                        "text-daintree-text",
+                        isCopyingTree && "cursor-wait opacity-70",
+                        "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                      )}
+                      aria-label={isCopyingTree ? "Copying…" : "Copy context"}
+                      aria-keyshortcuts={copyTreeAriaShortcut}
+                      aria-haspopup="dialog"
+                      aria-expanded={copyTreeOpen}
+                    >
+                      {showCopyingSpinner ? <Spinner /> : <Folders />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="font-medium">
+                    {isCopyingTree
+                      ? "Copying…"
+                      : !activeWorktree
+                        ? "Open a worktree first"
+                        : createTooltipContent("Copy context", copyTreeShortcut)}
+                  </TooltipContent>
+                </Tooltip>
+              </ContextMenuTrigger>
+              <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                <ToolbarContextMenuItems buttonId="copy-tree" side="right" />
+              </ContextMenuContent>
+            </ContextMenu>
+            <FixedDropdown
+              open={copyTreeOpen}
+              onOpenChange={(open) => {
+                if (!open) closeCopyTreePanel();
+              }}
+              anchorRef={copyTreeButtonRef}
+              className="p-0"
+            >
+              {copyTreePanelMounted && (
+                <Suspense fallback={null}>
+                  <LazyCopyTreeRecentsPanel
+                    onCopyFullContext={handleCopyTreeFullContext}
+                    onRunRecent={handleCopyTreeRunRecent}
+                  />
+                </Suspense>
+              )}
+            </FixedDropdown>
+          </div>
         ),
         isAvailable: true,
       },
@@ -1282,7 +1385,12 @@ export function Toolbar({
       copyTreeShortcut,
       copyTreeAriaShortcut,
       currentProject,
-      handleCopyTreeClick,
+      handleCopyTreeToggle,
+      handleCopyTreeFullContext,
+      handleCopyTreeRunRecent,
+      closeCopyTreePanel,
+      copyTreeOpen,
+      copyTreePanelMounted,
       isCopyingTree,
       showCopyingSpinner,
       activeWorktree,
@@ -1508,6 +1616,27 @@ export function Toolbar({
     }
     if (overflowSet.has("notification-center")) {
       useUIStore.getState().closeNotificationCenter();
+    }
+    // The panel is portaled to document.body, so the wrapper's `invisible
+    // absolute` eviction styles never reach it — an open panel would strand on
+    // screen and then re-anchor to the hidden button's rect on the next resize.
+    if (overflowSet.has("copy-tree")) {
+      const focusWasInPanel = isInsideCopyTreePanel(document.activeElement);
+      setCopyTreeOpen(false);
+      // The anchor is on its way to being hidden, so it can't take focus back.
+      // The overflow trigger is where the command now lives, which makes it the
+      // honest destination — otherwise a keyboard user is dropped onto <body>.
+      // It has to be the trigger on the side that swallowed the button: the
+      // other one renders display:none and untabbable when its own side has no
+      // overflow, so focusing it would be the silent no-op this prevents.
+      if (focusWasInPanel) {
+        const side = rightOverflow.includes("copy-tree") ? "right" : "left";
+        toolbarRef.current
+          ?.querySelector<HTMLElement>(
+            `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"][data-visible="true"]`
+          )
+          ?.focus();
+      }
     }
   }, [leftOverflow, rightOverflow]);
 

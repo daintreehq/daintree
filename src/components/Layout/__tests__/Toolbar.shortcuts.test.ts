@@ -272,6 +272,67 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
   });
 
+  describe("copy-tree recents dropdown — issue #11733", () => {
+    // Only invariants that can't be reached from a render live here; the
+    // panel's own dialog role, focus handling and row behavior are covered
+    // behaviorally in CopyTreeRecentsPanel.test.tsx. Toolbar.tsx is too large
+    // to mount in jsdom, which is the reason this file reads source at all.
+
+    it("never replays a recent against the worktree stored on the record", () => {
+      // The history dedupe key covers options alone, so `record.worktreeId` is
+      // whichever worktree ran it last — provenance, not a stable target, and
+      // possibly one that no longer exists. File-wide rather than block-scoped:
+      // the field must not be read anywhere in the toolbar, however the handler
+      // is later refactored or extracted.
+      expect(source).toContain("handleCopyTreeWithOptions(activeWorktree, record.options");
+      expect(source).not.toContain("record.worktreeId");
+    });
+
+    it("closes the panel wherever a sibling dropdown is closed on overflow eviction", () => {
+      // Relational, and the reason it matters: the panel is portaled to
+      // document.body, so the wrapper's `invisible absolute` eviction styles
+      // never reach it. Whatever set of ids that effect closes, copy-tree
+      // belongs in it — asserted against its neighbours rather than as a
+      // standalone literal, so deleting the effect fails here too.
+      const evictionEffect = source.match(
+        /Close open dropdowns when their buttons move into overflow[\s\S]*?\}, \[leftOverflow, rightOverflow\]\);/
+      );
+      expect(evictionEffect).not.toBeNull();
+      expect(evictionEffect![0]).toContain('overflowSet.has("notification-center")');
+      expect(evictionEffect![0]).toContain('overflowSet.has("copy-tree")');
+    });
+
+    it("gates opening the panel on the same condition the trigger reports as disabled", () => {
+      // The shared Button doesn't suppress clicks on aria-disabled alone, so a
+      // trigger that announces "disabled" while copying must also refuse to
+      // open — otherwise the panel appears and every row silently declines.
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      const ariaDisabled = copyTreeBlock![0].match(/aria-disabled=\{([^}]+)\}/);
+      expect(ariaDisabled).not.toBeNull();
+
+      // `undefined` is the JSX spelling of "not disabled", not a condition.
+      const disablingTerms = ariaDisabled![1]!
+        .split("||")
+        .map((t) => t.trim().replace(/^!/, ""))
+        .filter((t) => t !== "undefined" && t !== "");
+      // Guard against a vacuous pass: an expression that yielded no terms would
+      // make the loop below assert nothing at all.
+      expect(disablingTerms.length).toBeGreaterThan(0);
+
+      // Read the early-return condition specifically, not the whole callback —
+      // its dependency array names the same identifiers, so a body-wide
+      // substring check would still pass with the guard deleted.
+      const earlyReturn = source.match(
+        /const handleCopyTreeToggle = useCallback\(\(\) => \{\s*if \(([^)]+)\) return;/
+      );
+      expect(earlyReturn).not.toBeNull();
+      for (const term of disablingTerms) {
+        expect(earlyReturn![1]).toContain(term);
+      }
+    });
+  });
+
   describe("sidebar toggle drops always-on armed highlight — issue #8357", () => {
     it("marks the sidebar toggle button with data-sidebar-toggle", () => {
       const sidebarBlock = source.match(/"sidebar-toggle":\s*\{[\s\S]*?isAvailable/);

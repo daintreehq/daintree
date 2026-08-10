@@ -8,7 +8,7 @@ import {
   getFirstGridPanel,
   getGridPanelCount,
   getDockPanelCount,
-  clickToolbarButton,
+  copyFullContextFromToolbar,
   expectToolbarButtonReachable,
   openTerminal,
 } from "../../helpers/panels";
@@ -381,9 +381,25 @@ test.describe.serial("Core: Terminal & Panels", () => {
     });
 
     test("Copy Context button transitions through states", async () => {
-      const { window } = ctx;
+      const { app, window } = ctx;
 
-      await clickToolbarButton(window, SEL.toolbar.copyContext, T_MEDIUM);
+      // Clear first: the next test in this serial block asserts the clipboard
+      // is non-empty, which would pass on leftover content from an earlier
+      // test even if this copy did nothing. `clear()` rather than
+      // `writeText("")` — writing empty text still installs a text format, so
+      // the format-count assertion would stay satisfied by the reset itself.
+      await app.evaluate(({ clipboard }) => clipboard.clear());
+      await expect
+        .poll(async () => app.evaluate(({ clipboard }) => clipboard.availableFormats().length), {
+          timeout: T_SHORT,
+          message: "Clipboard should start empty so the copy below is what the next test sees",
+        })
+        .toBe(0);
+
+      // The trigger opens a recents panel rather than copying (#11733); the
+      // helper follows through to the panel's "Copy full context" row so the
+      // serial clipboard assertion below still has a copy to observe.
+      await copyFullContextFromToolbar(window, T_MEDIUM);
       await expectToolbarButtonReachable(window, SEL.toolbar.copyContext, T_LONG);
     });
 

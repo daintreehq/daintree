@@ -354,6 +354,14 @@ async function hasToolbarOverflowItem(
 }
 
 /**
+ * Which route a toolbar command was actually invoked through. Callers whose
+ * expectations differ per route (a button that opens a panel when visible but
+ * runs immediately from the overflow menu) need this to stay deterministic —
+ * which route applies depends on the CI viewport width.
+ */
+export type ToolbarClickRoute = "visible" | "overflow" | "tray" | "shortcut";
+
+/**
  * Click a toolbar button, handling the case where it may be hidden
  * in the overflow menu on small displays (e.g., Windows CI).
  * Checks direct visibility first, then falls back to the overflow menu.
@@ -362,7 +370,7 @@ export async function clickToolbarButton(
   page: Page,
   selector: string,
   timeout = 5000
-): Promise<void> {
+): Promise<ToolbarClickRoute> {
   await dismissBlockingPalette(page);
 
   const toolbar = page.getByRole("toolbar", { name: "Main toolbar" });
@@ -370,24 +378,47 @@ export async function clickToolbarButton(
 
   for (const candidate of getToolbarButtonLocators(toolbar, selector, label)) {
     if (await clickFirstVisible(candidate, 3000, 1000)) {
-      return;
+      return "visible";
     }
   }
 
   if (label && (await clickToolbarOverflowItem(page, toolbar, label, timeout))) {
-    return;
+    return "overflow";
   }
 
   if (label && (await clickPanelTrayItem(page, toolbar, label, timeout))) {
-    return;
+    return "tray";
   }
 
   if (label && toolbarShortcuts[label]) {
     await page.keyboard.press(toolbarShortcuts[label]);
-    return;
+    return "shortcut";
   }
 
   throw new Error(`Toolbar button ${label ?? selector} was not visible or present`);
+}
+
+/**
+ * Copy the active worktree's full context from the toolbar (#11733).
+ *
+ * The visible copy-tree button no longer copies — it opens a recents dropdown
+ * whose first row does. Every other route still copies on the spot: the overflow
+ * row and the `Cmd+Shift+C` fallback both bypass the panel by design.
+ *
+ * Branching on the returned route rather than probing for the panel is what
+ * makes this deterministic. `locator.isVisible()` does not wait — its `timeout`
+ * option is a no-op — so a probe would race a cold lazy chunk and silently
+ * return having copied nothing, leaving the caller's clipboard assertion to pass
+ * on whatever was there before.
+ */
+export async function copyFullContextFromToolbar(page: Page, timeout = 5000): Promise<void> {
+  const route = await clickToolbarButton(page, SEL.toolbar.copyContext, timeout);
+  if (route !== "visible") return;
+
+  const panel = page.getByRole("dialog", { name: "Copy context" });
+  const fullCopyRow = panel.getByRole("button", { name: "Copy full context", exact: true });
+  await fullCopyRow.waitFor({ state: "visible", timeout });
+  await fullCopyRow.click({ timeout });
 }
 
 /**
