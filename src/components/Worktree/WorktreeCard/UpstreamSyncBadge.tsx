@@ -20,6 +20,13 @@ interface UpstreamSyncBadgeProps {
   baseAheadCount?: number | null;
   baseBehindCount?: number | null;
   baseMatchesUpstream?: boolean;
+  /**
+   * Ref the base counts were measured against (`upstream/main`). Named in the
+   * tooltip while the compact pill keeps the bare branch name — the pill is
+   * scanned across a dozen cards, the tooltip is where the disambiguation
+   * belongs.
+   */
+  baseCompareRef?: string | null;
   fetchIntervalMs?: number;
 }
 
@@ -39,6 +46,7 @@ export function UpstreamSyncBadge({
   baseAheadCount,
   baseBehindCount,
   baseMatchesUpstream,
+  baseCompareRef,
   fetchIntervalMs,
 }: UpstreamSyncBadgeProps) {
   const hasAhead = aheadCount !== undefined && aheadCount > 0;
@@ -198,19 +206,19 @@ export function UpstreamSyncBadge({
           <div className="text-text-muted/70">
             {baseAheadCount != null && baseAheadCount > 0 && (
               <span>
-                {baseAheadCount} ahead of {baseBranchName}
+                {baseAheadCount} ahead of {baseCompareRef || baseBranchName}
               </span>
             )}
             {baseBehindCount != null && baseBehindCount > 0 && (
               <span>
-                {baseBehindCount} behind {baseBranchName}
+                {baseBehindCount} behind {baseCompareRef || baseBranchName}
               </span>
             )}
           </div>
         )}
         {fetchNetworkFailed && (
           <div className="text-status-warning/80" data-testid="upstream-sync-network-warning">
-            Couldn't reach origin
+            Couldn't reach the remote
           </div>
         )}
         {isStale && lastFetchedAt != null && (

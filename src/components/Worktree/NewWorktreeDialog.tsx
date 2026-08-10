@@ -413,11 +413,23 @@ export function NewWorktreeDialog({
         setBranches(branchList);
 
         if (initialPR?.headRef) {
-          const remoteBranchName = `origin/${initialPR.headRef}`;
-          const remoteBranch = branchList.find((b) => b.name === remoteBranchName);
+          // Any remote may carry the PR head — on a fork layout the forge is
+          // `upstream`, not `origin` (#11747). Matched as an exact
+          // `<remote>/<headRef>` rather than a suffix, so a head named `x`
+          // can't match `origin/feature/x`.
+          const remoteCandidates = branchList.filter(
+            (b) => b.remote && b.name === `${b.remote}/${initialPR.headRef}`
+          );
+          // A branch name is not a PR identity. When two remotes both carry the
+          // name they may be different commits, and this component has no way
+          // to tell which repo the PR belongs to — picking either could build
+          // the worktree from the wrong commit. Fall through to the PR-number
+          // fetch, which is authoritative. One match is unambiguous enough to
+          // keep the fast path (and is the single-remote case).
+          const remoteBranch = remoteCandidates.length === 1 ? remoteCandidates[0] : undefined;
           const localBranch = branchList.find((b) => b.name === initialPR.headRef && !b.remote);
           if (remoteBranch) {
-            setBaseBranch(remoteBranchName);
+            setBaseBranch(remoteBranch.name);
             setFromRemote(true);
             setPrBranchResolved(true);
           } else if (localBranch) {
