@@ -72,6 +72,18 @@ export interface CopyTreeGeneratePayload {
    */
   includeContent?: boolean;
   /**
+   * Caller-supplied display label for the run, shown in the project's
+   * copy-tree history and in the completion notification (#11734).
+   *
+   * Deliberately a payload field rather than a `CopyTreeOptions` one, for the
+   * same reason as `source`: it names the run for a human, it does not select
+   * or format anything, so it must stay out of the dedupe key — two runs that
+   * build the identical bundle are one history entry whatever they were
+   * called. Blank counts as absent, and an absent name falls back to a label
+   * derived from the options.
+   */
+  name?: string;
+  /**
    * Which surface asked for the run, recorded in the project's copy-tree
    * history (#11732).
    *
@@ -86,6 +98,8 @@ export interface CopyTreeGeneratePayload {
 export interface CopyTreeGenerateAndCopyFilePayload {
   worktreeId: string;
   options?: CopyTreeOptions;
+  /** See {@link CopyTreeGeneratePayload.name}. */
+  name?: string;
   /** See {@link CopyTreeGeneratePayload.source}. */
   source?: CopyTreeRunSource;
 }
@@ -97,6 +111,8 @@ export interface CopyTreeInjectPayload {
   options?: CopyTreeOptions;
   /** Unique identifier for this injection operation (for per-operation cancellation) */
   injectionId?: string;
+  /** See {@link CopyTreeGeneratePayload.name}. */
+  name?: string;
   /** See {@link CopyTreeGeneratePayload.source}. */
   source?: CopyTreeRunSource;
 }

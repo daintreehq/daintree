@@ -1286,6 +1286,52 @@ describe("copy-tree run history recording", () => {
     expect(lastRecordedRun()[1]).toMatchObject({ source: "mcp", worktreeId: "wt-1" });
   });
 
+  /**
+   * The caller-supplied label reaching history (#11734).
+   *
+   * Every channel is covered rather than one representative: each validates
+   * through its own payload schema, and an ordinary zod object *strips* an
+   * undeclared key instead of rejecting it. A channel that was missed would
+   * therefore keep passing every other assertion in this file while silently
+   * dropping the name — the exact failure this table exists to catch.
+   */
+  describe.each([
+    { channel: CHANNELS.COPYTREE_GENERATE, extra: {} as Record<string, unknown> },
+    { channel: CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, extra: {} as Record<string, unknown> },
+    { channel: CHANNELS.COPYTREE_INJECT, extra: { terminalId: "t-1" } },
+  ])("$channel run name", ({ channel, extra }) => {
+    it("forwards a supplied name to the history append", async () => {
+      makeService();
+      const handler = getInvokeHandler(channel);
+
+      await handler(mockSender, { worktreeId: "wt-1", name: "Authentication stuff", ...extra });
+
+      expect(lastRecordedRun()[1].name).toBe("Authentication stuff");
+    });
+
+    it("forwards the raw value, leaving normalization to the history layer", async () => {
+      makeService();
+      const handler = getInvokeHandler(channel);
+
+      // Untrimmed on purpose: `applyCopyTreeRun` owns blank-as-absent and
+      // truncation, so trimming here too would give the same input two
+      // normalizations that can drift apart.
+      await handler(mockSender, { worktreeId: "wt-1", name: "  spaced  ", ...extra });
+
+      expect(lastRecordedRun()[1].name).toBe("  spaced  ");
+    });
+
+    it("records the run with no name when none was supplied", async () => {
+      makeService();
+      const handler = getInvokeHandler(channel);
+
+      await handler(mockSender, { worktreeId: "wt-1", ...extra });
+
+      expect(copyTreeHistoryMock.recordCopyTreeRun).toHaveBeenCalledTimes(1);
+      expect(lastRecordedRun()[1].name).toBeUndefined();
+    });
+  });
+
   it("stores the caller's runtime options, not the settings-merged ones", async () => {
     projectStoreMock.getProjectSettings.mockResolvedValue({
       excludedPaths: ["vendor"],

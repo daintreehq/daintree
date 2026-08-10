@@ -1417,24 +1417,28 @@ function buildElectronApi(): ElectronAPI {
         worktreeId: string,
         options?: CopyTreeOptions,
         includeContent?: boolean,
-        source?: CopyTreeRunSource
+        source?: CopyTreeRunSource,
+        name?: string
       ) =>
         _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE, {
           worktreeId,
           options,
           includeContent,
           source,
+          name,
         }),
 
       generateAndCopyFile: (
         worktreeId: string,
         options?: CopyTreeOptions,
-        source?: CopyTreeRunSource
+        source?: CopyTreeRunSource,
+        name?: string
       ) =>
         _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, {
           worktreeId,
           options,
           source,
+          name,
         }),
 
       injectToTerminal: (
@@ -1442,7 +1446,8 @@ function buildElectronApi(): ElectronAPI {
         worktreeId: string,
         options?: CopyTreeOptions,
         injectionId?: string,
-        source?: CopyTreeRunSource
+        source?: CopyTreeRunSource,
+        name?: string
       ) =>
         _unwrappingInvoke(CHANNELS.COPYTREE_INJECT, {
           terminalId,
@@ -1450,6 +1455,7 @@ function buildElectronApi(): ElectronAPI {
           options,
           injectionId,
           source,
+          name,
         }),
 
       isAvailable: () => _unwrappingInvoke(CHANNELS.COPYTREE_AVAILABLE),
