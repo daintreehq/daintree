@@ -799,36 +799,49 @@ describe("systemActions adversarial", () => {
    * passing every other assertion here while silently discarding the name.
    */
   describe("copyTree run name", () => {
+    const RAW_NAME = "  Auth flow context  ";
+
+    // The FULL expected client tuple, not just the trailing slot. Asserting only
+    // the last argument would still pass if `source` were dropped and the name
+    // slid into its place — losing attribution silently. Both are strings, so
+    // nothing upstream of this catches that swap.
     const CASES = [
       {
         id: "copyTree.generate",
         mock: copyTreeClientMock.generate,
         args: {} as Record<string, unknown>,
         base: "Context generated",
+        call: ["wt-active", undefined, undefined, "unknown", RAW_NAME],
       },
       {
         id: "copyTree.generateAndCopyFile",
         mock: copyTreeClientMock.generateAndCopyFile,
         args: {} as Record<string, unknown>,
         base: "Context copied",
+        call: ["wt-active", undefined, "unknown", RAW_NAME],
       },
       {
         id: "copyTree.injectToTerminal",
         mock: copyTreeClientMock.injectToTerminal,
         args: { terminalId: "t-1" },
         base: "Context injected",
+        call: ["t-1", "wt-active", undefined, undefined, "unknown", RAW_NAME],
       },
     ];
 
     const titleOf = (): string =>
       (notifyMock.mock.calls[0]?.[0] as { title: string } | undefined)?.title ?? "";
 
-    it.each(CASES)("$id advertises name as an optional string with guidance", ({ id }) => {
+    /**
+     * The `name` property as an MCP client actually receives it.
+     *
+     * Goes through the real conversion, matching ActionService.computeSchemas:
+     * a `.describe()` attached to the wrong link in a zod chain is dropped by
+     * toJSONSchema without error, so reading `.description` off the zod object
+     * would assert text that is never sent.
+     */
+    const emitName = (id: string): { type?: string; description?: string } => {
       const schema = setupActions().getDef(id).argsSchema;
-      // Through the real conversion, matching ActionService.computeSchemas: a
-      // `.describe()` attached to the wrong link in the chain is dropped by
-      // toJSONSchema without error, so reading `.description` off the zod
-      // object would assert text the MCP client is never sent.
       const emitted = z.toJSONSchema(schema!, {
         io: "input",
         unrepresentable: "any",
@@ -839,13 +852,27 @@ describe("systemActions adversarial", () => {
         properties?: Record<string, { type?: string; description?: string }>;
         required?: string[];
       };
-
-      expect(emitted.properties?.name?.type).toBe("string");
       expect(emitted.required ?? []).not.toContain("name");
-      // The two facts a caller needs to use the field well; without them the
-      // field advertises as an unexplained free-text string.
-      expect(emitted.properties?.name?.description).toContain("copy-tree history");
-      expect(emitted.properties?.name?.description).toContain("2 to 4 words");
+      return emitted.properties?.name ?? {};
+    };
+
+    it.each(CASES)("$id advertises name as an optional described string", ({ id }) => {
+      const emitted = emitName(id);
+      expect(emitted.type).toBe("string");
+      // Only that SOME text survived the conversion. Asserting the wording
+      // would copy a literal out of the source and break on a harmless reword;
+      // the failure worth catching is the silent one, where the text is dropped
+      // in transit and the field ships as an unexplained free-text string.
+      expect(emitted.description).toBeTruthy();
+    });
+
+    it("advertises one identical name description across all three tools", () => {
+      // The real invariant behind the wording: all three read from a single
+      // field constant, so a tool that drifted to its own reworded copy — the
+      // way three hand-written descriptions inevitably do — fails here without
+      // pinning what the text actually says.
+      const descriptions = CASES.map(({ id }) => emitName(id).description);
+      expect(new Set(descriptions).size).toBe(1);
     });
 
     it.each(CASES)("$id survives the schema transform rather than being stripped", ({ id }) => {
@@ -862,25 +889,23 @@ describe("systemActions adversarial", () => {
       expect(parsed.name).toBe("Auth flow");
     });
 
-    it.each(CASES)("$id forwards the raw name to the client", async ({ id, mock, args }) => {
-      const { run } = setupActions();
-      // Untrimmed: the client and IPC layers forward verbatim so that
-      // resolveCopyTreeRunName stays the single normalization seam.
-      await run(id, { ...args, name: "  Auth flow context  " }, { activeWorktreeId: "wt-active" });
+    it.each(CASES)(
+      "$id forwards the raw name in the slot after the source",
+      async ({ id, mock, args, call }) => {
+        const { run } = setupActions();
+        // Untrimmed: the client and IPC layers forward verbatim so that
+        // resolveCopyTreeRunName stays the single normalization seam.
+        await run(id, { ...args, name: RAW_NAME }, { activeWorktreeId: "wt-active" });
 
-      const call = mock.mock.calls[0] as unknown[];
-      expect(call[call.length - 1]).toBe("  Auth flow context  ");
-    });
+        expect(mock.mock.calls[0]).toEqual(call);
+      }
+    );
 
     it.each(CASES)(
       "$id labels its completion with the supplied name",
       async ({ id, args, base }) => {
         const { run } = setupActions();
-        await run(
-          id,
-          { ...args, name: "  Auth flow context  " },
-          { activeWorktreeId: "wt-active" }
-        );
+        await run(id, { ...args, name: RAW_NAME }, { activeWorktreeId: "wt-active" });
 
         // Trimmed for display even though it is forwarded raw — the label the
         // user reads must match the one the history stores.
@@ -928,10 +953,10 @@ describe("systemActions adversarial", () => {
           { activeWorktreeId: "wt-active" }
         );
 
-        // deriveCopyTreeRunName would return "auth" here. Surfacing it would
-        // restate, cryptically, the selection the body already summarizes.
+        // deriveCopyTreeRunName returns "auth" for this selection — a bare
+        // basename, which is exactly the kind of fallback that reads as a
+        // riddle in a headline. The exact match below already excludes it.
         expect(titleOf()).toBe(base);
-        expect(titleOf()).not.toContain("auth");
       }
     );
   });

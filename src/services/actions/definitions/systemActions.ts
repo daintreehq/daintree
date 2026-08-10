@@ -144,17 +144,21 @@ const copyTreeRunNameField = z
   .string()
   .optional()
   .describe(
-    "Short human-readable label for this copy tree, shown in the user's copy-tree history and in the completion notification. Use 2 to 4 words describing what the context is for, for example 'auth flow context'. Omit it and a label is derived from the selection instead."
+    "Short human-readable label for this copy tree, shown in the user's copy-tree history and in the completion notification. Use 2 to 4 words describing what the context is for, for example 'auth flow context'. Omit it and the history entry falls back to a label derived from the selection, while the notification stays unlabelled."
   );
 
 /**
  * The completion title for a copy-tree run, labelled when the caller named it.
  *
  * Only a *supplied* name is appended, never the derived fallback. The fallback
- * exists so every history row has a label; a notification already has one in
- * `base`, so appending a derived label would read as noise on an unnarrowed run
- * ("Context copied — Full context") or restate, cryptically, the same selection
- * the body already summarizes. That also keeps every existing caller's title
+ * exists so every history row stays navigable, and it is a heuristic — a path
+ * basename, a raw pattern, or "Full context" — which reads as noise in a
+ * headline that already says what happened ("Context copied — Full context")
+ * and as a riddle when it is a bare basename. It can also disagree with the
+ * stored row outright: a deduped unnamed run keeps whatever explicit name is
+ * already on the entry, so a freshly derived label would name the run something
+ * the history does not. An explicit name is caller intent and worth promoting;
+ * the fallback is not. This also keeps every existing caller's title
  * byte-identical — nothing but an explicitly named run changes.
  *
  * Resolved through the helper the main process persists with, so the label the
