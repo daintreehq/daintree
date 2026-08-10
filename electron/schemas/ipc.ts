@@ -506,6 +506,16 @@ export const CopyTreeOptionsSchema = z
  */
 export const CopyTreeRunSourceSchema = z.enum(COPY_TREE_RUN_SOURCES);
 
+/**
+ * Caller-supplied display label for a run (#11734).
+ *
+ * Unconstrained beyond being a string, deliberately. Blank is valid input and
+ * resolves as absent, and `resolveCopyTreeRunName` is the single trim/truncate
+ * seam for every consumer — a `.max()` here would reject an oversized cosmetic
+ * label by failing the whole (expensive) generation instead of shortening it.
+ */
+const CopyTreeRunNameSchema = z.string().optional();
+
 export const CopyTreeGeneratePayloadSchema = z.object({
   worktreeId: z.string().min(1),
   options: CopyTreeOptionsSchema,
@@ -514,12 +524,14 @@ export const CopyTreeGeneratePayloadSchema = z.object({
   // CopyTreeOptionsSchema: the destination is chosen by the main process, so a
   // tool call can never turn into an arbitrary file write.
   includeContent: z.boolean().optional(),
+  name: CopyTreeRunNameSchema,
   source: CopyTreeRunSourceSchema.optional(),
 });
 
 export const CopyTreeGenerateAndCopyFilePayloadSchema = z.object({
   worktreeId: z.string().min(1),
   options: CopyTreeOptionsSchema,
+  name: CopyTreeRunNameSchema,
   source: CopyTreeRunSourceSchema.optional(),
 });
 
@@ -528,6 +540,7 @@ export const CopyTreeInjectPayloadSchema = z.object({
   worktreeId: z.string().min(1),
   options: CopyTreeOptionsSchema,
   injectionId: z.string().min(1).optional(),
+  name: CopyTreeRunNameSchema,
   source: CopyTreeRunSourceSchema.optional(),
 });
 

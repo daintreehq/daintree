@@ -14,6 +14,7 @@ import { z } from "zod";
 import { notify } from "@/lib/notify";
 import { formatCopyResultMessage } from "@/lib/formatCopyResult";
 import { resolveCopyTreeRunSource } from "@/lib/copyTreeRunSource";
+import { resolveCopyTreeRunName } from "@shared/utils/copyTreeHistory";
 import {
   artifactClient,
   cliAvailabilityClient,
@@ -128,6 +129,47 @@ function requireGeneratedFile(result: CopyTreeResult): { filePath: string; outpu
     throw new Error("Failed to generate context");
   }
   return { filePath: result.filePath, outputBytes: result.outputBytes };
+}
+
+/**
+ * The optional display label an MCP caller can attach to a run (#11734).
+ *
+ * One definition for all three copy-tree tools: the field means the same thing
+ * on each, and the text below is what an agent actually reads when deciding
+ * whether to pass it, so a per-tool reword would be three chances to drift.
+ * `.describe()` sits last in the chain because anything after it is what
+ * `toJSONSchema` emits — attached earlier the text is silently dropped.
+ */
+const copyTreeRunNameField = z
+  .string()
+  .optional()
+  .describe(
+    "Short human-readable label for this copy tree, shown in the user's copy-tree history and in the completion notification. Use 2 to 4 words describing what the context is for, for example 'auth flow context'. Omit it and the notification stays unlabelled, while the history entry keeps the label it already has or, if this selection is new, one derived from it."
+  );
+
+/**
+ * The completion title for a copy-tree run, labelled when the caller named it.
+ *
+ * Only a *supplied* name is appended, never the derived fallback. The fallback
+ * exists so every history row stays navigable, and it is a heuristic — a path
+ * basename, a raw pattern, or "Full context" — which reads as noise in a
+ * headline that already says what happened ("Context copied — Full context")
+ * and as a riddle when it is a bare basename. It can also disagree with the
+ * stored row outright: a deduped unnamed run keeps whatever explicit name is
+ * already on the entry, so a freshly derived label would name the run something
+ * the history does not. An explicit name is caller intent and worth promoting;
+ * the fallback is not. This also keeps every existing caller's title
+ * byte-identical — nothing but an explicitly named run changes.
+ *
+ * Resolved through the helper the main process persists with, so the label the
+ * user sees is the one stored in history, trimmed and truncated alike. Options
+ * are not passed: the derive branch is unreachable for a non-blank name, and
+ * feeding them in would imply the fallback can surface here, which is the one
+ * thing this must not do.
+ */
+function copyTreeRunTitle(base: string, suppliedName: string | undefined): string {
+  const trimmed = suppliedName?.trim();
+  return trimmed ? `${base} — ${resolveCopyTreeRunName(trimmed, undefined)}` : base;
 }
 
 export function registerSystemActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
@@ -435,6 +477,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       mcpAnnotations: { readOnlyHint: false, idempotentHint: false },
       argsSchema: withWorktreeLocation({
         options: CopyTreeOptionsSchema.optional(),
+        name: copyTreeRunNameField,
         includeContent: z
           .boolean()
           .optional()
@@ -451,7 +494,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           requireWorktreeId(args, ctx),
           args?.options,
           args?.includeContent,
-          resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource)
+          resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
+          args?.name
         );
         throwOnCopyTreeFailure(result);
         const { filePath, outputBytes } = requireGeneratedFile(result);
@@ -480,7 +524,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         // unprotected-success-toast rule, so a disable here would be dead.
         notify({
           type: "success",
-          title: "Context generated",
+          title: copyTreeRunTitle("Context generated", args?.name),
           message: formatCopyResultMessage(
             {
               fileCount: result.fileCount,
@@ -540,6 +584,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         options: CopyTreeOptionsSchema.optional().describe(
           "Selection, exclusion, formatting, and size-budget settings for the bundle."
         ),
+        name: copyTreeRunNameField,
       }).optional(),
       // `destructiveHint` is otherwise derived from `danger === "confirm"`, so
       // this would advertise as non-destructive while `actionRiskBand` already
@@ -560,7 +605,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         const result = await copyTreeClient.generateAndCopyFile(
           requireWorktreeId(args, ctx),
           args?.options,
-          resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource)
+          resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
+          args?.name
         );
         throwOnCopyTreeFailure(result);
         const { filePath, outputBytes } = requireGeneratedFile(result);
@@ -584,7 +630,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           // Matches the title every other copy-tree completion uses for this
           // artifact ("context", never "reference file"), paired with the same
           // formatCopyResultMessage body — see worktreeContextActions.ts.
-          title: "Context copied",
+          title: copyTreeRunTitle("Context copied", args?.name),
           message: formatCopyResultMessage({
             fileCount: result.fileCount,
             stats: result.stats,
@@ -627,6 +673,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         terminalId: z.string(),
         worktreeId: z.string().optional().describe("Worktree ID. Defaults to the active worktree."),
         options: CopyTreeOptionsSchema.optional(),
+        name: copyTreeRunNameField,
       }),
       // No path: this bundle is streamed into the PTY and never written to disk.
       resultSchema: z.object({
@@ -634,7 +681,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         stats: CopyTreeStatsSchema,
       }),
       mcpOutputSchema: true,
-      run: async ({ terminalId, worktreeId, options }, ctx: ActionContext) => {
+      run: async ({ terminalId, worktreeId, options, name }, ctx: ActionContext) => {
         const resolvedWorktreeId = worktreeId ?? ctx.activeWorktreeId;
         if (!resolvedWorktreeId) throw new Error("No active worktree");
         const result = await copyTreeClient.injectToTerminal(
@@ -642,7 +689,8 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
           resolvedWorktreeId,
           options,
           undefined,
-          resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource)
+          resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
+          name
         );
         throwOnCopyTreeFailure(result);
         // "injected … into terminal", not "copied": the bundle streams into a
@@ -654,7 +702,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "success",
-          title: "Context injected",
+          title: copyTreeRunTitle("Context injected", name),
           message: formatCopyResultMessage(
             {
               fileCount: result.fileCount,

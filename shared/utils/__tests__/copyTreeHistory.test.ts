@@ -228,6 +228,36 @@ describe("resolveCopyTreeRunName", () => {
     const name = resolveCopyTreeRunName("y".repeat(500), {});
     expect(name.length).toBeLessThanOrEqual(COPY_TREE_HISTORY_NAME_MAX_LENGTH);
   });
+
+  // The derived branch already pins both boundaries above. The supplied branch
+  // needs its own: the two only share `truncateName` by construction, so a
+  // change to either could regress this one while the derived tests stay green
+  // — and this is the branch every named MCP run takes (#11734).
+  it("leaves a supplied name of exactly the limit untouched", () => {
+    const exact = "y".repeat(COPY_TREE_HISTORY_NAME_MAX_LENGTH);
+    const name = resolveCopyTreeRunName(exact, {});
+    expect(name).toBe(exact);
+    expect(name).not.toContain("…");
+  });
+
+  it("never splits a surrogate pair when bounding a supplied name", () => {
+    // Slide the emoji across the boundary so one offset lands mid-pair; a plain
+    // `slice` persists a lone surrogate, which renders as a replacement glyph
+    // and stops comparing equal to the same name resolved elsewhere.
+    //
+    // Checked by code point rather than by round-tripping the string: spreading
+    // yields a lone surrogate as its own element, so `[...name].join("")` equals
+    // `name` for EVERY input and would assert nothing.
+    for (let pad = 0; pad < 6; pad++) {
+      const supplied = `${"y".repeat(COPY_TREE_HISTORY_NAME_MAX_LENGTH - 4 + pad)}${"🌳".repeat(6)}`;
+      const name = resolveCopyTreeRunName(supplied, {});
+      expect(name.length).toBeLessThanOrEqual(COPY_TREE_HISTORY_NAME_MAX_LENGTH);
+      for (const char of name) {
+        const code = char.codePointAt(0) as number;
+        expect(code >= 0xd800 && code <= 0xdfff).toBe(false);
+      }
+    }
+  });
 });
 
 describe("sortCopyTreeHistory", () => {

@@ -260,11 +260,20 @@ export function resolveCopyTreeProjectId(
  */
 async function recordCompletedCopyTreeRun(
   projectId: string | null,
-  validated: { worktreeId: string; options?: CopyTreeOptions; source?: CopyTreeRunSource },
+  validated: {
+    worktreeId: string;
+    options?: CopyTreeOptions;
+    name?: string;
+    source?: CopyTreeRunSource;
+  },
   result: CopyTreeResult
 ): Promise<void> {
   try {
     await recordCopyTreeRun(projectId, {
+      // Forwarded raw, including blank and untrimmed values: `applyCopyTreeRun`
+      // is the authoritative normalization seam (blank-as-absent, trim,
+      // truncate), and normalizing twice would let the two drift.
+      name: validated.name,
       options: validated.options ?? {},
       source: validated.source ?? "unknown",
       worktreeId: validated.worktreeId,

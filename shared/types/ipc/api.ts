@@ -378,19 +378,22 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       worktreeId: string,
       options?: CopyTreeOptions,
       includeContent?: boolean,
-      source?: CopyTreeRunSource
+      source?: CopyTreeRunSource,
+      name?: string
     ): Promise<CopyTreeResult>;
     generateAndCopyFile(
       worktreeId: string,
       options?: CopyTreeOptions,
-      source?: CopyTreeRunSource
+      source?: CopyTreeRunSource,
+      name?: string
     ): Promise<CopyTreeResult>;
     injectToTerminal(
       terminalId: string,
       worktreeId: string,
       options?: CopyTreeOptions,
       injectionId?: string,
-      source?: CopyTreeRunSource
+      source?: CopyTreeRunSource,
+      name?: string
     ): Promise<CopyTreeResult>;
     isAvailable(): Promise<boolean>;
     cancel(injectionId?: string): Promise<void>;

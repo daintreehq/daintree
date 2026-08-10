@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { COPY_TREE_UNMATCHED_SELECTORS } from "@shared/types/ipc/copyTree";
+import { COPY_TREE_HISTORY_NAME_MAX_LENGTH } from "@shared/types/ipc/copyTreeHistory";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const filesClientMock = vi.hoisted(() => ({
@@ -200,7 +201,8 @@ describe("systemActions adversarial", () => {
         "wt-active",
         undefined,
         undefined,
-        "unknown"
+        "unknown",
+        undefined
       );
     });
 
@@ -212,7 +214,8 @@ describe("systemActions adversarial", () => {
         "wt-active",
         options,
         undefined,
-        "unknown"
+        "unknown",
+        undefined
       );
     });
 
@@ -223,7 +226,8 @@ describe("systemActions adversarial", () => {
         "wt-active",
         undefined,
         true,
-        "unknown"
+        "unknown",
+        undefined
       );
     });
 
@@ -400,7 +404,8 @@ describe("systemActions adversarial", () => {
       expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith(
         "wt-active",
         undefined,
-        "unknown"
+        "unknown",
+        undefined
       );
     });
 
@@ -443,7 +448,8 @@ describe("systemActions adversarial", () => {
       expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith(
         "wt-landscape",
         undefined,
-        "mcp"
+        "mcp",
+        undefined
       );
     });
 
@@ -462,7 +468,12 @@ describe("systemActions adversarial", () => {
         { worktreeId: "wt-1", options },
         { dispatchSource: "agent" }
       );
-      expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith("wt-1", options, "mcp");
+      expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith(
+        "wt-1",
+        options,
+        "mcp",
+        undefined
+      );
 
       // And the selection SURVIVES the schema transform — `run()` is called
       // directly here, so the transform is otherwise never exercised. Asserting
@@ -661,7 +672,8 @@ describe("systemActions adversarial", () => {
         "wt-active",
         undefined,
         undefined,
-        "unknown"
+        "unknown",
+        undefined
       );
     });
 
@@ -677,7 +689,8 @@ describe("systemActions adversarial", () => {
         "wt-explicit",
         undefined,
         undefined,
-        "unknown"
+        "unknown",
+        undefined
       );
     });
 
@@ -775,6 +788,187 @@ describe("systemActions adversarial", () => {
         );
       }
     });
+  });
+
+  /**
+   * The optional run name an MCP caller can attach (#11734).
+   *
+   * Table-driven over all three tools because the field is declared three times
+   * against two different schema builders, and a plain zod object *strips* an
+   * undeclared key rather than rejecting it — a tool that was missed would keep
+   * passing every other assertion here while silently discarding the name.
+   */
+  describe("copyTree run name", () => {
+    const RAW_NAME = "  Auth flow context  ";
+
+    // The FULL expected client tuple, not just the trailing slot. Asserting only
+    // the last argument would still pass if `source` were dropped and the name
+    // slid into its place — losing attribution silently. Both are strings, so
+    // nothing upstream of this catches that swap.
+    const CASES = [
+      {
+        id: "copyTree.generate",
+        mock: copyTreeClientMock.generate,
+        args: {} as Record<string, unknown>,
+        base: "Context generated",
+        call: ["wt-active", undefined, undefined, "unknown", RAW_NAME],
+      },
+      {
+        id: "copyTree.generateAndCopyFile",
+        mock: copyTreeClientMock.generateAndCopyFile,
+        args: {} as Record<string, unknown>,
+        base: "Context copied",
+        call: ["wt-active", undefined, "unknown", RAW_NAME],
+      },
+      {
+        id: "copyTree.injectToTerminal",
+        mock: copyTreeClientMock.injectToTerminal,
+        args: { terminalId: "t-1" },
+        base: "Context injected",
+        call: ["t-1", "wt-active", undefined, undefined, "unknown", RAW_NAME],
+      },
+    ];
+
+    // Parsed rather than asserted, matching schemaDescriptions.test.ts: a cast
+    // would declare the shape true, while a parse makes a conversion that
+    // stopped returning it fail here instead of yielding `undefined` silently.
+    const EmittedName = z.object({
+      properties: z
+        .object({
+          name: z.object({ type: z.string().optional(), description: z.string().optional() }),
+        })
+        .optional(),
+      required: z.array(z.string()).optional(),
+    });
+
+    const NotifyPayload = z.object({ title: z.string() });
+
+    const titleOf = (): string => NotifyPayload.parse(notifyMock.mock.calls[0]?.[0]).title;
+
+    /**
+     * The `name` property as an MCP client actually receives it.
+     *
+     * Goes through the real conversion, matching ActionService.computeSchemas:
+     * a `.describe()` attached to the wrong link in a zod chain is dropped by
+     * toJSONSchema without error, so reading `.description` off the zod object
+     * would assert text that is never sent.
+     */
+    const emitName = (id: string): { type?: string; description?: string } => {
+      const schema = setupActions().getDef(id).argsSchema;
+      const emitted = EmittedName.parse(
+        z.toJSONSchema(schema!, {
+          io: "input",
+          unrepresentable: "any",
+          reused: "inline",
+          cycles: "ref",
+          target: "draft-2020-12",
+        })
+      );
+      expect(emitted.required ?? []).not.toContain("name");
+      // `properties.name` is required by the schema above, so a tool that never
+      // advertised the field fails in the parse rather than here.
+      return emitted.properties!.name;
+    };
+
+    it.each(CASES)("$id advertises name as an optional described string", ({ id }) => {
+      const emitted = emitName(id);
+      expect(emitted.type).toBe("string");
+      // Only that SOME text survived the conversion. Asserting the wording
+      // would copy a literal out of the source and break on a harmless reword;
+      // the failure worth catching is the silent one, where the text is dropped
+      // in transit and the field ships as an unexplained free-text string.
+      expect(emitted.description).toBeTruthy();
+    });
+
+    it("advertises one identical name description across all three tools", () => {
+      // The real invariant behind the wording: all three read from a single
+      // field constant, so a tool that drifted to its own reworded copy — the
+      // way three hand-written descriptions inevitably do — fails here without
+      // pinning what the text actually says.
+      const descriptions = CASES.map(({ id }) => emitName(id).description);
+      expect(new Set(descriptions).size).toBe(1);
+    });
+
+    it.each(CASES)("$id survives the schema transform rather than being stripped", ({ id }) => {
+      const schema = setupActions().getDef(id).argsSchema;
+      // Asserting the parsed OUTPUT, not `.success`: zod strips unknown keys and
+      // still reports success, so a success-only check passes on a dropped field.
+      const parsed = z
+        .object({ name: z.string().optional() })
+        .parse(schema!.parse({ worktreeId: "wt-1", terminalId: "t-1", name: "Auth flow" }));
+      expect(parsed.name).toBe("Auth flow");
+    });
+
+    it.each(CASES)(
+      "$id forwards the raw name in the slot after the source",
+      async ({ id, mock, args, call }) => {
+        const { run } = setupActions();
+        // Untrimmed: the client and IPC layers forward verbatim so that
+        // resolveCopyTreeRunName stays the single normalization seam.
+        await run(id, { ...args, name: RAW_NAME }, { activeWorktreeId: "wt-active" });
+
+        expect(mock.mock.calls[0]).toEqual(call);
+      }
+    );
+
+    it.each(CASES)(
+      "$id labels its completion with the supplied name",
+      async ({ id, args, base }) => {
+        const { run } = setupActions();
+        await run(id, { ...args, name: RAW_NAME }, { activeWorktreeId: "wt-active" });
+
+        // Trimmed for display even though it is forwarded raw — the label the
+        // user reads must match the one the history stores.
+        expect(titleOf()).toBe(`${base} — Auth flow context`);
+      }
+    );
+
+    it.each(CASES)("$id truncates a long name to the stored length", async ({ id, args, base }) => {
+      const { run } = setupActions();
+      await run(id, { ...args, name: "y".repeat(500) }, { activeWorktreeId: "wt-active" });
+
+      const label = titleOf().slice(base.length + 3);
+      expect(label.length).toBe(COPY_TREE_HISTORY_NAME_MAX_LENGTH);
+      expect(label.endsWith("…")).toBe(true);
+    });
+
+    it.each(CASES)(
+      "$id leaves its title untouched when no name is supplied",
+      async ({ id, args, base }) => {
+        const { run } = setupActions();
+        await run(id, args, { activeWorktreeId: "wt-active" });
+
+        // The derived fallback is deliberately NOT shown: it exists so every
+        // history row has a label, and appending it here would read as noise on
+        // an unnarrowed run ("Context copied — Full context"). This is also what
+        // keeps every pre-existing caller's title byte-identical.
+        expect(titleOf()).toBe(base);
+      }
+    );
+
+    it.each(CASES)("$id treats a blank name as no name at all", async ({ id, args, base }) => {
+      const { run } = setupActions();
+      await run(id, { ...args, name: "   " }, { activeWorktreeId: "wt-active" });
+
+      expect(titleOf()).toBe(base);
+    });
+
+    it.each(CASES)(
+      "$id never derives a label from the options it was given",
+      async ({ id, args, base }) => {
+        const { run } = setupActions();
+        await run(
+          id,
+          { ...args, options: { scopePaths: ["src/auth"] } },
+          { activeWorktreeId: "wt-active" }
+        );
+
+        // deriveCopyTreeRunName returns "auth" for this selection — a bare
+        // basename, which is exactly the kind of fallback that reads as a
+        // riddle in a headline. The exact match below already excludes it.
+        expect(titleOf()).toBe(base);
+      }
+    );
   });
 
   // #11731. An empty bundle used to arrive as `noFilesMatched: true` and nothing
