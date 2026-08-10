@@ -29,15 +29,28 @@ import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 
 function setupActions(): {
   run: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
+  parseArgs: (id: string, args: unknown) => { success: boolean; message?: string };
 } {
   const actions: ActionRegistry = new Map();
   const callbacks: ActionCallbacks = {} as unknown as ActionCallbacks;
   registerWorktreeContextActions(actions, callbacks);
+  const define = (id: string): AnyActionDefinition => {
+    const factory = actions.get(id);
+    if (!factory) throw new Error(`missing ${id}`);
+    return factory() as AnyActionDefinition;
+  };
   return {
-    run: async (id, args, ctx) => {
-      const factory = actions.get(id);
-      if (!factory) throw new Error(`missing ${id}`);
-      return (factory() as AnyActionDefinition).run(args, (ctx ?? {}) as never);
+    run: async (id, args, ctx) => define(id).run(args, (ctx ?? {}) as never),
+    // `run` is dispatched with already-validated args, so a schema-only rule is
+    // invisible to it. ActionService parses `argsSchema` first; this reaches the
+    // same schema so a guard that never fires cannot pass as one that does.
+    parseArgs: (id, args) => {
+      const schema = define(id).argsSchema;
+      if (!schema) throw new Error(`${id} has no argsSchema`);
+      const result = schema.safeParse(args);
+      return result.success
+        ? { success: true }
+        : { success: false, message: result.error.issues[0]?.message };
     },
   };
 }
@@ -212,5 +225,68 @@ describe("worktree.copyTree completion announcement", () => {
     const payload = notifyMock.mock.calls[0]?.[0] as { rateLimitKey?: string; type: string };
     expect(payload.rateLimitKey).toBeTruthy();
     expect(payload.rateLimitKey).not.toBe(payload.type);
+  });
+});
+
+/**
+ * #11750. This action hand-rolls its `argsSchema` instead of reusing
+ * `CopyTreeOptionsSchema`, and builds its options object by conditional spread
+ * — so a field added to the shared schema reaches it in neither place. These
+ * pin both halves against exactly that drift.
+ */
+describe("worktree.copyTree ignore-file bypass", () => {
+  const optionsOf = () =>
+    copyTreeClientMock.generateAndCopyFile.mock.calls[0]?.[1] as Record<string, unknown>;
+
+  it("forwards the bypass alongside the scope that justifies it", async () => {
+    const { run } = setupActions();
+
+    await run("worktree.copyTree", {
+      worktreeId: "wt-1",
+      scopePaths: ["docs"],
+      scopeIgnoresIgnoreFiles: true,
+    });
+
+    expect(optionsOf()).toMatchObject({
+      scopePaths: ["docs"],
+      scopeIgnoresIgnoreFiles: true,
+    });
+  });
+
+  it.each([
+    ["omitted", {}],
+    // The default spelled out, which the SDK reads identically to absence — so
+    // the payload should not carry it, matching how the path fields are spread.
+    ["explicitly false", { scopeIgnoresIgnoreFiles: false }],
+  ])("omits the field entirely when it is %s", async (_label, extra) => {
+    const { run } = setupActions();
+
+    await run("worktree.copyTree", { worktreeId: "wt-1", scopePaths: ["docs"], ...extra });
+
+    expect(optionsOf()).not.toHaveProperty("scopeIgnoresIgnoreFiles");
+  });
+
+  it("refuses the bypass at the schema when no scope accompanies it", () => {
+    const { parseArgs } = setupActions();
+
+    // Scope-bound in the SDK, so this combination is inert rather than wrong —
+    // and an inert flag that parses is how a caller gets a short bundle with no
+    // explanation, which is the whole complaint behind the issue.
+    expect(parseArgs("worktree.copyTree", { scopeIgnoresIgnoreFiles: true }).success).toBe(false);
+    expect(
+      parseArgs("worktree.copyTree", {
+        scopeIgnoresIgnoreFiles: true,
+        includePaths: ["docs/guide.md"],
+      })
+    ).toMatchObject({ success: false, message: expect.stringContaining("scopePaths") });
+
+    expect(
+      parseArgs("worktree.copyTree", { scopePaths: ["docs"], scopeIgnoresIgnoreFiles: true })
+        .success
+    ).toBe(true);
+    // The guard fires on the opt-in only; every request that never asked for it
+    // has to keep parsing exactly as before.
+    expect(parseArgs("worktree.copyTree", { includePaths: ["src/**"] }).success).toBe(true);
+    expect(parseArgs("worktree.copyTree", undefined).success).toBe(true);
   });
 });

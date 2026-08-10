@@ -760,12 +760,27 @@ class CopyTreeService {
       filter: CopyTreeService.mergeSelectionPatterns(options.includePaths, options.filter),
       // Literal paths, not patterns, and orthogonal to `filter`: the walk starts
       // here but the ignore stack is still built from the root down, so a folder
-      // copy drops what a whole-project copy would have dropped. Both
-      // `scopeIgnores*` escape hatches stay off for that reason.
+      // copy drops what a whole-project copy would have dropped.
       scope: options.scopePaths?.length ? options.scopePaths : undefined,
       exclude: options.exclude || undefined,
       always: options.always,
       respectGitignore: true,
+      // The one escape hatch a caller can open (#11750), and it is deliberately
+      // the ignore-FILE one rather than `always`. The SDK strips only the rules
+      // standing between the root and each scope entry, so config exclusions,
+      // the caller's `exclude`, the git filters and the per-file size gate keep
+      // applying. A force-include survives all four — `collectForcedEntries`
+      // globs with `ignore: []` and `ProfileFilterStage` returns before it ever
+      // reads `exclude` — which is why the selection is never promoted into
+      // `always`. (The later budgets bound both equally: `BudgetStage` and
+      // `CharLimitStage` have no force-include exemption.)
+      //
+      // `=== true` rather than a truthy read: the field crosses IPC from an MCP
+      // caller, and only the boolean the schemas admit should open this.
+      // `scopeIgnoresConfigExcludes` stays off unconditionally — lifting an
+      // ignore rule the caller named a path inside of is a different question
+      // from dragging `node_modules` in, and only the first was asked for.
+      scopeIgnoresIgnoreFiles: options.scopeIgnoresIgnoreFiles === true,
 
       modified: options.modified,
       changed: options.changed,
