@@ -201,17 +201,26 @@ describe("CopyTreeRecentsPanel", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Copy full context" }));
   });
 
-  it("activates a row from the keyboard", () => {
+  it("builds every row as a real button so Enter and Space work natively", () => {
+    // Asserting the element type rather than firing Enter: jsdom does not
+    // synthesize a click from Enter, so a keydown test would prove nothing
+    // about activation. Native button semantics are the thing this component
+    // actually controls — a regression to a clickable div would fail here,
+    // and it is what makes the panel operable without a roving-tabindex system.
     seed([makeRecord({ name: "authentication stuff" })]);
-    const onRunRecent = vi.fn();
-    render(<CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={onRunRecent} />);
+    render(<CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />);
 
-    const row = screen.getByRole("button", { name: /authentication stuff/ });
-    row.focus();
-    fireEvent.keyDown(row, { key: "Enter" });
-    fireEvent.click(row);
-
-    expect(onRunRecent).toHaveBeenCalledTimes(1);
+    const rows = [
+      screen.getByRole("button", { name: "Copy full context" }),
+      screen.getByRole("button", { name: /authentication stuff/ }),
+    ];
+    for (const row of rows) {
+      expect(row.tagName).toBe("BUTTON");
+      // Without an explicit type, a button inside a form defaults to submit.
+      expect(row.getAttribute("type")).toBe("button");
+      expect(row.hasAttribute("disabled")).toBe(false);
+      expect(row.getAttribute("tabindex")).toBeNull();
+    }
   });
 
   it("names the next action when the project has no history yet", () => {

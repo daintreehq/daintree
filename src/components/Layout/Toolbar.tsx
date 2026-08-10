@@ -849,14 +849,26 @@ export function Toolbar({
   // Close and hand focus back to the trigger — but only when focus would
   // otherwise be lost. An outside click has already moved focus somewhere the
   // user chose, and yanking it back to the toolbar would fight that.
+  //
+  // The decision is deferred a frame because it cannot be made yet: the
+  // dismiss path runs off `mousedown`, which fires BEFORE the browser's default
+  // focus transfer, so reading `activeElement` here would still show the panel
+  // row on an outside click and restore the trigger over the user's choice.
+  // After the frame, focus has settled — landing on `body` is the honest signal
+  // that nothing else claimed it.
   const closeCopyTreePanel = useCallback(() => {
     const active = document.activeElement;
     const focusWasInPanel =
-      active instanceof HTMLElement && active.closest(COPY_TREE_PANEL_SELECTOR);
+      active instanceof HTMLElement && active.closest(COPY_TREE_PANEL_SELECTOR) !== null;
     setCopyTreeOpen(false);
-    if (focusWasInPanel || active === null || active === document.body) {
-      copyTreeButtonRef.current?.focus();
-    }
+    if (!focusWasInPanel && active !== null && active !== document.body) return;
+
+    requestAnimationFrame(() => {
+      const settled = document.activeElement;
+      if (settled === null || settled === document.body) {
+        copyTreeButtonRef.current?.focus();
+      }
+    });
   }, []);
 
   // The visible button opens the panel; it no longer copies. Every immediate
@@ -1626,7 +1638,16 @@ export function Toolbar({
     // absolute` eviction styles never reach it — an open panel would strand on
     // screen and then re-anchor to the hidden button's rect on the next resize.
     if (overflowSet.has("copy-tree")) {
+      const active = document.activeElement;
+      const focusWasInPanel =
+        active instanceof HTMLElement && active.closest(COPY_TREE_PANEL_SELECTOR) !== null;
       setCopyTreeOpen(false);
+      // The anchor is on its way to being hidden, so it can't take focus back.
+      // The overflow trigger is where the command now lives, which makes it the
+      // honest destination — otherwise a keyboard user is dropped onto <body>.
+      if (focusWasInPanel) {
+        document.querySelector<HTMLElement>("[data-toolbar-overflow-trigger]")?.focus();
+      }
     }
   }, [leftOverflow, rightOverflow]);
 

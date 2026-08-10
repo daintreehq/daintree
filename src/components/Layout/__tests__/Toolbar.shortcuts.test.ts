@@ -311,13 +311,24 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       const ariaDisabled = copyTreeBlock![0].match(/aria-disabled=\{([^}]+)\}/);
       expect(ariaDisabled).not.toBeNull();
 
-      const toggle = source.match(/const handleCopyTreeToggle = useCallback\([\s\S]*?\n {2}\);/);
-      expect(toggle).not.toBeNull();
-      // Every condition the button announces as disabling must also gate the
-      // toggle. `undefined` is the JSX spelling of "not disabled", not a term.
-      for (const term of ariaDisabled![1]!.split("||").map((t) => t.trim())) {
-        if (term === "undefined") continue;
-        expect(toggle![0]).toContain(term.replace(/^!/, ""));
+      // `undefined` is the JSX spelling of "not disabled", not a condition.
+      const disablingTerms = ariaDisabled![1]!
+        .split("||")
+        .map((t) => t.trim().replace(/^!/, ""))
+        .filter((t) => t !== "undefined" && t !== "");
+      // Guard against a vacuous pass: an expression that yielded no terms would
+      // make the loop below assert nothing at all.
+      expect(disablingTerms.length).toBeGreaterThan(0);
+
+      // Read the early-return condition specifically, not the whole callback —
+      // its dependency array names the same identifiers, so a body-wide
+      // substring check would still pass with the guard deleted.
+      const earlyReturn = source.match(
+        /const handleCopyTreeToggle = useCallback\(\(\) => \{\s*if \(([^)]+)\) return;/
+      );
+      expect(earlyReturn).not.toBeNull();
+      for (const term of disablingTerms) {
+        expect(earlyReturn![1]).toContain(term);
       }
     });
   });

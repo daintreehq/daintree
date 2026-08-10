@@ -385,8 +385,16 @@ test.describe.serial("Core: Terminal & Panels", () => {
 
       // Clear first: the next test in this serial block asserts the clipboard
       // is non-empty, which would pass on leftover content from an earlier
-      // test even if this copy did nothing.
-      await app.evaluate(({ clipboard }) => clipboard.writeText(""));
+      // test even if this copy did nothing. `clear()` rather than
+      // `writeText("")` — writing empty text still installs a text format, so
+      // the format-count assertion would stay satisfied by the reset itself.
+      await app.evaluate(({ clipboard }) => clipboard.clear());
+      await expect
+        .poll(async () => app.evaluate(({ clipboard }) => clipboard.availableFormats().length), {
+          timeout: T_SHORT,
+          message: "Clipboard should start empty so the copy below is what the next test sees",
+        })
+        .toBe(0);
 
       // The trigger opens a recents panel rather than copying (#11733); the
       // helper follows through to the panel's "Copy full context" row so the
