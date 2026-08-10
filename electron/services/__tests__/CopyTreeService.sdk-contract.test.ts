@@ -318,7 +318,7 @@ describe("CopyTreeService against the installed CopyTree", () => {
         expect(result.excluded?.byReason.optionExclude ?? 0).toBeGreaterThan(0);
       });
 
-      it("still applies the file-count budget, which a force-include would not have", async () => {
+      it("still applies the file-count budget inside the unblocked folder", async () => {
         await buildIgnoredDocs();
         await fs.writeFile(path.join(tempDir, "docs", "intro.md"), "# intro\n");
 
@@ -330,12 +330,39 @@ describe("CopyTreeService against the installed CopyTree", () => {
         });
 
         expect(result.error).toBeUndefined();
-        // Two files are now reachable inside the unblocked folder, and the budget
-        // has to bound them. Pinned because the `always` wire text promises the
-        // budgets outlive a force-include too — `BudgetStage` has no
-        // `alwaysInclude` exemption — and that claim needs a test of its own.
+        // Two files are reachable inside the unblocked folder once the root rule
+        // is lifted (`key.secret` is dropped earlier by the surviving rule), so
+        // the budget has to bound them.
         expect(result.files?.length).toBe(1);
         expect(result.excluded?.byReason.fileCountBudget ?? 0).toBeGreaterThan(0);
+      });
+
+      it("bounds even a force-include by the file-count budget", async () => {
+        await buildIgnoredDocs();
+        await fs.writeFile(path.join(tempDir, "docs", "intro.md"), "# intro\n");
+
+        const forced = await copyTreeService.testConfig(tempDir, { always: ["docs/*.md"] });
+        const budgeted = await copyTreeService.testConfig(tempDir, {
+          always: ["docs/*.md"],
+          maxFileCount: 1,
+          sort: "path",
+        });
+
+        expect(forced.error).toBeUndefined();
+        expect(budgeted.error).toBeUndefined();
+        // Unbudgeted, `always` really does drag both ignored docs back in — that
+        // is the blast radius the wire text warns about, and asserting it here
+        // stops the budgeted half passing because the force-include silently
+        // stopped working. Containment rather than an exact list: this run is
+        // unscoped, so the fixture's root-level files come along too.
+        expect(forced.files?.map((file) => file.path)).toEqual(
+          expect.arrayContaining(["docs/guide.md", "docs/intro.md"])
+        );
+        // Budgeted, it does not: `BudgetStage` has no `alwaysInclude` exemption,
+        // which is the one bound the `always` description promises survives a
+        // force-include. Nothing else in the suite pins that claim.
+        expect(budgeted.files?.length).toBe(1);
+        expect(budgeted.excluded?.byReason.fileCountBudget ?? 0).toBeGreaterThan(0);
       });
 
       it("lets a directory scope subsume a file scope, so the child gets no override", async () => {

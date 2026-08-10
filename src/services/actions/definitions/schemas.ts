@@ -286,7 +286,7 @@ export const CopyTreeOptionsSchema = z
       .array(z.string())
       .optional()
       .describe(
-        "Force-includes matching files, overriding several exclusion layers at once: ignore files, project and config exclusions, your own `exclude`, the `modified`/`changed` git filters, and `maxFileSize`. A broad pattern here can pull in `node_modules`, so it is the blunt option. What it does NOT override: `.git`, the worktree boundary, `scopePaths`, and the `maxFileCount`/`maxTotalSize`/`charLimit` budgets, which still drop force-included files. Prefer `scopePaths` with `scopeIgnoresIgnoreFiles` when you only need past an ignore rule."
+        "Force-includes matching files, overriding several exclusion layers at once: ignore files, project and config exclusions, your own `exclude`, the `modified`/`changed` git filters, and `maxFileSize`. It is the blunt option: a broad pattern can pull in `node_modules`, and a `../` pattern reaches outside the worktree entirely. What it does not override: `.git`, CopyTree's internal 10MB memory ceiling, and the `maxFileCount`/`maxTotalSize`/`charLimit` budgets, which still drop force-included files. Prefer `scopePaths` with `scopeIgnoresIgnoreFiles` when you only need past an ignore rule."
       ),
     includePaths: z
       .array(z.string().min(1))

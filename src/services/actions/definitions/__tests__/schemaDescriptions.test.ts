@@ -198,14 +198,16 @@ describe("argument descriptions carry the semantics prose no longer states", () 
     expect(bypass).toMatch(/only the rules blocking/i);
 
     // And the layers that keep applying — the half that distinguishes this from
-    // `always`, which lifts every one of them.
-    expect(bypass).toMatch(/(still|continue to|remain)[^.]{0,120}(apply|applies)/i);
+    // `always`, which lifts every one of them. "all still apply" rather than a
+    // /still.*apply/ span, which "still do not apply" would satisfy.
+    expect(bypass).toMatch(/all still apply/i);
     expect(bypass).toMatch(/node_modules/);
+    expect(bypass).not.toMatch(/not only the rules/i);
 
     // The composition trap a caller hits the moment it moves a selection into
     // `scopePaths`: a rule inside the selection needs the exact file, not its
     // parent, because a scoped directory subsumes its children.
-    expect(bypass).toMatch(/exact file/i);
+    expect(bypass).toMatch(/scope the exact file/i);
   });
 
   it("warns that always is the blunt instrument the bypass is not", () => {
@@ -221,6 +223,13 @@ describe("argument descriptions carry the semantics prose no longer states", () 
     // node_modules" would satisfy a bare /node_modules/ while telling a caller
     // the opposite of the truth.
     expect(always).toMatch(/can pull in[^.]{0,40}node_modules/i);
+
+    // A `../` pattern really does escape the worktree — `collectForcedEntries`
+    // hands the patterns straight to fast-glob and only checks root containment
+    // when `followSymlinks` is on. An earlier draft of this text claimed the
+    // opposite. The field predates this change and is not being narrowed here,
+    // so the wire has to say what it actually does.
+    expect(always).toMatch(/outside the worktree/i);
 
     // The budgets are the one bound that DOES outlive a force-include
     // (`BudgetStage` has no `alwaysInclude` exemption). An earlier draft of this
