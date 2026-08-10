@@ -66,6 +66,8 @@ import {
   setWorktreePathIndexAccessor,
   resetStoreAccessorsForTesting,
 } from "@/store/storeAccessors";
+import { _resetCopyTreeNoticePresenterForTest } from "@/lib/copyTreeFeedback";
+import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 
 function setupActions(): {
   run: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
@@ -104,6 +106,11 @@ beforeEach(() => {
   // The worktree path index leaks across files otherwise, so a later suite
   // would inherit whichever map the last path-resolution test installed.
   resetStoreAccessorsForTesting();
+  // The completion-toast assertions below are FALLBACK coverage: they hold
+  // because no presenter is registered. Reset explicitly so a future test that
+  // registers one can't make ordering matter, and settle the run counter.
+  _resetCopyTreeNoticePresenterForTest();
+  useCopyTreeRunStore.setState({ activeRunCount: 0 });
   for (const fn of Object.values(filesClientMock)) fn.mockResolvedValue(undefined);
   for (const fn of Object.values(copyTreeClientMock)) fn.mockResolvedValue(undefined);
   for (const fn of Object.values(slashCommandsClientMock)) fn.mockResolvedValue(undefined);
@@ -434,6 +441,49 @@ describe("systemActions adversarial", () => {
       await expect(
         run("copyTree.generateAndCopyFile", undefined, { activeWorktreeId: "wt-active" })
       ).rejects.toThrow("Failed to copy file to clipboard: EACCES");
+    });
+
+    it("brackets the shared run store so the toolbar spinner tracks MCP copies", async () => {
+      // This is the action MCP clipboard copies and the recents replay land
+      // on; the toolbar's Copy context spinner derives from this count.
+      const { run } = setupActions();
+      let midFlightCount = -1;
+      copyTreeClientMock.generateAndCopyFile.mockImplementationOnce(async () => {
+        midFlightCount = useCopyTreeRunStore.getState().activeRunCount;
+        return { ...COPY_TREE_RESULT };
+      });
+
+      await run(
+        "copyTree.generateAndCopyFile",
+        { worktreeId: "wt-1" },
+        { dispatchSource: "agent" }
+      );
+
+      expect(midFlightCount).toBe(1);
+      expect(useCopyTreeRunStore.getState().activeRunCount).toBe(0);
+    });
+
+    it("settles the run count even when the copy rejects", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generateAndCopyFile.mockRejectedValueOnce(new Error("boom"));
+      await expect(
+        run("copyTree.generateAndCopyFile", undefined, { activeWorktreeId: "wt-active" })
+      ).rejects.toThrow("boom");
+      expect(useCopyTreeRunStore.getState().activeRunCount).toBe(0);
+    });
+
+    it("never blips the spinner for a dispatch refused before the client is reached", async () => {
+      // The agent-target guard throws before the bracket: a refused dispatch
+      // did no work, so it must not flash the button.
+      const { run } = setupActions();
+      await expect(
+        run("copyTree.generateAndCopyFile", undefined, {
+          dispatchSource: "agent",
+          activeWorktreeId: "wt-active",
+        })
+      ).rejects.toThrow(/explicit/i);
+      expect(useCopyTreeRunStore.getState().activeRunCount).toBe(0);
+      expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
     });
 
     it("resolves an explicit worktreePath to the id its IPC takes", async () => {

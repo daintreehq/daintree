@@ -12,6 +12,8 @@ import {
 } from "./locationArgs";
 import { z } from "zod";
 import { notify } from "@/lib/notify";
+import { announceCopyTreeCopy } from "@/lib/copyTreeFeedback";
+import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import { formatCopyResultMessage } from "@/lib/formatCopyResult";
 import { resolveCopyTreeRunSource } from "@/lib/copyTreeRunSource";
 import { resolveCopyTreeRunName } from "@shared/utils/copyTreeHistory";
@@ -602,52 +604,50 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       mcpOutputSchema: true,
       run: async (args, ctx: ActionContext) => {
         requireExplicitWorktreeForAgentDispatch("copyTree.generateAndCopyFile", args, ctx);
-        const result = await copyTreeClient.generateAndCopyFile(
-          requireWorktreeId(args, ctx),
-          args?.options,
-          resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
-          args?.name
-        );
+        // Bracketed for the toolbar's Copy context spinner — this is the action
+        // MCP clipboard copies and the recents replay land on, and both should
+        // spin the button exactly like a direct click (the other clipboard
+        // route, worktree.copyTree, brackets itself the same way). The
+        // temp-file and terminal-injection siblings deliberately don't: the
+        // button advertises a clipboard copy, and neither touches the clipboard.
+        const runStore = useCopyTreeRunStore.getState();
+        runStore.beginRun();
+        let result;
+        try {
+          result = await copyTreeClient.generateAndCopyFile(
+            requireWorktreeId(args, ctx),
+            args?.options,
+            resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
+            args?.name
+          );
+        } finally {
+          runStore.endRun();
+        }
         throwOnCopyTreeFailure(result);
         const { filePath, outputBytes } = requireGeneratedFile(result);
         // Announced for every dispatch source, not just agents. The old
         // agent-only gate assumed a person who triggered this already knows
         // their clipboard changed — true of a button with inline feedback, but
-        // this action's only human route is the command palette, which leaves
-        // nothing on screen at all (#11735). Ordered after the failure checks so
-        // a failed generate or a failed clipboard write can never announce
+        // this action's other human routes (palette, recents replay) leave
+        // nothing on screen at all (#11735). The announcement is a transient
+        // tooltip on the toolbar's Copy context button, with a toast fallback
+        // when that button isn't visible. Ordered after the failure checks so a
+        // failed generate or a failed clipboard write can never announce
         // success.
-        //
-        // No `context.worktreeId` here, deliberately: notify() suppresses a
-        // high-priority toast into the inbox when context names the worktree
-        // the user is already looking at, and copying the ACTIVE worktree is the
-        // common case — passing it would silence exactly this toast. A clipboard
-        // overwrite is invisible no matter which worktree is on screen, so the
-        // origin-surface rule doesn't hold here.
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "success",
-          // Matches the title every other copy-tree completion uses for this
-          // artifact ("context", never "reference file"), paired with the same
-          // formatCopyResultMessage body — see worktreeContextActions.ts.
-          title: copyTreeRunTitle("Context copied", args?.name),
-          message: formatCopyResultMessage({
-            fileCount: result.fileCount,
-            stats: result.stats,
-            format: args?.options?.format,
-          }),
-          // Its own bucket. The key otherwise falls back to `type`, putting
-          // every "success" toast in the app in one bucket — three unrelated
-          // ones would swallow this into a generic overflow row and lose the
-          // message that says what is on the clipboard.
-          rateLimitKey: "copyTree.generateAndCopyFile",
-          // "agent", not "completed": both route identically (active → high),
-          // but "completed" owns the `completedEnabled` setting, which gates
-          // only main-process completion watches and never a renderer
-          // notify() — so it would offer a "silence completed notifications"
-          // affordance that leaves these copies firing anyway.
-          context: { eventKind: "agent" },
-        });
+        announceCopyTreeCopy(
+          {
+            // Matches the title every other copy-tree completion uses for this
+            // artifact ("context", never "reference file"), paired with the
+            // same formatCopyResultMessage body — see worktreeContextActions.ts.
+            title: copyTreeRunTitle("Context copied", args?.name),
+            message: formatCopyResultMessage({
+              fileCount: result.fileCount,
+              stats: result.stats,
+              format: args?.options?.format,
+            }),
+          },
+          "copyTree.generateAndCopyFile"
+        );
         return {
           filePath,
           fileCount: result.fileCount,

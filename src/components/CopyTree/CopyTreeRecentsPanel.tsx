@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Folders, History } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -49,6 +49,16 @@ const rowClass = cn(
   "transition-colors"
 );
 
+// The primary action is the panel's header: a framed button in its own padded
+// band rather than the first row of the list, so it reads as "the button, with
+// its history underneath" instead of one more entry. Neutral raised surface —
+// the focus ring it takes on open is the region's one emphasis signal.
+const primaryButtonClass = cn(
+  "w-full flex items-center gap-2.5 rounded-[var(--radius-md)] px-3 py-2 text-left",
+  "border border-divider bg-overlay-subtle text-daintree-text hover:bg-overlay-raised",
+  "transition-colors"
+);
+
 interface CopyTreeRecentsPanelProps {
   /** The old one-click behavior, now one click deeper. */
   onCopyFullContext: () => void;
@@ -73,7 +83,6 @@ export function CopyTreeRecentsPanel({
   const records = useCopyTreeHistoryStore((s) => s.records);
   const loading = useCopyTreeHistoryStore((s) => s.loading);
   const init = useCopyTreeHistoryStore((s) => s.init);
-  const headingId = useId();
   const primaryRowRef = useRef<HTMLButtonElement>(null);
 
   // The trigger advertises `aria-haspopup="dialog"`, and this panel is where
@@ -96,7 +105,7 @@ export function CopyTreeRecentsPanel({
   // whole selection step.
   const recents = records.slice(0, RECENTS_LIMIT);
 
-  // Header and primary row paint immediately; only the recents section waits.
+  // The primary button paints immediately; only the recents section waits.
   // The bones are `immediate` because this gate has already proven the wait
   // exceeded the Doherty threshold — the class-level delay would gate it twice.
   const showSkeleton = useDohertyGate(loading);
@@ -105,28 +114,28 @@ export function CopyTreeRecentsPanel({
     <div
       data-copy-tree-panel=""
       role="dialog"
-      aria-labelledby={headingId}
-      className="w-[360px] max-h-[420px] flex flex-col"
+      aria-label="Copy context"
+      className="w-[320px] max-h-[420px] flex flex-col"
     >
-      <div className="flex items-center pl-3 pr-2 py-2 border-b border-divider">
-        <span id={headingId} className="text-xs font-medium text-daintree-text/80">
-          Copy context
-        </span>
-      </div>
-
-      <button ref={primaryRowRef} type="button" onClick={onCopyFullContext} className={rowClass}>
-        <Folders className="w-4 h-4 shrink-0 text-daintree-text/70" aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">Copy full context</span>
-      </button>
-
-      <div className="flex items-center px-3 pt-2 pb-1 border-t border-divider">
-        <span className="text-xs font-medium text-daintree-text/80">Recent</span>
+      {/* No headings: the framed primary button IS the header, and everything
+          under the divider is self-evidently the run history — each row names
+          its run and ends in a relative timestamp. */}
+      <div className="p-1.5 border-b border-divider">
+        <button
+          ref={primaryRowRef}
+          type="button"
+          onClick={onCopyFullContext}
+          className={primaryButtonClass}
+        >
+          <Folders className="w-4 h-4 shrink-0 text-daintree-text/70" aria-hidden="true" />
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">Copy full context</span>
+        </button>
       </div>
 
       <ScrollShadow className="flex-1 min-h-0">
         {/* One stable child: the shadow hook observes firstElementChild, so it
             must outlive the skeleton/empty-state/list swaps below. */}
-        <div className="pb-1">
+        <div className="py-1">
           {loading ? (
             showSkeleton ? (
               <>

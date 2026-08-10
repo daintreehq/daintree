@@ -16,7 +16,8 @@ import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { formatCopyResultMessage } from "@/lib/formatCopyResult";
-import { notify } from "@/lib/notify";
+import { announceCopyTreeCopy } from "@/lib/copyTreeFeedback";
+import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
 import { basename } from "@shared/utils/path";
@@ -307,12 +308,12 @@ export function registerWorktreeContextActions(
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      // This action now raises its own completion toast, which lands top-right —
-      // the same corner the hint anchors to on the toolbar button. 219e2908f
-      // already dismissed the hint for exactly this overlap back when the result
-      // showed in a forced tooltip; the toast inherits that conflict and says
-      // strictly more than the hint does. The hint only fires for source "user",
-      // so this costs the toolbar and palette routes nothing the toast doesn't
+      // Completion feedback is a transient tooltip pinned to the toolbar's Copy
+      // context button (announceCopyTreeCopy), which a shortcut hint on that
+      // same button would sit directly on top of. 219e2908f already dismissed
+      // the hint for exactly this overlap back when the result showed in a
+      // forced tooltip. The hint only fires for source "user", so this costs
+      // the toolbar and palette routes nothing the completion notice doesn't
       // already cover, and the keybinding route never raised one (#11735).
       suppressShortcutHint: true,
       argsSchema: z
@@ -347,16 +348,26 @@ export function registerWorktreeContextActions(
 
         const format = explicitFormat ?? DEFAULT_COPYTREE_FORMAT;
 
-        const result = await copyTreeClient.generateAndCopyFile(
-          targetWorktreeId,
-          {
-            format,
-            modified,
-            ...(includePaths && includePaths.length > 0 ? { includePaths } : {}),
-            ...(scopePaths && scopePaths.length > 0 ? { scopePaths } : {}),
-          },
-          resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource)
-        );
+        // Bracketed for the toolbar spinner, whoever dispatched — an MCP copy
+        // spins the Copy context button the same as a clicked one. After the
+        // no-worktree return so a refused dispatch never blips it.
+        const runStore = useCopyTreeRunStore.getState();
+        runStore.beginRun();
+        let result;
+        try {
+          result = await copyTreeClient.generateAndCopyFile(
+            targetWorktreeId,
+            {
+              format,
+              modified,
+              ...(includePaths && includePaths.length > 0 ? { includePaths } : {}),
+              ...(scopePaths && scopePaths.length > 0 ? { scopePaths } : {}),
+            },
+            resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource)
+          );
+        } finally {
+          runStore.endRun();
+        }
 
         if (result.error) {
           if (modified && result.error.includes("No valid files")) {
@@ -370,7 +381,7 @@ export function registerWorktreeContextActions(
         // Cmd+Shift+C, the palette, the `worktree.copyContext` alias, and any
         // agent dispatch. `copyContextWithFeedback` is the sole "context-menu"
         // caller and updates its own spinner toast in place, so announcing here
-        // too would double-toast it. Ordered after the failure checks so a
+        // too would double-report it. Ordered after the failure checks so a
         // failed copy can never announce success (#11735).
         if (ctx.dispatchSource !== "context-menu") {
           // Deliberately no empty-result explanation here, unlike the
@@ -378,32 +389,17 @@ export function registerWorktreeContextActions(
           // folder, whereas `includePaths`/`scopePaths` also carry globs and
           // individual files, so "this folder…" would be the wrong words for an
           // unmatched pattern. A plain count stays true for every caller.
-          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-          notify({
-            type: "success",
-            title: "Context copied",
-            message: formatCopyResultMessage({
-              fileCount: result.fileCount,
-              stats: result.stats,
-              format,
-            }),
-            // Its own bucket. The key otherwise falls back to `type`, pooling
-            // this with every other success toast in the app, where an
-            // unrelated burst would swallow the one message saying what is now
-            // on the clipboard.
-            rateLimitKey: "worktree.copyTree",
-            // No `context.worktreeId`, deliberately: notify() diverts a
-            // high-priority toast to the inbox when context names the worktree
-            // already on screen — the common case here — which would silence
-            // exactly this signal. A clipboard overwrite is invisible whichever
-            // worktree is displayed.
-            //
-            // "agent", not "completed": both route active → high, but
-            // "completed" owns the `completedEnabled` setting, which gates only
-            // main-process completion watches and never a renderer notify() —
-            // it would offer a toggle that leaves these copies firing anyway.
-            context: { eventKind: "agent" },
-          });
+          announceCopyTreeCopy(
+            {
+              title: "Context copied",
+              message: formatCopyResultMessage({
+                fileCount: result.fileCount,
+                stats: result.stats,
+                format,
+              }),
+            },
+            "worktree.copyTree"
+          );
         }
 
         return {

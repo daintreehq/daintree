@@ -187,16 +187,13 @@ describe("CopyTreeRecentsPanel", () => {
     // The trigger declares aria-haspopup="dialog" and the panel now owns the
     // button's former action. Portaled to the end of <body>, an unfocused panel
     // would leave a keyboard user tabbing through the whole app to reach it.
+    // The panel has no visible heading — the primary button is its header — so
+    // the dialog's name must come from an aria-label instead. Resolved through
+    // the accessibility tree rather than read off the attribute.
     seed([makeRecord()]);
     render(<CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />);
 
-    const dialog = screen.getByRole("dialog");
-    const labelId = dialog.getAttribute("aria-labelledby");
-    expect(labelId).toBeTruthy();
-    // The name has to resolve to real text inside the panel — a dangling id
-    // leaves the dialog anonymous to a screen reader. Asserted by resolution
-    // rather than against a duplicated literal.
-    expect(document.getElementById(labelId!)?.textContent?.trim()).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: /copy context/i })).toBeTruthy();
 
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Copy full context" }));
   });
