@@ -1,21 +1,19 @@
 import { Profiler, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
-import {
-  isElectronAvailable,
-  useAgentLauncher,
-  useTerminalConfig,
-  useAppThemeConfig,
-  useGlobalKeybindings,
-  useGlobalEscapeDispatcher,
-  useContextInjection,
-  useGridNavigation,
-  useWindowNotifications,
-  useWatchedPanelNotifications,
-  useWorktreeActions,
-  useMenuActions,
-  useErrors,
-  useReEntrySummary,
-} from "./hooks";
+import { isElectronAvailable } from "@/hooks/useElectron";
+import { useAgentLauncher } from "@/hooks/useAgentLauncher";
+import { useTerminalConfig } from "@/hooks/useTerminalConfig";
+import { useAppThemeConfig } from "@/hooks/useAppThemeConfig";
+import { useGlobalKeybindings } from "@/hooks/useGlobalKeybindings";
+import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
+import { useContextInjection } from "@/hooks/useContextInjection";
+import { useGridNavigation } from "@/hooks/useGridNavigation";
+import { useWindowNotifications } from "@/hooks/useWindowNotifications";
+import { useWatchedPanelNotifications } from "@/hooks/useWatchedPanelNotifications";
+import { useWorktreeActions } from "@/hooks/useWorktreeActions";
+import { useMenuActions } from "@/hooks/useMenuActions";
+import { useErrors } from "@/hooks/useErrors";
+import { useReEntrySummary } from "@/hooks/useReEntrySummary";
 import type { ProjectCreationIdentity } from "@shared/types";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { usePluginActions } from "./hooks/usePluginActions";
@@ -77,14 +75,12 @@ import {
 
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
-import {
-  usePanelStore,
-  useWorktreeSelectionStore,
-  useProjectStore,
-  usePaletteStore,
-  usePreferencesStore,
-  usePluginManagerStore,
-} from "./store";
+import { usePanelStore } from "@/store/panelStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useProjectStore } from "@/store/projectStore";
+import { usePaletteStore } from "@/store/paletteStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { useEmptyCanvasContent } from "./hooks/app/useEmptyCanvasContent";
 // Eager side-effect import: auto-discovers every built-in plugin renderer and
 // registers its builtin view slots at module-eval time, before first render.

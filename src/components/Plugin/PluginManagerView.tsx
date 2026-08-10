@@ -20,7 +20,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
-import { useOverlayClaim } from "@/hooks";
+import { useOverlayClaim } from "@/hooks/useOverlayState";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";

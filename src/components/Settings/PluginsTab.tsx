@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Package, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
-import { useDeferredLoading } from "@/hooks";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";

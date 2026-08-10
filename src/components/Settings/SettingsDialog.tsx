@@ -34,7 +34,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { appClient } from "@/clients";
+import { appClient } from "@/clients/appClient";
 import type { AppVersionInfo } from "@shared/types/ipc/app";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { EmptyState } from "@/components/ui/EmptyState";

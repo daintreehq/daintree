@@ -25,7 +25,7 @@ import { SettingsChoicebox } from "@/components/Settings/SettingsChoicebox";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { McpAuditLogViewer } from "@/components/Settings/McpAuditLogViewer";
 import { TurnOutcomeDiagnostics } from "@/components/Settings/TurnOutcomeDiagnostics";
-import { useDeferredLoading } from "@/hooks";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { formatErrorMessage } from "@shared/utils/errorMessage";

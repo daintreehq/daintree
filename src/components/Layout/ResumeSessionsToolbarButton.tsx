@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { useShortcutHintHover } from "@/hooks/useShortcutHintHover";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { actionService } from "@/services/ActionService";
 

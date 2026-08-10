@@ -225,6 +225,17 @@ export async function waitForServerReady(
 
     if (signal.aborted) return false;
 
+    // Sleep only up to the caller's deadline. A flat poll-interval wait
+    // overshoots short timeouts by nearly a full interval — waitForServerReady(
+    // url, signal, 100) used to take 500ms+ to report failure — and burns that
+    // time on a round the loop condition is about to reject anyway.
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) break;
+    // Round the clamped wait up: setTimeout truncates fractional delays, so a
+    // bare `remaining` can fire a hair before the deadline and buy the loop one
+    // extra unbudgeted round.
+    const sleepMs = Math.min(READINESS_POLL_INTERVAL_MS, Math.ceil(remaining));
+
     try {
       await new Promise<void>((resolve, reject) => {
         if (signal.aborted) {
@@ -238,7 +249,7 @@ export async function waitForServerReady(
         const timer = setTimeout(() => {
           signal.removeEventListener("abort", onAbort);
           resolve();
-        }, READINESS_POLL_INTERVAL_MS);
+        }, sleepMs);
         signal.addEventListener("abort", onAbort, { once: true });
       });
     } catch {

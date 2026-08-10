@@ -17,15 +17,13 @@ import { MoveOrRenameProjectDialog } from "@/components/Project/MoveOrRenameProj
 import { ChordIndicator } from "./ChordIndicator";
 
 import { AllClearOverlay } from "../AllClearOverlay";
-import {
-  useDiagnosticsStore,
-  useDockStore,
-  useFocusStore,
-  useHelpPanelStore,
-  usePreferencesStore,
-  useUIStore,
-  type PanelState,
-} from "@/store";
+import { useDiagnosticsStore } from "@/store/diagnosticsStore";
+import { useDockStore } from "@/store/dockStore";
+import { useFocusStore } from "@/store/focusStore";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { useUIStore } from "@/store/uiStore";
+import type { PanelState } from "@/store/focusStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
 import { useProjectStore } from "@/store/projectStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
@@ -35,13 +33,14 @@ import { useCcrPresetsSubscription } from "@/hooks/useCcrPresetsSubscription";
 import { useProjectPresetsSubscription } from "@/hooks/useProjectPresetsSubscription";
 import { useDiagnosticsAutoOpen } from "@/hooks/useDiagnosticsAutoOpen";
 import { useDockPopoverLayerSync } from "@/components/Layout/useOpenDockPopoverId";
-import type { RetryAction } from "@/store";
-import { appClient } from "@/clients";
+import type { RetryAction } from "@/store/errorStore";
+import { appClient } from "@/clients/appClient";
 import type { CliAvailability, AgentSettings } from "@shared/types";
-import { useLayoutState, useOverlayOpen } from "@/hooks";
+import { useLayoutState } from "@/hooks/useLayoutState";
+import { useOverlayOpen } from "@/hooks/useOverlayState";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
-import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
+import type { UseProjectSwitcherPaletteReturn } from "@/hooks/useProjectSwitcherPalette";
 import {
   createAssistantRevealCoordinator,
   suppressSidebarResizes,

@@ -5,9 +5,10 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   getPanelKindDefinitionsSnapshot,
   subscribeToPanelKindDefinitions,
-  type PanelComponentProps,
-} from "@/registry";
-import { ContentPanel, PluginMissingPanel } from "@/components/Panel";
+} from "@/registry/panelKindRegistry";
+import type { PanelComponentProps } from "@/registry/panelKindRegistry";
+import { ContentPanel } from "@/components/Panel/ContentPanel";
+import { PluginMissingPanel } from "@/components/Panel/PluginMissingPanel";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
 import { buildPanelProps } from "@/utils/panelProps";
 import { withViewTransition } from "@/lib/viewTransition";

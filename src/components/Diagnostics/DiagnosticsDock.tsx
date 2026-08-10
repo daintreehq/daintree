@@ -10,7 +10,7 @@ import {
   DIAGNOSTICS_MAX_HEIGHT_RATIO,
   DIAGNOSTICS_DEFAULT_HEIGHT,
 } from "@/store/diagnosticsStore";
-import { useErrorStore } from "@/store";
+import { useErrorStore } from "@/store/errorStore";
 import { usePerfMetricsStore } from "@/store/perfMetricsStore";
 import { ProblemsContent } from "./ProblemsContent";
 import { LogsContent } from "./LogsContent";
@@ -25,7 +25,7 @@ import {
   TelemetryActions,
   PerfActions,
 } from "./DiagnosticsActions";
-import type { RetryAction } from "@/store";
+import type { RetryAction } from "@/store/errorStore";
 import { appClient } from "@/clients";
 import { logError } from "@/utils/logger";
 

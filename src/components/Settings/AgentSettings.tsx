@@ -1,9 +1,9 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState, useCallback } from "react";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
-import { useTabLoad } from "@/hooks";
+import { useTabLoad } from "@/hooks/useTabLoad";
 import { getAgentIds, getAgentConfig, getMergedPresets, type AgentPreset } from "@/config/agents";
 import { useAgentSettingsStore, useCliAvailabilityStore, useAgentPreferencesStore } from "@/store";
-import { cliAvailabilityClient } from "@/clients";
+import { cliAvailabilityClient } from "@/clients/cliAvailabilityClient";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { logError } from "@/utils/logger";

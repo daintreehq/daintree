@@ -26,8 +26,8 @@ import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { ForgeAuditLogViewer } from "./ForgeAuditLogViewer";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
-import { useTabLoad } from "@/hooks";
-import { appClient } from "@/clients";
+import { useTabLoad } from "@/hooks/useTabLoad";
+import { appClient } from "@/clients/appClient";
 import { logError } from "@/utils/logger";
 
 type ForgeIcon = ComponentType<{ className?: string; "aria-hidden"?: boolean }>;

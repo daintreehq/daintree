@@ -13,14 +13,11 @@ import { useDroppable } from "@dnd-kit/core";
 import type { Transition, TransformProperties } from "framer-motion";
 import { logError } from "@/utils/logger";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
-import {
-  usePanelStore,
-  panelStoreApi,
-  useLayoutConfigStore,
-  useWorktreeSelectionStore,
-  usePreferencesStore,
-  useTwoPaneSplitStore,
-} from "@/store";
+import { usePanelStore, panelStoreApi } from "@/store/panelStore";
+import { useLayoutConfigStore } from "@/store/layoutConfigStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { useTwoPaneSplitStore } from "@/store/twoPaneSplitStore";
 import { getNarrowPanel, getRenderablePanel } from "@/store/slices/panelRegistry/selectors";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
@@ -48,7 +45,7 @@ import {
   subscribeSidebarHydrationUnlock,
 } from "@/lib/layoutTransitionLock";
 import { useWorktrees } from "@/hooks/useWorktrees";
-import { useProjectBranding } from "@/hooks";
+import { useProjectBranding } from "@/hooks/useProjectBranding";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import type { CliAvailability } from "@shared/types";
 import {

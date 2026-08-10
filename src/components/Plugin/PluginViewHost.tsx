@@ -1,6 +1,7 @@
 import { useCallback, useEffect, type ComponentType } from "react";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
-import { ContentPanel, type BasePanelProps } from "@/components/Panel";
+import { ContentPanel } from "@/components/Panel/ContentPanel";
+import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { makePluginViewContent } from "@/components/Plugin/PluginViewContent";
 import { logWarn } from "@/utils/logger";

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
-import { useErrorStore } from "@/store";
+import { useErrorStore } from "@/store/errorStore";
 
 // The dock component is lazy-loaded behind a first-open gate (AppLayout), so
 // the error watcher that auto-opens it must live in an always-mounted owner:

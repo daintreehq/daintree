@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { usePanelStore } from "@/store";
+import { usePanelStore } from "@/store/panelStore";
 import type { PanelInstance } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
@@ -8,9 +8,11 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import {
   getPanelKindDefinitionsSnapshot,
   subscribeToPanelKindDefinitions,
-  type PanelComponentProps,
-} from "@/registry";
-import { ContentPanel, PluginMissingPanel, triggerPanelTransition } from "@/components/Panel";
+} from "@/registry/panelKindRegistry";
+import type { PanelComponentProps } from "@/registry/panelKindRegistry";
+import { ContentPanel } from "@/components/Panel/ContentPanel";
+import { PluginMissingPanel } from "@/components/Panel/PluginMissingPanel";
+import { triggerPanelTransition } from "@/components/Panel/PanelTransitionOverlay";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
 import { buildPanelProps } from "@/utils/panelProps";

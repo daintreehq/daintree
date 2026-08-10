@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Copy, RefreshCw } from "lucide-react";
-import { agentHelpClient } from "@/clients";
+import { agentHelpClient } from "@/clients/agentHelpClient";
 
 import type { AgentHelpResult } from "@shared/types/ipc/agent";
 import type { AgentAvailabilityState } from "@shared/types";

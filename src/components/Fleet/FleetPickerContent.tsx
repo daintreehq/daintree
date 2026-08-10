@@ -8,7 +8,7 @@ import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { CircleHelp } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useEscapeStack } from "@/hooks";
+import { useEscapeStack } from "@/hooks/useEscapeStack";
 import {
   FALLBACK_GROUP_ID,
   FALLBACK_GROUP_NAME,

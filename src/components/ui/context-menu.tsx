@@ -8,7 +8,7 @@ import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { MenuActionSourceContext, useMenuActionSource } from "./menu-source";
 import { actionService } from "@/services/ActionService";
-import { useAriaKeyshortcuts } from "@/hooks";
+import { useAriaKeyshortcuts } from "@/hooks/useKeybinding";
 import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
 
 type ContextMenuRootProps = React.ComponentProps<typeof ContextMenuPrimitiveType.Root>;

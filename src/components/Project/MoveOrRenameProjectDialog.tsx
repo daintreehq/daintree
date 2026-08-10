@@ -10,7 +10,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { notify } from "@/lib/notify";
-import { useDohertyGate } from "@/hooks";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import {
   useProjectRelocationStore,
   type PendingProjectRelocation,

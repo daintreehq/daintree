@@ -6,7 +6,10 @@ import {
   getPanelKindConfig,
   type PanelKindConfig,
 } from "@shared/config/panelKindRegistry";
-import { registerPanelKindDefinition, unregisterPanelKindDefinition } from "@/registry";
+import {
+  registerPanelKindDefinition,
+  unregisterPanelKindDefinition,
+} from "@/registry/panelKindRegistry";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
 import { makePluginViewHost } from "@/components/Plugin/PluginViewHost";
 import { reconcileDockMembership } from "@/store/reconcileDockMembership";

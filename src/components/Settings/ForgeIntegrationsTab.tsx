@@ -10,7 +10,7 @@ import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect, type SettingsSelectOption } from "./SettingsSelect";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useProjectStore } from "@/store";
-import { useDohertyGate } from "@/hooks";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { resolveForgeRemote } from "@shared/utils/forgeRemoteSelection";

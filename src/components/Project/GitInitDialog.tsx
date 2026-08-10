@@ -5,7 +5,7 @@ import { Check, AlertCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { FolderGit2 } from "@/components/icons";
 import { projectClient } from "@/clients";
-import { useDohertyGate } from "@/hooks";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { basename } from "@shared/utils/path";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";

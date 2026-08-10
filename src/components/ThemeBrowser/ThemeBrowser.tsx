@@ -18,7 +18,8 @@ import { Button } from "@/components/ui/button";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import type { AppColorScheme, AppThemeValidationWarning } from "@shared/types/appTheme";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
-import { useOverlayClaim, useImageError } from "@/hooks";
+import { useOverlayClaim } from "@/hooks/useOverlayState";
+import { useImageError } from "@/hooks/useImageError";
 
 const PANEL_WIDTH = 380;
 const EMPTY_WARNINGS: AppThemeValidationWarning[] = [];

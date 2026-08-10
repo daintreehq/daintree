@@ -8,7 +8,7 @@ import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import type { GitHubTokenValidation } from "../../shared/types.js";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
-import { useTabLoad } from "@/hooks";
+import { useTabLoad } from "@/hooks/useTabLoad";
 import { logError } from "@/utils/logger";
 
 interface ForgeSettingBlockProps {

@@ -75,19 +75,18 @@ import { middleTruncate } from "@/utils/textParsing";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
-import {
-  useAriaKeyshortcuts,
-  useDohertyGate,
-  useKeepMounted,
-  useKeybindingDisplay,
-  useShortcutHintHover,
-} from "@/hooks";
-import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
+import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { useDohertyGate } from "@/hooks";
+import { useKeepMounted } from "@/hooks/useKeepMounted";
+import { useShortcutHintHover } from "@/hooks/useShortcutHintHover";
+import type { UseProjectSwitcherPaletteReturn } from "@/hooks/useProjectSwitcherPalette";
 import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentity";
-import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
@@ -104,7 +103,7 @@ import { isGitBackedProject } from "@shared/types";
 import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
 import { isAgentPinned, isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
-import { projectClient } from "@/clients";
+import { projectClient } from "@/clients/projectClient";
 import { actionService } from "@/services/ActionService";
 import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
 import { LazyProjectSwitcherPalette } from "@/lazyPanels";

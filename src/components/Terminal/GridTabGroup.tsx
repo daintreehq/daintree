@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useEffect, useEffectEvent, useRef } from "react";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import { useShallow } from "zustand/react/shallow";
-import { usePanelStore } from "@/store";
+import { usePanelStore } from "@/store/panelStore";
 import { getRenderablePanel } from "@/store/slices/panelRegistry/selectors";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";

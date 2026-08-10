@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { useErrorStore, type RetryAction } from "@/store";
 import { logError } from "@/utils/logger";
-import { errorsClient } from "@/clients";
+import { errorsClient } from "@/clients/errorsClient";
 
 export function useErrorRetry() {
   const removeError = useErrorStore((s) => s.removeError);
