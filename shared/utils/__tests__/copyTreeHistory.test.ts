@@ -244,11 +244,18 @@ describe("resolveCopyTreeRunName", () => {
     // Slide the emoji across the boundary so one offset lands mid-pair; a plain
     // `slice` persists a lone surrogate, which renders as a replacement glyph
     // and stops comparing equal to the same name resolved elsewhere.
+    //
+    // Checked by code point rather than by round-tripping the string: spreading
+    // yields a lone surrogate as its own element, so `[...name].join("")` equals
+    // `name` for EVERY input and would assert nothing.
     for (let pad = 0; pad < 6; pad++) {
       const supplied = `${"y".repeat(COPY_TREE_HISTORY_NAME_MAX_LENGTH - 4 + pad)}${"🌳".repeat(6)}`;
       const name = resolveCopyTreeRunName(supplied, {});
       expect(name.length).toBeLessThanOrEqual(COPY_TREE_HISTORY_NAME_MAX_LENGTH);
-      expect(name).toBe([...name].join(""));
+      for (const char of name) {
+        const code = char.codePointAt(0) as number;
+        expect(code >= 0xd800 && code <= 0xdfff).toBe(false);
+      }
     }
   });
 });

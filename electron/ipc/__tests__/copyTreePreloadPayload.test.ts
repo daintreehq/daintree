@@ -45,14 +45,24 @@ describe("copyTree preload bindings forward every argument they accept", () => {
       .map((part) => part.replace(/\/\/.*$/gm, "").trim())
       .filter(Boolean);
 
-  it("places each declared parameter into the invoke payload", async () => {
-    const source = await readFile(PRELOAD_CTS, "utf8");
-
-    // Bounded to the copyTree namespace so an unrelated binding elsewhere in
-    // this 1500-line file can never satisfy or fail these assertions.
+  /**
+   * The copyTree namespace only, so an unrelated binding elsewhere in this
+   * 1500-line file can neither satisfy nor fail these assertions.
+   *
+   * Both delimiters are asserted. Without the closing check a missed sentinel
+   * yields `indexOf` = -1, and `slice(start, -1)` would quietly widen the scan
+   * to the rest of the file instead of failing.
+   */
+  const copyTreeBlock = (source: string): string => {
     const start = source.indexOf("    copyTree: {");
-    expect(start, "copyTree namespace not found in preload.cts").toBeGreaterThan(-1);
-    const block = source.slice(start, source.indexOf("\n    },", start));
+    expect(start, "copyTree namespace opening not found in preload.cts").toBeGreaterThan(-1);
+    const end = source.indexOf("\n    },", start);
+    expect(end, "copyTree namespace closing not found in preload.cts").toBeGreaterThan(start);
+    return source.slice(start, end);
+  };
+
+  it("places each declared parameter into the invoke payload", async () => {
+    const block = copyTreeBlock(await readFile(PRELOAD_CTS, "utf8"));
 
     const bindings = [...block.matchAll(BINDING)].map((match) => ({
       method: match[1]!,
@@ -76,9 +86,7 @@ describe("copyTree preload bindings forward every argument they accept", () => {
   });
 
   it("accepts the run name on all three run-recording bindings", async () => {
-    const source = await readFile(PRELOAD_CTS, "utf8");
-    const start = source.indexOf("    copyTree: {");
-    const block = source.slice(start, source.indexOf("\n    },", start));
+    const block = copyTreeBlock(await readFile(PRELOAD_CTS, "utf8"));
 
     // The check above proves whatever is declared gets forwarded; this proves
     // the run name is declared at all. Without it, deleting the parameter and
