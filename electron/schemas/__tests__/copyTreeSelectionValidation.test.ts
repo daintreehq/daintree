@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CopyTreeOptionsSchema, CopyTreeTestConfigOptionsSchema } from "../ipc.js";
+import { CopyTreeHistoryRecordSchema } from "../copyTreeHistory.js";
 
 /**
  * The IPC half of the selection guard (#11722).
@@ -92,6 +93,36 @@ describe("CopyTreeOptionsSchema ignore-file bypass guard", () => {
     expect(parse({}).success).toBe(true);
     expect(parse({ scopeIgnoresIgnoreFiles: false }).success).toBe(true);
     expect(parse({ includePaths: ["src/a.ts"] }).success).toBe(true);
+  });
+
+  it("carries the rule into a rehydrated history record", () => {
+    // `CopyTreeHistoryRecordSchema.options` is `CopyTreeOptionsSchema.unwrap()`,
+    // which reaches the REFINED object rather than the plain base — the whole
+    // reason the base is a separate export instead of the thing everything
+    // extends. A future cleanup that swapped the unwrap for the base would let a
+    // persisted record rehydrate into a request the generate handlers reject,
+    // and nothing else in the suite would notice.
+    const record = (options: unknown) => ({
+      id: "r1",
+      dedupeKey: "k1",
+      name: "Docs",
+      options,
+      source: "mcp",
+      worktreeId: "wt-1",
+      stats: { fileCount: 1 },
+      createdAt: 1,
+      lastUsedAt: 2,
+      runCount: 1,
+    });
+
+    expect(
+      CopyTreeHistoryRecordSchema.safeParse(record({ scopeIgnoresIgnoreFiles: true })).success
+    ).toBe(false);
+    expect(
+      CopyTreeHistoryRecordSchema.safeParse(
+        record({ scopePaths: ["docs"], scopeIgnoresIgnoreFiles: true })
+      ).success
+    ).toBe(true);
   });
 
   it("applies the same rule to a test-config dry run", () => {

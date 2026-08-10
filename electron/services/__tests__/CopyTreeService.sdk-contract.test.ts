@@ -250,6 +250,9 @@ describe("CopyTreeService against the installed CopyTree", () => {
         // Paired rather than asserted alone: the default half is what proves the
         // fixture's rule actually bites, so the bypass half cannot pass for the
         // wrong reason (an unwritten ignore file would satisfy it silently).
+        // Both errors checked, or the default half passes on a failed run.
+        expect(obeyed.error).toBeUndefined();
+        expect(bypassed.error).toBeUndefined();
         expect(obeyed.files?.map((file) => file.path) ?? []).not.toContain("docs/guide.md");
         expect(bypassed.files?.map((file) => file.path)).toContain("docs/guide.md");
       });
@@ -289,6 +292,11 @@ describe("CopyTreeService against the installed CopyTree", () => {
 
       it("still applies the caller's own exclude inside the unblocked folder", async () => {
         await buildIgnoredDocs();
+        // A control the `exclude` does NOT name. Without it this test passes on a
+        // bypass that silently stopped working: `docs/` is ignored by the
+        // fixture either way, so "guide.md is absent" alone proves nothing about
+        // `exclude` having run.
+        await fs.writeFile(path.join(tempDir, "docs", "intro.md"), "# intro\n");
 
         const result = await copyTreeService.testConfig(tempDir, {
           scopePaths: ["docs"],
@@ -296,10 +304,65 @@ describe("CopyTreeService against the installed CopyTree", () => {
           exclude: ["**/guide.md"],
         });
 
-        // The single behaviour that ruled out force-including the selection:
-        // `always` would have resurrected this file, since ProfileFilterStage
-        // returns before it ever consults `exclude`.
-        expect(result.files?.map((file) => file.path) ?? []).not.toContain("docs/guide.md");
+        expect(result.error).toBeUndefined();
+        const paths = result.files?.map((file) => file.path) ?? [];
+        // The bypass worked...
+        expect(paths).toContain("docs/intro.md");
+        // ...and `exclude` still bit inside it. This is the single behaviour that
+        // ruled out force-including the selection: `always` would have
+        // resurrected this file, since ProfileFilterStage returns on
+        // `alwaysInclude` before it ever consults `exclude`.
+        expect(paths).not.toContain("docs/guide.md");
+        // Attribution, so the absence is booked to `exclude` and not to some
+        // other layer that happened to drop it.
+        expect(result.excluded?.byReason.optionExclude ?? 0).toBeGreaterThan(0);
+      });
+
+      it("still applies the file-count budget, which a force-include would not have", async () => {
+        await buildIgnoredDocs();
+        await fs.writeFile(path.join(tempDir, "docs", "intro.md"), "# intro\n");
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["docs"],
+          scopeIgnoresIgnoreFiles: true,
+          maxFileCount: 1,
+          sort: "path",
+        });
+
+        expect(result.error).toBeUndefined();
+        // Two files are now reachable inside the unblocked folder, and the budget
+        // has to bound them. Pinned because the `always` wire text promises the
+        // budgets outlive a force-include too — `BudgetStage` has no
+        // `alwaysInclude` exemption — and that claim needs a test of its own.
+        expect(result.files?.length).toBe(1);
+        expect(result.excluded?.byReason.fileCountBudget ?? 0).toBeGreaterThan(0);
+      });
+
+      it("lets a directory scope subsume a file scope, so the child gets no override", async () => {
+        await buildIgnoredDocs();
+        await fs.writeFile(path.join(tempDir, "docs", ".copytreeignore"), "draft.md\n");
+        await fs.writeFile(path.join(tempDir, "docs", "draft.md"), "# draft\n");
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          // `resolveScope` drops an entry already covered by a directory
+          // ancestor, so this collapses to `["docs"]` and `draft.md` never gets
+          // its own root-to-entry override. Naming the exact file INSTEAD of its
+          // parent is the remedy, which is why the wire text says so.
+          scopePaths: ["docs", "docs/draft.md"],
+          scopeIgnoresIgnoreFiles: true,
+        });
+
+        expect(result.error).toBeUndefined();
+        const paths = result.files?.map((file) => file.path) ?? [];
+        expect(paths).toContain("docs/guide.md");
+        expect(paths).not.toContain("docs/draft.md");
+
+        // The remedy actually works: scope the file on its own and it arrives.
+        const exact = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["docs/draft.md"],
+          scopeIgnoresIgnoreFiles: true,
+        });
+        expect(exact.files?.map((file) => file.path)).toContain("docs/draft.md");
       });
 
       it("still applies the per-file size gate inside the unblocked folder", async () => {
@@ -326,7 +389,7 @@ describe("CopyTreeService against the installed CopyTree", () => {
       // directory a caller is most likely to scope into expecting this flag to
       // work, precisely because its own `.gitignore` usually names it too.
       it.each(["node_modules", "build"])(
-        "leaves the config exclusion on %s standing, bypass or not",
+        "leaves the config exclusion on %s standing even under the bypass",
         async (excludedDir) => {
           await fs.mkdir(path.join(tempDir, excludedDir, "nested"), { recursive: true });
           await fs.writeFile(
@@ -339,11 +402,16 @@ describe("CopyTreeService against the installed CopyTree", () => {
             scopeIgnoresIgnoreFiles: true,
           });
 
+          // Errors first: `includedFiles === 0` is also what a failed run and an
+          // empty traversal look like, so on its own it would pass without the
+          // config layer doing anything.
+          expect(result.error).toBeUndefined();
+          expect(result.includedFiles).toBe(0);
           // The companion `scopeIgnoresConfigExcludes` escape is deliberately
           // never set: lifting an ignore rule is a different request from
           // dragging a dependency tree or a build output in, and only the first
-          // one is on offer.
-          expect(result.includedFiles).toBe(0);
+          // one is on offer. Attribution proves it was that layer.
+          expect(result.excluded?.byReason.configExclude ?? 0).toBeGreaterThan(0);
         }
       );
 

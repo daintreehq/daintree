@@ -768,9 +768,12 @@ class CopyTreeService {
       // The one escape hatch a caller can open (#11750), and it is deliberately
       // the ignore-FILE one rather than `always`. The SDK strips only the rules
       // standing between the root and each scope entry, so config exclusions,
-      // the caller's `exclude`, `.git`, the git filters, the size gate and every
-      // budget keep applying — none of which survive a force-include, which
-      // globs with `ignore: []` and then outranks `exclude` in ProfileFilterStage.
+      // the caller's `exclude`, the git filters and the per-file size gate keep
+      // applying. A force-include survives all four — `collectForcedEntries`
+      // globs with `ignore: []` and `ProfileFilterStage` returns before it ever
+      // reads `exclude` — which is why the selection is never promoted into
+      // `always`. (The later budgets bound both equally: `BudgetStage` and
+      // `CharLimitStage` have no force-include exemption.)
       //
       // `=== true` rather than a truthy read: the field crosses IPC from an MCP
       // caller, and only the boolean the schemas admit should open this.

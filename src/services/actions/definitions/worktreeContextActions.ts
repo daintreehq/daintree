@@ -334,13 +334,13 @@ export function registerWorktreeContextActions(
             .min(1)
             .optional()
             .describe(
-              "Worktree-relative literal file or directory paths to walk — not patterns, so pass 'src/panels', not 'src/panels/**'. Ignore rules still resolve from the worktree root, so the result matches what a whole-worktree copy would have returned for that subtree. Prefer this over includePaths when selecting a folder. This restricts traversal, so includePaths can only narrow within these paths and never add a file outside them."
+              "Worktree-relative literal file or directory paths to walk — not patterns, so pass 'src/panels', not 'src/panels/**'. Ignore rules still resolve from the worktree root, so by default the result matches what a whole-worktree copy would have returned for that subtree — unless scopeIgnoresIgnoreFiles is true. Prefer this over includePaths when selecting a folder. This restricts traversal, so includePaths can only narrow within these paths and never add a file outside them."
             ),
           scopeIgnoresIgnoreFiles: z
             .boolean()
             .optional()
             .describe(
-              "Lets scopePaths into subtrees an ignore file would have pruned (default false). Requires scopePaths and is rejected without it. Set true when a path you named is being dropped by a `.copytreeignore` or `.gitignore` rule: only the rules blocking entry into each scoped path are removed. Project and config exclusions such as node_modules, `.git`, the size gate and all budgets still apply."
+              "Lets scopePaths into subtrees an ignore file would have pruned (default false). Requires scopePaths and is rejected without it. Set true when a path you named is being dropped by a `.copytreeignore` or `.gitignore` rule: only the rules blocking entry into each scoped path are removed. Unrelated rules, ignore files inside a scoped folder, project and config exclusions such as node_modules, `.git`, `modified`, and every budget all still apply. To get past a rule declared inside a selected folder, scope the exact file instead of that folder — a scoped directory subsumes any of its children you also list."
             ),
         })
         // Same guard as `CopyTreeOptionsSchema`, restated because this action
@@ -382,9 +382,12 @@ export function registerWorktreeContextActions(
               modified,
               ...(includePaths && includePaths.length > 0 ? { includePaths } : {}),
               ...(scopePaths && scopePaths.length > 0 ? { scopePaths } : {}),
-              // Only forwarded when true: the field is absent-means-default, and
-              // sending an explicit `false` would file the run under its own
-              // history entry despite building an identical bundle.
+              // Only forwarded when true, matching the conditional spreads
+              // above: the field is absent-means-default, so an explicit `false`
+              // is noise in the payload. (History would dedupe it onto the same
+              // entry either way — `canonicalizeCopyTreeOptions` folds exact
+              // `false` away — so this is about keeping the request honest, not
+              // about the run history.)
               ...(scopeIgnoresIgnoreFiles === true ? { scopeIgnoresIgnoreFiles } : {}),
             },
             resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource)

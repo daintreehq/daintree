@@ -255,8 +255,8 @@ describe("worktree.copyTree ignore-file bypass", () => {
 
   it.each([
     ["omitted", {}],
-    // The default spelled out. Forwarding it would file an identical bundle
-    // under its own history row, since the run hashes the options it was given.
+    // The default spelled out, which the SDK reads identically to absence — so
+    // the payload should not carry it, matching how the path fields are spread.
     ["explicitly false", { scopeIgnoresIgnoreFiles: false }],
   ])("omits the field entirely when it is %s", async (_label, extra) => {
     const { run } = setupActions();

@@ -472,10 +472,16 @@ export const SlashCommandListRequestSchema = z.object({
 export const CopyTreeFormatSchema = z.enum(["xml", "json", "markdown", "tree", "ndjson", "sarif"]);
 
 /**
- * The unrefined object base — exported so the test-config variant can `.extend()`
- * it and the history codec can reuse it without reaching through the
- * `.superRefine` wrapper below, mirroring `PanelContributionObjectSchema`.
- * Runtime validation goes through {@link CopyTreeOptionsSchema}.
+ * The unrefined object base, mirroring `PanelContributionObjectSchema`. It exists
+ * so {@link CopyTreeTestConfigOptionsSchema} can `.extend()` a plain object —
+ * that is the one operation the refined schema below cannot serve.
+ *
+ * Extend from here ONLY when you also re-apply
+ * {@link requireScopeForIgnoreFileBypass}; anything that just needs to validate
+ * should use {@link CopyTreeOptionsSchema}. Notably the history codec unwraps
+ * the refined schema on purpose, so a persisted record cannot rehydrate into a
+ * request the generate handlers would have rejected — swapping it to this base
+ * would silently drop that check.
  */
 export const CopyTreeOptionsObjectSchema = z.object({
   format: CopyTreeFormatSchema.optional(),

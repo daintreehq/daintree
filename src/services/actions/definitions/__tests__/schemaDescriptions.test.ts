@@ -173,17 +173,21 @@ describe("argument descriptions carry the semantics prose no longer states", () 
 
   // #11750. The flag's whole safety story is "it lifts less than you fear", and
   // a caller can only learn the boundary from this text — the type is a bare
-  // boolean and the SDK's own docs are not on the wire. Each assertion below is
-  // a claim `CopyTreeService.sdk-contract.test.ts` proves against the real SDK;
-  // if one of those flips, the description here is what has to change with it.
+  // boolean and the SDK's own docs are not on the wire. The claims about what
+  // survives are pinned against the real SDK in
+  // `CopyTreeService.sdk-contract.test.ts`; if one of those flips, this text is
+  // what has to change with it.
+  //
+  // Every pattern below carries polarity. A bare /budget/ would be satisfied by
+  // "budgets no longer apply" — text that says the exact opposite of what the
+  // code does — so matching the topic word alone would enforce nothing.
   it("bounds what the ignore-file bypass lifts, and what it leaves standing", () => {
     const bypass =
       emit(CopyTreeOptionsSchema).properties?.scopeIgnoresIgnoreFiles?.description ?? "";
 
     // Scope-bound, and refused without one — a caller that sets it alone gets a
     // parse error, so the text has to explain the pairing before it happens.
-    expect(bypass).toMatch(/scopePaths/);
-    expect(bypass).toMatch(/rejected|requires/i);
+    expect(bypass).toMatch(/(requires|rejected without)[^.]{0,40}`?scopePaths/i);
 
     // Both ignore files, stated. The SDK cannot narrow this to `.copytreeignore`
     // and a description naming only that one would understate the reach.
@@ -191,13 +195,17 @@ describe("argument descriptions carry the semantics prose no longer states", () 
     expect(bypass).toMatch(/\.gitignore/);
 
     // The limit that makes it safe: only the rules blocking entry are removed.
-    expect(bypass).toMatch(/only the rules/i);
+    expect(bypass).toMatch(/only the rules blocking/i);
 
-    // And the layers that keep applying. Without these a caller has no way to
-    // tell this apart from `always`, which lifts every one of them.
+    // And the layers that keep applying — the half that distinguishes this from
+    // `always`, which lifts every one of them.
+    expect(bypass).toMatch(/(still|continue to|remain)[^.]{0,120}(apply|applies)/i);
     expect(bypass).toMatch(/node_modules/);
-    expect(bypass).toMatch(/exclude/);
-    expect(bypass).toMatch(/budget/i);
+
+    // The composition trap a caller hits the moment it moves a selection into
+    // `scopePaths`: a rule inside the selection needs the exact file, not its
+    // parent, because a scoped directory subsumes its children.
+    expect(bypass).toMatch(/exact file/i);
   });
 
   it("warns that always is the blunt instrument the bypass is not", () => {
@@ -208,7 +216,19 @@ describe("argument descriptions carry the semantics prose no longer states", () 
     // narrower field is the half that changes behaviour — a warning with no
     // alternative just leaves the caller where it started.
     expect(always).toMatch(/scopeIgnoresIgnoreFiles/);
-    expect(always).toMatch(/node_modules/);
+
+    // Polarity again, and in the dangerous direction: "cannot pull in
+    // node_modules" would satisfy a bare /node_modules/ while telling a caller
+    // the opposite of the truth.
+    expect(always).toMatch(/can pull in[^.]{0,40}node_modules/i);
+
+    // The budgets are the one bound that DOES outlive a force-include
+    // (`BudgetStage` has no `alwaysInclude` exemption). An earlier draft of this
+    // text claimed only `.git` and the memory ceiling survived, which was wrong
+    // in the direction that matters — it undersold the remaining safety net.
+    // `[\s\S]` rather than `[^.]` because the clause lists `.git` on the way,
+    // and a dot-excluding span cannot reach past it.
+    expect(always).toMatch(/does not override[\s\S]{0,140}maxFileCount/i);
   });
 
   it("says a scope restricts traversal, so patterns cannot widen it", () => {

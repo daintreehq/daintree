@@ -286,7 +286,7 @@ export const CopyTreeOptionsSchema = z
       .array(z.string())
       .optional()
       .describe(
-        "Force-includes matching files, overriding every exclusion layer at once: ignore files, project and config exclusions, your own `exclude`, the git filters and the per-file size gate. Only `.git` and the memory ceiling survive it, so a broad pattern here can pull in `node_modules`. Prefer `scopePaths` with `scopeIgnoresIgnoreFiles` when you only need past an ignore file."
+        "Force-includes matching files, overriding several exclusion layers at once: ignore files, project and config exclusions, your own `exclude`, the `modified`/`changed` git filters, and `maxFileSize`. A broad pattern here can pull in `node_modules`, so it is the blunt option. What it does NOT override: `.git`, the worktree boundary, `scopePaths`, and the `maxFileCount`/`maxTotalSize`/`charLimit` budgets, which still drop force-included files. Prefer `scopePaths` with `scopeIgnoresIgnoreFiles` when you only need past an ignore rule."
       ),
     includePaths: z
       .array(z.string().min(1))
@@ -308,7 +308,7 @@ export const CopyTreeOptionsSchema = z
       .boolean()
       .optional()
       .describe(
-        "Lets `scopePaths` into subtrees an ignore file would have pruned (default false — a scoped copy returns what a whole-worktree copy would have returned). Requires `scopePaths` and is rejected without it. Set true when a path you named is being dropped by a `.copytreeignore` or `.gitignore` rule: only the rules blocking entry into each scoped path are removed, from those two ignore files. Unrelated rules in the same files, negations, and ignore files at or below the selection still apply — as do project and config exclusions such as node_modules, your own `exclude`, `.git`, the git filters, the size gate and all budgets. Scope the exact file rather than its parent folder to override a rule that lives inside the selection."
+        "Lets `scopePaths` into subtrees an ignore file would have pruned (default false — a scoped copy returns what a whole-worktree copy would have returned). Requires `scopePaths` and is rejected without it. Set true when a path you named is being dropped by a `.copytreeignore` or `.gitignore` rule: only the rules blocking entry into each scoped path are removed, from those two ignore files. Unrelated rules in the same files, negations, and ignore files at or below the selection all still apply — as do project and config exclusions such as node_modules, your own `exclude`, `.git`, the `modified`/`changed` filters, `maxFileSize` and every budget. To get past a rule declared inside a selected folder, scope the exact file instead of that folder: a scoped directory subsumes any of its children you also list, so naming both changes nothing."
       ),
     modified: z.boolean().optional(),
     changed: z.string().optional(),
