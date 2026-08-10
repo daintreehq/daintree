@@ -68,7 +68,22 @@ function installRepo(fixture: RepoFixture): void {
 
   mockGitRaw.mockImplementation(async (args: string[]) => {
     if (args[0] === "remote") return `${remotes.join("\n")}\n`;
-    if (args[0] === "for-each-ref") return `${remoteBaseRefs.join("\n")}\n`;
+    if (args[0] === "for-each-ref") {
+      // Model git's ref-filter matching rather than echoing the fixture back:
+      // `*` does NOT cross `/`, which is exactly the behaviour that decides
+      // whether slash-bearing remote names are discoverable.
+      const patterns = args.slice(args.indexOf("--") + 1);
+      const matches = remoteBaseRefs.filter((ref) =>
+        patterns.some((pattern) => {
+          const source = pattern
+            .split("*")
+            .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+            .join("[^/]*");
+          return new RegExp(`^${source}$`).test(ref);
+        })
+      );
+      return `${matches.join("\n")}\n`;
+    }
     if (args[0] === "rev-parse" && args[1] === "--symbolic-full-name") {
       const resolved = symbolicRefs[args[2]!];
       if (!resolved) throw new Error(`no upstream configured for ${args[2]}`);
@@ -350,6 +365,45 @@ describe("BaseDivergence", () => {
       expect(result?.baseCompareRef).toBe("upstream/main");
       expect(mockCreateWslHardenedGit).toHaveBeenCalled();
       expect(mockCreateHardenedGit).not.toHaveBeenCalled();
+    });
+
+    it("keeps the resolved remote in the fetch plan even when its ref is not fetched yet", async () => {
+      // Fresh fork: `upstream` is configured but `refs/remotes/upstream/main`
+      // has never been fetched, so the rev-list against it fails and the pass
+      // falls back to the local branch. If that made the divergence report no
+      // base remote, upstream would drop out of the fetch plan, the ref would
+      // never arrive, the stat key would never move, and the fallback would be
+      // served from cache forever.
+      installRepo({
+        remotes: ["origin", "upstream"],
+        remoteBaseRefs: ["refs/remotes/upstream/main"],
+        revList: { "main...HEAD": "0\t2\n" },
+      });
+      const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
+
+      const result = await divergence.compute(false);
+
+      // Display tells the truth about what was measured...
+      expect(result?.baseCompareRef).toBe("main");
+      expect(result?.baseRemote).toBeNull();
+      // ...while the fetch plan still targets the remote we need.
+      expect(divergence.baseRemote).toBe("upstream");
+    });
+
+    it("discovers a remote whose own name contains a slash", async () => {
+      // git's ref-filter wildcard does not cross `/`, so a single
+      // `refs/remotes/*/main` glob would never surface `team/fork`.
+      installRepo({
+        remotes: ["team/fork"],
+        remoteBaseRefs: ["refs/remotes/team/fork/main"],
+        revList: { "team/fork/main...HEAD": "1\t0\n" },
+      });
+      const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
+
+      const result = await divergence.compute(false);
+
+      expect(result?.baseCompareRef).toBe("team/fork/main");
+      expect(divergence.baseRemote).toBe("team/fork");
     });
 
     it("keeps today's origin fallback when the remote table can't be read", async () => {

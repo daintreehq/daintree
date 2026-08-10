@@ -48,6 +48,18 @@ import { WorktreeListService } from "./WorktreeListService.js";
 import { PRIntegrationService, type PRIntegrationCallbacks } from "./PRIntegrationService.js";
 import { RepoFetchCoordinator } from "./RepoFetchCoordinator.js";
 import { planFetchRemotes } from "../../shared/utils/baseRemoteSelection.js";
+
+/**
+ * The remote a worktree's displayed counts depend on. Derived through the same
+ * planner that chose what to fetch, so the "which remote did we fetch for this
+ * card" and "which remote may update this card" answers cannot drift apart.
+ */
+function dependsOnRemote(monitor: WorktreeMonitor): string {
+  return planFetchRemotes({
+    baseRemote: monitor.baseRemote,
+    availableRemotes: monitor.availableRemotes,
+  }).primaryRemote;
+}
 import { waitForPathExists } from "../utils/fs.js";
 import { markHostPerformance } from "../utils/hostPerformance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -1362,6 +1374,7 @@ export class WorkspaceService {
             lastFetchedAt: result.lastFetchedAt ?? null,
             authFailed: result.authFailed ?? false,
             networkFailed: result.networkFailed ?? false,
+            remote: result.remote,
           });
         },
       },
@@ -1597,7 +1610,16 @@ export class WorkspaceService {
    */
   private async applyFetchResultToSiblings(
     triggering: WorktreeMonitor,
-    result: { lastFetchedAt: number | null; authFailed: boolean; networkFailed: boolean }
+    result: {
+      lastFetchedAt: number | null;
+      authFailed: boolean;
+      networkFailed: boolean;
+      /**
+       * Remote the result describes. A sibling only adopts it when that is the
+       * remote the sibling's own counts depend on — see the fan-out note below.
+       */
+      remote: string | undefined;
+    }
   ): Promise<void> {
     const triggeringCommonDir = await getGitCommonDir(triggering.path, { logErrors: false });
     if (!triggeringCommonDir) {
@@ -1609,9 +1631,24 @@ export class WorkspaceService {
     for (const monitor of this.monitors.values()) {
       if (!monitor.isRunning) continue;
       const monitorCommonDir = await getGitCommonDir(monitor.path, { logErrors: false });
-      if (monitorCommonDir === triggeringCommonDir) {
-        monitor.setFetchState(result.lastFetchedAt, result.authFailed, result.networkFailed);
-      }
+      if (monitorCommonDir !== triggeringCommonDir) continue;
+      // Sharing a commondir no longer implies sharing a fetch outcome. Once a
+      // repo refreshes more than one remote, a sibling measuring against
+      // `upstream` must not be stamped fresh by an `origin` success, nor
+      // marked failed by an `upstream` failure it doesn't read — whichever
+      // remote finished last would otherwise win across every card, hiding the
+      // stale behind-count this issue exists to fix.
+      // The monitor that asked for this fetch always adopts the answer: the
+      // fetch was planned from its own resolution, and a poll landing mid-fetch
+      // could otherwise re-plan it into never accepting the result it asked for.
+      const isTriggering = monitor.id === triggering.id;
+      if (
+        !isTriggering &&
+        result.remote !== undefined &&
+        dependsOnRemote(monitor) !== result.remote
+      )
+        continue;
+      monitor.setFetchState(result.lastFetchedAt, result.authFailed, result.networkFailed);
     }
   }
 

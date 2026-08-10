@@ -818,6 +818,39 @@ describe("NewWorktreeDialog — branch list cache", () => {
     expect(document.getElementById("base-branch")?.textContent).toContain("upstream/feature/test");
   });
 
+  it("falls through to the PR fetch when two remotes carry the same head name", async () => {
+    // A branch name is not a PR identity: origin/feature/test and
+    // upstream/feature/test can be different commits, and the dialog has no
+    // way to tell which repo the PR belongs to. Building from the wrong one is
+    // worse than paying for the authoritative PR-number fetch.
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: true, commit: "abc123" },
+      { name: "origin/feature/test", current: false, commit: "aaa111", remote: "origin" },
+      { name: "upstream/feature/test", current: false, commit: "bbb222", remote: "upstream" },
+    ]);
+    renderDialog({
+      initialPR: {
+        number: 44,
+        title: "Test PR",
+        body: "",
+        headRef: "feature/test",
+        baseRef: "main",
+        state: "open",
+        rawState: "OPEN",
+        url: "https://github.com/test/repo/pull/44",
+        author: { login: "user", avatarUrl: "", rawData: null },
+        isDraft: false,
+        merged: false,
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
+      },
+    });
+    await advanceTimersGradually(500);
+
+    expect(mockFetchPRBranch).toHaveBeenCalledWith("/test/root", 44, "feature/test");
+  });
+
   it("does not mistake a nested branch for the PR head", async () => {
     // `origin/feature/test` must not satisfy a head named `test` — an exact
     // `<remote>/<headRef>` match, not a suffix match.

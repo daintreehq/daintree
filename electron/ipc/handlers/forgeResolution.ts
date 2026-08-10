@@ -210,7 +210,18 @@ export async function resolveForgeRemoteNameForCwd(cwd: string): Promise<string 
     forgeRemote,
     forgeProviderOverride
   );
-  return selected?.name ?? null;
+  if (selected) return selected.name;
+  // `null` from a *configured* remote means enumeration failed, so we could
+  // not verify the remote the user named — not that the repo has none. The
+  // caller's fallback is `origin`, and PR numbers are per-repository: fetching
+  // `origin pull/42/head` for a project pointed at `upstream` would silently
+  // check out an unrelated PR that happens to share the number. Fail closed.
+  if (forgeRemote) {
+    throw new Error(
+      `Couldn't confirm this project's "${forgeRemote}" remote, so the repository to fetch from is unknown. Check the remote and try again.`
+    );
+  }
+  return null;
 }
 
 export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> {

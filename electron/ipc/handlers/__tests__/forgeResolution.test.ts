@@ -582,6 +582,29 @@ describe("resolveForgeRemoteNameForCwd", () => {
     await expect(resolveForgeRemoteNameForCwd("/repo")).rejects.toThrow(/gone/);
   });
 
+  it("refuses to guess when a configured remote cannot be verified", async () => {
+    // Enumeration failing is NOT the same as "this repo has no remote". The
+    // caller's fallback is origin, and PR numbers are per-repository, so
+    // fetching origin's PR 42 for an upstream-configured project would check
+    // out an unrelated PR that happens to share the number.
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      runCommands: [],
+      forgeRemote: "upstream",
+    });
+    gitServiceMock.listRemotes.mockRejectedValue(new Error("git exploded"));
+
+    await expect(resolveForgeRemoteNameForCwd("/repo")).rejects.toThrow(/upstream/);
+  });
+
+  it("still returns null on enumeration failure when nothing is configured", async () => {
+    // Nothing was named, so there is no user intent to contradict — the
+    // caller's origin default is the pre-existing behavior.
+    gitServiceMock.listRemotes.mockRejectedValue(new Error("git exploded"));
+    gitServiceMock.getRemoteUrl.mockResolvedValue(null);
+
+    await expect(resolveForgeRemoteNameForCwd("/repo")).resolves.toBeNull();
+  });
+
   it("returns null for a path that is not a git repository", async () => {
     gitServiceCacheMock.getGitService.mockReturnValue(null);
 

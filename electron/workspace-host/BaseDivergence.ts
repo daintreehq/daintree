@@ -86,12 +86,20 @@ export class BaseDivergence {
   ) {}
 
   /**
-   * Remote the last computed divergence measured against, or `null` when it
-   * fell back to a local ref. Lets the fetch scheduler refresh the remote this
-   * worktree actually reads instead of assuming `origin`.
+   * Remote the divergence *wants* to compare against — the resolution's answer,
+   * not whichever ref the last pass happened to succeed against.
+   *
+   * The distinction is load-bearing. A `rev-list upstream/main...HEAD` that
+   * fails because `upstream/main` hasn't been fetched yet falls back to the
+   * local branch and records `baseRemote: null` on the result. Reporting that
+   * null here would drop `upstream` from the fetch plan, so the ref would never
+   * arrive, so the stat key would never move, so the fallback result would be
+   * served from cache forever — a deadlock that bites exactly the fresh-fork
+   * setup this issue is about. Reporting the resolved remote keeps it in the
+   * fetch plan until it succeeds.
    */
   get baseRemote(): string | null {
-    return this.lastResult?.baseRemote ?? null;
+    return this.resolution?.remote ?? null;
   }
 
   /** Remotes this repo has, as of the last resolution. Empty until one runs. */
@@ -224,7 +232,13 @@ export class BaseDivergence {
     dirs: GitDirs
   ): Promise<RemoteResolution | null> {
     const stamp = await this.buildResolutionStamp(branch, baseBranch, hasUpstream, dirs);
-    const aged = Date.now() - this.resolutionAt >= RESOLUTION_MAX_AGE_MS;
+    // The age ceiling only earns its spawns where the answer is genuinely
+    // ambiguous. With at most one remote there is nothing to choose between,
+    // and anything that could introduce a second one writes `.git/config`,
+    // which the stamp already covers — so the overwhelmingly common repo
+    // re-resolves on real events only, never on a timer.
+    const ambiguous = (this.resolution?.availableRemotes.length ?? 0) > 1;
+    const aged = ambiguous && Date.now() - this.resolutionAt >= RESOLUTION_MAX_AGE_MS;
     // A null stamp means a stat failed unexpectedly. Re-resolving on every such
     // poll would turn a flaky filesystem into a spawn storm, so the cached
     // answer is held until it ages out on its own.
@@ -286,21 +300,26 @@ export class BaseDivergence {
 
   /**
    * Which remotes carry `<baseBranch>`. Uses `for-each-ref` rather than a
-   * readdir so packed refs are found too; the `*` matches exactly the
-   * remote-name path component, so a slash-bearing base (`release/2.0`) still
-   * matches as a literal suffix.
+   * readdir so packed refs are found too.
+   *
+   * One literal pattern per known remote rather than a single
+   * `refs/remotes/*` glob: git's ref-filter wildcard does not cross `/`, so a
+   * remote whose own name contains a slash (`team/fork`) would never appear in
+   * the glob's output, and the exact cross-reference below cannot recover a ref
+   * that was never listed.
    */
   private async readRemotesCarrying(
     git: GitRunner,
     baseBranch: string,
     availableRemotes: readonly string[]
   ): Promise<string[]> {
+    if (availableRemotes.length === 0) return [];
     try {
       const out = await git.raw([
         "for-each-ref",
         "--format=%(refname)",
         "--",
-        `refs/remotes/*/${baseBranch}`,
+        ...availableRemotes.map((remote) => `${REMOTE_REF_PREFIX}${remote}/${baseBranch}`),
       ]);
       const found: string[] = [];
       for (const line of out.split("\n")) {
