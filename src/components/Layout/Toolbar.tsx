@@ -123,6 +123,10 @@ import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
 import { useOverflowBadgeSeverity, type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
+import {
+  isInsideCopyTreePanel,
+  restoreCopyTreeTriggerFocus,
+} from "@/components/CopyTree/copyTreeFocus";
 import type { CopyTreeHistoryRecord } from "@shared/types";
 
 import {
@@ -137,11 +141,6 @@ function preloadCopyTreeRecentsPanel() {
 const LazyCopyTreeRecentsPanel = lazy(() =>
   preloadCopyTreeRecentsPanel().then((m) => ({ default: m.CopyTreeRecentsPanel }))
 );
-
-// The panel portals out of the toolbar, so "is focus still inside it?" can't be
-// answered by a DOM ancestor check from here. The marker attribute is the panel
-// component's half of that contract.
-const COPY_TREE_PANEL_SELECTOR = "[data-copy-tree-panel]";
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
@@ -846,29 +845,13 @@ export function Toolbar({
     void preloadCopyTreeRecentsPanel();
   }, []);
 
-  // Close and hand focus back to the trigger — but only when focus would
-  // otherwise be lost. An outside click has already moved focus somewhere the
-  // user chose, and yanking it back to the toolbar would fight that.
-  //
-  // The decision is deferred a frame because it cannot be made yet: the
-  // dismiss path runs off `mousedown`, which fires BEFORE the browser's default
-  // focus transfer, so reading `activeElement` here would still show the panel
-  // row on an outside click and restore the trigger over the user's choice.
-  // After the frame, focus has settled — landing on `body` is the honest signal
-  // that nothing else claimed it.
+  // Close and hand focus back to the trigger, but only when closing would
+  // otherwise strand it — an outside click has already moved focus somewhere the
+  // user chose, and yanking it back to the toolbar would fight that. The
+  // deferred-frame reasoning lives with the helper.
   const closeCopyTreePanel = useCallback(() => {
-    const active = document.activeElement;
-    const focusWasInPanel =
-      active instanceof HTMLElement && active.closest(COPY_TREE_PANEL_SELECTOR) !== null;
     setCopyTreeOpen(false);
-    if (!focusWasInPanel && active !== null && active !== document.body) return;
-
-    requestAnimationFrame(() => {
-      const settled = document.activeElement;
-      if (settled === null || settled === document.body) {
-        copyTreeButtonRef.current?.focus();
-      }
-    });
+    restoreCopyTreeTriggerFocus(copyTreeButtonRef.current);
   }, []);
 
   // The visible button opens the panel; it no longer copies. Every immediate
@@ -1638,15 +1621,21 @@ export function Toolbar({
     // absolute` eviction styles never reach it — an open panel would strand on
     // screen and then re-anchor to the hidden button's rect on the next resize.
     if (overflowSet.has("copy-tree")) {
-      const active = document.activeElement;
-      const focusWasInPanel =
-        active instanceof HTMLElement && active.closest(COPY_TREE_PANEL_SELECTOR) !== null;
+      const focusWasInPanel = isInsideCopyTreePanel(document.activeElement);
       setCopyTreeOpen(false);
       // The anchor is on its way to being hidden, so it can't take focus back.
       // The overflow trigger is where the command now lives, which makes it the
       // honest destination — otherwise a keyboard user is dropped onto <body>.
+      // It has to be the trigger on the side that swallowed the button: the
+      // other one renders display:none and untabbable when its own side has no
+      // overflow, so focusing it would be the silent no-op this prevents.
       if (focusWasInPanel) {
-        document.querySelector<HTMLElement>("[data-toolbar-overflow-trigger]")?.focus();
+        const side = rightOverflow.includes("copy-tree") ? "right" : "left";
+        toolbarRef.current
+          ?.querySelector<HTMLElement>(
+            `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"][data-visible="true"]`
+          )
+          ?.focus();
       }
     }
   }, [leftOverflow, rightOverflow]);
