@@ -8,7 +8,7 @@ import {
   getFirstGridPanel,
   getGridPanelCount,
   getDockPanelCount,
-  clickToolbarButton,
+  copyFullContextFromToolbar,
   expectToolbarButtonReachable,
   openTerminal,
 } from "../../helpers/panels";
@@ -383,7 +383,10 @@ test.describe.serial("Core: Terminal & Panels", () => {
     test("Copy Context button transitions through states", async () => {
       const { window } = ctx;
 
-      await clickToolbarButton(window, SEL.toolbar.copyContext, T_MEDIUM);
+      // The trigger opens a recents panel rather than copying (#11733); the
+      // helper follows through to the panel's "Copy full context" row so the
+      // serial clipboard assertion below still has a copy to observe.
+      await copyFullContextFromToolbar(window, T_MEDIUM);
       await expectToolbarButtonReachable(window, SEL.toolbar.copyContext, T_LONG);
     });
 

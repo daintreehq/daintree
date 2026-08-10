@@ -92,6 +92,93 @@ describe("useWorktreeActions", () => {
     expect(updateNotificationMock).not.toHaveBeenCalled();
   });
 
+  describe("handleCopyTreeWithOptions — replaying a recent (#11733)", () => {
+    // Every field `CopyTreeOptions` carries. The point of the fixture is that
+    // it is wider than `worktree.copyTree`'s flat args schema, which accepts
+    // only worktreeId/format/modified/includePaths/scopePaths and — because Zod
+    // object parsing strips rather than rejects unknown keys — would drop the
+    // rest without erroring.
+    const storedOptions = {
+      format: "markdown" as const,
+      filter: ["src/auth/**"],
+      exclude: ["**/*.snap"],
+      always: ["README.md"],
+      includePaths: ["src/index.ts"],
+      scopePaths: ["src"],
+      modified: true,
+      changed: "HEAD~3",
+      maxFileSize: 1024,
+      maxTotalSize: 4096,
+      maxFileCount: 50,
+      withLineNumbers: true,
+      charLimit: 10_000,
+      sort: "size" as const,
+    };
+
+    it("routes through the action that accepts the whole options object", async () => {
+      dispatchMock.mockResolvedValueOnce({ ok: true, result: {} });
+
+      const { result } = renderHook(() => useWorktreeActions());
+      await result.current.handleCopyTreeWithOptions(worktree, storedOptions, "toolbar");
+
+      const [actionId, args] = dispatchMock.mock.calls[0]!;
+      expect(actionId).toBe("copyTree.generateAndCopyFile");
+      // Nested, not spread: flattening would put the options through the wrong
+      // schema and silently lose most of them.
+      expect(args.options).toEqual(storedOptions);
+      expect(Object.keys(args)).toEqual(["worktreeId", "options"]);
+    });
+
+    it("targets the supplied worktree rather than anything carried on the record", async () => {
+      dispatchMock.mockResolvedValueOnce({ ok: true, result: {} });
+
+      const { result } = renderHook(() => useWorktreeActions());
+      await result.current.handleCopyTreeWithOptions(worktree, storedOptions);
+
+      expect(dispatchMock.mock.calls[0]![1].worktreeId).toBe(worktree.id);
+    });
+
+    it("forwards the run source so history attributes the replay to the toolbar", async () => {
+      dispatchMock.mockResolvedValueOnce({ ok: true, result: {} });
+
+      const { result } = renderHook(() => useWorktreeActions());
+      await result.current.handleCopyTreeWithOptions(worktree, storedOptions, "toolbar");
+
+      expect(dispatchMock.mock.calls[0]![2]).toEqual({
+        source: "user",
+        copyTreeRunSource: "toolbar",
+      });
+    });
+
+    it("reports a failed replay the same way a failed full copy is reported", async () => {
+      // Shared failure path: a user cannot tell the two routes apart, so the
+      // error surface must not either. Same classification branch as the
+      // full-copy case above.
+      dispatchMock.mockResolvedValueOnce({
+        ok: false,
+        error: { message: "permission denied" },
+      });
+
+      const { result } = renderHook(() => useWorktreeActions());
+      await expect(
+        result.current.handleCopyTreeWithOptions(worktree, storedOptions)
+      ).resolves.toBeUndefined();
+
+      expect(addErrorMock).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "filesystem", context: { worktreeId: "wt-1" } })
+      );
+    });
+
+    it("settles after a thrown dispatch so the caller's spinner can clear", async () => {
+      dispatchMock.mockRejectedValueOnce(new Error("boom"));
+
+      const { result } = renderHook(() => useWorktreeActions());
+      await expect(
+        result.current.handleCopyTreeWithOptions(worktree, storedOptions)
+      ).resolves.toBeUndefined();
+    });
+  });
+
   it("records a failed copy in the error store without rejecting", async () => {
     dispatchMock.mockResolvedValueOnce({
       ok: false,

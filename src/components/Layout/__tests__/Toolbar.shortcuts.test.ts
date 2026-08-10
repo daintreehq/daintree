@@ -272,6 +272,51 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
   });
 
+  describe("copy-tree recents dropdown — issue #11733", () => {
+    it("advertises the trigger as a dialog disclosure", () => {
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      // The button no longer performs its action on click, so it has to say so:
+      // without both halves a screen-reader user gets no signal that anything
+      // opened, and no way to tell open from closed.
+      expect(copyTreeBlock![0]).toContain('aria-haspopup="dialog"');
+      expect(copyTreeBlock![0]).toContain("aria-expanded={copyTreeOpen}");
+      expect(copyTreeBlock![0]).toContain("<FixedDropdown");
+      expect(copyTreeBlock![0]).toContain("anchorRef={copyTreeButtonRef}");
+    });
+
+    it("leaves FixedDropdown's keepMounted unset so the body unmounts on close", () => {
+      // #8005/#6787: Activity-hidden bodies keep portaled Radix content mounted
+      // (stranding it at 0,0) and retain transient state across reveals. This
+      // panel has no state worth preserving, so it opts out entirely rather
+      // than working around either failure mode. The `useKeepMounted` latch
+      // below is a different thing — it only stops `Suspense` re-suspending.
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      expect(copyTreeBlock![0]).not.toMatch(/keepMounted/);
+      expect(source).toContain("const copyTreePanelMounted = useKeepMounted(copyTreeOpen);");
+    });
+
+    it("warms the panel chunk before the first click", () => {
+      // React 19 `lazy` still shows the fallback for a frame on a cold chunk,
+      // and the copy is already one click deeper than it used to be.
+      expect(source).toContain("void preloadCopyTreeRecentsPanel();");
+      expect(source).toMatch(/lazy\(\(\) =>\s*preloadCopyTreeRecentsPanel\(\)/);
+    });
+
+    it("replays a recent against the active worktree, never the record's own", () => {
+      // The history dedupe key covers options alone, so `record.worktreeId` is
+      // whichever worktree ran it last — provenance, not a stable target, and
+      // possibly one that no longer exists.
+      const handler = source.match(
+        /const handleCopyTreeRunRecent = useCallback\([\s\S]*?\n {2}\);/
+      );
+      expect(handler).not.toBeNull();
+      expect(handler![0]).toContain("handleCopyTreeWithOptions(activeWorktree, record.options");
+      expect(handler![0]).not.toContain("record.worktreeId");
+    });
+  });
+
   describe("sidebar toggle drops always-on armed highlight — issue #8357", () => {
     it("marks the sidebar toggle button with data-sidebar-toggle", () => {
       const sidebarBlock = source.match(/"sidebar-toggle":\s*\{[\s\S]*?isAvailable/);

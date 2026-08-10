@@ -152,18 +152,30 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
   });
 
   describe("copy-tree feedback from overflow — #9821, superseded by #11735", () => {
-    it("shares one handler between the visible button and the overflow item", () => {
+    it("keeps the overflow item on the immediate-copy handler the panel also calls", () => {
       // #9821 gave overflow its own handler because the visible button's only
-      // feedback was an inline check the overflow menu couldn't show. Now that
-      // completion is a toast from the `worktree.copyTree` action, both routes
-      // are identical — a second handler could only drift from the first.
+      // feedback was an inline check the overflow menu couldn't show. Once
+      // completion became a toast from the `worktree.copyTree` action, both
+      // routes collapsed onto one handler — and #11733 kept it that way rather
+      // than nesting a panel inside the overflow menu. So the overflow row and
+      // the panel's own "Copy full context" row must reach the SAME handler;
+      // a second one could only drift from the first.
       expect(source).toMatch(/"copy-tree":\s*\(\)\s*=>\s*\{\s*void handleCopyTreeClick\(\)/);
       expect(source).not.toContain("handleCopyTreeOverflow");
-      // The visible button half of the same invariant: without this, deleting
-      // the overflow handler could pass while the button itself lost its wiring.
+      expect(source).toMatch(
+        /const handleCopyTreeFullContext = useCallback\(\(\) => \{[\s\S]*?void handleCopyTreeClick\(\)/
+      );
+    });
+
+    it("routes the visible button to the panel, not to the immediate copy (#11733)", () => {
+      // The half of the split that is easy to regress: re-pointing the trigger
+      // back at `handleCopyTreeClick` would restore one-click copying and
+      // silently strand the panel. Asserted on the block rather than the file
+      // because the immediate handler still legitimately appears elsewhere.
       const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
       expect(copyTreeBlock).not.toBeNull();
-      expect(copyTreeBlock![0]).toContain("onClick={handleCopyTreeClick}");
+      expect(copyTreeBlock![0]).toContain("onClick={handleCopyTreeToggle}");
+      expect(copyTreeBlock![0]).not.toContain("onClick={handleCopyTreeClick}");
     });
 
     it("no longer raises its own copy-tree toast in the toolbar", () => {

@@ -391,6 +391,29 @@ export async function clickToolbarButton(
 }
 
 /**
+ * Copy the active worktree's full context from the toolbar (#11733).
+ *
+ * The visible copy-tree button no longer copies — it opens a recents dropdown
+ * whose first row does. Every other route it can take still copies on the spot:
+ * the overflow row and the `Cmd+Shift+C` fallback both bypass the panel by
+ * design, and which route `clickToolbarButton` picks depends on the CI viewport
+ * width. So the panel row is clicked only if a panel actually opened.
+ */
+export async function copyFullContextFromToolbar(page: Page, timeout = 5000): Promise<void> {
+  await clickToolbarButton(page, SEL.toolbar.copyContext, timeout);
+
+  const fullCopyRow = page.getByRole("button", { name: "Copy full context", exact: true });
+  if (
+    await fullCopyRow
+      .first()
+      .isVisible({ timeout: 1000 })
+      .catch(() => false)
+  ) {
+    await fullCopyRow.first().click({ timeout });
+  }
+}
+
+/**
  * Assert that a toolbar command can be reached either as a visible button or
  * through the overflow menu. Use this for toolbar responsiveness checks where
  * direct button visibility depends on CI viewport width.

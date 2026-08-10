@@ -4,13 +4,12 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import {
-  clickToolbarButton,
+  copyFullContextFromToolbar,
   getGridPanelCount,
   getGridPanelIds,
   getPanelById,
   openTerminal,
 } from "../../helpers/panels";
-import { SEL } from "../../helpers/selectors";
 import { waitForTerminalTextIgnoringLineBreaks } from "../../helpers/terminal";
 import { T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
@@ -58,7 +57,9 @@ test.describe.serial("Core: Context Injection", () => {
     // Clear clipboard before testing to avoid false positives
     await app.evaluate(({ clipboard }) => clipboard.writeText(""));
 
-    await clickToolbarButton(window, SEL.toolbar.copyContext, T_MEDIUM);
+    // The toolbar button opens a recents panel now (#11733); the copy itself is
+    // its first row. The helper handles the routes that still copy on the spot.
+    await copyFullContextFromToolbar(window, T_MEDIUM);
 
     // The Copy Context button writes a *file reference* to the clipboard (the
     // generated context lives in a temp file), not the raw text — so readText()
