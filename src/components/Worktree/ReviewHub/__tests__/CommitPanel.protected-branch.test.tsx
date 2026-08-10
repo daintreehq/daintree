@@ -49,6 +49,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     onConfirm,
     onClose,
     confirmLabel,
+    confirmDisabled,
   }: {
     isOpen: boolean;
     title: ReactNode;
@@ -57,6 +58,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     onConfirm: () => void;
     onClose?: () => void;
     confirmLabel: string;
+    confirmDisabled?: boolean;
   }) => {
     if (!isOpen) return null;
     return (
@@ -64,7 +66,9 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
         <div data-testid="confirm-title">{title}</div>
         {description && <div data-testid="confirm-description">{description}</div>}
         {children && <div data-testid="confirm-body">{children}</div>}
-        <button type="button" onClick={onConfirm}>
+        {/* Honours confirmDisabled: a double that always fires onConfirm would
+            make every gating assertion vacuous. */}
+        <button type="button" onClick={confirmDisabled ? undefined : onConfirm}>
           {confirmLabel}
         </button>
         {onClose && (
@@ -82,6 +86,7 @@ import { CommitPanel } from "../CommitPanel";
 interface RenderProps {
   currentBranch?: string | null;
   hasRemote?: boolean;
+  pushDestination?: { remote: string; branch: string } | null;
   commitMessage?: string;
   skipPushConfirm?: boolean;
   onCommitAndPush?: (message: string) => Promise<void>;
@@ -101,6 +106,13 @@ function renderPanel(overrides: RenderProps = {}) {
       isDetachedHead={false}
       hasConflicts={false}
       hasRemote={overrides.hasRemote ?? true}
+      pushDestination={
+        "pushDestination" in overrides
+          ? (overrides.pushDestination ?? null)
+          : currentBranch === null
+            ? null
+            : { remote: "origin", branch: currentBranch }
+      }
       worktreePath="/repo"
       currentBranch={currentBranch}
       commitMessage={overrides.commitMessage ?? "fix: bug"}
@@ -150,7 +162,7 @@ describe("CommitPanel — push confirm", () => {
     fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
     expect(onCommitAndPush).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: /Push to develop/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Push to origin\/develop/ }));
     expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
   });
 
@@ -174,7 +186,9 @@ describe("CommitPanel — push confirm", () => {
     renderPanel({ currentBranch: "feature/my-thing" });
     fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
     const pill = screen.getByTestId("commit-panel-push-confirm-branch");
-    expect(pill.textContent).toBe("feature/my-thing");
+    // The pill names the full destination, not just the branch: which
+    // repository the push lands in is the fact a fork workflow hides (#11746).
+    expect(pill.textContent).toBe("origin/feature/my-thing");
   });
 
   it("warns about protected branches in the description copy", () => {
@@ -209,7 +223,7 @@ describe("CommitPanel — push confirm", () => {
     const checkbox = screen.getByTestId("commit-panel-push-confirm-dont-ask") as HTMLInputElement;
     fireEvent.click(checkbox);
     expect(checkbox.checked).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: /Push to feature\/x/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Push to origin\/feature\/x/ }));
     expect(onSetSkipPushConfirm).toHaveBeenCalledWith(true);
     expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
   });
@@ -217,7 +231,7 @@ describe("CommitPanel — push confirm", () => {
   it("confirming without checking the box calls onSetSkipPushConfirm(false)", () => {
     const { onSetSkipPushConfirm } = renderPanel({ currentBranch: "feature/x" });
     fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Push to feature\/x/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Push to origin\/feature\/x/ }));
     expect(onSetSkipPushConfirm).toHaveBeenCalledWith(false);
   });
 
@@ -270,6 +284,7 @@ describe("CommitPanel — push confirm", () => {
         isDetachedHead={false}
         hasConflicts={false}
         hasRemote={false}
+        pushDestination={null}
         worktreePath="/repo"
         currentBranch="feature/x"
         commitMessage="fix: bug"
@@ -297,12 +312,25 @@ describe("CommitPanel — push confirm", () => {
     expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
   });
 
-  it("with currentBranch=null, the dialog opens and confirming fires push exactly once", () => {
+  it("with currentBranch=null, the dialog opens but confirming is blocked", () => {
+    // A null branch is a detached HEAD, which has no push destination to
+    // resolve — the confirm opens to explain that rather than pushing (#11746).
     const { onCommitAndPush } = renderPanel({ currentBranch: null });
     fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
-    const dialog = screen.getByTestId("push-confirm-dialog");
-    expect(dialog).toBeDefined();
+    expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
+    expect(screen.getByTestId("commit-panel-push-no-destination")).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: /Push to branch/ }));
+    expect(onCommitAndPush).not.toHaveBeenCalled();
+  });
+
+  it("with currentBranch=null but a resolved destination, confirming fires push exactly once", () => {
+    const { onCommitAndPush } = renderPanel({
+      currentBranch: null,
+      pushDestination: { remote: "origin", branch: "main" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    expect(screen.getByTestId("push-confirm-dialog")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: /Push to origin\/main/ }));
     expect(onCommitAndPush).toHaveBeenCalledTimes(1);
     expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
   });
@@ -315,9 +343,48 @@ describe("CommitPanel — push confirm", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
     fireEvent.click(screen.getByTestId("commit-panel-push-confirm-dont-ask"));
-    fireEvent.click(screen.getByRole("button", { name: /Push to feature\/x/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Push to origin\/feature\/x/ }));
     expect(onSetSkipPushConfirm).toHaveBeenCalledWith(true);
     // The push attempt itself was made.
     expect(onCommitAndPush).toHaveBeenCalledWith("fix: bug");
+  });
+});
+
+describe("CommitPanel — unresolved push destination (#11746)", () => {
+  it("names the resolved destination rather than the local branch", () => {
+    renderPanel({
+      currentBranch: "topic",
+      pushDestination: { remote: "fork", branch: "release/topic" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+    expect(screen.getByTestId("commit-panel-push-confirm-branch").textContent).toBe(
+      "fork/release/topic"
+    );
+  });
+
+  it("blocks the push confirm when no destination resolved", () => {
+    const onCommitAndPush = vi.fn().mockResolvedValue(undefined);
+    renderPanel({ currentBranch: "topic", pushDestination: null, onCommitAndPush });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+
+    expect(screen.getByTestId("commit-panel-push-no-destination")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: /Push to topic/ }));
+    expect(onCommitAndPush).not.toHaveBeenCalled();
+  });
+
+  it("overrides the confirm opt-out when no destination resolved", () => {
+    // The opt-out must not turn a push that will certainly be refused into a
+    // silent failure with no explanation.
+    const onCommitAndPush = vi.fn().mockResolvedValue(undefined);
+    renderPanel({
+      currentBranch: "topic",
+      pushDestination: null,
+      skipPushConfirm: true,
+      onCommitAndPush,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Commit & Push/ }));
+
+    expect(screen.getByTestId("commit-panel-push-no-destination")).toBeDefined();
+    expect(onCommitAndPush).not.toHaveBeenCalled();
   });
 });

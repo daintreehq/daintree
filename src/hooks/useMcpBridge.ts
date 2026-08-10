@@ -188,16 +188,18 @@ export async function buildMcpConfirmPreview(target: McpConfirmPreviewTarget): P
       return formatWorktreeDeletePreviewLines(null);
     }
   }
+  const operation = target.kind === "gitPush" ? "push" : "pull-rebase";
   try {
     const preview = await buildGitRemoteOperationPreview(target.cwd);
     return formatGitRemoteOperationPreviewLines(
       preview,
       target.kind === "gitPush"
         ? "No local commits found on this branch."
-        : "No local commits to replay."
+        : "No local commits to replay.",
+      operation
     );
   } catch {
-    return formatGitRemoteOperationPreviewLines(null, "");
+    return formatGitRemoteOperationPreviewLines(null, "", operation);
   }
 }
 

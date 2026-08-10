@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
+import type { GitPushDestination } from "@shared/types/git";
 import { cn } from "@/lib/utils";
 import { GitCommit, ArrowUpFromLine, Check, CircleX } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
@@ -16,6 +17,12 @@ interface CommitPanelProps {
   isDetachedHead: boolean;
   hasConflicts: boolean;
   hasRemote: boolean;
+  /**
+   * Resolved push destination, or `null` when this branch has none (#11746).
+   * Named in the push confirm so the approver sees the repository being written
+   * to, which the branch name alone doesn't reveal in a fork workflow.
+   */
+  pushDestination: GitPushDestination | null;
   worktreePath: string;
   /** Current branch name from the staging status; surfaced in the push confirm dialog. */
   currentBranch?: string | null;
@@ -38,6 +45,7 @@ export function CommitPanel({
   isDetachedHead,
   hasConflicts,
   hasRemote,
+  pushDestination,
   worktreePath,
   currentBranch,
   commitMessage,
@@ -53,6 +61,9 @@ export function CommitPanel({
 }: CommitPanelProps) {
   const [isCommitting, setIsCommitting] = useState(false);
   const [pushConfirmOpen, setPushConfirmOpen] = useState(false);
+  const destinationLabel = pushDestination
+    ? `${pushDestination.remote}/${pushDestination.branch}`
+    : null;
   const [dontAskChecked, setDontAskChecked] = useState(false);
 
   const isProtected = isProtectedBranch(currentBranch?.toLowerCase());
@@ -186,7 +197,11 @@ export function CommitPanel({
       // D2 confirmation: every remote push is a shared-state mutation. Show
       // the commit message + target branch preview unless the user has opted
       // out for this worktree (#8025).
-      if (!skipPushConfirm) {
+      //
+      // The opt-out is overridden when no destination resolved (#11746): the
+      // push will be refused by the handler, and silently attempting it would
+      // leave the user with a failed write and no explanation.
+      if (!skipPushConfirm || pushDestination === null) {
         setPushConfirmOpen(true);
         return;
       }
@@ -198,6 +213,7 @@ export function CommitPanel({
     isBlocked,
     isBusy,
     hasRemote,
+    pushDestination,
     skipPushConfirm,
     focusBlocker,
     handleCommitAndPush,
@@ -444,7 +460,7 @@ export function CommitPanel({
       <ConfirmDialog
         isOpen={pushConfirmOpen}
         onClose={handleClosePushConfirm}
-        title={`Push to '${currentBranch ?? ""}'?`}
+        title={`Push to '${destinationLabel ?? currentBranch ?? ""}'?`}
         description={
           isProtected ? (
             <span>
@@ -455,18 +471,28 @@ export function CommitPanel({
             <span>Review your commit message before pushing:</span>
           )
         }
-        confirmLabel={`Push to ${currentBranch ?? "branch"}`}
+        confirmLabel={`Push to ${destinationLabel ?? currentBranch ?? "branch"}`}
+        confirmDisabled={pushDestination === null}
         variant="default"
         zIndex="nested"
         onConfirm={handleConfirmPush}
       >
         <div className="flex flex-col gap-2">
+          {pushDestination === null && (
+            <div
+              className="rounded border border-status-error/30 bg-status-error/10 px-2 py-1.5 text-[11px] text-status-error"
+              data-testid="commit-panel-push-no-destination"
+            >
+              No push destination is configured for this branch. Set an upstream, or configure a
+              push remote, before pushing.
+            </div>
+          )}
           <div>
             <span
               data-testid="commit-panel-push-confirm-branch"
               className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] font-mono text-daintree-text"
             >
-              {currentBranch ?? ""}
+              {destinationLabel ?? currentBranch ?? ""}
             </span>
           </div>
           <pre

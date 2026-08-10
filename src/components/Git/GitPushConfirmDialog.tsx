@@ -9,8 +9,10 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import {
   buildGitRemoteOperationPreview,
+  formatGitPushDestination,
   type GitPreviewCommit,
 } from "@/components/Git/gitRemoteOperationPreview";
+import type { GitPushDestination } from "@shared/types/git";
 
 const SHORT_HASH_LEN = 7;
 
@@ -27,6 +29,7 @@ function GitPushConfirmDialogInner() {
   const cwd = pendingConfirm?.cwd ?? null;
 
   const [branch, setBranch] = useState<string | null>(null);
+  const [destination, setDestination] = useState<GitPushDestination | null>(null);
   const [commits, setCommits] = useState<GitPreviewCommit[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -38,6 +41,7 @@ function GitPushConfirmDialogInner() {
     setIsLoading(true);
     setLoadError(null);
     setBranch(null);
+    setDestination(null);
     setCommits(null);
 
     safeFireAndForget(
@@ -47,6 +51,7 @@ function GitPushConfirmDialogInner() {
         .then((preview) => {
           if (requestIdRef.current !== requestId) return;
           setBranch(preview.branch);
+          setDestination(preview.destination);
           setCommits(preview.commits);
         })
         .catch((err: unknown) => {
@@ -64,6 +69,7 @@ function GitPushConfirmDialogInner() {
   useEffect(() => {
     if (!cwd) {
       setBranch(null);
+      setDestination(null);
       setCommits(null);
       setLoadError(null);
       setIsLoading(false);
@@ -84,26 +90,51 @@ function GitPushConfirmDialogInner() {
   if (!pendingConfirm) return null;
 
   const branchLabel = branch ?? "current branch";
+  const destinationLabel = destination ? formatGitPushDestination(destination) : null;
+  const isDestinationMissing = !isLoading && !loadError && destination === null;
 
   return (
     <ConfirmDialog
       isOpen={true}
       onClose={() => resolveConfirmation(false)}
-      title={`Push '${branchLabel}'?`}
+      title={destinationLabel ? `Push to '${destinationLabel}'?` : `Push '${branchLabel}'?`}
       description={
-        <span>
-          Pushes local commits on <span className="font-mono">{branchLabel}</span> to its remote
-          branch. If the remote has moved forward, the push is rejected until you pull and rebase.
-        </span>
+        destinationLabel ? (
+          <span>
+            Pushes local commits on <span className="font-mono">{branchLabel}</span> to{" "}
+            <span className="font-mono">{destinationLabel}</span>. If the remote has moved forward,
+            the push is rejected until you pull and rebase.
+          </span>
+        ) : (
+          <span>
+            Pushes local commits on <span className="font-mono">{branchLabel}</span> to its remote
+            branch. If the remote has moved forward, the push is rejected until you pull and rebase.
+          </span>
+        )
       }
       confirmLabel="Push"
       cancelLabel="Cancel"
       variant="destructive"
       hasPreview={true}
       isConfirmLoading={isLoading}
-      confirmDisabled={commits === null || !!loadError}
+      // A destination nobody can name can't be approved — the handler would
+      // refuse the write anyway, and guessing `origin` is the bug (#11746).
+      confirmDisabled={commits === null || !destination || !!loadError}
       onConfirm={() => resolveConfirmation(true)}
     >
+      {isDestinationMissing && (
+        <div
+          className="mb-3 rounded border border-status-error/30 bg-status-error/10 px-3 py-2 text-xs text-status-error flex items-start gap-2"
+          data-testid="git-push-no-destination"
+        >
+          <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+          <span>
+            This branch has no push destination, or more than one remote could be meant. Set an
+            upstream, or name one with{" "}
+            <span className="font-mono">git config branch.&lt;name&gt;.pushRemote</span>.
+          </span>
+        </div>
+      )}
       <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
         <div className="px-3 py-2 border-b border-tint/[0.08]">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">

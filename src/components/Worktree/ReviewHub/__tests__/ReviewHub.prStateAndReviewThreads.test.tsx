@@ -280,6 +280,8 @@ const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
   isDetachedHead: false,
   currentBranch: "feature/test",
   hasRemote: false,
+  pushDestination: { remote: "origin", branch: "feature/test" },
+  pullSource: { remote: "origin", branch: "feature/test" },
   repoState: "DIRTY",
   rebaseStep: null,
   rebaseTotalSteps: null,

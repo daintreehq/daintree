@@ -129,6 +129,39 @@ export interface RebaseSequence {
   backend: "merge" | "apply";
 }
 
+/**
+ * Where a branch actually pushes, as git resolved it (#11746).
+ *
+ * Renderer-safe half of the main-process resolution: the confirm surfaces need
+ * to name the destination they are about to write to, but have no business
+ * knowing the remote-tracking ref behind it.
+ */
+export interface GitPushDestination {
+  /** Remote name, e.g. `origin` or `fork`. May itself contain slashes. */
+  remote: string;
+  /** Branch name on the remote side, which need not match the local name. */
+  branch: string;
+}
+
+/** One commit that a force-push would discard from the remote. */
+export interface GitRemoteCommit {
+  hash: string;
+  date: string;
+  message: string;
+  author: string;
+}
+
+/**
+ * Discard preview for the force-push confirm: the commits, the destination they
+ * live on, and the full count over the same range the rows came from.
+ */
+export interface GitRemoteCommitPreview {
+  destination: GitPushDestination;
+  commits: GitRemoteCommit[];
+  /** Total commits in the range, which may exceed the returned `commits`. */
+  total: number;
+}
+
 export interface StagingStatus {
   staged: StagingFileEntry[];
   unstaged: StagingFileEntry[];
@@ -139,6 +172,21 @@ export interface StagingStatus {
   isDetachedHead: boolean;
   currentBranch: string | null;
   hasRemote: boolean;
+  /**
+   * Resolved push destination for `currentBranch`, or `null` when git has no
+   * unambiguous answer (#11746). Distinct from `hasRemote`: a repo can have
+   * remotes while this branch still has no destination anyone can name, and
+   * confirm surfaces must block the write and say so rather than assume
+   * `origin`.
+   */
+  pushDestination: GitPushDestination | null;
+  /**
+   * Resolved upstream for `currentBranch` — where a pull-and-rebase would
+   * integrate FROM. Distinct from `pushDestination`: a triangular branch tracks
+   * `origin/release/topic` while pushing to `fork/topic`, so a pull surface that
+   * named the push destination would describe the wrong repository.
+   */
+  pullSource: GitPushDestination | null;
   /** Current in-progress repository operation, or `CLEAN`/`DIRTY`. */
   repoState: RepoState;
   /** When `repoState === "REBASING"`, the current step number (1-based). Null otherwise. */

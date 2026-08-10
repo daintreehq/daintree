@@ -6,20 +6,14 @@ import { AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-
-interface RemoteCommit {
-  hash: string;
-  date: string;
-  message: string;
-  author: string;
-}
+import type { GitRemoteCommitPreview } from "@shared/types/git";
+import { formatGitPushDestination } from "@/components/Git/gitRemoteOperationPreview";
 
 interface ForcePushConfirmDialogProps {
   isOpen: boolean;
   cwd: string;
   branchName: string;
   leaseSha: string;
-  behindCount?: number;
   onClose: () => void;
   onSuccess: () => void;
   onError: (err: unknown) => void;
@@ -33,12 +27,11 @@ export function ForcePushConfirmDialog({
   cwd,
   branchName,
   leaseSha,
-  behindCount,
   onClose,
   onSuccess,
   onError,
 }: ForcePushConfirmDialogProps) {
-  const [commits, setCommits] = useState<RemoteCommit[] | null>(null);
+  const [preview, setPreview] = useState<GitRemoteCommitPreview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isPushing, setIsPushing] = useState(false);
@@ -49,14 +42,14 @@ export function ForcePushConfirmDialog({
     const requestId = ++requestIdRef.current;
     setIsLoading(true);
     setLoadError(null);
-    setCommits(null);
+    setPreview(null);
 
     safeFireAndForget(
       window.electron.git
         .listRemoteCommits(cwd, branchName, COMMIT_LIMIT)
         .then((result) => {
           if (requestIdRef.current !== requestId) return;
-          setCommits(result);
+          setPreview(result);
         })
         .catch((err: unknown) => {
           if (requestIdRef.current !== requestId) return;
@@ -72,7 +65,7 @@ export function ForcePushConfirmDialog({
 
   useEffect(() => {
     if (!isOpen) {
-      setCommits(null);
+      setPreview(null);
       setLoadError(null);
       setIsLoading(false);
       return;
@@ -85,8 +78,11 @@ export function ForcePushConfirmDialog({
     if (isLoading) return;
     // Block confirm when the discard preview failed to load — without it the
     // user has no visibility into what `--force-with-lease` would discard,
-    // even though the lease itself still keeps the operation safe.
-    if (loadError) return;
+    // even though the lease itself still keeps the operation safe. `preview`
+    // is checked too: on the first render after opening it is null while
+    // `isLoading` is still false, so the two guards together are what close
+    // the window on a click landing before the fetch starts.
+    if (loadError || preview === null) return;
     isExecutingRef.current = true;
     setIsPushing(true);
     try {
@@ -102,15 +98,23 @@ export function ForcePushConfirmDialog({
     }
   };
 
-  const totalRemote =
-    behindCount !== undefined && behindCount > 0 ? behindCount : (commits?.length ?? 0);
+  const commits = preview?.commits ?? null;
+  // Both the rows and the total come from the same `HEAD..<push ref>` range, so
+  // the tail can't be computed against a different repository's ref (#11746).
+  const totalRemote = preview?.total ?? 0;
   const hiddenCount =
     commits !== null && totalRemote > commits.length ? totalRemote - commits.length : 0;
+  // Optional-chained rather than keyed off `preview` alone: this crosses the
+  // IPC boundary, so a payload missing the field must degrade to the branch
+  // name rather than throwing inside a destructive confirm.
+  const destinationLabel = preview?.destination
+    ? formatGitPushDestination(preview.destination)
+    : null;
 
   return (
     <ConfirmDialog
       isOpen={isOpen}
-      title={`Force push ${branchName}?`}
+      title={destinationLabel ? `Force push to ${destinationLabel}?` : `Force push ${branchName}?`}
       onClose={isPushing ? undefined : onClose}
       onConfirm={() => void handleConfirm()}
       confirmLabel="Force push"
@@ -118,13 +122,13 @@ export function ForcePushConfirmDialog({
       variant="destructive"
       hasPreview={true}
       isConfirmLoading={isPushing}
-      confirmDisabled={isLoading || !!loadError}
+      confirmDisabled={isLoading || !!loadError || preview === null}
     >
       <div className="space-y-3 text-xs text-daintree-text/80">
         <p>
-          This rewrites the remote branch <span className="font-mono">{branchName}</span> to match
-          your local branch. Any commits on the remote that aren&apos;t in your local history will
-          be discarded.
+          This rewrites <span className="font-mono">{destinationLabel ?? branchName}</span> to match
+          your local branch <span className="font-mono">{branchName}</span>. Any commits on the
+          remote that aren&apos;t in your local history will be discarded.
         </p>
 
         <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">

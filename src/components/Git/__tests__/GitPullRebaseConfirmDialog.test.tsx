@@ -69,7 +69,12 @@ describe("GitPullRebaseConfirmDialog", () => {
   });
 
   it("reads the preview through the shared builder, scoped to the requested cwd", async () => {
-    mocks.buildPreview.mockResolvedValue({ branch: "feature/y", commits: [] });
+    mocks.buildPreview.mockResolvedValue({
+      branch: "feature/y",
+      destination: { remote: "origin", branch: "feature/y" },
+      pullSource: { remote: "origin", branch: "feature/y" },
+      commits: [],
+    });
     render(<GitPullRebaseConfirmDialog />);
 
     await act(async () => {
@@ -80,7 +85,12 @@ describe("GitPullRebaseConfirmDialog", () => {
   });
 
   it("blocks approval while the preview is still loading", async () => {
-    const gate = deferred<{ branch: string; commits: never[] }>();
+    const gate = deferred<{
+      branch: string;
+      destination: { remote: string; branch: string };
+      pullSource: { remote: string; branch: string };
+      commits: never[];
+    }>();
     mocks.buildPreview.mockReturnValue(gate.promise);
     render(<GitPullRebaseConfirmDialog />);
 
@@ -91,7 +101,12 @@ describe("GitPullRebaseConfirmDialog", () => {
     expect(rebaseButton().hasAttribute("disabled")).toBe(true);
 
     await act(async () => {
-      gate.resolve({ branch: "main", commits: [] });
+      gate.resolve({
+        branch: "main",
+        destination: { remote: "origin", branch: "main" },
+        pullSource: { remote: "origin", branch: "main" },
+        commits: [],
+      });
       await gate.promise;
     });
 
@@ -110,7 +125,12 @@ describe("GitPullRebaseConfirmDialog", () => {
   });
 
   it("resolves the awaited confirm promise with the user's decision", async () => {
-    mocks.buildPreview.mockResolvedValue({ branch: "main", commits: [] });
+    mocks.buildPreview.mockResolvedValue({
+      branch: "main",
+      destination: { remote: "origin", branch: "main" },
+      pullSource: { remote: "origin", branch: "main" },
+      commits: [],
+    });
     render(<GitPullRebaseConfirmDialog />);
 
     let decision: boolean | undefined;

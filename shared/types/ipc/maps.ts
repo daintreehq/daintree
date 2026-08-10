@@ -1,4 +1,4 @@
-import type { StagingStatus } from "../git.js";
+import type { GitRemoteCommitPreview, StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
 import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
 import type {
@@ -847,11 +847,14 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "git:list-remote-commits": {
     args: [payload: { cwd: string; branchName: string; limit?: number }];
     /**
-     * Returns the parsed commits in `HEAD..refs/remotes/origin/<branch>` so
-     * the force-push confirmation modal can show which remote commits would
-     * be discarded. Capped at `limit` (default 20) entries.
+     * Returns the parsed commits in `HEAD..<the branch's resolved push ref>` so
+     * the force-push confirmation modal can show which remote commits would be
+     * discarded, alongside the destination they live on and the full count over
+     * the same range. Rows are capped at `limit` (default 20); `total` is not.
+     * Rejects when the push destination can't be resolved — an empty list would
+     * read as "nothing to discard" (#11746).
      */
-    result: Array<{ hash: string; date: string; message: string; author: string }>;
+    result: GitRemoteCommitPreview;
   };
   "git:get-staging-status": {
     args: [cwd: string];
