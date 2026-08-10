@@ -21,6 +21,11 @@ vi.mock("@/clients", () => ({
 }));
 
 import { registerWorktreeContextActions } from "../worktreeContextActions";
+import {
+  registerCopyTreeNoticePresenter,
+  _resetCopyTreeNoticePresenterForTest,
+} from "@/lib/copyTreeFeedback";
+import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 
 function setupActions(): {
   run: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
@@ -48,15 +53,68 @@ const COPY_TREE_RESULT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  _resetCopyTreeNoticePresenterForTest();
+  useCopyTreeRunStore.setState({ activeRunCount: 0 });
   copyTreeClientMock.generateAndCopyFile.mockResolvedValue({ ...COPY_TREE_RESULT });
 });
 
 // Issue #11735 — this action is the single completion point for every copy-tree
 // route that isn't the context menu: the toolbar button, its overflow item,
 // Cmd+Shift+C, the command palette, the `worktree.copyContext` alias, and agent
-// dispatches. All of them were silent or relied on inline button state that
-// three of them could not show.
-describe("worktree.copyTree completion toast", () => {
+// dispatches. Completion goes through announceCopyTreeCopy: the toolbar button
+// presents it as a transient tooltip, and with no presenter registered — as in
+// every case below unless one is — it falls back to the toast the notifyMock
+// observes, so those cases pin the fallback payload.
+describe("worktree.copyTree completion announcement", () => {
+  it("prefers a registered presenter over the toast fallback", async () => {
+    // The tooltip path: when the toolbar button is visible its presenter
+    // consumes the notice, and no toast may stack on top of it.
+    const presenter = vi.fn().mockReturnValue(true);
+    registerCopyTreeNoticePresenter(presenter);
+
+    const { run } = setupActions();
+    await run("worktree.copyTree", { worktreeId: "wt-1", format: "xml" });
+
+    expect(presenter).toHaveBeenCalledWith({
+      title: "Context copied",
+      message: "Copied 3 files (4 KB) as XML to clipboard",
+    });
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the toast when the presenter declines", async () => {
+    // A registered presenter whose anchor is hidden (overflow-evicted button)
+    // returns false; the completion must still land somewhere visible.
+    registerCopyTreeNoticePresenter(() => false);
+
+    const { run } = setupActions();
+    await run("worktree.copyTree", { worktreeId: "wt-1" });
+
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("brackets the shared run store so the toolbar spinner tracks every route", async () => {
+    // The spinner derives from this count, so an MCP dispatch spins the button
+    // exactly like a click. Sampled mid-flight through the client mock.
+    const { run } = setupActions();
+    let midFlightCount = -1;
+    copyTreeClientMock.generateAndCopyFile.mockImplementationOnce(async () => {
+      midFlightCount = useCopyTreeRunStore.getState().activeRunCount;
+      return { ...COPY_TREE_RESULT };
+    });
+
+    await run("worktree.copyTree", { worktreeId: "wt-1" }, { dispatchSource: "agent" });
+
+    expect(midFlightCount).toBe(1);
+    expect(useCopyTreeRunStore.getState().activeRunCount).toBe(0);
+  });
+
+  it("settles the run count even when the copy fails", async () => {
+    const { run } = setupActions();
+    copyTreeClientMock.generateAndCopyFile.mockRejectedValueOnce(new Error("boom"));
+    await expect(run("worktree.copyTree", { worktreeId: "wt-1" })).rejects.toThrow("boom");
+    expect(useCopyTreeRunStore.getState().activeRunCount).toBe(0);
+  });
   it.each([
     ["the toolbar button and palette", "user"],
     ["Cmd+Shift+C", "keybinding"],

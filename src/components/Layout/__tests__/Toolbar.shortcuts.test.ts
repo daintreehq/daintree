@@ -224,20 +224,36 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(copyTreeBlock![0]).toContain("<Folders />");
     });
 
-    it("carries no inline completion feedback — the toast owns it (issue #11735)", () => {
-      // The button used to swap in a check icon and force its tooltip open for
-      // two seconds. That feedback was invisible from the overflow menu and had
-      // no counterpart on any other copy-tree route, so it moved to the
-      // `worktree.copyTree` completion toast. Only the in-flight spinner stays.
+    it("presents completion as the button's transient tooltip, not a checkmark swap", () => {
+      // Completion feedback is a short-lived tooltip pinned to the button (the
+      // toast it replaced felt heavy for a one-second copy). The presenter,
+      // hide timer, and decline rules are useCopyTreeCompletionNotice's and
+      // are behavior-tested in its own suite; the toolbar's half of the
+      // contract — asserted here — is the wiring: the hook feeds the tooltip's
+      // controlled `open` as a union with ordinary hover, close requests clear
+      // the notice too (Escape and dialog transitions must be able to end the
+      // display window early), and the notice is mirrored into a live region,
+      // since tooltips aren't announced the way the old toast was. The old
+      // check-icon swap stays gone — the glyph slot belongs to the spinner.
       const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
       expect(copyTreeBlock).not.toBeNull();
-      expect(copyTreeBlock![0]).not.toContain("treeCopied");
       expect(copyTreeBlock![0]).not.toContain("<Check />");
       expect(copyTreeBlock![0]).not.toContain("text-status-success");
-      // A controlled `open` prop is what forced the tooltip; the plain <Tooltip>
-      // must stay uncontrolled.
-      expect(copyTreeBlock![0]).not.toMatch(/<Tooltip\s+open=/);
-      expect(copyTreeBlock![0]).not.toContain('role="status"');
+      expect(copyTreeBlock![0]).toMatch(
+        /open=\{copyTreeTooltipHovered \|\| copyTreeNotice !== null\}/
+      );
+      expect(copyTreeBlock![0]).toContain("if (!open) clearCopyTreeNotice()");
+      expect(copyTreeBlock![0]).toContain('role="status"');
+      expect(copyTreeBlock![0]).toContain("{copyTreeAnnouncement}");
+      expect(source).toContain("useCopyTreeCompletionNotice(copyTreeButtonRef");
+    });
+
+    it("suppresses the completion tooltip while the recents panel holds the anchor", () => {
+      // Both surfaces portal to the same button; an MCP completion landing
+      // mid-browse would stack the tooltip on the open panel.
+      expect(source).toMatch(
+        /useCopyTreeCompletionNotice\(copyTreeButtonRef,\s*\{\s*suppress:\s*copyTreeOpen\s*\}\)/
+      );
     });
 
     it("skips the hover hint, matching the action's suppressShortcutHint opt-out", async () => {
