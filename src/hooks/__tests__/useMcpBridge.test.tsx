@@ -823,7 +823,7 @@ describe("useMcpBridge", () => {
     mocks.getContext.mockReturnValue({ activeWorktreePath: "/previewed" });
     mocks.buildGitPreview.mockResolvedValue({
       branch: "feature/y",
-      destination: { remote: "origin", branch: "feature/y" },
+      destination: { remote: "fork", branch: "feature/y" },
       pullSource: { remote: "origin", branch: "feature/y" },
       commits: [{ hash: "1234567890a", message: "Replay me", author: "Cy" }],
     });
@@ -843,7 +843,8 @@ describe("useMcpBridge", () => {
     await vi.waitFor(() => {
       const current = useMcpConfirmStore.getState().current;
       expect(current?.previewPending).toBe(false);
-      expect(current?.preview?.[0]).toBe("Destination: origin/feature/y");
+      // The upstream it rebases onto, never the fork it pushes to (#11746).
+      expect(current?.preview?.[0]).toBe("Rebases onto: origin/feature/y");
       expect(current?.preview?.[1]).toBe("Branch: feature/y");
       expect(current?.preview?.[2]).toContain("Replay me");
     });
@@ -1181,13 +1182,13 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
   it("distinguishes an empty branch from an unverifiable one for git targets", async () => {
     mocks.buildGitPreview.mockResolvedValue({
       branch: "main",
-      destination: { remote: "origin", branch: "main" },
+      destination: { remote: "fork", branch: "main" },
       pullSource: { remote: "origin", branch: "main" },
       commits: [],
     });
     const empty = await buildMcpConfirmPreview({ kind: "gitPullRebase", cwd: "/repo" });
     expect(empty).toEqual([
-      "Destination: origin/main",
+      "Rebases onto: origin/main",
       "Branch: main",
       "No local commits to replay.",
     ]);

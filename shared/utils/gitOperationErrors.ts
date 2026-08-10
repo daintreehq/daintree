@@ -117,8 +117,9 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
   [
     "config-missing",
     // Covers the older 'has no upstream branch', the newer 'no upstream configured for branch',
-    // and the push-side variant raised when a branch resolves to no push destination (#11746).
-    /fatal: unable to read config file|fatal: bad config|fatal: The current branch .* has no upstream branch|fatal: no upstream configured for branch|fatal: no push destination configured for branch|fatal: could not resolve the push destination for branch|fatal: the remote configured for branch .* has an unusable name/i,
+    // and the variants raised when a branch resolves to no push destination or no
+    // upstream to rebase onto (#11746).
+    /fatal: unable to read config file|fatal: bad config|fatal: The current branch .* has no upstream branch|fatal: no upstream configured for branch|fatal: no push destination configured for branch|fatal: could not resolve the (?:push destination|upstream) for branch|fatal: the remote configured for branch .* has an unusable name/i,
   ],
   [
     "system-io-error",
@@ -147,7 +148,7 @@ const RECOVERY_HINTS: Record<GitOperationReason, string | undefined> = {
   "dubious-ownership":
     "Git refuses to operate on this repo because its owner doesn't match the current user.",
   "config-missing":
-    "This branch has no push destination — set an upstream, or configure branch.<name>.pushRemote or remote.pushDefault.",
+    "This branch has no upstream or push destination — set an upstream, or configure branch.<name>.pushRemote or remote.pushDefault.",
   "worktree-dirty":
     "You have local changes that would be overwritten — commit or stash them first.",
   "conflict-unresolved": "Resolve the merge conflicts and commit before continuing.",

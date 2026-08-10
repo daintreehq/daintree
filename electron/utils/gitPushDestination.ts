@@ -299,3 +299,27 @@ export function describeUnresolvedPushDestination(
       return `fatal: no push destination configured for branch '${branchName}'`;
   }
 }
+
+/**
+ * Message text for an upstream that could not be resolved, by reason.
+ *
+ * Deliberately not shared with the push wording: a pull-and-rebase that fails
+ * for want of an upstream must not tell the user to configure a push remote
+ * (#11746). Both land in the `config-missing` bucket, so the renderer's
+ * recovery hint still applies.
+ */
+export function describeUnresolvedUpstream(
+  reason: GitPushDestinationUnresolvedReason,
+  branchName: string
+): string {
+  switch (reason) {
+    case "unsafe-remote":
+      return `fatal: the remote configured for branch '${branchName}' has an unusable name`;
+    case "invalid-push-ref":
+      return `fatal: could not resolve the upstream for branch '${branchName}'`;
+    case "ambiguous":
+    case "not-configured":
+    default:
+      return `fatal: no upstream configured for branch '${branchName}'`;
+  }
+}

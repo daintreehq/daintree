@@ -53,6 +53,7 @@ import {
   resolveGitUpstream,
   formatGitPushDestination,
   describeUnresolvedPushDestination,
+  describeUnresolvedUpstream,
   type ResolvedGitPushDestination,
 } from "../../utils/gitPushDestination.js";
 
@@ -95,24 +96,32 @@ async function countCommitsInRange(
 }
 
 /**
- * Resolve the push destination for a write, or refuse the write (#11746).
+ * Resolve the remote ref a write acts on, or refuse the write (#11746).
  *
  * Every remote-mutating path routes through here so that "we could not work out
  * where this goes" can never degrade into "send it to origin" — a wrong-repo
  * push is not recoverable. The thrown message is worded to land in the existing
  * `config-missing` bucket, so the renderer already has a recovery hint for it.
+ *
+ * `target` selects the resolver AND its wording together, so a pull-rebase can
+ * never be refused in push terms.
  */
-async function requirePushDestination(
+async function requireRemoteTarget(
   git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw" | "getRemotes">,
   branchName: string,
   cwd: string,
   op: string,
-  resolver: typeof resolveGitPushDestination = resolveGitPushDestination
+  target: "push" | "upstream" = "push"
 ): Promise<ResolvedGitPushDestination> {
-  const resolution = await resolver(git, branchName);
+  const resolution = await (target === "upstream"
+    ? resolveGitUpstream(git, branchName)
+    : resolveGitPushDestination(git, branchName));
   if (resolution.status === "resolved") return resolution.destination;
 
-  const message = describeUnresolvedPushDestination(resolution.reason, branchName);
+  const message =
+    target === "upstream"
+      ? describeUnresolvedUpstream(resolution.reason, branchName)
+      : describeUnresolvedPushDestination(resolution.reason, branchName);
   throw new GitOperationError(
     "config-missing",
     encodeGitOperationErrorMessage("config-missing", message, { branchName }),
@@ -296,7 +305,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       // event, backs the `--set-upstream` argv, and pins the lease ref if the
       // push is rejected. Refuses the push outright when git has no answer,
       // rather than reporting one target and writing to another.
-      destination = await requirePushDestination(git, branchName, payload.cwd, "push");
+      destination = await requireRemoteTarget(git, branchName, payload.cwd, "push");
       const targetBranch = formatGitPushDestination(destination);
 
       sendProgress({
@@ -402,12 +411,12 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       // `origin/release/topic` while pushing to `fork/topic`, and `git pull`
       // reads the upstream. Rebasing onto the wrong repository's history is as
       // destructive as pushing to it.
-      const source = await requirePushDestination(
+      const source = await requireRemoteTarget(
         git,
         branchName,
         payload.cwd,
         "pull-rebase",
-        resolveGitUpstream
+        "upstream"
       );
       await git.pull(source.remote, source.branch, ["--rebase"]);
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
@@ -456,7 +465,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     const branchName = payload.branchName.trim();
 
     try {
-      const destination = await requirePushDestination(
+      const destination = await requireRemoteTarget(
         git,
         branchName,
         payload.cwd,
@@ -517,7 +526,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       // Refuse rather than preview an empty list: this read is what the D2
       // force-push confirm shows, and "no commits to discard" from an
       // unresolvable destination reads as "safe to proceed" (#11746).
-      const destination = await requirePushDestination(
+      const destination = await requireRemoteTarget(
         git,
         branchName,
         payload.cwd,

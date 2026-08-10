@@ -286,13 +286,17 @@ describe("fails closed when the destination is unresolvable", () => {
     expect(git.push).not.toHaveBeenCalled();
   });
 
-  it("refuses to pull-rebase and issues no pull call", async () => {
+  it("refuses to pull-rebase in upstream terms, and issues no pull call", async () => {
     const git = makeUnresolvableGit();
     createAuthenticatedGitMock.mockResolvedValue(git);
 
-    await expect(getHandler("git:pull-rebase")(FAKE_EVENT, { cwd: CWD })).rejects.toThrow(
-      /no push destination configured/
+    // A missing upstream must not be reported as a missing push destination:
+    // the recovery it implies would be for the wrong end of the workflow.
+    const error = await getHandler("git:pull-rebase")(FAKE_EVENT, { cwd: CWD }).catch(
+      (e: unknown) => e
     );
+    expect(String(error)).toMatch(/no upstream configured for branch/);
+    expect(String(error)).not.toMatch(/push destination/);
     expect(git.pull).not.toHaveBeenCalled();
   });
 

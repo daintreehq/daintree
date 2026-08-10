@@ -128,7 +128,8 @@ describe("formatGitRemoteOperationPreviewLines", () => {
           { hash: "9876543210fed", message: "Second", author: "Bob" },
         ],
       },
-      "none"
+      "none",
+      "push"
     );
     expect(lines[0]).toBe("Destination: origin/feature/x");
     expect(lines[1]).toBe("Branch: feature/x");
@@ -149,18 +150,67 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: { remote: "fork", branch: "release/topic" },
         commits: [],
       },
-      "none"
+      "none",
+      "push"
     );
     expect(lines[0]).toBe("Destination: fork/release/topic");
+  });
+
+  it("names the upstream, not the push target, for a pull-rebase", () => {
+    // The triangular case: pushing to `fork` while tracking `origin` means the
+    // rebase integrates history the push line would never mention (#11746).
+    const lines = formatGitRemoteOperationPreviewLines(
+      {
+        branch: "topic",
+        destination: { remote: "fork", branch: "topic" },
+        pullSource: { remote: "origin", branch: "release/topic" },
+        commits: [],
+      },
+      "none",
+      "pull-rebase"
+    );
+    expect(lines[0]).toBe("Rebases onto: origin/release/topic");
+    expect(lines[0]).not.toContain("fork");
   });
 
   it("warns explicitly when no push destination is configured", () => {
     const lines = formatGitRemoteOperationPreviewLines(
       { branch: "topic", destination: null, pullSource: null, commits: [] },
-      "none"
+      "none",
+      "push"
     );
     expect(lines[0]).toContain("No push destination");
     expect(lines[1]).toBe("Branch: topic");
+  });
+
+  it("warns about a missing upstream for a pull-rebase, even when a push target resolves", () => {
+    const lines = formatGitRemoteOperationPreviewLines(
+      {
+        branch: "topic",
+        destination: { remote: "fork", branch: "topic" },
+        pullSource: null,
+        commits: [],
+      },
+      "none",
+      "pull-rebase"
+    );
+    expect(lines[0]).toBe(
+      "⚠ This branch has no upstream to rebase onto — this operation will be refused."
+    );
+  });
+
+  it("does not warn about a pull-rebase when only the push destination is missing", () => {
+    const lines = formatGitRemoteOperationPreviewLines(
+      {
+        branch: "topic",
+        destination: null,
+        pullSource: { remote: "origin", branch: "topic" },
+        commits: [],
+      },
+      "none",
+      "pull-rebase"
+    );
+    expect(lines[0]).toBe("Rebases onto: origin/topic");
   });
 
   it("treats an empty commit list as a valid loaded state, not a failure", () => {
@@ -171,7 +221,8 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: { remote: "origin", branch: "main" },
         commits: [],
       },
-      "No local commits found on this branch."
+      "No local commits found on this branch.",
+      "push"
     );
     expect(lines).toEqual([
       "Destination: origin/main",
@@ -189,13 +240,14 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: { remote: "origin", branch: "main" },
         commits: [],
       },
-      "none"
+      "none",
+      "push"
     );
     expect(lines[1]).toBe("Branch: (detached HEAD)");
   });
 
   it("surfaces an explicit couldn't-verify warning for a failed fetch", () => {
-    const lines = formatGitRemoteOperationPreviewLines(null, "none");
+    const lines = formatGitRemoteOperationPreviewLines(null, "none", "push");
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("Could not verify");
     // Must never read as "nothing to push" — that's the whole point of the

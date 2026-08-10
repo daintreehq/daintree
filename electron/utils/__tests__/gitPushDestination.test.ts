@@ -8,7 +8,9 @@ import {
   resolveGitPushDestination,
   formatGitPushDestination,
   describeUnresolvedPushDestination,
+  describeUnresolvedUpstream,
 } from "../gitPushDestination.js";
+import { classifyGitError } from "../../../shared/utils/gitOperationErrors.js";
 
 /**
  * Real git fixtures rather than mocks: the whole point of this resolver is that
@@ -425,6 +427,26 @@ describe("describeUnresolvedPushDestination", () => {
     const reasons = ["not-configured", "ambiguous", "unsafe-remote", "invalid-push-ref"] as const;
     for (const reason of reasons) {
       expect(describeUnresolvedPushDestination(reason, "topic")).toContain("topic");
+    }
+  });
+});
+
+describe("describeUnresolvedUpstream", () => {
+  const reasons = ["not-configured", "ambiguous", "unsafe-remote", "invalid-push-ref"] as const;
+
+  it("names the branch in every reason and never mentions pushing", () => {
+    for (const reason of reasons) {
+      const message = describeUnresolvedUpstream(reason, "topic");
+      expect(message).toContain("topic");
+      expect(message).not.toMatch(/push/i);
+    }
+  });
+
+  it("stays inside the config-missing bucket so the renderer keeps its recovery hint", () => {
+    for (const reason of reasons) {
+      expect(classifyGitError(new Error(describeUnresolvedUpstream(reason, "topic")))).toBe(
+        "config-missing"
+      );
     }
   });
 });
