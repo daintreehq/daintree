@@ -124,9 +124,13 @@ describe("useWorktreeActions", () => {
       const [actionId, args] = dispatchMock.mock.calls[0]!;
       expect(actionId).toBe("copyTree.generateAndCopyFile");
       // Nested, not spread: flattening would put the options through the wrong
-      // schema and silently lose most of them.
+      // schema and silently lose most of them. The representative flattened
+      // fields are the ones `worktree.copyTree` would have accepted, so their
+      // presence at the top level is exactly what a regression looks like.
       expect(args.options).toEqual(storedOptions);
-      expect(Object.keys(args)).toEqual(["worktreeId", "options"]);
+      expect(args.format).toBeUndefined();
+      expect(args.modified).toBeUndefined();
+      expect(args.scopePaths).toBeUndefined();
     });
 
     it("targets the supplied worktree rather than anything carried on the record", async () => {
@@ -150,32 +154,49 @@ describe("useWorktreeActions", () => {
       });
     });
 
-    it("reports a failed replay the same way a failed full copy is reported", async () => {
-      // Shared failure path: a user cannot tell the two routes apart, so the
-      // error surface must not either. Same classification branch as the
-      // full-copy case above.
-      dispatchMock.mockResolvedValueOnce({
-        ok: false,
-        error: { message: "permission denied" },
+    it("classifies and phrases a failed replay exactly like a failed full copy", async () => {
+      // A user cannot tell the two routes apart, so the error surface must not
+      // either. Compared side by side rather than restated, so a change to one
+      // path's classification without the other fails here. `source` is the one
+      // field that legitimately differs — the Problems panel shows it verbatim,
+      // and the replay only ever comes from the toolbar.
+      const failure = { ok: false, error: { message: "permission denied" } };
+
+      const { result } = renderHook(() => useWorktreeActions());
+
+      dispatchMock.mockResolvedValueOnce(failure);
+      await result.current.handleCopyTree(worktree);
+      const fullCopyError = addErrorMock.mock.calls.at(-1)![0];
+
+      dispatchMock.mockResolvedValueOnce(failure);
+      await result.current.handleCopyTreeWithOptions(worktree, storedOptions);
+      const replayError = addErrorMock.mock.calls.at(-1)![0];
+
+      // `correlationId` is a fresh UUID per report and `details` is a stack
+      // trace naming the calling function, so neither can match across paths.
+      // What must match is the classification and the words the user reads.
+      const comparable = ({
+        correlationId: _id,
+        source: _source,
+        details: _details,
+        ...rest
+      }: typeof replayError) => rest;
+      expect(comparable(replayError)).toEqual(comparable(fullCopyError));
+      expect(replayError.source).not.toBe(fullCopyError.source);
+    });
+
+    it("settles after a synchronous throw so the caller's spinner can clear", async () => {
+      // Not mockRejectedValue: a throw *before* a promise is returned is the
+      // case that would escape a `.finally()` on the returned value.
+      dispatchMock.mockImplementationOnce(() => {
+        throw new Error("boom");
       });
 
       const { result } = renderHook(() => useWorktreeActions());
       await expect(
         result.current.handleCopyTreeWithOptions(worktree, storedOptions)
       ).resolves.toBeUndefined();
-
-      expect(addErrorMock).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "filesystem", context: { worktreeId: "wt-1" } })
-      );
-    });
-
-    it("settles after a thrown dispatch so the caller's spinner can clear", async () => {
-      dispatchMock.mockRejectedValueOnce(new Error("boom"));
-
-      const { result } = renderHook(() => useWorktreeActions());
-      await expect(
-        result.current.handleCopyTreeWithOptions(worktree, storedOptions)
-      ).resolves.toBeUndefined();
+      expect(addErrorMock).toHaveBeenCalled();
     });
   });
 

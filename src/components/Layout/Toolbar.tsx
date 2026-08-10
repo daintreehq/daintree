@@ -138,6 +138,11 @@ const LazyCopyTreeRecentsPanel = lazy(() =>
   preloadCopyTreeRecentsPanel().then((m) => ({ default: m.CopyTreeRecentsPanel }))
 );
 
+// The panel portals out of the toolbar, so "is focus still inside it?" can't be
+// answered by a DOM ancestor check from here. The marker attribute is the panel
+// component's half of that contract.
+const COPY_TREE_PANEL_SELECTOR = "[data-copy-tree-panel]";
+
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
@@ -841,29 +846,47 @@ export function Toolbar({
     void preloadCopyTreeRecentsPanel();
   }, []);
 
+  // Close and hand focus back to the trigger — but only when focus would
+  // otherwise be lost. An outside click has already moved focus somewhere the
+  // user chose, and yanking it back to the toolbar would fight that.
+  const closeCopyTreePanel = useCallback(() => {
+    const active = document.activeElement;
+    const focusWasInPanel =
+      active instanceof HTMLElement && active.closest(COPY_TREE_PANEL_SELECTOR);
+    setCopyTreeOpen(false);
+    if (focusWasInPanel || active === null || active === document.body) {
+      copyTreeButtonRef.current?.focus();
+    }
+  }, []);
+
   // The visible button opens the panel; it no longer copies. Every immediate
   // route is deliberately left alone: `Cmd+Shift+C` dispatches
   // `worktree.copyTree` without passing through here at all, and the overflow
   // item calls `handleCopyTreeClick` directly — a nested panel inside the
   // overflow menu isn't worth it (#11733).
+  //
+  // The in-flight check matches what the button already announces: it renders
+  // `aria-disabled` while copying, and the shared Button doesn't suppress
+  // clicks on that alone, so without this the "disabled" trigger still opens a
+  // panel whose rows would all decline to run.
   const handleCopyTreeToggle = useCallback(() => {
-    if (!activeWorktree) return;
+    if (isCopyingTree || !activeWorktree) return;
     setCopyTreeOpen((open) => !open);
-  }, [activeWorktree]);
+  }, [isCopyingTree, activeWorktree]);
 
   // The panel's primary row: the old one-click behavior, now one click deeper.
   const handleCopyTreeFullContext = useCallback(() => {
-    setCopyTreeOpen(false);
+    closeCopyTreePanel();
     void handleCopyTreeClick();
-  }, [handleCopyTreeClick]);
+  }, [closeCopyTreePanel, handleCopyTreeClick]);
 
-  // A recents row. Replayed against the ACTIVE worktree, not `record.worktreeId`
-  // — the history dedupe key covers options alone, so a record's worktree is
-  // whichever one ran it last rather than a stable target, and it may name a
-  // worktree that has since been removed.
+  // A recents row. Replayed against the ACTIVE worktree, never the worktree
+  // stored on the record — the history dedupe key covers options alone, so a
+  // record's worktree is whichever one ran it last rather than a stable target,
+  // and it may name a worktree that has since been removed.
   const handleCopyTreeRunRecent = useCallback(
     (record: CopyTreeHistoryRecord) => {
-      setCopyTreeOpen(false);
+      closeCopyTreePanel();
       if (isCopyingTree || !activeWorktree) return;
 
       setIsCopyingTree(true);
@@ -871,7 +894,7 @@ export function Toolbar({
         setIsCopyingTree(false);
       });
     },
-    [isCopyingTree, activeWorktree, handleCopyTreeWithOptions]
+    [closeCopyTreePanel, isCopyingTree, activeWorktree, handleCopyTreeWithOptions]
   );
 
   // The anchor stops being interactive without a worktree, and the panel's rows
@@ -1259,7 +1282,9 @@ export function Toolbar({
             </ContextMenu>
             <FixedDropdown
               open={copyTreeOpen}
-              onOpenChange={setCopyTreeOpen}
+              onOpenChange={(open) => {
+                if (!open) closeCopyTreePanel();
+              }}
               anchorRef={copyTreeButtonRef}
               className="p-0"
             >
@@ -1368,6 +1393,7 @@ export function Toolbar({
       handleCopyTreeToggle,
       handleCopyTreeFullContext,
       handleCopyTreeRunRecent,
+      closeCopyTreePanel,
       copyTreeOpen,
       copyTreePanelMounted,
       isCopyingTree,
@@ -1595,6 +1621,12 @@ export function Toolbar({
     }
     if (overflowSet.has("notification-center")) {
       useUIStore.getState().closeNotificationCenter();
+    }
+    // The panel is portaled to document.body, so the wrapper's `invisible
+    // absolute` eviction styles never reach it — an open panel would strand on
+    // screen and then re-anchor to the hidden button's rect on the next resize.
+    if (overflowSet.has("copy-tree")) {
+      setCopyTreeOpen(false);
     }
   }, [leftOverflow, rightOverflow]);
 

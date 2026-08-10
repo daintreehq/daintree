@@ -31,6 +31,11 @@ import {
   _resetCopyTreeHistoryStoreForTest,
 } from "@/store/copyTreeHistoryStore";
 
+// Hoisted so the mock factory can reference the spy directly rather than
+// through a closure that only resolves at mount time — a later edit to
+// `init: initSpy` would otherwise become a TDZ collection failure.
+const { initSpy } = vi.hoisted(() => ({ initSpy: vi.fn() }));
+
 vi.mock("@/store/copyTreeHistoryStore", async () => {
   const { create } = await import("zustand");
   const store = create<{
@@ -40,15 +45,13 @@ vi.mock("@/store/copyTreeHistoryStore", async () => {
   }>(() => ({
     records: [],
     loading: true,
-    init: () => initSpy(),
+    init: initSpy,
   }));
   return {
     useCopyTreeHistoryStore: store,
     _resetCopyTreeHistoryStoreForTest: () => store.setState({ records: [], loading: true }),
   };
 });
-
-const initSpy = vi.fn();
 
 function makeRecord(overrides: Partial<CopyTreeHistoryRecord> = {}): CopyTreeHistoryRecord {
   const id = overrides.id ?? "r1";
@@ -122,6 +125,8 @@ describe("CopyTreeRecentsPanel", () => {
   it("never falls back to a spinner while hydrating", () => {
     // The panel's shape is predictable, so the loading rule is skeleton-or-
     // nothing; a spinner here is the specific thing the issue ruled out.
+    // `.animate-spin` is what the shared Spinner actually renders — it carries
+    // no test id, so that is the only marker that would catch a regression.
     vi.useFakeTimers();
     const { container, unmount } = render(
       <CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />
@@ -129,9 +134,84 @@ describe("CopyTreeRecentsPanel", () => {
     act(() => {
       vi.advanceTimersByTime(500);
     });
-    expect(container.querySelector('[data-testid="spinner"]')).toBeNull();
     expect(container.querySelector(".animate-spin")).toBeNull();
     unmount();
+  });
+
+  it("tears the skeleton down once history resolves and does not bring it back", () => {
+    // The gate's timer is still pending when loading flips. Without the outer
+    // `loading` branch owning the swap, a late-firing gate would remount a
+    // skeleton over an already-populated list.
+    vi.useFakeTimers();
+    const { unmount } = render(
+      <CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(screen.queryByRole("status")).not.toBeNull();
+
+    act(() => {
+      useCopyTreeHistoryStore.setState({ records: [makeRecord()], loading: false });
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+
+    unmount();
+  });
+
+  it("shows no skeleton at all when history resolves inside the gate", () => {
+    vi.useFakeTimers();
+    const { unmount } = render(
+      <CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(200);
+      useCopyTreeHistoryStore.setState({ records: [makeRecord()], loading: false });
+    });
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(screen.queryByRole("status")).toBeNull();
+    unmount();
+  });
+
+  it("is a named dialog that takes focus so the rows are keyboard-reachable", () => {
+    // The trigger declares aria-haspopup="dialog" and the panel now owns the
+    // button's former action. Portaled to the end of <body>, an unfocused panel
+    // would leave a keyboard user tabbing through the whole app to reach it.
+    seed([makeRecord()]);
+    render(<CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={noop} />);
+
+    const dialog = screen.getByRole("dialog");
+    const labelId = dialog.getAttribute("aria-labelledby");
+    expect(labelId).toBeTruthy();
+    // The name has to resolve to real text inside the panel — a dangling id
+    // leaves the dialog anonymous to a screen reader. Asserted by resolution
+    // rather than against a duplicated literal.
+    expect(document.getElementById(labelId!)?.textContent?.trim()).toBeTruthy();
+
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Copy full context" }));
+  });
+
+  it("activates a row from the keyboard", () => {
+    seed([makeRecord({ name: "authentication stuff" })]);
+    const onRunRecent = vi.fn();
+    render(<CopyTreeRecentsPanel onCopyFullContext={noop} onRunRecent={onRunRecent} />);
+
+    const row = screen.getByRole("button", { name: /authentication stuff/ });
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    fireEvent.click(row);
+
+    expect(onRunRecent).toHaveBeenCalledTimes(1);
   });
 
   it("names the next action when the project has no history yet", () => {

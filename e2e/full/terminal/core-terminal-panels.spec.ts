@@ -381,7 +381,12 @@ test.describe.serial("Core: Terminal & Panels", () => {
     });
 
     test("Copy Context button transitions through states", async () => {
-      const { window } = ctx;
+      const { app, window } = ctx;
+
+      // Clear first: the next test in this serial block asserts the clipboard
+      // is non-empty, which would pass on leftover content from an earlier
+      // test even if this copy did nothing.
+      await app.evaluate(({ clipboard }) => clipboard.writeText(""));
 
       // The trigger opens a recents panel rather than copying (#11733); the
       // helper follows through to the panel's "Copy full context" row so the

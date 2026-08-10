@@ -1,9 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, useId, useRef } from "react";
 import { Folders, History } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useCopyTreeHistoryStore } from "@/store/copyTreeHistoryStore";
 import { formatBytes } from "@/lib/formatBytes";
@@ -73,6 +73,17 @@ export function CopyTreeRecentsPanel({
   const records = useCopyTreeHistoryStore((s) => s.records);
   const loading = useCopyTreeHistoryStore((s) => s.loading);
   const init = useCopyTreeHistoryStore((s) => s.init);
+  const headingId = useId();
+  const primaryRowRef = useRef<HTMLButtonElement>(null);
+
+  // The trigger advertises `aria-haspopup="dialog"`, and this panel is where
+  // the button's own action now lives — so focus has to come in with it. The
+  // dropdown portals to the end of <body>, so a keyboard user who left focus on
+  // the trigger would otherwise have to tab through the whole app to reach
+  // these rows. The body unmounts on close, so this runs once per open.
+  useEffect(() => {
+    primaryRowRef.current?.focus();
+  }, []);
 
   // Idempotent at the store: later opens re-run this and return immediately.
   // The subscription deliberately outlives the panel — an MCP or context-menu
@@ -91,12 +102,19 @@ export function CopyTreeRecentsPanel({
   const showSkeleton = useDohertyGate(loading);
 
   return (
-    <div className="w-[360px] max-h-[420px] flex flex-col">
+    <div
+      data-copy-tree-panel=""
+      role="dialog"
+      aria-labelledby={headingId}
+      className="w-[360px] max-h-[420px] flex flex-col"
+    >
       <div className="flex items-center pl-3 pr-2 py-2 border-b border-divider">
-        <span className="text-xs font-medium text-daintree-text/80">Copy context</span>
+        <span id={headingId} className="text-xs font-medium text-daintree-text/80">
+          Copy context
+        </span>
       </div>
 
-      <button type="button" onClick={onCopyFullContext} className={rowClass}>
+      <button ref={primaryRowRef} type="button" onClick={onCopyFullContext} className={rowClass}>
         <Folders className="w-4 h-4 shrink-0 text-daintree-text/70" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-sm font-medium">Copy full context</span>
       </button>
@@ -111,14 +129,21 @@ export function CopyTreeRecentsPanel({
         <div className="pb-1">
           {loading ? (
             showSkeleton ? (
-              <Skeleton label="Loading recent copies" className="flex flex-col gap-2 px-3 py-2">
-                {Array.from({ length: SKELETON_ROWS }, (_, i) => (
-                  <div key={i} className="flex flex-col gap-1.5">
-                    <SkeletonBone immediate heightPx={12} className="w-1/2" />
-                    <SkeletonBone immediate heightPx={10} className="w-2/3" />
-                  </div>
-                ))}
-              </Skeleton>
+              <>
+                <Skeleton label="Loading recent copies" className="flex flex-col gap-2 px-3 py-2">
+                  {Array.from({ length: SKELETON_ROWS }, (_, i) => (
+                    <div key={i} className="flex flex-col gap-1.5">
+                      <SkeletonBone immediate heightPx={12} className="w-1/2" />
+                      <SkeletonBone immediate heightPx={10} className="w-2/3" />
+                    </div>
+                  ))}
+                </Skeleton>
+                {/* Sibling, never nested: the Skeleton wrapper's aria-busy
+                    silences mutations inside its subtree. A local history read
+                    should never take this long, so if it does the user needs to
+                    be told rather than left watching a pulse. */}
+                <SkeletonHint className="px-3 pb-2" />
+              </>
             ) : null
           ) : recents.length === 0 ? (
             <EmptyState

@@ -170,7 +170,7 @@ export function useWorktreeActions({
   // same way a full copy does — the user cannot tell the two routes apart, so
   // neither should the error surface.
   const reportCopyFailure = useCallback(
-    (worktreeId: string, e: unknown): void => {
+    (worktreeId: string, e: unknown, source = "WorktreeCard"): void => {
       const message = formatErrorMessage(e, "Failed to copy context to clipboard");
       const details = e instanceof Error ? e.stack : undefined;
 
@@ -189,7 +189,7 @@ export function useWorktreeActions({
         type: errorType,
         message: `Copy context failed: ${message}`,
         details,
-        source: "WorktreeCard",
+        source,
         context: {
           worktreeId,
         },
@@ -226,6 +226,11 @@ export function useWorktreeActions({
   /**
    * Re-run a stored option set — the toolbar's recents rows (#11733).
    *
+   * Reported against the toolbar rather than the worktree card, which is the
+   * only surface that reaches this path — the Problems panel shows that source
+   * verbatim, so inheriting the full-copy helper's label would point at a
+   * component the user never touched.
+   *
    * Routed through `copyTree.generateAndCopyFile`, NOT `worktree.copyTree`:
    * that action's args schema is flat and narrow (`format`, `modified`,
    * `includePaths`, `scopePaths`), and Zod object parsing strips unknown keys
@@ -260,7 +265,7 @@ export function useWorktreeActions({
           throw new Error(result.error.message);
         }
       } catch (e) {
-        reportCopyFailure(worktree.id, e);
+        reportCopyFailure(worktree.id, e, "Toolbar");
       }
     },
     [reportCopyFailure]

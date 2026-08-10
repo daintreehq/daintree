@@ -273,47 +273,52 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
   });
 
   describe("copy-tree recents dropdown — issue #11733", () => {
-    it("advertises the trigger as a dialog disclosure", () => {
-      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
-      expect(copyTreeBlock).not.toBeNull();
-      // The button no longer performs its action on click, so it has to say so:
-      // without both halves a screen-reader user gets no signal that anything
-      // opened, and no way to tell open from closed.
-      expect(copyTreeBlock![0]).toContain('aria-haspopup="dialog"');
-      expect(copyTreeBlock![0]).toContain("aria-expanded={copyTreeOpen}");
-      expect(copyTreeBlock![0]).toContain("<FixedDropdown");
-      expect(copyTreeBlock![0]).toContain("anchorRef={copyTreeButtonRef}");
-    });
+    // Only invariants that can't be reached from a render live here; the
+    // panel's own dialog role, focus handling and row behavior are covered
+    // behaviorally in CopyTreeRecentsPanel.test.tsx. Toolbar.tsx is too large
+    // to mount in jsdom, which is the reason this file reads source at all.
 
-    it("leaves FixedDropdown's keepMounted unset so the body unmounts on close", () => {
-      // #8005/#6787: Activity-hidden bodies keep portaled Radix content mounted
-      // (stranding it at 0,0) and retain transient state across reveals. This
-      // panel has no state worth preserving, so it opts out entirely rather
-      // than working around either failure mode. The `useKeepMounted` latch
-      // below is a different thing — it only stops `Suspense` re-suspending.
-      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
-      expect(copyTreeBlock).not.toBeNull();
-      expect(copyTreeBlock![0]).not.toMatch(/keepMounted/);
-      expect(source).toContain("const copyTreePanelMounted = useKeepMounted(copyTreeOpen);");
-    });
-
-    it("warms the panel chunk before the first click", () => {
-      // React 19 `lazy` still shows the fallback for a frame on a cold chunk,
-      // and the copy is already one click deeper than it used to be.
-      expect(source).toContain("void preloadCopyTreeRecentsPanel();");
-      expect(source).toMatch(/lazy\(\(\) =>\s*preloadCopyTreeRecentsPanel\(\)/);
-    });
-
-    it("replays a recent against the active worktree, never the record's own", () => {
+    it("never replays a recent against the worktree stored on the record", () => {
       // The history dedupe key covers options alone, so `record.worktreeId` is
       // whichever worktree ran it last — provenance, not a stable target, and
-      // possibly one that no longer exists.
-      const handler = source.match(
-        /const handleCopyTreeRunRecent = useCallback\([\s\S]*?\n {2}\);/
+      // possibly one that no longer exists. File-wide rather than block-scoped:
+      // the field must not be read anywhere in the toolbar, however the handler
+      // is later refactored or extracted.
+      expect(source).toContain("handleCopyTreeWithOptions(activeWorktree, record.options");
+      expect(source).not.toContain("record.worktreeId");
+    });
+
+    it("closes the panel wherever a sibling dropdown is closed on overflow eviction", () => {
+      // Relational, and the reason it matters: the panel is portaled to
+      // document.body, so the wrapper's `invisible absolute` eviction styles
+      // never reach it. Whatever set of ids that effect closes, copy-tree
+      // belongs in it — asserted against its neighbours rather than as a
+      // standalone literal, so deleting the effect fails here too.
+      const evictionEffect = source.match(
+        /Close open dropdowns when their buttons move into overflow[\s\S]*?\}, \[leftOverflow, rightOverflow\]\);/
       );
-      expect(handler).not.toBeNull();
-      expect(handler![0]).toContain("handleCopyTreeWithOptions(activeWorktree, record.options");
-      expect(handler![0]).not.toContain("record.worktreeId");
+      expect(evictionEffect).not.toBeNull();
+      expect(evictionEffect![0]).toContain('overflowSet.has("notification-center")');
+      expect(evictionEffect![0]).toContain('overflowSet.has("copy-tree")');
+    });
+
+    it("gates opening the panel on the same condition the trigger reports as disabled", () => {
+      // The shared Button doesn't suppress clicks on aria-disabled alone, so a
+      // trigger that announces "disabled" while copying must also refuse to
+      // open — otherwise the panel appears and every row silently declines.
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      const ariaDisabled = copyTreeBlock![0].match(/aria-disabled=\{([^}]+)\}/);
+      expect(ariaDisabled).not.toBeNull();
+
+      const toggle = source.match(/const handleCopyTreeToggle = useCallback\([\s\S]*?\n {2}\);/);
+      expect(toggle).not.toBeNull();
+      // Every condition the button announces as disabling must also gate the
+      // toggle. `undefined` is the JSX spelling of "not disabled", not a term.
+      for (const term of ariaDisabled![1]!.split("||").map((t) => t.trim())) {
+        if (term === "undefined") continue;
+        expect(toggle![0]).toContain(term.replace(/^!/, ""));
+      }
     });
   });
 
