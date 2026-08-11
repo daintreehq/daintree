@@ -203,6 +203,13 @@ export type PtyHostRequest =
   | { type: "write"; id: string; data: string; traceId?: string }
   | { type: "broadcast-write"; ids: string[]; data: string }
   | { type: "submit"; id: string; text: string }
+  | {
+      type: "submit-acknowledged";
+      id: string;
+      text: string;
+      launchGeneration: number;
+      requestId: string;
+    }
   | { type: "stage"; id: string; text: string }
   | { type: "batch-double-escape"; ids: string[] }
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
@@ -279,6 +286,15 @@ export type PtyHostRequest =
   | { type: "get-terminal"; id: string; requestId: string }
   | { type: "replay-history"; id: string; maxLines: number; requestId: string }
   | { type: "get-serialized-state"; id: string; requestId: string }
+  | {
+      type: "console-observe";
+      id: string;
+      observerId: string;
+      launchGeneration: number;
+      afterSeq?: number;
+      requestId: string;
+    }
+  | { type: "console-unobserve"; id: string; observerId: string }
   | {
       type: "init-buffers";
       visualBuffers: SharedArrayBuffer[];
@@ -619,6 +635,43 @@ export type PtyHostEvent =
       id: string;
       state: SerializedTerminalSnapshot | null;
     }
+  | {
+      type: "console-observe-result";
+      requestId: string;
+      id: string;
+      observerId: string;
+      launchGeneration: number;
+      mode: "snapshot" | "resume" | "resync";
+      reason?: "gap" | "generation-changed";
+      throughSeq: number;
+      state: SerializedTerminalSnapshot | null;
+      chunks: Array<{ seq: number; data: string; encoding: "base64"; bytes: number }>;
+    }
+  | {
+      type: "console-output";
+      id: string;
+      observerId: string;
+      launchGeneration: number;
+      seq: number;
+      data: string;
+      encoding: "base64";
+      bytes: number;
+    }
+  | {
+      type: "console-invalidated";
+      id: string;
+      observerId: string;
+      launchGeneration: number;
+      reason: "generation-changed" | "host-restarted";
+    }
+  | {
+      type: "submit-result";
+      requestId: string;
+      id: string;
+      launchGeneration: number;
+      accepted: boolean;
+      reason?: "not-found" | "generation-changed" | "not-live" | "trashed" | "write-failed";
+    }
   | { type: "terminal-diagnostic-info"; requestId: string; info: TerminalInfoPayload | null }
   | { type: "available-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "terminals-by-state"; requestId: string; terminals: PtyHostTerminalInfo[] }
@@ -821,6 +874,8 @@ export interface PtyHostTerminalInfo {
    */
   ptyCols?: number;
   ptyRows?: number;
+  /** Host-adopted lifecycle generation for incarnation-safe remote operations. */
+  launchGeneration?: number;
   /** Captured agent session ID from graceful shutdown */
   agentSessionId?: string;
   /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */

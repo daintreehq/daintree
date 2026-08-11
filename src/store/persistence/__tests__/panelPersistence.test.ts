@@ -111,6 +111,31 @@ describe("PanelPersistence", () => {
   });
 
   describe("save", () => {
+    it("persists remote launch identity and CLI resume metadata through the ordinary panel path", () => {
+      const snapshot = panelToSnapshot(
+        createMockTerminal({
+          id: "remote-panel",
+          kind: "terminal",
+          launchAgentId: "claude",
+          worktreeId: "worktree-main",
+          spawnedBy: "remote",
+          agentSessionId: "cli-session-1",
+          hasPty: true,
+        })
+      );
+
+      expect(snapshot).toMatchObject({
+        id: "remote-panel",
+        kind: "terminal",
+        launchAgentId: "claude",
+        worktreeId: "worktree-main",
+        spawnedBy: "remote",
+        agentSessionId: "cli-session-1",
+      });
+      expect(snapshot).not.toHaveProperty("transcript");
+      expect(snapshot).not.toHaveProperty("processSurvivesRestart");
+    });
+
     it("debounces multiple saves into single persist call", async () => {
       const client = createMockProjectClient();
       const persistence = new PanelPersistence(client, { debounceMs: 100 });

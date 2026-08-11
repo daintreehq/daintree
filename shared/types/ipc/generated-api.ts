@@ -652,6 +652,40 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["project-relocation:preview"]["args"]
     ): Promise<IpcInvokeMap["project-relocation:preview"]["result"]>;
   };
+  remoteAccess: {
+    approvePairing(
+      ...args: IpcInvokeMap["remote-access:approve-pairing"]["args"]
+    ): Promise<IpcInvokeMap["remote-access:approve-pairing"]["result"]>;
+    disconnectAllDevices(
+      ...args: IpcInvokeMap["remote-access:disconnect-all-devices"]["args"]
+    ): Promise<IpcInvokeMap["remote-access:disconnect-all-devices"]["result"]>;
+    disconnectDevice(
+      ...args: IpcInvokeMap["remote-access:disconnect-device"]["args"]
+    ): Promise<IpcInvokeMap["remote-access:disconnect-device"]["result"]>;
+    getState(
+      ...args: IpcInvokeMap["remote-access:get-state"]["args"]
+    ): Promise<IpcInvokeMap["remote-access:get-state"]["result"]>;
+    openPairingWindow(
+      ...args: IpcInvokeMap["remote-access:open-pairing-window"]["args"]
+    ): Promise<IpcInvokeMap["remote-access:open-pairing-window"]["result"]>;
+    rejectPairing(
+      ...args: IpcInvokeMap["remote-access:reject-pairing"]["args"]
+    ): Promise<IpcInvokeMap["remote-access:reject-pairing"]["result"]>;
+    revokeDevice(
+      ...args: IpcInvokeMap["remote-access:revoke-device"]["args"]
+    ): Promise<IpcInvokeMap["remote-access:revoke-device"]["result"]>;
+    setDeviceCapabilities(
+      ...args: IpcInvokeMap["remote-access:set-device-capabilities"]["args"]
+    ): Promise<IpcInvokeMap["remote-access:set-device-capabilities"]["result"]>;
+    updateConfig(
+      ...args: IpcInvokeMap["remote-access:update-config"]["args"]
+    ): Promise<IpcInvokeMap["remote-access:update-config"]["result"]>;
+  };
+  remotePanelProjection: {
+    publish(
+      ...args: IpcInvokeMap["remote-panel-projection:publish"]["args"]
+    ): Promise<IpcInvokeMap["remote-panel-projection:publish"]["result"]>;
+  };
   runHistory: {
     append(
       ...args: IpcInvokeMap["run-history:append"]["args"]

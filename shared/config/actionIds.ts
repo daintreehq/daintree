@@ -265,6 +265,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- appActions --
   "app.pluginManager",
+  "app.remoteAccess.manage",
   "app.reloadConfig",
   "app.developerMode.set",
   "app.theme.pick",

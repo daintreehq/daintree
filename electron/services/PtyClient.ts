@@ -1531,6 +1531,25 @@ export class PtyClient extends EventEmitter {
     this.shardForTerminal(id).send({ type: "submit", id, text });
   }
 
+  submitAcknowledged(
+    id: string,
+    text: string,
+    launchGeneration: number
+  ): Promise<{
+    accepted: boolean;
+    reason?: "not-found" | "generation-changed" | "not-live" | "trashed" | "write-failed";
+    launchGeneration: number;
+  }> {
+    const shard = this.shardForTerminal(id);
+    return sendPtyHostRpc(shard, `submit-${id}-${launchGeneration}`, (requestId) => ({
+      type: "submit-acknowledged",
+      id,
+      text,
+      launchGeneration,
+      requestId,
+    }));
+  }
+
   /**
    * Stage text into a terminal's input without submitting it (no Enter). The
    * no-execute counterpart to {@link submit}; see {@link TerminalProcess.stage}.
@@ -2274,6 +2293,41 @@ export class PtyClient extends EventEmitter {
       console.warn(`[PtyClient] getSerializedState timeout for ${id}`);
       return null;
     });
+  }
+
+  async beginConsoleObservation(
+    id: string,
+    observerId: string,
+    launchGeneration: number,
+    afterSeq?: number
+  ): Promise<{
+    id: string;
+    observerId: string;
+    launchGeneration: number;
+    mode: "snapshot" | "resume" | "resync";
+    reason?: "gap" | "generation-changed";
+    throughSeq: number;
+    state: SerializedTerminalSnapshot | null;
+    chunks: Array<{ seq: number; data: string; encoding: "base64"; bytes: number }>;
+  }> {
+    const shard = this.shardForTerminal(id);
+    return sendPtyHostRpc(
+      shard,
+      `console-observe-${observerId}`,
+      (requestId) => ({
+        type: "console-observe",
+        id,
+        observerId,
+        launchGeneration,
+        afterSeq,
+        requestId,
+      }),
+      { method: "console-observe", timeoutMs: PTY_TIMEOUTS["get-serialized-state"] }
+    );
+  }
+
+  endConsoleObservation(id: string, observerId: string): void {
+    this.shardForTerminal(id).send({ type: "console-unobserve", id, observerId });
   }
 
   /**

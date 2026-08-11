@@ -22,6 +22,9 @@ yarn.lock
 *.min.js
 *.min.css
 
+# Flutter source and platform projects are formatted by Dart and native toolchains
+apps/portal/
+
 # Generated plugin view — `npm run build:sample-rich-view` output, committed and
 # shipped verbatim (#11208). Formatting it here would make every regeneration
 # fail format:check. Its hand-authored sibling (rich-panel-view.js) IS formatted.

@@ -307,8 +307,8 @@ export function registerPanelCoreActions(
 
   actions.set("panel.togglePortal", () => ({
     id: "panel.togglePortal",
-    title: "Toggle Portal",
-    description: "Toggle the portal panel",
+    title: "Toggle Web",
+    description: "Toggle the Web panel",
     category: "panel",
     kind: "command",
     danger: "safe",

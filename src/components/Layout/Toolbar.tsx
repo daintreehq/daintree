@@ -122,6 +122,7 @@ import { ToolbarSettingsButton } from "./ToolbarSettingsButton";
 import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
+import { RemoteAccessPresence } from "./RemoteAccessPresence";
 import { useOverflowBadgeSeverity, type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import {
@@ -2196,6 +2197,8 @@ export function Toolbar({
           <div className="app-no-drag">
             {renderOverflowMenu(visibleRightOverflow, "right", rightOverflowSeverity)}
           </div>
+
+          <RemoteAccessPresence />
 
           <div className={toolbarDividerClass} />
 

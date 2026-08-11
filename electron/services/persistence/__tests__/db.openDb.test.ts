@@ -502,7 +502,8 @@ describe("openDb (integration)", () => {
     const additions = [...finalSql.matchAll(/ALTER TABLE `([a-z_]+)` ADD `([a-z_]+)`/g)].map(
       (m) => ({ table: m[1]!, column: m[2]! })
     );
-    expect(additions.length).toBeGreaterThan(0);
+    const createdTables = [...finalSql.matchAll(/CREATE TABLE `([a-z_]+)`/g)].map((m) => m[1]!);
+    expect(additions.length + createdTables.length).toBeGreaterThan(0);
 
     // Those columns must be absent before the upgrade for the test to mean
     // anything — the seed tables were created without them.
@@ -513,6 +514,11 @@ describe("openDb (integration)", () => {
       ).map((c) => c.name);
       expect(seededColumns).not.toContain(column);
     }
+    for (const table of createdTables) {
+      expect(
+        preCheck.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)
+      ).toBeUndefined();
+    }
     preCheck.close();
 
     const { sqlite } = openDb(dbPath, migrationsFolder);
@@ -521,12 +527,57 @@ describe("openDb (integration)", () => {
         const columns = (sqlite.pragma(`table_info(${table})`) as ColInfo[]).map((c) => c.name);
         expect(columns).toContain(column);
       }
+      for (const table of createdTables) {
+        expect(
+          sqlite.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)
+        ).toBeDefined();
+      }
 
       // The skipped migration is now recorded — total equals the full journal.
       const migrations = sqlite.prepare("SELECT id FROM __drizzle_migrations").all();
       expect(migrations).toHaveLength(EXPECTED_MIGRATION_COUNT);
     } finally {
       sqlite.close();
+    }
+  });
+
+  it("leaves newer additive tables intact when opened with the previous migration set", async () => {
+    const dbPath = path.join(tmpDir, "downgrade-safe.db");
+    const latest = openDb(dbPath, migrationsFolder);
+    latest.sqlite.close();
+
+    const journal = JSON.parse(
+      fs.readFileSync(path.join(migrationsFolder, "meta", "_journal.json"), "utf8")
+    ) as { entries: Array<{ tag: string }> };
+    const previousFolder = path.join(tmpDir, "previous-migrations");
+    fs.mkdirSync(path.join(previousFolder, "meta"), { recursive: true });
+    const previousEntries = journal.entries.slice(0, -1);
+    for (const entry of previousEntries) {
+      fs.copyFileSync(
+        path.join(migrationsFolder, `${entry.tag}.sql`),
+        path.join(previousFolder, `${entry.tag}.sql`)
+      );
+    }
+    const previousJournal = { ...journal, entries: previousEntries };
+    fs.writeFileSync(
+      path.join(previousFolder, "meta", "_journal.json"),
+      JSON.stringify(previousJournal)
+    );
+
+    const older = openDb(dbPath, previousFolder);
+    try {
+      const remoteTables = older.sqlite
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('remote_mutation_ledger', 'remote_audit_events') ORDER BY name"
+        )
+        .all() as Array<{ name: string }>;
+      expect(remoteTables.map(({ name }) => name)).toEqual([
+        "remote_audit_events",
+        "remote_mutation_ledger",
+      ]);
+      expect(() => older.sqlite.prepare("SELECT id FROM projects LIMIT 1").all()).not.toThrow();
+    } finally {
+      older.sqlite.close();
     }
   });
 

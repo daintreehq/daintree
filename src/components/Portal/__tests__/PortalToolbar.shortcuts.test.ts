@@ -22,8 +22,8 @@ describe("PortalToolbar shortcut tooltips — issue #3819", () => {
   });
 
   describe("createTooltipContent usage", () => {
-    it("uses createTooltipContent for Close portal tooltip", () => {
-      expect(source).toContain('createTooltipContent("Close portal", closePortalShortcut)');
+    it("uses createTooltipContent for Close Web tooltip", () => {
+      expect(source).toContain('createTooltipContent("Close Web", closePortalShortcut)');
     });
 
     it("uses createTooltipContent for New Tab tooltip", () => {

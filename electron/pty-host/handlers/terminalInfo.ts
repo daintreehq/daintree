@@ -62,6 +62,8 @@ export function mapTerminalInfo(t: NonNullable<TerminalInfoLike>, ctx: HostConte
     trashExpiresAt: t.trashExpiresAt,
     activityTier: ctx.ptyManager.getActivityTier(t.id),
     hasPty,
+    launchGeneration: t.launchGeneration,
+    worktreeId: t.worktreeId,
     agentSessionId: t.agentSessionId,
     agentLaunchFlags: t.agentLaunchFlags,
     agentModelId: t.agentModelId,

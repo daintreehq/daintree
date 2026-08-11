@@ -25,12 +25,12 @@ export const LaunchLocationSchema = z
  * Mirror of `TerminalSpawnSource` from `shared/types/panel.ts`. Kept in lockstep
  * with that union so action argsSchemas can validate the field. The MCP bridge
  * stamps `"mcp"` on spawn-producing dispatches; user surfaces stamp their own
- * origin (`"quickrun"`, `"recipe"`, `"agent"`, `"palette"`).
+ * origin (`"quickrun"`, `"recipe"`, `"agent"`, `"palette"`, `"remote"`).
  */
 export const TerminalSpawnSourceSchema = z
-  .enum(["quickrun", "recipe", "agent", "palette", "mcp"])
+  .enum(["quickrun", "recipe", "agent", "palette", "mcp", "remote"])
   .describe(
-    "Records which surface asked for the spawn, for provenance and run history only; it never changes what is launched. Leave it unset when dispatching over MCP — the bridge stamps its own origin."
+    "Records which surface asked for the spawn, for provenance and run history only; it never changes what is launched. MCP and remote bridges stamp their own origin."
   );
 
 /**

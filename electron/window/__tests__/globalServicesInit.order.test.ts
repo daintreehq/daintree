@@ -78,6 +78,9 @@ vi.mock("../../store.js", () => ({
       if (key === "privacy") {
         return mockLogRetentionDays === undefined ? {} : { logRetentionDays: mockLogRetentionDays };
       }
+      if (key === "remoteAccess") {
+        return { enabled: false, bindAddress: "127.0.0.1", port: 45_123 };
+      }
       return {};
     }),
     set: vi.fn(),
@@ -310,7 +313,11 @@ vi.mock("../deferredInitQueue.js", () => ({
 }));
 
 vi.mock("electron", () => ({
-  app: { exit: vi.fn(), getPath: vi.fn((name: string) => `/tmp/${name}`) },
+  app: {
+    exit: vi.fn(),
+    getPath: vi.fn((name: string) => `/tmp/${name}`),
+    getVersion: vi.fn(() => "0.30.1"),
+  },
   dialog: { showErrorBox: vi.fn() },
   session: { defaultSession: { clearCache: vi.fn(), clearStorageData: vi.fn() } },
   // The update-state pull is registered eagerly here (not from its deferred
@@ -502,6 +509,7 @@ describe("initGlobalServices task ordering", () => {
       "trashed-pid-cleanup",
       "scratch-cleanup",
       "assistant-scratch-cleanup",
+      "remote-gateway",
     ];
 
     const telemetryIdx = registeredTaskNames.indexOf("telemetry");

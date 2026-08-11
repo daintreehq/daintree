@@ -1919,6 +1919,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       confirmationDecision?: import("./mcpServer.js").McpConfirmationDecision;
     }): void;
   };
+  remoteRendererBridge: {
+    onRequest(
+      callback: (payload: import("./remoteRendererBridge.js").RemoteRendererRequest) => void
+    ): () => void;
+    sendResponse(payload: import("./remoteRendererBridge.js").RemoteRendererResponse): void;
+  };
   pluginBridge: {
     /**
      * Listen for plugin-sourced action dispatch requests from the main process.

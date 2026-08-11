@@ -208,13 +208,13 @@ export function registerPortalHandlers(deps: HandlerDependencies): () => void {
                 })),
                 ...(links.length > 0 ? [{ type: "separator" as const }] : []),
                 {
-                  label: "Manage Portal Settings...",
+                  label: "Manage Web Settings...",
                   click: () => sendMenuAction(win, "app.settings.openTab", { tab: "portal" }),
                 },
               ],
             },
             {
-              label: "Manage Portal Settings...",
+              label: "Manage Web Settings...",
               click: () => sendMenuAction(win, "app.settings.openTab", { tab: "portal" }),
             },
           ]);

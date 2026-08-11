@@ -205,6 +205,7 @@ describe("buildArgsForBackendTerminal", () => {
     const saved = {
       id: "t1",
       location: "grid",
+      spawnedBy: "remote" as const,
       exitBehavior: undefined,
       agentSessionId: undefined,
       agentLaunchFlags: undefined,
@@ -215,6 +216,7 @@ describe("buildArgsForBackendTerminal", () => {
     expect(result.cwd).toBe("/project");
     expect(result.kind).toBe("terminal");
     expect(result.location).toBe("grid");
+    expect(result.spawnedBy).toBe("remote");
   });
 
   it("falls back to projectRoot when backend cwd is empty", () => {
@@ -525,6 +527,7 @@ describe("buildArgsForRespawn", () => {
       location: "grid",
       agentSessionId: "sess-123",
       agentLaunchFlags: ["--flag"],
+      spawnedBy: "remote" as const,
     };
 
     const result = buildArgsForRespawn(
@@ -540,6 +543,7 @@ describe("buildArgsForRespawn", () => {
     expect(result.launchAgentId).toBe("claude");
     expect(result.requestedId).toBe("t1");
     expect(result.restore).toBe(true);
+    expect(result.spawnedBy).toBe("remote");
   });
 
   it("omits requestedId when reconnect timed out", () => {

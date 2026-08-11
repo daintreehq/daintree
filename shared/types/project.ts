@@ -12,6 +12,7 @@ import type {
   FileBrowserSortDirection,
   FileBrowserSortKey,
   FileBrowserTreeSnapshot,
+  TerminalSpawnSource,
 } from "./panel.js";
 import type { CommandOverride } from "./commands.js";
 import type { GitignoreTemplateId } from "../config/gitignoreTemplates.js";
@@ -258,6 +259,8 @@ export interface PanelSnapshot {
   exitBehavior?: PanelExitBehavior;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
+  /** Origin that created the panel; retained so remote provenance survives restoration. */
+  spawnedBy?: TerminalSpawnSource;
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
   /**

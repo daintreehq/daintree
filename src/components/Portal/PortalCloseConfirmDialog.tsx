@@ -18,24 +18,24 @@ export function buildCopy(pending: PortalPendingCloseSnapshot): DialogCopy {
   switch (pending.kind) {
     case "closeAll":
       return {
-        title: "Close all portal tabs?",
-        description: `Every portal tab closes and its navigation history is discarded. ${count} ${noun} will close.`,
-        confirmLabel: `Close ${count} portal ${noun}`,
+        title: "Close all Web tabs?",
+        description: `Every Web tab closes and its navigation history is discarded. ${count} ${noun} will close.`,
+        confirmLabel: `Close ${count} Web ${noun}`,
       };
     case "closeOthers":
       return {
-        title: "Close other portal tabs?",
+        title: "Close other Web tabs?",
         // The kept tab is the one the user invoked from (right-clicked tab
         // or active tab) — not necessarily the active one — so name neither;
         // the list below shows exactly which tabs close.
-        description: `All other portal tabs close and their navigation history is discarded. ${count} ${noun} will close.`,
-        confirmLabel: `Close ${count} portal ${noun}`,
+        description: `All other Web tabs close and their navigation history is discarded. ${count} ${noun} will close.`,
+        confirmLabel: `Close ${count} Web ${noun}`,
       };
     case "closeToRight":
       return {
         title: "Close tabs to the right?",
-        description: `All portal tabs to the right close and their navigation history is discarded. ${count} ${noun} will close.`,
-        confirmLabel: `Close ${count} portal ${noun}`,
+        description: `All Web tabs to the right close and their navigation history is discarded. ${count} ${noun} will close.`,
+        confirmLabel: `Close ${count} Web ${noun}`,
       };
   }
 }

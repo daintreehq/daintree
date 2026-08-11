@@ -19,9 +19,9 @@ import {
 export function registerPortalActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("portal.toggle", () => ({
     id: "portal.toggle",
-    title: "Toggle Portal",
+    title: "Toggle Web",
     description:
-      "Show or hide the portal browser panel, whichever it currently is not. This changes what the user sees without closing any tab or discarding page state. Because it toggles rather than sets, calling it without knowing the current state can hide a panel the user is using. Opening is suppressed while a dialog or overlay owns the viewport, so the call can do nothing at all.",
+      "Show or hide the Web browser panel, whichever it currently is not. This changes what the user sees without closing any tab or discarding page state. Because it toggles rather than sets, calling it without knowing the current state can hide a panel the user is using. Opening is suppressed while a dialog or overlay owns the viewport, so the call can do nothing at all.",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -34,9 +34,9 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("portal.listTabs", () => ({
     id: "portal.listTabs",
-    title: "List Portal Tabs",
+    title: "List Web Tabs",
     description:
-      "List the tabs currently open in the portal browser, with their addresses and titles. Use this to find a tab to act on. It never fails — an empty list means the portal has no tabs open rather than that it is unavailable.",
+      "List the tabs currently open in Web, with their addresses and titles. Use this to find a tab to act on. It never fails — an empty list means Web has no tabs open rather than that it is unavailable.",
     category: "portal",
     kind: "query",
     danger: "safe",
@@ -62,8 +62,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("portal.links.add", () => ({
     id: "portal.links.add",
-    title: "Add Portal Link",
-    description: "Add a user link to the portal",
+    title: "Add Web Link",
+    description: "Add a user link to Web",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -94,13 +94,13 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("portal.links.remove", () => ({
     id: "portal.links.remove",
-    title: "Remove Portal Link",
-    description: "Remove a portal link by ID",
+    title: "Remove Web Link",
+    description: "Remove a Web link by ID",
     category: "portal",
     kind: "command",
     danger: "confirm",
     scope: "renderer",
-    dangerRationale: "Permanently removes a portal link by ID. The link configuration is lost.",
+    dangerRationale: "Permanently removes a Web link by ID. The link configuration is lost.",
     argsSchema: z.object({ id: z.string() }),
     run: async (args: unknown) => {
       const { id } = args as { id: string };
@@ -110,8 +110,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("portal.links.update", () => ({
     id: "portal.links.update",
-    title: "Update Portal Link",
-    description: "Update a portal link",
+    title: "Update Web Link",
+    description: "Update a Web link",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -134,8 +134,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("portal.links.toggle", () => ({
     id: "portal.links.toggle",
-    title: "Toggle Portal Link",
-    description: "Enable or disable a portal link",
+    title: "Toggle Web Link",
+    description: "Enable or disable a Web link",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -149,8 +149,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("portal.links.reorder", () => ({
     id: "portal.links.reorder",
-    title: "Reorder Portal Links",
-    description: "Reorder portal links by index",
+    title: "Reorder Web Links",
+    description: "Reorder Web links by index",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -164,8 +164,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("portal.tabs.reorder", () => ({
     id: "portal.tabs.reorder",
-    title: "Reorder Portal Tabs",
-    description: "Reorder portal tabs by index",
+    title: "Reorder Web Tabs",
+    description: "Reorder Web tabs by index",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -179,9 +179,9 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("portal.newTab", () => ({
     id: "portal.newTab",
-    title: "New Portal Tab",
+    title: "New Web Tab",
     description:
-      "Open a new tab in the portal browser for the user to work in. It loads the user's configured default address when they have set one, and is blank otherwise. This adds a tab that consumes resources until closed. Open a specific address instead when the destination is already known.",
+      "Open a new tab in Web for the user to work in. It loads the user's configured default address when they have set one, and is blank otherwise. This adds a tab that consumes resources until closed. Open a specific address instead when the destination is already known.",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -210,8 +210,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("portal.openLaunchpad", () => ({
     id: "portal.openLaunchpad",
-    title: "Open Portal Launchpad",
-    description: "Open the portal launchpad (blank tab)",
+    title: "Open Web Launchpad",
+    description: "Open the Web launchpad (blank tab)",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -225,8 +225,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("portal.closeAllTabs", () => ({
     id: "portal.closeAllTabs",
-    title: "Close All Portal Tabs",
-    description: "Close all portal tabs",
+    title: "Close All Web Tabs",
+    description: "Close all Web tabs",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -257,9 +257,9 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("portal.openUrl", () => ({
     id: "portal.openUrl",
-    title: "Open URL in Portal",
+    title: "Open URL in Web",
     description:
-      "Open a web page in a new portal tab, adding to whatever tabs are already open. This creates a tab that consumes resources until closed, so reuse an existing tab when repeatedly visiting the same page. It shows the page to the user rather than returning its contents.",
+      "Open a page in a new Web tab, adding to whatever tabs are already open. This creates a tab that consumes resources until closed, so reuse an existing tab when repeatedly visiting the same page. It shows the page to the user rather than returning its contents.",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -270,7 +270,7 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
       background: z
         .boolean()
         .optional()
-        .describe("If true, create tab without showing portal (default: false)"),
+        .describe("If true, create the tab without showing Web (default: false)"),
     }),
     run: async (args: unknown) => {
       const { url, title, background } = args as {
@@ -330,8 +330,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
     // Per-tab op: duplicates the active portal tab, no-op without one.
     // Portal-toolbar/context-menu affordance, not a global palette command.
     palette: { mode: "hidden" },
-    title: "Duplicate Portal Tab",
-    description: "Duplicate a portal tab",
+    title: "Duplicate Web Tab",
+    description: "Duplicate a Web tab",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -364,8 +364,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("portal.resetWidth", () => ({
     id: "portal.resetWidth",
-    title: "Reset Portal Width",
-    description: "Reset portal width to default",
+    title: "Reset Web Width",
+    description: "Reset Web width to default",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -378,8 +378,8 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("portal.width.set", () => ({
     id: "portal.width.set",
-    title: "Set Portal Width",
-    description: "Set portal width",
+    title: "Set Web Width",
+    description: "Set Web width",
     category: "portal",
     kind: "command",
     danger: "safe",
@@ -409,7 +409,7 @@ export function registerPortalActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("portal.setDefaultNewTab", () => ({
     id: "portal.setDefaultNewTab",
     title: "Set Default New Tab",
-    description: "Set the default new tab for portal",
+    description: "Set the default new tab for Web",
     category: "portal",
     kind: "command",
     danger: "safe",

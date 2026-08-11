@@ -9,6 +9,7 @@ import type {
   FileBrowserTreeSnapshot,
   PanelExitBehavior,
   PanelTitleMode,
+  TerminalSpawnSource,
 } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
@@ -144,6 +145,7 @@ export interface SavedTerminalData {
   browserSortDirection?: unknown;
   exitBehavior?: PanelExitBehavior;
   agentSessionId?: string;
+  spawnedBy?: TerminalSpawnSource;
   agentLaunchFlags?: string[];
   agentModelId?: string;
   agentPresetId?: string;
@@ -367,6 +369,7 @@ export function buildArgsForBackendTerminal(
     devPreviewScrollPosition: isDevPreview ? saved.devPreviewScrollPosition : undefined,
     exitBehavior: saved.exitBehavior,
     agentSessionId: backendTerminal.agentSessionId ?? saved.agentSessionId,
+    spawnedBy: saved.spawnedBy,
     agentLaunchFlags: backendTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
     agentModelId: backendTerminal.agentModelId ?? saved.agentModelId,
     everDetectedAgent: backendTerminal.everDetectedAgent,
@@ -443,6 +446,7 @@ export function buildArgsForReconnectedFallback(
     devPreviewScrollPosition: isDevPreview ? saved.devPreviewScrollPosition : undefined,
     exitBehavior: saved.exitBehavior,
     agentSessionId: reconnectedTerminal.agentSessionId ?? saved.agentSessionId,
+    spawnedBy: saved.spawnedBy,
     agentLaunchFlags: reconnectedTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
     agentModelId: reconnectedTerminal.agentModelId ?? saved.agentModelId,
     everDetectedAgent: reconnectedTerminal.everDetectedAgent,
@@ -731,6 +735,7 @@ export function buildArgsForRespawn(
       ? undefined
       : (reconciledLaunchFlags ?? saved.agentLaunchFlags),
     agentModelId: saved.agentModelId,
+    spawnedBy: saved.spawnedBy,
     agentPresetId: respawnAgentPresetId,
     agentPresetColor: respawnAgentPresetColor,
     originalPresetId: respawnOriginalPresetId,

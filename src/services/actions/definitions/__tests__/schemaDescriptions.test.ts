@@ -77,6 +77,11 @@ describe("shared field descriptions reach the emitted JSON Schema", () => {
     expect(described(TerminalSpawnSourceSchema.default("mcp"))).not.toBe("");
   });
 
+  it("keeps the canonical action schema compatible with remote terminal provenance", () => {
+    expect(TerminalSpawnSourceSchema.safeParse("remote").success).toBe(true);
+    expect(TerminalSpawnSourceSchema.safeParse("portal-client").success).toBe(false);
+  });
+
   it("advertises every enum member it explains", () => {
     // Derived from the emitted schema rather than a copied literal: if a member
     // is added to the enum and left unexplained, the description stops covering

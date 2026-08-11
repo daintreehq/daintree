@@ -66,6 +66,8 @@ import { useE2EBridges } from "./hooks/app/useE2EBridges";
 import { useModalResetKeys } from "./hooks/app/useModalResetKeys";
 import { useAppBootstrap } from "./hooks/app/useAppBootstrap";
 import { usePaletteWiring } from "./hooks/app/usePaletteWiring";
+import { useRemotePanelProjection } from "./hooks/useRemotePanelProjection";
+import { useRemoteRendererBridge } from "./hooks/useRemoteRendererBridge";
 
 import {
   LazyModalHostLayer,
@@ -136,6 +138,7 @@ function AppInner() {
   useMainProcessToastListener();
 
   useMcpBridge();
+  useRemoteRendererBridge();
   useMcpAnomalyStats();
   usePluginBridge();
   usePluginPromptBridge();
@@ -275,6 +278,7 @@ function AppInner() {
     pluginDeepLink,
     gettingStarted,
   } = useAppBootstrap();
+  useRemotePanelProjection(isStateLoaded);
 
   const { emptyContent, workspaceId } = useEmptyCanvasContent(gettingStarted);
 

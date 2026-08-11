@@ -298,7 +298,7 @@ describe("registerPortalHandlers adversarial", () => {
     );
 
     expect(() => {
-      findMenuItem(capturedTemplates[0], "Manage Portal Settings...").click?.();
+      findMenuItem(capturedTemplates[0], "Manage Web Settings...").click?.();
     }).not.toThrow();
     expect(warnSpy).toHaveBeenCalledWith(
       "[PortalHandler] Failed to send portal menu action:",

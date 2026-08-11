@@ -108,6 +108,8 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     getPausedDurationsSnapshot: vi.fn(() => []),
     getDropTallySnapshot: vi.fn(() => []),
     ...overrides,
+    consoleObservationHub:
+      overrides.consoleObservationHub ?? ({} as HostContext["consoleObservationHub"]),
   };
 }
 

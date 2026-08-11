@@ -32,6 +32,7 @@ const BASE_REQUIRED_MARKERS = [
 ];
 const SUCCESS_MARKER = "[SMOKE] Stability soak complete";
 const CHILD_EXIT_GRACE_MS = 5_000;
+const FATAL_OUTPUT_MARKERS = ["[SMOKE] FAILED", "Bootstrap failed:"];
 
 export function buildRequiredMarkers(platform) {
   const markers = [...BASE_REQUIRED_MARKERS];
@@ -236,8 +237,11 @@ export function validateSmokeOutput(runIndex, runCount, result, requiredMarkers)
       `Packaged smoke run ${runIndex}/${runCount} failed with code ${code} (signal ${signal})`
     );
   }
-  if (validationOutput.includes("[SMOKE] FAILED")) {
-    throw new Error(`Packaged smoke run ${runIndex}/${runCount} reported a smoke failure`);
+  const fatalMarker = FATAL_OUTPUT_MARKERS.find((marker) => validationOutput.includes(marker));
+  if (fatalMarker) {
+    throw new Error(
+      `Packaged smoke run ${runIndex}/${runCount} reported fatal output: ${fatalMarker}`
+    );
   }
   for (const marker of requiredMarkers) {
     if (!validationOutput.includes(marker)) {

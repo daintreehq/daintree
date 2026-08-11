@@ -1146,6 +1146,18 @@ export async function initGlobalServices(
     },
   });
 
+  registerDeferredTask({
+    name: "remote-gateway",
+    run: async () => {
+      const { initializeRemoteGateway } = await import("../services/remote/index.js");
+      try {
+        await initializeRemoteGateway(store.get("remoteAccess"), app.getVersion());
+      } catch (err) {
+        console.warn("[MAIN] Remote gateway initialization failed closed:", err);
+      }
+    },
+  });
+
   return "ok";
 }
 

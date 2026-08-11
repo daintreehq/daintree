@@ -182,7 +182,23 @@ describe("validateSmokeOutput", () => {
         { code: 0, signal: null, output, timedOut: false },
         buildRequiredMarkers("linux")
       )
-    ).toThrow(/reported a smoke failure/);
+    ).toThrow(/reported fatal output/);
+  });
+
+  it("throws when renderer bootstrap fails before the success marker", () => {
+    const markers = buildRequiredMarkers("darwin");
+    const output = fullOutputFor("darwin").replace(
+      "[SMOKE] Stability soak complete",
+      "Bootstrap failed: ReferenceError: schema is not defined\n[SMOKE] Stability soak complete"
+    );
+    expect(() =>
+      validateSmokeOutput(
+        1,
+        1,
+        { code: 0, signal: null, output, timedOut: false, completedBySuccessMarker: true },
+        markers
+      )
+    ).toThrow(/Bootstrap failed/);
   });
 
   it("throws when a required marker is missing", () => {

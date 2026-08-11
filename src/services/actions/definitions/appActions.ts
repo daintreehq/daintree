@@ -92,6 +92,21 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     },
   }));
 
+  actions.set("app.remoteAccess.manage", () => ({
+    id: "app.remoteAccess.manage",
+    title: "Manage remote access…",
+    description: "Pair Portal devices and manage private remote access",
+    category: "app",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["portal", "mobile", "pair", "device", "gateway", "lan"],
+    nonRepeatable: true,
+    run: async () => {
+      callbacks.onOpenSettingsTab({ tab: "remote-access" });
+    },
+  }));
+
   actions.set("app.settings.openTab", () => ({
     id: "app.settings.openTab",
     title: "Open Settings Tab",

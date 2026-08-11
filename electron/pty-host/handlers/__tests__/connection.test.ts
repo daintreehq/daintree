@@ -65,6 +65,7 @@ function makeCtx(stateRef: {
     disconnectTerminalWorkerPort: vi.fn(),
     getPausedDurationsSnapshot: vi.fn(() => []),
     getDropTallySnapshot: vi.fn(() => []),
+    consoleObservationHub: {} as HostContext["consoleObservationHub"],
   };
 }
 

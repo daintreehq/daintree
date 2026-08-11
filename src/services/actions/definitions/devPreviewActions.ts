@@ -145,9 +145,9 @@ export function registerDevPreviewActions(
 
   actions.set("devPreview.promoteToPortal", () => ({
     id: "devPreview.promoteToPortal",
-    title: "Open in Portal",
+    title: "Open in Web",
     description:
-      "Open the current dev preview URL in a Portal tab, sharing the same session (cookies, localStorage, IndexedDB). The dev preview stays open; sessionStorage does not carry over.",
+      "Open the current dev preview URL in a Web tab, sharing the same session (cookies, localStorage, IndexedDB). The dev preview stays open; sessionStorage does not carry over.",
     category: "devServer",
     kind: "command",
     danger: "safe",
@@ -157,7 +157,7 @@ export function registerDevPreviewActions(
       mode: "requireContext",
       // resolveTarget() needs a focused dev preview AND ctx.projectId.
       isReady: (ctx) => Boolean(ctx.projectId) && isDevPreviewFocused(),
-      reason: "Focus a dev preview to open it in a Portal",
+      reason: "Focus a dev preview to open it in Web",
     },
     argsSchema,
     run: async (args: unknown, ctx: ActionContext) => {

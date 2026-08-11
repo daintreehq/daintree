@@ -78,6 +78,8 @@ import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
 import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
+import { buildRemotePanelProjectionPreloadBindings } from "./ipc/handlers/remotePanelProjection.preload.js";
+import { buildRemoteAccessPreloadBindings } from "./ipc/handlers/remoteAccess.preload.js";
 import { buildProjectHistoryPreloadBindings } from "./ipc/handlers/projectHistory.preload.js";
 import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRelocation.preload.js";
 import { buildPaintFabricSurfacePreloadBindings } from "./ipc/handlers/paintFabricSurface.preload.js";
@@ -1966,6 +1968,8 @@ function buildElectronApi(): ElectronAPI {
       ) => _typedOn(CHANNELS.FLEET_SNAPSHOT_UPDATED, callback),
     },
 
+    remotePanelProjection: buildRemotePanelProjectionPreloadBindings(_unwrappingInvoke),
+
     // Scratch (one-off agent workspace) API
     scratch: {
       ...buildScratchPreloadBindings(_unwrappingInvoke),
@@ -2029,6 +2033,8 @@ function buildElectronApi(): ElectronAPI {
       onServiceChanged: (callback: (payload: ServiceConnectivityPayload) => void) =>
         _typedOn(CHANNELS.CONNECTIVITY_SERVICE_CHANGED, callback),
     },
+
+    remoteAccess: buildRemoteAccessPreloadBindings(_unwrappingInvoke),
 
     // Dev Preview API
     devPreview: {
@@ -3003,6 +3009,19 @@ function buildElectronApi(): ElectronAPI {
         confirmationDecision?: "approved" | "rejected" | "timeout";
       }) => {
         ipcRenderer.send(CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE, payload);
+      },
+    },
+
+    remoteRendererBridge: {
+      onRequest: (
+        callback: (
+          payload: import("../shared/types/ipc/remoteRendererBridge.js").RemoteRendererRequest
+        ) => void
+      ) => _typedOn(CHANNELS.REMOTE_RENDERER_REQUEST, callback),
+      sendResponse: (
+        payload: import("../shared/types/ipc/remoteRendererBridge.js").RemoteRendererResponse
+      ) => {
+        ipcRenderer.send(CHANNELS.REMOTE_RENDERER_RESPONSE, payload);
       },
     },
 

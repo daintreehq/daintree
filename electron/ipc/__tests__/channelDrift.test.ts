@@ -64,6 +64,9 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   "mcp:dispatch-action-response",
   "mcp:get-manifest-response",
   "plugin:dispatch-action-response",
+  // fire-and-forget — renderer→main reply for the narrow Portal renderer
+  // request channel declared in IpcEventMap.
+  "remote:renderer-response",
   // fire-and-forget — renderer→main `ipcRenderer.send` replies carrying the
   // projected built-in action catalog / single entry (#10561). Paired with the
   // `plugin:actions-list-request` / `plugin:actions-get-request` events declared

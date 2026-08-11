@@ -402,6 +402,12 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
       // Module load errors during teardown are non-fatal (PluginService may
       // never have been loaded if shutdown fired before first-interactive).
     }
+    try {
+      const { disposeRemoteGateway } = await import("../services/remote/index.js");
+      await disposeRemoteGateway();
+    } catch (err) {
+      console.warn("[MAIN] Remote gateway shutdown failed:", err);
+    }
     // Stop the DB maintenance worker BEFORE the audit flushNow() calls
     // below. The drain wait is capped (a wedged worker must not eat the
     // shutdown budget), so it is best-effort — shutdownDbWorker() advances

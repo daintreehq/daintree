@@ -453,6 +453,7 @@ export function cleanupEntry(host: ProjectViewManager, projectId: string): void 
     }
 
     host.webContentsToProject.delete(wcId);
+    host.notifyViewInvalidated(projectId, wcId);
     unregisterProjectView(wcId);
     forgetBlinkSample(wcId);
     forgetEluSample(wcId);

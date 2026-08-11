@@ -13,6 +13,31 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
       ptyManager.submit(msg.id, msg.text);
     },
 
+    "submit-acknowledged": (msg) => {
+      const terminal = ptyManager.getTerminal(msg.id);
+      let reason:
+        "not-found" | "generation-changed" | "not-live" | "trashed" | "write-failed" | undefined;
+      if (!terminal) reason = "not-found";
+      else if (terminal.launchGeneration !== msg.launchGeneration) reason = "generation-changed";
+      else if (ptyManager.isInTrash(msg.id)) reason = "trashed";
+      else if (terminal.wasKilled || terminal.isExited) reason = "not-live";
+      if (!reason) {
+        try {
+          ptyManager.submit(msg.id, msg.text);
+        } catch {
+          reason = "write-failed";
+        }
+      }
+      sendEvent({
+        type: "submit-result",
+        requestId: msg.requestId,
+        id: msg.id,
+        launchGeneration: msg.launchGeneration,
+        accepted: reason === undefined,
+        ...(reason ? { reason } : {}),
+      });
+    },
+
     stage: (msg) => {
       ptyManager.stage(msg.id, msg.text);
     },

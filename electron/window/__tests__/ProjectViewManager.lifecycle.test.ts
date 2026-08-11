@@ -249,6 +249,8 @@ import { logWarn } from "../../utils/logger.js";
 import { registerCachedViewWebContents } from "../webContentsRegistry.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
 import { assertLifecycleInvariants, createPortLedger } from "./helpers/lifecycleInvariants.js";
+import { RemoteProjectViewBroker } from "../../services/remote/RemoteProjectViewBroker.js";
+import { RemoteRendererPanelRegistry } from "../../services/remote/RemoteRendererPanelRegistry.js";
 
 const flushImmediates = () => new Promise<void>((resolve) => setImmediate(resolve));
 const flushMicrotasks = async (n = 10) => {
@@ -890,6 +892,154 @@ describe("ProjectViewManager — lifecycle invariants", () => {
       expect(sharedWcTwo.isDestroyed()).toBe(false);
       assertLifecycleInvariants(setupTwo.manager as never, setupTwo.win as never);
       setupTwo.ledger.assertNoPortsForDeadViews(setupTwo.manager as never);
+    });
+  });
+
+  describe("remote background materialization integration", () => {
+    function createBroker(setup: ManagerSetup, registry: RemoteRendererPanelRegistry) {
+      const context = {
+        windowId: setup.win.id,
+        webContentsId: setup.win.webContents.id,
+        browserWindow: setup.win,
+        projectPath: null,
+        abortController: new AbortController(),
+        services: { projectViewManager: setup.manager },
+        cleanup: { dispose: vi.fn() },
+      };
+      return new RemoteProjectViewBroker(
+        {
+          getProjectById: (projectId) => ({
+            id: projectId,
+            path: `/${projectId}`,
+            name: projectId,
+            emoji: "🌲",
+            status: "background",
+            lastOpened: 1,
+          }),
+        },
+        () => [context as never],
+        registry,
+        100
+      );
+    }
+
+    function publishReady(
+      registry: RemoteRendererPanelRegistry,
+      projectId: string,
+      wc: MockWc
+    ): void {
+      registry.publish({ projectId, status: "available", panels: [] }, wc);
+    }
+
+    it("loads a real detached ProjectViewManager entry and preserves every foreground surface", async () => {
+      const setup = createManager();
+      const registry = new RemoteRendererPanelRegistry();
+      const broker = createBroker(setup, registry);
+      const backgroundWc = createMockWebContents();
+      wcQueue.push(backgroundWc);
+      const activeBefore = setup.manager.getActiveProjectId();
+      const childrenBefore = [...setup.win.contentView.children];
+      const materializing = broker.ensureBackgroundView("proj-background");
+      await flushMicrotasks();
+      publishReady(registry, "proj-background", backgroundWc);
+
+      const lease = await materializing;
+
+      expect(lease).toMatchObject({
+        projectId: "proj-background",
+        webContentsId: backgroundWc.id,
+        generation: 1,
+      });
+      expect(setup.manager.getActiveProjectId()).toBe(activeBefore);
+      expect(setup.win.contentView.children).toEqual(childrenBefore);
+      expect(backgroundWc.focus).not.toHaveBeenCalled();
+      expect(setup.manager.getAllViews()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ projectId: "proj-background", state: "cached" }),
+        ])
+      );
+      assertLifecycleInvariants(setup.manager as never, setup.win as never);
+      lease.release();
+      broker.dispose();
+      setup.manager.dispose();
+    });
+
+    it("revives a pre-evicted renderer and coalesces concurrent real manager loads", async () => {
+      const setup = createManager();
+      const registry = new RemoteRendererPanelRegistry();
+      const broker = createBroker(setup, registry);
+      const oldWc = createMockWebContents();
+      publishReady(registry, "proj-revive", oldWc);
+      oldWc._fire("destroyed");
+      const revivedWc = createMockWebContents();
+      wcQueue.push(revivedWc);
+
+      const first = broker.ensureBackgroundView("proj-revive");
+      const second = broker.ensureBackgroundView("proj-revive");
+      await flushMicrotasks();
+      publishReady(registry, "proj-revive", revivedWc);
+      const [firstLease, secondLease] = await Promise.all([first, second]);
+
+      expect(firstLease.webContentsId).toBe(revivedWc.id);
+      expect(secondLease.webContentsId).toBe(revivedWc.id);
+      expect(firstLease.generation).toBeGreaterThan(1);
+      expect(
+        setup.manager.getAllViews().filter((entry) => entry.projectId === "proj-revive")
+      ).toHaveLength(1);
+      firstLease.release();
+      expect(setup.manager.hasBackgroundViewHold("proj-revive")).toBe(true);
+      secondLease.release();
+      expect(setup.manager.hasBackgroundViewHold("proj-revive")).toBe(false);
+      broker.dispose();
+      setup.manager.dispose();
+    });
+
+    it("rejects a cached renderer crash during readiness and removes the real view", async () => {
+      const setup = createManager();
+      const registry = new RemoteRendererPanelRegistry();
+      const broker = createBroker(setup, registry);
+      const crashingWc = createMockWebContents();
+      wcQueue.push(crashingWc);
+      const materializing = broker.ensureBackgroundView("proj-crash");
+      const rejected = expect(materializing).rejects.toMatchObject({ code: "VIEW_INVALIDATED" });
+      await flushMicrotasks();
+      crashingWc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+      await flushImmediates();
+
+      await rejected;
+      expect(setup.manager.getAllViews().map((entry) => entry.projectId)).not.toContain(
+        "proj-crash"
+      );
+      expect(setup.manager.getActiveProjectId()).toBe("proj-a");
+      assertLifecycleInvariants(setup.manager as never, setup.win as never);
+      broker.dispose();
+      setup.manager.dispose();
+    });
+
+    it("enforces the real cache cap after sequential background lease releases", async () => {
+      const setup = createManager({ cachedProjectViews: 2 });
+      const registry = new RemoteRendererPanelRegistry();
+      const broker = createBroker(setup, registry);
+      for (const projectId of ["proj-bg-1", "proj-bg-2", "proj-bg-3"]) {
+        const wc = createMockWebContents();
+        wcQueue.push(wc);
+        const materializing = broker.ensureBackgroundView(projectId);
+        await flushMicrotasks();
+        publishReady(registry, projectId, wc);
+        const lease = await materializing;
+        lease.release();
+        await flushImmediates();
+        expect(setup.manager.getAllViews().length).toBeLessThanOrEqual(2);
+      }
+
+      expect(setup.manager.getActiveProjectId()).toBe("proj-a");
+      expect(setup.manager.getAllViews().map((entry) => entry.projectId)).toEqual([
+        "proj-a",
+        "proj-bg-3",
+      ]);
+      assertLifecycleInvariants(setup.manager as never, setup.win as never);
+      broker.dispose();
+      setup.manager.dispose();
     });
   });
 

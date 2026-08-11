@@ -93,7 +93,7 @@ describe("ARIA page landmarks — issue #5416", () => {
     });
 
     it("uses an <aside> region landmark with an accessible name", () => {
-      expect(source).toMatch(/<aside[\s\S]*?aria-label="Portal"/);
+      expect(source).toMatch(/<aside[\s\S]*?aria-label="Web"/);
       expect(source).toMatch(/<aside[\s\S]*?role="region"/);
     });
 

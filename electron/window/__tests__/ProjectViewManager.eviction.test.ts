@@ -1329,6 +1329,44 @@ describe("ProjectViewManager — eviction safety", () => {
     expect(vi.mocked(forgetBlinkSample)).toHaveBeenCalledWith(wcA.id);
   });
 
+  it("excludes leased background views from LRU eviction until the final hold releases", async () => {
+    const leasedManager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 2,
+    });
+    const wcA = createMockWebContents();
+    leasedManager.registerInitialView(
+      { webContents: wcA, setBounds: vi.fn() } as never,
+      "proj-a",
+      "/path/a"
+    );
+    await leasedManager.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+    const releaseFirst = leasedManager.acquireBackgroundViewHold("proj-a");
+    const releaseSecond = leasedManager.acquireBackgroundViewHold("proj-a");
+
+    await leasedManager.switchTo("proj-c", "/path/c");
+    await flushImmediates();
+
+    expect(leasedManager.getAllViews().map((entry) => entry.projectId)).toContain("proj-a");
+    expect(leasedManager.getAllViews().map((entry) => entry.projectId)).not.toContain("proj-b");
+    releaseFirst();
+    expect(leasedManager.hasBackgroundViewHold("proj-a")).toBe(true);
+    const immediateSpy = vi.spyOn(globalThis, "setImmediate");
+    releaseSecond();
+    releaseSecond();
+    expect(leasedManager.hasBackgroundViewHold("proj-a")).toBe(false);
+    expect(immediateSpy).toHaveBeenCalledOnce();
+
+    await leasedManager.switchTo("proj-d", "/path/d");
+    await flushImmediates();
+    expect(leasedManager.getAllViews().map((entry) => entry.projectId)).not.toContain("proj-a");
+  });
+
   it("calls forgetEluSample with the evicted webContents id", async () => {
     const managerWithLimit = new ProjectViewManager(win as never, {
       dirname: "/test",

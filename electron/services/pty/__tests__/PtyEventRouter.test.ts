@@ -523,6 +523,30 @@ describe("routeHostEvent", () => {
     expect(brokerCalls).toEqual([{ requestId: "trim-7", result: { trimmed: 3, skipped: 4 } }]);
   });
 
+  it("resolves acknowledged submit results with the host generation and disposition", () => {
+    const { deps, brokerCalls } = makeDeps();
+
+    expect(
+      routeHostEvent(
+        {
+          type: "submit-result",
+          requestId: "submit-1",
+          id: "panel-1",
+          launchGeneration: 4,
+          accepted: false,
+          reason: "generation-changed",
+        },
+        deps
+      )
+    ).toBe(true);
+    expect(brokerCalls).toEqual([
+      {
+        requestId: "submit-1",
+        result: { accepted: false, reason: "generation-changed", launchGeneration: 4 },
+      },
+    ]);
+  });
+
   it("logs and returns false for unknown event types", () => {
     const logWarn = vi.fn();
     const { deps } = makeDeps({ logWarn });

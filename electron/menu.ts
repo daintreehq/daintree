@@ -269,6 +269,11 @@ export function createApplicationMenu(
                   sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
               },
               {
+                label: "Manage Remote Access…",
+                click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) =>
+                  sendAction("app.remoteAccess.manage", getTargetBrowserWindow(browserWindow)),
+              },
+              {
                 label: "Plugin Manager…",
                 click: (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) =>
                   sendAction("app.pluginManager", getTargetBrowserWindow(browserWindow)),
@@ -695,6 +700,11 @@ export function createApplicationMenu(
           accelerator: rendererMenuAccelerator("app.settings"),
           click: (_item, browserWindow) =>
             sendAction("app.settings", getTargetBrowserWindow(browserWindow)),
+        },
+        {
+          label: "Manage Remote Access…",
+          click: (_item, browserWindow) =>
+            sendAction("app.remoteAccess.manage", getTargetBrowserWindow(browserWindow)),
         },
         {
           label: "Plugin Manager…",

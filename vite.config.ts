@@ -1328,9 +1328,8 @@ export default defineConfig(({ command, mode }) => {
             manualPureFunctions: ["console.log", "console.info", "console.warn", "console.debug"],
           },
         }),
-        experimental: {
-          lazyBarrel: true,
-        },
+        // Vite 8.0/Rolldown 1.0 lazyBarrel miswires dependency initializers for
+        // shared schema barrels, producing undefined Zod bindings at runtime.
         output: {
           // The `boot` codeSplitting group merges cross-chunk module sets,
           // which can reorder module evaluation relative to the automatic

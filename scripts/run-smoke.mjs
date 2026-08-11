@@ -40,6 +40,7 @@ const REQUIRED_MARKERS = [
   "[SMOKE] CHECK: Project persistence stress",
   "[SMOKE] Stability soak complete",
 ];
+const FATAL_OUTPUT_MARKERS = ["[SMOKE] FAILED", "Bootstrap failed:"];
 
 function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(value ?? "", 10);
@@ -149,8 +150,9 @@ function validateSmokeOutput(runIndex, runCount, result) {
       `Smoke run ${runIndex}/${runCount} failed with code ${code} (signal ${signal})`
     );
   }
-  if (output.includes("[SMOKE] FAILED")) {
-    throw new Error(`Smoke run ${runIndex}/${runCount} reported a smoke failure`);
+  const fatalMarker = FATAL_OUTPUT_MARKERS.find((marker) => output.includes(marker));
+  if (fatalMarker) {
+    throw new Error(`Smoke run ${runIndex}/${runCount} reported fatal output: ${fatalMarker}`);
   }
   for (const marker of REQUIRED_MARKERS) {
     if (!output.includes(marker)) {

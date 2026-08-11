@@ -5,6 +5,7 @@ import type { PtyPool } from "../../services/PtyPool.js";
 import type { AnalysisWorkerPool } from "../../services/pty/analysis/AnalysisWorkerPool.js";
 import type { ProcessTreeCache } from "../../services/ProcessTreeCache.js";
 import type { TerminalResourceMonitor } from "../../services/pty/TerminalResourceMonitor.js";
+import type { ConsoleObservationHub } from "../../services/pty/ConsoleObservationHub.js";
 import type { PtyHostEvent } from "../../../shared/types/pty-host.js";
 import type { SharedRingBuffer, PacketFramer } from "../../../shared/utils/SharedRingBuffer.js";
 import type {
@@ -56,6 +57,7 @@ export interface HostContext {
   ipcQueueManager: IpcQueueManager;
   resourceGovernor: ResourceGovernor;
   packetFramer: PacketFramer;
+  consoleObservationHub: ConsoleObservationHub;
 
   // Stable Map/Set references — mutated in place
   pauseCoordinators: Map<string, PtyPauseCoordinator>;

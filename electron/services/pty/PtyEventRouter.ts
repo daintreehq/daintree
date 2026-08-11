@@ -230,6 +230,35 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.state ?? null);
       return true;
 
+    case "console-observe-result":
+      broker.resolve(event.requestId, {
+        id: event.id,
+        observerId: event.observerId,
+        launchGeneration: event.launchGeneration,
+        mode: event.mode,
+        reason: event.reason,
+        throughSeq: event.throughSeq,
+        state: event.state,
+        chunks: event.chunks,
+      });
+      return true;
+
+    case "console-output":
+      emitter.emit("console-output", event);
+      return true;
+
+    case "console-invalidated":
+      emitter.emit("console-invalidated", event);
+      return true;
+
+    case "submit-result":
+      broker.resolve(event.requestId, {
+        accepted: event.accepted,
+        reason: event.reason,
+        launchGeneration: event.launchGeneration,
+      });
+      return true;
+
     case "kill-by-project-result":
       broker.resolve(event.requestId, event.killed ?? 0);
       return true;

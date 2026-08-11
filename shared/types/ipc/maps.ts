@@ -1511,6 +1511,9 @@ export interface IpcEventMap {
     callerInfo?: import("./mcpServer.js").McpBearerIdentity;
   };
 
+  /** Narrow Portal bridge request pinned to one project renderer generation. */
+  "remote:renderer-request": import("./remoteRendererBridge.js").RemoteRendererRequest;
+
   /**
    * Plugin-sourced action dispatch request. Main process emits this on the
    * active project WebContents and awaits a renderer `ipcRenderer.send` reply

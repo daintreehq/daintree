@@ -1341,6 +1341,86 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "remote-access:approve-pairing": {
+    args: [
+      __0: {
+        pairingId: string;
+        capabilities: (
+          | "observe-projects"
+          | "launch-agents"
+          | "prompt-agents"
+          | "view-session-history"
+          | "administer-host"
+        )[];
+      },
+    ];
+    result: import("../remote/management.js").RemoteAccessSnapshot;
+  };
+  "remote-access:disconnect-all-devices": {
+    args: [];
+    result: import("../remote/management.js").RemoteAccessSnapshot;
+  };
+  "remote-access:disconnect-device": {
+    args: [__0: { deviceId: string }];
+    result: import("../remote/management.js").RemoteAccessSnapshot;
+  };
+  "remote-access:get-state": {
+    args: [];
+    result: import("../remote/management.js").RemoteAccessSnapshot;
+  };
+  "remote-access:open-pairing-window": {
+    args: [];
+    result: import("../remote/management.js").RemotePairingWindow;
+  };
+  "remote-access:reject-pairing": {
+    args: [__0: { pairingId: string }];
+    result: import("../remote/management.js").RemoteAccessSnapshot;
+  };
+  "remote-access:revoke-device": {
+    args: [__0: { deviceId: string; reason: string }];
+    result: import("../remote/management.js").RemoteAccessSnapshot;
+  };
+  "remote-access:set-device-capabilities": {
+    args: [
+      __0: {
+        deviceId: string;
+        capabilities: (
+          | "observe-projects"
+          | "launch-agents"
+          | "prompt-agents"
+          | "view-session-history"
+          | "administer-host"
+        )[];
+      },
+    ];
+    result: import("../remote/management.js").RemoteAccessSnapshot;
+  };
+  "remote-access:update-config": {
+    args: [patch: import("../remote/management.js").RemoteAccessConfigPatch];
+    result: import("../remote/management.js").RemoteAccessSnapshot;
+  };
+  "remote-panel-projection:publish": {
+    args: [
+      payload: {
+        projectId: string;
+        status: "available" | "loading";
+        panels: {
+          panelId: string;
+          worktreeSourceId: string;
+          agentId: string;
+          displayName: string;
+          title: string;
+          spawnedRemotely: boolean;
+          resumable: boolean;
+          launchGeneration?: number | undefined;
+          placement?: "grid" | "dock" | undefined;
+          spawnedAt?: number | undefined;
+          connectionState?: "live" | "starting" | "restored" | "exited" | undefined;
+        }[];
+      },
+    ];
+    result: void;
+  };
   "run-history:append": {
     args: [input: import("./runHistory.js").RunHistoryAppendInput];
     result: void;

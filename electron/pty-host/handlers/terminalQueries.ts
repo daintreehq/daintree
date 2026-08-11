@@ -121,6 +121,67 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
       })();
     },
 
+    "console-observe": (msg) => {
+      void (async () => {
+        const terminal = ctx.ptyManager.getTerminal(msg.id);
+        if (!terminal || terminal.launchGeneration !== msg.launchGeneration) {
+          ctx.sendEvent({
+            type: "console-observe-result",
+            requestId: msg.requestId,
+            id: msg.id,
+            observerId: msg.observerId,
+            launchGeneration: msg.launchGeneration,
+            mode: "resync",
+            reason: "generation-changed",
+            throughSeq: 0,
+            state: null,
+            chunks: [],
+          });
+          return;
+        }
+        const started = ctx.consoleObservationHub.begin(
+          msg.id,
+          msg.launchGeneration,
+          msg.observerId,
+          msg.afterSeq
+        );
+        const state =
+          started.mode === "snapshot" ? await ctx.ptyManager.getSerializedStateAsync(msg.id) : null;
+        if (started.mode === "snapshot" && state === null) {
+          ctx.consoleObservationHub.end(msg.id, msg.observerId);
+          ctx.sendEvent({
+            type: "console-observe-result",
+            requestId: msg.requestId,
+            id: msg.id,
+            observerId: msg.observerId,
+            launchGeneration: msg.launchGeneration,
+            mode: "resync",
+            reason: "generation-changed",
+            throughSeq: started.throughSeq,
+            state: null,
+            chunks: [],
+          });
+          return;
+        }
+        ctx.sendEvent({
+          type: "console-observe-result",
+          requestId: msg.requestId,
+          id: msg.id,
+          observerId: msg.observerId,
+          launchGeneration: msg.launchGeneration,
+          mode: started.mode,
+          ...(started.mode === "resync" ? { reason: started.reason } : {}),
+          throughSeq: started.throughSeq,
+          state,
+          chunks: started.chunks,
+        });
+      })();
+    },
+
+    "console-unobserve": (msg) => {
+      ctx.consoleObservationHub.end(msg.id, msg.observerId);
+    },
+
     "search-semantic-buffers": (msg) => {
       const matches: SemanticSearchMatch[] = [];
       let regex: RegExp | null = null;

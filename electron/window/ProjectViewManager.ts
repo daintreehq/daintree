@@ -26,6 +26,7 @@ import * as PaintGateController from "./ProjectViewPaintGateController.js";
 import { performSwitch } from "./ProjectViewSwitchController.js";
 import { cleanupEntry } from "./ProjectViewLifecycleController.js";
 import * as EvictionController from "./ProjectViewEvictionController.js";
+import * as BackgroundController from "./ProjectViewBackgroundController.js";
 import { hasActiveAgent, initAgentStateCache } from "./ProjectViewAgentStateCache.js";
 import type { PaintGate, PaintGateOutcome, ViewEntry } from "./ProjectViewManagerTypes.js";
 import type { MemoryPressurePolicy } from "../utils/cachedProjectViews.js";
@@ -223,6 +224,10 @@ export class ProjectViewManager {
   isTerminalLive?: (terminalId: string) => boolean;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
+  private readonly backgroundViewHolds = new Map<string, number>();
+  private readonly viewInvalidatedListeners = new Set<
+    (projectId: string, webContentsId: number) => void
+  >();
   private resizeHandler: (() => void) | null = null;
   evictionTimestamps = new Map<string, number>();
   efficiencyFreezeEnabled = false;
@@ -422,6 +427,93 @@ export class ProjectViewManager {
       () => undefined
     );
     return task;
+  }
+
+  async ensureBackgroundView(
+    projectId: string,
+    projectPath: string,
+    signal?: AbortSignal
+  ): Promise<BackgroundController.BackgroundViewResult> {
+    const task = this.switchChain.then(() =>
+      BackgroundController.ensureBackgroundView(this, projectId, projectPath, signal)
+    );
+    this.switchChain = task.then(
+      () => undefined,
+      () => undefined
+    );
+    return task;
+  }
+
+  acquireBackgroundViewHold(projectId: string): () => void {
+    this.backgroundViewHolds.set(projectId, (this.backgroundViewHolds.get(projectId) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (this.backgroundViewHolds.get(projectId) ?? 1) - 1;
+      if (remaining <= 0) {
+        this.backgroundViewHolds.delete(projectId);
+        setImmediate(() => {
+          if (!this.disposed && !this.win.isDestroyed()) {
+            EvictionController.evictStaleViews(this, "lru");
+          }
+        });
+      } else {
+        this.backgroundViewHolds.set(projectId, remaining);
+      }
+    };
+  }
+
+  hasBackgroundViewHold(projectId: string): boolean {
+    return (this.backgroundViewHolds.get(projectId) ?? 0) > 0;
+  }
+
+  onViewInvalidated(listener: (projectId: string, webContentsId: number) => void): () => void {
+    this.viewInvalidatedListeners.add(listener);
+    return () => this.viewInvalidatedListeners.delete(listener);
+  }
+
+  notifyViewInvalidated(projectId: string, webContentsId: number): void {
+    for (const listener of this.viewInvalidatedListeners) {
+      try {
+        listener(projectId, webContentsId);
+      } catch (error) {
+        console.error("[ProjectViewManager] view invalidation listener threw:", error);
+      }
+    }
+  }
+
+  canMaterializeBackgroundView(projectId: string): boolean {
+    const existing = this.views.get(projectId);
+    if (existing && !existing.view.webContents.isDestroyed()) return true;
+    return this.canCreateBackgroundView();
+  }
+
+  canCreateBackgroundView(): boolean {
+    const availableMb = EvictionController.getAvailableMemoryMb();
+    return !(
+      this.memoryPressurePolicy &&
+      availableMb !== null &&
+      availableMb <= this.memoryPressurePolicy.criticalMb
+    );
+  }
+
+  finalizeBackgroundView(projectId: string, webContentsId: number): boolean {
+    return BackgroundController.finalizeBackgroundView(this, projectId, webContentsId);
+  }
+
+  destroyBackgroundView(projectId: string, webContentsId: number): boolean {
+    const entry = this.views.get(projectId);
+    if (
+      !entry ||
+      this.activeProjectId === projectId ||
+      entry.view.webContents.isDestroyed() ||
+      entry.view.webContents.id !== webContentsId
+    ) {
+      return false;
+    }
+    cleanupEntry(this, projectId);
+    return true;
   }
 
   /**
@@ -958,6 +1050,8 @@ export class ProjectViewManager {
     }
     this.views.clear();
     this.webContentsToProject.clear();
+    this.backgroundViewHolds.clear();
+    this.viewInvalidatedListeners.clear();
     this.evictionTimestamps.clear();
     this.activeProjectId = null;
   }

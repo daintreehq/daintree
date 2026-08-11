@@ -22,7 +22,8 @@ const SETTINGS_CONTEXT_MENU_TABS = [
   { tab: "terminal", label: "Terminal" },
   { tab: "keyboard", label: "Keyboard" },
   { tab: "notifications", label: "Notifications" },
-  { tab: "portal", label: "Portal" },
+  { tab: "remote-access", label: "Remote access" },
+  { tab: "portal", label: "Web" },
 ] as const;
 
 interface ToolbarSettingsButtonProps {

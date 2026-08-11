@@ -1087,13 +1087,13 @@ export function BrowserToolbar({
               type="button"
               onClick={onPromoteToPortal}
               className={buttonClass}
-              aria-label="Open in Portal"
+              aria-label="Open in Web"
               data-testid="browser-promote-portal"
             >
               <PanelRight className="w-4 h-4" />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">Open in Portal</TooltipContent>
+          <TooltipContent side="bottom">Open in Web</TooltipContent>
         </Tooltip>
       )}
 

@@ -41,6 +41,8 @@ import type {
   ActionUsageEntry,
 } from "../shared/types/ipc/app.js";
 import type { HelpAssistantTier } from "../shared/types/ipc/maps.js";
+import type { RemoteGatewayConfig } from "../shared/types/remote/index.js";
+import { DEFAULT_REMOTE_GATEWAY_CONFIG } from "../shared/types/remote/index.js";
 
 interface WindowStateEntry {
   x?: number;
@@ -89,6 +91,7 @@ export interface StoreSchema {
     enabled: boolean;
     inactiveThresholdHours: number;
   };
+  remoteAccess: RemoteGatewayConfig;
   idleTerminalNotify: {
     enabled: boolean;
     thresholdMinutes: number;
@@ -549,6 +552,7 @@ const storeOptions = {
       enabled: false,
       inactiveThresholdHours: 24,
     },
+    remoteAccess: DEFAULT_REMOTE_GATEWAY_CONFIG,
     idleTerminalNotify: {
       enabled: true,
       thresholdMinutes: 60,

@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, real, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, index, primaryKey } from "drizzle-orm/sqlite-core";
 
 export const projects = sqliteTable(
   "projects",
@@ -76,8 +76,95 @@ export const scratches = sqliteTable("scratches", {
   lastCompletionSeenAt: integer("last_completion_seen_at"),
 });
 
+export const remoteHostIdentities = sqliteTable("remote_host_identities", {
+  id: text("id").primaryKey(),
+  schemaVersion: integer("schema_version").notNull(),
+  hostId: text("host_id").notNull().unique(),
+  publicKey: text("public_key").notNull(),
+  fingerprint: text("fingerprint").notNull(),
+  encryptedPrivateKey: text("encrypted_private_key").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const remoteDevices = sqliteTable(
+  "remote_devices",
+  {
+    id: text("id").primaryKey(),
+    schemaVersion: integer("schema_version").notNull(),
+    hostId: text("host_id").notNull(),
+    displayName: text("display_name").notNull(),
+    platform: text("platform").notNull(),
+    publicKey: text("public_key").notNull(),
+    capabilities: text("capabilities").notNull(),
+    createdAt: integer("created_at").notNull(),
+    lastSeenAt: integer("last_seen_at"),
+    revokedAt: integer("revoked_at"),
+    revocationReason: text("revocation_reason"),
+  },
+  (table) => [index("remote_devices_host_revoked_idx").on(table.hostId, table.revokedAt)]
+);
+
+export const remoteTlsIdentities = sqliteTable("remote_tls_identities", {
+  hostId: text("host_id").primaryKey(),
+  schemaVersion: integer("schema_version").notNull(),
+  certificate: text("certificate").notNull(),
+  certificateFingerprint: text("certificate_fingerprint").notNull(),
+  encryptedPrivateKey: text("encrypted_private_key").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const remoteMutationLedger = sqliteTable(
+  "remote_mutation_ledger",
+  {
+    deviceId: text("device_id").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    operationType: text("operation_type").notNull(),
+    argumentDigest: text("argument_digest").notNull(),
+    outcome: text("outcome").notNull(),
+    resultCode: text("result_code"),
+    createdResourceId: text("created_resource_id"),
+    createdAt: integer("created_at").notNull(),
+    committedAt: integer("committed_at"),
+    expiresAt: integer("expires_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.deviceId, table.idempotencyKey] }),
+    index("remote_mutation_expiry_created_idx").on(table.expiresAt, table.createdAt),
+  ]
+);
+
+export const remoteAuditEvents = sqliteTable(
+  "remote_audit_events",
+  {
+    id: text("id").primaryKey(),
+    actorDeviceId: text("actor_device_id"),
+    sessionId: text("session_id"),
+    operation: text("operation").notNull(),
+    result: text("result").notNull(),
+    targetProjectId: text("target_project_id"),
+    targetWorktreeId: text("target_worktree_id"),
+    targetPanelId: text("target_panel_id"),
+    characterCount: integer("character_count"),
+    byteCount: integer("byte_count"),
+    contentDigest: text("content_digest"),
+    occurredAt: integer("occurred_at").notNull(),
+  },
+  (table) => [index("remote_audit_occurred_idx").on(table.occurredAt)]
+);
+
 export type ProjectRow = typeof projects.$inferSelect;
 export type ProjectInsertRow = typeof projects.$inferInsert;
 
 export type ScratchRow = typeof scratches.$inferSelect;
 export type ScratchInsertRow = typeof scratches.$inferInsert;
+
+export type RemoteHostIdentityRow = typeof remoteHostIdentities.$inferSelect;
+export type RemoteHostIdentityInsertRow = typeof remoteHostIdentities.$inferInsert;
+export type RemoteDeviceRow = typeof remoteDevices.$inferSelect;
+export type RemoteDeviceInsertRow = typeof remoteDevices.$inferInsert;
+export type RemoteTlsIdentityRow = typeof remoteTlsIdentities.$inferSelect;
+export type RemoteTlsIdentityInsertRow = typeof remoteTlsIdentities.$inferInsert;
+export type RemoteMutationLedgerRow = typeof remoteMutationLedger.$inferSelect;
+export type RemoteMutationLedgerInsertRow = typeof remoteMutationLedger.$inferInsert;
+export type RemoteAuditEventRow = typeof remoteAuditEvents.$inferSelect;
+export type RemoteAuditEventInsertRow = typeof remoteAuditEvents.$inferInsert;

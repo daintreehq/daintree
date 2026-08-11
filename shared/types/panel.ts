@@ -173,7 +173,7 @@ export type PersistableFlowStatus = Exclude<TerminalFlowStatus, "data-loss" | Fu
 export type TerminalRuntimeStatus = PersistableFlowStatus | "background" | "exited" | "error";
 
 /** Origin that spawned a terminal */
-export type TerminalSpawnSource = "quickrun" | "recipe" | "agent" | "palette" | "mcp";
+export type TerminalSpawnSource = "quickrun" | "recipe" | "agent" | "palette" | "mcp" | "remote";
 
 /** Focus policy for newly-created panels — orthogonal to provenance. */
 export type AddPanelFocusPolicy = "auto" | "preserve" | "take";

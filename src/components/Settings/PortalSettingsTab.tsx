@@ -217,7 +217,7 @@ export function PortalSettingsTab() {
             value={editName}
             onChange={(e) => setEditName(e.target.value)}
             className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text w-32 focus:border-daintree-accent/40 focus:outline-hidden"
-            placeholder="e.g. My portal"
+            placeholder="e.g. Research"
             aria-label="Edit link name"
           />
           <input
@@ -285,7 +285,7 @@ export function PortalSettingsTab() {
               )
             }
             disabled={link.alwaysEnabled}
-            aria-label={`Toggle ${link.title || "portal link"}`}
+            aria-label={`Toggle ${link.title || "Web link"}`}
           />
           {allowDelete && (
             <button
@@ -309,7 +309,7 @@ export function PortalSettingsTab() {
         isOpen={pendingRemoveId !== null}
         variant="destructive"
         title={`Remove '${pendingRemoveLink?.title || "this link"}'?`}
-        description="This removes the link from your portal tab bar. You can add it back later."
+        description="This removes the link from your Web tab bar. You can add it back later."
         confirmLabel="Remove link"
         onConfirm={() => {
           if (pendingRemoveId !== null) {
@@ -406,7 +406,7 @@ export function PortalSettingsTab() {
       <SettingsSection
         icon={Link}
         title="Default links"
-        description="Built-in agent and service links. Toggle visibility in the portal tab bar."
+        description="Built-in agent and service links. Toggle visibility in the Web tab bar."
       >
         <div className="space-y-2">{systemLinks.map((link) => renderLinkRow(link, false))}</div>
       </SettingsSection>
@@ -422,7 +422,7 @@ export function PortalSettingsTab() {
           <div className="flex gap-2">
             <input
               type="text"
-              placeholder="e.g. My portal"
+              placeholder="e.g. Research"
               value={newLinkName}
               onChange={(e) => {
                 setNewLinkName(e.target.value);

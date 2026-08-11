@@ -17,6 +17,7 @@ import {
   LifeBuoy,
   Bell,
   KeyRound,
+  RadioTower,
   Shield,
 } from "lucide-react";
 import { DaintreeIcon, FolderGit2, Plug, McpServerIcon, Workflow } from "@/components/icons";
@@ -104,6 +105,7 @@ const importTroubleshootingTab = () => import("./TroubleshootingTab");
 const importCodeForgeSettingsTab = () => import("./CodeForgeSettingsTab");
 const importNotificationSettingsTab = () => import("./NotificationSettingsTab");
 const importPortalSettingsTab = () => import("./PortalSettingsTab");
+const importRemoteAccessSettingsTab = () => import("./RemoteAccessSettingsTab");
 const importKeyboardShortcutsTab = () => import("./KeyboardShortcutsTab");
 const importWorktreeSettingsTab = () => import("./WorktreeSettingsTab");
 const importToolbarSettingsTab = () => import("./ToolbarSettingsTab");
@@ -144,6 +146,9 @@ const LazyNotificationSettingsTab = lazy(() =>
 );
 const LazyPortalSettingsTab = lazy(() =>
   importPortalSettingsTab().then((m) => ({ default: m.PortalSettingsTab }))
+);
+const LazyRemoteAccessSettingsTab = lazy(() =>
+  importRemoteAccessSettingsTab().then((m) => ({ default: m.RemoteAccessSettingsTab }))
 );
 const LazyKeyboardShortcutsTab = lazy(() =>
   importKeyboardShortcutsTab().then((m) => ({ default: m.KeyboardShortcutsTab }))
@@ -998,7 +1003,7 @@ export const SETTINGS_REGISTRY = [
         section: "Global agent settings",
         title: "Default agent",
         description:
-          'Agent used for the help dock button (⌘⇧H) and automated workflows ("What\'s Next?", onboarding, project explanations). Distinct from the Portal "Default new tab agent".',
+          'Agent used for the help dock button (⌘⇧H) and automated workflows ("What\'s Next?", onboarding, project explanations). Distinct from the Web "Default new tab agent".',
         keywords: [
           "default",
           "agent",
@@ -1310,37 +1315,80 @@ export const SETTINGS_REGISTRY = [
   } satisfies LazySettingsTabEntry,
 
   {
+    id: "remote-access",
+    scope: "global",
+    group: "Integrations",
+    label: "Remote access",
+    icon: <RadioTower className="w-4 h-4" />,
+    importKind: "lazy",
+    importer: importRemoteAccessSettingsTab,
+    LazyComponent: LazyRemoteAccessSettingsTab,
+    searchNavDescription: "Pair Portal devices and manage private remote access",
+    searchNavKeywords: ["remote", "portal", "mobile", "pair", "device", "gateway", "lan"],
+    sections: [
+      {
+        id: "remote-access-gateway",
+        section: "Remote access",
+        title: "Enable Remote access",
+        description: "Start the private authenticated Portal gateway",
+        keywords: ["enable", "disable", "gateway", "host", "interface", "lan"],
+      },
+      {
+        id: "remote-access-pairing",
+        section: "Pairing",
+        title: "Pair a device",
+        description: "Open a time-limited QR pairing window",
+        keywords: ["pair", "qr", "phone", "tablet", "code"],
+      },
+      {
+        id: "remote-access-devices",
+        section: "Devices",
+        title: "Paired devices",
+        description: "Review capabilities, activity, disconnect, or revoke a device",
+        keywords: ["device", "capability", "grant", "last seen", "revoke", "disconnect"],
+      },
+      {
+        id: "remote-access-activity",
+        section: "Activity",
+        title: "Remote activity",
+        description: "Inspect recent security and operation audit metadata",
+        keywords: ["activity", "audit", "event", "security", "history"],
+      },
+    ],
+  } satisfies LazySettingsTabEntry,
+
+  {
     id: "portal",
     scope: "global",
     group: "Integrations",
-    label: "Portal",
-    headerTitle: "Portal Links",
+    label: "Web",
+    headerTitle: "Web links",
     icon: <PanelRight className="w-4 h-4" />,
     importKind: "lazy",
     importer: importPortalSettingsTab,
     LazyComponent: LazyPortalSettingsTab,
-    searchNavDescription: "Default and custom links for the portal browser panel",
-    searchNavKeywords: ["integrations", "portal", "links", "browser", "bookmarks"],
+    searchNavDescription: "Default and custom links for the Web browser panel",
+    searchNavKeywords: ["integrations", "web", "portal", "links", "browser", "bookmarks"],
     sections: [
       {
         id: "portal-default-agent",
         section: "Default new tab agent",
         title: "Default new tab agent",
-        description: "Choose which agent opens when you click the + button in the portal",
+        description: "Choose which agent opens when you click the + button in Web",
         keywords: ["portal", "agent", "default", "new tab", "browser"],
       },
       {
         id: "portal-default-links",
         section: "Default links",
         title: "Default links",
-        description: "System-provided links shown in the portal panel",
+        description: "System-provided links shown in the Web panel",
         keywords: ["portal", "links", "default", "browser", "bookmarks"],
       },
       {
         id: "portal-custom-links",
         section: "Custom links",
         title: "Custom links",
-        description: "Add custom URLs and links to the portal panel",
+        description: "Add custom URLs and links to the Web panel",
         keywords: ["portal", "custom", "links", "url", "add", "bookmark"],
       },
     ],
@@ -1920,6 +1968,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   agents: <Plug className="w-5 h-5 text-text-secondary" />,
   assistant: <DaintreeIcon className="w-5 h-5 text-text-secondary" size={20} />,
   "code-forge": <GitBranch className="w-5 h-5 text-text-secondary" />,
+  "remote-access": <RadioTower className="w-5 h-5 text-text-secondary" />,
   portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
   toolbar: <SettingsIcon className="w-5 h-5 text-text-secondary" />,
   notifications: <Bell className="w-5 h-5 text-text-secondary" />,

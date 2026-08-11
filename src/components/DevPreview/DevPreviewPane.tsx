@@ -872,7 +872,7 @@ export function DevPreviewPane({
         {promoteToPortalError && (
           <InlineStatusBanner
             icon={OctagonAlert}
-            title="Couldn't open in Portal"
+            title="Couldn't open in Web"
             description={promoteToPortalError}
             severity="error"
             action={{
@@ -882,10 +882,10 @@ export function DevPreviewPane({
               variant: "dangerFilled",
               loading: isPromotingToPortal,
               onClick: () => void handlePromoteToPortal(),
-              ariaLabel: "Retry opening in Portal",
+              ariaLabel: "Retry opening in Web",
             }}
             onClose={clearPromoteToPortalError}
-            closeAriaLabel="Dismiss Portal error"
+            closeAriaLabel="Dismiss Web error"
           />
         )}
 

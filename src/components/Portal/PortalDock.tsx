@@ -465,7 +465,7 @@ export function PortalDock() {
         <aside
           ref={dockRef}
           role="region"
-          aria-label="Portal"
+          aria-label="Web"
           data-macro-focus={isMacroFocused ? "true" : undefined}
           className={cn(
             "flex flex-col h-full bg-daintree-bg relative portal-dock outline-hidden",
@@ -478,7 +478,7 @@ export function PortalDock() {
         >
           <div
             role="separator"
-            aria-label="Resize portal panel"
+            aria-label="Resize Web panel"
             aria-orientation="vertical"
             aria-controls="portal-placeholder"
             aria-valuenow={Math.round(width)}
@@ -598,7 +598,7 @@ export function PortalDock() {
         </ContextMenuSub>
         <ContextMenuSeparator />
         <ContextMenuActionItem actionId="app.settings.openTab" args={{ tab: "portal" }}>
-          Portal Settings...
+          Web settings…
         </ContextMenuActionItem>
       </ContextMenuContent>
     </ContextMenu>

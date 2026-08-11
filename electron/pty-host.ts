@@ -48,6 +48,7 @@ import { PtyPool, getPtyPool, shouldEnablePtyPool } from "./services/PtyPool.js"
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
 import { ImagePathProbe } from "./services/pty/ImagePathProbe.js";
 import { TerminalResourceMonitor } from "./services/pty/TerminalResourceMonitor.js";
+import { ConsoleObservationHub } from "./services/pty/ConsoleObservationHub.js";
 import { events } from "./services/events.js";
 import { SharedRingBuffer, PacketFramer } from "../shared/utils/SharedRingBuffer.js";
 import { selectShard } from "../shared/utils/shardSelection.js";
@@ -132,6 +133,30 @@ process.on("unhandledRejection", (reason) => {
 });
 
 const ptyManager = new PtyManager();
+const consoleObservationHub = new ConsoleObservationHub(
+  (terminalId, launchGeneration, observerId, event) => {
+    if (event.type === "output") {
+      sendEvent({
+        type: "console-output",
+        id: terminalId,
+        observerId,
+        launchGeneration,
+        seq: event.seq,
+        data: event.data,
+        encoding: event.encoding,
+        bytes: event.bytes,
+      });
+      return;
+    }
+    sendEvent({
+      type: "console-invalidated",
+      id: terminalId,
+      observerId,
+      launchGeneration,
+      reason: event.reason,
+    });
+  }
+);
 
 // Idle heap compaction for this (main) isolate: terminal output churns
 // transient strings through node-pty, forensics slicing, and port batching on
@@ -850,6 +875,9 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   // Terminal output always updates headless state; visual streaming can be suspended under backpressure.
   const isSuspended = backpressureManager.isSuspended(id);
   const terminalInfo = ptyManager.getTerminal(id);
+  if (terminalInfo?.launchGeneration !== undefined) {
+    consoleObservationHub.onData(id, terminalInfo.launchGeneration, data);
+  }
 
   // Every chunk mutates the headless buffer regardless of routing — bump the
   // epoch unconditionally so a suppressed/suspended/dropped chunk invalidates
@@ -1236,6 +1264,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
 ptyManager.on(
   "exit",
   (id: string, exitCode: number, signal?: number, launchGeneration?: number) => {
+    consoleObservationHub.removeTerminal(id, "generation-changed");
     // Release all pause holds and remove coordinator for this terminal
     const coordinator = pauseCoordinators.get(id);
     if (coordinator) {
@@ -1572,6 +1601,7 @@ const pluginPtyManager = new PluginPtyProcessManager(sendEvent);
 
 const hostContext: HostContext = {
   ptyManager,
+  consoleObservationHub,
   pluginPtyManager,
   processTreeCache,
   terminalResourceMonitor,
@@ -1657,6 +1687,7 @@ port.on("message", async (rawMsg: any) => {
 
 function cleanup(): void {
   console.log("[PtyHost] Disposing resources...");
+  consoleObservationHub.clear("host-restarted");
 
   // Disconnect all renderer windows
   for (const windowId of Array.from(rendererConnections.keys())) {

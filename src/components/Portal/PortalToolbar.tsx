@@ -352,7 +352,7 @@ export function PortalToolbar({
             <TooltipTrigger asChild>
               <button
                 onClick={onClose}
-                aria-label="Close portal"
+                aria-label="Close Web"
                 aria-keyshortcuts={closePortalAriaShortcut}
                 className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-daintree-text transition-colors ml-1"
               >
@@ -360,7 +360,7 @@ export function PortalToolbar({
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {createTooltipContent("Close portal", closePortalShortcut)}
+              {createTooltipContent("Close Web", closePortalShortcut)}
             </TooltipContent>
           </Tooltip>
         </div>

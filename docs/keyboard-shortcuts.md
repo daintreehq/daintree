@@ -144,19 +144,9 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Open diagnostics dock to Problems tab | `⌃+⇧+M` | `Ctrl+Shift+M` |
 | Toggle diagnostics dock | `⌃+⇧+J` | `Ctrl+Shift+J` |
 | Toggle notification inbox | `⌘+⇧+N` | `Ctrl+Shift+N` |
-| Toggle portal panel | `⌘+\` | `Ctrl+\` |
+| Toggle Web panel | `⌘+\` | `Ctrl+\` |
 | Open focused panel context menu | `⇧+F10` | `Shift+F10` |
 | Open focused panel context menu | `ContextMenu` | `ContextMenu` |
-
-## Portal
-
-| Action | macOS | Windows/Linux |
-| --- | --- | --- |
-| Close active portal tab | `⌘+W` | `Ctrl+W` |
-| Next portal tab | `⌃+Tab` | `Ctrl+Tab` |
-| Previous portal tab | `⌃+⇧+Tab` | `Ctrl+Shift+Tab` |
-| New portal tab | `⌘+T` | `Ctrl+T` |
-| Close active portal tab | — | `Ctrl+F4` (Windows only) |
 
 ## Dev Preview
 
@@ -231,6 +221,16 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | --- | --- | --- |
 | Open a new window | `⌘+⇧+⌥+N` | `Ctrl+Shift+Alt+N` |
 | Open settings | `⌘+,` | `Ctrl+,` |
+
+## Web
+
+| Action | macOS | Windows/Linux |
+| --- | --- | --- |
+| Close active Web tab | `⌘+W` | `Ctrl+W` |
+| Next Web tab | `⌃+Tab` | `Ctrl+Tab` |
+| Previous Web tab | `⌃+⇧+Tab` | `Ctrl+Shift+Tab` |
+| New Web tab | `⌘+T` | `Ctrl+T` |
+| Close active Web tab | — | `Ctrl+F4` (Windows only) |
 
 ## Fixed keys
 

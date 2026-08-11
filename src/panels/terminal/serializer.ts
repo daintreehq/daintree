@@ -15,6 +15,7 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
     command: t.command?.trim() || undefined,
     ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
     ...(t.agentSessionId && { agentSessionId: t.agentSessionId }),
+    ...(t.spawnedBy && { spawnedBy: t.spawnedBy }),
     ...(t.agentLaunchFlags?.length && { agentLaunchFlags: t.agentLaunchFlags }),
     ...(env && { env }),
     ...(t.agentModelId && { agentModelId: t.agentModelId }),

@@ -230,6 +230,7 @@ export function evictStaleViews(
     .filter(
       ([id]) =>
         id !== host.activeProjectId &&
+        !host.hasBackgroundViewHold(id) &&
         id !== gateOutgoingProjectId &&
         id !== switchOutgoingProjectId
     )

@@ -115,7 +115,8 @@ export function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteIt
   const title =
     typeof entry.title === "string" && entry.title.trim().length > 0 ? entry.title : entry.id;
   const description = typeof entry.description === "string" ? entry.description : "";
-  const category = typeof entry.category === "string" ? entry.category : "General";
+  const rawCategory = typeof entry.category === "string" ? entry.category : "General";
+  const category = rawCategory === "portal" ? "Web" : rawCategory;
   // A `requireContext` palette action surfaces as disabled-with-reason: fold
   // its palette-only flags into the row's enabled/disabledReason so the
   // existing disabled-row UX (grayed, inline reason, Enter no-ops) applies

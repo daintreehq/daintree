@@ -643,6 +643,20 @@ export const CHANNELS = {
   MCP_SERVER_DISPATCH_ACTION_REQUEST: "mcp:dispatch-action-request",
   /** Bridge: renderer returns the action dispatch result to the main process. */
   MCP_SERVER_DISPATCH_ACTION_RESPONSE: "mcp:dispatch-action-response",
+  /** Narrow main → project renderer Portal request. */
+  REMOTE_RENDERER_REQUEST: "remote:renderer-request",
+  /** Correlated project renderer → main Portal response. */
+  REMOTE_RENDERER_RESPONSE: "remote:renderer-response",
+  REMOTE_PANEL_PROJECTION_PUBLISH: "remote-panel-projection:publish",
+  REMOTE_ACCESS_GET_STATE: "remote-access:get-state",
+  REMOTE_ACCESS_UPDATE_CONFIG: "remote-access:update-config",
+  REMOTE_ACCESS_OPEN_PAIRING_WINDOW: "remote-access:open-pairing-window",
+  REMOTE_ACCESS_APPROVE_PAIRING: "remote-access:approve-pairing",
+  REMOTE_ACCESS_REJECT_PAIRING: "remote-access:reject-pairing",
+  REMOTE_ACCESS_SET_DEVICE_CAPABILITIES: "remote-access:set-device-capabilities",
+  REMOTE_ACCESS_DISCONNECT_DEVICE: "remote-access:disconnect-device",
+  REMOTE_ACCESS_DISCONNECT_ALL_DEVICES: "remote-access:disconnect-all-devices",
+  REMOTE_ACCESS_REVOKE_DEVICE: "remote-access:revoke-device",
   /**
    * Push channel: a tool call from a help-session was denied because the
    * session tier doesn't permit it. Targeted at the pinned WebContents — the
