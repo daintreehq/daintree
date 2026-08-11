@@ -10,6 +10,11 @@ import {
 } from "../../shared/config/voiceCorrection.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
+import {
+  createTimeoutSignal,
+  withTimeoutSignal,
+  type DisposableTimeoutSignal,
+} from "../../shared/utils/timeoutSignal.js";
 
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
@@ -282,6 +287,7 @@ export class VoiceCorrectionService {
     if (!trimmed) return [];
     if (!FILE_LINK_TRIGGER_RE.test(trimmed)) return [];
 
+    const deadline = this.buildFetchSignal(FILE_LINK_DETECTION_TIMEOUT_MS);
     try {
       const response = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
@@ -289,7 +295,7 @@ export class VoiceCorrectionService {
           "Content-Type": "application/json",
           ...buildOpenAIHeaders(settings.apiKey, settings.organizationId, settings.projectId),
         },
-        signal: this.buildFetchSignal(FILE_LINK_DETECTION_TIMEOUT_MS),
+        signal: deadline.signal,
         body: JSON.stringify({
           model: VOICE_DICTATION_AI_MODEL,
           instructions: FILE_LINK_DETECTION_PROMPT,
@@ -352,14 +358,20 @@ export class VoiceCorrectionService {
       const msg = formatErrorMessage(error, "Voice file link detection failed");
       logWarn(`${P} File link detection failed`, { error: msg });
       return [];
+    } finally {
+      deadline.dispose();
     }
   }
 
-  private buildFetchSignal(timeoutMs: number): AbortSignal {
-    if (this.sessionSignal) {
-      return AbortSignal.any([this.sessionSignal, AbortSignal.timeout(timeoutMs)]);
-    }
-    return AbortSignal.timeout(timeoutMs);
+  /**
+   * Deadline guard for one API round-trip. Returns a disposable handle rather
+   * than a bare signal so the timer dies with the request: a 15s paragraph
+   * budget used to stay armed for the full 15s after a 300ms response came
+   * back, holding the signal and its fetch listeners alive for nothing.
+   * Callers must `dispose()` once the response body has been consumed.
+   */
+  private buildFetchSignal(timeoutMs: number): DisposableTimeoutSignal {
+    return createTimeoutSignal(timeoutMs, this.sessionSignal);
   }
 
   private getCorrectionTimeoutMs(request: VoiceCorrectionRequest): number {
@@ -397,8 +409,7 @@ export class VoiceCorrectionService {
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings
   ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
-    const { model, apiKey, customDictionary, customInstructions, projectName, projectPath } =
-      settings;
+    const { model, customDictionary, customInstructions, projectName, projectPath } = settings;
 
     const context: CorrectionPromptContext = {
       projectName,
@@ -415,13 +426,29 @@ export class VoiceCorrectionService {
       segmentCount: request.segmentCount ?? 0,
     });
 
+    return await withTimeoutSignal(
+      this.getCorrectionTimeoutMs(request),
+      (signal) =>
+        this.requestCorrection(request, settings, model, systemPrompt, userMessage, signal),
+      this.sessionSignal
+    );
+  }
+
+  private async requestCorrection(
+    request: VoiceCorrectionRequest,
+    settings: VoiceCorrectionSettings,
+    model: string,
+    systemPrompt: string,
+    userMessage: string,
+    signal: AbortSignal
+  ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...buildOpenAIHeaders(apiKey, settings.organizationId, settings.projectId),
+        ...buildOpenAIHeaders(settings.apiKey, settings.organizationId, settings.projectId),
       },
-      signal: this.buildFetchSignal(this.getCorrectionTimeoutMs(request)),
+      signal,
       body: JSON.stringify({
         model,
         // Pass the system prompt as the first developer message in the `input`

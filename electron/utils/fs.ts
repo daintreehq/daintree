@@ -1,6 +1,12 @@
 // eager-import-allow: wraps the sync fs primitives used across the main process
 import { dirname } from "path";
-import { access, chmod as fsChmod, open, unlink as fsUnlink } from "fs/promises";
+import {
+  access,
+  chmod as fsChmod,
+  constants as fsConstants,
+  open,
+  unlink as fsUnlink,
+} from "fs/promises";
 import { chmodSync, closeSync, fsyncSync, openSync, unlinkSync, writeFileSync } from "fs";
 import stubbornFs from "stubborn-fs";
 
@@ -10,6 +16,32 @@ import stubbornFs from "stubborn-fs";
 const RETRY_TIMEOUT_MS = 10_000;
 // Sync retries spin-block the event loop; keep the budget short
 const RETRY_TIMEOUT_SYNC_MS = 500;
+
+/**
+ * stubborn-fs treats EACCES/EPERM as retriable because on Windows those codes
+ * stand in for transient lock contention (AV scanners, the search indexer). On
+ * POSIX they mean the permission bits genuinely deny the write, which no amount
+ * of waiting fixes — so the full budget is spent hammering the syscall in a
+ * near-busy loop before surfacing an error the caller had to handle anyway.
+ *
+ * Probe the destination directory first. When it is plainly not writable, hand
+ * stubborn-fs a zero budget so it takes exactly one attempt and rethrows the
+ * authentic errno immediately. Transient codes (EMFILE/ENFILE/EAGAIN/EBUSY)
+ * keep the full budget, and Windows is left entirely alone.
+ */
+async function writeRetryBudgetFor(filePath: string): Promise<number> {
+  if (process.platform === "win32") return RETRY_TIMEOUT_MS;
+  try {
+    await access(dirname(filePath), fsConstants.W_OK);
+    return RETRY_TIMEOUT_MS;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    // Only a definitive "permission denied" short-circuits. ENOENT and friends
+    // fall through to the normal path so callers that create the directory as
+    // part of the write still get the retry budget.
+    return code === "EACCES" || code === "EPERM" ? 0 : RETRY_TIMEOUT_MS;
+  }
+}
 
 /**
  * Rename with retry for transient file-locking errors (EPERM/EBUSY/EACCES).
@@ -40,7 +72,8 @@ export async function resilientDirectWriteFile(
   data: string,
   encoding: BufferEncoding = "utf-8"
 ): Promise<void> {
-  await stubbornFs.retry.writeFile({ timeout: RETRY_TIMEOUT_MS })(filePath, data, encoding);
+  const retryTimeout = await writeRetryBudgetFor(filePath);
+  await stubbornFs.retry.writeFile({ timeout: retryTimeout })(filePath, data, encoding);
 }
 
 function generateTempPath(filePath: string): string {
@@ -121,8 +154,9 @@ export async function resilientAtomicWriteFile(
   const writeOptions = (
     applyMode ? { ...baseWriteOptions, mode: options!.mode } : baseWriteOptions
   ) as Parameters<typeof writeFileSync>[2];
+  const retryTimeout = await writeRetryBudgetFor(filePath);
   try {
-    await stubbornFs.retry.writeFile({ timeout: RETRY_TIMEOUT_MS })(tempPath, data, writeOptions);
+    await stubbornFs.retry.writeFile({ timeout: retryTimeout })(tempPath, data, writeOptions);
     // Re-assert after write: writeFile's mode only applies on creation and is
     // masked by umask, so chmod guarantees exact bits even if the temp existed.
     if (applyMode) {

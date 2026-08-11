@@ -25,13 +25,19 @@ export function nextFrame(): Promise<void> {
   if (typeof requestAnimationFrame !== "function") return Promise.resolve();
   return new Promise((resolve) => {
     let settled = false;
+    let fallback: ReturnType<typeof setTimeout> | undefined;
     const done = (): void => {
       if (settled) return;
       settled = true;
+      // Release the loser. In the normal foreground case the real frame wins in
+      // ~16ms and this fallback would otherwise stay armed for the remaining
+      // ~234ms holding the promise closure — once per frame, and a reveal burns
+      // up to MAX_REVEAL_FRAMES of them per terminal.
+      if (fallback !== undefined) clearTimeout(fallback);
       resolve();
     };
     requestAnimationFrame(done);
-    if (typeof setTimeout === "function") setTimeout(done, NEXT_FRAME_FALLBACK_MS);
+    if (typeof setTimeout === "function") fallback = setTimeout(done, NEXT_FRAME_FALLBACK_MS);
   });
 }
 

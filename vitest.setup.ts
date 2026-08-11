@@ -8,7 +8,6 @@ import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import { markIpcSecurityReady } from "./electron/ipc/ipcGuard.js";
-import { primeRadix } from "./src/components/ui/radix-loader";
 
 markIpcSecurityReady();
 
@@ -30,7 +29,18 @@ process.env.DAINTREE_USER_DATA = path.join(os.tmpdir(), `daintree-vitest-userdat
 // dynamic-import the Radix primitive chunk on demand. Prime the loader once
 // at setup so the module-level cache is populated and wrappers render Radix
 // content synchronously throughout the suite.
-await primeRadix();
+//
+// Only in DOM environments, and via a dynamic import so the loader module (and
+// through it React) never enters a node-environment worker's graph.
+// `radix-deferred` pulls in five @radix-ui packages and their react-dom
+// dependency graph, and setup files re-run per test file under the isolated
+// forks pool — so priming it in the node-environment suites (the majority, and
+// none of which can render a Radix primitive at all) paid that import on every
+// one of them for nothing.
+if (typeof document !== "undefined") {
+  const { primeRadix } = await import("./src/components/ui/radix-loader");
+  await primeRadix();
+}
 
 // jsdom does not implement Trusted Types. The renderer policy module
 // (`src/lib/trustedTypesPolicy.ts`) throws at import time if
