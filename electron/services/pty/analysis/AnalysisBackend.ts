@@ -41,6 +41,19 @@ export interface AnalysisBackend {
   feedPrelude(data: string): void;
   /** Headless resize + monitor resize suppression + temperature reset. */
   resize(cols: number, rows: number): void;
+  /**
+   * Re-assert the mirror's grid without any of `resize`'s side effects
+   * (#11719).
+   *
+   * Called when the PTY is ALREADY at the requested size, so there is no
+   * reflow to suppress and no temperature event to record — only a mirror that
+   * may have drifted and can otherwise never re-converge, because every later
+   * re-assertion short-circuits on the same PTY-dims check. Implementations
+   * must no-op when the mirror is already at this grid: it runs on routine
+   * re-assertions, and firing `notifyResize()` here would repeatedly blind
+   * agent detection for 500ms at a time.
+   */
+  resyncGeometry(cols: number, rows: number): void;
 
   notifyInput(data: string): void;
   notifyFocus(): void;

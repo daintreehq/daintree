@@ -345,6 +345,7 @@ describe("getProjectRowStatus", () => {
 
     expect(status.text).toMatch(/^Opened /);
     expect(status.tone).toBe("muted");
+    expect(status.isDormantFallback).toBe(true);
   });
 
   it("names the next step for a never-opened project instead of echoing its path", () => {
@@ -366,6 +367,57 @@ describe("getProjectRowStatus", () => {
       getProjectRowStatus(project({ displayPath: "payments/api", waitingAgentCount: 1 }), NOW)
         .pathHint
     ).toBe("payments/api");
+  });
+
+  // The flag decides whether a row keeps its second line at all, so what it
+  // must NOT catch matters more than what it does. "Agent finished" and
+  // "Suspended to free memory" are muted too — a tone check would take them
+  // down with the timestamps, which is the bug this field exists to avoid.
+  it("flags only the opened-time fallback, never the other muted states", () => {
+    const dormant = [
+      project({ lastOpened: NOW - 2 * 3600_000 }),
+      project({ lastOpened: 0 }),
+      // Closed, but swept by nothing — no auto-park marker, so it falls all the
+      // way through to the fallback.
+      project({ status: "closed", lastOpened: NOW - 2 * 3600_000 }),
+    ];
+    for (const row of dormant) {
+      expect(getProjectRowStatus(row, NOW).isDormantFallback).toBe(true);
+    }
+
+    const reportable = [
+      project({ status: "closed", autoParkedAt: NOW - 1000, lastOpened: NOW - 5000 }),
+      project({ completedAgentCount: 1, latestCompletionAt: NOW - 2 * 3600_000 }),
+      project({ isMissing: true }),
+      project({ waitingAgentCount: 1 }),
+      project({ activeAgentCount: 1 }),
+      project({ processCount: 1 }),
+    ];
+    for (const row of reportable) {
+      const status = getProjectRowStatus(row, NOW);
+      expect(status.isDormantFallback).toBeUndefined();
+      // Guards the pairing the switcher relies on: anything unflagged still has
+      // a sentence to print, so hiding the flagged ones can't blank a row.
+      expect(status.text.length).toBeGreaterThan(0);
+    }
+
+    // Two of the reportable rows are muted. If that stopped being true the test
+    // above would pass while proving nothing.
+    expect(getProjectRowStatus(reportable[0]!, NOW).tone).toBe("muted");
+    expect(getProjectRowStatus(reportable[1]!, NOW).tone).toBe("muted");
+  });
+
+  // The hint disambiguates two projects sharing a folder name, so it is part of
+  // the row's identity rather than its status — it has to survive the flag that
+  // takes the status line away.
+  it("keeps the path hint on a dormant project", () => {
+    const status = getProjectRowStatus(
+      project({ displayPath: "payments/api", lastOpened: NOW - 2 * 3600_000 }),
+      NOW
+    );
+
+    expect(status.isDormantFallback).toBe(true);
+    expect(status.pathHint).toBe("payments/api");
   });
 });
 
@@ -400,6 +452,10 @@ describe("getScratchRowStatus", () => {
 
     expect(scratchStatus.text).toBe(projectStatus.text);
     expect(scratchStatus.tone).toBe(projectStatus.tone);
+    // Shared core, shared verdict on whether the line is worth showing — a
+    // scratch and a project holding the same activity must not disagree about
+    // which of them gets a second line.
+    expect(scratchStatus.isDormantFallback).toBe(projectStatus.isDormantFallback);
   });
 
   it("falls back to the opened time when nothing is running", () => {
@@ -407,10 +463,14 @@ describe("getScratchRowStatus", () => {
 
     expect(status.text).toMatch(/^Opened /);
     expect(status.tone).toBe("muted");
+    expect(status.isDormantFallback).toBe(true);
   });
 
   it("names the never-opened state rather than showing a bare age", () => {
-    expect(getScratchRowStatus(scratch({ lastOpened: 0 }), NOW).text).toBe("Not opened yet");
+    const status = getScratchRowStatus(scratch({ lastOpened: 0 }), NOW);
+
+    expect(status.text).toBe("Not opened yet");
+    expect(status.isDormantFallback).toBe(true);
   });
 
   // A scratch path is a UUID under the app's own directory, so a fragment of

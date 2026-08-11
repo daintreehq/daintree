@@ -102,6 +102,9 @@ import type {
   MemoryRollup,
   GracefulKillResult,
   PtyHostWorkerGovernanceSnapshot,
+  TrimStateResult,
+  TrimStateScope,
+  TrimStateSummary,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
@@ -124,6 +127,9 @@ interface TerminalInfoResponse {
   titleMode?: PanelTitleMode;
   cwd: string;
   worktreeId?: string;
+  /** Live PTY grid, read off the node-pty handle when the query was served. */
+  ptyCols?: number;
+  ptyRows?: number;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
@@ -2312,11 +2318,52 @@ export class PtyClient extends EventEmitter {
     return promise.catch(() => false);
   }
 
-  /** Request every shard to trim scrollback on all terminals to reduce memory */
-  trimState(targetLines: number): void {
-    for (const shard of this.shards.values()) {
-      shard.send({ type: "trim-state", targetLines });
+  /**
+   * Ask the shards to trim terminal scrollback. `scope` decides who is fair
+   * game: `idle-only` spares terminals with a live agent, `all` exempts
+   * nothing and is only for the post-pause emergency (#11674).
+   *
+   * Resolves with the summed counts rather than void because the trim's effect
+   * is invisible to a footprint re-sample: it drops JS references, and nothing
+   * returns to the OS inside any settle window main can afford to wait. The
+   * counts are the only account of what it did — a record of the shrink each
+   * host applied and dispatched, not of a worker confirming it landed.
+   *
+   * `shardsTotal` counts every live shard, not just the ones that could be
+   * reached — a shard still booting or mid-restart is counted as failed rather
+   * than quietly dropped from the denominator, so an incomplete fan-out can
+   * never read as "nothing was eligible".
+   */
+  async trimState(targetLines: number, scope: TrimStateScope): Promise<TrimStateSummary> {
+    const liveShards = [...this.shards.values()].filter((shard) => !shard.retired);
+    const reachable = new Set(this.fanOutShards());
+    const results = await Promise.all(
+      liveShards.map((shard) =>
+        reachable.has(shard)
+          ? sendPtyHostRpc<TrimStateResult>(shard, "trim-state", (requestId) => ({
+              type: "trim-state",
+              targetLines,
+              requestId,
+              scope,
+            })).catch(() => null)
+          : Promise.resolve(null)
+      )
+    );
+    const summary: TrimStateSummary = {
+      trimmed: 0,
+      skipped: 0,
+      shardsTotal: liveShards.length,
+      shardsFailed: 0,
+    };
+    for (const result of results) {
+      if (!result) {
+        summary.shardsFailed++;
+        continue;
+      }
+      summary.trimmed += result.trimmed;
+      summary.skipped += result.skipped;
     }
+    return summary;
   }
 
   /** Suppress or resume terminal session persistence across all shards */

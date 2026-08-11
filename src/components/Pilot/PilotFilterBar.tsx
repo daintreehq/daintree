@@ -22,11 +22,9 @@ const NEUTRAL_TONE_FADED = "text-text-secondary/40";
  * the faded variant is spelled out rather than derived — the same constraint
  * `QuickStateFilterBar` documents.
  *
- * `working` has no demand tone at all because its rows have none: colour is
- * spent only where there is something to act on, and a hued Working segment
- * would put back one of the competing signals this surface exists to remove.
- * The other two carry the hue of the demand they can reveal, and only while
- * they are actually holding one — see `bandFilterHasDemand`.
+ * `working` is hued unconditionally — see `segmentIsHued`. The other two carry
+ * the hue of the demand they can reveal, and only while they are actually
+ * holding one; see `bandFilterHasDemand`.
  */
 const SEGMENT_TONE: Record<
   Exclude<PilotBandFilter, "all">,
@@ -39,15 +37,32 @@ const SEGMENT_TONE: Record<
   },
   working: {
     Icon: BAND_GLYPH.running,
-    tone: NEUTRAL_TONE,
-    toneFaded: NEUTRAL_TONE_FADED,
+    tone: "text-state-working",
+    toneFaded: "text-state-working/40",
   },
   finished: {
     Icon: BAND_GLYPH.review,
-    tone: "text-activity-completed",
-    toneFaded: "text-activity-completed/40",
+    tone: "text-category-blue",
+    toneFaded: "text-category-blue/40",
   },
 };
+
+/**
+ * Whether a segment gets its configured hue or falls back to neutral.
+ *
+ * `working` is exempt from the demand test rather than failing it. A working
+ * agent is genuinely not a demand — `bandFilterHasDemand` is right to report
+ * false for `running` — but green for working is the vocabulary the sidebar,
+ * the assistant header and the panel chrome already speak, and the segment has
+ * to match the row glyphs it filters to. Every other segment earns its hue only
+ * while it actually holds something to act on.
+ */
+function segmentIsHued(
+  bands: Readonly<FleetBandCounts>,
+  segment: Exclude<PilotBandFilter, "all">
+): boolean {
+  return segment === "working" || bandFilterHasDemand(bands, segment);
+}
 
 const SEGMENTS: readonly PilotBandFilter[] = ["all", ...PILOT_BAND_FILTERS];
 
@@ -86,7 +101,7 @@ export interface PilotFilterBarProps {
  * `aria-activedescendant`; Tab hands real focus to this bar, and from that
  * moment the input's virtual focus is simply inert rather than contradicted.
  * Arrow keys are bound HERE and nowhere else — `usePaletteTreeNavigation` owns
- * Home/End/←/→ as structural keys, but only while focus is physically in the
+ * Home/End as structural keys, but only while focus is physically in the
  * input, so the two never contend.
  *
  * Selection follows focus, per the radiogroup pattern: the filter is instant
@@ -167,14 +182,11 @@ export function PilotFilterBar({
         const label = PILOT_BAND_FILTER_LABEL[segment];
         const Icon = visual?.Icon;
         const isSpinning = segment === "working" && count > 0;
-        // Hued only while the segment actually holds a demand; otherwise it
-        // falls back to neutral like the rows it would reveal.
-        const tone = bandFilterHasDemand(bands, segment) ? visual?.tone : NEUTRAL_TONE;
+        const isHued = segment !== "all" && segmentIsHued(bands, segment);
+        const tone = isHued ? visual?.tone : NEUTRAL_TONE;
         // An empty bucket keeps its glyph and its "0" but mutes the glyph, so
         // the zero registers without having to be read.
-        const fadedTone = bandFilterHasDemand(bands, segment)
-          ? visual?.toneFaded
-          : NEUTRAL_TONE_FADED;
+        const fadedTone = isHued ? visual?.toneFaded : NEUTRAL_TONE_FADED;
 
         return (
           <button

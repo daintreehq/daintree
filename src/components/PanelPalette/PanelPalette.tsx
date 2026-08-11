@@ -138,7 +138,7 @@ export function PanelPalette({
           <PanelKindIcon iconId={kind.iconId} color={kind.color} size={16} />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-daintree-text">
+          <div className="text-sm font-medium text-daintree-text truncate">
             <HighlightedText
               text={kind.name}
               indices={findMatchIndices(matchesById.get(kind.id), "name")}
@@ -193,7 +193,7 @@ export function PanelPalette({
       : undefined;
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Panel palette">
+    <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Panel palette" tier="anchored">
       <AppPaletteDialog.Header
         label={showCounter ? `New Panel (${panelCount} / ${hardLimit})` : "New Panel"}
         shortcut={panelPaletteShortcut}
@@ -242,10 +242,6 @@ export function PanelPalette({
             keys: ["↵"],
             label: selectedKind ? `to create ${selectedKind.name.toLowerCase()}` : "to create",
           }}
-          hints={[
-            { keys: ["↑", "↓"], label: "navigate" },
-            { keys: ["Esc"], label: "close" },
-          ]}
         />
       </AppPaletteDialog.Footer>
     </AppPaletteDialog>

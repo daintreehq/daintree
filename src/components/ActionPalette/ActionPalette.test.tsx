@@ -56,8 +56,12 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
 }));
 
 import { ActionPalette } from "./ActionPalette";
-import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
+import type {
+  ActionPaletteItem as ActionPaletteItemType,
+  UseActionPaletteReturn,
+} from "@/hooks/useActionPalette";
 import { usePaletteStore } from "@/store/paletteStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
 
 function makeItem(id: string, title: string): ActionPaletteItemType {
   return {
@@ -87,7 +91,7 @@ const baseProps = {
   totalResults: 0,
   selectedIndex: 0,
   isStale: false,
-  pinnedCount: 0,
+  sections: [] as UseActionPaletteReturn["sections"],
   close: noop,
   setQuery: noop,
   setSelectedIndex: noop,
@@ -141,10 +145,15 @@ describe("ActionPalette", () => {
   beforeEach(() => {
     lastSearchablePaletteProps.current = null;
     usePaletteStore.setState({ activePaletteId: "action" });
+    // Real store, not a mock: the prefix hint's whole behaviour is that a
+    // render writes state a later render reads, so a non-reactive fixture would
+    // only ever prove the selector was called.
+    usePreferencesStore.setState({ hasSeenActionPalettePrefixHint: false });
   });
 
   afterEach(() => {
     usePaletteStore.setState({ activePaletteId: null });
+    usePreferencesStore.setState({ hasSeenActionPalettePrefixHint: false });
   });
 
   it("does not render the empty message when a typed query has zero matches", () => {
@@ -152,7 +161,9 @@ describe("ActionPalette", () => {
     expect(screen.queryByText("No actions yet")).toBeNull();
   });
 
-  it("shows the empty message when no MRU exists and no query is typed", () => {
+  it("shows the empty message when the registry exposes no eligible actions", () => {
+    // No longer the empty-MRU state — that now browses the whole inventory.
+    // This is the defensive case where there is genuinely nothing to list.
     render(<ActionPalette {...baseProps} />);
     expect(screen.getByText("No actions yet")).toBeTruthy();
   });
@@ -170,13 +181,32 @@ describe("ActionPalette", () => {
     expect(lastSearchablePaletteProps.current?.isFiltering).toBe(true);
   });
 
-  it("passes a renderBody callback when on the empty-query rail with results", () => {
+  it("passes a renderBody callback when the hook supplies sections", () => {
     render(
       <ActionPalette
         {...baseProps}
         query=""
         results={[makeItem("a.action", "Alpha")]}
         totalResults={1}
+        sections={[{ id: "category:general", label: "General", start: 0, count: 1 }]}
+      />
+    );
+
+    expect(typeof lastSearchablePaletteProps.current?.renderBody).toBe("function");
+  });
+
+  it("keeps the sectioned body while a typed query's results are still catching up", () => {
+    // Filtering lags the input, so the browse rows and their sections are both
+    // still on screen for a frame after the first keystroke. Gating on `query`
+    // would strip the headers off rows that still need them.
+    render(
+      <ActionPalette
+        {...baseProps}
+        query="al"
+        results={[makeItem("a.action", "Alpha")]}
+        totalResults={1}
+        sections={[{ id: "category:general", label: "General", start: 0, count: 1 }]}
+        isStale
       />
     );
 
@@ -335,6 +365,9 @@ describe("ActionPalette", () => {
   });
 
   describe("prefix discoverability footer", () => {
+    const prefixRow = () => screen.queryByLabelText("Prefix shortcuts");
+    const seen = () => usePreferencesStore.getState().hasSeenActionPalettePrefixHint;
+
     it("renders the prefix table in the default empty-query footer", () => {
       render(<ActionPalette {...baseProps} />);
       // One chip per prefix — labels are lowercased for mid-sentence rendering.
@@ -354,41 +387,147 @@ describe("ActionPalette", () => {
           totalResults={1}
         />
       );
-      expect(screen.queryByText("worktrees")).toBeNull();
+      expect(prefixRow()).toBeNull();
     });
 
     it("hides the prefix table while a mode chip is active", () => {
       render(<ActionPalette {...baseProps} />);
       // Sanity: prefix row visible before any prefix is typed.
-      expect(screen.getByText("worktrees")).toBeTruthy();
+      expect(prefixRow()).toBeTruthy();
       fireKey(">");
       // Activating commands mode replaces the row with the mode-scoped hint.
-      expect(screen.queryByText("worktrees")).toBeNull();
+      expect(prefixRow()).toBeNull();
+    });
+
+    it("keeps the row for the whole opening when a query is typed and cleared", () => {
+      const { rerender } = render(<ActionPalette {...baseProps} />);
+      rerender(<ActionPalette {...baseProps} query="al" />);
+      expect(prefixRow()).toBeNull();
+      // Typing is not what spends the hint — only closing the palette is, so
+      // clearing the buffer inside the same opening brings the row back.
+      rerender(<ActionPalette {...baseProps} query="" />);
+      expect(prefixRow()).toBeTruthy();
+      expect(seen()).toBe(false);
+    });
+
+    it("retires the row once the opening that showed it closes", () => {
+      const { rerender } = render(<ActionPalette {...baseProps} />);
+      expect(prefixRow()).toBeTruthy();
+
+      rerender(<ActionPalette {...baseProps} isOpen={false} />);
+      expect(seen()).toBe(true);
+
+      rerender(<ActionPalette {...baseProps} isOpen />);
+      expect(prefixRow()).toBeNull();
+    });
+
+    it("suppresses the row for a user who has already seen it", () => {
+      usePreferencesStore.setState({ hasSeenActionPalettePrefixHint: true });
+      render(<ActionPalette {...baseProps} />);
+      expect(prefixRow()).toBeNull();
+    });
+
+    it("does not spend the hint on an opening that never showed the row", () => {
+      // Opened straight into a query — the row never rendered, so closing has
+      // nothing to consume and the next empty open still teaches. The closed
+      // render drops the query because production `close()` resets it: the
+      // palette then satisfies the row's query/mode predicate while invisible,
+      // which is exactly the state that must not bank an exposure.
+      const { rerender } = render(<ActionPalette {...baseProps} query="al" />);
+      rerender(<ActionPalette {...baseProps} query="" isOpen={false} />);
+      expect(seen()).toBe(false);
+    });
+
+    it("does not spend the hint while sitting closed between openings", () => {
+      // `useKeepMounted` keeps this component mounted after its first open, so
+      // it goes on rendering with an empty query and no mode — the row's own
+      // conditions — long after the palette is off screen.
+      usePreferencesStore.setState({ hasSeenActionPalettePrefixHint: false });
+      const { rerender } = render(<ActionPalette {...baseProps} isOpen={false} />);
+      rerender(<ActionPalette {...baseProps} isOpen={false} />);
+      expect(seen()).toBe(false);
+    });
+
+    it("keeps the scope-exit hint but not the close convention in commands mode", () => {
+      render(<ActionPalette {...baseProps} />);
+      fireKey(">");
+      expect(screen.getByText("exit scope")).toBeTruthy();
+      expect(screen.queryByText("close")).toBeNull();
     });
   });
 
   describe("section header listbox separators", () => {
-    it("renders section headers as aria-disabled options so AT announces them", () => {
+    const THREE_SECTIONS = [
+      { id: "favorites", label: "Favorites", start: 0, count: 1 },
+      { id: "recently-used", label: "Recently used", start: 1, count: 1 },
+      { id: "category:worktree", label: "Worktrees", start: 2, count: 2 },
+    ];
+    const FOUR_ROWS = [
+      makeItem("pinned.alpha", "Alpha"),
+      makeItem("recent.beta", "Beta"),
+      makeItem("browse.gamma", "Gamma"),
+      makeItem("browse.delta", "Delta"),
+    ];
+
+    function renderSectionedBody(props: Partial<typeof baseProps> = {}) {
       render(
         <ActionPalette
           {...baseProps}
-          pinnedCount={1}
-          results={[makeItem("pinned.alpha", "Alpha"), makeItem("recent.beta", "Beta")]}
-          totalResults={2}
+          results={FOUR_ROWS}
+          totalResults={FOUR_ROWS.length}
+          sections={THREE_SECTIONS}
+          {...props}
         />
       );
       const renderBody = lastSearchablePaletteProps.current?.renderBody as
         (() => React.ReactNode) | undefined;
       expect(typeof renderBody).toBe("function");
-      const { container } = render(<>{renderBody!()}</>);
+      return render(<>{renderBody!()}</>).container;
+    }
 
-      const favorites = container.querySelector('[aria-label="Favorites"]');
-      const recent = container.querySelector('[aria-label="Recently used"]');
-      expect(favorites?.getAttribute("role")).toBe("option");
-      expect(favorites?.getAttribute("aria-disabled")).toBe("true");
-      expect(favorites?.getAttribute("aria-selected")).toBe("false");
-      expect(recent?.getAttribute("role")).toBe("option");
-      expect(recent?.getAttribute("aria-disabled")).toBe("true");
+    it("renders every section header as an aria-disabled option so AT announces them", () => {
+      const container = renderSectionedBody();
+
+      for (const { label } of THREE_SECTIONS) {
+        const header = container.querySelector(`[aria-label="${label}"]`);
+        expect(header?.getAttribute("role")).toBe("option");
+        expect(header?.getAttribute("aria-disabled")).toBe("true");
+        expect(header?.getAttribute("aria-selected")).toBe("false");
+      }
+    });
+
+    it("never nests a role=group inside the listbox", () => {
+      // role="group" inside role="listbox" drops its label under Chromium +
+      // VoiceOver, which is why the headers masquerade as inert options.
+      const container = renderSectionedBody();
+      expect(container.querySelectorAll('[role="group"]').length).toBe(0);
+    });
+
+    it("keeps headers out of the navigable rows", () => {
+      const container = renderSectionedBody();
+      const navigable = container.querySelectorAll('[role="option"]:not([aria-disabled="true"])');
+      // Arrow keys walk `results`; the three dividers must not join them.
+      expect(navigable.length).toBe(FOUR_ROWS.length);
+    });
+
+    it("indexes rows against the flat result list, not each section's slice", () => {
+      // The last row is selected, so the highlight must follow its global index
+      // rather than its offset within the final section.
+      const container = renderSectionedBody({ selectedIndex: FOUR_ROWS.length - 1 });
+      const selected = container.querySelectorAll('[aria-selected="true"]');
+      expect(selected.length).toBe(1);
+      expect(selected[0]?.getAttribute("id")).toBe(`action-option-${FOUR_ROWS[3]!.id}`);
+    });
+
+    it("offers the hide control only on Recently used rows", () => {
+      const container = renderSectionedBody();
+      const hideButtons = container.querySelectorAll('[data-testid="action-palette-hide"]');
+      // "Hide from Recently used" against a category row would promise an
+      // eviction that rail can't perform.
+      expect(hideButtons.length).toBe(1);
+      // The control is presentational inside `role="option"` now, so it carries
+      // no name of its own — identify it by the row it belongs to instead.
+      expect(hideButtons[0]?.closest('[role="option"]')?.textContent).toContain("Beta");
     });
   });
 });

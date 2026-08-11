@@ -169,7 +169,7 @@ function PluginTrayRow({
       data-testid={`plugin-tray-row-${config.id}`}
     >
       <span className="mr-2 inline-flex h-4 w-4 items-center justify-center">
-        <Icon className="h-3.5 w-3.5 text-text-muted" />
+        <Icon className="h-3.5 w-3.5 text-text-secondary" />
       </span>
 
       <span className="flex-1">{config.label}</span>
@@ -214,7 +214,7 @@ function PluginTrayRow({
  * contribution claimed its own top-level slot and all of them rendered the
  * same generic glyph.
  *
- * Mirrors `AgentTrayButton`'s structure deliberately: same controlled
+ * Mirrors `DockLaunchButton`'s structure deliberately: same controlled
  * Dropdown + ContextMenu + Tooltip nesting, same focus-restoration
  * suppression, and the same hover-reveal pin affordance — here promoting a
  * contribution to its own top-level button instead of pinning an agent.
@@ -232,7 +232,7 @@ export function PluginTrayButton({
 
   const [open, setOpen] = useState(false);
   const [tooltipOpen, setTooltipOpen] = useState(false);
-  // Mirrors AgentTrayButton: Radix reopens the Tooltip whenever the trigger
+  // Mirrors DockLaunchButton: Radix reopens the Tooltip whenever the trigger
   // regains focus, including the programmatic restore from onCloseAutoFocus
   // and from a dialog opened via a menu item closing much later. Hold the
   // suppression until the next genuine pointer hover (see #5153).
@@ -355,7 +355,7 @@ export function PluginTrayButton({
 
         <DropdownMenuSeparator />
         <DropdownMenuActionItem actionId="app.pluginManager" className="h-7">
-          <Package className="mr-2 h-3.5 w-3.5 text-text-muted" />
+          <Package className="mr-2 h-3.5 w-3.5 text-text-secondary" />
           Manage plugins
         </DropdownMenuActionItem>
         <DropdownMenuActionItem
@@ -363,7 +363,7 @@ export function PluginTrayButton({
           args={{ tab: "toolbar" }}
           className="h-7"
         >
-          <Settings2 className="mr-2 h-3.5 w-3.5 text-text-muted" />
+          <Settings2 className="mr-2 h-3.5 w-3.5 text-text-secondary" />
           {TOOLBAR_CUSTOMIZE_LABEL}
         </DropdownMenuActionItem>
       </DropdownMenuContent>

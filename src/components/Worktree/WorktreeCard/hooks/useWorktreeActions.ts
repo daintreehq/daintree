@@ -31,7 +31,6 @@ export interface UseWorktreeActionsResult {
   closeConfirmDialog: () => void;
 
   handlePathClick: () => void;
-  handleCopyTree: () => Promise<void>;
 
   handleRunRecipe: (recipeId: string) => Promise<void>;
 
@@ -48,11 +47,9 @@ export interface UseWorktreeActionsResult {
 
 export function useWorktreeActions({
   worktree,
-  onCopyTree,
   teardownCommands,
 }: {
   worktree: WorktreeState;
-  onCopyTree: () => Promise<string | undefined> | void;
   teardownCommands: string[];
 }): UseWorktreeActionsResult {
   const runRecipeWithResults = useRecipeStore((state) => state.runRecipeWithResults);
@@ -251,10 +248,6 @@ export function useWorktreeActions({
     });
   }, [worktree.id, worktree.issueTitle, worktree.branch, worktree.name, teardownCommands, source]);
 
-  const handleCopyTree = useCallback(async () => {
-    await onCopyTree();
-  }, [onCopyTree]);
-
   return {
     runningRecipeId,
     confirmDialog,
@@ -262,7 +255,6 @@ export function useWorktreeActions({
     setShowDeleteDialog,
     closeConfirmDialog,
     handlePathClick,
-    handleCopyTree,
     handleRunRecipe,
     handleDockAll,
     handleMaximizeAll,

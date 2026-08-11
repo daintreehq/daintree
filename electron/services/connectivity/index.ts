@@ -3,24 +3,11 @@ import { broadcastToRenderer } from "../../ipc/utils.js";
 import { getForgeProviderImpl, onForgeProviderRegistryChanged } from "../forgeProviderRegistry.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../shared/utils/forgeProviderIds.js";
 import type { ForgeTokenHealthState, HealthEventsCapability } from "../../../shared/types/forge.js";
-import { agentConnectivityService } from "./AgentConnectivityService.js";
 import {
   ServiceConnectivityRegistry,
   type ServiceConnectivityRegistryOptions,
 } from "./ServiceConnectivityRegistry.js";
 import type { MainProcessToastPayload } from "../../../shared/types/ipc/maps.js";
-
-export {
-  agentConnectivityService,
-  AgentConnectivityServiceImpl,
-  AGENT_CONNECTIVITY_INTERVAL_MS,
-  AGENT_CONNECTIVITY_FOCUS_COOLDOWN_MS,
-  AGENT_CONNECTIVITY_FETCH_TIMEOUT_MS,
-} from "./AgentConnectivityService.js";
-export type {
-  AgentConnectivityChange,
-  AgentConnectivityProvider,
-} from "./AgentConnectivityService.js";
 
 export { ServiceConnectivityRegistry } from "./ServiceConnectivityRegistry.js";
 export type { ServiceConnectivityRegistryOptions } from "./ServiceConnectivityRegistry.js";
@@ -131,15 +118,18 @@ function createForgeTokenHealthSource(providerId: string): {
 /**
  * Returns the process-wide `ServiceConnectivityRegistry` singleton, creating
  * it on first call. The registry wires together the GitHub forge provider's
- * token health, `mcpServerService`, and `agentConnectivityService`, and emits
- * a single "Connection restored" toast on `unreachable → reachable` transitions.
+ * token health and `mcpServerService`, and emits a single "Connection
+ * restored" toast on `unreachable → reachable` transitions.
+ *
+ * In practice MCP is the only source that can reach that edge: GitHub maps
+ * `unhealthy` to `unknown`, never `unreachable`. Keep that in mind before
+ * assuming this callback is dead.
  */
 export function getServiceConnectivityRegistry(): ServiceConnectivityRegistry {
   if (!registryInstance) {
     registryInstance = new ServiceConnectivityRegistry({
       gitHubHealth: createForgeTokenHealthSource(BUILTIN_GITHUB_PROVIDER_ID),
       mcpServer: mcpServerProxy,
-      agentConnectivity: agentConnectivityService,
       onRecovery: (_serviceKey, label) => {
         const payload: MainProcessToastPayload = {
           type: "info",

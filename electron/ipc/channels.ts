@@ -942,6 +942,10 @@ export const CHANNELS = {
   RUN_HISTORY_APPEND: "run-history:append",
   RUN_HISTORY_CLEAR: "run-history:clear",
 
+  // Copy-tree run history (#11732). Read-only: the main process records a run
+  // where it completes, so there is no append channel to forge entries through.
+  COPY_TREE_HISTORY_GET_RECORDS: "copy-tree-history:get-records",
+
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
   PLUGIN_INSTALL: "plugin:install",
@@ -1035,6 +1039,11 @@ export const CHANNELS = {
   // typed event bus. Distinct from the per-tool plugin-MCP consent above —
   // this gates first use of a host capability (shell:exec, fs:*-write, git:write).
   PLUGIN_CAPABILITY_RESOLVE_CONSENT: "plugin-capability:resolve-consent",
+  // Receipt for that push (#11708), sent when the prompt is enqueued rather
+  // than when it is answered. A push into a renderer with no listener is a
+  // silent no-op, so without an explicit receipt an undeliverable prompt is
+  // indistinguishable from an ignored one until the five-minute timeout.
+  PLUGIN_CAPABILITY_ACKNOWLEDGE_CONSENT: "plugin-capability:acknowledge-consent",
 
   // Plugin managed-process channels (#9234) — child processes spawned by a
   // plugin via `host.process.spawn` (gated on `shell:exec`). `list` is the

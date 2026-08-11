@@ -139,6 +139,7 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
   if (step === "logger") {
     return (
       <SearchablePalette<LoggerItem>
+        tier="command"
         isOpen={isOpen}
         query={loggerPalette.query}
         results={loggerPalette.results}
@@ -179,6 +180,7 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
 
   return (
     <SearchablePalette<(typeof LEVEL_OPTIONS)[number]>
+      tier="command"
       isOpen={isOpen}
       query={levelPalette.query}
       results={levelPalette.results}

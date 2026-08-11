@@ -1,3 +1,5 @@
+import type { CopyTreeRunSource } from "./copyTreeHistory.js";
+
 /** CopyTree generation options */
 export interface CopyTreeOptions {
   /** Output format */
@@ -8,7 +10,12 @@ export interface CopyTreeOptions {
   exclude?: string | string[];
   always?: string[];
 
-  /** Explicit file/folder paths to include (used by file picker modal) */
+  /**
+   * Worktree-relative file paths or glob patterns to include (used by the file
+   * picker modal). Unioned into the SDK's single `filter`, which matches against
+   * FILE paths — so a bare directory name matches nothing. A folder needs a glob
+   * (`src/panels/**`), or belongs in `scopePaths` below.
+   */
   includePaths?: string[];
 
   /**
@@ -22,6 +29,33 @@ export interface CopyTreeOptions {
    * rather than replacing them.
    */
   scopePaths?: string[];
+
+  /**
+   * Let `scopePaths` into subtrees an ignore file would have pruned (#11750).
+   *
+   * Absent or `false` is the default every existing caller keeps: a scoped copy
+   * returns what a whole-worktree copy would have returned for that subtree.
+   * `true` requires `scopePaths` and is rejected without it at both option
+   * schemas — the flag is scope-bound, so accepting it alone would silently do
+   * nothing, which is the failure mode the issue was filed about.
+   *
+   * The lift is surgical, and only the SDK's ignore-FILE escape is used: the
+   * rules removed are the ones standing between the worktree root and each
+   * scope entry, in the `.gitignore` and `.copytreeignore` layers only. Every
+   * unrelated rule in those same files survives, negations survive, and ignore
+   * files at or below the selection still apply — they describe the subtree the
+   * caller asked for. Project and config exclusions (`node_modules`), the
+   * caller's own `exclude`, `.git`, the git filters, the per-file size gate and
+   * every budget are untouched, because the companion `scopeIgnoresConfigExcludes`
+   * escape stays off.
+   *
+   * It cannot be narrowed to `.copytreeignore` alone: the SDK layers that file
+   * at every depth on every code path, with no option or config key to drop it
+   * (`FileDiscoveryStage`, copytree 0.17.0). Lifting the ignore-file rules
+   * blocking a named subtree is the closest thing it does expose, and unlike
+   * `always` it leaves every other exclusion layer standing.
+   */
+  scopeIgnoresIgnoreFiles?: boolean;
 
   /** Git filtering - only include files modified in working directory (staged + unstaged changes, excludes untracked files) */
   modified?: boolean;
@@ -64,11 +98,37 @@ export interface CopyTreeGeneratePayload {
    * context-generation setting.
    */
   includeContent?: boolean;
+  /**
+   * Caller-supplied display label for the run, shown in the project's
+   * copy-tree history and in the completion notification (#11734).
+   *
+   * Deliberately a payload field rather than a `CopyTreeOptions` one, for the
+   * same reason as `source`: it names the run for a human, it does not select
+   * or format anything, so it must stay out of the dedupe key — two runs that
+   * build the identical bundle are one history entry whatever they were
+   * called. Blank counts as absent, and an absent name falls back to a label
+   * derived from the options.
+   */
+  name?: string;
+  /**
+   * Which surface asked for the run, recorded in the project's copy-tree
+   * history (#11732).
+   *
+   * Optional, and never part of the dedupe key: it describes the caller, not
+   * the context to build, so omitting it changes nothing about the bundle. A
+   * caller that doesn't identify itself is recorded as `unknown` rather than
+   * being attributed to a surface it didn't come from.
+   */
+  source?: CopyTreeRunSource;
 }
 
 export interface CopyTreeGenerateAndCopyFilePayload {
   worktreeId: string;
   options?: CopyTreeOptions;
+  /** See {@link CopyTreeGeneratePayload.name}. */
+  name?: string;
+  /** See {@link CopyTreeGeneratePayload.source}. */
+  source?: CopyTreeRunSource;
 }
 
 /** Payload for injecting CopyTree context to terminal */
@@ -78,6 +138,10 @@ export interface CopyTreeInjectPayload {
   options?: CopyTreeOptions;
   /** Unique identifier for this injection operation (for per-operation cancellation) */
   injectionId?: string;
+  /** See {@link CopyTreeGeneratePayload.name}. */
+  name?: string;
+  /** See {@link CopyTreeGeneratePayload.source}. */
+  source?: CopyTreeRunSource;
 }
 
 /** Payload for cancelling a specific injection operation */
@@ -148,6 +212,26 @@ export interface CopyTreeExclusionSummary {
 /** Which budget dropped files first */
 export type CopyTreeTruncatedBy = "maxFileCount" | "maxTotalSize" | "charLimit";
 
+/**
+ * Which pattern selector a caller supplied, named the way the caller spelled it.
+ *
+ * `filter` and `includePaths` are unioned into the SDK's single `filter` before
+ * it runs, so once a run is over the two can no longer be told apart from its
+ * stats — which is why supplying both reports the pair rather than guessing.
+ *
+ * A tuple rather than a bare union: `CopyTreeStatsSchema` builds its `z.enum`
+ * from this, so the wire enum and this type cannot drift. Dispatch parses
+ * results against that schema (#11539), and a member here that the enum lacked
+ * would fail the parse and take the whole result down with it.
+ */
+export const COPY_TREE_UNMATCHED_SELECTORS = [
+  "filter",
+  "includePaths",
+  "filterAndIncludePaths",
+] as const;
+
+export type CopyTreeUnmatchedSelector = (typeof COPY_TREE_UNMATCHED_SELECTORS)[number];
+
 /** Budget and estimate reporting shared by real runs and dry runs */
 export interface CopyTreeBudgetStats {
   /**
@@ -159,6 +243,27 @@ export interface CopyTreeBudgetStats {
   estimatedTokens?: number;
   /** True when nothing matched — a valid outcome, not an error */
   noFilesMatched?: boolean;
+  /**
+   * Which supplied pattern selector emptied the run, when one did.
+   *
+   * `noFilesMatched` alone says nothing about WHICH selector missed, so a caller
+   * that passed a bare directory to `includePaths` learns only that it got
+   * nothing and is left guessing at the option shape (#11731).
+   *
+   * Set only when the run came back empty, files reached the pattern check and
+   * were rejected there, and NOTHING was removed after the patterns ran. That
+   * last condition is what keeps the hint honest: `noFilesMatched` is measured
+   * once the whole pipeline is done, and the git filter, the budgets and the
+   * size gate all run later — so a single file removed by one of those is proof
+   * the patterns matched it, and the patterns are not what emptied the run. An
+   * empty scope, an empty repo, a `modified` filter with no changes and a
+   * budget that dropped the last file therefore all leave this unset.
+   *
+   * Ignore rules, configured excludes and scope prune while the walker
+   * descends, before the patterns are consulted, so they neither set nor
+   * suppress this.
+   */
+  unmatchedSelector?: CopyTreeUnmatchedSelector;
   /** What didn't make it, and why */
   excluded?: CopyTreeExclusionSummary;
   /** Whether a budget dropped files */

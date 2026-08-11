@@ -2,10 +2,13 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, afterEach, beforeAll, vi } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
-import { createRef } from "react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { BaseBranchCombobox } from "../views/BaseBranchCombobox";
+import { inUseRow, optionRow, stubController } from "../views/__tests__/branchPickerFixtures";
+import { toBranchOption } from "../branchPickerUtils";
+import type { BranchPickerRow } from "../branchPickerUtils";
+import type { UseBranchPickerResult } from "../hooks/useBranchPicker";
 
 class ResizeObserverStub {
   observe() {}
@@ -19,46 +22,123 @@ beforeAll(() => {
 
 afterEach(cleanup);
 
-function renderCombobox(overrides: Partial<Parameters<typeof BaseBranchCombobox>[0]> = {}) {
-  return render(
+function renderCombobox(
+  rows: BranchPickerRow[] = [],
+  overrides: Partial<Omit<UseBranchPickerResult, "rows" | "selectableRows">> = {},
+  props: Partial<Parameters<typeof BaseBranchCombobox>[0]> = {}
+) {
+  const controller = stubController(rows, overrides);
+  const result = render(
     <TooltipProvider>
-      <BaseBranchCombobox
-        baseBranch="develop"
-        branchPickerOpen
-        onOpenChange={() => {}}
-        branchQuery=""
-        onQueryChange={() => {}}
-        branchRows={[]}
-        selectableRows={[]}
-        selectedIndex={-1}
-        selectedBranchLabel="develop"
-        onKeyDown={() => {}}
-        onSelect={() => {}}
-        branchInputRef={createRef<HTMLInputElement>()}
-        branchListRef={createRef<HTMLDivElement>()}
-        branchOptionsLength={0}
-        onClose={() => {}}
-        {...overrides}
-      />
+      <BaseBranchCombobox baseBranch="develop" controller={controller} {...props} />
     </TooltipProvider>
   );
+  return { ...result, controller };
 }
 
-describe("BaseBranchCombobox empty states", () => {
-  it("renders zero-data EmptyState when no branches and no query", () => {
-    const { container } = renderCombobox({ branchQuery: "", selectableRows: [] });
-    expect(screen.getByText("No branches available")).toBeTruthy();
-    expect(container.querySelector("[aria-live]")).toBeNull();
-    expect(container.querySelector("[aria-describedby]")).toBeNull();
+describe("BaseBranchCombobox trigger", () => {
+  it("keeps the id the dialog's validation and tests address it by", () => {
+    renderCombobox();
+    expect(document.getElementById("base-branch")).not.toBeNull();
   });
 
-  it("renders filtered-empty EmptyState with interpolated query", () => {
-    renderCombobox({ branchQuery: "feature/foo", selectableRows: [] });
+  it("shows the composed label so one line carries the whole answer", () => {
+    // The trigger keeps "(current)"/"(remote)" inline; rows split them into badges.
+    const selectedOption = toBranchOption({ name: "main", current: true, commit: "a1" });
+    renderCombobox([], { selectedOption });
+
+    expect(document.getElementById("base-branch")!.textContent).toContain("main (current)");
+  });
+
+  it("prompts when no branch is chosen yet", () => {
+    renderCombobox();
+    expect(document.getElementById("base-branch")!.textContent).toContain("Select base branch...");
+  });
+
+  it("flags the field as invalid only for its own error", () => {
+    const { rerender } = renderCombobox([], {}, { errorField: "base-branch" });
+    expect(document.getElementById("base-branch")!.getAttribute("aria-invalid")).toBe("true");
+    expect(document.getElementById("base-branch")!.getAttribute("aria-describedby")).toBe(
+      "validation-error"
+    );
+
+    rerender(
+      <TooltipProvider>
+        <BaseBranchCombobox
+          baseBranch="develop"
+          controller={stubController([])}
+          errorField="new-branch"
+        />
+      </TooltipProvider>
+    );
+    expect(document.getElementById("base-branch")!.getAttribute("aria-invalid")).toBeNull();
+  });
+});
+
+describe("BaseBranchCombobox in-use rows", () => {
+  it("routes a click on an in-use branch to the selection handler", () => {
+    // #11716 regression guard: this used to activate that worktree and close the
+    // whole dialog instead of selecting the branch.
+    const handleSelect = vi.fn();
+    const busy = inUseRow("main", { id: "main-wt", name: "main-worktree" });
+    renderCombobox([busy, optionRow("develop")], { handleSelect });
+
+    fireEvent.click(screen.getAllByRole("option")[0]!);
+
+    expect(handleSelect).toHaveBeenCalledTimes(1);
+    expect(handleSelect.mock.calls[0]![0]).toBe(busy);
+  });
+
+  it("labels the in-use badge with the owning worktree name, not the branch name", () => {
+    renderCombobox([inUseRow("main", { id: "main-wt", name: "main-worktree" })]);
+    expect(screen.getByTitle("In use by worktree: main-worktree")).toBeTruthy();
+  });
+});
+
+describe("BaseBranchCombobox panel wiring", () => {
+  it("wires the search field to its own listbox and cursor row", () => {
+    // Relationships, not literal ids: the ids themselves are contracts of the
+    // dialog and e2e suites, which address them directly.
+    renderCombobox([optionRow("main"), optionRow("develop")]);
+
+    const search = screen.getByLabelText("Search base branches");
+    const listbox = screen.getByRole("listbox");
+    const cursor = screen
+      .getAllByRole("option")
+      .find((el) => el.getAttribute("aria-selected") === "true");
+
+    expect(search.getAttribute("aria-controls")).toBe(listbox.id);
+    expect(cursor!.id).not.toBe("");
+    expect(search.getAttribute("aria-activedescendant")).toBe(cursor!.id);
+  });
+
+  it("marks the checked-out branch, which only base mode can offer", () => {
+    renderCombobox([optionRow("main", { isCurrent: true })]);
+    expect(screen.getAllByRole("option")[0]!.textContent).toContain("current");
+  });
+
+  it("renders base-mode zero-data copy", () => {
+    renderCombobox([], { query: "" });
+    expect(screen.getByText("No branches available")).toBeTruthy();
+    expect(document.body.querySelector("[aria-live]")).toBeNull();
+    expect(document.body.querySelector("[aria-describedby]")).toBeNull();
+  });
+
+  it("renders filtered-empty copy with the query interpolated", () => {
+    renderCombobox([], { query: "feature/foo" });
     expect(screen.getByText('No matches for "feature/foo"')).toBeTruthy();
   });
 
-  it("falls back to zero-data copy for whitespace-only query", () => {
-    renderCombobox({ branchQuery: "   ", selectableRows: [] });
+  it("falls back to zero-data copy for a whitespace-only query", () => {
+    renderCombobox([], { query: "   " });
     expect(screen.getByText("No branches available")).toBeTruthy();
+  });
+
+  it("checks the row matching the committed base branch", () => {
+    renderCombobox([optionRow("main"), optionRow("develop")]);
+
+    const [mainRow, developRow] = screen.getAllByRole("option");
+    expect(developRow!.getAttribute("aria-current")).toBe("true");
+    expect(mainRow!.getAttribute("aria-current")).toBeNull();
   });
 });

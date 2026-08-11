@@ -15,6 +15,7 @@ export {
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
   CircleCheck, // finished run awaiting review (Pilot's review band)
   CircleHelp, // workspace whose metadata is missing (removed while its agents ran)
+  CircleSlash, // agent stopped on an error, distinct in shape from a waiting one (Pilot's blocked band)
   Clock, // recency sort order (most recently opened first)
   FileText, // view selected file path in the read-only file viewer
   FolderGit2, // git worktree (single)
@@ -28,6 +29,7 @@ export {
   LayoutPanelTop, // workspace plugin category (panels, notes)
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   Plug, // agent (integration that plugs into the host system)
+  Plus, // the toolbar launcher — "make me a new thing" (agent, panel)
   Sprout, // origin / first step (main worktree, first agent launch)
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";

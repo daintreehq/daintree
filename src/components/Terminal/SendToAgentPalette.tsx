@@ -99,6 +99,7 @@ export function SendToAgentPalette({
 
   return (
     <SearchablePalette<SendToAgentItem>
+      tier="anchored"
       isOpen={isOpen}
       query={query}
       results={results}

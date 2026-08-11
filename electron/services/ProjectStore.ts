@@ -38,6 +38,10 @@ import { ProjectSettingsManager } from "./ProjectSettingsManager.js";
 import { ProjectStateManager, type ProjectStateReadResult } from "./ProjectStateManager.js";
 import { invalidatePrefetchCache } from "./prefetchHydrateCache.js";
 import { ProjectFileStore } from "./ProjectFileStore.js";
+import type {
+  CopyTreeHistoryAppendInput,
+  CopyTreeHistoryRecord,
+} from "../../shared/types/ipc/copyTreeHistory.js";
 import { GlobalFileStore } from "./GlobalFileStore.js";
 import { ProjectIdentityFiles } from "./ProjectIdentityFiles.js";
 import {
@@ -1540,6 +1544,19 @@ export class ProjectStore {
 
   getEffectiveNotificationSettings(): NotificationSettings {
     return this.settingsManager.getEffectiveNotificationSettings(this.getCurrentProjectId());
+  }
+
+  // --- Copy-tree run history (#11732) ---
+
+  async getCopyTreeHistory(projectId: string): Promise<CopyTreeHistoryRecord[]> {
+    return this.fileStore.getCopyTreeHistory(projectId);
+  }
+
+  async appendCopyTreeRun(
+    projectId: string,
+    input: CopyTreeHistoryAppendInput
+  ): Promise<CopyTreeHistoryRecord[]> {
+    return this.fileStore.appendCopyTreeRun(projectId, input);
   }
 
   // --- Recipes ---

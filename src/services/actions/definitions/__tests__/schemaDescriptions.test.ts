@@ -117,6 +117,138 @@ describe("argument descriptions carry the semantics prose no longer states", () 
     expect(scope).toMatch(/empty list is rejected|rejected rather than/i);
   });
 
+  // #11731: a caller sent `includePaths: ["src/worldgen", ...]`, every directory
+  // existed, and the call returned zero files with no error — then burned 13
+  // rounds guessing. Both spellings of the selection feed the SDK's single
+  // `filter`, which matches against FILE paths, so a bare directory matches
+  // nothing. The wire description is the only place that rule can be learned,
+  // and a caller reads the description of whichever field it reached for.
+  it.each(["includePaths", "filter"])(
+    "warns on %s that a folder needs a glob, and where a folder belongs instead",
+    (field) => {
+      const description = emit(CopyTreeOptionsSchema).properties?.[field]?.description ?? "";
+
+      expect(description).toMatch(/patterns match file paths/i);
+
+      // Both halves of the contrast, not just the rule: "a folder needs a glob"
+      // is advice a caller cannot act on without seeing the two forms side by
+      // side, which is exactly what the working `worktree.copyTree` text shows.
+      // Captured rather than compared against copied literals, so the example
+      // path can change freely but the two forms still have to be the SAME
+      // folder — text that globbed one path and warned off another would read
+      // as guidance and teach nothing.
+      const contrast = description.match(/pass '([^']+)', not '([^']+)'/);
+      expect(contrast).not.toBeNull();
+      const [, recommended, rejected] = contrast ?? [];
+      expect(recommended).toBe(`${rejected}/**`);
+
+      // The redirect matters as much as the warning — the caller's real intent
+      // was a folder, and `scopePaths` is the field that takes one.
+      expect(description).toMatch(/scopePaths/);
+    }
+  );
+
+  it("keeps the union and traversal guidance the folder rule was added beside", () => {
+    const includePaths = emit(CopyTreeOptionsSchema).properties?.includePaths?.description ?? "";
+
+    // Regression guard on the reword itself. None of this is recoverable from
+    // anywhere else on the wire: #11722's union with `filter` is invisible from
+    // the types, and the traversal contrast is what stops a caller reaching for
+    // `scopePaths` when it genuinely wants patterns matched worktree-wide.
+    expect(includePaths).toMatch(/curated bundle/i);
+    expect(includePaths).toMatch(/combined with `filter`/i);
+    expect(includePaths).toMatch(/does not restrict traversal/i);
+  });
+
+  it("says a scope path is literal, so the folder rule does not carry over to it", () => {
+    const scope = emit(CopyTreeOptionsSchema).properties?.scopePaths?.description ?? "";
+
+    // The inverse trap, and the one the fix above could create: a caller that
+    // has just learned "a folder needs a glob" carries '/**' over to the field
+    // that walks literal paths, where it matches nothing either.
+    expect(scope).toMatch(/not glob patterns/i);
+    expect(scope).toMatch(/literal file or directory paths/i);
+    expect(scope).toMatch(/prefer this over[^.]*folder/i);
+  });
+
+  // #11750. The flag's whole safety story is "it lifts less than you fear", and
+  // a caller can only learn the boundary from this text — the type is a bare
+  // boolean and the SDK's own docs are not on the wire. The claims about what
+  // survives are pinned against the real SDK in
+  // `CopyTreeService.sdk-contract.test.ts`; if one of those flips, this text is
+  // what has to change with it.
+  //
+  // Every pattern below carries polarity. A bare /budget/ would be satisfied by
+  // "budgets no longer apply" — text that says the exact opposite of what the
+  // code does — so matching the topic word alone would enforce nothing.
+  it("bounds what the ignore-file bypass lifts, and what it leaves standing", () => {
+    const bypass =
+      emit(CopyTreeOptionsSchema).properties?.scopeIgnoresIgnoreFiles?.description ?? "";
+
+    // Scope-bound, and refused without one — a caller that sets it alone gets a
+    // parse error, so the text has to explain the pairing before it happens.
+    expect(bypass).toMatch(/(requires|rejected without)[^.]{0,40}`?scopePaths/i);
+
+    // Both ignore files, stated. The SDK cannot narrow this to `.copytreeignore`
+    // and a description naming only that one would understate the reach.
+    expect(bypass).toMatch(/\.copytreeignore/);
+    expect(bypass).toMatch(/\.gitignore/);
+
+    // The limit that makes it safe: only the rules blocking entry are removed.
+    expect(bypass).toMatch(/only the rules blocking/i);
+
+    // And the layers that keep applying — the half that distinguishes this from
+    // `always`, which lifts every one of them. "all still apply" rather than a
+    // /still.*apply/ span, which "still do not apply" would satisfy.
+    expect(bypass).toMatch(/all still apply/i);
+    expect(bypass).toMatch(/node_modules/);
+    expect(bypass).not.toMatch(/not only the rules/i);
+
+    // The composition trap a caller hits the moment it moves a selection into
+    // `scopePaths`: a rule inside the selection needs the exact file, not its
+    // parent, because a scoped directory subsumes its children.
+    expect(bypass).toMatch(/scope the exact file/i);
+  });
+
+  it("warns that always is the blunt instrument the bypass is not", () => {
+    const always = emit(CopyTreeOptionsSchema).properties?.always?.description ?? "";
+
+    // Undocumented on the wire until #11750, which is how a caller ended up
+    // hand-computing per-file patterns for it instead of scoping. Naming the
+    // narrower field is the half that changes behaviour — a warning with no
+    // alternative just leaves the caller where it started.
+    expect(always).toMatch(/scopeIgnoresIgnoreFiles/);
+
+    // Polarity again, and in the dangerous direction: "cannot pull in
+    // node_modules" would satisfy a bare /node_modules/ while telling a caller
+    // the opposite of the truth.
+    expect(always).toMatch(/can pull in[^.]{0,40}node_modules/i);
+
+    // A `../` pattern really does escape the worktree — `collectForcedEntries`
+    // hands the patterns straight to fast-glob and only checks root containment
+    // when `followSymlinks` is on. An earlier draft of this text claimed the
+    // opposite. The field predates this change and is not being narrowed here,
+    // so the wire has to say what it actually does.
+    expect(always).toMatch(/outside the worktree/i);
+
+    // The budgets are the one bound that DOES outlive a force-include
+    // (`BudgetStage` has no `alwaysInclude` exemption). An earlier draft of this
+    // text claimed only `.git` and the memory ceiling survived, which was wrong
+    // in the direction that matters — it undersold the remaining safety net.
+    // `[\s\S]` rather than `[^.]` because the clause lists `.git` on the way,
+    // and a dot-excluding span cannot reach past it.
+    expect(always).toMatch(/does not override[\s\S]{0,140}maxFileCount/i);
+  });
+
+  it("says a scope restricts traversal, so patterns cannot widen it", () => {
+    const scope = emit(CopyTreeOptionsSchema).properties?.scopePaths?.description ?? "";
+
+    // The composition trap the bypass makes reachable: a caller told to move its
+    // selection into `scopePaths` will keep its `includePaths` alongside, and
+    // anything outside the scope silently disappears.
+    expect(scope).toMatch(/never add a file outside|cannot add|only narrow/i);
+  });
+
   it("keeps the terminal-id contract on the hand-written wait schema", () => {
     // A hand-written JSON Schema rather than a zod conversion, so none of the
     // propagation above applies to it. Note this constant is NOT what the

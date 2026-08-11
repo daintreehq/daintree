@@ -43,11 +43,11 @@ interface DockLaunchMenuItemsProps {
    * don't pass it.
    */
   pinnedCount?: number;
-  // The surface attribution to attach to the settings dispatch for
-  // non-launchable rows. Defaults to "menu"; ContentDock's context-menu
-  // path overrides it so telemetry stays consistent with how the user
-  // actually opened the launcher.
-  settingsSource?: ActionSource;
+  // The surface attribution to attach to everything this launcher dispatches —
+  // panel launches and the settings redirect for non-launchable rows. Defaults
+  // to "menu"; ContentDock's context-menu path overrides it so attribution
+  // stays consistent with how the user actually opened the launcher.
+  source?: ActionSource;
   /**
    * Where this surface creates panels. The grid's context menu launches into
    * the grid, so it must not offer a dock destination it won't honour.
@@ -69,7 +69,7 @@ export function DockLaunchMenuItems({
   recipeContext,
   onLaunchAgent,
   pinnedCount,
-  settingsSource = "menu",
+  source = "menu",
   surface,
 }: DockLaunchMenuItemsProps) {
   const model = useDockLaunchModel({ agents, pinnedCount, activeWorktreeId, surface });
@@ -80,7 +80,7 @@ export function DockLaunchMenuItems({
       activeWorktreeId,
       recipeContext,
       onLaunchAgent,
-      settingsSource,
+      source,
     });
 
   const renderAgentItem = (agent: DockLaunchAgent, keyPrefix?: string) => {
@@ -96,7 +96,13 @@ export function DockLaunchMenuItems({
         className={!isLaunchable ? "opacity-70" : undefined}
         title={!isLaunchable ? settingsTooltip : undefined}
         onSelect={() =>
-          activate({ category: "agent", key: `agent:${agent.id}`, name: agent.name, agent })
+          activate({
+            category: "agent",
+            key: `agent:${agent.id}`,
+            name: agent.name,
+            agent,
+            agentBand: isLaunchable ? "launch" : "needs-setup",
+          })
         }
       >
         {Icon ? (
@@ -133,7 +139,7 @@ export function DockLaunchMenuItems({
   );
 
   const renderCreateRecipeCue = () => (
-    <C.Item onSelect={() => activateCreateRecipeCue(activeWorktreeId, settingsSource)}>
+    <C.Item onSelect={() => activateCreateRecipeCue(activeWorktreeId, source)}>
       <Workflow className="w-3.5 h-3.5 mr-2" />
       Create a recipe
     </C.Item>

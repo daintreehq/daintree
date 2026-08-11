@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
+import { useState } from "react";
 import type { BranchInfo } from "@/types/electron";
 
 vi.stubGlobal(
@@ -481,6 +482,121 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     expect(mockGetDefaultPath).toHaveBeenCalledWith("/test/root", "feature/existing-work");
   });
 
+  // The existing-branch field used to filter with a plain `includes()` and had no
+  // key handling at all, one radio toggle away from a fully navigable picker.
+  describe("existing-branch search and keyboard parity", () => {
+    async function enterExistingMode() {
+      renderDialog();
+      await advanceTimersGradually(500);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("radio", { name: /existing branch/i }));
+      });
+    }
+
+    function existingSearch(): HTMLElement {
+      return screen.getByLabelText("Search existing branches");
+    }
+
+    function optionNames(): string[] {
+      return screen.getAllByRole("option").map((el) => el.textContent ?? "");
+    }
+
+    async function type(value: string) {
+      await act(async () => {
+        fireEvent.change(existingSearch(), { target: { value } });
+      });
+    }
+
+    it("narrows on a single character instead of emptying the list", async () => {
+      await enterExistingMode();
+
+      await type("b");
+
+      // Candidates are develop, feature/existing-work, bugfix/old-fix.
+      expect(optionNames()).toContain("bugfix/old-fix");
+      expect(optionNames()).not.toContain("develop");
+    });
+
+    it("narrows on a multi-token query", async () => {
+      await enterExistingMode();
+
+      await type("exist work");
+
+      expect(optionNames()).toEqual(["feature/existing-work"]);
+    });
+
+    it("selects with arrow keys and Enter", async () => {
+      await enterExistingMode();
+      expect(optionNames()[0]).toBe("develop");
+
+      await act(async () => {
+        fireEvent.keyDown(existingSearch(), { key: "ArrowDown" });
+      });
+      await act(async () => {
+        fireEvent.keyDown(existingSearch(), { key: "Enter" });
+      });
+
+      expect(screen.getByTestId("existing-branch-picker").textContent).toContain(
+        "feature/existing-work"
+      );
+    });
+
+    it("moves one cursor that the active descendant follows", async () => {
+      await enterExistingMode();
+
+      await act(async () => {
+        fireEvent.keyDown(existingSearch(), { key: "ArrowDown" });
+      });
+
+      const cursor = screen
+        .getAllByRole("option")
+        .filter((el) => el.getAttribute("aria-selected") === "true");
+      expect(cursor).toHaveLength(1);
+      expect(existingSearch().getAttribute("aria-activedescendant")).toBe(cursor[0]!.id);
+    });
+
+    it("drops a typed query when the mode toggles away and back", async () => {
+      // Deliberately does NOT select a row first: selecting closes the picker,
+      // which clears the query on its own, so the assertion would hold even if
+      // the mode change reset nothing.
+      await enterExistingMode();
+
+      await type("bugfix");
+      expect(optionNames()).toEqual(["bugfix/old-fix"]);
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("radio", { name: /new branch/i }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("radio", { name: /existing branch/i }));
+      });
+
+      expect((existingSearch() as HTMLInputElement).value).toBe("");
+      expect(optionNames()).toContain("develop");
+    });
+
+    it("drops the chosen branch when the mode toggles away and back", async () => {
+      await enterExistingMode();
+
+      await type("bugfix");
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole("option")[0]!);
+      });
+      expect(screen.getByTestId("existing-branch-picker").textContent).toContain("bugfix/old-fix");
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("radio", { name: /new branch/i }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("radio", { name: /existing branch/i }));
+      });
+
+      expect(screen.getByTestId("existing-branch-picker").textContent).toContain(
+        "Select a local branch..."
+      );
+    });
+  });
+
   it("hides from-remote checkbox in existing mode", async () => {
     renderDialog();
     await advanceTimersGradually(500);
@@ -668,6 +784,101 @@ describe("NewWorktreeDialog — branch list cache", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByTestId("branch-name-input")).toBeDefined();
     expect(document.getElementById("base-branch")?.textContent).toContain("main");
+  });
+
+  it("resolves a PR head that lives on a non-origin remote without re-fetching", async () => {
+    // Fork layout: the forge is `upstream`, so the PR head is only ever
+    // tracked as `upstream/<headRef>` (#11747). Probing `origin/<headRef>`
+    // misses it and triggers a redundant fetch.
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: true, commit: "abc123" },
+      { name: "upstream/feature/test", current: false, commit: "zzz999", remote: "upstream" },
+    ]);
+    renderDialog({
+      initialPR: {
+        number: 42,
+        title: "Test PR",
+        body: "",
+        headRef: "feature/test",
+        baseRef: "main",
+        state: "open",
+        rawState: "OPEN",
+        url: "https://github.com/test/repo/pull/42",
+        author: { login: "user", avatarUrl: "", rawData: null },
+        isDraft: false,
+        merged: false,
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
+      },
+    });
+    await advanceTimersGradually(500);
+
+    expect(mockFetchPRBranch).not.toHaveBeenCalled();
+    expect(document.getElementById("base-branch")?.textContent).toContain("upstream/feature/test");
+  });
+
+  it("falls through to the PR fetch when two remotes carry the same head name", async () => {
+    // A branch name is not a PR identity: origin/feature/test and
+    // upstream/feature/test can be different commits, and the dialog has no
+    // way to tell which repo the PR belongs to. Building from the wrong one is
+    // worse than paying for the authoritative PR-number fetch.
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: true, commit: "abc123" },
+      { name: "origin/feature/test", current: false, commit: "aaa111", remote: "origin" },
+      { name: "upstream/feature/test", current: false, commit: "bbb222", remote: "upstream" },
+    ]);
+    renderDialog({
+      initialPR: {
+        number: 44,
+        title: "Test PR",
+        body: "",
+        headRef: "feature/test",
+        baseRef: "main",
+        state: "open",
+        rawState: "OPEN",
+        url: "https://github.com/test/repo/pull/44",
+        author: { login: "user", avatarUrl: "", rawData: null },
+        isDraft: false,
+        merged: false,
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
+      },
+    });
+    await advanceTimersGradually(500);
+
+    expect(mockFetchPRBranch).toHaveBeenCalledWith("/test/root", 44, "feature/test");
+  });
+
+  it("does not mistake a nested branch for the PR head", async () => {
+    // `origin/feature/test` must not satisfy a head named `test` — an exact
+    // `<remote>/<headRef>` match, not a suffix match.
+    mockListBranches.mockResolvedValue([
+      { name: "main", current: true, commit: "abc123" },
+      { name: "origin/feature/test", current: false, commit: "zzz999", remote: "origin" },
+    ]);
+    renderDialog({
+      initialPR: {
+        number: 43,
+        title: "Test PR",
+        body: "",
+        headRef: "test",
+        baseRef: "main",
+        state: "open",
+        rawState: "OPEN",
+        url: "https://github.com/test/repo/pull/43",
+        author: { login: "user", avatarUrl: "", rawData: null },
+        isDraft: false,
+        merged: false,
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
+      },
+    });
+    await advanceTimersGradually(500);
+
+    expect(mockFetchPRBranch).toHaveBeenCalledWith("/test/root", 43, "test");
   });
 
   it("bypasses the cache and keeps the skeleton for PR checkout opens", async () => {
@@ -1172,5 +1383,291 @@ describe("NewWorktreeDialog — recipe scope visibility (#11510)", () => {
     await advanceTimersGradually(500);
 
     expect(recipePickerCalls.last?.defaultRecipeId).toBe("global-work");
+  });
+});
+
+describe("NewWorktreeDialog — in-use base branch selection", () => {
+  // `main` is in use by `main-wt` via mockWorktreeDataMap. Make `develop` the
+  // current branch so it wins deriveDefaultBaseBranch — otherwise `main` is
+  // already the default and clicking it would change nothing observable.
+  const BRANCHES_WITH_DEVELOP_CURRENT: BranchInfo[] = TEST_BRANCHES.map((b) => ({
+    ...b,
+    current: b.name === "develop",
+  }));
+
+  const IN_USE_BRANCH = "main";
+
+  function baseBranchLabel(): string {
+    return document.getElementById("base-branch")?.textContent ?? "";
+  }
+
+  /** Match on the row's label span so `main` never resolves to `origin/main`. */
+  function baseBranchOption(label: string): HTMLElement {
+    const list = document.getElementById("branch-list");
+    if (!list) throw new Error("base-branch listbox not rendered");
+    const row = Array.from(list.querySelectorAll<HTMLElement>('[role="option"]')).find(
+      (el) => el.querySelector("span")?.textContent === label
+    );
+    if (!row) throw new Error(`no base-branch row labelled "${label}"`);
+    return row;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(BRANCHES_WITH_DEVELOP_CURRENT);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockAssignIssue.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("selects an in-use branch as the base without closing the dialog or switching worktrees", async () => {
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+    await advanceTimersGradually(500);
+
+    expect(baseBranchLabel()).toBe("develop (current)");
+
+    const row = baseBranchOption(IN_USE_BRANCH);
+    expect(row.querySelector('[title^="In use by worktree:"]')).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.click(row);
+    });
+
+    // Exact, not substring: `toContain("main")` would also accept `origin/main`.
+    expect(baseBranchLabel()).toBe(IN_USE_BRANCH);
+    // `aria-current`, not `aria-selected`: the latter tracks the keyboard cursor,
+    // which sits on row 0 regardless, so it would pass without a selection.
+    expect(baseBranchOption(IN_USE_BRANCH).getAttribute("aria-current")).toBe("true");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(mockDispatch.mock.calls.map((c) => c[0])).not.toContain("worktree.setActive");
+  });
+
+  it("reaches the same selection with Enter as with a click", async () => {
+    const onClose = vi.fn();
+    renderDialog({ onClose });
+    await advanceTimersGradually(500);
+
+    // selectedIndex starts at 0, so Enter targets whichever row leads the list.
+    expect(baseBranchOption(IN_USE_BRANCH).getAttribute("data-option-index")).toBe("0");
+
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText("Search base branches"), { key: "Enter" });
+    });
+
+    expect(baseBranchLabel()).toBe(IN_USE_BRANCH);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(mockDispatch.mock.calls.map((c) => c[0])).not.toContain("worktree.setActive");
+  });
+
+  it("preserves a typed branch name across an in-use base-branch selection", async () => {
+    // renderDialog() pins isOpen={true}, so it can never unmount and any
+    // "still mounted"/"input survived" assertion against it passes even with the
+    // bug present. Drive `isOpen` from onClose so the close actually unmounts.
+    function ControlledDialog() {
+      const [open, setOpen] = useState(true);
+      return open ? (
+        <NewWorktreeDialog isOpen onClose={() => setOpen(false)} rootPath="/test/root" />
+      ) : null;
+    }
+
+    render(<ControlledDialog />);
+    await advanceTimersGradually(500);
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/keep-me" },
+      });
+    });
+    await advanceTimersGradually(1000);
+
+    await act(async () => {
+      fireEvent.click(baseBranchOption(IN_USE_BRANCH));
+    });
+
+    expect(screen.queryByTestId("new-worktree-dialog")).not.toBeNull();
+    expect(screen.getByTestId<HTMLInputElement>("branch-name-input").value).toBe("feature/keep-me");
+  });
+});
+
+describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name === "feature/terrain" ? "feature/terrain-2" : name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockDispatch.mockResolvedValue({ ok: true, result: "new-wt-id" });
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockAssignIssue.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function typeBranch(value: string) {
+    const branchInput = screen.getByTestId("branch-name-input") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(branchInput, { target: { value } });
+    });
+    await advanceTimersGradually(500);
+    return branchInput;
+  }
+
+  it("leaves the typed name in place while flagging the conflict", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = await typeBranch("feature/terrain");
+
+    expect(branchInput.value).toBe("feature/terrain");
+    expect(screen.getByText(/auto-incremented/i)).toBeDefined();
+  });
+
+  it("does not clobber characters typed past the conflicting prefix", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = await typeBranch("feature/terrain");
+    // Resume typing from whatever the field actually holds. Replacing the value
+    // outright would mask a rewrite, since it overwrites the damage too.
+    await typeBranch(`${branchInput.value}-shadows`);
+
+    expect(branchInput.value).toBe("feature/terrain-shadows");
+    expect(screen.queryByText(/auto-incremented/i)).toBeNull();
+  });
+
+  it("applies the auto-incremented name on blur without re-checking or disabling Create", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = await typeBranch("feature/terrain");
+    const pathInput = screen.getByTestId("worktree-path-input") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(pathInput, { target: { value: "/custom/path" } });
+    });
+    mockGetAvailableBranch.mockClear();
+    mockGetDefaultPath.mockClear();
+
+    await act(async () => {
+      fireEvent.blur(branchInput);
+    });
+
+    expect(branchInput.value).toBe("feature/terrain-2");
+    // Skipping the re-check is what keeps a hand-edited path from being
+    // regenerated out from under the user.
+    expect(pathInput.value).toBe("/custom/path");
+    // Re-checking a name we already know is free would re-disable Create in the
+    // gap between the blur and the click that caused it, swallowing the click.
+    const createButton = screen.getByTestId("create-worktree-button") as HTMLButtonElement;
+    expect(createButton.disabled).toBe(false);
+
+    await advanceTimersGradually(500);
+    expect(mockGetAvailableBranch).not.toHaveBeenCalled();
+    expect(mockGetDefaultPath).not.toHaveBeenCalled();
+  });
+
+  it("creates the auto-incremented branch when Create follows a blur", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = await typeBranch("feature/terrain");
+    // The rewrite must be the blur's doing, not the debounce's.
+    expect(branchInput.value).toBe("feature/terrain");
+
+    await act(async () => {
+      fireEvent.blur(branchInput);
+    });
+    expect(branchInput.value).toBe("feature/terrain-2");
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(mockAddPendingCreation).toHaveBeenCalledWith(
+      "/test/root-worktrees/feature/terrain",
+      expect.objectContaining({ branch: "feature/terrain-2" })
+    );
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "worktree.create",
+      expect.objectContaining({
+        options: expect.objectContaining({ newBranch: "feature/terrain-2" }),
+      }),
+      expect.anything()
+    );
+  });
+
+  it("creates the auto-incremented branch when Create fires without a blur", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = await typeBranch("feature/terrain");
+    // The field still holds what was typed — Create has to resolve it itself.
+    expect(branchInput.value).toBe("feature/terrain");
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "worktree.create",
+      expect.objectContaining({
+        options: expect.objectContaining({ newBranch: "feature/terrain-2" }),
+      }),
+      expect.anything()
+    );
+  });
+
+  it("creates the typed name when no conflict was detected", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    const branchInput = await typeBranch("feature/canyon");
+    await act(async () => {
+      fireEvent.blur(branchInput);
+    });
+    // Blur leaves an unconflicted name untouched.
+    expect(branchInput.value).toBe("feature/canyon");
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      "worktree.create",
+      expect.objectContaining({
+        options: expect.objectContaining({ newBranch: "feature/canyon" }),
+      }),
+      expect.anything()
+    );
   });
 });

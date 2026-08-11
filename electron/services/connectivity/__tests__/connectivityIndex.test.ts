@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../ipc/utils.js", () => ({ broadcastToRenderer: vi.fn() }));
 
@@ -7,6 +7,8 @@ import {
   wireMcpServerToConnectivityRegistry,
   _resetServiceConnectivityRegistryForTests,
 } from "../index.js";
+import { broadcastToRenderer } from "../../../ipc/utils.js";
+import { CHANNELS } from "../../../ipc/channels.js";
 
 interface FakeMcpServer {
   isRunning: boolean;
@@ -131,5 +133,43 @@ describe("connectivity lazy MCP proxy", () => {
 
     registry.dispose();
     expect(fake.listeners.size).toBe(0);
+  });
+});
+
+describe("connectivity recovery toast", () => {
+  beforeEach(() => {
+    vi.mocked(broadcastToRenderer).mockClear();
+  });
+
+  afterEach(() => {
+    _resetServiceConnectivityRegistryForTests();
+  });
+
+  // MCP is the only source that can reach the unreachable→reachable edge —
+  // GitHub maps `unhealthy` to `unknown`, never `unreachable`. Nothing else
+  // guards the channel or the copy, so assert both here.
+  it("broadcasts the restored toast only on an MCP crash→restart, not on first start", () => {
+    const registry = getServiceConnectivityRegistry();
+    registry.start();
+
+    const fake = createFakeMcpServer(false);
+    wireMcpServerToConnectivityRegistry(fake);
+
+    // unknown → reachable: normal launch, must stay silent.
+    fake.setRunning(true);
+    expect(broadcastToRenderer).not.toHaveBeenCalled();
+
+    // reachable → unreachable: the crash itself carries no toast.
+    fake.setRunning(false);
+    expect(broadcastToRenderer).not.toHaveBeenCalled();
+
+    // unreachable → reachable: the recovery users actually need to know about.
+    fake.setRunning(true);
+    expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+    expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      type: "info",
+      title: "Connection restored",
+      message: "Reconnected to MCP server.",
+    });
   });
 });

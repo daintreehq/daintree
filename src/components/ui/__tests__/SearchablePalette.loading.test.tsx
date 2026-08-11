@@ -49,6 +49,7 @@ function renderPalette({ isLoading, results }: { isLoading?: boolean; results: I
       renderItem={(item) => <div key={item.id}>{item.id}</div>}
       label="Test"
       ariaLabel="Test palette"
+      tier="command"
       emptyMessage="No items available"
       isLoading={isLoading}
     />

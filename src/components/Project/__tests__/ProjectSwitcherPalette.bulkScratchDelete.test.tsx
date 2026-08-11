@@ -1,8 +1,9 @@
 /**
  * @vitest-environment jsdom
  *
- * Scratch deletion from the switcher palette: bulk "delete all" from the section
- * header (#11086) and single delete from a row's context menu (#11522). Both
+ * Scratch deletion from the switcher palette: bulk "delete all" from the visible
+ * button under the create control and from the section header's context menu
+ * (#11086, #11705), plus single delete from a row's context menu (#11522). All
  * share this harness because they share the surface — the section header and the
  * rows under it — and splitting them would fork 150 lines of identical mocks.
  *
@@ -14,7 +15,7 @@
  * is which props the palette hands it.
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, within } from "@testing-library/react";
 
 const originalScrollIntoView = Element.prototype.scrollIntoView;
 beforeAll(() => {
@@ -92,7 +93,17 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
   Dialog.Footer = Footer;
   Dialog.Divider = (props: React.HTMLAttributes<HTMLDivElement>) => <div {...props} />;
 
-  return { AppPaletteDialog: Dialog, KBD_CLASS: "kbd", PALETTE_SURFACE_WIDTH: "w-[484px]" };
+  return {
+    AppPaletteDialog: Dialog,
+    KBD_CLASS: "kbd",
+    PALETTE_SURFACE_WIDTHS: {
+      // Sentinel values, not the production pixels: this mock only has to satisfy
+      // the real AppPalettePopover's width lookup, and copying the shipped
+      // classes here would couple every future resize to six mock factories.
+      anchored: "mock-anchored-width",
+      command: "mock-command-width",
+    },
+  };
 });
 
 vi.mock("@/components/ui/popover", () => ({
@@ -263,6 +274,19 @@ function deleteAllItem(): HTMLElement | null {
   return screen.queryByRole("menuitem");
 }
 
+/**
+ * Where a control sits among the section's stacked children. Compared between
+ * two controls rather than asserted against a fixed number, so inserting
+ * anything else into the section doesn't rewrite every ordering spec.
+ */
+function orderInScratchSection(testId: string): number {
+  const element = screen.getByTestId(testId);
+  const siblings = Array.from(element.parentElement?.children ?? []);
+  const index = siblings.indexOf(element);
+  if (index === -1) throw new Error(`${testId} is not a child of its own parent`);
+  return index;
+}
+
 function snapshotOf(count: number): DeleteAllScratchesSnapshot {
   return Array.from({ length: count }, (_, i) => ({ id: `scratch-${i}`, name: `Spike ${i}` }));
 }
@@ -279,6 +303,15 @@ function confirmedCount(): number {
 function confirmedNoun(): string {
   const title = screen.getByTestId("confirm-title").textContent ?? "";
   return /workspaces/i.test(title) ? "plural" : "singular";
+}
+
+/**
+ * The number the consequence sentence is written in, read off its own noun so
+ * the spec pins agreement with the title rather than the wording of either.
+ */
+function consequenceNoun(): string {
+  const body = screen.getByTestId("confirm-body").textContent ?? "";
+  return /folders/i.test(body) ? "plural" : "singular";
 }
 
 beforeEach(() => {
@@ -346,6 +379,108 @@ describe.each(["modal", "dropdown"] as const)("Scratch section header menu (%s)"
   });
 });
 
+/**
+ * The visible control (#11705). The header menu it duplicates stays, but nothing
+ * in the palette advertised that the header was right-clickable, so the practical
+ * experience was deleting scratches one row at a time.
+ */
+describe.each(["modal", "dropdown"] as const)("Visible bulk delete button (%s)", (mode) => {
+  it("sits below the create control once scratches exist", () => {
+    const { view } = renderPalette({ mode, scratchResults: [makeScratch(1)] });
+
+    // Order, not adjacency: the issue asks for it *below* the create button —
+    // one rendered above reads as the primary action — but a helper line landing
+    // between them later is not a regression, so pinning them as siblings would
+    // fail on a change that still honours the contract.
+    expect(orderInScratchSection("scratch-delete-all-button")).toBeGreaterThan(
+      orderInScratchSection("scratch-create-button")
+    );
+
+    // Paired with the positive case so this can't pass by the button simply
+    // never existing — "absent when empty" only means something next to it.
+    view.rerender(<ProjectSwitcherPalette {...baseProps()} mode={mode} scratchResults={[]} />);
+
+    expect(screen.queryByTestId("scratch-delete-all-button")).toBeNull();
+  });
+
+  it("stays available while the create-name editor is open", () => {
+    // Clicking it moves focus off the editor input, whose blur cancels the
+    // create. The button must survive that re-render and still take the click —
+    // and the abandoned name must not be created on the way past.
+    const { props } = renderPalette({ mode, scratchResults: [makeScratch(1)] });
+    fireEvent.click(screen.getByTestId("scratch-create-button"));
+    expect(screen.getByTestId("scratch-create-input")).toBeTruthy();
+
+    const deleteAll = screen.getByTestId("scratch-delete-all-button");
+    // A real focus move, not fireEvent.blur: the ordering of blur against the
+    // click is the whole risk here.
+    deleteAll.focus();
+    expect(deleteAll.isConnected).toBe(true);
+    fireEvent.click(deleteAll);
+
+    expect(props.onRequestDeleteAllScratches).toHaveBeenCalledTimes(1);
+    expect(props.onCreateScratch).not.toHaveBeenCalled();
+  });
+
+  it("leaves the reach of the section it belongs to", () => {
+    const { view } = renderPalette({ mode, scratchResults: [makeScratch(1)] });
+    const named = { name: "Delete all scratch workspaces" };
+    expect(screen.queryByRole("button", named)).not.toBeNull();
+
+    // Collapsing unmounts the section's contents.
+    fireEvent.click(scratchHeader());
+    expect(screen.queryByRole("button", named)).toBeNull();
+    fireEvent.click(scratchHeader());
+    expect(screen.queryByRole("button", named)).not.toBeNull();
+
+    // Searching only sets `hidden` — the subtree stays mounted so a deliberate
+    // collapse survives clearing the box — so this has to be asked of the
+    // accessibility tree rather than the DOM.
+    view.rerender(
+      <ProjectSwitcherPalette
+        {...baseProps()}
+        mode={mode}
+        query="spike"
+        scratchResults={[makeScratch(1)]}
+      />
+    );
+
+    expect(screen.queryByRole("button", named)).toBeNull();
+  });
+
+  it("asks the host to open the confirmation when pressed", () => {
+    const { props } = renderPalette({ mode, scratchResults: [makeScratch(1), makeScratch(2)] });
+
+    fireEvent.click(screen.getByTestId("scratch-delete-all-button"));
+
+    // The palette never deletes anything itself — it requests the confirm, the
+    // same one the header menu requests.
+    expect(props.onRequestDeleteAllScratches).toHaveBeenCalledTimes(1);
+    expect(props.onRequestDeleteScratch).not.toHaveBeenCalled();
+  });
+
+  it("hides the button when the host wires no handler, but shows it when wired", () => {
+    const { view } = renderPalette({
+      mode,
+      scratchResults: [makeScratch(1)],
+      onRequestDeleteAllScratches: undefined,
+    });
+
+    expect(screen.queryByTestId("scratch-delete-all-button")).toBeNull();
+
+    view.rerender(
+      <ProjectSwitcherPalette
+        {...baseProps()}
+        mode={mode}
+        scratchResults={[makeScratch(1)]}
+        onRequestDeleteAllScratches={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByTestId("scratch-delete-all-button")).not.toBeNull();
+  });
+});
+
 describe("Scratch section header collapse toggle", () => {
   it("opens the menu without collapsing the section", () => {
     renderPalette({ scratchResults: [makeScratch(1)] });
@@ -393,6 +528,10 @@ describe("Bulk delete confirmation", () => {
 
     expect(confirmedCount()).toBe(1);
     expect(confirmedNoun()).toBe("singular");
+    // The consequence sentence branches on the same count, so it has to move
+    // with the title — "Delete 1 scratch workspace?" over "their folders" would
+    // be describing a different operation than the one being agreed to.
+    expect(consequenceNoun()).toBe("singular");
 
     view.rerender(
       <ProjectSwitcherPalette
@@ -404,6 +543,7 @@ describe("Bulk delete confirmation", () => {
 
     expect(confirmedCount()).toBe(4);
     expect(confirmedNoun()).toBe("plural");
+    expect(consequenceNoun()).toBe("plural");
   });
 
   it("opens only once a confirm is pending, and closes when it clears", () => {
@@ -461,6 +601,63 @@ describe("Bulk delete confirmation", () => {
 
     expect(props.onDismissDeleteAllScratchesConfirm).toHaveBeenCalledTimes(1);
     expect(props.onConfirmDeleteAllScratches).not.toHaveBeenCalled();
+  });
+
+  it("names the frozen targets rather than the live scratch rows", () => {
+    const snapshot = [
+      { id: "frozen-1", name: "Dependency spike" },
+      { id: "frozen-2", name: "Release notes draft" },
+    ] satisfies DeleteAllScratchesSnapshot;
+
+    renderPalette({
+      // The rows drain away as removals land, and a fresh scratch can appear
+      // under the open dialog — neither may rewrite what the user agreed to.
+      scratchResults: [{ ...makeScratch(1), name: "Live replacement" }],
+      deleteAllScratchesConfirm: snapshot,
+    });
+
+    const named = within(screen.getByTestId("scratch-delete-all-preview"))
+      .getAllByRole("listitem")
+      .map((item) => item.textContent);
+
+    expect(named).toEqual(snapshot.map((target) => target.name));
+  });
+
+  it("previews every target rather than a truncated head, and says so to a reader", () => {
+    // Two share a name: keyed by id, they have to stay separate rows, since
+    // "Spike" listed once would understate what is about to be deleted.
+    const snapshot = Array.from({ length: 12 }, (_, i) => ({
+      id: `frozen-${i}`,
+      name: i < 2 ? "Spike" : `Spike ${i}`,
+    })) satisfies DeleteAllScratchesSnapshot;
+
+    renderPalette({
+      scratchResults: [makeScratch(1)],
+      deleteAllScratchesConfirm: snapshot,
+    });
+
+    const named = within(screen.getByTestId("scratch-delete-all-preview"))
+      .getAllByRole("listitem")
+      .map((item) => item.textContent);
+
+    // A "+N more" tail would hand the hidden targets back the count-only
+    // treatment the preview exists to replace. Only the viewport is capped.
+    expect(named).toEqual(snapshot.map((target) => target.name));
+  });
+
+  it("hands focus back inside the palette, not to the trigger it just unmounted", () => {
+    renderPalette({
+      scratchResults: [makeScratch(1)],
+      deleteAllScratchesConfirm: snapshotOf(2),
+    });
+
+    // Both triggers are gone once the run lands — the header menu's item and the
+    // visible button are each gated on there being scratches left. Without a
+    // named successor the restore walks to app chrome behind a still-`aria-modal`
+    // palette, so the resolved target has to be the palette's own search box.
+    expect(screen.getByTestId("confirm-dialog").getAttribute("data-restore-focus")).toBe(
+      "palette-input"
+    );
   });
 
   it("refuses dismissal while the deletion is in flight", () => {

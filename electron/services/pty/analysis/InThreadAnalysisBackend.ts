@@ -20,6 +20,7 @@ export interface InThreadAnalysisHost {
   feedChunk(data: string): void;
   feedPrelude(data: string): void;
   resize(cols: number, rows: number): void;
+  resyncGeometry(cols: number, rows: number): void;
   handleFocus(): void;
   getMonitor(): ActivityMonitor | null;
   startMonitor(opts: MonitorStartOptions): void;
@@ -48,6 +49,10 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
 
   resize(cols: number, rows: number): void {
     this.host.resize(cols, rows);
+  }
+
+  resyncGeometry(cols: number, rows: number): void {
+    this.host.resyncGeometry(cols, rows);
   }
 
   notifyInput(data: string): void {

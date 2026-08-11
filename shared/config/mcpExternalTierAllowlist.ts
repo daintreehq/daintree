@@ -95,4 +95,19 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   "worktree.getCurrent",
   "worktree.createWithRecipe",
   "worktree.setActive",
+
+  // A deliberate product exception rather than a clean pass of the rule above,
+  // so it is worth stating the reasoning plainly. A caller holding
+  // `terminal.sendCommand` could pipe files through `pbcopy` itself, so this is
+  // not a capability it categorically lacks. What it cannot reproduce is the
+  // actual deliverable: one call that applies the project's own CopyTree policy
+  // (ignore rules, budgets, format) and puts a FILE on the clipboard the same
+  // way across macOS, Linux and Windows. The alternative is a brittle
+  // shell-and-pipe reconstruction per platform. Without the entry the feature
+  // only half exists — the in-app assistant reaches it through the system tier
+  // while Claude Code and Codex, the callers #11722 names, cannot.
+  //
+  // Its blast radius is a clipboard overwrite, which `actionRiskBand` already
+  // bands `destructive-local` and the tool advertises via `destructiveHint`.
+  "copyTree.generateAndCopyFile",
 ] as const satisfies readonly BuiltInActionId[];

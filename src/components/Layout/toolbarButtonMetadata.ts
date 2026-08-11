@@ -6,12 +6,11 @@ import {
   Globe,
   Mic,
   MonitorPlay,
-  Plug,
   SlidersHorizontal,
   SquareMenu,
   SquareTerminal,
 } from "lucide-react";
-import { FolderTree, Folders, History, Package } from "@/components/icons";
+import { FolderTree, Folders, History, Package, Plus } from "@/components/icons";
 import {
   BUILT_IN_AGENT_IDS,
   isBuiltInAgentId,
@@ -53,10 +52,10 @@ const AGENT_METADATA: Partial<Record<AnyToolbarButtonId, ToolbarButtonMetadata>>
   ) as Partial<Record<AnyToolbarButtonId, ToolbarButtonMetadata>>;
 
 export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, ToolbarButtonMetadata>> = {
-  "agent-tray": {
-    label: "Agent tray",
-    icon: Plug,
-    description: "Dropdown for launching any agent and jumping into setup",
+  launcher: {
+    label: "Launcher",
+    icon: Plus,
+    description: "Dropdown for launching any agent or panel and pinning it to the toolbar",
   },
   "plugin-tray": {
     label: "Plugin tray",
@@ -127,13 +126,70 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
 };
 
 /**
+ * Left-toolbar groups, in the order they render (#11681).
+ *
+ * A divider is drawn wherever the group changes, so this array is the single
+ * source of both the ordering and the separator positions. It replaces the
+ * old `AGENT_TOOLBAR_IDS` predicate, which described an agent/non-agent flip
+ * rather than a group: once a user reordered the toolbar, that flip landed
+ * dividers in arbitrary positions and could split the agent brand marks.
+ *
+ * `utilities` trails deliberately. Any built-in a user drags onto the left
+ * side — settings, notifications, copy-tree — plus every plugin contribution
+ * lands there, and calling those "panels" would be a lie. On a normal layout
+ * the group is empty and the row reads `[launcher] │ [agents] │ [panels]`.
+ */
+export const TOOLBAR_BUTTON_GROUP_ORDER = ["launcher", "agents", "panels", "utilities"] as const;
+
+export type ToolbarButtonGroup = (typeof TOOLBAR_BUTTON_GROUP_ORDER)[number];
+
+/**
+ * A `Map`, not an object literal, because `getToolbarButtonGroup` looks up ids
+ * that include plugin contributions — bracket-indexing a plain object with a
+ * key the registry supplies would inherit `Object.prototype` members.
+ */
+const BUILT_IN_TOOLBAR_GROUPS: ReadonlyMap<AnyToolbarButtonId, ToolbarButtonGroup> = new Map<
+  AnyToolbarButtonId,
+  ToolbarButtonGroup
+>([
+  ["launcher", "launcher"],
+  ["terminal", "panels"],
+  ["file-browser", "panels"],
+  ["browser", "panels"],
+  ["dev-server", "panels"],
+]);
+
+/**
+ * Canonical resolver for which left-toolbar group a button belongs to (#11681).
+ *
+ * Declared data, never derived from position: the group is a pure function of
+ * the id and must stay that way. It is deliberately absent from `ToolbarLayout`
+ * and `ToolbarPinnedState` — the side arrays reconcile last-writer-wins across
+ * project views, so making array position carry meaning beyond display order
+ * reopens the data loss #11667/#11671 had to unpick.
+ *
+ * Dispatch order mirrors `isToolbarButtonVisible` below: agent ids first,
+ * registered plugin contributions second (registry membership is the
+ * discriminator, never string-parsing the dotted id), then the built-in table,
+ * and finally the trailing `utilities` fallback for anything unclassified.
+ */
+export function getToolbarButtonGroup(
+  buttonId: AnyToolbarButtonId,
+  isPluginContribution = false
+): ToolbarButtonGroup {
+  if (isBuiltInAgentId(buttonId)) return "agents";
+  if (isPluginContribution) return "utilities";
+  return BUILT_IN_TOOLBAR_GROUPS.get(buttonId) ?? "utilities";
+}
+
+/**
  * Canonical resolver for whether a button gets its own top-level toolbar slot.
  * Both `Toolbar.tsx` and `ToolbarSettingsTab.tsx` consume this so they can
  * never disagree (#7666).
  *
  * Agent IDs (entries in `BUILT_IN_AGENT_IDS`) route to `isAgentToolbarVisible`
  * — their pin lives in `agentSettingsStore`. Built-in IDs, including
- * `agent-tray` and `plugin-tray`, read from the toolbar store's
+ * `launcher` and `plugin-tray`, read from the toolbar store's
  * `pinnedButtons` map: an explicit `false` hides; missing or `true` shows.
  *
  * Registered plugin contributions invert that default (#11304): they reach the

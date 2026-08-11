@@ -42,6 +42,8 @@ import { SynchronizedFrameDetector } from "./SynchronizedFrameDetector.js";
 import type { IMarker } from "@xterm/headless";
 import {
   TERMINAL_SESSION_PERSISTENCE_ENABLED,
+  mirrorNeedsResize,
+  mirrorReplayInFlight,
   resizeMirror,
   restoreSessionFromFile,
 } from "./terminalSessionPersistence.js";
@@ -134,7 +136,7 @@ export interface TerminalProcessDependencies {
  * reports nonsense (the pty can be torn down between the resize and the
  * read-back) — an unknown geometry must never be reported as a known one.
  */
-function readPtyDimension(read: () => number, fallback: number | null): number | null {
+export function readPtyDimension(read: () => number, fallback: number | null): number | null {
   try {
     const value = read();
     return Number.isFinite(value) ? value : fallback;
@@ -185,6 +187,11 @@ export class TerminalProcess {
   private ptyDataDisposable: { dispose: () => void } | null = null;
   private headlessResponderDisposable: { dispose: () => void } | null = null;
   private synchronizedFrameDetector: SynchronizedFrameDetector | null = null;
+  // Mirror-vs-pty divergence bookkeeping (#11719): the signature of the split
+  // currently being reported (null while the grids agree) so a periodic check
+  // logs once per episode, and a cumulative count for triage.
+  private mirrorDivergenceSignature: string | null = null;
+  private mirrorDivergenceCount = 0;
   private sessionSnapshotter!: SessionSnapshotter;
   private readonly agentOutputTemperature = new AgentActivityTemperature();
   private agentOutputContentSnapshot: VisibleContentSnapshot | undefined;
@@ -676,6 +683,7 @@ export class TerminalProcess {
       feedChunk: (data) => this.feedChunkInThread(data),
       feedPrelude: (data) => this.feedPreludeInThread(data),
       resize: (cols, rows) => this.resizeAnalysisInThread(cols, rows),
+      resyncGeometry: (cols, rows) => this.resyncGeometryInThread(cols, rows),
       handleFocus: () => this.handleFocusInThread(),
       getMonitor: () => this.activityMonitor,
       startMonitor: (opts) => this.startMonitorInThread(opts),
@@ -756,7 +764,71 @@ export class TerminalProcess {
         agentLive: this.isAgentLive,
         agentState: this.terminalInfo.agentState,
       }),
+      onMirrorGeometry: (cols, rows, replayInFlight) =>
+        this.checkMirrorGeometry(cols, rows, replayInFlight),
     };
+  }
+
+  /**
+   * Compare a mirror grid against the PTY's and report a divergence (#11719).
+   *
+   * The mirror is a third grid: it stamps its own geometry onto every snapshot,
+   * so a diverged one is self-consistent — the replay aligns to the claimed
+   * grid, every check passes, and the corruption replays forever. Nothing
+   * anywhere logged the two side by side, which is why this class of bug has
+   * been re-diagnosed from scratch repeatedly.
+   *
+   * Compares against the PTY's LIVE dims, never the last requested ones: a
+   * request that never landed is exactly the case worth catching. Logs once per
+   * episode (signature-deduped, cleared on agreement) rather than once per
+   * check, since this runs on the worker's sample cadence.
+   */
+  private checkMirrorGeometry(
+    mirrorCols: number,
+    mirrorRows: number,
+    replayInFlight: boolean
+  ): void {
+    const terminal = this.terminalInfo;
+    if (terminal.isExited) return;
+    // A replay deliberately parks the mirror on the snapshot's capture grid
+    // (#11552), so its live geometry is EXPECTED to disagree for the duration.
+    // Reporting that would manufacture a divergence out of healthy behaviour —
+    // and a log that cries wolf is worse than no log, given the whole point is
+    // settling the next report from it.
+    if (replayInFlight) return;
+    const ptyCols = readPtyDimension(() => terminal.ptyProcess.cols, null);
+    const ptyRows = readPtyDimension(() => terminal.ptyProcess.rows, null);
+    if (ptyCols === null || ptyRows === null) return;
+
+    if (mirrorCols === ptyCols && mirrorRows === ptyRows) {
+      this.mirrorDivergenceSignature = null;
+      return;
+    }
+
+    const signature = `${mirrorCols}x${mirrorRows}:${ptyCols}x${ptyRows}`;
+    if (this.mirrorDivergenceSignature !== signature) {
+      this.mirrorDivergenceSignature = signature;
+      this.mirrorDivergenceCount++;
+      console.warn(
+        `[TerminalProcess] Mirror grid diverged from the pty for ${this.id}: ` +
+          `mirror ${mirrorCols}x${mirrorRows} vs pty ${ptyCols}x${ptyRows} ` +
+          `(divergence #${this.mirrorDivergenceCount}); re-asserting the pty grid`
+      );
+      // The repair reflows the mirror, so a snapshot taken against the pre-
+      // repair buffer is stale. Bump once per episode, not once per sample:
+      // the repair below runs on every sample while the split persists, and
+      // dirtying the epoch each time would defeat the no-change serialize skip
+      // for as long as the divergence lasts.
+      terminal.contentEpoch++;
+    }
+    // Repair on EVERY observation, unlike the log. A repair whose post was
+    // dropped must get another chance — deduping this too would re-seal the
+    // exact divergence it exists to break. The backend no-ops once converged.
+    try {
+      this.analysis.resyncGeometry(ptyCols, ptyRows);
+    } catch (error) {
+      console.error(`Failed to resync mirror geometry for ${this.id}:`, error);
+    }
   }
 
   private startMonitorInThread(opts: MonitorStartOptions): void {
@@ -833,9 +905,7 @@ export class TerminalProcess {
   private resizeAnalysisInThread(cols: number, rows: number): void {
     const terminal = this.terminalInfo;
     if (terminal.headlessTerminal) {
-      // Parked, not applied, while a session replay owns the grid — the replay
-      // reflows to this geometry instead of to the one it opened on (#11552).
-      resizeMirror(terminal.headlessTerminal, cols, rows);
+      this.applyMirrorResize(terminal.headlessTerminal, cols, rows);
       // Reflow rewraps the buffer — invalidate any wake no-change skip.
       terminal.contentEpoch++;
     }
@@ -845,6 +915,53 @@ export class TerminalProcess {
     }
     this.agentOutputTemperature.noteResize(Date.now());
     this.agentOutputContentSnapshot = undefined;
+  }
+
+  /**
+   * Re-assert the mirror's grid WITHOUT the side effects of a real resize
+   * (#11719).
+   *
+   * Driven from `resize()`'s "unchanged" branch, where the PTY is already at
+   * the requested size but the mirror may not be. It must stay side-effect
+   * free: `notifyResize()` opens a 500ms activity-suppression window and resets
+   * four detectors, and geometry gets re-asserted routinely, so firing that
+   * here would repeatedly blind agent detection. No PTY resize happened, so
+   * there are no reflow bytes to suppress either.
+   */
+  private resyncGeometryInThread(cols: number, rows: number): void {
+    const mirror = this.terminalInfo.headlessTerminal;
+    if (!mirror || !mirrorNeedsResize(mirror, cols, rows)) return;
+    console.warn(
+      `[TerminalProcess] Mirror grid diverged for ${this.id}: mirror ${mirror.cols}x${mirror.rows} ` +
+        `vs pty ${cols}x${rows}; re-asserting`
+    );
+    this.applyMirrorResize(mirror, cols, rows);
+    this.terminalInfo.contentEpoch++;
+  }
+
+  /**
+   * Move the in-thread mirror to `cols`x`rows`, keeping the scheduler's held
+   * output on the correct side of the reflow (#11719).
+   *
+   * A resize that a replay window will only PARK changes no geometry now, so
+   * there is no ordering boundary to put the backlog behind — and draining for
+   * it would push the scheduler's aggregate in-flight ledger over its cap with
+   * no `flushSync` to repay it, stalling every other mirror until the backlog
+   * parsed on its own. Park it directly instead.
+   */
+  private applyMirrorResize(mirror: HeadlessTerminalType, cols: number, rows: number): void {
+    if (mirrorReplayInFlight(mirror)) {
+      resizeMirror(mirror, cols, rows);
+      return;
+    }
+    // Slices the scheduler still holds were emitted at the OLD grid. Handing
+    // them over first lets xterm's own pre-resize flushSync parse them at that
+    // grid; feeding them afterwards lays old-width output out at the new width.
+    headlessMirrorScheduler.drainThenResize(this.id, mirror, () => {
+      // Parked, not applied, while a session replay owns the grid — the replay
+      // reflows to this geometry instead of to the one it opened on (#11552).
+      resizeMirror(mirror, cols, rows);
+    });
   }
 
   private disposeHeadless(): void {
@@ -1184,6 +1301,17 @@ export class TerminalProcess {
       currentRows = terminal.ptyProcess.rows;
 
       if (currentCols === cols && currentRows === rows) {
+        // The PTY needs no work, but the mirror is a THIRD grid and may have
+        // drifted off this one — and this branch is the only thing a later
+        // re-assertion of the current size reaches, so skipping it outright is
+        // what made mirror divergence permanent (#11719). Re-assert the grid;
+        // the backend no-ops when the mirror is already there, so the common
+        // case stays free of resize side effects.
+        try {
+          this.analysis.resyncGeometry(cols, rows);
+        } catch (error) {
+          console.error(`Failed to resync mirror geometry for ${this.id}:`, error);
+        }
         return {
           requestedCols: cols,
           requestedRows: rows,

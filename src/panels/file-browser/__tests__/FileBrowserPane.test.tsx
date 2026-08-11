@@ -1279,7 +1279,10 @@ describe("folder context menu", () => {
     expect(copyContextWithFeedbackMock).toHaveBeenCalledWith(
       "wt-1",
       "context-menu",
-      expect.anything()
+      expect.anything(),
+      // The dispatch source cannot tell this apart from a worktree-card copy,
+      // so the pane names its own surface for the run history (#11732).
+      "file-browser"
     );
   });
 });

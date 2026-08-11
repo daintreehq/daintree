@@ -47,8 +47,8 @@ function RecipeListItem({
         id={`quick-create-option-${item.id}`}
         onClick={onClick}
         className={cn(
-          // Was a hand-rolled copy of the shared row, so it kept the neutral
-          // selected border after the family moved to the accent one.
+          // Was a hand-rolled copy of the shared row and drifted out of step
+          // with it; takes the selected treatment from the family now.
           PALETTE_ROW_CLASS,
           "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex items-center gap-2",
           "bg-daintree-bg hover:bg-surface"
@@ -128,6 +128,7 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
 
   return (
     <SearchablePalette<QuickCreateItem>
+      tier="anchored"
       isOpen={palette.isOpen}
       query={palette.query}
       results={palette.results}
@@ -189,9 +190,11 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
         ) : undefined
       }
       footer={
+        // No `Esc cancel` chip. Escape closes the palette but the pending
+        // `worktree.createWithRecipe` keeps running — there is no abort path —
+        // so naming it "cancel" promised something the key doesn't do.
         <PaletteFooterHints
           primaryHint={{ keys: ["↵"], label: palette.isPending ? "creating…" : "to create" }}
-          hints={[{ keys: ["Esc"], label: "cancel" }]}
         />
       }
     />

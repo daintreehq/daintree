@@ -88,7 +88,6 @@ describe("PtyClient lifecycle ledger", () => {
   let disposeLifecycleLedger: typeof import("../pty/lifecycleLedger.js").disposeLifecycleLedger;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
     vi.resetModules();
     vi.clearAllMocks();
     shared.appMock.removeAllListeners();
@@ -97,6 +96,9 @@ describe("PtyClient lifecycle ledger", () => {
 
     ({ PtyClient: PtyClientClass } = await import("../PtyClient.js"));
     ({ getLifecycleLedger, disposeLifecycleLedger } = await import("../pty/lifecycleLedger.js"));
+
+    // Install after imports: fake timers can stall module re-execution (#11661).
+    vi.useFakeTimers();
     disposeLifecycleLedger();
   });
 

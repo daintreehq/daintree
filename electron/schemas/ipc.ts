@@ -6,6 +6,7 @@ import { z } from "zod";
 import { BUILT_IN_PANEL_KINDS, panelKindHasPty } from "../../shared/config/panelKindRegistry.js";
 import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
 import { MAX_TERMINAL_GRID_DIMENSION } from "../../shared/types/terminal.js";
+import { COPY_TREE_RUN_SOURCES } from "../../shared/types/ipc/copyTreeHistory.js";
 import {
   ASSISTANT_HOST_PROTOCOL_VERSION,
   type AssistantHostEvent,
@@ -470,27 +471,88 @@ export const SlashCommandListRequestSchema = z.object({
 
 export const CopyTreeFormatSchema = z.enum(["xml", "json", "markdown", "tree", "ndjson", "sarif"]);
 
-export const CopyTreeOptionsSchema = z
-  .object({
-    format: CopyTreeFormatSchema.optional(),
-    filter: z.union([z.string(), z.array(z.string())]).optional(),
-    exclude: z.union([z.string(), z.array(z.string())]).optional(),
-    always: z.array(z.string()).optional(),
-    includePaths: z.array(z.string()).optional(),
-    // Non-empty at both levels: an empty list or a blank entry would resolve to
-    // the worktree root, turning a folder copy into a whole-worktree copy that
-    // no caller asked for. Absent still means "no scoping".
-    scopePaths: z.array(z.string().min(1)).min(1).optional(),
-    modified: z.boolean().optional(),
-    changed: z.string().optional(),
-    maxFileSize: z.number().int().positive().optional(),
-    maxTotalSize: z.number().int().positive().optional(),
-    maxFileCount: z.number().int().positive().optional(),
-    withLineNumbers: z.boolean().optional(),
-    charLimit: z.number().int().positive().optional(),
-    sort: z.enum(["path", "size", "modified", "name", "extension", "depth"]).optional(),
-  })
-  .optional();
+/**
+ * The unrefined object base, mirroring `PanelContributionObjectSchema`. It exists
+ * so {@link CopyTreeTestConfigOptionsSchema} can `.extend()` a plain object —
+ * that is the one operation the refined schema below cannot serve.
+ *
+ * Extend from here ONLY when you also re-apply
+ * {@link requireScopeForIgnoreFileBypass}; anything that just needs to validate
+ * should use {@link CopyTreeOptionsSchema}. Notably the history codec unwraps
+ * the refined schema on purpose, so a persisted record cannot rehydrate into a
+ * request the generate handlers would have rejected — swapping it to this base
+ * would silently drop that check.
+ */
+export const CopyTreeOptionsObjectSchema = z.object({
+  format: CopyTreeFormatSchema.optional(),
+  // `filter`/`includePaths` are one selection set and are unioned in
+  // CopyTreeService. Non-empty at both levels, like `scopePaths` below: an
+  // empty list or a blank entry leaves the selection empty, which the SDK
+  // reads as "no filter" — i.e. the whole worktree. Rejecting them here keeps
+  // a malformed narrow request from widening into a full-repo copy.
+  filter: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
+  exclude: z.union([z.string(), z.array(z.string())]).optional(),
+  always: z.array(z.string()).optional(),
+  includePaths: z.array(z.string().min(1)).min(1).optional(),
+  // Non-empty at both levels: an empty list or a blank entry would resolve to
+  // the worktree root, turning a folder copy into a whole-worktree copy that
+  // no caller asked for. Absent still means "no scoping".
+  scopePaths: z.array(z.string().min(1)).min(1).optional(),
+  scopeIgnoresIgnoreFiles: z.boolean().optional(),
+  modified: z.boolean().optional(),
+  changed: z.string().optional(),
+  maxFileSize: z.number().int().positive().optional(),
+  maxTotalSize: z.number().int().positive().optional(),
+  maxFileCount: z.number().int().positive().optional(),
+  withLineNumbers: z.boolean().optional(),
+  charLimit: z.number().int().positive().optional(),
+  sort: z.enum(["path", "size", "modified", "name", "extension", "depth"]).optional(),
+});
+
+/**
+ * `scopeIgnoresIgnoreFiles` is scope-bound: the SDK only consults it while
+ * walking `scope` entries, so setting it alone does exactly nothing. Silently
+ * accepting that is the shape of the bug #11750 was filed about — a caller
+ * believes it asked for the ignored files back, gets a short bundle, and is
+ * told nothing. Rejecting names the missing field instead, in one round trip.
+ *
+ * Shared by the ordinary and test-config variants so the rule cannot drift
+ * between them.
+ */
+function requireScopeForIgnoreFileBypass(
+  options: { scopeIgnoresIgnoreFiles?: boolean; scopePaths?: string[] },
+  ctx: z.RefinementCtx
+): void {
+  if (options.scopeIgnoresIgnoreFiles === true && !options.scopePaths?.length) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["scopeIgnoresIgnoreFiles"],
+      message: "scopeIgnoresIgnoreFiles requires scopePaths",
+    });
+  }
+}
+
+export const CopyTreeOptionsSchema = CopyTreeOptionsObjectSchema.superRefine(
+  requireScopeForIgnoreFileBypass
+).optional();
+
+/**
+ * Which surface asked for a copy-tree run (#11732). Left `.optional()` rather
+ * than given a `.default()` so the schema keeps describing omission honestly —
+ * the main handler is what maps an absent source to `unknown`, and it is the
+ * only writer of the history.
+ */
+export const CopyTreeRunSourceSchema = z.enum(COPY_TREE_RUN_SOURCES);
+
+/**
+ * Caller-supplied display label for a run (#11734).
+ *
+ * Unconstrained beyond being a string, deliberately. Blank is valid input and
+ * resolves as absent, and `resolveCopyTreeRunName` is the single trim/truncate
+ * seam for every consumer — a `.max()` here would reject an oversized cosmetic
+ * label by failing the whole (expensive) generation instead of shortening it.
+ */
+const CopyTreeRunNameSchema = z.string().optional();
 
 export const CopyTreeGeneratePayloadSchema = z.object({
   worktreeId: z.string().min(1),
@@ -500,11 +562,15 @@ export const CopyTreeGeneratePayloadSchema = z.object({
   // CopyTreeOptionsSchema: the destination is chosen by the main process, so a
   // tool call can never turn into an arbitrary file write.
   includeContent: z.boolean().optional(),
+  name: CopyTreeRunNameSchema,
+  source: CopyTreeRunSourceSchema.optional(),
 });
 
 export const CopyTreeGenerateAndCopyFilePayloadSchema = z.object({
   worktreeId: z.string().min(1),
   options: CopyTreeOptionsSchema,
+  name: CopyTreeRunNameSchema,
+  source: CopyTreeRunSourceSchema.optional(),
 });
 
 export const CopyTreeInjectPayloadSchema = z.object({
@@ -512,6 +578,8 @@ export const CopyTreeInjectPayloadSchema = z.object({
   worktreeId: z.string().min(1),
   options: CopyTreeOptionsSchema,
   injectionId: z.string().min(1).optional(),
+  name: CopyTreeRunNameSchema,
+  source: CopyTreeRunSourceSchema.optional(),
 });
 
 export const CopyTreeCancelPayloadSchema = z.object({
@@ -522,15 +590,15 @@ export const CopyTreeCancelPayloadSchema = z.object({
 // unsaved settings form (Electron's structured clone drops `undefined` keys, so
 // `null` is the only sentinel that survives IPC). `null` blocks the saved-settings
 // back-fill in mergeCopyTreeOptions; absent/undefined still falls back.
-export const CopyTreeTestConfigOptionsSchema = CopyTreeOptionsSchema.unwrap()
-  .extend({
-    exclude: z.union([z.string(), z.array(z.string())]).nullish(),
-    always: z.array(z.string()).nullish(),
-    maxFileSize: z.number().int().positive().nullish(),
-    maxTotalSize: z.number().int().positive().nullish(),
-    charLimit: z.number().int().positive().nullish(),
-    sort: z.enum(["path", "size", "modified", "name", "extension", "depth"]).nullish(),
-  })
+export const CopyTreeTestConfigOptionsSchema = CopyTreeOptionsObjectSchema.extend({
+  exclude: z.union([z.string(), z.array(z.string())]).nullish(),
+  always: z.array(z.string()).nullish(),
+  maxFileSize: z.number().int().positive().nullish(),
+  maxTotalSize: z.number().int().positive().nullish(),
+  charLimit: z.number().int().positive().nullish(),
+  sort: z.enum(["path", "size", "modified", "name", "extension", "depth"]).nullish(),
+})
+  .superRefine(requireScopeForIgnoreFileBypass)
   .optional();
 
 export const CopyTreeTestConfigPayloadSchema = z.object({

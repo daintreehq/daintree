@@ -10,6 +10,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { TerminalRestoreController } from "../TerminalRestoreController";
 import type { ManagedTerminal } from "../types";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
+import { terminalClient } from "@/clients";
 
 vi.mock("@/clients", () => ({
   terminalClient: { getSerializedState: vi.fn() },
@@ -45,16 +46,17 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
   const writeAndFlush = (terminal: Terminal, data: string): Promise<void> =>
     new Promise<void>((resolve) => terminal.write(data, () => resolve()));
 
-  function makeTerminal(cols: number, rows = 10): Terminal {
+  function makeTerminal(cols: number, rows: number = 10): Terminal {
     return new Terminal({ cols, rows, scrollback: 200, allowProposedApi: true });
   }
 
   /** Capture a snapshot the way the pty-host mirror does. */
   async function capture(
     cols: number,
-    content: string
+    content: string,
+    rows?: number
   ): Promise<{ snapshot: SerializedTerminalSnapshot; source: Terminal }> {
-    const source = makeTerminal(cols);
+    const source = makeTerminal(cols, rows);
     const addon = new SerializeAddon();
     source.loadAddon(addon);
     await writeAndFlush(source, content);
@@ -85,7 +87,10 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
   const cursorOf = (terminal: Terminal) =>
     `${terminal.buffer.active.cursorX},${terminal.buffer.active.cursorY}`;
 
-  function makeController(terminal: Terminal): {
+  function makeController(
+    terminal: Terminal,
+    overrides: Partial<ManagedTerminal> = {}
+  ): {
     controller: TerminalRestoreController;
     managed: ManagedTerminal;
   } {
@@ -97,6 +102,11 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
       isSerializedRestoreInProgress: false,
       deferredOutput: [],
       isUserScrolledBack: false,
+      // Opened: these panes were attached and measured, so `terminal.cols/rows`
+      // genuinely describes their grid. Parked panes are the exception and say
+      // so explicitly (#11718).
+      isOpened: true,
+      ...overrides,
     } as unknown as ManagedTerminal;
     const controller = new TerminalRestoreController({
       getInstance: (id) => (id === "t1" ? managed : undefined),
@@ -184,5 +194,200 @@ describe("TerminalRestoreController replay fidelity (real xterm)", () => {
 
     expect(live.cols).toBe(100);
     expect(readBuffer(live).length).toBeGreaterThan(0);
+  });
+
+  /**
+   * A parked pane must end a restore on the grid it is really on (#11718).
+   *
+   * A pane restored into a non-selected worktree is prewarmed but never
+   * attached, so nothing fits it — yet it stays content-live and keeps parsing
+   * whatever its surviving PTY streams. `terminal.cols/rows` for such a pane is
+   * xterm's constructor default, not evidence of anything, and seeding the
+   * restore window from it left the pane back at 80×24 after a correctly
+   * aligned replay. Every subsequent agent repaint then wrapped into the wrong
+   * rows, and because that is committed cell data no later fit or Redraw undoes
+   * it — it only clears once new output scrolls it away.
+   */
+  describe("parked pane geometry", () => {
+    const PARKED_COLS = 120;
+    const PARKED_ROWS = 30;
+    const CAPTURE_COLS = 90;
+
+    // Longer than the 80-column default and shorter than the pane's real grid,
+    // so it occupies one row on the real grid and wraps onto a second at the
+    // default. Erase-line then only clears the first of those two rows, which
+    // is how one repainting status line becomes fragments down the pane.
+    const STATUS_LINE = "* Cooking".padEnd(95, ".");
+
+    /** Cursor-addressed repaints, the way an agent CLI emits them. */
+    async function streamStatusRepaints(terminal: Terminal): Promise<void> {
+      for (let frame = 0; frame < 4; frame++) {
+        await writeAndFlush(terminal, `\x1b[1;1H\x1b[2K${STATUS_LINE} ${frame}`);
+      }
+    }
+
+    it("parses live output at the pane's real grid, not the constructor default", async () => {
+      const { snapshot, source } = await capture(CAPTURE_COLS, WRAPPED_LINE, PARKED_ROWS);
+
+      // Ground truth: the same session on the real grid throughout — what the
+      // user would have seen had the view never been evicted.
+      const truth = await reflowed(source, PARKED_COLS);
+      await streamStatusRepaints(truth);
+
+      // The pane as hydration builds it: prewarmed at xterm's default, never
+      // attached, carrying the persisted grid only as an attach target.
+      const live = makeTerminal(80, 24);
+      const { controller } = makeController(live, {
+        isOpened: false,
+        targetCols: PARKED_COLS,
+        targetRows: PARKED_ROWS,
+      });
+
+      controller.restoreFromSerialized("t1", snapshot.data, snapshot);
+      await flush(live);
+      // endRestoreWindow hops out of the write callback via queueMicrotask, so
+      // the geometry is only settled one tick after the replay drains.
+      await Promise.resolve();
+
+      // Live PTY output arrives long before the user selects this worktree.
+      await streamStatusRepaints(live);
+
+      expect(live.cols).toBe(PARKED_COLS);
+      expect(readBuffer(live)).toEqual(readBuffer(truth));
+      expect(cursorOf(live)).toBe(cursorOf(truth));
+    });
+
+    it("falls back to the snapshot's capture grid when the pane has no target", async () => {
+      // No persisted size reached this pane, so the grid the mirror and PTY were
+      // last agreed on is the best evidence left — still better than a default
+      // the pane was never on.
+      const { snapshot } = await capture(CAPTURE_COLS, WRAPPED_LINE, PARKED_ROWS);
+
+      const live = makeTerminal(80, 24);
+      const { controller } = makeController(live, { isOpened: false });
+
+      controller.restoreFromSerialized("t1", snapshot.data, snapshot);
+      await flush(live);
+      await Promise.resolve();
+
+      expect(live.cols).toBe(CAPTURE_COLS);
+      expect(live.rows).toBe(PARKED_ROWS);
+    });
+
+    it("keeps that fallback through fetchAndRestore, the path hydration uses", async () => {
+      // fetchAndRestore opens its window BEFORE the snapshot exists, and the
+      // nested restore cannot reseed an open window — so a seed computed from
+      // capture geometry would never survive this entry point. Expressing "no
+      // target" as an absent seed is what makes the two paths agree.
+      const { snapshot } = await capture(CAPTURE_COLS, WRAPPED_LINE, PARKED_ROWS);
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot);
+
+      const live = makeTerminal(80, 24);
+      const { controller } = makeController(live, { isOpened: false });
+
+      await controller.fetchAndRestore("t1");
+      await flush(live);
+      await Promise.resolve();
+
+      expect(live.cols).toBe(CAPTURE_COLS);
+      expect(live.rows).toBe(PARKED_ROWS);
+    });
+
+    it("prefers the parked target over the capture grid through fetchAndRestore", async () => {
+      const { snapshot } = await capture(CAPTURE_COLS, WRAPPED_LINE, PARKED_ROWS);
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot);
+
+      const live = makeTerminal(80, 24);
+      const { controller } = makeController(live, {
+        isOpened: false,
+        targetCols: PARKED_COLS,
+        targetRows: PARKED_ROWS,
+      });
+
+      await controller.fetchAndRestore("t1");
+      await flush(live);
+      await Promise.resolve();
+
+      expect(live.cols).toBe(PARKED_COLS);
+    });
+
+    it("applies the parked target on the incremental path too", async () => {
+      // Large snapshots take the incremental route, which opens its own window.
+      const bulk = `${WRAPPED_LINE}\r\n`.repeat(40) + WRAPPED_LINE;
+      const { snapshot } = await capture(CAPTURE_COLS, bulk, PARKED_ROWS);
+
+      const live = makeTerminal(80, 24);
+      const { controller } = makeController(live, {
+        isOpened: false,
+        targetCols: PARKED_COLS,
+        targetRows: PARKED_ROWS,
+      });
+
+      await controller.restoreFromSerializedIncremental("t1", snapshot.data, snapshot);
+      await flush(live);
+      await Promise.resolve();
+
+      expect(live.cols).toBe(PARKED_COLS);
+      expect(live.rows).toBe(PARKED_ROWS);
+    });
+
+    it("ignores a parked target that is not a grid a terminal could have had", async () => {
+      // Corrupt or legacy persisted state must not become the pane's grid; the
+      // capture grid stands instead.
+      const { snapshot } = await capture(CAPTURE_COLS, WRAPPED_LINE, PARKED_ROWS);
+
+      const live = makeTerminal(80, 24);
+      const { controller } = makeController(live, {
+        isOpened: false,
+        targetCols: 100_000,
+        targetRows: PARKED_ROWS,
+      });
+
+      controller.restoreFromSerialized("t1", snapshot.data, snapshot);
+      await flush(live);
+      await Promise.resolve();
+
+      expect(live.cols).toBe(CAPTURE_COLS);
+    });
+
+    it("keeps a resize that lands mid-replay ahead of the parked target", async () => {
+      // The window seed is the only thing that changed: a real resize arriving
+      // during the replay still parks into pendingRestoreGeometry and still
+      // wins, exactly as before (#11552).
+      const { snapshot } = await capture(CAPTURE_COLS, WRAPPED_LINE, PARKED_ROWS);
+
+      const live = makeTerminal(80, 24);
+      const { controller, managed } = makeController(live, {
+        isOpened: false,
+        targetCols: PARKED_COLS,
+        targetRows: PARKED_ROWS,
+      });
+
+      controller.restoreFromSerialized("t1", snapshot.data, snapshot);
+      managed.pendingRestoreGeometry = { cols: 64, rows: 20 };
+      await flush(live);
+      await Promise.resolve();
+
+      expect(live.cols).toBe(64);
+      expect(live.rows).toBe(20);
+    });
+
+    it("leaves an opened pane's live grid authoritative", async () => {
+      // An attached pane WAS measured, so its own grid outranks a stale target.
+      const { snapshot } = await capture(CAPTURE_COLS, WRAPPED_LINE, PARKED_ROWS);
+
+      const live = makeTerminal(100);
+      const { controller } = makeController(live, {
+        isOpened: true,
+        targetCols: PARKED_COLS,
+        targetRows: PARKED_ROWS,
+      });
+
+      controller.restoreFromSerialized("t1", snapshot.data, snapshot);
+      await flush(live);
+      await Promise.resolve();
+
+      expect(live.cols).toBe(100);
+    });
   });
 });

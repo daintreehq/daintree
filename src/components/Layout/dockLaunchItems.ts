@@ -10,16 +10,22 @@ import {
   subscribeToPanelKindRegistry,
   getPanelKindRegistrySnapshot,
 } from "@shared/config/panelKindRegistry";
-import { usePanelStore } from "@/store/panelStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useActionMruStore } from "@/store/actionMruStore";
 import { actionService } from "@/services/ActionService";
+import { launchPanelKind } from "@/registry/panelKindLaunch";
+import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
+import { notify } from "@/lib/notify";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { getRecipeScope } from "@/utils/recipeScope";
 import { logError } from "@/utils/logger";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
-import type { ActionSource, AgentAvailabilityState, TerminalRecipe } from "@shared/types";
-import type { AddPanelOptions } from "@shared/types/addPanelOptions";
+import type {
+  ActionSource,
+  AgentAvailabilityState,
+  AgentState,
+  TerminalRecipe,
+} from "@shared/types";
 import type { RecipeContext } from "@/utils/recipeVariables";
 
 export const AGENT_MRU_PREFIX = "agent.";
@@ -27,19 +33,6 @@ export const AGENT_MRU_PREFIX = "agent.";
 /** Cap the "Recently launched" band so it stays a quick-reach shortcut rather
  * than a second full agent list above the fixed Pinned/Other groups. */
 export const RECENCY_BAND_CAP = 3;
-
-/**
- * Panel kinds `agent.launch` understands. `terminal` resolves to the plain
- * shell; `browser` and `dev-preview` return from their own branches in
- * `launchAgent` (seeding the dev-server title, reusing the launch reentrancy
- * guard). Every other kind must be created through `addPanel` directly —
- * `resolveAgentLaunchKind` throws on an id it can't resolve as an agent (#11498).
- */
-const AGENT_LAUNCH_PANEL_KINDS: ReadonlySet<string> = new Set([
-  "terminal",
-  "browser",
-  "dev-preview",
-]);
 
 /** Terminal opts out of the palette (it has dedicated spawn actions) but is the
  * launcher's most-used entry, so it is added back explicitly here. */
@@ -50,12 +43,46 @@ export const CREATE_RECIPE_ROW_KEY = "create-recipe";
 
 export type LaunchAgentIcon = React.ComponentType<{ className?: string; brandColor?: string }>;
 
+/** Which provenance group a preset renders under, in this order. */
+export type DockLaunchPresetGroup = "default" | "ccr" | "project" | "custom";
+
+/**
+ * One selectable preset for an agent. `presetId: null` is the synthetic
+ * "Default" choice — the sentinel that clears a saved preset rather than
+ * inheriting it, so it is deliberately distinct from `undefined`.
+ */
+export interface DockLaunchPresetChoice {
+  presetId: string | null;
+  label: string;
+  color?: string;
+  group: DockLaunchPresetGroup;
+  isSelected: boolean;
+}
+
 export interface DockLaunchAgent {
   id: string;
   name: string;
   icon?: LaunchAgentIcon;
   brandColor?: string;
   availability?: AgentAvailabilityState;
+  /**
+   * Present only when the agent has at least one named preset. Always begins
+   * with the synthetic Default choice, so an expanded row can offer the plain
+   * launch alongside the named ones.
+   */
+  presetChoices?: readonly DockLaunchPresetChoice[];
+  /** Drives the running pip. Null when nothing is running for this agent. */
+  dominantState?: AgentState | null;
+  /** Newly detected on this machine and not yet acted on — drives the "New" cue. */
+  isNew?: boolean;
+}
+
+/**
+ * Why a row cannot be activated right now. An object rather than a boolean plus
+ * a separately-optional reason, so a disabled row can never render without one.
+ */
+export interface DockLaunchDisabledState {
+  reason: string;
 }
 
 interface DockLaunchItemBase {
@@ -64,11 +91,21 @@ interface DockLaunchItemBase {
   name: string;
   searchAliases?: string[];
   description?: string;
+  /**
+   * Set when a precondition for launching is missing. The row stays in the
+   * navigation space regardless — its pin affordance is still worth reaching,
+   * and pinning a panel you haven't opened a project for yet is reasonable.
+   */
+  disabled?: DockLaunchDisabledState;
 }
+
+/** Which agent band a row belongs to, decided by availability. */
+export type DockLaunchAgentBand = "launch" | "needs-setup" | "available";
 
 export interface DockLaunchAgentItem extends DockLaunchItemBase {
   category: "agent";
   agent: DockLaunchAgent;
+  agentBand: DockLaunchAgentBand;
 }
 
 export interface DockLaunchPanelItem extends DockLaunchItemBase {
@@ -100,6 +137,10 @@ export type DockLaunchBandId =
   | "grid-panels"
   | "panels"
   | "recipes"
+  | "needs-setup"
+  | "available-agents"
+  | "presets"
+  | "actions"
   | "results";
 
 export const DOCK_LAUNCH_BAND_LABELS: Record<DockLaunchBandId, string> = {
@@ -111,15 +152,31 @@ export const DOCK_LAUNCH_BAND_LABELS: Record<DockLaunchBandId, string> = {
   "grid-panels": "Open in grid",
   panels: "Launch panel",
   recipes: "Launch recipe",
+  "needs-setup": "Needs setup",
+  "available-agents": "Available agents",
+  presets: "Presets",
+  actions: "More",
   results: "Search results",
 };
 
-/**
- * One rendered row of the `+` launcher palette. The launcher drives arrow-key
- * navigation off a single flat row list for both the browse bands and the
- * filtered results, so every row needs an index in the same space.
- */
-export interface DockLaunchRow {
+/** A row that runs something other than a launchable item. */
+export type DockLaunchCueId = "create-recipe" | "setup-agents" | "manage-agents";
+
+/** Heading for each named provenance group, matching the old preset submenu. */
+export const DOCK_LAUNCH_PRESET_GROUP_LABELS: Record<DockLaunchPresetGroup, string> = {
+  default: "",
+  ccr: "CCR Routes",
+  project: "Project Shared",
+  custom: "Custom",
+};
+
+export const DOCK_LAUNCH_CUE_LABELS: Record<DockLaunchCueId, string> = {
+  "create-recipe": "Create a recipe",
+  "setup-agents": "Set up agents",
+  "manage-agents": "Manage agents",
+};
+
+interface DockLaunchRowBase {
   /**
    * Unique per rendered row — NOT the item key. The recency band repeats agents
    * that also appear under Pinned/Other, and two rows sharing an id would
@@ -127,8 +184,150 @@ export interface DockLaunchRow {
    */
   rowKey: string;
   band: DockLaunchBandId;
-  /** Absent for the "Create a recipe" discovery cue, which opens the editor. */
-  item?: DockLaunchItem;
+}
+
+/**
+ * One rendered row of the `+` launcher palette. The launcher drives arrow-key
+ * navigation off a single flat row list for both the browse bands and the
+ * filtered results, so every row needs an index in the same space — which is
+ * why an expanded agent's presets are sibling rows here rather than a nested
+ * menu. A submenu would open a second focus and navigation system that
+ * `selectedIndex` and `aria-activedescendant` cannot describe.
+ */
+export type DockLaunchRow =
+  | (DockLaunchRowBase & { kind: "item"; item: DockLaunchItem })
+  | (DockLaunchRowBase & { kind: "cue"; cue: DockLaunchCueId })
+  | (DockLaunchRowBase & {
+      kind: "preset";
+      band: "presets";
+      item: DockLaunchAgentItem;
+      /**
+       * The exact parent ROW key, not the item key: an agent listed under both
+       * Recently launched and Pinned must expand only the copy that was
+       * activated, or both highlight and the ids collide.
+       */
+      parentRowKey: string;
+      preset: DockLaunchPresetChoice;
+      /**
+       * Provenance heading, stamped on the first row of each named group and
+       * only when more than one exists — with a single group the heading would
+       * just restate what every row under it already is.
+       */
+      groupLabel?: string;
+    });
+
+/** Narrowing helper — the item rows are the only ones carrying a launchable item. */
+export function getDockLaunchRowItem(row: DockLaunchRow): DockLaunchItem | undefined {
+  return row.kind === "item" || row.kind === "preset" ? row.item : undefined;
+}
+
+/**
+ * Split an agent's merged presets into the launcher's fixed provenance order,
+ * with the synthetic Default first.
+ *
+ * Project membership beats the `ccr-` prefix so a project preset with a `ccr-*`
+ * id still reads as Project Shared; everything neither project nor `ccr-` falls
+ * through to Custom, preserving display for presets whose origin can't be told
+ * from the id alone.
+ */
+export function buildPresetChoices(
+  presets: ReadonlyArray<{ id: string; name: string; displayTitle?: string; color?: string }>,
+  projectPresetIds: ReadonlySet<string>,
+  savedPresetId: string | undefined
+): DockLaunchPresetChoice[] {
+  const groupOf = (id: string): DockLaunchPresetGroup =>
+    projectPresetIds.has(id) ? "project" : id.startsWith("ccr-") ? "ccr" : "custom";
+  const order: DockLaunchPresetGroup[] = ["ccr", "project", "custom"];
+
+  const named = presets.map((preset) => {
+    const group = groupOf(preset.id);
+    return {
+      presetId: preset.id,
+      // CCR names carry a redundant "CCR: " prefix that the group heading
+      // already states.
+      label:
+        preset.displayTitle ??
+        (group === "ccr" ? preset.name.replace(/^CCR:\s*/, "") : preset.name),
+      color: preset.color,
+      group,
+      isSelected: savedPresetId === preset.id,
+    } satisfies DockLaunchPresetChoice;
+  });
+
+  named.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group));
+
+  return [
+    {
+      presetId: null,
+      label: "Default",
+      group: "default",
+      // Default is the selection precisely when nothing named is saved.
+      isSelected: savedPresetId === undefined,
+    },
+    ...named,
+  ];
+}
+
+/**
+ * The sibling rows an expanded agent contributes, keyed to the exact parent row
+ * so the same agent listed twice expands independently.
+ */
+export function buildPresetRows(parentRow: DockLaunchRow): DockLaunchRow[] {
+  if (parentRow.kind !== "item") return [];
+  const { item } = parentRow;
+  if (item.category !== "agent") return [];
+  const choices = item.agent.presetChoices;
+  if (!choices || choices.length === 0) return [];
+  // Headings only earn their space when they tell two groups apart — the old
+  // submenu applied exactly this rule.
+  const namedGroups = new Set(
+    choices.filter((choice) => choice.presetId !== null).map((choice) => choice.group)
+  );
+  const showGroupLabels = namedGroups.size > 1;
+  const labelled = new Set<DockLaunchPresetGroup>();
+
+  return choices.map((preset) => ({
+    kind: "preset" as const,
+    // The synthetic Default and a real preset live in separate key namespaces:
+    // Mistral ships a preset whose id is literally "default", and a shared
+    // spelling would collide — two rows with one id highlight together and
+    // leave `aria-activedescendant` pointing at whichever rendered last.
+    rowKey: `preset:${parentRow.rowKey}:${
+      preset.presetId === null ? "sentinel:default" : `id:${preset.presetId}`
+    }`,
+    band: "presets" as const,
+    item,
+    parentRowKey: parentRow.rowKey,
+    preset,
+    groupLabel:
+      showGroupLabels && preset.presetId !== null && !labelled.has(preset.group)
+        ? (labelled.add(preset.group), DOCK_LAUNCH_PRESET_GROUP_LABELS[preset.group])
+        : undefined,
+  }));
+}
+
+/** Splice an agent's preset rows in immediately after it, leaving order intact. */
+export function insertExpandedPresetRows(
+  rows: ReadonlyArray<DockLaunchRow>,
+  parentRowKey: string | null
+): DockLaunchRow[] {
+  if (!parentRowKey) return [...rows];
+  const index = rows.findIndex((row) => row.rowKey === parentRowKey);
+  if (index < 0) return [...rows];
+  const presetRows = buildPresetRows(rows[index]!);
+  if (presetRows.length === 0) return [...rows];
+  return [...rows.slice(0, index + 1), ...presetRows, ...rows.slice(index + 1)];
+}
+
+/** True when a row can expand into preset children. */
+export function rowHasPresets(row: DockLaunchRow | undefined): boolean {
+  if (!row || row.kind !== "item") return false;
+  const { item } = row;
+  return (
+    item.category === "agent" &&
+    isAgentLaunchable(item.agent.availability) &&
+    (item.agent.presetChoices?.length ?? 0) > 0
+  );
 }
 
 export interface DockLaunchModel {
@@ -156,13 +355,46 @@ export interface DockLaunchModel {
  */
 export type DockLaunchSurface = "dock" | "grid";
 
-export interface BuildDockLaunchModelOptions {
+/**
+ * Preconditions the launcher gates rows on. Optional throughout: a surface that
+ * doesn't know (the dock's right-click menu) gets today's behaviour, where a row
+ * with no resolvable target reports after the fact instead of pre-empting.
+ */
+export interface DockLaunchPreconditions {
+  hasWorkspace?: boolean;
+  hasProject?: boolean;
+}
+
+/**
+ * Whether the agent inventory is still being detected, reflects what is actually
+ * installed, or is the every-built-in discovery list shown when nothing is.
+ */
+export type DockLaunchInventoryState = "loading" | "installed" | "fallback";
+
+export interface BuildDockLaunchModelOptions extends DockLaunchPreconditions {
   agents: ReadonlyArray<DockLaunchAgent>;
   pinnedCount?: number;
   activeWorktreeId: string | null;
   recipes: ReadonlyArray<TerminalRecipe>;
   mruEntries: ReadonlyArray<{ id: string; lastAccessedAt: number }>;
   surface: DockLaunchSurface;
+  agentInventoryState?: DockLaunchInventoryState;
+}
+
+/**
+ * Panels whose action resolves nothing without a workspace or project. Gated
+ * here rather than at the row so every consumer of the model agrees, and stated
+ * as a reason the row can render rather than a bare boolean.
+ */
+function panelPrecondition(
+  kindId: string,
+  { hasWorkspace, hasProject }: DockLaunchPreconditions
+): DockLaunchDisabledState | undefined {
+  // Undefined means "not supplied", which must not read as false — the dock's
+  // context menu doesn't know either answer and must keep offering both rows.
+  if (kindId === "file-browser" && hasWorkspace === false) return { reason: "Needs a workspace" };
+  if (kindId === "dev-preview" && hasProject === false) return { reason: "Needs a project" };
+  return undefined;
 }
 
 function toPanelItem(
@@ -173,7 +405,8 @@ function toPanelItem(
     color: string;
     searchAliases?: string[];
   },
-  surface: DockLaunchSurface
+  surface: DockLaunchSurface,
+  preconditions: DockLaunchPreconditions
 ): DockLaunchPanelItem {
   // A grid surface lands everything in the grid regardless of dockability — its
   // launch callback dispatches `location: "grid"`, so claiming "dock" there
@@ -190,6 +423,7 @@ function toPanelItem(
     // to this group without the registry aliases having to spell it out.
     searchAliases: [...(config.searchAliases ?? []), "panel", location],
     location,
+    disabled: panelPrecondition(config.id, preconditions),
   };
 }
 
@@ -224,10 +458,20 @@ export function buildRecentBrowseRows(
   recentAgentIds: ReadonlyArray<string>
 ): DockLaunchRow[] {
   const byKey = new Map(agentItems.map((item) => [item.key, item]));
-  return recentAgentIds
-    .map((id) => byKey.get(`agent:${id}`))
-    .filter((item): item is DockLaunchAgentItem => item !== undefined)
-    .map((item) => ({ rowKey: `recent:${item.key}`, band: "recent" as const, item }));
+  return (
+    recentAgentIds
+      .map((id) => byKey.get(`agent:${id}`))
+      .filter((item): item is DockLaunchAgentItem => item !== undefined)
+      // Only agents that can actually be launched: an agent that needs setup has
+      // no business in a quick-reach band, and its row belongs under Needs setup.
+      .filter((item) => item.agentBand === "launch")
+      .map((item) => ({
+        kind: "item" as const,
+        rowKey: `recent:${item.key}`,
+        band: "recent" as const,
+        item,
+      }))
+  );
 }
 
 /**
@@ -245,20 +489,23 @@ export function buildDockLaunchModel({
   recipes,
   mruEntries,
   surface,
+  agentInventoryState = "installed",
+  hasWorkspace,
+  hasProject,
 }: BuildDockLaunchModelOptions): DockLaunchModel {
-  const recentAgents = selectRecentAgents(agents, mruEntries);
+  const preconditions: DockLaunchPreconditions = { hasWorkspace, hasProject };
 
   const panelItems: DockLaunchPanelItem[] = [];
   const seenKinds = new Set<string>();
   const terminalConfig = getPanelKindConfig(TERMINAL_KIND_ID);
   if (terminalConfig) {
-    panelItems.push(toPanelItem(terminalConfig, surface));
+    panelItems.push(toPanelItem(terminalConfig, surface, preconditions));
     seenKinds.add(TERMINAL_KIND_ID);
   }
   for (const config of getSpawnablePanelKinds()) {
     if (seenKinds.has(config.id)) continue;
     seenKinds.add(config.id);
-    panelItems.push(toPanelItem(config, surface));
+    panelItems.push(toPanelItem(config, surface, preconditions));
   }
 
   const dockPanels = panelItems.filter((item) => item.location === "dock");
@@ -282,22 +529,55 @@ export function buildDockLaunchModel({
       };
     });
 
+  // In fallback mode nothing is installed, so every agent offered is a
+  // discovery row that routes to setup rather than a launch.
+  const bandFor = (agent: DockLaunchAgent): DockLaunchAgentBand =>
+    agentInventoryState === "fallback"
+      ? "available"
+      : isAgentLaunchable(agent.availability)
+        ? "launch"
+        : "needs-setup";
+
   const agentItems: DockLaunchAgentItem[] = agents.map((agent) => ({
     category: "agent" as const,
     key: `agent:${agent.id}`,
     name: agent.name,
     agent,
-    searchAliases: [agent.id, "agent"],
+    agentBand: bandFor(agent),
+    // Preset names are searchable through the parent, so typing a preset name
+    // still surfaces the agent that owns it — the presets themselves are rows,
+    // never search items, so they can never rank detached from their agent.
+    searchAliases: [
+      agent.id,
+      "agent",
+      ...(agent.presetChoices ?? [])
+        .filter((choice) => choice.presetId !== null)
+        .map((choice) => choice.label),
+    ],
   }));
 
+  const launchAgents = agentItems.filter((item) => item.agentBand === "launch");
+  const needsSetupAgents = agentItems.filter((item) => item.agentBand === "needs-setup");
+  const availableAgents = agentItems.filter((item) => item.agentBand === "available");
+
+  // Recency is drawn from launchable agents only, and only after the band
+  // assignment above, so a recently-launched agent that has since become
+  // unavailable drops out rather than offering a launch that redirects.
+  const recentAgents = selectRecentAgents(
+    launchAgents.map((item) => item.agent),
+    mruEntries
+  );
+
+  // The Pinned/Other split describes the launchable group it slices; counting
+  // it against every agent would put setup rows on the wrong side of the line.
   const showAgentGroups =
-    pinnedCount !== undefined && pinnedCount > 0 && pinnedCount < agents.length;
+    pinnedCount !== undefined && pinnedCount > 0 && pinnedCount < launchAgents.length;
   const isSplitByDestination = dockPanels.length > 0 && gridPanels.length > 0;
 
   const browseRows: DockLaunchRow[] = [];
   const pushRows = (band: DockLaunchBandId, items: ReadonlyArray<DockLaunchItem>) => {
     for (const item of items) {
-      browseRows.push({ rowKey: item.key, band, item });
+      browseRows.push({ kind: "item", rowKey: item.key, band, item });
     }
   };
 
@@ -308,12 +588,12 @@ export function buildDockLaunchModel({
     )
   );
 
-  if (agentItems.length > 0) {
+  if (launchAgents.length > 0) {
     if (showAgentGroups) {
-      pushRows("pinned", agentItems.slice(0, pinnedCount));
-      pushRows("other", agentItems.slice(pinnedCount));
+      pushRows("pinned", launchAgents.slice(0, pinnedCount));
+      pushRows("other", launchAgents.slice(pinnedCount));
     } else {
-      pushRows("agents", agentItems);
+      pushRows("agents", launchAgents);
     }
   }
 
@@ -327,8 +607,30 @@ export function buildDockLaunchModel({
   if (recipeItems.length > 0) {
     pushRows("recipes", recipeItems);
   } else {
-    browseRows.push({ rowKey: CREATE_RECIPE_ROW_KEY, band: "recipes" });
+    browseRows.push({
+      kind: "cue",
+      rowKey: CREATE_RECIPE_ROW_KEY,
+      band: "recipes",
+      cue: "create-recipe",
+    });
   }
+
+  if (needsSetupAgents.length > 0) pushRows("needs-setup", needsSetupAgents);
+
+  if (availableAgents.length > 0) {
+    pushRows("available-agents", availableAgents);
+    // Setup belongs to the empty state, not the footer (#11681): it only helps
+    // when nothing is installed, and as a permanent row it competed with
+    // Manage agents, which already reaches the same settings.
+    browseRows.push({
+      kind: "cue",
+      rowKey: "setup-agents",
+      band: "available-agents",
+      cue: "setup-agents",
+    });
+  }
+
+  browseRows.push({ kind: "cue", rowKey: "manage-agents", band: "actions", cue: "manage-agents" });
 
   return {
     recentAgents,
@@ -350,19 +652,34 @@ export function buildDockLaunchModel({
  * The panel/recipe/search derivation is memoized because `searchItems` keys the
  * consumer's Fuse index — rebuilding it on every keystroke would be wasteful.
  * The recency band deliberately sits OUTSIDE that memo: `getSortedActionMruList`
- * is a stable function reference that reads store state at call time, so
- * subscribing to it never re-renders and a memo keyed on it would never observe
- * a launch recorded between two opens — the band would show pre-launch order
- * forever. Reading it per render is safe: the MRU only changes on launch, which
- * closes the menu, so it cannot reshuffle under the user mid-search.
+ * prunes by wall-clock and reads store state at call time, so a memo keyed on it
+ * would never observe a launch recorded since — the band would show pre-launch
+ * order forever.
+ *
+ * The usage map itself IS subscribed, which the single-surface version could do
+ * without: two launchers are mounted at once now, so a launch recorded from one
+ * has to re-render the other, and nothing else was going to. It is referenced
+ * rather than merely listed as a dependency — a value the callback body never
+ * mentions is one the React compiler is free to drop.
  */
 export function useDockLaunchModel(options: {
   agents: ReadonlyArray<DockLaunchAgent>;
   pinnedCount?: number;
   activeWorktreeId: string | null;
   surface: DockLaunchSurface;
+  agentInventoryState?: DockLaunchInventoryState;
+  hasWorkspace?: boolean;
+  hasProject?: boolean;
 }): DockLaunchModel {
-  const { agents, pinnedCount, activeWorktreeId, surface } = options;
+  const {
+    agents,
+    pinnedCount,
+    activeWorktreeId,
+    surface,
+    agentInventoryState,
+    hasWorkspace,
+    hasProject,
+  } = options;
   // Both registries, because a plugin's metadata lands before its renderer
   // definition and `getSpawnablePanelKinds` requires both. Without these the
   // long-lived `+` button would keep a model memoized from before the plugin
@@ -383,8 +700,11 @@ export function useDockLaunchModel(options: {
   // Subscribe to the stable getter (not its result) so the selector returns a
   // constant reference — calling getSortedActionMruList() inside the selector
   // would mint a new array every render and trip Zustand 5's infinite-loop
-  // guard. Mirrors AgentTrayButton's pattern.
+  // guard.
   const getSortedActionMruList = useActionMruStore((s) => s.getSortedActionMruList);
+  // The map is a stable reference that changes identity on every recorded use,
+  // which is exactly the invalidation signal the getter cannot provide.
+  const actionUsageEntries = useActionMruStore((s) => s.actionUsageEntries);
 
   const stable = useMemo(
     () =>
@@ -394,14 +714,38 @@ export function useDockLaunchModel(options: {
         activeWorktreeId,
         recipes,
         surface,
+        agentInventoryState,
+        hasWorkspace,
+        hasProject,
         mruEntries: [],
       }),
     // The two registry snapshots are read for invalidation only — the builder
     // pulls the live registries itself.
-    [agents, pinnedCount, activeWorktreeId, recipes, surface, kindRegistry, definitionRegistry]
+    [
+      agents,
+      pinnedCount,
+      activeWorktreeId,
+      recipes,
+      surface,
+      agentInventoryState,
+      hasWorkspace,
+      hasProject,
+      kindRegistry,
+      definitionRegistry,
+    ]
   );
 
-  const recentAgents = selectRecentAgents(agents, getSortedActionMruList());
+  // An empty map can only produce an empty list, so short-circuiting on it is
+  // exact rather than defensive — and it makes the subscription above load-
+  // bearing in the expression itself, not just in a dependency list.
+  const mruEntries = actionUsageEntries.size > 0 ? getSortedActionMruList() : [];
+  const launchableAgents = stable.searchItems.filter(
+    (item): item is DockLaunchAgentItem => item.category === "agent" && item.agentBand === "launch"
+  );
+  const recentAgents = selectRecentAgents(
+    launchableAgents.map((item) => item.agent),
+    mruEntries
+  );
   // `stable` was built with an empty MRU, so its `browseRows` carry no recency
   // band — splice it back on here. Keyed on the id signature rather than the
   // array, which `selectRecentAgents` mints fresh on every render.
@@ -440,18 +784,45 @@ export interface ActivateDockLaunchItemContext {
   cwd: string;
   activeWorktreeId: string | null;
   recipeContext?: RecipeContext;
-  onLaunchAgent: (agentId: string) => void;
-  settingsSource: ActionSource;
+  /**
+   * `presetId` carries a three-way distinction the launcher depends on:
+   * `undefined` launches whatever preset is saved, `null` is the explicit
+   * Default that clears it, and a string selects one. Collapsing null into
+   * undefined silently relaunches the saved preset when the user asked for
+   * plain.
+   */
+  onLaunchAgent: (agentId: string, presetId?: string | null) => void;
+  /** Dispatch source for everything this activation dispatches. Must stay a
+   * foreground source, or panel actions silently skip their focus handling. */
+  source: ActionSource;
+}
+
+/** Route a cue row — the launcher entries that navigate rather than launch. */
+export function activateDockLaunchCue(
+  cue: DockLaunchCueId,
+  activeWorktreeId: string | null,
+  source: ActionSource
+): void {
+  if (cue === "create-recipe") {
+    activateCreateRecipeCue(activeWorktreeId, source);
+    return;
+  }
+  if (cue === "setup-agents") {
+    window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
+    return;
+  }
+  void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source });
 }
 
 /**
- * Run a launcher entry. Agents and the three kinds `launchAgent` special-cases
- * keep routing through `onLaunchAgent`; everything else creates its panel
- * directly at the location its menu heading advertised.
+ * Run a launcher entry. Agents keep routing through `onLaunchAgent`; panels go
+ * through the shared launch seam, so a kind activates here exactly as it does
+ * from the palette or the toolbar (#11668).
  */
 export function activateDockLaunchItem(
   item: DockLaunchItem,
-  ctx: ActivateDockLaunchItemContext
+  ctx: ActivateDockLaunchItemContext,
+  presetId?: string | null
 ): void {
   if (item.category === "agent") {
     const { agent } = item;
@@ -462,32 +833,54 @@ export function activateDockLaunchItem(
       void actionService.dispatch(
         "app.settings.openTab",
         { tab: "agents", subtab: agent.id },
-        { source: ctx.settingsSource }
+        { source: ctx.source }
       );
       return;
     }
     useActionMruStore.getState().recordActionMru(`${AGENT_MRU_PREFIX}${agent.id}`);
-    ctx.onLaunchAgent(agent.id);
+    ctx.onLaunchAgent(agent.id, presetId);
     return;
   }
 
+  // A row whose precondition is unmet opens nothing. Guarded here as well as at
+  // the caller so no surface can activate it by a path that skipped the check —
+  // the row stays navigable precisely because it is inert rather than absent.
+  if (item.disabled) return;
+
   if (item.category === "panel") {
-    if (AGENT_LAUNCH_PANEL_KINDS.has(item.kindId)) {
-      ctx.onLaunchAgent(item.kindId);
-      return;
-    }
-    void usePanelStore.getState().addPanel({
-      kind: item.kindId,
-      cwd: ctx.cwd,
-      worktreeId: ctx.activeWorktreeId ?? undefined,
+    // The menu closes on select, so an action that refuses leaves no trace
+    // otherwise — the same reason LauncherQuickActions reports its refusals.
+    void launchPanelKind({
+      kindId: item.kindId,
       location: item.location,
-      // Folds dock activation into the same set() that commits the panel, so
-      // the offscreen-container watchdog can't close it in the render gap (#6590).
-      activateDockOnCreate: item.location === "dock",
-      // Plugin kinds are deliberately outside the built-in AddPanelOptions
-      // union (a `string & {}` member would defeat discriminated narrowing),
-      // so widening happens here at the integration boundary.
-    } as AddPanelOptions);
+      cwd: ctx.cwd,
+      worktreeId: ctx.activeWorktreeId,
+      source: ctx.source,
+    })
+      .then((outcome) => {
+        if (outcome.route !== "action" || outcome.result.ok) return;
+        // A full grid is already reported by `addPanel`, with an accurate
+        // message and the actual recovery (#11666).
+        if (isPanelLimitError(outcome.result.error.message)) return;
+        logError("Panel launch from dock refused", outcome.result.error);
+        notify({
+          type: "error",
+          title: `Couldn't open ${item.name}`,
+          // Purpose-written rather than the action's own message: those name
+          // internal ids ("Worktree not found: wt-3f2") and state a cause
+          // without a fix. Covers every kind this launcher offers, so it stays
+          // true for a dev preview with no project open as well as a browser
+          // with no folder — unlike the file-browser-only surfaces.
+          message:
+            "No project folder or worktree resolved for this launch. Open a project or select a worktree, then try again.",
+          // `uiFeedback` is a passive kind, so without this the toast the
+          // closed menu depends on would be an inbox row nobody sees.
+          priority: "high",
+          context: { eventKind: "uiFeedback" },
+          action: { label: "Retry", onClick: () => activateDockLaunchItem(item, ctx) },
+        });
+      })
+      .catch((error) => logError("Panel launch from dock failed", error));
     return;
   }
 

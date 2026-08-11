@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { isAbsolute } from "@shared/utils/path";
 import { projectClient } from "@/clients";
+import { readDevServerCommand } from "@/utils/devServerCommand";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
@@ -52,18 +53,16 @@ export function registerDevServerActions(
         (await projectClient.getCurrent().catch(() => null));
       const projectId = ctx.projectId ?? currentProject?.id;
 
-      if (!projectId) {
-        throw new Error("No project is currently open");
-      }
-
-      const settings = await projectClient.getSettings(projectId);
-      const devServerCommand = settings?.devServerCommand?.trim();
+      // Scratch-owned views have no project, and the dock/palette launcher used
+      // to open a dev preview there via the workspace cwd fallback (#11673).
+      const devServerCommand = projectId ? await readDevServerCommand(projectId) : undefined;
 
       const cwd = firstAbsolutePath(
         ctx.activeWorktreePath,
         readActiveWorktreePath(ctx.activeWorktreeId),
         ctx.projectPath,
-        currentProject?.path
+        currentProject?.path,
+        ctx.scratchPath
       );
       if (!cwd) {
         throw new Error("No absolute project path is available for Dev Preview");
@@ -75,7 +74,7 @@ export function registerDevServerActions(
         cwd,
         worktreeId: ctx.activeWorktreeId,
         location: "grid",
-        devCommand: devServerCommand || undefined,
+        devCommand: devServerCommand,
       });
     },
   }));

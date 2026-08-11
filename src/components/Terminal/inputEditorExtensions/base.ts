@@ -14,8 +14,13 @@ export const TERMINAL_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width=
 const INLINE_CHIP_BASE = {
   display: "inline-flex",
   alignItems: "center",
-  height: "20px",
-  verticalAlign: "bottom",
+  // minHeight, not height: a wrapped label has to grow the pill rather than
+  // spill out of its painted background. Single-line chips still land on 20px.
+  minHeight: "20px",
+  // top, not bottom: a wrapped pill is taller than the line box, and adjacent
+  // text should sit on its first row rather than its last. Identical for
+  // single-line chips, whose height already equals the line box.
+  verticalAlign: "top",
   whiteSpace: "nowrap",
   gap: "4px",
   padding: "0 5px",
@@ -95,19 +100,20 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         color: c.chipColor,
         textDecoration: "underline dotted 1px",
         textUnderlineOffset: "2px",
-        // Long paths ellipsize instead of blowing out narrow panes; the hover
-        // tooltip still shows the full path.
-        maxWidth: "280px",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-        verticalAlign: "bottom",
+        // The full path stays visible and wraps: truncating hid the tail, so two
+        // out-of-tree files could render identically. `break-spaces` (not
+        // `normal`) because quoted tokens can carry runs of spaces that
+        // `normal` would collapse — the same indistinguishable-paths bug by
+        // another route. `anywhere` (not `break-word`) zeroes min-content, so
+        // the chip shrinks in narrow panes instead of blowing them out.
+        whiteSpace: "break-spaces",
+        overflowWrap: "anywhere",
+        verticalAlign: "top",
       },
       ".cm-chip-label": {
-        maxWidth: "180px",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
+        whiteSpace: "break-spaces",
+        overflowWrap: "anywhere",
+        minWidth: "0",
       },
       ".cm-tooltip": {
         background: "transparent",

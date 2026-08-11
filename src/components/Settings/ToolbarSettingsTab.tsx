@@ -25,16 +25,34 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, LayoutGrid, Rocket, RotateCcw } from "lucide-react";
+import { LayoutPanelTop, Plus } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import type { AnyToolbarButtonId, PluginToolbarButtonId } from "@/../../shared/types/toolbar";
-import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
+import type {
+  AnyToolbarButtonId,
+  LauncherPanelButtonId,
+  PluginToolbarButtonId,
+} from "@/../../shared/types/toolbar";
+// `@shared/...` because these are value imports — the type-only spelling above
+// is erased at compile time and never has to resolve at runtime.
+import {
+  LAUNCHER_PANEL_BUTTON_IDS,
+  isPanelButtonOnToolbar,
+  isLauncherPanelButtonId,
+} from "@shared/types/toolbar";
+import { LAUNCHABLE_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
+import { isAgentButtonOnToolbar } from "../../../shared/utils/agentPinned";
 import {
   TOOLBAR_BUTTON_METADATA,
+  getToolbarButtonGroup,
   isToolbarButtonVisible,
   type ToolbarButtonMetadata,
 } from "@/components/Layout/toolbarButtonMetadata";
+import {
+  getGroupedInsertionIndex,
+  orderToolbarButtonsByGroup,
+} from "@/components/Layout/toolbarButtonGrouping";
 import { getAgentConfig } from "@/config/agents";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { DEFAULT_PLUGIN_ICON } from "@/components/icons/pluginIconRegistry";
@@ -175,19 +193,21 @@ function SortableButtonItem({
   );
 }
 
-interface PluginButtonRowProps {
-  buttonId: PluginToolbarButtonId;
+interface TrayButtonRowProps {
+  buttonId: AnyToolbarButtonId;
   isVisible: boolean;
-  onToggle: (buttonId: PluginToolbarButtonId) => void;
+  onToggle: (buttonId: AnyToolbarButtonId) => void;
   metadata: ToolbarButtonMetadata | undefined;
 }
 
-// Plugin buttons toggle promotion, not visibility — they always remain
-// reachable in the plugin tray (#11304), and they're never persisted into the
-// position arrays, so they get no drag handle and stay out of cross-side
-// movement. Reusing `SortableButtonItem` would call `useSortable` outside a
-// `SortableContext` and crash; this is a plain non-sortable row.
-function PluginButtonRow({ buttonId, isVisible, onToggle, metadata }: PluginButtonRowProps) {
+// Tray-backed buttons toggle promotion, not visibility — they always remain
+// reachable in their tray, whether that's the plugin tray (#11304) or the panel
+// tray (#11667). A plugin contribution is never persisted into the position
+// arrays at all, and a panel button may or may not be, so neither gets a drag
+// handle or takes part in cross-side movement. Reusing `SortableButtonItem`
+// would call `useSortable` outside a `SortableContext` and crash; this is a
+// plain non-sortable row.
+function TrayButtonRow({ buttonId, isVisible, onToggle, metadata }: TrayButtonRowProps) {
   if (!metadata) return null;
   const Icon = metadata.icon;
 
@@ -292,6 +312,8 @@ export function ToolbarSettingsTab() {
   const moveButton = useToolbarPreferencesStore((s) => s.moveButton);
   const toggleButtonVisibility = useToolbarPreferencesStore((s) => s.toggleButtonVisibility);
   const setPluginButtonPromoted = useToolbarPreferencesStore((s) => s.setPluginButtonPromoted);
+  const setPanelButtonOnToolbar = useToolbarPreferencesStore((s) => s.setPanelButtonOnToolbar);
+  const positionAgentButton = useToolbarPreferencesStore((s) => s.positionAgentButton);
   const setAlwaysShowDevServer = useToolbarPreferencesStore((s) => s.setAlwaysShowDevServer);
   const setDefaultSelection = useToolbarPreferencesStore((s) => s.setDefaultSelection);
   const reset = useToolbarPreferencesStore((s) => s.reset);
@@ -306,7 +328,6 @@ export function ToolbarSettingsTab() {
   const [dragState, setDragState] = useState<SideLists | null>(null);
   const [activeId, setActiveId] = useState<AnyToolbarButtonId | null>(null);
 
-  const liveLeft = dragState?.left ?? layout.leftButtons;
   const liveRight = dragState?.right ?? layout.rightButtons;
 
   const sensors = useSensors(
@@ -317,6 +338,22 @@ export function ToolbarSettingsTab() {
   );
 
   const { buttonIds: pluginButtonIds, configs: pluginConfigs } = usePluginToolbarButtons();
+
+  const resolveGroup = useCallback(
+    (id: AnyToolbarButtonId) => getToolbarButtonGroup(id, pluginConfigs.has(id)),
+    [pluginConfigs]
+  );
+
+  // The left toolbar renders its buttons grouped (#11681), so this column has
+  // to show the same order — otherwise it would invite the user to arrange a
+  // row the toolbar will never draw. The right side has no groups and stays in
+  // persisted order.
+  const groupedLeft = useMemo(
+    () => orderToolbarButtonsByGroup(layout.leftButtons, resolveGroup),
+    [layout.leftButtons, resolveGroup]
+  );
+
+  const liveLeft = dragState?.left ?? groupedLeft;
 
   const allMetadata = useMemo(
     () =>
@@ -348,6 +385,33 @@ export function ToolbarSettingsTab() {
     [layout.pinnedButtons, agentSettings, agentAvailability, pluginConfigs]
   );
 
+  // Launcher panel buttons need the array-aware resolver, not `isVisible`: since
+  // v13 `browser`/`dev-server` carry no pin entry on a fresh profile, so
+  // `isToolbarButtonVisible`'s "absent means visible" default would report both
+  // as on while neither is anywhere on the toolbar (#11667). Inside the side
+  // columns the two agree — a column only ever renders ids the arrays already
+  // hold — but the panel section below lists all four regardless.
+  const isPanelOnToolbar = useCallback(
+    (id: LauncherPanelButtonId) =>
+      isPanelButtonOnToolbar(id, layout.pinnedButtons, layout.leftButtons, layout.rightButtons),
+    [layout.pinnedButtons, layout.leftButtons, layout.rightButtons]
+  );
+
+  // Agents need one for the same reason since #11680: `isAgentToolbarVisible`
+  // resolves an unset pin to "the binary is installed", which no longer implies
+  // a toolbar slot now that agent ids left `DEFAULT_LEFT_BUTTONS`. The launcher
+  // reads through this same resolver, so the two surfaces can't disagree about
+  // which agents are on the toolbar.
+  const isAgentOnToolbar = useCallback(
+    (id: AnyToolbarButtonId) =>
+      isAgentButtonOnToolbar(
+        agentSettings?.agents?.[id],
+        agentAvailability?.[id],
+        layout.leftButtons.includes(id) || layout.rightButtons.includes(id)
+      ),
+    [agentSettings, agentAvailability, layout.leftButtons, layout.rightButtons]
+  );
+
   const findContainer = (id: UniqueIdentifier, lists: SideLists): ToolbarSide | null => {
     if (id === "left" || id === "right") return id;
     const buttonId = toButtonId(id);
@@ -366,7 +430,7 @@ export function ToolbarSettingsTab() {
 
   const handleDragStart = (event: DragStartEvent) => {
     setActiveId(toButtonId(event.active.id));
-    setDragState({ left: layout.leftButtons, right: layout.rightButtons });
+    setDragState({ left: groupedLeft, right: layout.rightButtons });
   };
 
   // Speculatively relocate the dragged button across columns so the target's
@@ -378,7 +442,7 @@ export function ToolbarSettingsTab() {
     const activeButtonId = toButtonId(active.id);
 
     setDragState((prev) => {
-      const base = prev ?? { left: layout.leftButtons, right: layout.rightButtons };
+      const base = prev ?? { left: groupedLeft, right: layout.rightButtons };
       const activeContainer = findContainer(active.id, base);
       const overContainer = findContainer(over.id, base);
       if (!activeContainer || !overContainer || activeContainer === overContainer) {
@@ -398,14 +462,22 @@ export function ToolbarSettingsTab() {
         newIndex = overIndex >= 0 ? overIndex + (isAfterOver ? 1 : 0) : overItems.length;
       }
 
+      const relocated = [
+        ...overItems.slice(0, newIndex),
+        activeButtonId,
+        ...overItems.slice(newIndex),
+      ];
+
       return {
         ...base,
         [activeContainer]: base[activeContainer].filter((id) => id !== activeButtonId),
-        [overContainer]: [
-          ...overItems.slice(0, newIndex),
-          activeButtonId,
-          ...overItems.slice(newIndex),
-        ],
+        // Regroup the left column live so the gap opens where the button will
+        // actually land — dropping a panel among the agents snaps it into the
+        // panel block during the drag rather than jumping after the release.
+        [overContainer]:
+          overContainer === "left"
+            ? orderToolbarButtonsByGroup(relocated, resolveGroup)
+            : relocated,
       };
     });
   };
@@ -424,7 +496,7 @@ export function ToolbarSettingsTab() {
       return;
     }
 
-    const live = dragState ?? { left: layout.leftButtons, right: layout.rightButtons };
+    const live = dragState ?? { left: groupedLeft, right: layout.rightButtons };
     const overContainer = findContainer(over.id, live);
     const originalContainer: ToolbarSide | null = layout.leftButtons.includes(activeButtonId)
       ? "left"
@@ -451,7 +523,15 @@ export function ToolbarSettingsTab() {
       }
       const reordered = arrayMove(items, oldIndex, newIndex);
       if (overContainer === "left") {
-        setLeftButtons(reordered);
+        // Regroup before writing: a drag across a group boundary snaps back
+        // into the button's own group, and a drop that only crossed a boundary
+        // therefore changes nothing — skip the write rather than churn persist.
+        const grouped = orderToolbarButtonsByGroup(reordered, resolveGroup);
+        const unchanged =
+          grouped.length === groupedLeft.length && grouped.every((id, i) => id === groupedLeft[i]);
+        if (!unchanged) {
+          setLeftButtons(grouped);
+        }
       } else {
         setRightButtons(reordered);
       }
@@ -459,11 +539,17 @@ export function ToolbarSettingsTab() {
       // Cross-side move — `onDragOver` already relocated the item into the
       // target list at its drop position, so its index in `dragState` IS the
       // final target index. Re-running `arrayMove` here would invert it.
-      const toIndex = live[overContainer].indexOf(activeButtonId);
-      if (toIndex === -1) {
+      if (live[overContainer].indexOf(activeButtonId) === -1) {
         clearDrag();
         return;
       }
+      // `moveButton` splices into the stored array, which may still be
+      // interleaved, so a grouped index can't be handed over directly —
+      // translate it into one that survives grouping (#11681).
+      const toIndex =
+        overContainer === "left"
+          ? getGroupedInsertionIndex(layout.leftButtons, live.left, activeButtonId, resolveGroup)
+          : live[overContainer].indexOf(activeButtonId);
       moveButton(activeButtonId, originalContainer, overContainer, toIndex);
     }
 
@@ -484,12 +570,34 @@ export function ToolbarSettingsTab() {
       setPluginButtonPromoted(buttonId, !isVisible(buttonId));
       return;
     }
-    dispatchToolbarVisibility(buttonId, side, {
-      agentSettings,
-      agentAvailability,
-      setAgentPinned,
-      toggleButtonVisibility,
-    });
+    // Launcher panel buttons need the same treatment for a different reason
+    // (#11667). `browser` and `dev-server` are not defaults, so the generic
+    // toggle's "delete the key to show" leaves nothing recording that the user
+    // wants them — and a stale sibling view's write, which replaces the position
+    // arrays wholesale, would then silently un-promote them with nothing left to
+    // rebuild from. `setPanelButtonOnToolbar` writes the explicit `true` that
+    // survives, and positions the button if it has no slot yet.
+    if (isLauncherPanelButtonId(buttonId)) {
+      setPanelButtonOnToolbar(buttonId, !isPanelOnToolbar(buttonId));
+      return;
+    }
+    // The explicit next state comes from the array-aware resolver, not the
+    // dispatcher's own `isAgentToolbarVisible` fallback: since #11680 an
+    // installed-but-unpositioned agent reads as visible to that fallback while
+    // rendering nothing, so the toggle would write `false` on a button the user
+    // is trying to turn on. Non-agent ids ignore the argument.
+    dispatchToolbarVisibility(
+      buttonId,
+      side,
+      {
+        agentSettings,
+        agentAvailability,
+        setAgentPinned,
+        toggleButtonVisibility,
+        positionAgentButton,
+      },
+      isBuiltInAgentId(buttonId) ? !isAgentOnToolbar(buttonId) : undefined
+    );
   };
 
   const activeMetadata = activeId ? allMetadata[activeId] : undefined;
@@ -499,7 +607,7 @@ export function ToolbarSettingsTab() {
       <SettingsSection
         icon={LayoutGrid}
         title="Toolbar buttons"
-        description="Drag to reorder within a side or move a button between the left and right groups. Toggle to show or hide."
+        description="Drag to reorder within a side or move a button between the left and right groups. Left-side buttons stay grouped as launcher, agents, panels, then everything else, so dragging one across a boundary snaps it back into its own group. Toggle to show or hide."
       >
         <DndContext
           sensors={sensors}
@@ -541,6 +649,60 @@ export function ToolbarSettingsTab() {
         </DndContext>
       </SettingsSection>
 
+      {/*
+        Its own section rather than relying on the two side columns above: those
+        render `layout.leftButtons`/`layout.rightButtons`, and since #11680 no
+        agent id is in either array on a fresh profile — the same reason the
+        panel section below exists for `browser`/`dev-server` since v13 (#11667).
+        Without this the launcher's "Customize toolbar…" footer would land the
+        user on a page that lists none of the agents they were just looking at,
+        leaving the launcher as the only place an agent can be pinned at all.
+        Enumerating `LAUNCHABLE_AGENT_IDS` keeps the page honest regardless of
+        array membership, the same way the plugin section does.
+      */}
+      <SettingsSection
+        icon={Plus}
+        title="Agent buttons"
+        description={`Every agent lives in the launcher. Pin one to give it its own toolbar button too. ${LAUNCHABLE_AGENT_IDS.filter(isAgentOnToolbar).length} of ${LAUNCHABLE_AGENT_IDS.length} pinned.`}
+      >
+        <div className="space-y-2">
+          {LAUNCHABLE_AGENT_IDS.map((buttonId) => (
+            <TrayButtonRow
+              key={buttonId}
+              buttonId={buttonId}
+              isVisible={isAgentOnToolbar(buttonId)}
+              onToggle={(id) => handleToggle(id, "left")}
+              metadata={allMetadata[buttonId]}
+            />
+          ))}
+        </div>
+      </SettingsSection>
+
+      {/*
+        Same reason as the agent section above: since v13 `browser` and
+        `dev-server` are in neither array on a fresh profile (#11667), so the
+        side columns can't be the only place these are listed. Enumerating
+        `LAUNCHER_PANEL_BUTTON_IDS` keeps the page honest regardless of array
+        membership.
+      */}
+      <SettingsSection
+        icon={LayoutPanelTop}
+        title="Panel buttons"
+        description={`Every panel button lives in the launcher. Pin one to give it its own toolbar button too. ${LAUNCHER_PANEL_BUTTON_IDS.filter(isPanelOnToolbar).length} of ${LAUNCHER_PANEL_BUTTON_IDS.length} pinned.`}
+      >
+        <div className="space-y-2">
+          {LAUNCHER_PANEL_BUTTON_IDS.map((buttonId) => (
+            <TrayButtonRow
+              key={buttonId}
+              buttonId={buttonId}
+              isVisible={isPanelOnToolbar(buttonId)}
+              onToggle={(id) => handleToggle(id, "left")}
+              metadata={allMetadata[buttonId]}
+            />
+          ))}
+        </div>
+      </SettingsSection>
+
       {pluginButtonIds.length > 0 && (
         <SettingsSection
           icon={DEFAULT_PLUGIN_ICON}
@@ -549,7 +711,7 @@ export function ToolbarSettingsTab() {
         >
           <div className="space-y-2">
             {pluginButtonIds.map((buttonId) => (
-              <PluginButtonRow
+              <TrayButtonRow
                 key={buttonId}
                 buttonId={buttonId}
                 isVisible={isVisible(buttonId)}

@@ -78,7 +78,6 @@ describe("PtyClient fabric", () => {
   let fabricConfig: typeof import("../pty/fabricConfig.js");
 
   beforeEach(async () => {
-    vi.useFakeTimers();
     forks = [];
     failNextFork = false;
 
@@ -123,6 +122,9 @@ describe("PtyClient fabric", () => {
     // would be a different module instance than the one PtyClient reads, so
     // registrations here would be invisible to the code under test.
     pluginProcessTools = await import("../../../shared/config/pluginProcessToolRegistry.js");
+
+    // Install after imports: fake timers can stall module re-execution (#11661).
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
@@ -775,18 +777,112 @@ describe("PtyClient fabric", () => {
       const client = createFabricClient();
       client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
       const shardA = projectShard("project-a");
+      // trim-state is an RPC now, so it fans out over ready shards (as
+      // get-memory-rollup and get-all-terminals do) — a shard that cannot
+      // reply yet would only contribute a timeout.
+      shardA.child.emit("message", { type: "ready" });
 
       client.pauseAll();
       client.resumeAll();
-      client.trimState(1000);
+      void client.trimState(1000, "idle-only").catch(() => {});
 
       for (const child of [defaultShard().child, shardA.child]) {
         expect(messagesOfType(child, "pause-all")).toHaveLength(1);
         expect(messagesOfType(child, "resume-all")).toHaveLength(1);
-        expect(messagesOfType(child, "trim-state")).toEqual([
-          { type: "trim-state", targetLines: 1000 },
-        ]);
+        const trims = messagesOfType(child, "trim-state");
+        expect(trims).toHaveLength(1);
+        expect(trims[0]).toEqual({
+          type: "trim-state",
+          targetLines: 1000,
+          scope: "idle-only",
+          requestId: expect.any(String),
+        });
       }
+      client.dispose();
+    });
+
+    it("sums trim-state counts across shards (#11674)", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      const promise = client.trimState(500, "idle-only");
+      const defaultReq = messagesOfType(defaultShard().child, "trim-state")[0];
+      const shardAReq = messagesOfType(shardA.child, "trim-state")[0];
+      defaultShard().child.emit("message", {
+        type: "trim-state-result",
+        requestId: defaultReq.requestId,
+        result: { trimmed: 1, skipped: 2 },
+      });
+      shardA.child.emit("message", {
+        type: "trim-state-result",
+        requestId: shardAReq.requestId,
+        result: { trimmed: 3, skipped: 4 },
+      });
+
+      expect(await promise).toEqual({
+        trimmed: 4,
+        skipped: 6,
+        shardsTotal: 2,
+        shardsFailed: 0,
+      });
+      client.dispose();
+    });
+
+    it("keeps a responding shard's counts when a sibling never answers", async () => {
+      // A silent shard must surface as shardsFailed, not fold into `skipped` —
+      // an incomplete fan-out read as "nothing was eligible" is the same class
+      // of unfalsifiable signal #11674 is about.
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      const promise = client.trimState(500, "idle-only");
+      const defaultReq = messagesOfType(defaultShard().child, "trim-state")[0];
+      defaultShard().child.emit("message", {
+        type: "trim-state-result",
+        requestId: defaultReq.requestId,
+        result: { trimmed: 5, skipped: 1 },
+      });
+
+      // Just past the shard broker's 5s default request deadline — advancing
+      // further would drive unrelated shard timers for no added coverage.
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      expect(await promise).toEqual({
+        trimmed: 5,
+        skipped: 1,
+        shardsTotal: 2,
+        shardsFailed: 1,
+      });
+      client.dispose();
+    });
+
+    it("counts an unreachable shard against the total instead of dropping it", async () => {
+      // A shard still booting cannot be sent to, but excluding it from the
+      // denominator would report a complete fan-out that never happened.
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      // Deliberately never ready.
+
+      const promise = client.trimState(500, "idle-only");
+      const defaultReq = messagesOfType(defaultShard().child, "trim-state")[0];
+      defaultShard().child.emit("message", {
+        type: "trim-state-result",
+        requestId: defaultReq.requestId,
+        result: { trimmed: 2, skipped: 0 },
+      });
+
+      expect(messagesOfType(shardA.child, "trim-state")).toHaveLength(0);
+      expect(await promise).toEqual({
+        trimmed: 2,
+        skipped: 0,
+        shardsTotal: 2,
+        shardsFailed: 1,
+      });
       client.dispose();
     });
   });

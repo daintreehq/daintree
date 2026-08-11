@@ -50,6 +50,7 @@ function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilder
     baseAheadCount: null,
     baseBehindCount: null,
     baseMatchesUpstream: undefined,
+    baseCompareRef: null,
     lastFetchedAt: null,
     lastGitStatusCheckedAt: 0,
     workingTreeChangedAt: 0,

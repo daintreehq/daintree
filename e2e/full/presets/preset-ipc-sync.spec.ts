@@ -115,7 +115,7 @@ test.describe.serial("Presets: IPC Sync — Main ↔ Renderer (77–82)", () => 
 
   test("77. CCR config write triggers IPC event and presets appear in settings", async () => {
     // Write two CCR models so downstream tests in this serial block see the
-    // split-button chevron and tray submenu-trigger (both require ≥2 presets).
+    // split-button chevron and the launcher's preset disclosure (both require ≥2 presets).
     writeCcrConfig([
       { id: "ipc-sync-model", name: "IPC Sync Model", model: "ipc-model-v1" },
       { id: "ipc-sync-aux", name: "IPC Sync Aux", model: "ipc-model-v2" },
@@ -189,13 +189,17 @@ test.describe.serial("Presets: IPC Sync — Main ↔ Renderer (77–82)", () => 
     const trayButton = ctx.window.locator(SEL.agent.trayButton);
     await trayButton.click();
 
-    // The submenu-trigger renders for any launchable agent that has ≥1 preset.
-    // Claude is launchable (fake CLI on PATH) and has two CCR presets, so the
-    // Claude row mounts as a split launch item. Assert it unconditionally.
-    const submenuTrigger = ctx.window.locator('[data-testid="submenu-trigger"]', {
-      hasText: "Claude",
+    // A launchable agent with ≥1 preset announces itself as expandable. Claude
+    // is launchable (fake CLI on PATH) and has two CCR presets, so its row
+    // carries the disclosure. Assert it unconditionally.
+    const search = ctx.window.getByRole("combobox", {
+      name: "Search agents, panels, and recipes",
     });
-    await expect(submenuTrigger).toBeVisible({ timeout: T_MEDIUM });
+    await expect(search).toBeVisible({ timeout: T_MEDIUM });
+    await search.fill("Claude");
+    await expect(ctx.window.locator(SEL.preset.trayLaunchPresetParent).first()).toBeVisible({
+      timeout: T_MEDIUM,
+    });
     await ctx.window.keyboard.press("Escape");
   });
 

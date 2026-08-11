@@ -92,6 +92,7 @@ const fsPromisesMocks = vi.hoisted(() => ({
   realpath: vi.fn(),
   stat: vi.fn(),
   open: vi.fn(),
+  readFile: vi.fn(),
   constants: { O_RDONLY: 0, O_NOFOLLOW: 0x100, O_NONBLOCK: 0x4 },
 }));
 
@@ -3019,7 +3020,7 @@ describe("createPluginProtocolHandler", () => {
   });
 });
 
-describe("createAppProtocolHandler — direct disk read", () => {
+describe("createAppProtocolHandler — ASAR-safe buffered read", () => {
   type ProtocolHandler = (request: GlobalRequest) => Promise<Response>;
 
   async function captureHandler(): Promise<ProtocolHandler> {
@@ -3038,14 +3039,6 @@ describe("createAppProtocolHandler — direct disk read", () => {
     return new Request(`app://daintree${pathname}`, init) as GlobalRequest;
   }
 
-  function makeFileHandle(content: string | Buffer = "bytes") {
-    const buffer = typeof content === "string" ? Buffer.from(content) : content;
-    return {
-      readFile: vi.fn().mockResolvedValue(buffer),
-      close: vi.fn().mockResolvedValue(undefined),
-    };
-  }
-
   beforeEach(async () => {
     vi.clearAllMocks();
     const fs = await import("fs/promises");
@@ -3053,9 +3046,7 @@ describe("createAppProtocolHandler — direct disk read", () => {
       mtime: new Date(0),
       isFile: () => true,
     } as Awaited<ReturnType<typeof fs.stat>>);
-    vi.mocked(fs.open).mockResolvedValue(
-      makeFileHandle() as unknown as Awaited<ReturnType<typeof fs.open>>
-    );
+    vi.mocked(fs.readFile).mockResolvedValue(Buffer.from("bytes"));
     const appProtocol = await import("../../utils/appProtocol.js");
     vi.mocked(appProtocol.resolveAppUrlToDistPath).mockReturnValue({
       filePath: "/tmp/dist/assets/index-abc123.js",
@@ -3067,7 +3058,7 @@ describe("createAppProtocolHandler — direct disk read", () => {
     vi.mocked(appProtocol.isNotModified).mockReturnValue(false);
   });
 
-  it("serves the file straight off disk with fs.open(O_RDONLY) and never touches net.fetch", async () => {
+  it("serves the file with fs.readFile and never calls fs.open or net.fetch", async () => {
     const { net } = await import("electron");
     const fs = await import("fs/promises");
 
@@ -3078,12 +3069,15 @@ describe("createAppProtocolHandler — direct disk read", () => {
     expect(await response.text()).toBe("bytes");
     // The whole point of #9768: read directly, no Chromium network-stack hop.
     expect(vi.mocked(net.fetch)).not.toHaveBeenCalled();
-    expect(fs.open).toHaveBeenCalledTimes(1);
-    const openArgs = vi.mocked(fs.open).mock.calls[0];
-    expect(openArgs[0]).toBe("/tmp/dist/assets/index-abc123.js");
-    // No O_NOFOLLOW — app:// uses lexical containment with no realpath, so there
-    // is no TOCTOU window for the flag to close.
-    expect(openArgs[1]).toBe(fs.constants.O_RDONLY);
+    expect(fs.readFile).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fs.readFile).mock.calls[0][0]).toBe("/tmp/dist/assets/index-abc123.js");
+    // #11726: dist/ lives inside the asar, and fs.open on an archived path makes
+    // Electron extract it to a memoized temp file. Once that file is reaped the
+    // entry goes stale and every open throws ENOENT for the life of the process,
+    // so index.html — and with it every project switch — fails until restart.
+    // fs.readFile reads off the archive's backing fd and never extracts. Swapping
+    // back to open would silently reintroduce the bug, so guard it here.
+    expect(fs.open).not.toHaveBeenCalled();
   });
 
   it("builds the 200 response headers from the validator stats (Last-Modified / Cache-Control)", async () => {
@@ -3121,10 +3115,10 @@ describe("createAppProtocolHandler — direct disk read", () => {
     );
 
     expect(response.status).toBe(404);
-    expect(fs.open).not.toHaveBeenCalled();
+    expect(fs.readFile).not.toHaveBeenCalled();
   });
 
-  it("short-circuits to 304 without opening the file when the validator matches", async () => {
+  it("short-circuits to 304 without reading the file when the validator matches", async () => {
     const fs = await import("fs/promises");
     const appProtocol = await import("../../utils/appProtocol.js");
     vi.mocked(appProtocol.isNotModified).mockReturnValue(true);
@@ -3137,7 +3131,7 @@ describe("createAppProtocolHandler — direct disk read", () => {
     );
 
     expect(response.status).toBe(304);
-    expect(fs.open).not.toHaveBeenCalled();
+    expect(fs.readFile).not.toHaveBeenCalled();
   });
 
   it("returns 405 for non-GET/HEAD methods without resolving a path", async () => {
@@ -3163,7 +3157,7 @@ describe("createAppProtocolHandler — direct disk read", () => {
 
     expect(response.status).toBe(404);
     expect(fs.stat).not.toHaveBeenCalled();
-    expect(fs.open).not.toHaveBeenCalled();
+    expect(fs.readFile).not.toHaveBeenCalled();
   });
 
   it("returns 404 when stat fails (missing file)", async () => {
@@ -3174,12 +3168,29 @@ describe("createAppProtocolHandler — direct disk read", () => {
     const response = await handler(makeRequest());
 
     expect(response.status).toBe(404);
+    expect(fs.readFile).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the read rejects with ENOENT after stat succeeded", async () => {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.readFile).mockRejectedValue(
+      Object.assign(new Error("ENOENT"), { code: "ENOENT" })
+    );
+
+    const handler = await captureHandler();
+    const response = await handler(makeRequest());
+
+    expect(response.status).toBe(404);
+    // A retry through fs.open here would look like a harmless fallback and put
+    // the asar extraction right back (#11726) — there is no second attempt.
     expect(fs.open).not.toHaveBeenCalled();
   });
 
-  it("returns 404 when fs.open rejects with ENOENT", async () => {
+  it("returns 404 when the read rejects with EISDIR (directory that slipped past isFile)", async () => {
     const fs = await import("fs/promises");
-    vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    vi.mocked(fs.readFile).mockRejectedValue(
+      Object.assign(new Error("EISDIR"), { code: "EISDIR" })
+    );
 
     const handler = await captureHandler();
     const response = await handler(makeRequest());
@@ -3187,82 +3198,15 @@ describe("createAppProtocolHandler — direct disk read", () => {
     expect(response.status).toBe(404);
   });
 
-  it("returns 404 when fs.open rejects with EISDIR (directory URL on Windows)", async () => {
+  it("returns 500 when the read fails with an error that isn't a missing file", async () => {
     const fs = await import("fs/promises");
-    vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("EISDIR"), { code: "EISDIR" }));
-
-    const handler = await captureHandler();
-    const response = await handler(makeRequest());
-
-    expect(response.status).toBe(404);
-  });
-
-  it("returns 404 when readFile rejects with EISDIR (directory open succeeds on macOS/Linux)", async () => {
-    const fs = await import("fs/promises");
-    const handle = {
-      readFile: vi.fn().mockRejectedValue(Object.assign(new Error("EISDIR"), { code: "EISDIR" })),
-      close: vi.fn().mockResolvedValue(undefined),
-    };
-    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
-
-    const handler = await captureHandler();
-    const response = await handler(makeRequest());
-
-    expect(response.status).toBe(404);
-    expect(handle.close).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns 500 and closes the handle when readFile fails unexpectedly", async () => {
-    const fs = await import("fs/promises");
-    const handle = {
-      readFile: vi.fn().mockRejectedValue(Object.assign(new Error("EIO"), { code: "EIO" })),
-      close: vi.fn().mockResolvedValue(undefined),
-    };
-    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
+    vi.mocked(fs.readFile).mockRejectedValue(Object.assign(new Error("EIO"), { code: "EIO" }));
 
     const handler = await captureHandler();
     const response = await handler(makeRequest());
 
     expect(response.status).toBe(500);
-    expect(handle.close).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns 500 when fs.open rejects with an unexpected error", async () => {
-    const fs = await import("fs/promises");
-    vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("EACCES"), { code: "EACCES" }));
-
-    const handler = await captureHandler();
-    const response = await handler(makeRequest());
-
-    expect(response.status).toBe(500);
-  });
-
-  it("closes the file handle on the success path", async () => {
-    const fs = await import("fs/promises");
-    const handle = makeFileHandle("bytes");
-    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
-
-    const handler = await captureHandler();
-    const response = await handler(makeRequest());
-
-    expect(response.status).toBe(200);
-    expect(handle.close).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns 200 when close() rejects after a successful read (close errors are swallowed)", async () => {
-    const fs = await import("fs/promises");
-    const handle = {
-      readFile: vi.fn().mockResolvedValue(Buffer.from("ok")),
-      close: vi.fn().mockRejectedValue(new Error("EBADF")),
-    };
-    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
-
-    const handler = await captureHandler();
-    const response = await handler(makeRequest());
-
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe("ok");
-    expect(handle.close).toHaveBeenCalledTimes(1);
+    expect(fs.open).not.toHaveBeenCalled();
   });
 
   describe("404 diagnostics (#11635)", () => {
@@ -3288,7 +3232,12 @@ describe("createAppProtocolHandler — direct disk read", () => {
     it("distinguishes the stat failure from the other 404 branches", async () => {
       const fs = await import("fs/promises");
       vi.mocked(fs.stat).mockRejectedValue(
-        Object.assign(new Error("nope"), { code: "ENOENT", errno: -2 })
+        Object.assign(new Error("nope"), {
+          code: "ENOENT",
+          errno: -2,
+          path: "/tmp/dist/assets/vanished.js",
+          syscall: "stat",
+        })
       );
 
       const handler = await captureHandler();
@@ -3302,6 +3251,11 @@ describe("createAppProtocolHandler — direct disk read", () => {
         filePath: "/tmp/dist/assets/index-abc123.js",
         code: "ENOENT",
         errno: -2,
+        // Carried through from the failing syscall alongside filePath, so a
+        // report can tell the path we asked for apart from the one the
+        // filesystem layer actually reported (#11726).
+        path: "/tmp/dist/assets/vanished.js",
+        syscall: "stat",
       });
     });
 
@@ -3319,24 +3273,28 @@ describe("createAppProtocolHandler — direct disk read", () => {
       expect(logged).toMatchObject({ stage: "not-a-file" });
       // Nothing threw, so there is no errno to invent.
       expect(logged).not.toHaveProperty("code");
+      // Same for the syscall fields: this branch has no caught error to read
+      // them off, and a report that carried them anyway would be fiction.
+      expect(logged).not.toHaveProperty("path");
+      expect(logged).not.toHaveProperty("syscall");
     });
 
-    it("separates an open failure from a read failure", async () => {
+    it("reports a body-read failure as its own stage, apart from stat and not-a-file", async () => {
       const fs = await import("fs/promises");
-      vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("nope"), { code: "EISDIR" }));
+      // Carries a code and nothing else: errors reach us wrapped or synthesized
+      // often enough that the report has to omit the syscall fields it wasn't
+      // given rather than log them as undefined.
+      vi.mocked(fs.readFile).mockRejectedValue(
+        Object.assign(new Error("nope"), { code: "EISDIR" })
+      );
 
       const handler = await captureHandler();
       await handler(makeRequest());
-      expect(await notFoundLog()).toMatchObject({ stage: "open", code: "EISDIR" });
 
-      vi.mocked(await import("../../utils/logger.js")).logWarn.mockClear();
-      vi.mocked(fs.open).mockResolvedValue({
-        readFile: vi.fn().mockRejectedValue(Object.assign(new Error("nope"), { code: "EISDIR" })),
-        close: vi.fn().mockResolvedValue(undefined),
-      } as unknown as Awaited<ReturnType<typeof fs.open>>);
-
-      await handler(makeRequest());
-      expect(await notFoundLog()).toMatchObject({ stage: "read", code: "EISDIR" });
+      const logged = await notFoundLog();
+      expect(logged).toMatchObject({ stage: "read", code: "EISDIR" });
+      expect(logged).not.toHaveProperty("path");
+      expect(logged).not.toHaveProperty("syscall");
     });
 
     it("logs the resolver rejection with its reason and never touches disk", async () => {

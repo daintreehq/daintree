@@ -6,9 +6,7 @@ import { useDndContext, useDroppable } from "@dnd-kit/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { usePanelStore, useProjectStore, useWorktreeSelectionStore } from "@/store";
-import { useScratchStore } from "@/store/scratchStore";
-import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
+import { usePanelStore, useWorktreeSelectionStore } from "@/store";
 import {
   isBrowserPanel,
   isDockPanel,
@@ -31,11 +29,8 @@ import { WaitingContainer } from "./WaitingContainer";
 import { ErrorsContainer } from "./ErrorsContainer";
 import { BackgroundContainer } from "./BackgroundContainer";
 import { DockLaunchButton } from "./DockLaunchButton";
-import {
-  DockLaunchMenuItems,
-  type DockLaunchAgent,
-  type DockLaunchMenuComponents,
-} from "./DockLaunchMenuItems";
+import { useLauncherData } from "./useLauncherData";
+import { DockLaunchMenuItems, type DockLaunchMenuComponents } from "./DockLaunchMenuItems";
 import {
   SortableDockItem,
   SortableDockPlaceholder,
@@ -47,12 +42,7 @@ import {
   subscribeToPanelKindRegistry,
   getPanelKindRegistrySnapshot,
 } from "@shared/config/panelKindRegistry";
-import { useWorktrees } from "@/hooks/useWorktrees";
 import { useHorizontalScrollControls } from "@/hooks";
-import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
-import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
-import { sortAgentsByToolbarPin } from "@/lib/agentMenuOrder";
 import type { ActionSource } from "@shared/types/actions";
 import { actionService } from "@/services/ActionService";
 import {
@@ -69,9 +59,6 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 
-import { getAgentConfig, getAgentIds } from "@/config/agents";
-import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
-import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { buildDockRenderItems, type DockRenderItem } from "./dockRenderItems";
 import { usePreferencesStore, type DockDensity } from "@/store/preferencesStore";
@@ -148,12 +135,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const storeTabGroups = usePanelStore((state) => state.tabGroups);
   const getTabGroups = usePanelStore((state) => state.getTabGroups);
   const getTabGroupPanels = usePanelStore((state) => state.getTabGroupPanels);
-  const currentProject = useProjectStore((s) => s.currentProject);
-  const currentScratch = useScratchStore((s) => s.currentScratch);
   const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
-  const agentSettings = useAgentSettingsStore((s) => s.settings);
-  const agentAvailability = useCliAvailabilityStore((s) => s.availability);
-  const leftButtons = useToolbarPreferencesStore(useShallow((s) => s.layout.leftButtons));
   const setDockDensity = usePreferencesStore((s) => s.setDockDensity);
 
   // Narrow dock subscriptions (#10908). Subscribing to the whole `panelsById`
@@ -261,47 +243,18 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
     })
   );
 
-  const { worktrees } = useWorktrees();
-
-  const activeWorktree = activeWorktreeId ? worktrees.find((w) => w.id === activeWorktreeId) : null;
-  // This cwd rides down as an explicit launch option, and `""` is not nullish —
-  // it would win over any fallback further down the chain, so it has to resolve
-  // the whole workspace here (#11076).
-  const cwd = resolveWorkspaceCwd({
-    worktreePath: activeWorktree?.path,
-    projectPath: currentProject?.path,
-    scratchPath: currentScratch?.path,
-  });
-
-  const { sorted: launchAgents, pinnedCount } = useMemo(() => {
-    const baseIds = getAgentIds();
-    const settingsIds = agentSettings?.agents ? Object.keys(agentSettings.agents) : [];
-    const extraIds = settingsIds.filter((id) => !baseIds.includes(id)).sort();
-    const agents: DockLaunchAgent[] = [...baseIds, ...extraIds]
-      // Assistant-only agents are never offered in the dock launch menu.
-      .filter((id) => !isAssistantOnlyAgentId(id))
-      .filter((id) => isAgentInstalled(agentAvailability?.[id]))
-      .map((id) => {
-        const config = getAgentConfig(id);
-        return {
-          id,
-          name: config?.name ?? id,
-          icon: config?.icon,
-          brandColor: config?.color,
-          availability: agentAvailability?.[id],
-        };
-      });
-    return sortAgentsByToolbarPin(agents, leftButtons, agentSettings);
-  }, [agentAvailability, agentSettings, leftButtons]);
-
-  const recipeContext = activeWorktree
-    ? {
-        issueNumber: activeWorktree.issueNumber,
-        prNumber: activeWorktree.linked?.pr?.ref.number,
-        branchName: activeWorktree.branch,
-        worktreePath: activeWorktree.path,
-      }
-    : undefined;
+  // Inventory, cwd and recipe variables all come from the shared launcher hook
+  // now that the toolbar hosts the same component (#11691) — two copies of these
+  // rules is how the two placements start offering different things.
+  const {
+    agents: launchAgents,
+    pinnedCount,
+    agentInventoryState,
+    cwd,
+    recipeContext,
+    hasWorkspace,
+    hasProject,
+  } = useLauncherData();
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const activeDockIndexRef = useRef(0);
@@ -451,7 +404,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   );
 
   const handleAddTerminal = useCallback(
-    async (agentId: string, source: ActionSource = "menu") => {
+    async (agentId: string, source: ActionSource = "menu", presetId?: string | null) => {
       // `activateDockOnCreate` folds the dock activation into the same `set()`
       // that commits the new panel to the store. Without it, the watchdog
       // effect in `DockPanelOffscreenContainer` can fire `closeDockTerminal()`
@@ -465,6 +418,10 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           cwd,
           worktreeId: activeWorktreeId || undefined,
           activateDockOnCreate: true,
+          // Spread rather than passed as `presetId: presetId`: `null` is the
+          // explicit-default sentinel the launcher relies on, and `undefined`
+          // must leave the key off entirely so the saved preset still resolves.
+          ...(presetId !== undefined ? { presetId } : {}),
         },
         { source }
       );
@@ -520,7 +477,12 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
             <DockLaunchButton
               agents={launchAgents}
               pinnedCount={pinnedCount}
-              onLaunchAgent={(agentId) => void handleAddTerminal(agentId, "menu")}
+              agentInventoryState={agentInventoryState}
+              hasWorkspace={hasWorkspace}
+              hasProject={hasProject}
+              onLaunchAgent={(agentId, presetId) =>
+                void handleAddTerminal(agentId, "menu", presetId)
+              }
               activeWorktreeId={activeWorktreeId}
               cwd={cwd}
               recipeContext={recipeContext}
@@ -668,7 +630,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           recipeContext={recipeContext}
           onLaunchAgent={(agentId) => void handleAddTerminal(agentId, "context-menu")}
           surface="dock"
-          settingsSource="context-menu"
+          source="context-menu"
         />
         <ContextMenuSeparator />
         <ContextMenuSub>

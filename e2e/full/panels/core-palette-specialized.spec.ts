@@ -4,6 +4,7 @@ import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { getGridPanelCount, getFirstGridPanel, openTerminal } from "../../helpers/panels";
 import { ensureWindowFocused, expectTerminalFocused } from "../../helpers/focus";
+import { escapeTerminalFocus } from "../../helpers/keyboard-audit";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
@@ -80,11 +81,55 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
     await resetToApp(ctx.window);
   });
 
+  // ── Action Palette prefix hint ─────────────────────────────
+  //
+  // Must stay the FIRST test in this serial suite. The prefix row gets one
+  // showing per profile and is spent by the first action-palette open that
+  // renders it, so any earlier test reaching for `Cmd+Shift+P` consumes it and
+  // leaves this asserting an empty footer.
+
+  test("prefix discoverability row is taught once and then retires", async () => {
+    const { window } = ctx;
+    await ensureWindowFocused(ctx.app);
+
+    await window.keyboard.press(`${mod}+Shift+P`);
+    const actionInput = window.locator(SEL.actionPalette.searchInput);
+    await expect(actionInput).toBeFocused({ timeout: T_MEDIUM });
+
+    const row = window.locator(SEL.palettePrefix.discoverabilityRow);
+    await expect(row).toBeVisible({ timeout: T_MEDIUM });
+
+    await actionInput.fill("toggle");
+    await expect(row).toHaveCount(0, { timeout: T_MEDIUM });
+
+    // Typing doesn't spend the hint — only closing the palette does, so the row
+    // is still there for the rest of this opening.
+    await actionInput.fill("");
+    await expect(row).toBeVisible({ timeout: T_MEDIUM });
+
+    await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.actionPalette.dialog)).not.toBeVisible({ timeout: T_MEDIUM });
+
+    await window.keyboard.press(`${mod}+Shift+P`);
+    await expect(actionInput).toBeFocused({ timeout: T_MEDIUM });
+    await expect(row).toHaveCount(0, { timeout: T_MEDIUM });
+
+    await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.actionPalette.dialog)).not.toBeVisible({ timeout: T_MEDIUM });
+  });
+
   // ── Panel Palette (Cmd+N) ─────────────────────────────────
 
   test("panel palette opens via shortcut with first option selected", async () => {
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);
+
+    // Move focus off the terminal before using the shortcut. Terminals own
+    // their keys, and off macOS this binding is Ctrl+N — a control key xterm
+    // legitimately forwards to the shell, so a focused terminal eats it and the
+    // palette never opens. macOS is immune only because Cmd+N is not a key a
+    // terminal claims.
+    await escapeTerminalFocus(window);
 
     await window.keyboard.press(`${mod}+N`);
     const dialog = window.locator(SEL.panelPalette.dialog);
@@ -420,21 +465,6 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
         count--;
       }
     });
-  });
-
-  test("prefix discoverability row shows on empty query and hides once typing starts", async () => {
-    const { window } = ctx;
-    await ensureWindowFocused(ctx.app);
-
-    await window.keyboard.press(`${mod}+Shift+P`);
-    const actionInput = window.locator(SEL.actionPalette.searchInput);
-    await expect(actionInput).toBeFocused({ timeout: T_MEDIUM });
-
-    const row = window.locator(SEL.palettePrefix.discoverabilityRow);
-    await expect(row).toBeVisible({ timeout: T_MEDIUM });
-
-    await actionInput.fill("toggle");
-    await expect(row).toHaveCount(0, { timeout: T_MEDIUM });
   });
 
   test("typing '>' shows the commands mode chip and backspace removes it", async () => {

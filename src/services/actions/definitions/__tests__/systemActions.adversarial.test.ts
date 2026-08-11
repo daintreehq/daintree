@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { COPY_TREE_UNMATCHED_SELECTORS } from "@shared/types/ipc/copyTree";
+import { COPY_TREE_HISTORY_NAME_MAX_LENGTH } from "@shared/types/ipc/copyTreeHistory";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const filesClientMock = vi.hoisted(() => ({
@@ -37,6 +40,10 @@ const artifactClientMock = vi.hoisted(() => ({
   applyPatch: vi.fn(),
 }));
 
+const notifyMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+
 vi.mock("@/clients", () => ({
   filesClient: filesClientMock,
   copyTreeClient: copyTreeClientMock,
@@ -55,6 +62,12 @@ vi.mock("@/clients", () => ({
 }));
 
 import { registerSystemActions } from "../systemActions";
+import {
+  setWorktreePathIndexAccessor,
+  resetStoreAccessorsForTesting,
+} from "@/store/storeAccessors";
+import { _resetCopyTreeNoticePresenterForTest } from "@/lib/copyTreeFeedback";
+import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 
 function setupActions(): {
   run: (id: string, args?: unknown, ctx?: Record<string, unknown>) => Promise<unknown>;
@@ -90,6 +103,14 @@ const COPY_TREE_RESULT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The worktree path index leaks across files otherwise, so a later suite
+  // would inherit whichever map the last path-resolution test installed.
+  resetStoreAccessorsForTesting();
+  // The completion-toast assertions below are FALLBACK coverage: they hold
+  // because no presenter is registered. Reset explicitly so a future test that
+  // registers one can't make ordering matter, and settle the run counter.
+  _resetCopyTreeNoticePresenterForTest();
+  useCopyTreeRunStore.setState({ activeRunCount: 0 });
   for (const fn of Object.values(filesClientMock)) fn.mockResolvedValue(undefined);
   for (const fn of Object.values(copyTreeClientMock)) fn.mockResolvedValue(undefined);
   for (const fn of Object.values(slashCommandsClientMock)) fn.mockResolvedValue(undefined);
@@ -183,20 +204,38 @@ describe("systemActions adversarial", () => {
     it("falls back to ctx.activeWorktreeId when worktreeId is omitted", async () => {
       const { run } = setupActions();
       await run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" });
-      expect(copyTreeClientMock.generate).toHaveBeenCalledWith("wt-active", undefined, undefined);
+      expect(copyTreeClientMock.generate).toHaveBeenCalledWith(
+        "wt-active",
+        undefined,
+        undefined,
+        "unknown",
+        undefined
+      );
     });
 
     it("forwards options when provided", async () => {
       const { run } = setupActions();
       const options = { format: "xml" as const };
       await run("copyTree.generate", { options }, { activeWorktreeId: "wt-active" });
-      expect(copyTreeClientMock.generate).toHaveBeenCalledWith("wt-active", options, undefined);
+      expect(copyTreeClientMock.generate).toHaveBeenCalledWith(
+        "wt-active",
+        options,
+        undefined,
+        "unknown",
+        undefined
+      );
     });
 
     it("forwards the content opt-in so the head is only read when asked for", async () => {
       const { run } = setupActions();
       await run("copyTree.generate", { includeContent: true }, { activeWorktreeId: "wt-active" });
-      expect(copyTreeClientMock.generate).toHaveBeenCalledWith("wt-active", undefined, true);
+      expect(copyTreeClientMock.generate).toHaveBeenCalledWith(
+        "wt-active",
+        undefined,
+        true,
+        "unknown",
+        undefined
+      );
     });
 
     it("throws when worktreeId is omitted and no active worktree", async () => {
@@ -285,13 +324,96 @@ describe("systemActions adversarial", () => {
         contentTruncated: true,
       });
     });
+
+    it("announces the bundle without claiming it reached the clipboard", async () => {
+      // This action writes a temp file and never touches the clipboard, so it
+      // needs its own verb and destination rather than the copy wording (#11735).
+      const { run } = setupActions();
+      await run(
+        "copyTree.generate",
+        { options: { format: "xml" } },
+        {
+          activeWorktreeId: "wt-active",
+        }
+      );
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const payload = notifyMock.mock.calls[0]?.[0] as { message: string; type: string };
+      expect(payload.type).toBe("success");
+      expect(payload.message).toBe("Bundled 3 files (4 KB) as XML into a temporary file");
+      expect(payload.message).not.toContain("clipboard");
+    });
+
+    it("is the one copy-tree completion that never reaches the toast surface", async () => {
+      // `copyTree.generate` is kind "query", so useActionPalette — which drops
+      // everything but kind "command" — never surfaces it: no human route at
+      // all, only MCP and the in-app assistant, where it sits in the lowest
+      // tier beside pure reads like file.read. It writes a temp file and hands
+      // the path back to the caller, so nothing the user owns changes, unlike
+      // generateAndCopyFile (replaces the clipboard) and injectToTerminal
+      // (writes into a live terminal). Asserted as a partition over all three
+      // so what's pinned is the distinction between them, not one literal.
+      const { run } = setupActions();
+      const ctx = { activeWorktreeId: "wt-active" };
+      const cases: [id: string, args: unknown][] = [
+        ["copyTree.generate", undefined],
+        ["copyTree.generateAndCopyFile", undefined],
+        ["copyTree.injectToTerminal", { terminalId: "t-1" }],
+      ];
+
+      const inboxOnly: string[] = [];
+      const interrupting: string[] = [];
+      for (const [id, args] of cases) {
+        notifyMock.mockClear();
+        await run(id, args, ctx);
+        // Guards the partition: an action that stopped announcing entirely
+        // would otherwise be silently filed under "interrupting".
+        expect(notifyMock).toHaveBeenCalledTimes(1);
+        const { priority } = notifyMock.mock.calls[0]?.[0] as { priority?: string };
+        (priority === "low" ? inboxOnly : interrupting).push(id);
+      }
+
+      expect(inboxOnly).toEqual(["copyTree.generate"]);
+      expect(interrupting).toEqual(["copyTree.generateAndCopyFile", "copyTree.injectToTerminal"]);
+    });
+
+    it("never announces a generate that failed", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generate.mockResolvedValueOnce({
+        content: "",
+        fileCount: 0,
+        error: "copytree exited with code 1",
+      });
+      await expect(
+        run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" })
+      ).rejects.toThrow();
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("never announces a bundle that produced no file", async () => {
+      // requireGeneratedFile throws when filePath is missing; announcing before
+      // that check would promise a bundle the caller cannot read.
+      const { run } = setupActions();
+      copyTreeClientMock.generate.mockResolvedValueOnce({
+        content: "",
+        fileCount: 3,
+      });
+      await expect(
+        run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" })
+      ).rejects.toThrow();
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
   });
 
   describe("copyTree.generateAndCopyFile", () => {
     it("falls back to ctx.activeWorktreeId when worktreeId is omitted", async () => {
       const { run } = setupActions();
       await run("copyTree.generateAndCopyFile", undefined, { activeWorktreeId: "wt-active" });
-      expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith("wt-active", undefined);
+      expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith(
+        "wt-active",
+        undefined,
+        "unknown",
+        undefined
+      );
     });
 
     it("returns the file handle without the bundle", async () => {
@@ -320,6 +442,271 @@ describe("systemActions adversarial", () => {
         run("copyTree.generateAndCopyFile", undefined, { activeWorktreeId: "wt-active" })
       ).rejects.toThrow("Failed to copy file to clipboard: EACCES");
     });
+
+    it("brackets the shared run store so the toolbar spinner tracks MCP copies", async () => {
+      // This is the action MCP clipboard copies and the recents replay land
+      // on; the toolbar's Copy context spinner derives from this count.
+      const { run } = setupActions();
+      let midFlightCount = -1;
+      copyTreeClientMock.generateAndCopyFile.mockImplementationOnce(async () => {
+        midFlightCount = useCopyTreeRunStore.getState().activeRunCount;
+        return { ...COPY_TREE_RESULT };
+      });
+
+      await run(
+        "copyTree.generateAndCopyFile",
+        { worktreeId: "wt-1" },
+        { dispatchSource: "agent" }
+      );
+
+      expect(midFlightCount).toBe(1);
+      expect(useCopyTreeRunStore.getState().activeRunCount).toBe(0);
+    });
+
+    it("settles the run count even when the copy rejects", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generateAndCopyFile.mockRejectedValueOnce(new Error("boom"));
+      await expect(
+        run("copyTree.generateAndCopyFile", undefined, { activeWorktreeId: "wt-active" })
+      ).rejects.toThrow("boom");
+      expect(useCopyTreeRunStore.getState().activeRunCount).toBe(0);
+    });
+
+    it("never blips the spinner for a dispatch refused before the client is reached", async () => {
+      // The agent-target guard throws before the bracket: a refused dispatch
+      // did no work, so it must not flash the button.
+      const { run } = setupActions();
+      await expect(
+        run("copyTree.generateAndCopyFile", undefined, {
+          dispatchSource: "agent",
+          activeWorktreeId: "wt-active",
+        })
+      ).rejects.toThrow(/explicit/i);
+      expect(useCopyTreeRunStore.getState().activeRunCount).toBe(0);
+      expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
+    });
+
+    it("resolves an explicit worktreePath to the id its IPC takes", async () => {
+      setWorktreePathIndexAccessor(() => new Map([["wt-landscape", "/repo/landscape"]]));
+      const { run } = setupActions();
+      await run(
+        "copyTree.generateAndCopyFile",
+        { worktreePath: "/repo/landscape" },
+        { dispatchSource: "agent", activeWorktreeId: "wt-active" }
+      );
+      // An agent dispatch is recorded as an MCP-sourced run (#11732).
+      expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith(
+        "wt-landscape",
+        undefined,
+        "mcp",
+        undefined
+      );
+    });
+
+    it("forwards the curated selection to the client untouched", async () => {
+      // Without this, swapping the call for `generateAndCopyFile(id, undefined)`
+      // leaves every other test here green while external callers silently lose
+      // their selection and copy the whole worktree.
+      const { getDef, run } = setupActions();
+      const options = {
+        includePaths: ["src/landscape/generator.ts"],
+        filter: ["tests/landscape/*.test.ts"],
+        format: "markdown" as const,
+      };
+      await run(
+        "copyTree.generateAndCopyFile",
+        { worktreeId: "wt-1", options },
+        { dispatchSource: "agent" }
+      );
+      expect(copyTreeClientMock.generateAndCopyFile).toHaveBeenCalledWith(
+        "wt-1",
+        options,
+        "mcp",
+        undefined
+      );
+
+      // And the selection SURVIVES the schema transform — `run()` is called
+      // directly here, so the transform is otherwise never exercised. Asserting
+      // the parsed output rather than `.success`: zod strips unknown keys and
+      // still succeeds, so a dropped field would pass a success-only check
+      // while real dispatch copied the whole worktree.
+      const parsed = getDef("copyTree.generateAndCopyFile").argsSchema?.parse({
+        worktreePath: "/repo/landscape",
+        options,
+      });
+      expect(parsed).toEqual({ worktreePath: "/repo/landscape", options });
+    });
+
+    it("rejects a blank selection entry instead of widening it to the whole worktree", async () => {
+      // An empty selection reads as "everything" downstream, so a blank must be
+      // a validation error rather than something quietly dropped.
+      const schema = setupActions().getDef("copyTree.generateAndCopyFile").argsSchema;
+      // A blank entry and an empty list fail the same way: both leave nothing
+      // selected, and nothing selected means everything one layer down.
+      for (const options of [
+        { includePaths: [""] },
+        { includePaths: [] },
+        { includePaths: ["src/a.ts", ""] },
+        { filter: [""] },
+        { filter: [] },
+        { filter: "" },
+      ]) {
+        expect(schema?.safeParse({ options }).success).toBe(false);
+      }
+      // The valid shapes still pass, so the guard above isn't rejecting everything.
+      expect(schema?.safeParse({ options: { includePaths: ["src/a.ts"] } }).success).toBe(true);
+      expect(schema?.safeParse({ options: { filter: "src/**" } }).success).toBe(true);
+    });
+
+    it("refuses an explicit worktreePath that matches no open worktree", async () => {
+      // Must not fall back to the active worktree: the agent named a target,
+      // and quietly copying a different one is the failure this guards.
+      setWorktreePathIndexAccessor(() => new Map([["wt-known", "/repo/known"]]));
+      const { run } = setupActions();
+      await expect(
+        run(
+          "copyTree.generateAndCopyFile",
+          { worktreePath: "/repo/gone" },
+          { dispatchSource: "agent", activeWorktreeId: "wt-active" }
+        )
+      ).rejects.toThrow(/no open worktree matches that path/i);
+      expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("refuses an agent dispatch that names no worktree, before touching the clipboard", async () => {
+      const { run } = setupActions();
+      await expect(
+        run("copyTree.generateAndCopyFile", undefined, {
+          dispatchSource: "agent",
+          activeWorktreeId: "wt-active",
+        })
+      ).rejects.toThrow(/requires an explicit/);
+      // The guard has to fire before the copy — a rejected call that already
+      // replaced the clipboard is the failure mode this exists to prevent.
+      expect(copyTreeClientMock.generateAndCopyFile).not.toHaveBeenCalled();
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("toasts once on a successful agent dispatch", async () => {
+      const { run } = setupActions();
+      await run(
+        "copyTree.generateAndCopyFile",
+        { worktreeId: "wt-1", options: { format: "xml" } },
+        { dispatchSource: "agent" }
+      );
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "success",
+          // The message is computed from the mocked result (3 files, 4 KB, the
+          // requested format), so it asserts real composition. The title is
+          // pure copy — pinning the wording would force a test edit for a copy
+          // tweak, so only require that the toast carries one.
+          title: expect.stringMatching(/\S/),
+          message: "Copied 3 files (4 KB) as XML to clipboard",
+          context: { eventKind: "agent" },
+        })
+      );
+    });
+
+    it("gives the toast a bucket of its own rather than the shared fallback", async () => {
+      // notify() derives the bucket from `rateLimitKey ?? correlationId ??
+      // context.projectId ?? context.worktreeId ?? type`. With none of those set
+      // it lands on `type` — pooling this with every other success toast in the
+      // app, where an unrelated burst replaces the one message saying what is
+      // now on the clipboard. The invariant is "not the shared bucket", not any
+      // particular string.
+      const { run } = setupActions();
+      await run(
+        "copyTree.generateAndCopyFile",
+        { worktreeId: "wt-1" },
+        { dispatchSource: "agent" }
+      );
+      const payload = notifyMock.mock.calls[0]?.[0] as { rateLimitKey?: string; type: string };
+      expect(payload.rateLimitKey).toBeTruthy();
+      expect(payload.rateLimitKey).not.toBe(payload.type);
+    });
+
+    it("describes the copy without a format when none was requested", async () => {
+      const { run } = setupActions();
+      await run(
+        "copyTree.generateAndCopyFile",
+        { worktreeId: "wt-1" },
+        { dispatchSource: "agent" }
+      );
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Copied 3 files (4 KB) to clipboard" })
+      );
+    });
+
+    it("keeps the worktree out of the toast context so notify() cannot suppress it", async () => {
+      // notify() routes a high-priority toast to the inbox instead when
+      // `context.worktreeId` matches the worktree already on screen. An agent
+      // copying the ACTIVE worktree is the common case, so naming it here would
+      // silence exactly the signal this toast exists to deliver. A clipboard
+      // overwrite is invisible regardless of which worktree is displayed.
+      const { run } = setupActions();
+      await run(
+        "copyTree.generateAndCopyFile",
+        { worktreeId: "wt-active" },
+        { dispatchSource: "agent", activeWorktreeId: "wt-active" }
+      );
+      // The nested `context` is a plain object, so it is compared by deep
+      // equality rather than partially: an added `worktreeId` fails this.
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ context: { eventKind: "agent" } })
+      );
+    });
+
+    it.each([
+      ["a user-driven dispatch", { dispatchSource: "user" as const }],
+      ["a source-less dispatch", {}],
+    ])("announces the copy for %s too", async (_label, sourceCtx) => {
+      // Inverted in #11735. The old agent-only gate assumed a human already
+      // knows their clipboard changed — true of a button with inline feedback,
+      // but this action's only human route is the command palette, which shows
+      // nothing at all. Silence there was the bug, not the feature.
+      const { run } = setupActions();
+      await run("copyTree.generateAndCopyFile", undefined, {
+        ...sourceCtx,
+        activeWorktreeId: "wt-active",
+      });
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "success",
+          message: "Copied 3 files (4 KB) to clipboard",
+          context: { eventKind: "agent" },
+        })
+      );
+    });
+
+    it("never announces success when the copy failed", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generateAndCopyFile.mockResolvedValueOnce({
+        content: "",
+        fileCount: 0,
+        error: "Failed to copy file to clipboard: EACCES",
+      });
+      await expect(
+        run("copyTree.generateAndCopyFile", { worktreeId: "wt-1" }, { dispatchSource: "agent" })
+      ).rejects.toThrow("EACCES");
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("never announces success when no file came back", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generateAndCopyFile.mockResolvedValueOnce({
+        content: "",
+        fileCount: 3,
+        // No filePath: the clipboard write had nothing to point at.
+      });
+      await expect(
+        run("copyTree.generateAndCopyFile", { worktreeId: "wt-1" }, { dispatchSource: "agent" })
+      ).rejects.toThrow();
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
   });
 
   describe("copyTree.injectToTerminal", () => {
@@ -333,6 +720,9 @@ describe("systemActions adversarial", () => {
       expect(copyTreeClientMock.injectToTerminal).toHaveBeenCalledWith(
         "t-1",
         "wt-active",
+        undefined,
+        undefined,
+        "unknown",
         undefined
       );
     });
@@ -347,6 +737,9 @@ describe("systemActions adversarial", () => {
       expect(copyTreeClientMock.injectToTerminal).toHaveBeenCalledWith(
         "t-1",
         "wt-explicit",
+        undefined,
+        undefined,
+        "unknown",
         undefined
       );
     });
@@ -375,6 +768,391 @@ describe("systemActions adversarial", () => {
       await expect(
         run("copyTree.injectToTerminal", { terminalId: "t-1" }, { activeWorktreeId: "wt-active" })
       ).rejects.toThrow("Terminal closed during injection");
+    });
+
+    it("announces the injection in terminal wording, never clipboard wording", async () => {
+      // The bundle streams into a PTY and never reaches the clipboard, so the
+      // default "copied … to clipboard" phrasing would be plainly false (#11735).
+      const { run } = setupActions();
+      await run(
+        "copyTree.injectToTerminal",
+        { terminalId: "t-1", options: { format: "xml" } },
+        { activeWorktreeId: "wt-active" }
+      );
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const payload = notifyMock.mock.calls[0]?.[0] as { message: string; type: string };
+      expect(payload.type).toBe("success");
+      expect(payload.message).toBe("Injected 3 files (4 KB) as XML into terminal");
+      expect(payload.message).not.toContain("clipboard");
+    });
+
+    it("never announces an injection that failed", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.injectToTerminal.mockResolvedValueOnce({
+        content: "",
+        fileCount: 0,
+        error: "Terminal closed during injection",
+      });
+      await expect(
+        run("copyTree.injectToTerminal", { terminalId: "t-1" }, { activeWorktreeId: "wt-active" })
+      ).rejects.toThrow();
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("copyTree completion toasts share one contract", () => {
+    // Each action needs its own rate-limit bucket: notify() falls back to
+    // `type` when none is set, which would pool all three with every other
+    // success toast in the app and let an unrelated burst swallow the message.
+    // Naming the worktree in context would let notify() divert the toast to the
+    // inbox whenever the target is already on screen — the common case.
+    const CASES = [
+      ["copyTree.generate", undefined],
+      ["copyTree.generateAndCopyFile", undefined],
+      ["copyTree.injectToTerminal", { terminalId: "t-1" }],
+    ] as const;
+
+    it("gives each action a distinct bucket that is not the shared fallback", async () => {
+      const keys: string[] = [];
+      for (const [actionId, args] of CASES) {
+        notifyMock.mockClear();
+        const { run } = setupActions();
+        await run(actionId, args, { activeWorktreeId: "wt-active" });
+        const payload = notifyMock.mock.calls[0]?.[0] as { rateLimitKey?: string; type: string };
+        expect(payload.rateLimitKey).toBeTruthy();
+        expect(payload.rateLimitKey).not.toBe(payload.type);
+        keys.push(payload.rateLimitKey!);
+      }
+      expect(new Set(keys).size).toBe(CASES.length);
+    });
+
+    it("keeps the worktree out of every toast context so notify() cannot suppress it", async () => {
+      for (const [actionId, args] of CASES) {
+        notifyMock.mockClear();
+        const { run } = setupActions();
+        await run(actionId, args, { activeWorktreeId: "wt-active" });
+        // `context` is a plain object, so this compares by deep equality — an
+        // added `worktreeId` fails here.
+        expect(notifyMock).toHaveBeenCalledWith(
+          expect.objectContaining({ context: { eventKind: "agent" } })
+        );
+      }
+    });
+  });
+
+  /**
+   * The optional run name an MCP caller can attach (#11734).
+   *
+   * Table-driven over all three tools because the field is declared three times
+   * against two different schema builders, and a plain zod object *strips* an
+   * undeclared key rather than rejecting it — a tool that was missed would keep
+   * passing every other assertion here while silently discarding the name.
+   */
+  describe("copyTree run name", () => {
+    const RAW_NAME = "  Auth flow context  ";
+
+    // The FULL expected client tuple, not just the trailing slot. Asserting only
+    // the last argument would still pass if `source` were dropped and the name
+    // slid into its place — losing attribution silently. Both are strings, so
+    // nothing upstream of this catches that swap.
+    const CASES = [
+      {
+        id: "copyTree.generate",
+        mock: copyTreeClientMock.generate,
+        args: {} as Record<string, unknown>,
+        base: "Context generated",
+        call: ["wt-active", undefined, undefined, "unknown", RAW_NAME],
+      },
+      {
+        id: "copyTree.generateAndCopyFile",
+        mock: copyTreeClientMock.generateAndCopyFile,
+        args: {} as Record<string, unknown>,
+        base: "Context copied",
+        call: ["wt-active", undefined, "unknown", RAW_NAME],
+      },
+      {
+        id: "copyTree.injectToTerminal",
+        mock: copyTreeClientMock.injectToTerminal,
+        args: { terminalId: "t-1" },
+        base: "Context injected",
+        call: ["t-1", "wt-active", undefined, undefined, "unknown", RAW_NAME],
+      },
+    ];
+
+    // Parsed rather than asserted, matching schemaDescriptions.test.ts: a cast
+    // would declare the shape true, while a parse makes a conversion that
+    // stopped returning it fail here instead of yielding `undefined` silently.
+    const EmittedName = z.object({
+      properties: z
+        .object({
+          name: z.object({ type: z.string().optional(), description: z.string().optional() }),
+        })
+        .optional(),
+      required: z.array(z.string()).optional(),
+    });
+
+    const NotifyPayload = z.object({ title: z.string() });
+
+    const titleOf = (): string => NotifyPayload.parse(notifyMock.mock.calls[0]?.[0]).title;
+
+    /**
+     * The `name` property as an MCP client actually receives it.
+     *
+     * Goes through the real conversion, matching ActionService.computeSchemas:
+     * a `.describe()` attached to the wrong link in a zod chain is dropped by
+     * toJSONSchema without error, so reading `.description` off the zod object
+     * would assert text that is never sent.
+     */
+    const emitName = (id: string): { type?: string; description?: string } => {
+      const schema = setupActions().getDef(id).argsSchema;
+      const emitted = EmittedName.parse(
+        z.toJSONSchema(schema!, {
+          io: "input",
+          unrepresentable: "any",
+          reused: "inline",
+          cycles: "ref",
+          target: "draft-2020-12",
+        })
+      );
+      expect(emitted.required ?? []).not.toContain("name");
+      // `properties.name` is required by the schema above, so a tool that never
+      // advertised the field fails in the parse rather than here.
+      return emitted.properties!.name;
+    };
+
+    it.each(CASES)("$id advertises name as an optional described string", ({ id }) => {
+      const emitted = emitName(id);
+      expect(emitted.type).toBe("string");
+      // Only that SOME text survived the conversion. Asserting the wording
+      // would copy a literal out of the source and break on a harmless reword;
+      // the failure worth catching is the silent one, where the text is dropped
+      // in transit and the field ships as an unexplained free-text string.
+      expect(emitted.description).toBeTruthy();
+    });
+
+    it("advertises one identical name description across all three tools", () => {
+      // The real invariant behind the wording: all three read from a single
+      // field constant, so a tool that drifted to its own reworded copy — the
+      // way three hand-written descriptions inevitably do — fails here without
+      // pinning what the text actually says.
+      const descriptions = CASES.map(({ id }) => emitName(id).description);
+      expect(new Set(descriptions).size).toBe(1);
+    });
+
+    it.each(CASES)("$id survives the schema transform rather than being stripped", ({ id }) => {
+      const schema = setupActions().getDef(id).argsSchema;
+      // Asserting the parsed OUTPUT, not `.success`: zod strips unknown keys and
+      // still reports success, so a success-only check passes on a dropped field.
+      const parsed = z
+        .object({ name: z.string().optional() })
+        .parse(schema!.parse({ worktreeId: "wt-1", terminalId: "t-1", name: "Auth flow" }));
+      expect(parsed.name).toBe("Auth flow");
+    });
+
+    it.each(CASES)(
+      "$id forwards the raw name in the slot after the source",
+      async ({ id, mock, args, call }) => {
+        const { run } = setupActions();
+        // Untrimmed: the client and IPC layers forward verbatim so that
+        // resolveCopyTreeRunName stays the single normalization seam.
+        await run(id, { ...args, name: RAW_NAME }, { activeWorktreeId: "wt-active" });
+
+        expect(mock.mock.calls[0]).toEqual(call);
+      }
+    );
+
+    it.each(CASES)(
+      "$id labels its completion with the supplied name",
+      async ({ id, args, base }) => {
+        const { run } = setupActions();
+        await run(id, { ...args, name: RAW_NAME }, { activeWorktreeId: "wt-active" });
+
+        // Trimmed for display even though it is forwarded raw — the label the
+        // user reads must match the one the history stores.
+        expect(titleOf()).toBe(`${base} — Auth flow context`);
+      }
+    );
+
+    it.each(CASES)("$id truncates a long name to the stored length", async ({ id, args, base }) => {
+      const { run } = setupActions();
+      await run(id, { ...args, name: "y".repeat(500) }, { activeWorktreeId: "wt-active" });
+
+      const label = titleOf().slice(base.length + 3);
+      expect(label.length).toBe(COPY_TREE_HISTORY_NAME_MAX_LENGTH);
+      expect(label.endsWith("…")).toBe(true);
+    });
+
+    it.each(CASES)(
+      "$id leaves its title untouched when no name is supplied",
+      async ({ id, args, base }) => {
+        const { run } = setupActions();
+        await run(id, args, { activeWorktreeId: "wt-active" });
+
+        // The derived fallback is deliberately NOT shown: it exists so every
+        // history row has a label, and appending it here would read as noise on
+        // an unnarrowed run ("Context copied — Full context"). This is also what
+        // keeps every pre-existing caller's title byte-identical.
+        expect(titleOf()).toBe(base);
+      }
+    );
+
+    it.each(CASES)("$id treats a blank name as no name at all", async ({ id, args, base }) => {
+      const { run } = setupActions();
+      await run(id, { ...args, name: "   " }, { activeWorktreeId: "wt-active" });
+
+      expect(titleOf()).toBe(base);
+    });
+
+    it.each(CASES)(
+      "$id never derives a label from the options it was given",
+      async ({ id, args, base }) => {
+        const { run } = setupActions();
+        await run(
+          id,
+          { ...args, options: { scopePaths: ["src/auth"] } },
+          { activeWorktreeId: "wt-active" }
+        );
+
+        // deriveCopyTreeRunName returns "auth" for this selection — a bare
+        // basename, which is exactly the kind of fallback that reads as a
+        // riddle in a headline. The exact match below already excludes it.
+        expect(titleOf()).toBe(base);
+      }
+    );
+  });
+
+  // #11731. An empty bundle used to arrive as `noFilesMatched: true` and nothing
+  // else, so a caller that had passed a bare directory could not tell which of
+  // its fields to correct. All three actions project the same stats, and all
+  // three are the MCP surface a caller hits, so a hint on one of them is a hint
+  // two thirds of callers never see.
+  describe("empty-result attribution across the copyTree actions", () => {
+    const EMPTY_RUN = {
+      content: "",
+      fileCount: 0,
+      filePath: "/tmp/daintree-context/repo-main-x.xml",
+      outputBytes: 460,
+      stats: {
+        totalSize: 0,
+        duration: 1800,
+        noFilesMatched: true,
+        unmatchedSelector: "includePaths" as const,
+        // Present on the IPC result, and deliberately NOT forwarded: the
+        // per-reason breakdown is the bulk #11528 took off this surface, and
+        // `unmatchedSelector` exists so a caller never needs it.
+        excluded: { total: 42, byReason: { filterPattern: 42 } },
+      },
+    };
+
+    const CASES = [
+      { id: "copyTree.generate", mock: copyTreeClientMock.generate, args: undefined },
+      {
+        id: "copyTree.generateAndCopyFile",
+        mock: copyTreeClientMock.generateAndCopyFile,
+        args: { worktreeId: "wt-active" },
+      },
+      {
+        id: "copyTree.injectToTerminal",
+        mock: copyTreeClientMock.injectToTerminal,
+        args: { terminalId: "t-1" },
+      },
+    ];
+
+    it.each(CASES)(
+      "$id names the selector that missed and drops the breakdown",
+      async ({ id, mock, args }) => {
+        const { run, getDef } = setupActions();
+        mock.mockResolvedValueOnce({ ...EMPTY_RUN });
+
+        const result = (await run(id, args, { activeWorktreeId: "wt-active" })) as {
+          stats?: Record<string, unknown>;
+        };
+
+        expect(result.stats).toMatchObject({
+          noFilesMatched: true,
+          unmatchedSelector: "includePaths",
+        });
+        expect(result.stats).not.toHaveProperty("excluded");
+
+        // Parsed through the action's own resultSchema, not just inspected:
+        // dispatch parses results (#11539), so a field the projection returns but
+        // the schema never declared is a field the caller is never sent — and an
+        // enum out of step with the shared tuple would fail the call outright.
+        const resultSchema = getDef(id).resultSchema;
+        expect(resultSchema).toBeDefined();
+        expect(resultSchema?.parse(result)).toMatchObject({
+          stats: { unmatchedSelector: "includePaths" },
+        });
+      }
+    );
+
+    it("omits the hint entirely when nothing was to blame", async () => {
+      const { run } = setupActions();
+      copyTreeClientMock.generate.mockResolvedValueOnce({
+        ...EMPTY_RUN,
+        stats: { totalSize: 0, duration: 1800, noFilesMatched: true },
+      });
+
+      const result = (await run("copyTree.generate", undefined, {
+        activeWorktreeId: "wt-active",
+      })) as { stats?: Record<string, unknown> };
+
+      // Absent rather than null: an empty scope or an empty worktree has no
+      // selector at fault, and a present-but-empty field reads as one.
+      expect(result.stats).not.toHaveProperty("unmatchedSelector");
+      expect(result.stats).toMatchObject({ noFilesMatched: true });
+    });
+
+    it.each(COPY_TREE_UNMATCHED_SELECTORS)(
+      "carries %s through dispatch's result parse",
+      async (selector) => {
+        // Every member, not just the one the service happens to emit most often:
+        // dispatch parses results against `resultSchema` (#11539), so a schema
+        // narrower than the shared tuple turns a correct diagnostic into a
+        // RESULT_VALIDATION_ERROR that destroys the whole call.
+        const { run, getDef } = setupActions();
+        copyTreeClientMock.generate.mockResolvedValueOnce({
+          ...EMPTY_RUN,
+          stats: { ...EMPTY_RUN.stats, unmatchedSelector: selector },
+        });
+
+        const result = await run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" });
+
+        expect(getDef("copyTree.generate").resultSchema?.parse(result)).toMatchObject({
+          stats: { unmatchedSelector: selector },
+        });
+      }
+    );
+
+    it.each(CASES)("$id advertises the hint on the wire, not just in its return", ({ id }) => {
+      // The projection returning a field and the MCP client being TOLD about it
+      // are different surfaces: `computeSchemas` converts `resultSchema` in
+      // output mode, and a description attached to the wrong link in a zod
+      // chain is dropped there silently. Same conversion, same options.
+      const { getDef } = setupActions();
+      const def = getDef(id);
+      expect(def.mcpOutputSchema).toBe(true);
+
+      const emitted = z.toJSONSchema(def.resultSchema as z.ZodType, {
+        io: "output",
+        unrepresentable: "any",
+        reused: "inline",
+        cycles: "ref",
+        target: "draft-2020-12",
+      }) as {
+        properties?: {
+          stats?: {
+            properties?: { unmatchedSelector?: { enum?: string[]; description?: string } };
+          };
+        };
+      };
+
+      const advertised = emitted.properties?.stats?.properties?.unmatchedSelector;
+      // Derived from the shared tuple rather than a copied literal: a member
+      // added there and left out of the wire enum fails here.
+      expect(advertised?.enum).toEqual([...COPY_TREE_UNMATCHED_SELECTORS]);
+      // The value alone is not actionable — the remedy is the point.
+      expect(advertised?.description ?? "").toMatch(/scopePaths/);
     });
   });
 });

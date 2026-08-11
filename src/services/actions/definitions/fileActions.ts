@@ -11,6 +11,7 @@ import { isAbsolute, isPathInside, join, normalize, toWorktreeRelative } from "@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { isForegroundDispatch } from "./dispatchSource";
+import { PANEL_LIMIT_ERROR_SUFFIX } from "./panelLimitError";
 
 const viewArgsSchema = z.object({
   path: z.string().describe("Absolute or repo-relative file path to open."),
@@ -267,7 +268,10 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
         ...(isForegroundDispatch(ctx?.dispatchSource) && { focusPolicy: "take" as const }),
       });
       if (!panelId) {
-        throw new Error("Could not open file panel: panel limit reached");
+        // Composed from the shared suffix rather than spelled out, so the
+        // dispatchers that stay quiet about an already-reported refusal keep
+        // recognising this one when either side is reworded.
+        throw new Error(`Could not open file panel: ${PANEL_LIMIT_ERROR_SUFFIX}`);
       }
       return { panelId };
     },

@@ -111,6 +111,18 @@ vi.mock("@/services/projectSwitchRendererCache", () => ({
   cancelPreparedProjectSwitchRendererCache: vi.fn(),
 }));
 
+// Grids the outgoing-state builder should read, keyed by panel id. Absent =
+// non-PTY panel (or one whose xterm is gone), which `get()` reports as null.
+const mockTerminalGrids = new Map<string, { cols: number; rows: number }>();
+vi.mock("@/services/TerminalInstanceService", () => ({
+  terminalInstanceService: {
+    get: (id: string) => {
+      const grid = mockTerminalGrids.get(id);
+      return grid ? { terminal: grid } : null;
+    },
+  },
+}));
+
 const projectA = {
   id: "project-a",
   name: "Project A",
@@ -129,6 +141,7 @@ const projectB = {
 
 beforeEach(() => {
   mockActiveWorktreeId = null;
+  mockTerminalGrids.clear();
   vi.resetModules();
   vi.clearAllMocks();
 });
@@ -348,6 +361,78 @@ describe("instant switch feedback: deferred snapshot + IPC", () => {
     // pay the snapshot cost. Avoid comparing sub-millisecond timings here:
     // on fast local runs the synthetic traversal can be cheaper than the
     // store update itself.
+  });
+});
+
+/**
+ * The switch is the ONLY thing that writes `terminalSizes`, and hydration reads
+ * it to build each restored pane's xterm on the grid its PTY is already on
+ * rather than xterm's 80×24 default (#11718). The writer was deleted as
+ * collateral in `30ed7877f` and the map sat empty on disk for four months, so
+ * these assert the payload actually carries grids — an outgoing state without
+ * them is indistinguishable from the regression.
+ */
+describe("buildOutgoingState terminal sizes", () => {
+  const switchWithPanels = async (
+    panels: Record<string, { id: string; kind: string; title: string; location: string }>
+  ) => {
+    const { setPanelStoreAccessor } = await import("../storeAccessors");
+    setPanelStoreAccessor(() => ({
+      panelsById: panels as never,
+      panelIds: Object.keys(panels),
+      tabGroups: new Map(),
+    }));
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+    await useProjectStore.getState().switchProject(projectB.id);
+    await Promise.resolve();
+    return projectClientMock.switch.mock.calls[0]![1];
+  };
+
+  const terminalPanel = (id: string) => ({ id, kind: "terminal", title: id, location: "grid" });
+
+  it("carries each live panel's current grid", async () => {
+    mockTerminalGrids.set("t1", { cols: 203, rows: 51 });
+    mockTerminalGrids.set("t2", { cols: 97, rows: 24 });
+    const outgoing = await switchWithPanels({ t1: terminalPanel("t1"), t2: terminalPanel("t2") });
+    expect(outgoing.terminalSizes).toEqual({
+      t1: { cols: 203, rows: 51 },
+      t2: { cols: 97, rows: 24 },
+    });
+  });
+
+  it("omits panels with no live xterm rather than inventing a grid", async () => {
+    // Both shapes that produce no instance: a kind that never has one (browser)
+    // and a PTY panel whose instance is gone. A default invented for either
+    // would restore the pane onto a grid its PTY is not on.
+    mockTerminalGrids.set("t1", { cols: 203, rows: 51 });
+    const outgoing = await switchWithPanels({
+      t1: terminalPanel("t1"),
+      t2: terminalPanel("t2"),
+      "browser-1": { id: "browser-1", kind: "browser", title: "B", location: "grid" },
+    });
+    expect(outgoing.terminalSizes).toEqual({ t1: { cols: 203, rows: 51 } });
+  });
+
+  it("drops an implausible grid instead of persisting it", async () => {
+    // A restore reads this map into xterm's constructor; a zero-column entry
+    // would boot the pane on a geometry no PTY can be on.
+    mockTerminalGrids.set("t1", { cols: 0, rows: 51 });
+    mockTerminalGrids.set("t2", { cols: 97, rows: 24 });
+    const outgoing = await switchWithPanels({ t1: terminalPanel("t1"), t2: terminalPanel("t2") });
+    expect(outgoing.terminalSizes).toEqual({ t2: { cols: 97, rows: 24 } });
+  });
+
+  it("excludes panels the switch does not persist", async () => {
+    // Same filter as `terminals`: a trashed pane is not restored, so a size for
+    // it is dead weight in the map.
+    mockTerminalGrids.set("t1", { cols: 203, rows: 51 });
+    mockTerminalGrids.set("t-trash", { cols: 97, rows: 24 });
+    const outgoing = await switchWithPanels({
+      t1: terminalPanel("t1"),
+      "t-trash": { id: "t-trash", kind: "terminal", title: "T", location: "trash" },
+    });
+    expect(outgoing.terminalSizes).toEqual({ t1: { cols: 203, rows: 51 } });
   });
 });
 

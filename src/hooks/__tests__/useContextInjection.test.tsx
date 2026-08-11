@@ -9,16 +9,23 @@ const { addErrorMock, removeErrorMock, isAvailableMock, cancelMock, onProgressMo
     isAvailableMock: vi.fn<() => Promise<boolean>>(() => new Promise<boolean>(() => {})),
     cancelMock: vi.fn(() => undefined),
     onProgressMock: vi.fn(() => () => {}),
-    injectMock:
-      vi.fn<
-        (
-          terminalId: string,
-          worktreeId: string,
-          options: unknown,
-          injectionUuid?: string
-        ) => Promise<{ error?: string; fileCount?: number }>
-      >(),
+    injectMock: vi.fn<
+      (
+        terminalId: string,
+        worktreeId: string,
+        options: unknown,
+        injectionUuid?: string
+      ) => Promise<{
+        error?: string;
+        fileCount?: number;
+        stats?: Record<string, unknown> | null;
+      }>
+    >(),
   }));
+
+const notifyMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 
 const { terminalState, usePanelStoreMock } = vi.hoisted(() => {
   const terminalState = {
@@ -93,6 +100,120 @@ describe("useContextInjection", () => {
       },
     };
     terminalState.panelIds = ["term-1"];
+  });
+
+  // Issue #11735 — a completed injection played a sound and dispatched a DOM
+  // event but showed nothing. The pane's inline progress banner disappears on
+  // completion, so nothing said how much context the agent actually received.
+  describe("completion toast", () => {
+    async function runInjection(
+      resolved: { error?: string; fileCount?: number; stats?: Record<string, unknown> | null },
+      selectedPaths?: string[]
+    ): Promise<void> {
+      isAvailableMock.mockResolvedValue(true);
+      injectMock.mockResolvedValue(resolved);
+
+      const { result } = renderHook(() => useContextInjection("term-1"));
+
+      // Awaited inside act so the success branch and the state updates that
+      // follow it flush together — a bare waitFor would leave them outside act.
+      await act(async () => {
+        await result.current.inject("wt-1", "term-1", selectedPaths);
+      });
+    }
+
+    it("announces the injection in terminal wording, never clipboard wording", async () => {
+      await runInjection({ fileCount: 7, stats: { totalSize: 2048 } });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const payload = notifyMock.mock.calls[0]?.[0] as { type: string; message: string };
+      expect(payload.type).toBe("success");
+      expect(payload.message).toContain("Injected 7 files");
+      expect(payload.message).toContain("into terminal");
+      expect(payload.message).not.toContain("clipboard");
+    });
+
+    it("keeps its own rate-limit bucket and omits the worktree from context", async () => {
+      // The `copyTree.injectToTerminal` action is an independent route to the
+      // same client method; a shared bucket would let one suppress the other.
+      // Naming the worktree would let notify() divert this to the inbox, and
+      // injection always targets a terminal that is already on screen.
+      await runInjection({ fileCount: 7, stats: { totalSize: 2048 } });
+
+      const payload = notifyMock.mock.calls[0]?.[0] as {
+        rateLimitKey?: string;
+        type: string;
+        context: Record<string, unknown>;
+      };
+      expect(payload.rateLimitKey).toBeTruthy();
+      expect(payload.rateLimitKey).not.toBe(payload.type);
+      expect(payload.rateLimitKey).not.toBe("copyTree.injectToTerminal");
+      expect(payload.context).toEqual({ eventKind: "agent" });
+    });
+
+    it.each([
+      ["a selected-path injection", ["node_modules"]],
+      ["a whole-context injection", undefined],
+    ])("reports an empty %s as a plain count, never as a folder", async (_label, selected) => {
+      // `selectedPaths` are file-browser selections that may be individual
+      // files, so the folder-shaped explanation the context menu uses would be
+      // the wrong words here. A count stays true whatever was selected.
+      await runInjection(
+        { fileCount: 0, stats: { excluded: { total: 3, byReason: { gitignore: 3 } } } },
+        selected
+      );
+
+      const payload = notifyMock.mock.calls[0]?.[0] as { type: string; message: string };
+      expect(payload.type).toBe("success");
+      expect(payload.message).toContain("0 files");
+      expect(payload.message).not.toContain("folder");
+    });
+
+    it("never announces an injection that failed", async () => {
+      await runInjection({ error: "Terminal closed during injection" });
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("never announces a cancelled injection", async () => {
+      // Cancellation returns before the success branch; announcing would claim
+      // the agent got context the user deliberately stopped.
+      await runInjection({ error: "Injection cancelled" });
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("never announces a cancel that races a successful write", async () => {
+      // The other half of the cancel race: the user cancels while the write is
+      // in flight and the client still resolves successfully. Resolving with an
+      // error only covers the branch that reads the message — this covers the
+      // one that has to recheck the cancelled set after the await.
+      isAvailableMock.mockResolvedValue(true);
+      let resolveInject!: (value: { fileCount?: number; stats?: Record<string, unknown> }) => void;
+      injectMock.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveInject = resolve;
+          })
+      );
+
+      const { result } = renderHook(() => useContextInjection("term-1"));
+
+      let injectPromise!: Promise<void>;
+      act(() => {
+        injectPromise = result.current.inject("wt-1", "term-1");
+      });
+      await vi.waitFor(() => expect(injectMock).toHaveBeenCalled());
+
+      act(() => {
+        result.current.cancel();
+      });
+
+      await act(async () => {
+        resolveInject({ fileCount: 7, stats: { totalSize: 2048 } });
+        await injectPromise;
+      });
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
   });
 
   it("does not throw if cancel API returns non-promise", async () => {

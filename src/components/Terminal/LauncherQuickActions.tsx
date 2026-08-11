@@ -5,6 +5,7 @@ import { SquareTerminal, Search, FolderTree } from "lucide-react";
 import { KbdChord } from "@/components/ui/Kbd";
 import { useEffectiveCombo, useAriaKeyshortcuts } from "@/hooks/useKeybinding";
 import { actionService } from "@/services/ActionService";
+import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
 import { notify } from "@/lib/notify";
 import { getLaunchOptions, type LaunchOption } from "@/components/TerminalPalette/launchOptions";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -108,7 +109,7 @@ export function LauncherQuickActions() {
     // Walk the toolbar's own left→right order (deduped defensively, #10937) and
     // keep the built-in agents whose toolbar button is currently visible. The
     // `isBuiltInAgentId` gate is what makes this an exact toolbar mirror: it
-    // drops every non-agent button (terminal, browser, agent-tray, settings, …)
+    // drops every non-agent button (terminal, browser, launcher, settings, …)
     // so a plugin/user agent whose id happens to collide with a toolbar button
     // id can never sneak in — only built-in agents are ever toolbar buttons.
     const order = Array.from(
@@ -138,9 +139,13 @@ export function LauncherQuickActions() {
   // A function declaration so the retry action can name it.
   function openFileBrowser() {
     void actionService
-      .dispatch("worktree.openFileBrowser", undefined, { source: "user" })
+      .dispatch("worktree.openFileBrowserPanel", undefined, { source: "user" })
       .then((result) => {
         if (result.ok) return;
+        // A full grid is the one refusal `addPanel` has already reported, with
+        // an accurate message and the actual recovery. Saying "no folder
+        // resolved" on top of it would name the wrong cause (#11666).
+        if (isPanelLimitError(result.error.message)) return;
         notify({
           type: "error",
           title: "Couldn't open the file browser",
@@ -148,6 +153,10 @@ export function LauncherQuickActions() {
           // hit ("No folder to browse", a worktree that no longer exists) come
           // down to the same thing for the user, and the recovery is the same.
           message: "No folder resolved for this workspace. Select a worktree and try again.",
+          // `uiFeedback` is a passive kind that resolves to `priority: "low"`
+          // (inbox only), which would leave this refusal — and its Retry — with
+          // no visible signal at all.
+          priority: "high",
           context: { eventKind: "uiFeedback" },
           action: { label: "Retry", onClick: openFileBrowser },
         });
@@ -183,7 +192,7 @@ export function LauncherQuickActions() {
         <QuickAction
           icon={<FolderTree className="h-4 w-4" />}
           label="Browse files"
-          actionId="worktree.openFileBrowser"
+          actionId="worktree.openFileBrowserPanel"
           onClick={openFileBrowser}
         />
       </div>

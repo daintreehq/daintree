@@ -178,4 +178,43 @@ describe("terminal:get-for-project handler", () => {
 
     mockIsHelpTerminal.mockImplementation(() => false);
   });
+
+  it("forwards the live PTY grid so restore can build the xterm on it (#11718)", async () => {
+    // Main is a pure relay here, and dropping these two fields is invisible:
+    // the pty-host mapper still reports them and hydration still prefers them,
+    // so every other suite stays green while the fix goes inert and restored
+    // panes silently fall back to 80×24.
+    const ptyClient = {
+      getTerminalsForProjectAsync: vi.fn(async () => ["t-sized", "t-unknown"]),
+      getTerminalAsync: vi.fn(async (id: string) => ({
+        id,
+        kind: "terminal",
+        type: "terminal",
+        cwd: "/tmp",
+        spawnedAt: Date.now(),
+        ...(id === "t-sized" ? { ptyCols: 203, ptyRows: 51 } : {}),
+      })),
+    };
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalSnapshotHandlers(deps);
+
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    const handler = calls.find(
+      (c) => c[0] === CHANNELS.TERMINAL_GET_FOR_PROJECT
+    )?.[1] as unknown as (
+      event: unknown,
+      projectId: string
+    ) => Promise<{ id: string; ptyCols?: number; ptyRows?: number }[]>;
+
+    const result = await handler({ senderFrame: { url: "http://localhost:5173" } }, "project-1");
+
+    const sized = result.find((t) => t.id === "t-sized");
+    expect(sized?.ptyCols).toBe(203);
+    expect(sized?.ptyRows).toBe(51);
+    // A host that reports no grid must stay "unknown" rather than acquire one.
+    const unknown = result.find((t) => t.id === "t-unknown");
+    expect(unknown?.ptyCols).toBeUndefined();
+  });
 });

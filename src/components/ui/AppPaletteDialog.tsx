@@ -41,19 +41,46 @@ import {
 export { KBD_CLASS };
 
 /**
- * One width for the whole palette family. Palettes are opened from the same
- * keyboard reflex and often in sequence, so a per-palette width reads as the
- * surface jumping around rather than as a deliberate size. Popover-hosted
- * palettes take this too, which is what keeps the project switcher identical
- * whether it opens as a dropdown or as a modal.
+ * How much box a palette earns. A picker scoped to one question — launch what,
+ * switch where — and a global command palette are not the same kind of surface:
+ * the anchored tier stays visibly narrower, while the command tier is the one
+ * the whole window defers to. Scope, not hosting: most anchored palettes are
+ * centred dialogs like their command siblings, and only the dock launcher and
+ * the project switcher hang off a trigger.
+ *
+ * Narrower is a step down, not a squeeze. An anchored palette carries the same
+ * rows as its command twin — titles, paths, a status line — so the tier is
+ * sized to that content and not to its chrome. #11736 was the cost of getting
+ * that wrong: sized as if it were a menu, the switcher's dropdown could not
+ * hold what it was still being asked to show.
+ *
+ * Two tiers, not a free width per palette — palettes open from the same
+ * keyboard reflex and often in sequence, so unconstrained per-surface sizing
+ * reads as the box jumping around rather than as a deliberate size.
  */
-export const PALETTE_SURFACE_WIDTH = "w-[484px] max-w-[calc(100vw-2rem)]";
+export type PaletteSurfaceTier = "anchored" | "command";
+
+/**
+ * Tailwind needs each class present in source for the JIT compiler, so these
+ * are whole literal strings — never build one by interpolation. Indexing the
+ * map at runtime is fine; the scanner only reads the text.
+ */
+export const PALETTE_SURFACE_WIDTHS: Record<PaletteSurfaceTier, string> = {
+  anchored: "w-[484px] max-w-[calc(100vw-2rem)]",
+  command: "w-[608px] max-w-[calc(100vw-2rem)]",
+};
 
 export interface AppPaletteDialogProps {
   isOpen: boolean;
   onClose: () => void;
   children: React.ReactNode;
   ariaLabel: string;
+  /**
+   * Which tier of surface this is. Required and never inferred: a picker's
+   * weight is an authoring decision, and a default would quietly hand every
+   * new launcher the command palette's box.
+   */
+  tier: PaletteSurfaceTier;
   /**
    * Extra classes for the palette box — sizing and layout only. The surface
    * itself is NOT overridable from here: `surface-overlay` is a handwritten
@@ -69,6 +96,7 @@ export function AppPaletteDialog({
   onClose,
   children,
   ariaLabel,
+  tier,
   className,
 }: AppPaletteDialogProps) {
   useEscapeStack(isOpen, onClose);
@@ -279,7 +307,7 @@ export function AppPaletteDialog({
           // `shadow-modal` sits one step above the popovers' `shadow-overlay`:
           // same inset top lip, deeper drop, because this one floats over a
           // scrim.
-          PALETTE_SURFACE_WIDTH,
+          PALETTE_SURFACE_WIDTHS[tier],
           "mx-4 surface-overlay shadow-modal rounded-[var(--radius-lg)] overflow-hidden origin-top",
           // Tailwind v4 scale-* emits the individual `scale` property, which
           // `transform` in a transition list does NOT cover — the palette
@@ -375,19 +403,23 @@ AppPaletteDialog.Header = function AppPaletteHeader({
  * scroll container itself holds focus. Tab and Shift+Tab are deliberately
  * absent: the container is a real tab stop (see `tabIndex` below) and palettes
  * such as the project switcher render controls after it that must stay
- * reachable by native traversal. PageUp/PageDown/Space are left to the
- * browser so the region keeps its native scrolling.
+ * reachable by native traversal. Space is left to the browser so the region
+ * keeps its native scrolling. The horizontal arrows were here for the one
+ * palette with collapsible groups and left with it (#11669); no list on this
+ * shell has a horizontal axis now.
+ *
+ * The page keys are forwarded rather than left to native scrolling, so a
+ * palette CAN bind them: scrolling the viewport without moving the selection
+ * walks the highlighted row off screen and leaves Enter committing something
+ * the user can no longer see. Forwarding alone changes nothing for a palette
+ * that ignores them — the shell never cancels a key itself, so a handler with
+ * no case for these leaves them to the browser exactly as before.
  */
 const BODY_NAVIGATION_KEYS = new Set([
   "ArrowUp",
   "ArrowDown",
-  // Horizontal arrows carry the disclosure half of the tree pattern for palettes
-  // whose list has collapsible groups (`PilotView`). Withholding them left the
-  // region able to move between rows but not in or out of a group, which is
-  // half a keyboard. Flat-list palettes have no case for them and ignore them,
-  // uncancelled, exactly as they did before.
-  "ArrowLeft",
-  "ArrowRight",
+  "PageUp",
+  "PageDown",
   "Home",
   "End",
   "Enter",
@@ -493,10 +525,27 @@ interface AppPaletteFooterProps {
   className?: string;
 }
 
+/**
+ * The values React renders as nothing. `getFooter` returning `[]` from a
+ * `.map()` over zero contextual actions is the realistic case — it is not
+ * nullish, so a plain `== null` guard would draw the band around nothing.
+ */
+function rendersNothing(node: React.ReactNode): boolean {
+  if (node == null || typeof node === "boolean" || node === "") return true;
+  return Array.isArray(node) && node.every(rendersNothing);
+}
+
 AppPaletteDialog.Footer = function AppPaletteFooter({
   children,
   className,
 }: AppPaletteFooterProps) {
+  // No content, no band. A footer earns its border by naming what Enter does
+  // for the current selection; `↑↓ navigate` and `Esc close` are conventions
+  // the surface does not need to restate, so there is no default to fall back
+  // to. Returning null rather than an empty wrapper matters because callers
+  // render <Footer> unconditionally and pass content that resolves per
+  // selection — an empty div would still draw the top border and padding.
+  if (rendersNothing(children)) return null;
   return (
     <div
       className={cn(
@@ -504,7 +553,7 @@ AppPaletteDialog.Footer = function AppPaletteFooter({
         className
       )}
     >
-      {children ?? <DefaultKeyboardHints />}
+      {children}
     </div>
   );
 };
@@ -521,8 +570,12 @@ export interface PaletteFooterHintsProps {
    * Secondary chips rendered on the trailing edge. They drop in reverse order
    * (last hides first) as the footer narrows, so order them by ascending
    * importance — the most-droppable chip last.
+   *
+   * Optional, and omitting it is the common case: a footer that carries one
+   * contextual action is the shape the family wants. Reach for these only when
+   * the surface has a second thing to say that isn't a navigation convention.
    */
-  hints: PaletteFooterHint[];
+  hints?: PaletteFooterHint[];
 }
 
 function HintChip({ hint, className }: { hint: PaletteFooterHint; className?: string }) {
@@ -548,7 +601,7 @@ const SECONDARY_DROP_CLASSES = [
   "@max-[200px]/palette-footer:hidden",
 ];
 
-export function PaletteFooterHints({ primaryHint, hints }: PaletteFooterHintsProps) {
+export function PaletteFooterHints({ primaryHint, hints = [] }: PaletteFooterHintsProps) {
   return (
     <div className="@container/palette-footer w-full flex items-center justify-between gap-3">
       <HintChip hint={primaryHint} />
@@ -569,31 +622,19 @@ export function PaletteFooterHints({ primaryHint, hints }: PaletteFooterHintsPro
   );
 }
 
-function DefaultKeyboardHints() {
-  return (
-    <PaletteFooterHints
-      primaryHint={{ keys: ["↵"], label: "to select" }}
-      hints={[
-        { keys: ["↑", "↓"], label: "navigate" },
-        { keys: ["Esc"], label: "close" },
-      ]}
-    />
-  );
-}
-
 // The search box IS the palette, not a form field sitting inside one, so it
 // takes a recessed wash over the dialog surface rather than the standalone
 // `surface-input` fill. Alpha-based, so it reads the same over a dialog and
 // over the dock launcher's popover.
 //
-// The focus lift that pairs with it is accent at /40, the same strength every
-// focus border in the app now carries — this input used to be the one holdout,
-// drawn neutral on the theory that the selection rail should own the region's
-// only accent, which just made the focused element the dimmest thing on the
-// surface. /40 also matches `PALETTE_ROW_CLASS`'s selected outline, so the
-// focused field and the selected row render the same green; change them
-// together. Tailwind needs the variants written out at each use site, so they
-// live inline below.
+// The focus lift that pairs with it draws `selection-outline`, the same token
+// and the same strength `PALETTE_ROW_CLASS` uses for the selected row, so the
+// focused field and the selected row read as one treatment; the ring is that
+// colour again at half alpha, a halo around the border rather than a second
+// signal. Change them together. Neutral rather than accent (#11686): the row,
+// its old rail and this field were three accent signals in one focus region.
+// Tailwind needs the variants written out at each use site, so they live inline
+// below.
 const PALETTE_INPUT_SURFACE =
   "bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)]";
 
@@ -620,8 +661,8 @@ AppPaletteDialog.Input = function AppPaletteInput({
         className={cn(
           "flex w-full items-center gap-1.5 pl-2 pr-3 py-1.5",
           PALETTE_INPUT_SURFACE,
-          // Accent focus — see `PALETTE_INPUT_SURFACE`.
-          "focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20"
+          // Neutral focus — see `PALETTE_INPUT_SURFACE`.
+          "focus-within:border-selection-outline focus-within:ring-1 focus-within:ring-selection-outline/50"
         )}
       >
         {inputPrefix}
@@ -647,8 +688,8 @@ AppPaletteDialog.Input = function AppPaletteInput({
         "w-full px-3 py-2 text-sm",
         PALETTE_INPUT_SURFACE,
         "text-daintree-text placeholder:text-text-placeholder",
-        // Accent focus — see `PALETTE_INPUT_SURFACE`.
-        "focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/20",
+        // Neutral focus — see `PALETTE_INPUT_SURFACE`.
+        "focus:outline-hidden focus:border-selection-outline focus:ring-1 focus:ring-selection-outline/50",
         className
       )}
       {...props}

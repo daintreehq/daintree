@@ -395,13 +395,23 @@ test("palette review — every surface in the family", async () => {
     });
 
     // One palette, two hosts: the modal and the dropdown render the same
-    // component and must resolve to the same surface in every theme. Shadow is
-    // deliberately out of the comparison — the modal floats over a scrim and
+    // component and must be cut from the same material in every theme. Shadow
+    // is deliberately out of the comparison — the modal floats over a scrim and
     // carries `shadow-modal`, one step above the dropdown's `shadow-overlay`.
+    //
+    // Width is out of it too, and now carries its own assertion: the ⌘P modal
+    // is the command tier and the title-bar dropdown is anchored, so the same
+    // content deliberately gets a box scaled to how the user reached it.
     if (dropdownSurface && modalSurface) {
-      expect(modalSurface, `palette surface drifted between hosts in "${THEME}"`).toEqual(
-        dropdownSurface
+      const { width: modalWidth, ...modalMaterial } = modalSurface;
+      const { width: dropdownWidth, ...dropdownMaterial } = dropdownSurface;
+      expect(modalMaterial, `palette material drifted between hosts in "${THEME}"`).toEqual(
+        dropdownMaterial
       );
+      expect(
+        parseFloat(modalWidth),
+        `the command-tier modal should be wider than the anchored dropdown in "${THEME}"`
+      ).toBeGreaterThan(parseFloat(dropdownWidth));
     } else if (ONLY.length === 0) {
       stepFailures.push("surface drift check: a project-switcher capture did not run");
     }

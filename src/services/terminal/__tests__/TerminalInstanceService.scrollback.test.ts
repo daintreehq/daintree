@@ -79,11 +79,13 @@ type ScrollbackTestService = {
 
 function makeMockManaged(overrides: Record<string, unknown> = {}) {
   const writtenData: string[] = [];
+  // Normal screen: xterm reports one buffer through both handles.
+  const buffer = { length: 3000 };
   const managed = {
     terminal: {
       options: { scrollback: 5000 },
       rows: 24,
-      buffer: { active: { length: 3000 } },
+      buffer: { active: buffer, normal: buffer },
       write: (data: string) => writtenData.push(data),
       hasSelection: vi.fn(() => false),
     },

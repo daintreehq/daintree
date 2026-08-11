@@ -166,6 +166,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./connectivity.js").ServiceConnectivitySnapshot;
   };
+  "copy-tree-history:get-records": {
+    args: [];
+    result: import("./copyTreeHistory.js").CopyTreeHistoryRecord[];
+  };
   "demo:annotate": {
     args: [payload: import("./demo.js").DemoAnnotatePayload];
     result: import("./demo.js").DemoAnnotateResult;
@@ -944,6 +948,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "plugin-capability:acknowledge-consent": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityAcknowledgeConsentInput];
+    result: void;
+  };
   "plugin-capability:resolve-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
     result: void;
@@ -1001,8 +1009,8 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "plugin:activate-for-view": {
-    args: [panelKindId: string];
-    result: void;
+    args: [panelKindId: string, requestRecoveryPath?: boolean | undefined];
+    result: string | undefined;
   };
   "plugin:agents-get": {
     args: [];

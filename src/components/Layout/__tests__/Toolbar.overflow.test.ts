@@ -52,7 +52,7 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
   describe("agent-state dots", () => {
     it("derives a per-agent dominant state map scoped to the active worktree", () => {
       expect(source).toContain("agentDominantStates");
-      // Shared with AgentTrayButton so the overflow dot matches the visible
+      // Shared with the launcher so the overflow dot matches the visible
       // agent button; computed inside useShallow so agent ticks that don't
       // change a dominant state don't re-render the toolbar.
       expect(source).toMatch(
@@ -62,7 +62,7 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
 
     it("renders the dot through a dedicated component so the keybinding hook is at component scope", () => {
       // A hook inside a .map() callback would violate the rules of hooks; the
-      // AgentOverflowItem component is the fix (mirrors AgentTrayButton).
+      // AgentOverflowItem component is the fix (mirrors DockLaunchButton).
       expect(source).toContain("function AgentOverflowItem");
       expect(source).toContain("useKeybindingDisplay(`agent.${id}`)");
       expect(source).toContain("agentStateDotColor(dominantState)");
@@ -96,7 +96,7 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
     });
 
     it("wires the file browser's shortcut hint like the other launchers (#11495)", () => {
-      expect(source).toContain('useKeybindingDisplay("worktree.openFileBrowser")');
+      expect(source).toContain('useKeybindingDisplay("worktree.openFileBrowserPanel")');
       expect(source).toMatch(/"file-browser":\s*fileBrowserShortcut/);
     });
   });
@@ -109,12 +109,19 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
     });
 
     it("surfaces the refusal instead of pressing silently", () => {
-      // `worktree.openFileBrowser` resolves its own target and throws when a
-      // workspace has nothing to browse; dispatch converts that to ok:false, so
-      // without this branch the press would do nothing at all.
+      // The action resolves its own target and throws when a workspace has
+      // nothing to browse; dispatch converts that to ok:false, so without this
+      // branch the press would do nothing at all.
       expect(source).toMatch(/if \(result\.ok\) return;/);
       expect(source).toContain("Couldn't open the file browser");
       expect(source).toMatch(/label: "Retry", onClick: openFileBrowser/);
+    });
+
+    it("leaves the already-reported full-grid refusal alone (#11666)", () => {
+      // Now that the button opens a real panel it can also be refused for a
+      // full grid — which `addPanel` has already reported accurately. The
+      // workspace-shaped message must not fire on top of it.
+      expect(source).toMatch(/if \(isPanelLimitError\(result\.error\.message\)\) return;/);
     });
   });
 
@@ -127,9 +134,12 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
       );
     });
 
-    it("disables the overflow copy-tree item when there is no active worktree", () => {
-      // Mirrors the visible button's aria-disabled "Open a worktree first" state.
-      expect(source).toMatch(/id === "copy-tree" && !hasActiveWorktree/);
+    it("disables the overflow copy-tree item exactly when its handler would refuse", () => {
+      // Mirrors the visible button's aria-disabled states: no active worktree
+      // ("Open a worktree first") and a copy already in flight — which can
+      // start from routes that never touch this menu (MCP, Cmd+Shift+C), so
+      // the item must not look live while activation would silently no-op.
+      expect(source).toMatch(/id === "copy-tree" && \(!hasActiveWorktree \|\| isCopyingTree\)/);
       expect(source).toContain("disabled={disabled}");
     });
   });
@@ -144,18 +154,36 @@ describe("Toolbar overflow menu state preservation — issue #9821", () => {
     });
   });
 
-  describe("copy-tree feedback from overflow", () => {
-    it("fires a transient success toast on the overflow path", () => {
-      expect(source).toContain("handleCopyTreeOverflow");
-      expect(source).toMatch(/notify\(\{[\s\S]*?transient: true[\s\S]*?\}\)/);
+  describe("copy-tree feedback from overflow — #9821, superseded by #11735", () => {
+    it("keeps the overflow item on the immediate-copy handler the panel also calls", () => {
+      // #9821 gave overflow its own handler because the visible button's only
+      // feedback was an inline check the overflow menu couldn't show. Once
+      // completion became a toast from the `worktree.copyTree` action, both
+      // routes collapsed onto one handler — and #11733 kept it that way rather
+      // than nesting a panel inside the overflow menu. So the overflow row and
+      // the panel's own "Copy full context" row must reach the SAME handler;
+      // a second one could only drift from the first.
+      expect(source).toMatch(/"copy-tree":\s*\(\)\s*=>\s*\{\s*void handleCopyTreeClick\(\)/);
+      expect(source).not.toContain("handleCopyTreeOverflow");
+      expect(source).toMatch(
+        /const handleCopyTreeFullContext = useCallback\(\(\) => \{[\s\S]*?void handleCopyTreeClick\(\)/
+      );
     });
 
-    it("wires the overflow action to the toast handler, not the inline-feedback handler", () => {
-      expect(source).toMatch(/"copy-tree":\s*\(\)\s*=>\s*\{\s*void handleCopyTreeOverflow\(\)/);
+    it("routes the visible button to the panel, not to the immediate copy (#11733)", () => {
+      // The half of the split that is easy to regress: re-pointing the trigger
+      // back at the immediate handler would restore one-click copying and
+      // silently strand the panel. Asserted on the block rather than the file
+      // because the immediate handler still legitimately appears elsewhere.
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      expect(copyTreeBlock![0]).toContain("onClick={handleCopyTreeToggle}");
     });
 
-    it("keeps the eslint exception for an action-free notify", () => {
-      expect(source).toContain("notify-no-action: ok");
+    it("no longer raises its own copy-tree toast in the toolbar", () => {
+      // The toolbar must not re-announce what the action already announces;
+      // two toasts per press was the failure mode this consolidation prevents.
+      expect(source).not.toMatch(/notify\(\{[\s\S]{0,200}?title: "Context copied"/);
     });
   });
 

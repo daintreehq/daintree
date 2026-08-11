@@ -60,29 +60,161 @@ describe("useWorktreeActions", () => {
     vi.clearAllMocks();
   });
 
-  it("uses safe fallback when copyTree payload omits fileCount", async () => {
+  const worktree: WorktreeState = {
+    id: "wt-1",
+    worktreeId: "wt-1",
+    path: "/repo/wt-1",
+    name: "wt-1",
+    branch: "main",
+    isCurrent: false,
+    isMainWorktree: true,
+    worktreeChanges: null,
+    lastActivityTimestamp: null,
+  };
+
+  it("dispatches worktree.copyTree and leaves the completion toast to the action", async () => {
+    // The hook used to format and return the result string for the toolbar to
+    // render inline. Completion feedback now belongs to the action, which is
+    // the only layer the keybinding and palette routes also pass through — so
+    // the hook must neither return a message nor raise its own toast (#11735).
+    dispatchMock.mockResolvedValueOnce({ ok: true, result: {} });
+
+    const { result } = renderHook(() => useWorktreeActions());
+
+    await expect(result.current.handleCopyTree(worktree)).resolves.toBeUndefined();
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "worktree.copyTree",
+      { worktreeId: "wt-1" },
+      { source: "user" }
+    );
+    expect(addNotificationMock).not.toHaveBeenCalled();
+    expect(updateNotificationMock).not.toHaveBeenCalled();
+  });
+
+  describe("handleCopyTreeWithOptions — replaying a recent (#11733)", () => {
+    // Every field `CopyTreeOptions` carries. The point of the fixture is that
+    // it is wider than `worktree.copyTree`'s flat args schema, which accepts
+    // only worktreeId/format/modified/includePaths/scopePaths and — because Zod
+    // object parsing strips rather than rejects unknown keys — would drop the
+    // rest without erroring.
+    const storedOptions = {
+      format: "markdown" as const,
+      filter: ["src/auth/**"],
+      exclude: ["**/*.snap"],
+      always: ["README.md"],
+      includePaths: ["src/index.ts"],
+      scopePaths: ["src"],
+      modified: true,
+      changed: "HEAD~3",
+      maxFileSize: 1024,
+      maxTotalSize: 4096,
+      maxFileCount: 50,
+      withLineNumbers: true,
+      charLimit: 10_000,
+      sort: "size" as const,
+    };
+
+    it("routes through the action that accepts the whole options object", async () => {
+      dispatchMock.mockResolvedValueOnce({ ok: true, result: {} });
+
+      const { result } = renderHook(() => useWorktreeActions());
+      await result.current.handleCopyTreeWithOptions(worktree, storedOptions, "toolbar");
+
+      const [actionId, args] = dispatchMock.mock.calls[0]!;
+      expect(actionId).toBe("copyTree.generateAndCopyFile");
+      // Nested, not spread: flattening would put the options through the wrong
+      // schema and silently lose most of them. The representative flattened
+      // fields are the ones `worktree.copyTree` would have accepted, so their
+      // presence at the top level is exactly what a regression looks like.
+      expect(args.options).toEqual(storedOptions);
+      expect(args.format).toBeUndefined();
+      expect(args.modified).toBeUndefined();
+      expect(args.scopePaths).toBeUndefined();
+    });
+
+    it("targets the supplied worktree rather than anything carried on the record", async () => {
+      dispatchMock.mockResolvedValueOnce({ ok: true, result: {} });
+
+      const { result } = renderHook(() => useWorktreeActions());
+      await result.current.handleCopyTreeWithOptions(worktree, storedOptions);
+
+      expect(dispatchMock.mock.calls[0]![1].worktreeId).toBe(worktree.id);
+    });
+
+    it("forwards the run source so history attributes the replay to the toolbar", async () => {
+      dispatchMock.mockResolvedValueOnce({ ok: true, result: {} });
+
+      const { result } = renderHook(() => useWorktreeActions());
+      await result.current.handleCopyTreeWithOptions(worktree, storedOptions, "toolbar");
+
+      expect(dispatchMock.mock.calls[0]![2]).toEqual({
+        source: "user",
+        copyTreeRunSource: "toolbar",
+      });
+    });
+
+    it("classifies and phrases a failed replay exactly like a failed full copy", async () => {
+      // A user cannot tell the two routes apart, so the error surface must not
+      // either. Compared side by side rather than restated, so a change to one
+      // path's classification without the other fails here. `source` is the one
+      // field that legitimately differs — the Problems panel shows it verbatim,
+      // and the replay only ever comes from the toolbar.
+      const failure = { ok: false, error: { message: "permission denied" } };
+
+      const { result } = renderHook(() => useWorktreeActions());
+
+      dispatchMock.mockResolvedValueOnce(failure);
+      await result.current.handleCopyTree(worktree);
+      const fullCopyError = addErrorMock.mock.calls.at(-1)![0];
+
+      dispatchMock.mockResolvedValueOnce(failure);
+      await result.current.handleCopyTreeWithOptions(worktree, storedOptions);
+      const replayError = addErrorMock.mock.calls.at(-1)![0];
+
+      // `correlationId` is a fresh UUID per report and `details` is a stack
+      // trace naming the calling function, so neither can match across paths.
+      // What must match is the classification and the words the user reads.
+      const comparable = ({
+        correlationId: _id,
+        source: _source,
+        details: _details,
+        ...rest
+      }: typeof replayError) => rest;
+      expect(comparable(replayError)).toEqual(comparable(fullCopyError));
+      expect(replayError.source).not.toBe(fullCopyError.source);
+    });
+
+    it("settles after a synchronous throw so the caller's spinner can clear", async () => {
+      // Not mockRejectedValue: a throw *before* a promise is returned is the
+      // case that would escape a `.finally()` on the returned value.
+      dispatchMock.mockImplementationOnce(() => {
+        throw new Error("boom");
+      });
+
+      const { result } = renderHook(() => useWorktreeActions());
+      await expect(
+        result.current.handleCopyTreeWithOptions(worktree, storedOptions)
+      ).resolves.toBeUndefined();
+      expect(addErrorMock).toHaveBeenCalled();
+    });
+  });
+
+  it("records a failed copy in the error store without rejecting", async () => {
     dispatchMock.mockResolvedValueOnce({
-      ok: true,
-      result: {},
+      ok: false,
+      error: { message: "permission denied" },
     });
 
     const { result } = renderHook(() => useWorktreeActions());
 
-    const worktree: WorktreeState = {
-      id: "wt-1",
-      worktreeId: "wt-1",
-      path: "/repo/wt-1",
-      name: "wt-1",
-      branch: "main",
-      isCurrent: false,
-      isMainWorktree: true,
-      worktreeChanges: null,
-      lastActivityTimestamp: null,
-    };
+    await expect(result.current.handleCopyTree(worktree)).resolves.toBeUndefined();
 
-    const message = await result.current.handleCopyTree(worktree);
-
-    expect(message).toBe("Copied 0 files to clipboard");
+    // "permission" routes to the filesystem bucket rather than the default
+    // "process" one — the branch is what this asserts, not the literal string.
+    expect(addErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "filesystem", context: { worktreeId: "wt-1" } })
+    );
   });
 
   it("handleLaunchAgent dispatches agent.launch through the ActionService", () => {
@@ -128,6 +260,36 @@ describe("formatCopyResultMessage", () => {
     expect(formatCopyResultMessage({} as { fileCount: number })).toBe(
       "Copied 0 files to clipboard"
     );
+  });
+
+  // The destination decides the verb and the trailing phrase. `copyTree.generate`
+  // writes a temp file and `injectToTerminal` streams into a PTY — neither
+  // touches the clipboard, so the default wording would be false there (#11735).
+  it("swaps verb and destination for a terminal injection", () => {
+    expect(
+      formatCopyResultMessage(
+        { fileCount: 42, stats: { totalSize: 1024 }, format: "xml" },
+        "terminal"
+      )
+    ).toBe("Injected 42 files (1 KB) as XML into terminal");
+  });
+
+  it("swaps verb and destination for a generated bundle", () => {
+    expect(
+      formatCopyResultMessage(
+        { fileCount: 42, stats: { totalSize: 1024 }, format: "xml" },
+        "temporary-file"
+      )
+    ).toBe("Bundled 42 files (1 KB) as XML into a temporary file");
+  });
+
+  it("says nothing about the clipboard for a non-clipboard destination", () => {
+    // Guards the whole set at once: a destination that forgot to override the
+    // suffix would still claim the bundle reached the clipboard.
+    for (const destination of ["terminal", "temporary-file"] as const) {
+      expect(formatCopyResultMessage({ fileCount: 1 }, destination)).not.toContain("clipboard");
+      expect(formatCopyResultMessage({ fileCount: 1 }, destination)).not.toContain("Copied");
+    }
   });
 });
 

@@ -151,6 +151,7 @@ export function CommandPicker({
 
   return (
     <SearchablePalette<CommandManifestEntry>
+      tier="command"
       isOpen={isOpen}
       query={query}
       results={flatCommands}

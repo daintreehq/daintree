@@ -86,11 +86,43 @@ export async function resolveEffectiveRemoteUrl(
   forgeRemote: string | null,
   forgeProviderOverride: string | null = null
 ): Promise<string | null> {
+  const selected = await resolveEffectiveForgeRemote(
+    gitService,
+    cwd,
+    forgeRemote,
+    forgeProviderOverride
+  );
+  return selected?.fetchUrl ?? null;
+}
+
+/**
+ * As {@link resolveEffectiveRemoteUrl}, but keeps the remote's *name*.
+ *
+ * Git operations that address the forge by remote name rather than URL —
+ * fetching a PR head, which only exists on the repository the PR was opened
+ * against (#11747) — need the name, and re-deriving it at those call sites
+ * would let the precedence chain drift from the one the toolbar uses.
+ * `resolveEffectiveRemoteUrl` delegates here so there is exactly one copy.
+ *
+ * Propagates {@link StaleForgeRemoteError} rather than falling back: a
+ * configured-but-missing remote means we cannot tell which repository the user
+ * meant, and PR numbers are per-repository, so substituting one would happily
+ * fetch a completely unrelated PR that happens to share the number.
+ */
+export async function resolveEffectiveForgeRemote(
+  gitService: RemoteReader,
+  cwd: string,
+  forgeRemote: string | null,
+  forgeProviderOverride: string | null = null
+): Promise<{ name: string; fetchUrl: string } | null> {
   const remotes = await gitService.listRemotes(cwd).catch(() => null);
 
   if (remotes === null) {
     if (forgeRemote) return null;
-    return gitService.getRemoteUrl(cwd).catch(() => null);
+    const fetchUrl = await gitService.getRemoteUrl(cwd).catch(() => null);
+    // The origin-only fallback path knows the URL but not a verified name;
+    // `origin` is what `getRemoteUrl` reads, so it is the honest label.
+    return fetchUrl ? { name: "origin", fetchUrl } : null;
   }
 
   const { remote, missingConfiguredRemote } = resolveForgeRemote({
@@ -106,7 +138,90 @@ export async function resolveEffectiveRemoteUrl(
       : (url) => listMatchingProviders(url).length > 0,
   });
   if (missingConfiguredRemote) throw new StaleForgeRemoteError(missingConfiguredRemote);
-  return remote?.fetchUrl ?? null;
+  return remote ? { name: remote.name, fetchUrl: remote.fetchUrl } : null;
+}
+
+/**
+ * Read the project-scoped forge settings that decide which remote to use.
+ *
+ * The cwd may be a linked-worktree subdirectory, so an exact match against
+ * `project.path` would miss. `git worktree list` reports the main worktree
+ * first from anywhere inside the repo — that path is what ProjectStore keys on.
+ *
+ * Resolved before any remote URL (#11408): the project's `forgeRemote` setting
+ * decides *which* remote we read, so the settings have to be in hand first.
+ */
+async function readProjectForgeSettings(
+  gitService: { listWorktrees(): Promise<Array<{ path: string; isMainWorktree?: boolean }>> } & {
+    getRepositoryRoot(cwd: string): Promise<string | null>;
+  },
+  cwd: string
+): Promise<{
+  forgeRemote: string | null;
+  forgeProviderOverride: string | null;
+  /** Repo root the settings were keyed on — what `repoRef.projectPath` stamps (#10563). */
+  mainWorktreePath: string;
+}> {
+  const worktrees = await gitService.listWorktrees().catch(() => []);
+  const mainWorktreePath =
+    worktrees.find((wt) => wt.isMainWorktree)?.path ??
+    (await gitService.getRepositoryRoot(cwd).catch(() => null)) ??
+    cwd;
+  const project = await projectStore.getProjectByPath(mainWorktreePath).catch(() => null);
+  // A registered project whose settings we cannot read is NOT the same as an
+  // unregistered path: the former may well have a `forgeRemote` we are about to
+  // ignore, and auto-detecting past it would point a mutation at whichever repo
+  // origin happens to be. Only a genuinely absent project may auto-detect.
+  let settings = null;
+  if (project) {
+    try {
+      settings = await projectStore.getProjectSettings(project.id);
+    } catch (error) {
+      throw new Error(
+        `Couldn't read this project's forge settings, so the remote to use is unknown: ${formatErrorMessage(error, "settings read failed")}`,
+        { cause: error }
+      );
+    }
+  }
+  return {
+    forgeRemote: settings?.forgeRemote ?? settings?.githubRemote ?? null,
+    forgeProviderOverride: settings?.forgeProviderOverride ?? null,
+    mainWorktreePath,
+  };
+}
+
+/**
+ * The forge remote's *name* for a cwd, for git commands that address the
+ * forge by remote rather than URL (PR-head fetches, #11747).
+ *
+ * Deliberately lighter than {@link resolveForCwd}: it reads the remote table
+ * and the project setting, and stops there. No provider matching, no lazy
+ * plugin activation — a PR checkout doesn't need a live provider
+ * implementation, and dragging one in would make the fetch depend on plugin
+ * startup.
+ */
+export async function resolveForgeRemoteNameForCwd(cwd: string): Promise<string | null> {
+  const gitService = gitServiceCache.getGitService(cwd);
+  if (!gitService) return null;
+  const { forgeRemote, forgeProviderOverride } = await readProjectForgeSettings(gitService, cwd);
+  const selected = await resolveEffectiveForgeRemote(
+    gitService,
+    cwd,
+    forgeRemote,
+    forgeProviderOverride
+  );
+  if (selected) return selected.name;
+  // `null` from a *configured* remote means enumeration failed, so we could
+  // not verify the remote the user named — not that the repo has none. The
+  // caller's fallback is `origin`, and PR numbers are per-repository: fetching
+  // `origin pull/42/head` for a project pointed at `upstream` would silently
+  // check out an unrelated PR that happens to share the number. Fail closed.
+  if (forgeRemote) {
+    throw new Error(
+      `Couldn't confirm this project's "${forgeRemote}" remote, so the repository to fetch from is unknown. Check the remote and try again.`
+    );
+  }
+  return null;
 }
 
 export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> {
@@ -130,33 +245,15 @@ export async function resolveForCwd(cwd: string): Promise<ResolvedForgeContext> 
   // setting decides *which* remote we read, so the settings have to be in hand
   // first. Previously this block ran after an origin-only `getRemoteUrl`, which
   // is why the setting never reached the toolbar's data path.
-  const worktrees = await gitService.listWorktrees().catch(() => []);
-  const mainWorktreePath =
-    worktrees.find((wt) => wt.isMainWorktree)?.path ??
-    (await gitService.getRepositoryRoot(cwd).catch(() => null)) ??
-    cwd;
-  const project = await projectStore.getProjectByPath(mainWorktreePath).catch(() => null);
-  // A registered project whose settings we cannot read is NOT the same as an
-  // unregistered path: the former may well have a `forgeRemote` we are about to
-  // ignore, and auto-detecting past it would point a mutation at whichever repo
-  // origin happens to be. Only a genuinely absent project may auto-detect.
-  let settings = null;
-  if (project) {
-    try {
-      settings = await projectStore.getProjectSettings(project.id);
-    } catch (error) {
-      throw new Error(
-        `Couldn't read this project's forge settings, so the remote to use is unknown: ${formatErrorMessage(error, "settings read failed")}`,
-        { cause: error }
-      );
-    }
-  }
-  const forgeProviderOverride = settings?.forgeProviderOverride ?? null;
+  const { forgeRemote, forgeProviderOverride, mainWorktreePath } = await readProjectForgeSettings(
+    gitService,
+    cwd
+  );
 
   const remoteUrl = await resolveEffectiveRemoteUrl(
     gitService,
     cwd,
-    settings?.forgeRemote ?? settings?.githubRemote ?? null,
+    forgeRemote,
     forgeProviderOverride
   );
   if (!remoteUrl) {

@@ -134,6 +134,29 @@ describe("WorkspaceService.fetchPRBranch", () => {
     vi.restoreAllMocks();
   });
 
+  it("fetches from the resolved forge remote when it is not origin", async () => {
+    mockSimpleGit.raw.mockResolvedValueOnce("");
+
+    await service.fetchPRBranch("req-fork", "/test/root", 42, "feature/my-branch", "upstream");
+
+    // With GitHub configured as `upstream`, a fetch from origin fails with
+    // "couldn't find remote ref pull/42/head" — the PR ref only exists on the
+    // repository the PR was opened against (#11747).
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith([
+      "fetch",
+      "upstream",
+      "pull/42/head:feature/my-branch",
+    ]);
+  });
+
+  it("falls back to origin when no remote could be resolved", async () => {
+    mockSimpleGit.raw.mockResolvedValueOnce("");
+
+    await service.fetchPRBranch("req-default", "/test/root", 7, "feature/x", undefined);
+
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith(["fetch", "origin", "pull/7/head:feature/x"]);
+  });
+
   it("should fetch PR branch using createAuthenticatedGit and emit success", async () => {
     const { createAuthenticatedGit } = await import("../../utils/hardenedGit.js");
     const { createHardenedGit } = await import("../../utils/hardenedGit.js");

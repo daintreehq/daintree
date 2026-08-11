@@ -60,13 +60,38 @@ interface FetchFailureEntry {
   confirmed?: boolean;
 }
 
-interface RepoState {
-  /** In-flight chain — every fetch awaits the prior one for the same commondir. */
-  chain: Promise<void>;
+/**
+ * Recency and failure state for one (commondir, remote) pair.
+ *
+ * Deliberately NOT per-commondir: once a repo fetches more than one remote, a
+ * shared entry lets a broken credential on one remote suspend fetches of a
+ * perfectly healthy sibling, and lets two remotes' failures interleave into
+ * one `authRetryCount` — which would confirm an auth failure on a single burst
+ * instead of across retries over time, re-alarming every card.
+ *
+ * The serialization chain stays per-commondir (see {@link RepoFetchCoordinator.chains}).
+ * The two scopes look symmetric and are not: refs are shared through the
+ * commondir, so concurrent fetches race on `packed-refs.lock` no matter which
+ * remote each one targets, while credentials and reachability are per-remote.
+ */
+interface RemoteState {
   failure: FetchFailureEntry | null;
   lastSuccessfulFetch: number | null;
   /** Bumped when the repo's monitors are torn down so stale completions discard. */
   generation: number;
+}
+
+/** The remote assumed when a caller names none — matches the pre-#11747 behavior. */
+const DEFAULT_REMOTE = "origin";
+
+/**
+ * Control character, so it can't collide with a path or a remote name (git
+ * forbids control characters in both).
+ */
+const STATE_KEY_DELIMITER = "\u0000";
+
+function stateKey(commonDir: string, remote: string): string {
+  return `${commonDir}${STATE_KEY_DELIMITER}${remote}`;
 }
 
 export interface RepoFetchCoordinatorCallbacks {
@@ -78,7 +103,7 @@ export interface RepoFetchCoordinatorCallbacks {
    * the per-card stripe. Fires only on the unconfirmed→confirmed transition;
    * `clearAuthFailures()` resets the state so a later re-confirmation re-fires.
    */
-  onAuthFailureConfirmed?: (commonDir: string, reason: GitOperationReason) => void;
+  onAuthFailureConfirmed?: (commonDir: string, remote: string, reason: GitOperationReason) => void;
 }
 
 export interface FetchOptions {
@@ -86,6 +111,26 @@ export interface FetchOptions {
   worktreePath: string;
   /** When true, ignore the failure cache (manual user-triggered refresh). */
   force?: boolean;
+  /**
+   * Remotes to refresh, in any order. Deduped internally, and `primaryRemote`
+   * is always fetched first. Defaults to `[origin]`, which is what every
+   * single-remote repo resolves to — so the common case still issues exactly
+   * one `git fetch`, unchanged from before #11747.
+   *
+   * Never expanded to `--all`: a mirror or a slow deploy remote would land on
+   * the poll loop, and `--all` also collapses per-remote failure isolation
+   * back into one opaque exit code.
+   */
+  remotes?: readonly string[];
+  /**
+   * The remote whose outcome describes this worktree — the one the divergence
+   * counts are actually measured against. Its result is what
+   * {@link RepoFetchCoordinator.fetchForWorktree} returns and what the card
+   * renders, because an auxiliary remote succeeding says nothing about whether
+   * the numbers on screen are fresh. Defaults to the first entry of
+   * `remotes`.
+   */
+  primaryRemote?: string;
 }
 
 export interface FetchResult {
@@ -95,28 +140,36 @@ export interface FetchResult {
   /** Why we skipped — for logging / diagnostics. */
   skipReason?: "no-common-dir" | "in-failure-window" | "auth-suspended" | "stale-generation";
   /**
-   * Coordinator's per-commondir `lastSuccessfulFetch` after this call settled.
-   * Set on success (the timestamp just written) and on skipped/failed
-   * outcomes (the prior timestamp, if any). Lets `WorkspaceService` propagate
-   * the freshest known value to monitors without reaching into coordinator
-   * internals.
+   * Coordinator's `lastSuccessfulFetch` for the primary (commondir, remote)
+   * after this call settled. Set on success (the timestamp just written) and
+   * on skipped/failed outcomes (the prior timestamp, if any). Lets
+   * `WorkspaceService` propagate the freshest known value to monitors without
+   * reaching into coordinator internals.
+   *
+   * Scoped to the primary remote on purpose: taking the newest timestamp
+   * across every fetched remote would let a healthy auxiliary `origin` vouch
+   * for counts measured against a base remote that failed, which is a
+   * fresh-looking badge over stale data — the same class of bug #11747 exists
+   * to fix.
    */
   lastFetchedAt?: number | null;
   /**
    * True when this call ended in (or remained in) an auth-class failure for
-   * this commondir. Includes the `auth-suspended` skip case so the renderer
-   * keeps showing the "Sign in to refresh" affordance instead of flashing
-   * stale counts when a sibling's force-fetch is rate-cached.
+   * the primary remote. Includes the `auth-suspended` skip case so the
+   * renderer keeps showing the "Sign in to refresh" affordance instead of
+   * flashing stale counts when a sibling's force-fetch is rate-cached.
    */
   authFailed?: boolean;
   /**
    * True when this call ended in (or remained in) a transient (network /
-   * repo-not-found-first / generic transient) failure. Drives the
-   * "Couldn't reach origin" tooltip line on the worktree card. False on
-   * success, on auth-class failures (those use `authFailed`), and on the
-   * `no-common-dir` skip path where we have no state to report.
+   * repo-not-found-first / generic transient) failure for the primary remote.
+   * Drives the "Couldn't reach the remote" tooltip line on the worktree card.
+   * False on success, on auth-class failures (those use `authFailed`), and on
+   * the `no-common-dir` skip path where we have no state to report.
    */
   networkFailed?: boolean;
+  /** Remote this result describes. Absent only on the `no-common-dir` skip. */
+  remote?: string;
 }
 
 /**
@@ -150,12 +203,28 @@ export interface FetchResult {
  *     recency window dedups them: when the repo fetched successfully moments
  *     ago, return that success without spawning git. Refs are shared via the
  *     commondir, so they are genuinely fresh for every sibling.
- */
-export class RepoFetchCoordinator {
-  private readonly states = new Map<string, RepoState>();
+ *   - A repo may need more than one remote refreshed — a fork whose base
+ *     branch lives on `upstream` reads refs `origin` never carries (#11747).
+ *     Serialization stays per-commondir because the `packed-refs.lock` race
+ *     doesn't care which remote is being fetched; recency and failure state go
+ *     per-(commondir, remote) because credentials and reachability very much
+ *     do. The two scopes look symmetric and need opposite keying.
+ */ export class RepoFetchCoordinator {
+  /**
+   * Recency and failure state, keyed by (commondir, remote) — see
+   * {@link RemoteState} for why this dimension is not shared with the chain.
+   */
+  private readonly states = new Map<string, RemoteState>();
+  /**
+   * In-flight chain per commondir. Every fetch awaits the prior one for the
+   * same repo regardless of which remote it targets, because `packed-refs` is
+   * shared through the commondir and does not care whose refs are being
+   * written.
+   */
+  private readonly chains = new Map<string, Promise<void>>();
   /**
    * Coordinator-wide generation baseline. Bumped by `destroy()` so any new
-   * `RepoState` created after a project switch (e.g. when reopening the same
+   * `RemoteState` created after a project switch (e.g. when reopening the same
    * repo path on a fresh project) starts at a higher generation than any
    * still-in-flight pre-destroy fetch. Without this, a stale completion that
    * captured `generationAtStart=0` could pass the guard against a fresh
@@ -166,9 +235,10 @@ export class RepoFetchCoordinator {
   constructor(private readonly callbacks: RepoFetchCoordinatorCallbacks = {}) {}
 
   /**
-   * Schedule a fetch for the given worktree. Resolves with a status describing
-   * what happened. Multiple worktrees that share a `git common-dir` are
-   * serialized on a single per-repo promise chain.
+   * Schedule a fetch for the given worktree. Resolves with the status of the
+   * primary remote — the one whose freshness the worktree's counts depend on.
+   * Multiple worktrees that share a `git common-dir` are serialized on a
+   * single per-repo promise chain, as are the remotes within one call.
    */
   async fetchForWorktree(opts: FetchOptions): Promise<FetchResult> {
     const baseGenerationAtStart = this.baseGeneration;
@@ -183,33 +253,119 @@ export class RepoFetchCoordinator {
       return { status: "skipped", skipReason: "stale-generation" };
     }
 
-    const state = this.getOrCreateState(commonDir);
+    const remotes = this.planRemotes(opts);
+    const primary = remotes[0]!;
 
-    if (!opts.force) {
-      const skip = this.failureSkipResult(state);
-      // Inside the backoff window we skip; once it elapses, fall through and
-      // re-attempt. Auth-class failures auto-retry on a widening schedule
-      // rather than suspending the repo's fetch indefinitely.
-      if (skip) return skip;
+    // Pre-chain triage: a remote inside its backoff window or covered by a
+    // recent success is answered without queueing at all, so a burst of
+    // sibling polls collapses instead of stacking chain links.
+    const settled = new Map<string, FetchResult>();
+    const pending: string[] = [];
+    for (const remote of remotes) {
+      const state = this.getOrCreateState(commonDir, remote);
+      if (!opts.force) {
+        const skip = this.failureSkipResult(state, remote);
+        // Inside the backoff window we skip; once it elapses, fall through and
+        // re-attempt. Auth-class failures auto-retry on a widening schedule
+        // rather than suspending the repo's fetch indefinitely.
+        if (skip) {
+          settled.set(remote, skip);
+          continue;
+        }
+      }
+      const recent = this.recentSuccessResult(state, opts.force === true, remote);
+      if (recent) {
+        settled.set(remote, recent);
+        continue;
+      }
+      pending.push(remote);
     }
 
-    const recent = this.recentSuccessResult(state, opts.force === true);
-    if (recent) {
-      return recent;
+    if (pending.length > 0) {
+      const generations = new Map(
+        pending.map((remote) => [remote, this.getOrCreateState(commonDir, remote).generation])
+      );
+      const chain = this.chains.get(commonDir) ?? Promise.resolve();
+      const batch = chain.then(() => this.runBatch(commonDir, pending, generations, opts));
+      this.chains.set(
+        commonDir,
+        batch.then(
+          () => undefined,
+          () => undefined
+        )
+      );
+      for (const [remote, result] of await batch) {
+        settled.set(remote, result);
+      }
     }
 
-    const generationAtStart = state.generation;
-    const result = state.chain.then(() => this.runFetch(commonDir, generationAtStart, opts));
-    state.chain = result.then(
-      () => undefined,
-      () => undefined
+    return (
+      settled.get(primary) ?? { status: "skipped", skipReason: "stale-generation", remote: primary }
     );
-    return result;
+  }
+
+  /**
+   * The deduped remote list for one call, primary first. Fetch order matters:
+   * the primary's result is what the card renders, so it should not sit behind
+   * a slow auxiliary remote's 60s timeout.
+   */
+  private planRemotes(opts: FetchOptions): string[] {
+    const requested = (opts.remotes ?? []).filter(
+      (remote) => typeof remote === "string" && remote.length > 0
+    );
+    const primary =
+      opts.primaryRemote && opts.primaryRemote.length > 0
+        ? opts.primaryRemote
+        : (requested[0] ?? DEFAULT_REMOTE);
+    const ordered = [primary];
+    for (const remote of requested) {
+      if (!ordered.includes(remote)) ordered.push(remote);
+    }
+    return ordered;
+  }
+
+  /**
+   * Fetch each pending remote in turn on the caller's chain link. Sequential
+   * rather than concurrent: they share `packed-refs`, which is the same reason
+   * sibling worktrees serialize. A failure on one remote does not stop the
+   * others — that isolation is the point of the per-remote state.
+   */
+  private async runBatch(
+    commonDir: string,
+    remotes: readonly string[],
+    generations: ReadonlyMap<string, number>,
+    opts: FetchOptions
+  ): Promise<Map<string, FetchResult>> {
+    const results = new Map<string, FetchResult>();
+    let anyFetched = false;
+    for (const remote of remotes) {
+      const generationAtStart = generations.get(remote) ?? this.baseGeneration;
+      const { result, fetched } = await this.runFetch(commonDir, remote, generationAtStart, opts);
+      results.set(remote, result);
+      // `fetched`, not `status === "success"`: the post-chain recency check
+      // also reports success, and firing the observer for a sibling that
+      // merely reused another's refs would refresh every card N times per
+      // scheduled poll.
+      if (fetched) anyFetched = true;
+    }
+    // One notification per batch, not per remote: the observer refreshes the
+    // worktree's status, and doing that N times for one scheduled poll is
+    // wasted work. Fired outside runFetch so a throwing observer can't poison
+    // any remote's failure cache.
+    if (anyFetched) {
+      try {
+        this.callbacks.onFetchSuccess?.(opts.worktreeId);
+      } catch {
+        // Observer threw — silently swallow; the fetches themselves succeeded.
+      }
+    }
+    return results;
   }
 
   /**
    * Drop network-class failures so the next fetch attempt is allowed
-   * immediately. Called on OS wake / network reconnect.
+   * immediately. Called on OS wake / network reconnect. Applies across every
+   * remote — a reconnect restores all of them at once.
    */
   clearNetworkFailures(): void {
     for (const state of this.states.values()) {
@@ -224,7 +380,9 @@ export class RepoFetchCoordinator {
 
   /**
    * Drop auth-suspension entries. Called when the user signs in / refreshes
-   * GitHub credentials so previously-failing repos can fetch again.
+   * GitHub credentials so previously-failing repos can fetch again. Applies
+   * across every remote: a credential refresh is not remote-specific, and
+   * leaving a sibling remote suspended would make the retry look ineffective.
    */
   clearAuthFailures(): void {
     for (const state of this.states.values()) {
@@ -254,17 +412,31 @@ export class RepoFetchCoordinator {
       state.failure = null;
     }
     this.states.clear();
+    this.chains.clear();
     this.baseGeneration += 1;
   }
 
-  /** Test/diagnostic accessor. */
-  hasFailureFor(commonDir: string): boolean {
-    return this.states.get(commonDir)?.failure != null;
+  /**
+   * Test/diagnostic accessor. With no `remote`, reports whether ANY remote of
+   * the repo is in a failure window.
+   */
+  hasFailureFor(commonDir: string, remote?: string): boolean {
+    if (remote !== undefined) {
+      return this.states.get(stateKey(commonDir, remote))?.failure != null;
+    }
+    const prefix = `${commonDir}${STATE_KEY_DELIMITER}`;
+    for (const [key, state] of this.states) {
+      if (key.startsWith(prefix) && state.failure != null) return true;
+    }
+    return false;
   }
 
-  /** Test/diagnostic accessor. */
-  getLastSuccessfulFetch(commonDir: string): number | null {
-    return this.states.get(commonDir)?.lastSuccessfulFetch ?? null;
+  /**
+   * Test/diagnostic accessor. Scoped to one remote — a repo-wide maximum would
+   * report a freshness the primary remote may not have.
+   */
+  getLastSuccessfulFetch(commonDir: string, remote: string = DEFAULT_REMOTE): number | null {
+    return this.states.get(stateKey(commonDir, remote))?.lastSuccessfulFetch ?? null;
   }
 
   /**
@@ -273,7 +445,11 @@ export class RepoFetchCoordinator {
    * failure so failure surfacing keeps today's semantics. A negative elapsed
    * (clock moved backwards) also forces a real fetch.
    */
-  private recentSuccessResult(state: RepoState, force: boolean): FetchResult | null {
+  private recentSuccessResult(
+    state: RemoteState,
+    force: boolean,
+    remote: string
+  ): FetchResult | null {
     if (state.failure || state.lastSuccessfulFetch === null) return null;
     const window = force ? FORCE_FETCH_RECENCY_WINDOW_MS : FETCH_RECENCY_WINDOW_MS;
     const elapsed = Date.now() - state.lastSuccessfulFetch;
@@ -283,17 +459,18 @@ export class RepoFetchCoordinator {
       lastFetchedAt: state.lastSuccessfulFetch,
       authFailed: false,
       networkFailed: false,
+      remote,
     };
   }
 
   /**
-   * Skip result for a repo still inside its failure backoff window — `null`
+   * Skip result for a remote still inside its failure backoff window — `null`
    * once the window elapses (so the caller re-attempts the fetch). Shared by
    * the pre-queue check and the post-chain re-check so a burst of sibling
    * fetches that all queue before the first failure lands still collapses to a
    * single git invocation once that failure is cached.
    */
-  private failureSkipResult(state: RepoState): FetchResult | null {
+  private failureSkipResult(state: RemoteState, remote: string): FetchResult | null {
     const failure = state.failure;
     if (!failure || Date.now() >= failure.retryAt) return null;
     const isAuth = failure.kind === "auth";
@@ -304,55 +481,65 @@ export class RepoFetchCoordinator {
       lastFetchedAt: state.lastSuccessfulFetch,
       // Only surface the per-card auth stripe once the failure is confirmed
       // (several retries exhausted). Pre-confirmation auth failures show the
-      // softer transient "Couldn't reach origin" tooltip instead, so a single
-      // blip doesn't alarm every worktree card.
+      // softer transient "Couldn't reach the remote" tooltip instead, so a
+      // single blip doesn't alarm every worktree card.
       authFailed: isAuth && failure.confirmed === true,
       networkFailed: isAuth ? failure.confirmed !== true : true,
+      remote,
     };
   }
 
-  private getOrCreateState(commonDir: string): RepoState {
-    let state = this.states.get(commonDir);
+  private getOrCreateState(commonDir: string, remote: string): RemoteState {
+    const key = stateKey(commonDir, remote);
+    let state = this.states.get(key);
     if (!state) {
       state = {
-        chain: Promise.resolve(),
         failure: null,
         lastSuccessfulFetch: null,
         generation: this.baseGeneration,
       };
-      this.states.set(commonDir, state);
+      this.states.set(key, state);
     }
     return state;
   }
 
+  /**
+   * Run one remote's fetch. `fetched` distinguishes a git invocation that
+   * actually landed from a result reused off another sibling's — only the
+   * former should notify observers.
+   */
   private async runFetch(
     commonDir: string,
+    remote: string,
     generationAtStart: number,
     opts: FetchOptions
-  ): Promise<FetchResult> {
-    const stateAtStart = this.states.get(commonDir);
+  ): Promise<{ result: FetchResult; fetched: boolean }> {
+    const key = stateKey(commonDir, remote);
+    const stateAtStart = this.states.get(key);
     if (!stateAtStart || stateAtStart.generation !== generationAtStart) {
-      return { status: "skipped", skipReason: "stale-generation" };
+      return {
+        result: { status: "skipped", skipReason: "stale-generation", remote },
+        fetched: false,
+      };
     }
     // Re-check recency after waiting on the chain — back-to-back sibling
     // fetches (wake storm, auth retry) all queue before the first completes,
     // so the dedup has to look at the timestamp the prior link just wrote.
-    const recent = this.recentSuccessResult(stateAtStart, opts.force === true);
+    const recent = this.recentSuccessResult(stateAtStart, opts.force === true, remote);
     if (recent) {
-      return recent;
+      return { result: recent, fetched: false };
     }
     // Same dedup for failures: once the first sibling in a burst caches a
     // failure, the rest skip instead of each spawning another git fetch (and
     // re-incrementing the auth retry count). Force fetches still bypass this —
     // their same-window failures are coalesced in `buildAuthFailureEntry`.
     if (opts.force !== true) {
-      const skip = this.failureSkipResult(stateAtStart);
-      if (skip) return skip;
+      const skip = this.failureSkipResult(stateAtStart, remote);
+      if (skip) return { result: skip, fetched: false };
     }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_ABORT_TIMEOUT_MS);
-    let succeeded = false;
     try {
       const git = await createBackgroundFetchGit(opts.worktreePath, {
         signal: controller.signal,
@@ -361,70 +548,75 @@ export class RepoFetchCoordinator {
       // so concurrent foreground operations (status polls, user pushes) don't
       // contend on the same file. Requires Git ≥ 2.29 — all supported platforms
       // ship ≥ 2.34, so no version guard is needed.
-      await git.raw(["fetch", "origin", "--no-auto-gc", "--prune", "--no-write-fetch-head"]);
+      await git.raw(["fetch", remote, "--no-auto-gc", "--prune", "--no-write-fetch-head"]);
 
-      const state = this.states.get(commonDir);
+      const state = this.states.get(key);
       if (!state || state.generation !== generationAtStart) {
-        return { status: "skipped", skipReason: "stale-generation" };
+        return {
+          result: { status: "skipped", skipReason: "stale-generation", remote },
+          fetched: false,
+        };
       }
       state.failure = null;
       state.lastSuccessfulFetch = Date.now();
-      succeeded = true;
       return {
-        status: "success",
-        lastFetchedAt: state.lastSuccessfulFetch,
-        authFailed: false,
-        networkFailed: false,
+        result: {
+          status: "success",
+          lastFetchedAt: state.lastSuccessfulFetch,
+          authFailed: false,
+          networkFailed: false,
+          remote,
+        },
+        fetched: true,
       };
     } catch (error) {
       const reason = classifyGitError(error);
-      const state = this.states.get(commonDir);
+      const state = this.states.get(key);
       if (!state || state.generation !== generationAtStart) {
-        return { status: "skipped", skipReason: "stale-generation" };
+        return {
+          result: { status: "skipped", skipReason: "stale-generation", remote },
+          fetched: false,
+        };
       }
-      state.failure = this.classifyForCache(reason, commonDir, state, error);
+      state.failure = this.classifyForCache(reason, commonDir, remote, state, error);
       const failure = state.failure;
       const isAuth = failure.kind === "auth";
       return {
-        status: "failed",
-        reason,
-        lastFetchedAt: state.lastSuccessfulFetch,
-        // Auth-class failures only raise the per-card stripe once confirmed;
-        // until then (and for every non-auth failure) the softer transient
-        // "Couldn't reach origin" tooltip line carries the signal.
-        authFailed: isAuth && failure.confirmed === true,
-        networkFailed: isAuth ? failure.confirmed !== true : true,
+        result: {
+          status: "failed",
+          reason,
+          lastFetchedAt: state.lastSuccessfulFetch,
+          // Auth-class failures only raise the per-card stripe once confirmed;
+          // until then (and for every non-auth failure) the softer transient
+          // "Couldn't reach the remote" tooltip line carries the signal.
+          authFailed: isAuth && failure.confirmed === true,
+          networkFailed: isAuth ? failure.confirmed !== true : true,
+          remote,
+        },
+        fetched: false,
       };
     } finally {
       clearTimeout(timeout);
-      // Notify outside the try/catch so a throwing observer can't poison the
-      // failure cache. Wrapped defensively — `onFetchSuccess` is fire-and-forget.
-      if (succeeded) {
-        try {
-          this.callbacks.onFetchSuccess?.(opts.worktreeId);
-        } catch {
-          // Observer threw — silently swallow; fetch itself succeeded.
-        }
-      }
     }
   }
 
   private classifyForCache(
     reason: GitOperationReason,
     commonDir: string,
-    state: RepoState,
+    remote: string,
+    state: RemoteState,
     error: unknown
   ): FetchFailureEntry {
     const now = Date.now();
     if (reason === "auth-failed") {
-      return this.buildAuthFailureEntry(reason, commonDir, state, now);
+      return this.buildAuthFailureEntry(reason, commonDir, remote, state, now);
     }
     if (reason === "repository-not-found") {
-      // After at least one prior success, a 404 from origin almost always
+      // After at least one prior success, a 404 from this remote almost always
       // indicates GitHub's "404 instead of 403" permission masking. Treat it
       // on the same auth backoff/confirmation path so we don't hammer retries.
       if (state.lastSuccessfulFetch !== null) {
-        return this.buildAuthFailureEntry(reason, commonDir, state, now);
+        return this.buildAuthFailureEntry(reason, commonDir, remote, state, now);
       }
       return {
         kind: "repo-not-found-first",
@@ -475,11 +667,17 @@ export class RepoFetchCoordinator {
    * exponential backoff ladder, and marks the failure `confirmed` once it
    * persists past the threshold — firing `onAuthFailureConfirmed` exactly once
    * on the unconfirmed→confirmed transition.
+   *
+   * `state` is the per-(commondir, remote) entry, so the retry count advances
+   * per remote. Sharing it across remotes would let two independent failures
+   * confirm each other, which is the same "fake confirmation threshold" bug
+   * the same-window coalescing below exists to prevent.
    */
   private buildAuthFailureEntry(
     reason: GitOperationReason,
     commonDir: string,
-    state: RepoState,
+    remote: string,
+    state: RemoteState,
     now: number
   ): FetchFailureEntry {
     const prior = state.failure?.kind === "auth" ? state.failure : null;
@@ -500,7 +698,7 @@ export class RepoFetchCoordinator {
       // Notify on the transition only. Wrapped defensively — a throwing
       // observer must not abort building the failure entry below.
       try {
-        this.callbacks.onAuthFailureConfirmed?.(commonDir, reason);
+        this.callbacks.onAuthFailureConfirmed?.(commonDir, remote, reason);
       } catch {
         // Observer threw — swallow; the failure cache must stay consistent.
       }

@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useCallback } from "react";
-import { AppPaletteDialog, KBD_CLASS, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
+import {
+  AppPaletteDialog,
+  KBD_CLASS,
+  PaletteFooterHints,
+  type PaletteSurfaceTier,
+} from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { useEscapeStack } from "@/hooks";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -53,6 +58,12 @@ export interface SearchablePaletteProps<T> {
   shortcut?: string;
   /** ARIA label for the dialog */
   ariaLabel: string;
+  /**
+   * Which tier of surface this is — see `PaletteSurfaceTier`. Required and
+   * never inferred, so a new picker's author has to decide whether it is a
+   * scoped menu or a global command surface rather than inheriting one.
+   */
+  tier: PaletteSurfaceTier;
   /** Placeholder text for search input */
   searchPlaceholder?: string;
   /** ARIA label for the search input */
@@ -98,7 +109,10 @@ export interface SearchablePaletteProps<T> {
    * — see that component for layout details.
    */
   inputPrefix?: React.ReactNode;
-  /** Custom footer content. Omit for default keyboard hints. */
+  /**
+   * Custom footer content. Omit — along with `getFooter` and `getActionLabel`
+   * — for no footer band at all, which is the right answer for most surfaces.
+   */
   footer?: React.ReactNode;
   /**
    * Dynamic footer derived from the currently selected item. Receives `null`
@@ -109,13 +123,13 @@ export interface SearchablePaletteProps<T> {
    */
   getFooter?: (selectedItem: T | null) => React.ReactNode;
   /**
-   * Sugar for the very common case of "I just want to change the verb in the
-   * default footer hint." Returns the verb-noun action label for the current
-   * selection (e.g. `"Switch terminal"`, `"Apply theme"`). The shell composes
-   * the default `↵`/`↑↓`/`Esc` hints around it and lowercases the label for
-   * mid-sentence rendering. Ignored when `footer` or `getFooter` is also set
-   * — those win, in that order. Use a stable reference (module-level fn or
-   * `useCallback`) to avoid recomputing the footer node every render.
+   * Sugar for the common case of "the footer says one thing: what Enter does."
+   * Returns the verb-noun action label for the current selection (e.g.
+   * `"Switch terminal"`, `"Apply theme"`); the shell wraps it in a single `↵`
+   * chip and lowercases the label for mid-sentence rendering. Ignored when
+   * `footer` or `getFooter` is also set — those win, in that order. Use a
+   * stable reference (module-level fn or `useCallback`) to avoid recomputing
+   * the footer node every render.
    */
   getActionLabel?: (selectedItem: T | null) => string;
   /** Additional className for AppPaletteDialog.Body */
@@ -165,6 +179,7 @@ export function SearchablePalette<T>({
   label,
   shortcut,
   ariaLabel,
+  tier,
   searchPlaceholder = "Search",
   searchAriaLabel,
   listId = "searchable-palette-list",
@@ -329,15 +344,10 @@ export function SearchablePalette<T>({
     if (rawActionLabel == null) return null;
     const actionLabel = rawActionLabel.trim() || "Select";
     const phrase = `to ${actionLabel.toLowerCase()}`;
-    return (
-      <PaletteFooterHints
-        primaryHint={{ keys: ["↵"], label: phrase }}
-        hints={[
-          { keys: ["↑", "↓"], label: "navigate" },
-          { keys: ["Esc"], label: "close" },
-        ]}
-      />
-    );
+    // One chip, not three. `getActionLabel` names what Enter does for the
+    // current selection, which is the only thing a footer is for now — the
+    // `↑↓` and `Esc` chips this used to compose were restating conventions.
+    return <PaletteFooterHints primaryHint={{ keys: ["↵"], label: phrase }} />;
   }, [rawActionLabel]);
 
   let footerContent: React.ReactNode;
@@ -360,7 +370,7 @@ export function SearchablePalette<T>({
   const resolvedEmptyContent = emptyContent ?? autoEmptyChip;
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel={ariaLabel}>
+    <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel={ariaLabel} tier={tier}>
       <AppPaletteDialog.Header
         label={label}
         shortcut={shortcut}

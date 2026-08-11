@@ -102,6 +102,7 @@ import type {
   FileTreeNode,
   CopyTreeProgress,
 } from "./copyTree.js";
+import type { CopyTreeRunSource } from "./copyTreeHistory.js";
 import type {
   SystemWakePayload,
   SystemOpenInEditorPayload,
@@ -376,14 +377,23 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     generate(
       worktreeId: string,
       options?: CopyTreeOptions,
-      includeContent?: boolean
+      includeContent?: boolean,
+      source?: CopyTreeRunSource,
+      name?: string
     ): Promise<CopyTreeResult>;
-    generateAndCopyFile(worktreeId: string, options?: CopyTreeOptions): Promise<CopyTreeResult>;
+    generateAndCopyFile(
+      worktreeId: string,
+      options?: CopyTreeOptions,
+      source?: CopyTreeRunSource,
+      name?: string
+    ): Promise<CopyTreeResult>;
     injectToTerminal(
       terminalId: string,
       worktreeId: string,
       options?: CopyTreeOptions,
-      injectionId?: string
+      injectionId?: string,
+      source?: CopyTreeRunSource,
+      name?: string
     ): Promise<CopyTreeResult>;
     isAvailable(): Promise<boolean>;
     cancel(injectionId?: string): Promise<void>;
@@ -914,7 +924,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       cwd: string,
       branchName: string,
       limit?: number
-    ): Promise<Array<{ hash: string; date: string; message: string; author: string }>>;
+    ): Promise<import("../git.js").GitRemoteCommitPreview>;
     onPushProgress(callback: (event: PushProgressEvent) => void): () => void;
     getStagingStatus(cwd: string): Promise<StagingStatus>;
     abortRepositoryOperation(cwd: string): Promise<void>;

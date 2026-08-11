@@ -4,6 +4,7 @@ import { systemClient } from "@/clients";
 import { usePanelStore } from "@/store/panelStore";
 import { flushConsoleCaptureBuffer, useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import { isBrowserPanel, isDevPreviewPanel } from "@shared/types/panel";
+import { PANEL_LIMIT_ERROR_SUFFIX } from "./panelLimitError";
 
 const getConsoleMessagesArgsSchema = z
   .object({
@@ -111,9 +112,11 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
       // focus-suppression guard (#9035) — never steal focus from a typing user.
       const newId = await store.addPanel({ kind: "browser", browserUrl: url });
       // addPanel returns null when the hard panel limit is reached (the store
-      // raises its own toast). Throw so callers don't get a false { ok: true }.
+      // raises its own toast). Throw so callers don't get a false { ok: true },
+      // composed from the shared suffix so the dispatchers that stay quiet
+      // about an already-reported refusal keep recognising this one.
       if (!newId) {
-        throw new Error("Could not open browser panel: panel limit reached");
+        throw new Error(`Could not open browser panel: ${PANEL_LIMIT_ERROR_SUFFIX}`);
       }
     },
   }));

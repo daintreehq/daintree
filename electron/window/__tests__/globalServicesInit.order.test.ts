@@ -103,7 +103,6 @@ vi.mock("../../services/TelemetryService.js", () => ({
 }));
 
 vi.mock("../../services/connectivity/index.js", () => ({
-  agentConnectivityService: { start: vi.fn(), dispose: vi.fn() },
   getServiceConnectivityRegistry: () => ({ start: vi.fn(), dispose: vi.fn() }),
 }));
 
@@ -194,12 +193,23 @@ vi.mock("../../services/TrashedPidTracker.js", () => ({
   initializeTrashedPidCleanup: vi.fn(),
 }));
 
+// `runScratchCleanup`/`runAssistantScratchCleanup` are also imported by
+// globalServicesInit for the disk-critical edge. A factory that omits them
+// throws only when that edge is actually exercised, so they must be present
+// for the onCriticalChange tests below.
 vi.mock("../../services/ScratchCleanupService.js", () => ({
   initializeScratchCleanup: vi.fn(),
+  runScratchCleanup: vi.fn(async () => {}),
 }));
 
 vi.mock("../../services/AssistantScratchService.js", () => ({
   startAssistantScratchCleanup: vi.fn(async () => {}),
+  runAssistantScratchCleanup: vi.fn(async () => {}),
+}));
+
+vi.mock("../../services/AgentCompileCacheCleanupService.js", () => ({
+  initializeAgentCompileCacheCleanup: vi.fn(),
+  requestAgentCompileCacheCleanup: vi.fn(async () => {}),
 }));
 
 // GpuCrashMonitorService is NOT a deferred task — it stays eager pre-window in
@@ -466,7 +476,6 @@ describe("initGlobalServices task ordering", () => {
       "disk-space-monitor",
       "event-loop-lag-monitor",
       "app-metrics-monitor",
-      "agent-connectivity",
       "service-connectivity-registry",
       "periodic-cleanup",
     ];
@@ -702,7 +711,7 @@ describe("initGlobalServices task ordering", () => {
     expect(registeredTaskNames).toContain("plugin-service");
   });
 
-  it("plugin-service task swaps in the live plugin:// resolver after initialize() (#10322)", async () => {
+  it("plugin-service task swaps in the live plugin:// resolver (#10322)", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     await initGlobalServices(fakeRegistry);
 
@@ -719,6 +728,57 @@ describe("initGlobalServices task ordering", () => {
     const resolver = setPluginDirResolver.mock.calls[0]![0] as (id: string) => string | undefined;
     expect(resolver("acme.tool")).toBe("/plugins/acme.tool");
     expect(pluginGetPluginDir).toHaveBeenCalledWith("acme.tool");
+  });
+
+  it("plugin-service task installs the plugin:// resolver BEFORE initialize() runs (#11728)", async () => {
+    // Ordering invariant, not an incidental arrangement. `initialize()` sweeps
+    // temp dirs, fetches the blocklist over the network, then awaits three
+    // sequential `loadFromDir` passes — while the FIRST plugin it loads already
+    // broadcasts an addressable `plugin://` componentPath. Wiring the resolver
+    // afterwards left the 404-everything placeholder live for that whole span,
+    // and a rejected dynamic import is permanent for its specifier (the module
+    // map has no eviction), so a restored plugin panel could never recover.
+    // The gate is built eagerly, not inside the mock implementation, so the
+    // `finally` below can always release it — an assertion that fires before
+    // initialize() is even reached would otherwise leave the task parked on a
+    // promise nothing can resolve, turning a clear failure into a timeout.
+    let releaseInit!: () => void;
+    const initGate = new Promise<void>((resolve) => {
+      releaseInit = resolve;
+    });
+    pluginInitialize.mockImplementationOnce(() => initGate);
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    const run = registeredTaskRuns.get("plugin-service");
+    expect(run).toBeDefined();
+
+    const pending = Promise.resolve(run!());
+    try {
+      // Poll until the task has actually entered initialize(), rather than
+      // assuming one macrotask outruns the deferred `import()` — that holds only
+      // when a previous test already warmed the module, so this test would be
+      // order-dependent (and pool-dependent) if run alone.
+      for (let i = 0; i < 200 && pluginInitialize.mock.calls.length === 0; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+
+      // The scan is demonstrably still in flight...
+      expect(pluginInitialize).toHaveBeenCalledTimes(1);
+      // ...and the resolver is already live. Before the fix this was 0.
+      expect(setPluginDirResolver).toHaveBeenCalledTimes(1);
+      // Proof the task really is parked inside initialize() rather than done:
+      // the post-initialize steps have not run yet.
+      expect(activateOpenFileInstaller).not.toHaveBeenCalled();
+    } finally {
+      releaseInit();
+      await pending;
+    }
+
+    expect(setPluginDirResolver.mock.invocationCallOrder[0]!).toBeLessThan(
+      pluginInitialize.mock.invocationCallOrder[0]!
+    );
   });
 
   it("plugin-service task drains queued open-file archives after initialize() (#10322)", async () => {
@@ -801,6 +861,7 @@ describe("initGlobalServices task ordering", () => {
     expect(registeredTaskNames).toContain("trashed-pid-cleanup");
     expect(registeredTaskNames).toContain("scratch-cleanup");
     expect(registeredTaskNames).toContain("assistant-scratch-cleanup");
+    expect(registeredTaskNames).toContain("agent-compile-cache-cleanup");
     // GpuCrashMonitor is intentionally NOT a deferred task — it must stay
     // eager in main.ts so the child-process-gone listener installs before
     // GPU process spawn. Deferring it would silently drop startup-window
@@ -859,6 +920,91 @@ describe("initGlobalServices task ordering", () => {
     expect(trashedSpy).toHaveBeenCalled();
     expect(scratchSpy).toHaveBeenCalled();
     expect(assistantSpy).toHaveBeenCalled();
+  });
+
+  it("defers the agent compile cache sweep rather than running it during init (#11699)", async () => {
+    const { initializeAgentCompileCacheCleanup } =
+      await import("../../services/AgentCompileCacheCleanupService.js");
+    const spy = initializeAgentCompileCacheCleanup as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+
+    // The first sweep on an affected install can delete gigabytes, so it must
+    // not run on the boot-critical path.
+    expect(spy).not.toHaveBeenCalled();
+
+    const run = registeredTaskRuns.get("agent-compile-cache-cleanup");
+    expect(run).toBeDefined();
+    await run!();
+
+    expect(spy).toHaveBeenCalled();
+  });
+
+  /**
+   * Register a fresh disk-space monitor and return the options IT was given.
+   * Clearing the monitor ref first is load-bearing: the task short-circuits on
+   * an already-installed monitor, so without this a later test reads an
+   * earlier test's callback out of the mock instead of its own.
+   */
+  async function captureDiskMonitorOptions(): Promise<{
+    onCriticalChange: (isCritical: boolean) => void;
+  }> {
+    const { setStopDiskSpaceMonitor } = await import("../serviceRefs.js");
+    const { startDiskSpaceMonitor } = await import("../../services/DiskSpaceMonitor.js");
+    const startSpy = startDiskSpaceMonitor as ReturnType<typeof vi.fn>;
+    setStopDiskSpaceMonitor(null);
+    startSpy.mockClear();
+
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+    const monitorRun = registeredTaskRuns.get("disk-space-monitor");
+    expect(monitorRun).toBeDefined();
+    await monitorRun!();
+
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    return startSpy.mock.calls[0][0];
+  }
+
+  it("reclaims the agent compile cache on the disk-critical edge only (#11699)", async () => {
+    const { requestAgentCompileCacheCleanup } =
+      await import("../../services/AgentCompileCacheCleanupService.js");
+    const requestSpy = requestAgentCompileCacheCleanup as ReturnType<typeof vi.fn>;
+    requestSpy.mockClear();
+
+    const monitorOptions = await captureDiskMonitorOptions();
+
+    // Recovering from pressure must not start a sweep.
+    monitorOptions.onCriticalChange(false);
+    expect(requestSpy).not.toHaveBeenCalled();
+
+    monitorOptions.onCriticalChange(true);
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs but does not reject when the disk-critical compile cache sweep fails", async () => {
+    const { requestAgentCompileCacheCleanup } =
+      await import("../../services/AgentCompileCacheCleanupService.js");
+    const { logError } = await import("../../utils/logger.js");
+    const requestSpy = requestAgentCompileCacheCleanup as ReturnType<typeof vi.fn>;
+    const logErrorSpy = logError as ReturnType<typeof vi.fn>;
+    requestSpy.mockClear();
+    logErrorSpy.mockClear();
+    const sweepError = new Error("EBUSY");
+    requestSpy.mockRejectedValueOnce(sweepError);
+
+    const monitorOptions = await captureDiskMonitorOptions();
+    // The callback is synchronous fire-and-forget, so the rejection has to be
+    // caught at the call site or it escapes as an unhandled rejection.
+    monitorOptions.onCriticalChange(true);
+
+    await vi.waitFor(() => {
+      expect(logErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("agent compile cache cleanup threw"),
+        sweepError
+      );
+    });
   });
 
   it("prune-old-logs task invokes pruneOldLogsAsync with retentionDays from privacy settings", async () => {

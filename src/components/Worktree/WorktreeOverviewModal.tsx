@@ -48,7 +48,6 @@ interface OverviewWorktreeCardProps {
   totalWorktreeCount: number;
   variant?: "sidebar" | "grid";
   onSelectWorktree: (worktreeId: string) => void;
-  onCopyTree: (worktree: WorktreeSnapshot) => Promise<string | undefined> | void;
   onOpenEditor: (worktree: WorktreeSnapshot) => void;
   onSaveLayout?: (worktree: WorktreeSnapshot) => void;
   onLaunchAgent?: (worktreeId: string, agentId: string) => void;
@@ -67,7 +66,6 @@ function OverviewWorktreeCard({
   totalWorktreeCount,
   variant,
   onSelectWorktree,
-  onCopyTree,
   onOpenEditor,
   onSaveLayout,
   onLaunchAgent,
@@ -96,10 +94,6 @@ function OverviewWorktreeCard({
     onClose();
   }, [onSelectWorktree, onClose, worktreeId]);
 
-  const handleCopyTree = useCallback(
-    () => worktree && onCopyTree(worktree),
-    [worktree, onCopyTree]
-  );
   const handleOpenEditor = useCallback(
     () => worktree && onOpenEditor(worktree),
     [worktree, onOpenEditor]
@@ -127,7 +121,6 @@ function OverviewWorktreeCard({
       isFocused={worktreeId === focusedWorktreeId}
       isSingleWorktree={totalWorktreeCount === 1}
       onSelect={handleSelect}
-      onCopyTree={handleCopyTree}
       onOpenEditor={handleOpenEditor}
       onSaveLayout={onSaveLayout ? handleSaveLayout : undefined}
       onLaunchAgent={onLaunchAgent ? handleLaunchAgent : undefined}
@@ -188,7 +181,6 @@ export interface WorktreeOverviewModalProps {
   activeWorktreeId: string | null;
   focusedWorktreeId: string | null;
   onSelectWorktree: (worktreeId: string) => void;
-  onCopyTree: (worktree: WorktreeSnapshot) => Promise<string | undefined> | void;
   onOpenEditor: (worktree: WorktreeSnapshot) => void;
   onSaveLayout?: (worktree: WorktreeSnapshot) => void;
   onLaunchAgent?: (worktreeId: string, agentId: string) => void;
@@ -205,7 +197,6 @@ export function WorktreeOverviewModal({
   activeWorktreeId,
   focusedWorktreeId,
   onSelectWorktree,
-  onCopyTree,
   onOpenEditor,
   onSaveLayout,
   onLaunchAgent,
@@ -1133,7 +1124,6 @@ export function WorktreeOverviewModal({
                         focusedWorktreeId={focusedWorktreeId}
                         totalWorktreeCount={worktrees.length}
                         onSelectWorktree={onSelectWorktree}
-                        onCopyTree={onCopyTree}
                         onOpenEditor={onOpenEditor}
                         onSaveLayout={onSaveLayout}
                         onLaunchAgent={onLaunchAgent}
@@ -1154,7 +1144,6 @@ export function WorktreeOverviewModal({
                       focusedWorktreeId={focusedWorktreeId}
                       totalWorktreeCount={worktrees.length}
                       onSelectWorktree={onSelectWorktree}
-                      onCopyTree={onCopyTree}
                       onOpenEditor={onOpenEditor}
                       onSaveLayout={onSaveLayout}
                       onLaunchAgent={onLaunchAgent}

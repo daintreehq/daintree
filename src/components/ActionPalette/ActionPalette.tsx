@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState } from "react";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { KBD_CLASS, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
+import { usePreferencesStore } from "@/store/preferencesStore";
 import {
   UI_PALETTE_ENTER_DURATION,
   UI_PALETTE_EXIT_DURATION,
@@ -14,9 +14,10 @@ import {
 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { ActionPaletteItem } from "./ActionPaletteItem";
-import type {
-  ActionPaletteItem as ActionPaletteItemType,
-  UseActionPaletteReturn,
+import {
+  RECENTLY_USED_SECTION_ID,
+  type ActionPaletteItem as ActionPaletteItemType,
+  type UseActionPaletteReturn,
 } from "@/hooks/useActionPalette";
 
 const SECTION_HEADER_CLASS =
@@ -55,10 +56,15 @@ function looksLikePath(query: string): boolean {
   return /[/\\]/.test(query) || /^[.~]/.test(query);
 }
 
-// Compact prefix table surfaced in the default empty-query footer so users can
-// discover the mode-routing characters without having to type one first. Drops
-// out as soon as a query or mode is active so it never competes with the
-// primary "↵ to {action}" hint.
+// Compact prefix table surfaced in the empty-query footer so users can discover
+// the mode-routing characters without having to type one first. Drops out as
+// soon as a query or mode is active so it never competes with the primary
+// "↵ to {action}" hint.
+//
+// Teaching content rather than chrome, so it gets one showing and then retires
+// (#11690) — see `hasSeenActionPalettePrefixHint`. The empty-query browse rail
+// covers what actions exist; this covers the input grammar that hands search to
+// another palette, which nothing else states.
 function PrefixDiscoverabilityRow() {
   return (
     <div
@@ -117,7 +123,7 @@ type ActionPaletteProps = Pick<
   | "totalResults"
   | "selectedIndex"
   | "isStale"
-  | "pinnedCount"
+  | "sections"
   | "close"
   | "setQuery"
   | "setSelectedIndex"
@@ -137,7 +143,7 @@ export function ActionPalette({
   totalResults,
   selectedIndex,
   isStale,
-  pinnedCount,
+  sections,
   close,
   setQuery,
   setSelectedIndex,
@@ -158,6 +164,8 @@ export function ActionPalette({
 
   const actionPaletteShortcut = useEffectiveCombo("action.palette.open");
   const pinnedActionIds = useActionPrefsStore((state) => state.pinnedActionIds);
+  const hasSeenPrefixHint = usePreferencesStore((state) => state.hasSeenActionPalettePrefixHint);
+  const markPrefixHintSeen = usePreferencesStore((state) => state.markActionPalettePrefixHintSeen);
   // Stable id wraps the rendered footer hint and gets pointed at by every
   // option's aria-describedby — mirrors QuickSwitcher.tsx so screen readers
   // announce what Enter does for each row.
@@ -169,7 +177,11 @@ export function ActionPalette({
   // sectioned listbox itself, keyed by `data-action-id` so the divider divs
   // don't throw off the offset.
   const sectionedListRef = useRef<HTMLDivElement>(null);
-  const showSections = !query.trim() && results.length > 0;
+  // Driven by the descriptors rather than by `query`, because filtering lags
+  // the input: the hook only publishes sections alongside the browse rows that
+  // produced them, so this can't sectionize a set of search results (or strip
+  // the headers off a browse list that is still on screen) mid-keystroke.
+  const showSections = sections.length > 0;
 
   useEffect(() => {
     if (!showSections) return;
@@ -182,7 +194,7 @@ export function ActionPalette({
   }, [showSections, selectedIndex, results]);
 
   const renderActionRow = useCallback(
-    (item: ActionPaletteItemType, index: number) => {
+    (item: ActionPaletteItemType, index: number, canHide: boolean) => {
       const isPinned = pinnedActionIds.includes(item.id);
       return (
         <div key={item.id} data-action-id={item.id}>
@@ -195,13 +207,16 @@ export function ActionPalette({
             isPinned={isPinned}
             onPin={pinAction}
             onUnpin={unpinAction}
-            onHide={hideAction}
+            onHide={canHide ? hideAction : undefined}
             footerHintId={footerHintId}
+            posInSet={index + 1}
+            setSize={results.length}
           />
         </div>
       );
     },
     [
+      results.length,
       pinnedActionIds,
       selectedIndex,
       handleSelect,
@@ -214,8 +229,6 @@ export function ActionPalette({
   );
 
   const renderSectionedBody = useCallback(() => {
-    const pinnedRows = results.slice(0, pinnedCount);
-    const recentRows = results.slice(pinnedCount);
     return (
       <>
         <div
@@ -227,47 +240,42 @@ export function ActionPalette({
           data-stale={isStale ? "true" : undefined}
           aria-busy={isStale || undefined}
         >
-          {pinnedRows.length > 0 && (
-            <>
-              {/*
-                Listbox children must be role="option" or role="group" per ARIA.
-                role="group" inside role="listbox" is broken under Chromium 146 +
-                VoiceOver (label is dropped, "empty group" is announced), so the
-                separator masquerades as a non-interactive option instead — AT
-                announces the section name, arrow keys still skip it because it
-                isn't in `results`.
-              */}
-              <div
-                className={SECTION_HEADER_CLASS}
-                role="option"
-                aria-disabled="true"
-                aria-selected="false"
-                aria-label="Favorites"
-              >
-                Favorites
-              </div>
-              {pinnedRows.map((item, idx) => renderActionRow(item, idx))}
-            </>
-          )}
-          {recentRows.length > 0 && (
-            <>
-              <div
-                className={SECTION_HEADER_CLASS}
-                role="option"
-                aria-disabled="true"
-                aria-selected="false"
-                aria-label="Recently used"
-              >
-                Recently used
-              </div>
-              {recentRows.map((item, idx) => renderActionRow(item, pinnedCount + idx))}
-            </>
-          )}
+          {sections.map((section) => {
+            const canHide = section.id === RECENTLY_USED_SECTION_ID;
+            return (
+              <Fragment key={section.id}>
+                {/*
+                  Listbox children must be role="option" or role="group" per ARIA.
+                  role="group" inside role="listbox" is broken under Chromium 146 +
+                  VoiceOver (label is dropped, "empty group" is announced), so the
+                  separator masquerades as a non-interactive option instead — AT
+                  announces the section name, arrow keys still skip it because it
+                  isn't in `results`.
+                */}
+                <div
+                  className={SECTION_HEADER_CLASS}
+                  role="option"
+                  aria-disabled="true"
+                  aria-selected="false"
+                  aria-label={section.label}
+                >
+                  {section.label}
+                </div>
+                {results
+                  .slice(section.start, section.start + section.count)
+                  // Rows are indexed against `results`, not the slice, so the
+                  // highlight and hover handlers keep addressing the flat list
+                  // the keyboard navigates.
+                  .map((item, idx) => renderActionRow(item, section.start + idx, canHide))}
+              </Fragment>
+            );
+          })}
         </div>
-        <PaletteOverflowNotice shown={results.length} total={totalResults} />
       </>
     );
-  }, [results, pinnedCount, isStale, totalResults, renderActionRow]);
+    // No overflow notice here: the browse rail is uncapped, so `shown` always
+    // equals `total`. The search path keeps its notice via SearchablePalette.
+  }, [results, sections, isStale, renderActionRow]);
 
   const [activeMode, setActiveMode] = useState<ActionPaletteMode | null>(null);
   // Hold the last rendered chip label across the exit animation so the chip
@@ -325,14 +333,42 @@ export function ActionPalette({
         if (route.mode) setActiveMode(route.mode);
         return;
       }
-      // Atomic hand-off — `openPalette` replaces `activePaletteId` directly,
-      // so the action palette unmounts as the target mounts. No `close()`
+      // Atomic hand-off — `openPalette` replaces `activePaletteId` directly, so
+      // this palette's `isOpen` goes false as the target mounts. No `close()`
       // call needed; an explicit close would briefly null the mutex and
-      // teardown focus restoration via the palette-to-palette guard.
+      // teardown focus restoration via the palette-to-palette guard. The
+      // component itself stays mounted (`useKeepMounted`) and only its dialog
+      // exits, which is what lets the prefix-hint close effect still run.
       usePaletteStore.getState().openPalette(route.paletteId);
     },
     [activeMode, query]
   );
+
+  // Mirror showSections (`!query.trim()`) so a whitespace-only buffer collapses
+  // to the same default state instead of diverging between the sectioned MRU
+  // body and the prefix-hint footer. The seen flag is an extra clause, not a
+  // replacement: within its one showing the row still comes and goes with the
+  // query, so typing and clearing brings it back.
+  const showPrefixHints = !hasSeenPrefixHint && activeMode === null && !query.trim();
+
+  // Consumed by an opening that actually showed the row, and only once it
+  // closes. Marking on open would clear the flag under the user mid-read, since
+  // this component subscribes to it; observing `isOpen` rather than wrapping
+  // `close()` catches every exit, including the prefix hand-off that swaps
+  // palettes through `paletteStore` without calling it.
+  // `isOpen` gates the exposure too, not just the spend. The component stays
+  // mounted between openings (`useKeepMounted`) and `close()` resets the query,
+  // so a closed palette otherwise satisfies the predicate and would bank an
+  // exposure the user never saw.
+  const prefixHintShownRef = useRef(false);
+  useEffect(() => {
+    if (isOpen && showPrefixHints) prefixHintShownRef.current = true;
+  }, [isOpen, showPrefixHints]);
+  useEffect(() => {
+    if (isOpen || !prefixHintShownRef.current) return;
+    prefixHintShownRef.current = false;
+    markPrefixHintSeen();
+  }, [isOpen, markPrefixHintSeen]);
 
   const getFooter = useCallback(
     (selectedItem: ActionPaletteItemType | null): React.ReactNode => {
@@ -344,44 +380,24 @@ export function ActionPalette({
         body = (
           <PaletteFooterHints
             primaryHint={{ keys: ["↵"], label: "to run command" }}
-            hints={[
-              { keys: ["⌫"], label: "exit scope" },
-              { keys: ["Esc"], label: "close" },
-            ]}
+            // Backspace keeps its chip: inside a mode it pops the scope rather
+            // than deleting a character, which is the one thing here a user
+            // can't infer from every other list they've used.
+            hints={[{ keys: ["⌫"], label: "exit scope" }]}
           />
         );
       } else if (results.length === 0 && looksLikePath(query)) {
         // Default empty-mode hint: surface the projects prefix when the query
         // resembles a path or filename. Per-query-shape only — no auto-routing.
-        body = (
-          <PaletteFooterHints
-            primaryHint={{ keys: ["/"], label: "search projects" }}
-            hints={[
-              { keys: ["↑", "↓"], label: "navigate" },
-              { keys: ["Esc"], label: "close" },
-            ]}
-          />
-        );
+        body = <PaletteFooterHints primaryHint={{ keys: ["/"], label: "search projects" }} />;
       } else {
         // Default footer mirrors SearchablePalette's getActionLabel composition
         // so we keep that affordance while still owning the wrapper id used by
         // aria-describedby.
         const phrase = `to ${(selectedItem?.title ?? "Run action").trim().toLowerCase()}`;
-        body = (
-          <PaletteFooterHints
-            primaryHint={{ keys: ["↵"], label: phrase }}
-            hints={[
-              { keys: ["↑", "↓"], label: "navigate" },
-              { keys: ["Esc"], label: "close" },
-            ]}
-          />
-        );
+        body = <PaletteFooterHints primaryHint={{ keys: ["↵"], label: phrase }} />;
       }
 
-      // Mirror showSections (`!query.trim()`) so a whitespace-only buffer
-      // collapses to the same default state instead of diverging between the
-      // sectioned MRU body and the prefix-hint footer.
-      const showPrefixHints = activeMode === null && !query.trim();
       return (
         <div id={footerHintId} className="@container/palette-footer w-full flex flex-col gap-1.5">
           {body}
@@ -389,13 +405,14 @@ export function ActionPalette({
         </div>
       );
     },
-    [activeMode, query, results.length, footerHintId]
+    [activeMode, query, results.length, footerHintId, showPrefixHints]
   );
 
   const chipNode = chipShouldRender ? <ModeChip label={chipLabel} isVisible={chipVisible} /> : null;
 
   return (
     <SearchablePalette<ActionPaletteItemType>
+      tier="command"
       isOpen={isOpen}
       query={query}
       results={results}
@@ -426,6 +443,11 @@ export function ActionPalette({
             onUnpin={unpinAction}
             onHide={hideAction}
             footerHintId={footerHintId}
+            // Redundant on this path — the search body has no headers to throw
+            // the count off — but stated anyway so a row announces the same way
+            // whichever body rendered it.
+            posInSet={index + 1}
+            setSize={results.length}
           />
         );
       }}

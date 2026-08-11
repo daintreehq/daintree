@@ -43,6 +43,18 @@ export type HostToWorkerMessage =
   | { type: "data"; terminalId: string; data: string; flags: AnalysisChunkFlags; epoch: number }
   | { type: "prelude"; terminalId: string; data: string }
   | { type: "resize"; terminalId: string; cols: number; rows: number }
+  | {
+      /**
+       * Repair-only geometry re-assert (#11719). Applies the grid if the
+       * mirror has drifted off it — including a stale replay target — and
+       * otherwise does nothing. Unlike `resize` it fires no monitor resize
+       * suppression or temperature event, because the PTY did not move.
+       */
+      type: "ensure-geometry";
+      terminalId: string;
+      cols: number;
+      rows: number;
+    }
   | { type: "input"; terminalId: string; data: string }
   | { type: "focus"; terminalId: string }
   | { type: "submission"; terminalId: string }
@@ -103,8 +115,24 @@ export interface AnalysisWorkerMemorySample {
    * Actual per-session buffer occupancy (lines really held, not the
    * configured scrollback cap) so the governor's targeted trim can rank by
    * real usage instead of assuming every buffer is full.
+   *
+   * `cols`/`rows` are the mirror's LIVE grid, read off the headless terminal
+   * at sample time. They are the host's only view of the geometry a worker
+   * mirror is really parsing at, so this sample doubles as the divergence
+   * signal for #11719 — hence rows, which buffer accounting itself never needs.
    */
-  sessions: Array<{ terminalId: string; bufferLines: number; cols: number }>;
+  sessions: Array<{
+    terminalId: string;
+    bufferLines: number;
+    cols: number;
+    rows: number;
+    /**
+     * A session replay owns the grid right now, so `cols`/`rows` are the
+     * capture grid it is parked on rather than a grid it owes the PTY. The
+     * host must not read that expected disagreement as divergence.
+     */
+    replayInFlight: boolean;
+  }>;
   /** Worker-side epoch ms when the sample was taken. */
   sampledAt: number;
 }

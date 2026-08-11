@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PALETTE_HEADER_ATTR } from "@/components/ui/paletteHeaderAttr";
-import { PALETTE_SURFACE_WIDTH } from "@/components/ui/AppPaletteDialog";
+import { PALETTE_SURFACE_WIDTHS, type PaletteSurfaceTier } from "@/components/ui/AppPaletteDialog";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
 
@@ -138,6 +138,13 @@ export interface AppPalettePopoverContentProps extends Omit<
    * the visible header and speech control can target it by the word on screen.
    */
   ariaLabel: string;
+  /**
+   * Which tier of surface this is. Required and never inferred — most anchored
+   * palettes want `"anchored"`, but the tier tracks the palette's weight rather
+   * than its host, so a genuinely global surface that happens to hang off a
+   * button still says so.
+   */
+  tier: PaletteSurfaceTier;
   /** The palette's search box. Focus is driven into it on every open. */
   inputRef: React.RefObject<HTMLInputElement | null>;
   /** Called when the first Escape spends itself clearing a non-empty query. */
@@ -155,6 +162,24 @@ export interface AppPalettePopoverContentProps extends Omit<
    */
   restoreFocusOnPointerDismiss?: boolean;
   /**
+   * Asked once per close whether this particular close must not bounce focus
+   * back to the trigger. Activating a row is an inside close, so Radix has no
+   * event that tells it apart from Escape — the palette that just launched
+   * something is the only thing that knows focus is already travelling.
+   *
+   * Separate from `restoreFocusOnPointerDismiss` rather than folded into it:
+   * that flag is a standing policy about how pointer dismissals should look,
+   * this is one close that must not bounce. Named for the side effect — the
+   * shell asks exactly once per close, including closes the pointer branch was
+   * going to suppress anyway, so the answer can be disarmed on the same call.
+   *
+   * Decide per close rather than arming and waiting to be asked: reopening
+   * inside the content's exit animation cancels Radix's unmount, so that close
+   * never reaches close-autofocus and an armed answer would survive to be spent
+   * on the next dismissal.
+   */
+  consumeCloseAutoFocusSuppression?: () => boolean;
+  /**
    * Fired before Radix restores focus, for triggers that have to suppress
    * something on the way out (a tooltip that would re-open on focus). The shell
    * keeps ownership of the Radix event itself.
@@ -164,9 +189,11 @@ export interface AppPalettePopoverContentProps extends Omit<
 
 function AppPalettePopoverContent({
   ariaLabel,
+  tier,
   inputRef,
   onClearQuery,
   restoreFocusOnPointerDismiss = false,
+  consumeCloseAutoFocusSuppression,
   onCloseAutoFocus,
   onEscapeKeyDown,
   onInteractOutside,
@@ -194,6 +221,10 @@ function AppPalettePopoverContent({
     if (!isOpen) return;
     // A dismissal that got vetoed, or one reversed mid-exit, can leave the
     // pointer flag armed with no close-autofocus to consume it.
+    //
+    // Only this flag: `consumeCloseAutoFocusSuppression` is the consumer's to
+    // keep current, and reopening inside the exit animation cancels the unmount
+    // outright rather than leaving a close-autofocus in flight.
     wasPointerCloseRef.current = false;
     const frame = requestAnimationFrame(focusInput);
     return () => cancelAnimationFrame(frame);
@@ -231,8 +262,13 @@ function AppPalettePopoverContent({
 
   const handleCloseAutoFocus = useCallback(
     (event: Event) => {
+      // Unconditional, and ahead of everything else: the answer is a one-shot
+      // the consumer disarms as it hands it over, so skipping the call on a
+      // close the pointer branch would have suppressed anyway would leave it
+      // armed for the next one.
+      const suppressRequested = consumeCloseAutoFocusSuppression?.() === true;
       onCloseAutoFocus?.();
-      if (!restoreFocusOnPointerDismiss && wasPointerCloseRef.current) {
+      if (suppressRequested || (!restoreFocusOnPointerDismiss && wasPointerCloseRef.current)) {
         event.preventDefault();
       }
       // Cleared on every close, not just the suppressed ones: a palette that
@@ -240,7 +276,7 @@ function AppPalettePopoverContent({
       // pointer dismissal and taint the next keyboard close.
       wasPointerCloseRef.current = false;
     },
-    [onCloseAutoFocus, restoreFocusOnPointerDismiss]
+    [consumeCloseAutoFocusSuppression, onCloseAutoFocus, restoreFocusOnPointerDismiss]
   );
 
   const handleEscapeKeyDown = useCallback(
@@ -319,12 +355,12 @@ function AppPalettePopoverContent({
     // names and data attributes still come through untouched.
     <PopoverContent
       {...props}
-      // The family's one width, carried by the shell rather than restated at
-      // each anchor — an anchored palette and the modal form of the same
-      // palette (the project switcher renders both) have to resolve to the same
-      // surface. `cn` merges, so a palette that genuinely needs another width
-      // can still pass one.
-      className={cn(PALETTE_SURFACE_WIDTH, className)}
+      // The tier's width, carried by the shell rather than restated at each
+      // anchor, and resolved from the same map the modal form reads — a
+      // palette on a given tier is the same box whichever host it opens in.
+      // `cn` merges, so a palette that genuinely needs another width can still
+      // pass one.
+      className={cn(PALETTE_SURFACE_WIDTHS[tier], className)}
       aria-label={ariaLabel}
       // Radix does not set this itself. `aria-modal="false"` is noise, so the
       // non-modal form carries nothing rather than a negation.

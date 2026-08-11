@@ -7,9 +7,16 @@ import {
   withProjectLocation,
   requireWorktreePath,
   requireWorktreeId,
+  requireExplicitWorktreeForAgentDispatch,
   resolveProjectLocation,
 } from "./locationArgs";
 import { z } from "zod";
+import { notify } from "@/lib/notify";
+import { announceCopyTreeCopy } from "@/lib/copyTreeFeedback";
+import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
+import { formatCopyResultMessage } from "@/lib/formatCopyResult";
+import { resolveCopyTreeRunSource } from "@/lib/copyTreeRunSource";
+import { resolveCopyTreeRunName } from "@shared/utils/copyTreeHistory";
 import {
   artifactClient,
   cliAvailabilityClient,
@@ -20,6 +27,7 @@ import {
 } from "@/clients";
 import { cancelContextInjection } from "@/hooks/useContextInjection";
 import type { CopyTreeResult } from "@shared/types";
+import { COPY_TREE_UNMATCHED_SELECTORS } from "@shared/types/ipc/copyTree";
 
 /**
  * The generation numbers every CopyTree action reports.
@@ -38,6 +46,16 @@ const CopyTreeStatsSchema = z
     duration: z.number(),
     estimatedTokens: z.number().optional().describe("Rough token count, accurate to about ±20%"),
     noFilesMatched: z.boolean().optional().describe("Nothing matched — a valid outcome, not error"),
+    // Still a scalar, so it stays on the right side of #11528's line: it names
+    // the field to fix rather than shipping the per-reason breakdown a caller
+    // would have to interpret. Without it `noFilesMatched` says only that the
+    // bundle is empty, and the caller guesses at the option shape (#11731).
+    unmatchedSelector: z
+      .enum(COPY_TREE_UNMATCHED_SELECTORS)
+      .optional()
+      .describe(
+        "Which supplied selector matched no files. For a folder, add '/**' to the pattern or use scopePaths instead."
+      ),
     truncated: z.boolean().optional().describe("A budget dropped or cut short some files"),
     truncatedCount: z.number().optional(),
     truncatedBy: z
@@ -76,6 +94,7 @@ function projectCopyTreeStats(stats: NonNullable<CopyTreeResult["stats"]>) {
     duration: stats.duration,
     ...(stats.estimatedTokens !== undefined && { estimatedTokens: stats.estimatedTokens }),
     ...(stats.noFilesMatched !== undefined && { noFilesMatched: stats.noFilesMatched }),
+    ...(stats.unmatchedSelector !== undefined && { unmatchedSelector: stats.unmatchedSelector }),
     ...(stats.truncated !== undefined && { truncated: stats.truncated }),
     ...(stats.truncatedCount !== undefined && { truncatedCount: stats.truncatedCount }),
     ...(stats.truncatedBy !== undefined && { truncatedBy: stats.truncatedBy }),
@@ -112,6 +131,47 @@ function requireGeneratedFile(result: CopyTreeResult): { filePath: string; outpu
     throw new Error("Failed to generate context");
   }
   return { filePath: result.filePath, outputBytes: result.outputBytes };
+}
+
+/**
+ * The optional display label an MCP caller can attach to a run (#11734).
+ *
+ * One definition for all three copy-tree tools: the field means the same thing
+ * on each, and the text below is what an agent actually reads when deciding
+ * whether to pass it, so a per-tool reword would be three chances to drift.
+ * `.describe()` sits last in the chain because anything after it is what
+ * `toJSONSchema` emits — attached earlier the text is silently dropped.
+ */
+const copyTreeRunNameField = z
+  .string()
+  .optional()
+  .describe(
+    "Short human-readable label for this copy tree, shown in the user's copy-tree history and in the completion notification. Use 2 to 4 words describing what the context is for, for example 'auth flow context'. Omit it and the notification stays unlabelled, while the history entry keeps the label it already has or, if this selection is new, one derived from it."
+  );
+
+/**
+ * The completion title for a copy-tree run, labelled when the caller named it.
+ *
+ * Only a *supplied* name is appended, never the derived fallback. The fallback
+ * exists so every history row stays navigable, and it is a heuristic — a path
+ * basename, a raw pattern, or "Full context" — which reads as noise in a
+ * headline that already says what happened ("Context copied — Full context")
+ * and as a riddle when it is a bare basename. It can also disagree with the
+ * stored row outright: a deduped unnamed run keeps whatever explicit name is
+ * already on the entry, so a freshly derived label would name the run something
+ * the history does not. An explicit name is caller intent and worth promoting;
+ * the fallback is not. This also keeps every existing caller's title
+ * byte-identical — nothing but an explicitly named run changes.
+ *
+ * Resolved through the helper the main process persists with, so the label the
+ * user sees is the one stored in history, trimmed and truncated alike. Options
+ * are not passed: the derive branch is unreachable for a non-blank name, and
+ * feeding them in would imply the fallback can surface here, which is the one
+ * thing this must not do.
+ */
+function copyTreeRunTitle(base: string, suppliedName: string | undefined): string {
+  const trimmed = suppliedName?.trim();
+  return trimmed ? `${base} — ${resolveCopyTreeRunName(trimmed, undefined)}` : base;
 }
 
 export function registerSystemActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
@@ -419,6 +479,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       mcpAnnotations: { readOnlyHint: false, idempotentHint: false },
       argsSchema: withWorktreeLocation({
         options: CopyTreeOptionsSchema.optional(),
+        name: copyTreeRunNameField,
         includeContent: z
           .boolean()
           .optional()
@@ -434,10 +495,50 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         const result = await copyTreeClient.generate(
           requireWorktreeId(args, ctx),
           args?.options,
-          args?.includeContent
+          args?.includeContent,
+          resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
+          args?.name
         );
         throwOnCopyTreeFailure(result);
         const { filePath, outputBytes } = requireGeneratedFile(result);
+        // "generated"/"bundled", never "copied": this writes a temp file and
+        // never touches the clipboard, so the clipboard wording would be false.
+        // Ordered after both failure checks so a bundle that never landed can't
+        // announce success. No `context.worktreeId` — see the note on
+        // generateAndCopyFile below (#11735).
+        //
+        // `priority: "low"` — inbox only, no toast, unlike the other two
+        // copy-tree completions. This action is `kind: "query"`, so
+        // `useActionPalette` (which drops everything but `kind: "command"`)
+        // never surfaces it: there is no human route at all, only MCP and the
+        // in-app assistant, and it sits in WORKBENCH_TIER_TOOLS beside pure
+        // reads like `file.read` and `worktree.list`. It writes a temp file and
+        // hands the path back to the calling agent — nothing the user owns
+        // changes, which is exactly what justifies the toast on
+        // generateAndCopyFile, whose whole point is that it silently replaces
+        // the clipboard. A toast is the most-restricted surface, and for a
+        // routine agent read it fails the notify() gate on "helpful next
+        // step?": the user never sees the temp path and can do nothing with it.
+        // Low keeps the durable "an agent bundled the codebase" inbox row
+        // without interrupting. It is also why this call carries no
+        // `notify-no-action` opt-out where its two siblings below do:
+        // `priority: "low"` is itself one of the sanctioned exits from the
+        // unprotected-success-toast rule, so a disable here would be dead.
+        notify({
+          type: "success",
+          title: copyTreeRunTitle("Context generated", args?.name),
+          message: formatCopyResultMessage(
+            {
+              fileCount: result.fileCount,
+              stats: result.stats,
+              format: args?.options?.format,
+            },
+            "temporary-file"
+          ),
+          priority: "low",
+          rateLimitKey: "copyTree.generate",
+          context: { eventKind: "agent" },
+        });
         // Projected explicitly rather than passed through. Dispatch does parse
         // results against `resultSchema` now (#11539), but building the result
         // here is still what keeps the bundle off the wire: a parse would reject
@@ -466,28 +567,34 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generateAndCopyFile",
       title: "Generate And Copy Context",
       description:
-        "Bundle a worktree's context to a file and put it on the system clipboard, replacing whatever the user currently has copied. What lands there is platform-dependent: macOS and Linux copy the file itself, Windows copies its path as text. The bundle is never returned inline — check the budget flags to tell whether it was complete.",
+        "Bundle a worktree's context to a file and put it on the system clipboard, replacing what the user had copied. Selection can mix exact files with globs, so this assembles a curated bundle of scattered related files, their supporting code and tests, rather than the whole worktree. Agent and MCP callers must name the worktree instead of relying on whichever is active. macOS and Linux copy the file, Windows its path. Never returned inline; check the budget flags for completeness.",
       category: "copyTree",
       kind: "command",
       danger: "safe",
       scope: "renderer",
       // run() resolves the target from ctx.activeWorktreeId and throws when none
       // is active. Disable-with-reason in the palette rather than letting the
-      // pick produce a "No active worktree" error toast.
+      // pick produce a "No active worktree" error toast. Palette picks dispatch
+      // with source "user", so the agent-only explicit-target guard below never
+      // applies to them and this fallback stays intact.
       palette: {
         mode: "requireContext",
         isReady: (ctx) => Boolean(ctx.activeWorktreeId),
         reason: "Open a worktree to generate its context",
       },
-      argsSchema: z
-        .object({
-          worktreeId: z
-            .string()
-            .optional()
-            .describe("Worktree ID. Defaults to the active worktree."),
-          options: CopyTreeOptionsSchema.optional(),
-        })
-        .optional(),
+      argsSchema: withWorktreeLocation({
+        options: CopyTreeOptionsSchema.optional().describe(
+          "Selection, exclusion, formatting, and size-budget settings for the bundle."
+        ),
+        name: copyTreeRunNameField,
+      }).optional(),
+      // `destructiveHint` is otherwise derived from `danger === "confirm"`, so
+      // this would advertise as non-destructive while `actionRiskBand` already
+      // classifies it `destructive-local`. It replaces the clipboard, which has
+      // no inverse — the annotation should say so to a caller deciding whether
+      // to ask first. `danger` stays "safe": the issue wants an assistant-driven
+      // copy to land like a manual one, not behind a confirm dialog.
+      mcpAnnotations: { destructiveHint: true, idempotentHint: false },
       resultSchema: z.object({
         filePath: z.string(),
         fileCount: z.number(),
@@ -496,11 +603,51 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       }),
       mcpOutputSchema: true,
       run: async (args, ctx: ActionContext) => {
-        const worktreeId = args?.worktreeId ?? ctx.activeWorktreeId;
-        if (!worktreeId) throw new Error("No active worktree");
-        const result = await copyTreeClient.generateAndCopyFile(worktreeId, args?.options);
+        requireExplicitWorktreeForAgentDispatch("copyTree.generateAndCopyFile", args, ctx);
+        // Bracketed for the toolbar's Copy context spinner — this is the action
+        // MCP clipboard copies and the recents replay land on, and both should
+        // spin the button exactly like a direct click (the other clipboard
+        // route, worktree.copyTree, brackets itself the same way). The
+        // temp-file and terminal-injection siblings deliberately don't: the
+        // button advertises a clipboard copy, and neither touches the clipboard.
+        const runStore = useCopyTreeRunStore.getState();
+        runStore.beginRun();
+        let result: CopyTreeResult;
+        try {
+          result = await copyTreeClient.generateAndCopyFile(
+            requireWorktreeId(args, ctx),
+            args?.options,
+            resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
+            args?.name
+          );
+        } finally {
+          runStore.endRun();
+        }
         throwOnCopyTreeFailure(result);
         const { filePath, outputBytes } = requireGeneratedFile(result);
+        // Announced for every dispatch source, not just agents. The old
+        // agent-only gate assumed a person who triggered this already knows
+        // their clipboard changed — true of a button with inline feedback, but
+        // this action's other human routes (palette, recents replay) leave
+        // nothing on screen at all (#11735). The announcement is a transient
+        // tooltip on the toolbar's Copy context button, with a toast fallback
+        // when that button isn't visible. Ordered after the failure checks so a
+        // failed generate or a failed clipboard write can never announce
+        // success.
+        announceCopyTreeCopy(
+          {
+            // Matches the title every other copy-tree completion uses for this
+            // artifact ("context", never "reference file"), paired with the
+            // same formatCopyResultMessage body — see worktreeContextActions.ts.
+            title: copyTreeRunTitle("Context copied", args?.name),
+            message: formatCopyResultMessage({
+              fileCount: result.fileCount,
+              stats: result.stats,
+              format: args?.options?.format,
+            }),
+          },
+          "copyTree.generateAndCopyFile"
+        );
         return {
           filePath,
           fileCount: result.fileCount,
@@ -526,6 +673,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         terminalId: z.string(),
         worktreeId: z.string().optional().describe("Worktree ID. Defaults to the active worktree."),
         options: CopyTreeOptionsSchema.optional(),
+        name: copyTreeRunNameField,
       }),
       // No path: this bundle is streamed into the PTY and never written to disk.
       resultSchema: z.object({
@@ -533,15 +681,39 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         stats: CopyTreeStatsSchema,
       }),
       mcpOutputSchema: true,
-      run: async ({ terminalId, worktreeId, options }, ctx: ActionContext) => {
+      run: async ({ terminalId, worktreeId, options, name }, ctx: ActionContext) => {
         const resolvedWorktreeId = worktreeId ?? ctx.activeWorktreeId;
         if (!resolvedWorktreeId) throw new Error("No active worktree");
         const result = await copyTreeClient.injectToTerminal(
           terminalId,
           resolvedWorktreeId,
-          options
+          options,
+          undefined,
+          resolveCopyTreeRunSource(ctx.dispatchSource, ctx.copyTreeRunSource),
+          name
         );
         throwOnCopyTreeFailure(result);
+        // "injected … into terminal", not "copied": the bundle streams into a
+        // PTY and never reaches the clipboard. Ordered after the failure check.
+        // No `context.worktreeId` — see the note on generateAndCopyFile above.
+        // The renderer's own injection path (`useContextInjection`) calls the
+        // client directly and carries its own key, so the two never stack
+        // (#11735).
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "success",
+          title: copyTreeRunTitle("Context injected", name),
+          message: formatCopyResultMessage(
+            {
+              fileCount: result.fileCount,
+              stats: result.stats,
+              format: options?.format,
+            },
+            "terminal"
+          ),
+          rateLimitKey: "copyTree.injectToTerminal",
+          context: { eventKind: "agent" },
+        });
         return {
           fileCount: result.fileCount,
           ...(result.stats ? { stats: projectCopyTreeStats(result.stats) } : {}),

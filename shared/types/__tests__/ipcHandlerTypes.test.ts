@@ -73,9 +73,11 @@ describe("hand-typed IPC handler contracts", () => {
       expectTypeOf<InvokeArgs<"git:list-remote-commits">>().toEqualTypeOf<
         [payload: { cwd: string; branchName: string; limit?: number }]
       >();
-      expectTypeOf<InvokeResult<"git:list-remote-commits">>().toEqualTypeOf<
-        Array<{ hash: string; date: string; message: string; author: string }>
-      >();
+      expectTypeOf<InvokeResult<"git:list-remote-commits">>().toEqualTypeOf<{
+        destination: { remote: string; branch: string };
+        commits: Array<{ hash: string; date: string; message: string; author: string }>;
+        total: number;
+      }>();
     });
 
     it("git:get-staging-status — args + result", () => {

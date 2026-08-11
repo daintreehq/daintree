@@ -84,9 +84,33 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
   });
 
-  describe("Agent/tool button group divider — issue #2879", () => {
-    it("defines AGENT_TOOLBAR_IDS constant for group boundary detection", () => {
-      expect(source).toContain("AGENT_TOOLBAR_IDS");
+  describe("Agent/tool button group divider — issues #2879, #11681", () => {
+    // The divider positions themselves are covered for real in
+    // toolbarButtonGrouping.test.ts — these only assert that Toolbar.tsx is
+    // still wired to that declared-group algorithm rather than deriving
+    // boundaries locally, which this file (a source scan) is the only place
+    // that can check.
+    it("resolves each button's group against the live plugin registry", () => {
+      // The membership argument is what keeps a contribution from inheriting a
+      // built-in's placement — a bare `getToolbarButtonGroup(id)` would compile
+      // and silently misplace every promoted plugin button.
+      expect(source).toMatch(/getToolbarButtonGroup\(\s*id,\s*pluginConfigs\.has\(id\)\s*\)/);
+    });
+
+    it("no longer derives boundaries from an agent/non-agent predicate", () => {
+      expect(source).not.toContain("AGENT_TOOLBAR_IDS");
+    });
+
+    it("orders the left buttons by declared group before rendering", () => {
+      expect(source).toContain("orderToolbarButtonsByGroup");
+    });
+
+    it("places dividers from the visible set, not from every available button", () => {
+      // Passing `() => true` here would restore a divider after an
+      // overflow-evicted button.
+      expect(source).toMatch(
+        /getToolbarDividerAfterIds\(\s*available,\s*\(id\) => visibleSet\.has\(id\),/
+      );
     });
 
     it("has renderLeftButtons helper that inserts group dividers", () => {

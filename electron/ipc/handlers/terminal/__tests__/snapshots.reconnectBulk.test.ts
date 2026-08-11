@@ -105,6 +105,8 @@ const TERMINALS = new Map<string, Record<string, unknown>>([
   ["t-unowned", makeTerminal("t-unowned", null)],
   ["t-absent", terminalWithNoProjectField],
   ["t-scratch", makeTerminal("t-scratch", "scratch-1")],
+  // Carries the live PTY grid the pty-host mapper reports (#11718).
+  ["t-sized", { ...makeTerminal("t-sized", "project-a"), ptyCols: 203, ptyRows: 51 }],
 ]);
 
 /** An invoke event whose URL can be mutated mid-flight, to prove identity is snapshotted. */
@@ -183,6 +185,20 @@ describe("terminal:reconnect — workspace ownership", () => {
     // toStrictEqual, not toEqual: toEqual ignores own properties whose value is
     // undefined, so a leak of `cwd: undefined` would slip through.
     await expect(reconnect(senderEvent(SENDER_A), "t-b")).resolves.toStrictEqual(REFUSED);
+  });
+
+  it("forwards the live PTY grid so restore can build the xterm on it (#11718)", async () => {
+    // Main relays these two fields and nothing else asserts it, so dropping them
+    // leaves the pty-host mapper and the hydration precedence both green while
+    // the reconnect-fallback path silently restores panes at 80×24.
+    register();
+
+    const result = (await reconnect(senderEvent(SENDER_A), "t-sized")) as ReconnectResult & {
+      ptyCols?: number;
+      ptyRows?: number;
+    };
+    expect(result.ptyCols).toBe(203);
+    expect(result.ptyRows).toBe(51);
   });
 
   it("serves each project its own terminal in the same session", async () => {

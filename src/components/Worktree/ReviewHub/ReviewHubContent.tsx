@@ -1869,6 +1869,7 @@ export function ReviewHubContent({
               isDetachedHead={status.isDetachedHead}
               hasConflicts={hasConflicts}
               hasRemote={status.hasRemote}
+              pushDestination={status.pushDestination}
               worktreePath={worktreePath}
               currentBranch={status.currentBranch}
               commitMessage={commitMessage}
@@ -1891,7 +1892,6 @@ export function ReviewHubContent({
           cwd={worktreePath}
           branchName={pushError.branchName}
           leaseSha={pushError.leaseSha}
-          behindCount={behindCount}
           onClose={() => setForcePushDialogOpen(false)}
           onSuccess={handleForcePushSuccess}
           onError={handleForcePushError}

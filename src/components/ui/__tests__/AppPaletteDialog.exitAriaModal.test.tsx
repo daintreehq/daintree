@@ -36,7 +36,7 @@ vi.stubGlobal(
 
 function renderPalette(isOpen: boolean, ariaLabel = "Test palette") {
   return render(
-    <AppPaletteDialog isOpen={isOpen} onClose={() => {}} ariaLabel={ariaLabel}>
+    <AppPaletteDialog isOpen={isOpen} onClose={() => {}} ariaLabel={ariaLabel} tier="command">
       <input type="text" placeholder="Palette input" />
     </AppPaletteDialog>
   );
@@ -78,10 +78,20 @@ describe("AppPaletteDialog aria-modal during exit window", () => {
     presenceFor = (isOpen) => ({ isVisible: isOpen, shouldRender: true });
     render(
       <>
-        <AppPaletteDialog isOpen={false} onClose={() => {}} ariaLabel="Outgoing palette">
+        <AppPaletteDialog
+          isOpen={false}
+          onClose={() => {}}
+          ariaLabel="Outgoing palette"
+          tier="command"
+        >
           <input type="text" placeholder="Outgoing input" />
         </AppPaletteDialog>
-        <AppPaletteDialog isOpen={true} onClose={() => {}} ariaLabel="Incoming palette">
+        <AppPaletteDialog
+          isOpen={true}
+          onClose={() => {}}
+          ariaLabel="Incoming palette"
+          tier="command"
+        >
           <input type="text" placeholder="Incoming input" />
         </AppPaletteDialog>
       </>

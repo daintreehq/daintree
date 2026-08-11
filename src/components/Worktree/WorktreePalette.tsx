@@ -26,8 +26,8 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
         id={`worktree-option-${worktree.id}`}
         onClick={onClick}
         className={cn(
-          // Was a hand-rolled copy of the shared row, so it kept the neutral
-          // selected border after the family moved to the accent one.
+          // Was a hand-rolled copy of the shared row and drifted out of step
+          // with it; takes the selected treatment from the family now.
           PALETTE_ROW_CLASS,
           "group w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5",
           "bg-daintree-bg hover:bg-surface"
@@ -35,11 +35,13 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
         aria-selected={isSelected}
         role="option"
       >
-        <div className="flex items-center justify-between text-sm">
-          <span className="font-medium text-daintree-text">{worktree.name}</span>
-          <div className="flex items-center gap-2 text-xs text-daintree-text/60">
+        <div className="flex items-center justify-between gap-2 text-sm">
+          {/* Both sides truncate: branch names have no length worth trusting,
+              so no tier is wide enough to make this unnecessary. */}
+          <span className="font-medium text-daintree-text truncate">{worktree.name}</span>
+          <div className="flex items-center gap-2 min-w-0 text-xs text-daintree-text/60">
             {worktree.branch && (
-              <span className="font-mono text-daintree-text/70">{worktree.branch}</span>
+              <span className="font-mono text-daintree-text/70 truncate">{worktree.branch}</span>
             )}
             {isActive && (
               <span className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-[var(--color-state-active)]/15 text-[var(--color-state-active)] text-[11px] font-semibold">
@@ -97,6 +99,7 @@ export function WorktreePalette({
 
   return (
     <SearchablePalette<WorktreeState>
+      tier="anchored"
       isOpen={isOpen}
       query={query}
       results={results}

@@ -144,6 +144,14 @@ test.describe.serial("Core: Command Palette Accessibility", () => {
     await expect(options.first()).toBeVisible({ timeout: T_MEDIUM });
     await expect(options.first()).toHaveAttribute("aria-selected", "true");
 
+    // The row's raised fill and neutral outline are both discarded here, so the
+    // system-colour fallback in `index.css` is the only thing still marking the
+    // row. The attribute assertion above cannot see that rule go missing.
+    const selectedOutlineWidth = await options
+      .first()
+      .evaluate((el) => getComputedStyle(el).outlineWidth);
+    expect(selectedOutlineWidth).not.toBe("0px");
+
     const searchInput = window.locator(SEL.panelPalette.searchInput);
     await searchInput.focus();
     await expect(searchInput).toBeFocused({ timeout: T_SHORT });

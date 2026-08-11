@@ -22,6 +22,7 @@
 import { app, powerMonitor } from "electron";
 import { runScratchCleanup } from "./ScratchCleanupService.js";
 import { runAssistantScratchCleanup } from "./AssistantScratchService.js";
+import { requestAgentCompileCacheCleanup } from "./AgentCompileCacheCleanupService.js";
 import {
   pruneOldLogs,
   pruneHeapSnapshotsAsync,
@@ -104,6 +105,13 @@ class PeriodicCleanupService {
       await runAssistantScratchCleanup();
     } catch (err) {
       logError("[PeriodicCleanup] assistant scratch cleanup threw", err);
+    }
+    try {
+      // Agent compile caches grow only while agents run, so a long session is
+      // exactly when they outgrow their budget between boots (#11699).
+      await requestAgentCompileCacheCleanup();
+    } catch (err) {
+      logError("[PeriodicCleanup] agent compile cache cleanup threw", err);
     }
     try {
       // Re-read retention each pass — the user may change it mid-session.

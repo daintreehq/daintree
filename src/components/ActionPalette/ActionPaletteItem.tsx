@@ -31,6 +31,10 @@ interface ActionPaletteItemProps {
    * pattern.
    */
   footerHintId?: string;
+  /** 1-based position among the navigable rows. See the ARIA note on the row. */
+  posInSet?: number;
+  /** Total navigable rows, excluding any inert section headers. */
+  setSize?: number;
 }
 
 function ActionPaletteItemInner({
@@ -44,6 +48,8 @@ function ActionPaletteItemInner({
   onUnpin,
   onHide,
   footerHintId,
+  posInSet,
+  setSize,
 }: ActionPaletteItemProps) {
   const categoryColor = ACTION_CATEGORY_COLORS[item.category] ?? ACTION_CATEGORY_DEFAULT_COLOR;
   const [pinRejected, setPinRejected] = useState(false);
@@ -139,18 +145,33 @@ function ActionPaletteItemInner({
       role="option"
       aria-selected={isSelected}
       aria-disabled={!item.enabled}
+      // The sectioned body seeds these because it interleaves inert section
+      // headers among the rows: those headers are role="option" too (role=group
+      // loses its label under Chromium + VoiceOver), so a computed set would
+      // count them and announce "38 of 328" for the 36th real action. Stating
+      // the position explicitly keeps the count over the rows only.
+      aria-posinset={posInSet}
+      aria-setsize={setSize}
+      // Carried by the option itself rather than an inner control: ARIA forbids
+      // interactive descendants inside `role="option"`, so there is no inner
+      // button left to hold them.
+      aria-haspopup={isConfirmTier ? "dialog" : undefined}
+      aria-describedby={describedBy}
       onPointerDown={(e) => e.preventDefault()}
       onPointerMove={handleHover}
+      // Activation lives on the option now that no inner button can hold it.
+      // The pin and hide controls stop propagation, so they still win over it.
+      onClick={handleSelectClick}
     >
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-label={item.title}
-        aria-haspopup={isConfirmTier ? "dialog" : undefined}
-        aria-describedby={describedBy}
-        onClick={handleSelectClick}
+      {/* A div, not a button. `role="option"` must not contain interactive
+          descendants — axe reports the nesting as `nested-interactive`
+          (serious), and a negative tabindex does not exempt it: "using a
+          negative tabindex on an element inside an interactive control does not
+          prevent assistive technologies from focusing the element". Activation
+          lives here; the option's name computes from this subtree's text. */}
+      <div
         className={cn(
-          "flex-1 min-w-0 flex items-center gap-3 text-left bg-transparent border-0 p-0",
+          "flex-1 min-w-0 flex items-center gap-3 text-left",
           !item.enabled && "cursor-not-allowed"
         )}
       >
@@ -203,14 +224,19 @@ function ActionPaletteItemInner({
             </div>
           )}
         </div>
-      </button>
+      </div>
 
-      <div className="shrink-0 flex items-center gap-1 pt-0.5">
+      {/* Presentational, for the same reason as the row body above: these sit
+          inside `role="option"`, where ARIA treats children as presentational
+          and a real <button> trips `nested-interactive`. They were already
+          `tabIndex={-1}`, so no keyboard path is lost — the palette's focus
+          stays on the search input and drives rows via aria-activedescendant.
+          `title` keeps the mouse tooltip; `data-testid` keeps them addressable. */}
+      <div className="shrink-0 flex items-center gap-1 pt-0.5" aria-hidden="true">
         {canShowHide && (
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-label={`Hide '${item.title}' from Recently used`}
+          <span
+            role="presentation"
+            data-testid="action-palette-hide"
             title="Hide from Recently used"
             onPointerDown={(e) => e.preventDefault()}
             onClick={handleHideClick}
@@ -222,14 +248,13 @@ function ActionPaletteItemInner({
             )}
           >
             <EyeOff className="w-3.5 h-3.5" aria-hidden />
-          </button>
+          </span>
         )}
         {canShowPin && (
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-label={isPinned ? `Unpin '${item.title}'` : `Pin '${item.title}' to Favorites`}
-            aria-pressed={isPinned}
+          <span
+            role="presentation"
+            data-testid="action-palette-pin"
+            data-pinned={isPinned}
             title={isPinned ? "Unpin from Favorites" : "Pin to Favorites"}
             onPointerDown={(e) => e.preventDefault()}
             onClick={handlePinClick}
@@ -247,7 +272,7 @@ function ActionPaletteItemInner({
             ) : (
               <Pin className="w-3.5 h-3.5" aria-hidden />
             )}
-          </button>
+          </span>
         )}
 
         {item.keybinding && (

@@ -117,7 +117,7 @@ Top-level files live directly in `electron/services/`; cohesive subsystems get a
 - **`git/`** + top-level `GitService.ts` / `GitServiceCache.ts` — simple-git operations, porcelain conflict parsing (`porcelainConflicts.ts`, `conflictMarkerScan.ts`), repo operation state.
 - **`worktree/`** + `workspace-client/` — worktree polling strategy, mood/notes readers; the `workspace-client/` shims that talk to the workspace host.
 - **DevPreview (`DevPreview*.ts`, 7 top-level files)** — `DevPreviewSessionService`, `DevPreviewProxyService`, `DevPreviewPortAllocator`, `DevPreviewReadinessProbe`, `DevPreviewManifestService`, `DevPreviewCommandNormalizer`, `DevPreviewRequestValidators`. Event routing for this cluster has its own doc: [dev-preview-event-routing.md](./dev-preview-event-routing.md).
-- **`connectivity/`** — `AgentConnectivityService`, `ServiceConnectivityRegistry` (reachability of model APIs and external services).
+- **`connectivity/`** — `ServiceConnectivityRegistry` (aggregates GitHub token health and MCP server runtime state into one snapshot; derived from work the app already does, never speculative traffic).
 - **`commands/`** — higher-level orchestrations invoked as commands (`githubCreateIssue`, `githubWorkIssue`).
 - **`events.ts`** — the Main-process `EventEmitter` hub with `EVENT_META` categorizing every event type; the bridge between service-internal events and the renderer event bus.
 - **Other clusters worth knowing:** `forge/` + `forgeProvider*` (provider abstraction — see [forge-provider-abstraction.md](./forge-provider-abstraction.md)), `mcp-server/` + `plugin-mcp/`, `plugin/`, `persistence/`, `migrations/`, `voice/`, `gemini/`, `rpc/`.

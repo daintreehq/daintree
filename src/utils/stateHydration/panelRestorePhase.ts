@@ -38,8 +38,71 @@ import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
+import { isValidTerminalGeometry } from "@shared/types/terminal";
+import type { TerminalGeometry } from "@shared/types/terminal";
 
 type AddPanelFn = HydrationOptions["addPanel"];
+
+/**
+ * The persisted grid for a saved pane, keyed by the id it was persisted under —
+ * resolvable BEFORE `addPanel`, which is the whole point.
+ *
+ * A pane restored into a non-selected worktree never attaches: it sits prewarmed
+ * at xterm's 80×24 default parsing everything its surviving PTY streams
+ * (#11718). Feeding this into the xterm constructor closes the window entirely —
+ * there is no moment at which the pane exists on the wrong grid.
+ *
+ * Rejects anything not a plausible grid rather than partially defaulting: a
+ * half-valid entry would boot the pane on a geometry the PTY is not on, which
+ * is the failure being fixed.
+ */
+function resolvePersistedGeometry(
+  terminalSizes: Record<string, { cols: number; rows: number }> | undefined,
+  terminalId: string
+): TerminalGeometry | undefined {
+  if (!terminalSizes || typeof terminalSizes !== "object") return undefined;
+  const saved = terminalSizes[terminalId];
+  return isValidTerminalGeometry(saved) ? saved : undefined;
+}
+
+/**
+ * The grid a reconnecting pane must be BORN on, live PTY first.
+ *
+ * `ptyCols`/`ptyRows` come off the node-pty handle at query time, so for a
+ * surviving PTY they are the truth by definition and no persisted value can
+ * beat them. The persisted map is the fallback for the paths that have no live
+ * PTY to ask (respawn after a cold restart) and for a host too old to report
+ * the field.
+ *
+ * That ordering is deliberate belt-and-braces: the persisted map is written by
+ * exactly one renderer code path, and when that path was dropped in `30ed7877f`
+ * the map silently emptied and #11718's construction-geometry fix became a
+ * no-op for four months. The PTY answer cannot rot the same way — nothing has
+ * to remember to write it.
+ *
+ * Both resolvers feed the xterm CONSTRUCTOR and stop there. Restore must not
+ * also park the result with `setTargetSize`, as these paths once did: on a cold
+ * attach a parked target is not a hint but a REPLACEMENT — the attach rAF runs
+ * `applyResize(targetCols, targetRows)` *instead of* `fit(id)`. A pane whose PTY
+ * is 240×60, first revealed in a dock that fits 90×30, would be dragged back to
+ * 240×60 with no SIGWINCH to follow it (the PTY is already there, so
+ * `TerminalProcess.resize` takes its "unchanged" path) — stuck wide in a narrow
+ * box, worse than the 80×24 default this replaces. It stayed latent only because
+ * the map was empty, so `setTargetSize` was a no-op on every restore; feeding
+ * geometry back in is exactly what would have armed it. The seed does the whole
+ * job alone — it makes the pane correct while UNATTACHED, which is the bug — and
+ * the first attach must stay free to measure the real container. Parking belongs
+ * to the warm detach/reattach path that owns it.
+ */
+function resolveRestoreGeometry(
+  live: { ptyCols?: number; ptyRows?: number } | null | undefined,
+  terminalSizes: Record<string, { cols: number; rows: number }> | undefined,
+  terminalId: string
+): TerminalGeometry | undefined {
+  const livePtyGrid = { cols: live?.ptyCols, rows: live?.ptyRows };
+  if (isValidTerminalGeometry(livePtyGrid)) return livePtyGrid;
+  return resolvePersistedGeometry(terminalSizes, terminalId);
+}
 type RestoreTerminalOrderFn = NonNullable<HydrationOptions["restoreTerminalOrder"]>;
 
 /**
@@ -623,6 +686,14 @@ export async function restorePanelsPhase(
             // onto the moved worktree's new root so persisted state and a later
             // respawn don't reference the vanished path (#11388).
             rebaseMovedArgsCwd(args, movedRootsById.get(saved.id));
+            // Born on the PTY's own grid, not 80×24 — the reconnected PTY is
+            // already there and a hidden-worktree pane never gets fitted
+            // (#11718).
+            args.initialTerminalGeometry = resolveRestoreGeometry(
+              backendTerminal,
+              terminalSizes,
+              saved.id
+            );
             const location = args.location as "grid" | "dock";
 
             logHydrationInfo(`[HYDRATION] Adding terminal from backend:`, {
@@ -642,23 +713,6 @@ export async function restorePanelsPhase(
                 restoredTerminalId,
                 backendTerminal.activityTier
               );
-            }
-
-            if (terminalSizes && typeof terminalSizes === "object") {
-              const savedSize = terminalSizes[restoredTerminalId];
-              if (
-                savedSize &&
-                Number.isFinite(savedSize.cols) &&
-                Number.isFinite(savedSize.rows) &&
-                savedSize.cols > 0 &&
-                savedSize.rows > 0
-              ) {
-                terminalInstanceService.setTargetSize(
-                  restoredTerminalId,
-                  savedSize.cols,
-                  savedSize.rows
-                );
-              }
             }
 
             restoreTasks.push({
@@ -709,6 +763,11 @@ export async function restorePanelsPhase(
                 // Rebase the reconnected PTY's live (old-path) cwd onto the
                 // moved worktree's new root, like the matched-backend path.
                 rebaseMovedArgsCwd(reconnectArgs, movedRootsById.get(saved.id));
+                reconnectArgs.initialTerminalGeometry = resolveRestoreGeometry(
+                  reconnectedTerminal,
+                  terminalSizes,
+                  saved.id
+                );
                 const restoredTerminalId = await addPanel(reconnectArgs);
                 restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
@@ -717,23 +776,6 @@ export async function restorePanelsPhase(
                     restoredTerminalId,
                     reconnectedTerminal.activityTier
                   );
-                }
-
-                if (terminalSizes && typeof terminalSizes === "object") {
-                  const savedSize = terminalSizes[restoredTerminalId];
-                  if (
-                    savedSize &&
-                    Number.isFinite(savedSize.cols) &&
-                    Number.isFinite(savedSize.rows) &&
-                    savedSize.cols > 0 &&
-                    savedSize.rows > 0
-                  ) {
-                    terminalInstanceService.setTargetSize(
-                      restoredTerminalId,
-                      savedSize.cols,
-                      savedSize.rows
-                    );
-                  }
                 }
 
                 restoreTasks.push({
@@ -772,6 +814,16 @@ export async function restorePanelsPhase(
                 // respawn's cwd pointing at a directory that still exists.
                 respawnArgs.worktreeId = await resolveRestoredWorktreeId(respawnArgs.worktreeId);
 
+                // A respawn boots a NEW PTY, so this also pairs the spawn: the
+                // renderer and the PTY start on one grid instead of the pane
+                // being seeded wide while the agent paints for 80 columns.
+                // Persisted-only by construction — the reconnect probe just
+                // told us there is no live PTY left to ask.
+                respawnArgs.initialTerminalGeometry = resolvePersistedGeometry(
+                  terminalSizes,
+                  saved.id
+                );
+
                 logHydrationInfo(
                   `Respawning PTY panel: ${saved.id} (${respawnArgs.launchAgentId ? "agent" : "terminal"})`
                 );
@@ -788,23 +840,6 @@ export async function restorePanelsPhase(
 
                 const restoredTerminalId = await addPanel(respawnArgs);
                 restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
-
-                if (terminalSizes && typeof terminalSizes === "object") {
-                  const savedSize = terminalSizes[saved.id] || terminalSizes[restoredTerminalId];
-                  if (
-                    savedSize &&
-                    Number.isFinite(savedSize.cols) &&
-                    Number.isFinite(savedSize.rows) &&
-                    savedSize.cols > 0 &&
-                    savedSize.rows > 0
-                  ) {
-                    terminalInstanceService.setTargetSize(
-                      restoredTerminalId,
-                      savedSize.cols,
-                      savedSize.rows
-                    );
-                  }
-                }
               }
             } else {
               // Unregistered kind. Restore when the panel carries a
@@ -1004,27 +1039,19 @@ export async function restorePanelsPhase(
           orphanArgs.worktreeId = effectiveActiveWorktreeId;
           orphanArgs.worktreeIdSource = "inferred";
         }
+        // Same prewarm-before-target ordering as the saved-panel paths, and an
+        // orphan can land in a worktree that is not the selected one. An orphan
+        // is by definition a LIVE backend terminal, so its PTY grid is available
+        // and authoritative.
+        orphanArgs.initialTerminalGeometry = resolveRestoreGeometry(
+          terminal,
+          terminalSizes,
+          terminal.id
+        );
         const restoredTerminalId = await addPanel(orphanArgs);
 
         if (terminal.activityTier) {
           terminalInstanceService.initializeBackendTier(restoredTerminalId, terminal.activityTier);
-        }
-
-        if (terminalSizes && typeof terminalSizes === "object") {
-          const savedSize = terminalSizes[restoredTerminalId];
-          if (
-            savedSize &&
-            Number.isFinite(savedSize.cols) &&
-            Number.isFinite(savedSize.rows) &&
-            savedSize.cols > 0 &&
-            savedSize.rows > 0
-          ) {
-            terminalInstanceService.setTargetSize(
-              restoredTerminalId,
-              savedSize.cols,
-              savedSize.rows
-            );
-          }
         }
 
         restoreTasks.push({

@@ -1,5 +1,6 @@
 import {
   Suspense,
+  lazy,
   useRef,
   useState,
   useEffect,
@@ -15,7 +16,6 @@ import {
   CircleDot,
   PanelLeftOpen,
   PanelLeftClose,
-  Check,
   ChevronsUpDown,
   MonitorPlay,
   Ellipsis,
@@ -30,20 +30,27 @@ import {
 import { Spinner } from "@/components/ui/Spinner";
 import { FolderTree, Folders } from "@/components/icons";
 import { buildPluginToolbarMeta } from "./pluginToolbarMeta";
-import { TOOLBAR_BUTTON_METADATA, isToolbarButtonVisible } from "./toolbarButtonMetadata";
+import {
+  TOOLBAR_BUTTON_METADATA,
+  getToolbarButtonGroup,
+  isToolbarButtonVisible,
+} from "./toolbarButtonMetadata";
+import { getToolbarDividerAfterIds, orderToolbarButtonsByGroup } from "./toolbarButtonGrouping";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { cn } from "@/lib/utils";
-import { shortcutHintStore } from "@/store/shortcutHintStore";
 import { isMac, isLinux, isWindows } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
-import { AgentTrayButton, deriveAgentDominantStates } from "./AgentTrayButton";
 import {
   PluginToolbarButton,
   PluginTrayButton,
   groupPluginToolbarButtons,
   type PluginTrayGroup,
 } from "./PluginTrayButton";
+import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
+import { deriveAgentDominantStates } from "@/lib/agentDominantStates";
+import { DockLaunchButton } from "./DockLaunchButton";
+import { useLauncherData } from "./useLauncherData";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { resolvePluginIcon } from "@/components/icons/pluginIconRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -83,7 +90,7 @@ import { activeWorkspaceIdentity, branchChipState } from "@/lib/workspaceIdentit
 import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
-import type { ToolbarButtonId, AnyToolbarButtonId } from "@/../../shared/types/toolbar";
+import type { AnyToolbarButtonId } from "@/../../shared/types/toolbar";
 import { usePluginToolbarButtons } from "@/hooks/usePluginToolbarButtons";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -95,9 +102,11 @@ import { notify } from "@/lib/notify";
 import type { CliAvailability, AgentSettings, AgentState } from "@shared/types";
 import { isGitBackedProject } from "@shared/types";
 import type { ForgeRepositoryStats } from "@shared/types/ipc/forge";
-import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
+import { isAgentPinned, isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
+import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
+import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
 import { LazyProjectSwitcherPalette } from "@/lazyPanels";
 import { ProjectIdentityEditor } from "@/components/Project/ProjectIdentityEditor";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
@@ -113,17 +122,32 @@ import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
 import { useOverflowBadgeSeverity, type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
+import { FixedDropdown } from "@/components/ui/fixed-dropdown";
+import {
+  isInsideCopyTreePanel,
+  restoreCopyTreeTriggerFocus,
+} from "@/components/CopyTree/copyTreeFocus";
+import { useCopyTreeCompletionNotice } from "@/hooks/useCopyTreeCompletionNotice";
+import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
+import type { CopyTreeHistoryRecord } from "@shared/types";
 
-import { LAUNCHABLE_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
+import {
+  LAUNCHABLE_AGENT_IDS,
+  isBuiltInAgentId,
+  type BuiltInAgentId,
+} from "@shared/config/agentIds";
 
-const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
-  "agent-tray",
-  ...(LAUNCHABLE_AGENT_IDS as unknown as ToolbarButtonId[]),
-]);
+function preloadCopyTreeRecentsPanel() {
+  return import("@/components/CopyTree/CopyTreeRecentsPanel");
+}
+const LazyCopyTreeRecentsPanel = lazy(() =>
+  preloadCopyTreeRecentsPanel().then((m) => ({ default: m.CopyTreeRecentsPanel }))
+);
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
+
 // These controls are project-only visually, but their no-drag rectangles must
 // exist on first paint so secondary windows don't cache them as titlebar drag.
 const PROJECT_SCOPED_TOOLBAR_IDS = new Set<AnyToolbarButtonId>(["dev-server", "forge-stats"]);
@@ -136,11 +160,6 @@ const PROJECT_SCOPED_TOOLBAR_IDS = new Set<AnyToolbarButtonId>(["dev-server", "f
 // should be added here.
 const VOICE_RECORDING_PINNED: ReadonlySet<AnyToolbarButtonId> = new Set(["voice-recording"]);
 const NO_PINNED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
-
-// How long the copy-tree button shows the green "context copied" feedback
-// before reverting to its idle state. Long enough to register the success,
-// short enough that re-clicks don't feel stuck.
-const COPY_TREE_FEEDBACK_RESET_MS = 2000;
 
 function ForgeStatsPlaceholder() {
   return (
@@ -189,6 +208,14 @@ interface OverflowMenuProps {
   // overflows, its dropdown is unreachable, so the overflow menu inlines these
   // groups instead — an un-promoted contribution has no other toolbar route.
   pluginTrayGroups: PluginTrayGroup[];
+  // Launchable agent ids, in the launcher's own order. When `launcher` itself
+  // overflows its dropdown is unreachable, so the overflow menu inlines these
+  // alongside the panels — since #11680 an unpinned agent has no other toolbar
+  // route.
+  launcherAgentIds: BuiltInAgentId[];
+  // Per-item availability for the inlined launcher panel rows, mirroring the
+  // gates the launcher applies to its own rows.
+  panelTrayDisabled: Partial<Record<string, boolean>>;
   // Shortcut display strings keyed by toolbar button id, so each overflow item
   // shows the same hint its visible button does (issue #9821).
   shortcutById: Partial<Record<string, string | null>>;
@@ -213,9 +240,15 @@ function OverflowMenu({
   overflowActions,
   pluginOverflowMeta,
   pluginTrayGroups,
+  launcherAgentIds,
+  panelTrayDisabled,
   shortcutById,
 }: OverflowMenuProps) {
   const [open, setOpen] = useState(false);
+  // Read here rather than threaded through props: the overflow copy-tree item
+  // mirrors the visible button's disabled states, and in-flight copies can
+  // start from routes that never touch this menu (MCP, Cmd+Shift+C).
+  const isCopyingTree = useCopyTreeRunStore((s) => s.activeRunCount > 0);
   // Snapshot of the repo stats taken when the menu opens. The stats live in
   // ForgeStatsToolbarButton's hook and are exposed through its imperative
   // handle, so they can't be read during render (refs aren't reactive — the
@@ -387,6 +420,65 @@ function OverflowMenu({
               ...(isLast ? [] : [<DropdownMenuSeparator key="plugin-tray-sep" />]),
             ];
           }
+          if (id === "launcher") {
+            // Same reason as `plugin-tray` above: the launcher's dropdown can't
+            // be opened from inside this menu, and since #11680 neither the
+            // agents nor `browser`/`dev-server` have a top-level button of their
+            // own on a fresh profile — so a bare row here would dismiss the menu
+            // and open nothing. That is what `agent-tray` did before the merge:
+            // it had no case at all and no `overflowActions` entry, leaving a
+            // silently dead row. Pins and shortcut editing are omitted:
+            // promoting a button while the toolbar is too narrow to show it has
+            // nothing to reveal.
+            //
+            // Items that already carry their own overflow row are skipped: a
+            // grandfathered profile keeps its agent and `browser`/`dev-server`
+            // buttons, and when those overflow alongside the launcher the
+            // generic rows below already offer them. Inlining anyway would put
+            // two identically labelled rows in one menu.
+            const inlinedAgents = launcherAgentIds.filter(
+              (agentId) => !overflowIds.includes(agentId) && OVERFLOW_MENU_META[agentId]
+            );
+            const inlinedPanels = LAUNCHER_PANEL_ITEMS.filter(
+              (item) => !overflowIds.includes(item.id)
+            );
+            if (inlinedAgents.length === 0 && inlinedPanels.length === 0) return [];
+            const isLast = idx === overflowIds.length - 1;
+            return [
+              ...inlinedAgents.map((agentId) => {
+                const agentMeta = OVERFLOW_MENU_META[agentId]!;
+                const dominantState = agentDominantStates.get(agentId) ?? null;
+                const dotColor = dominantState ? agentStateDotColor(dominantState) : null;
+                return (
+                  <AgentOverflowItem
+                    key={`launcher-${agentId}`}
+                    id={agentId}
+                    label={agentMeta.label}
+                    Icon={agentMeta.icon}
+                    dotColor={dotColor}
+                    onSelect={() => overflowActions[agentId]?.()}
+                  />
+                );
+              }),
+              ...inlinedPanels.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <DropdownMenuItem
+                    key={`launcher-${item.id}`}
+                    disabled={panelTrayDisabled[item.id]}
+                    onClick={() => overflowActions[item.id]?.()}
+                  >
+                    <Icon className="mr-2 h-3.5 w-3.5" />
+                    <span className="flex-1">{item.label}</span>
+                    {shortcutById[item.id] && (
+                      <DropdownMenuShortcut>{shortcutById[item.id]}</DropdownMenuShortcut>
+                    )}
+                  </DropdownMenuItem>
+                );
+              }),
+              ...(isLast ? [] : [<DropdownMenuSeparator key="launcher-sep" />]),
+            ];
+          }
           const meta = OVERFLOW_MENU_META[id] ?? pluginOverflowMeta[id];
           if (!meta) return [];
           if (isBuiltInAgentId(id)) {
@@ -405,10 +497,12 @@ function OverflowMenu({
           }
           const Icon = meta.icon;
           const shortcut = shortcutById[id];
-          // Mirror the visible copy-tree button, which is aria-disabled with an
-          // "Open a worktree first" tooltip when no worktree is active — without
-          // this the overflow item would silently close with no feedback.
-          const disabled = id === "copy-tree" && !hasActiveWorktree;
+          // Mirror the visible copy-tree button, which is aria-disabled both
+          // when no worktree is active ("Open a worktree first" tooltip) and
+          // while a copy is in flight — without this the overflow item would
+          // look live yet silently close with no feedback, since its handler
+          // guards on the same two conditions.
+          const disabled = id === "copy-tree" && (!hasActiveWorktree || isCopyingTree);
           return [
             <DropdownMenuItem key={id} disabled={disabled} onClick={() => overflowActions[id]?.()}>
               <Icon className="mr-2 h-3.5 w-3.5" />
@@ -519,7 +613,7 @@ export function Toolbar({
   // composite map (would risk the selector-identity churn of lesson #3730).
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
   // Per-agent dominant state across panels in the active worktree, used to draw
-  // the agent-state dot on overflow menu items. Shares AgentTrayButton's
+  // the agent-state dot on overflow menu items. Shares the launcher's
   // derivation so the overflow dot matches the visible agent button; computed
   // inside useShallow so agent ticks that don't change a dominant state don't
   // re-render the whole toolbar (issue #7451 pattern).
@@ -559,7 +653,8 @@ export function Toolbar({
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
-  // Live subscription so pin/unpin toggles from the AgentTrayButton immediately
+  const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
+  // Live subscription so pin/unpin toggles from the launcher immediately
   // update per-agent toolbar button visibility. The `agentSettings` prop is
   // sourced from `useAgentLauncher()`'s local useState which does not react to
   // store mutations, so we prefer the store value when available.
@@ -567,11 +662,32 @@ export function Toolbar({
   const effectiveAgentSettings = liveAgentSettings ?? agentSettings;
 
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [treeCopied, setTreeCopied] = useState(false);
-  const [isCopyingTree, setIsCopyingTree] = useState(false);
+  // Store-derived rather than local click state so every clipboard copy spins
+  // the button — an MCP or assistant dispatch runs the same bracketed actions
+  // a click does, and this button is the one place that work is visible.
+  const isCopyingTree = useCopyTreeRunStore((s) => s.activeRunCount > 0);
   const showCopyingSpinner = useDohertyGate(isCopyingTree);
-  const [copyFeedback, setCopyFeedback] = useState<string>("");
-  const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The tooltip's ordinary hover state — the Radix root is controlled with the
+  // union of this and the completion notice below, so a completion can force
+  // it open while hover keeps working through onOpenChange.
+  const [copyTreeTooltipHovered, setCopyTreeTooltipHovered] = useState(false);
+  // Local to the toolbar — the panel has no palette entry or action of its own,
+  // so nothing outside this component needs to open it (#11733).
+  const [copyTreeOpen, setCopyTreeOpen] = useState(false);
+  const copyTreeButtonRef = useRef<HTMLButtonElement>(null);
+  // Completion feedback for clipboard copies: the action layer announces every
+  // finished copy (announceCopyTreeCopy) and this hook's presenter pins it to
+  // the button as a short-lived tooltip, with a toast fallback whenever the
+  // button can't anchor one. Suppressed while the recents panel is open — both
+  // portal to the same anchor, and an MCP completion landing mid-browse would
+  // stack the tooltip on the panel.
+  const {
+    notice: copyTreeNotice,
+    announcement: copyTreeAnnouncement,
+    clearNotice: clearCopyTreeNotice,
+  } = useCopyTreeCompletionNotice(copyTreeButtonRef, { suppress: copyTreeOpen });
+  // Latch after first open so reopening never re-suspends.
+  const copyTreePanelMounted = useKeepMounted(copyTreeOpen);
 
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
@@ -595,7 +711,7 @@ export function Toolbar({
   const prevFocusedToolbarItemRef = useRef<HTMLElement | null>(null);
   const forgeStatsRef = useRef<ForgeStatsHandle>(null);
 
-  const { handleCopyTree } = useWorktreeActions();
+  const { handleCopyTree, handleCopyTreeWithOptions } = useWorktreeActions();
   const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
   const copyTreeShortcut = useKeybindingDisplay("worktree.copyTree");
   const devServerShortcut = useKeybindingDisplay("devServer.start");
@@ -606,15 +722,19 @@ export function Toolbar({
   const problemsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
   const terminalShortcut = useKeybindingDisplay("agent.terminal");
   const browserShortcut = useKeybindingDisplay("agent.browser");
-  const fileBrowserShortcut = useKeybindingDisplay("worktree.openFileBrowser");
+  const fileBrowserShortcut = useKeybindingDisplay("worktree.openFileBrowserPanel");
   const sidebarAriaShortcut = useAriaKeyshortcuts("nav.toggleSidebar");
   const copyTreeAriaShortcut = useAriaKeyshortcuts("worktree.copyTree");
-  const fileBrowserAriaShortcut = useAriaKeyshortcuts("worktree.openFileBrowser");
+  const fileBrowserAriaShortcut = useAriaKeyshortcuts("worktree.openFileBrowserPanel");
 
   const sidebarHintHover = useShortcutHintHover("nav.toggleSidebar");
   const devServerHintHover = useShortcutHintHover("devServer.start");
-  const copyTreeHintHover = useShortcutHintHover("worktree.copyTree");
-  const fileBrowserHintHover = useShortcutHintHover("worktree.openFileBrowser");
+  // No hover hint for copy-tree: the action sets `suppressShortcutHint`, and
+  // per that field's contract an opted-out button skips this hook too — the
+  // hover path teaches the same hint the dispatch path was opted out of, and an
+  // already-shown one isn't dismissed by the click, so it would sit beside the
+  // completion toast in the same corner. The tooltip still shows the shortcut.
+  const fileBrowserHintHover = useShortcutHintHover("worktree.openFileBrowserPanel");
 
   // The one launcher button whose action can legitimately refuse: it resolves
   // its own target (focused worktree, else the project or scratch root), and a
@@ -624,17 +744,45 @@ export function Toolbar({
   // A named function expression so the retry action can name itself.
   const openFileBrowser = useCallback(function openFileBrowser() {
     void actionService
-      .dispatch("worktree.openFileBrowser", undefined, { source: "user" })
+      .dispatch("worktree.openFileBrowserPanel", undefined, { source: "user" })
       .then((result) => {
         if (result.ok) return;
+        // A full grid is the one refusal `addPanel` has already reported, with
+        // an accurate message and the actual recovery. Saying "no folder
+        // resolved" on top of it would name the wrong cause (#11666).
+        if (isPanelLimitError(result.error.message)) return;
         notify({
           type: "error",
           title: "Couldn't open the file browser",
           message: "No folder resolved for this workspace. Select a worktree and try again.",
+          // `uiFeedback` is a passive kind that resolves to `priority: "low"`
+          // (inbox only), which would leave this refusal — and its Retry — with
+          // no visible signal at all.
+          priority: "high",
           context: { eventKind: "uiFeedback" },
           action: { label: "Retry", onClick: openFileBrowser },
         });
       });
+  }, []);
+
+  // The shared launcher's own inventory and workspace context (#11691). The
+  // toolbar had none of this before — its launcher owned every store read
+  // itself — so it comes from the same hook the dock uses.
+  const launcherData = useLauncherData();
+
+  // Agents launched from the toolbar keep going through `agent.launch` with no
+  // location override, so they land where they always have. The dock's copy of
+  // the launcher passes its own callback and keeps landing in the dock — the
+  // shared component decides how a row looks, never where it opens.
+  const launchAgentFromToolbar = useCallback((agentId: string, presetId?: string | null) => {
+    void actionService.dispatch(
+      "agent.launch",
+      // `null` is the explicit-default sentinel and must survive into the
+      // payload; `undefined` must leave the key off so the saved preset still
+      // resolves. A `!= null` test here would collapse the two.
+      { agentId, ...(presetId !== undefined ? { presetId } : {}) },
+      { source: "user" }
+    );
   }, []);
 
   const handleOpenProjectSettings = useCallback(() => {
@@ -698,66 +846,80 @@ export function Toolbar({
     return window.electron.window.onFullscreenChange(setIsFullscreen);
   }, []);
 
-  useEffect(() => {
-    return () => {
-      if (treeCopyTimeoutRef.current) {
-        clearTimeout(treeCopyTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  // Promise-method cleanup instead of try/finally: a statement-level finally
-  // clause bails React Compiler memoization for the whole Toolbar component.
+  // Feedback is owned by the action layer, not inline state here: the
+  // `worktree.copyTree` action brackets the shared run store (which drives the
+  // spinner above) and announces its completion through the button's transient
+  // tooltip, so every route — this handler, the overflow item, Cmd+Shift+C,
+  // the palette, MCP — reports identically (#11735). This handler only guards
+  // and dispatches.
   const handleCopyTreeClick = useCallback(() => {
     if (isCopyingTree || !activeWorktree) return;
-
-    setIsCopyingTree(true);
-
-    return handleCopyTree(activeWorktree)
-      .then((resultMessage) => {
-        if (!resultMessage) return;
-        setTreeCopied(true);
-        setCopyFeedback(resultMessage);
-        shortcutHintStore.getState().hide();
-
-        if (treeCopyTimeoutRef.current) {
-          clearTimeout(treeCopyTimeoutRef.current);
-        }
-
-        treeCopyTimeoutRef.current = setTimeout(() => {
-          setTreeCopied(false);
-          setCopyFeedback("");
-          treeCopyTimeoutRef.current = null;
-        }, COPY_TREE_FEEDBACK_RESET_MS);
-      })
-      .finally(() => {
-        setIsCopyingTree(false);
-      });
+    return handleCopyTree(activeWorktree, "toolbar");
   }, [isCopyingTree, activeWorktree, handleCopyTree]);
 
-  // Copy-tree invoked from the overflow menu. The visible toolbar button shows
-  // inline green-tick feedback, but that button is hidden when copy-tree is in
-  // overflow — so the overflow path surfaces a transient success toast instead
-  // (issue #9821). `transient: true` keeps it out of the inbox: the result is
-  // already on the clipboard, so no durable record is warranted.
-  const handleCopyTreeOverflow = useCallback(() => {
+  // Warm the panel chunk before the first click — React 19 `lazy` still shows
+  // the fallback for one frame on a cold chunk, and this dropdown's whole point
+  // is that the copy is one click deeper than it used to be.
+  useEffect(() => {
+    void preloadCopyTreeRecentsPanel();
+  }, []);
+
+  // Close and hand focus back to the trigger, but only when closing would
+  // otherwise strand it — an outside click has already moved focus somewhere the
+  // user chose, and yanking it back to the toolbar would fight that. The
+  // deferred-frame reasoning lives with the helper.
+  const closeCopyTreePanel = useCallback(() => {
+    setCopyTreeOpen(false);
+    restoreCopyTreeTriggerFocus(copyTreeButtonRef.current);
+  }, []);
+
+  // The visible button opens the panel; it no longer copies. Every immediate
+  // route is deliberately left alone: `Cmd+Shift+C` dispatches
+  // `worktree.copyTree` without passing through here at all, and the overflow
+  // item calls `handleCopyTreeClick` directly — a nested panel inside the
+  // overflow menu isn't worth it (#11733).
+  //
+  // The in-flight check matches what the button already announces: it renders
+  // `aria-disabled` while copying, and the shared Button doesn't suppress
+  // clicks on that alone, so without this the "disabled" trigger still opens a
+  // panel whose rows would all decline to run.
+  const handleCopyTreeToggle = useCallback(() => {
     if (isCopyingTree || !activeWorktree) return;
-    setIsCopyingTree(true);
-    return handleCopyTree(activeWorktree)
-      .then((resultMessage) => {
-        if (!resultMessage) return;
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "success",
-          title: "Context copied",
-          message: resultMessage,
-          transient: true,
-        });
-      })
-      .finally(() => {
-        setIsCopyingTree(false);
-      });
-  }, [isCopyingTree, activeWorktree, handleCopyTree]);
+    // A lingering completion tooltip and the opening panel would anchor to the
+    // same button; the click is also an acknowledgement of the notice.
+    clearCopyTreeNotice();
+    setCopyTreeOpen((open) => !open);
+  }, [isCopyingTree, activeWorktree, clearCopyTreeNotice]);
+
+  // The panel's primary row: the old one-click behavior, now one click deeper.
+  const handleCopyTreeFullContext = useCallback(() => {
+    closeCopyTreePanel();
+    void handleCopyTreeClick();
+  }, [closeCopyTreePanel, handleCopyTreeClick]);
+
+  // A recents row. Replayed against the ACTIVE worktree, never the worktree
+  // stored on the record — the history dedupe key covers options alone, so a
+  // record's worktree is whichever one ran it last rather than a stable target,
+  // and it may name a worktree that has since been removed.
+  const handleCopyTreeRunRecent = useCallback(
+    (record: CopyTreeHistoryRecord) => {
+      closeCopyTreePanel();
+      if (isCopyingTree || !activeWorktree) return;
+      void handleCopyTreeWithOptions(activeWorktree, record.options, "toolbar");
+    },
+    [closeCopyTreePanel, isCopyingTree, activeWorktree, handleCopyTreeWithOptions]
+  );
+
+  // The anchor stops being interactive without a worktree or while a copy is
+  // in flight (it renders aria-disabled for both), and the panel's rows decline
+  // in both states — leaving it open would strand a dead menu over the toolbar.
+  // The in-flight half matters because copies start without the trigger: MCP
+  // and assistant dispatches, Cmd+Shift+C, and the palette can all begin one
+  // while the panel is open. `closeCopyTreePanel` rather than a bare state
+  // flip so focus stranded inside the closing panel returns to the trigger.
+  useEffect(() => {
+    if ((!activeWorktree || isCopyingTree) && copyTreeOpen) closeCopyTreePanel();
+  }, [activeWorktree, isCopyingTree, copyTreeOpen, closeCopyTreePanel]);
 
   const getToolbarItems = useCallback(
     () =>
@@ -918,11 +1080,22 @@ export function Toolbar({
         ),
         isAvailable: true,
       },
-      "agent-tray": {
+      launcher: {
+        // Always available, unlike the plugin tray: its inventory is fixed, so
+        // there is no empty state. Individual rows gate themselves instead.
         render: () => (
-          <AgentTrayButton
-            key="agent-tray"
-            agentAvailability={agentAvailability}
+          <DockLaunchButton
+            key="launcher"
+            placement="toolbar"
+            agents={launcherData.agents}
+            pinnedCount={launcherData.pinnedCount}
+            agentInventoryState={launcherData.agentInventoryState}
+            hasWorkspace={launcherData.hasWorkspace}
+            hasProject={launcherData.hasProject}
+            activeWorktreeId={launcherData.activeWorktreeId}
+            cwd={launcherData.cwd}
+            recipeContext={launcherData.recipeContext}
+            onLaunchAgent={launchAgentFromToolbar}
             data-toolbar-item=""
           />
         ),
@@ -1085,50 +1258,99 @@ export function Toolbar({
       },
       "copy-tree": {
         render: () => (
-          <ContextMenu>
-            <ContextMenuTrigger asChild>
-              <Tooltip open={treeCopied || undefined}>
-                <TooltipTrigger asChild>
-                  <Button
-                    {...copyTreeHintHover}
-                    variant="ghost"
-                    size="icon"
-                    data-toolbar-item=""
-                    onClick={handleCopyTreeClick}
-                    aria-disabled={isCopyingTree || !activeWorktree || undefined}
-                    className={cn(
-                      "toolbar-icon-button relative",
-                      treeCopied ? "text-status-success" : "text-daintree-text",
-                      isCopyingTree && "cursor-wait opacity-70",
-                      "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+          <div className="relative">
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                {/* Controlled union: hover opens through onOpenChange as
+                    normal, while a completion notice forces the tooltip open
+                    for its short display window — the whole feedback for a
+                    finished copy, in place of a toast. Close requests clear
+                    the notice too, so Escape, a click, and the shared
+                    dialog-transition dismissal can end the window early
+                    instead of being overridden by the forced half of the
+                    union. The shared auto-dismiss is off while a notice is up:
+                    its timer arms on the open transition, so a completion that
+                    lands mid-hover would inherit whatever's left of the hover
+                    window instead of getting the notice's own. Hover-only opens
+                    keep the shared window. */}
+                <Tooltip
+                  autoDismiss={copyTreeNotice === null}
+                  open={copyTreeTooltipHovered || copyTreeNotice !== null}
+                  onOpenChange={(open) => {
+                    setCopyTreeTooltipHovered(open);
+                    if (!open) clearCopyTreeNotice();
+                  }}
+                >
+                  <TooltipTrigger asChild>
+                    <Button
+                      ref={copyTreeButtonRef}
+                      variant="ghost"
+                      size="icon"
+                      data-toolbar-item=""
+                      onClick={handleCopyTreeToggle}
+                      aria-disabled={isCopyingTree || !activeWorktree || undefined}
+                      className={cn(
+                        "toolbar-icon-button relative",
+                        "text-daintree-text",
+                        isCopyingTree && "cursor-wait opacity-70",
+                        "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                      )}
+                      aria-label={isCopyingTree ? "Copying…" : "Copy context"}
+                      aria-keyshortcuts={copyTreeAriaShortcut}
+                      aria-haspopup="dialog"
+                      aria-expanded={copyTreeOpen}
+                    >
+                      {showCopyingSpinner ? <Spinner /> : <Folders />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="font-medium">
+                    {copyTreeNotice ? (
+                      <span className="flex flex-col gap-0.5">
+                        <span>{copyTreeNotice.title}</span>
+                        <span className="font-normal text-daintree-text/60">
+                          {copyTreeNotice.message}
+                        </span>
+                      </span>
+                    ) : isCopyingTree ? (
+                      "Copying…"
+                    ) : !activeWorktree ? (
+                      "Open a worktree first"
+                    ) : (
+                      createTooltipContent("Copy context", copyTreeShortcut)
                     )}
-                    aria-label={
-                      isCopyingTree ? "Copying…" : treeCopied ? "Context copied" : "Copy context"
-                    }
-                    aria-keyshortcuts={copyTreeAriaShortcut}
-                  >
-                    {showCopyingSpinner ? <Spinner /> : treeCopied ? <Check /> : <Folders />}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="font-medium">
-                  {isCopyingTree ? (
-                    "Copying…"
-                  ) : treeCopied ? (
-                    <span role="status" aria-live="polite">
-                      {copyFeedback}
-                    </span>
-                  ) : !activeWorktree ? (
-                    "Open a worktree first"
-                  ) : (
-                    createTooltipContent("Copy context", copyTreeShortcut)
-                  )}
-                </TooltipContent>
-              </Tooltip>
-            </ContextMenuTrigger>
-            <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-              <ToolbarContextMenuItems buttonId="copy-tree" side="right" />
-            </ContextMenuContent>
-          </ContextMenu>
+                  </TooltipContent>
+                </Tooltip>
+              </ContextMenuTrigger>
+              <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                <ToolbarContextMenuItems buttonId="copy-tree" side="right" />
+              </ContextMenuContent>
+            </ContextMenu>
+            <FixedDropdown
+              open={copyTreeOpen}
+              onOpenChange={(open) => {
+                if (!open) closeCopyTreePanel();
+              }}
+              anchorRef={copyTreeButtonRef}
+              className="p-0"
+            >
+              {copyTreePanelMounted && (
+                <Suspense fallback={null}>
+                  <LazyCopyTreeRecentsPanel
+                    onCopyFullContext={handleCopyTreeFullContext}
+                    onRunRecent={handleCopyTreeRunRecent}
+                  />
+                </Suspense>
+              )}
+            </FixedDropdown>
+            {/* The toast this tooltip replaced was announced by assistive
+                tech; a forced-open tooltip isn't, so the notice is mirrored
+                into a live region. The hook toggles a zero-width space onto
+                identical back-to-back completions so the second overwrite
+                still announces. */}
+            <span role="status" className="sr-only">
+              {copyTreeAnnouncement}
+            </span>
+          </div>
         ),
         isAvailable: true,
       },
@@ -1213,19 +1435,27 @@ export function Toolbar({
       agentAvailability,
       effectiveAgentSettings,
       onLaunchAgent,
+      launcherData,
+      launchAgentFromToolbar,
       sidebarShortcut,
       sidebarAriaShortcut,
       sidebarHintHover,
       copyTreeShortcut,
       copyTreeAriaShortcut,
-      copyTreeHintHover,
       currentProject,
-      handleCopyTreeClick,
+      handleCopyTreeToggle,
+      handleCopyTreeFullContext,
+      handleCopyTreeRunRecent,
+      closeCopyTreePanel,
+      copyTreeOpen,
+      copyTreePanelMounted,
+      copyTreeNotice,
+      copyTreeAnnouncement,
+      copyTreeTooltipHovered,
+      clearCopyTreeNotice,
       isCopyingTree,
       showCopyingSpinner,
       activeWorktree,
-      treeCopied,
-      copyFeedback,
       onSettings,
       onPreloadSettings,
       onToggleProblems,
@@ -1247,12 +1477,81 @@ export function Toolbar({
 
   const pinnedButtons = toolbarLayout.pinnedButtons;
 
-  const effectiveLeftButtons = useMemo(
-    () =>
-      // Dedupe defensively so a persisted list holding a repeated id never
-      // renders duplicate pills (#10937) — the store also heals this, this is
-      // belt-and-suspenders at the render boundary.
-      Array.from(new Set(toolbarLayout.leftButtons)).filter((id) =>
+  // An agent the user explicitly pinned but that sits in neither side array
+  // still has to render (#11680). Two ways to get here, and neither can be
+  // repaired in the store's `merge()` — the pin lives in `agentSettingsStore`,
+  // which loads asynchronously over IPC and isn't readable at toolbar-store
+  // hydration:
+  //   - a genuinely fresh profile, where `buildInitialAgentPinUpdates` stamps
+  //     `pinned: true` for the first few installed agents before the user has
+  //     ever touched the toolbar;
+  //   - a stale sibling project view overwriting the orderings, which reconcile
+  //     last-writer-wins and so drop a position another view just wrote (the
+  //     same window `restorePromotedPanelButtons` covers for panels).
+  // `isAgentPinned`, not `isAgentToolbarVisible`: only an explicit `true` earns
+  // a slot here. Reading the tri-state's installed-means-visible fall-through
+  // would put every installed CLI back on the toolbar, which is the crowding
+  // this issue removed.
+  const unpositionedAgentPins = useMemo(() => {
+    const onEitherSide = new Set([...toolbarLayout.leftButtons, ...toolbarLayout.rightButtons]);
+    return LAUNCHABLE_AGENT_IDS.filter(
+      (id) => !onEitherSide.has(id) && isAgentPinned(effectiveAgentSettings?.agents?.[id])
+    );
+  }, [toolbarLayout.leftButtons, toolbarLayout.rightButtons, effectiveAgentSettings]);
+
+  // Materialize those positions once they're knowable, so the repair is a
+  // one-frame bridge rather than a permanent ghost. A rendered-but-unpositioned
+  // button is absent from Settings → Toolbar's sortable columns and inert to
+  // `moveButton`, which reads the arrays — the first-run seeding above would
+  // otherwise leave up to five agents that can never be reordered. The action
+  // no-ops when the id already holds a position, writes nothing to
+  // `pinnedButtons`, and converges under a concurrent sibling view. One batched
+  // call, not a call per id: every insert lands at the same index, so repairing
+  // the first-run seeding one agent at a time would persist them reversed
+  // against the order they just rendered in.
+  useEffect(() => {
+    if (unpositionedAgentPins.length > 0) positionAgentButton(unpositionedAgentPins);
+  }, [unpositionedAgentPins, positionAgentButton]);
+
+  // Whichever side the launcher is on — that is where the things pinned out of
+  // it belong. Splicing unconditionally into the left would strand them away
+  // from a launcher the user moved right.
+  const launcherOnRight =
+    toolbarLayout.rightButtons.includes("launcher") &&
+    !toolbarLayout.leftButtons.includes("launcher");
+
+  // Declared group per button, resolved against the live plugin registry so a
+  // contribution is classified by membership rather than by parsing its id.
+  const resolveToolbarGroup = useCallback(
+    (id: AnyToolbarButtonId) => getToolbarButtonGroup(id, pluginConfigs.has(id)),
+    [pluginConfigs]
+  );
+
+  const effectiveLeftButtons = useMemo(() => {
+    // Dedupe defensively so a persisted list holding a repeated id never
+    // renders duplicate pills (#10937) — the store also heals this, this is
+    // belt-and-suspenders at the render boundary.
+    const positioned = Array.from(new Set(toolbarLayout.leftButtons));
+
+    if (!launcherOnRight && unpositionedAgentPins.length > 0) {
+      // Right after the launcher they were pinned out of, so they lead the
+      // agent run in registry order rather than trailing the positioned ones.
+      // Grouping below is what keeps the brand marks contiguous; this only
+      // decides their order within that group.
+      const launcherIndex = positioned.indexOf("launcher");
+      positioned.splice(
+        launcherIndex === -1 ? positioned.length : launcherIndex + 1,
+        0,
+        ...unpositionedAgentPins
+      );
+    }
+
+    // Grouped, not persisted order (#11681): the divider marks a group
+    // boundary, so the groups have to actually be contiguous. Ordering here
+    // rather than at the render loop means overflow, keyboard roving, and the
+    // DOM all see the same canonical sequence.
+    return orderToolbarButtonsByGroup(
+      positioned.filter((id) =>
         isToolbarButtonVisible(
           id,
           pinnedButtons,
@@ -1261,19 +1560,31 @@ export function Toolbar({
           pluginConfigs.has(id)
         )
       ),
-    [
-      toolbarLayout.leftButtons,
-      pinnedButtons,
-      effectiveAgentSettings,
-      agentAvailability,
-      pluginConfigs,
-    ]
-  );
+      resolveToolbarGroup
+    );
+  }, [
+    toolbarLayout.leftButtons,
+    launcherOnRight,
+    unpositionedAgentPins,
+    pinnedButtons,
+    effectiveAgentSettings,
+    agentAvailability,
+    pluginConfigs,
+    resolveToolbarGroup,
+  ]);
 
   const effectiveRightButtons = useMemo(() => {
     // Dedupe the persisted base before appending plugin extras, so duplicate
     // ids (e.g. repeated `forge-stats`, #10937) can't render twice.
     const base = Array.from(new Set(toolbarLayout.rightButtons));
+    if (launcherOnRight && unpositionedAgentPins.length > 0) {
+      const launcherIndex = base.indexOf("launcher");
+      base.splice(
+        launcherIndex === -1 ? base.length : launcherIndex + 1,
+        0,
+        ...unpositionedAgentPins
+      );
+    }
     const positioned = new Set([...base, ...toolbarLayout.leftButtons]);
     // Only *promoted* contributions append — plugin buttons reach the user
     // through the tray by default now (#11304), so the pre-tray behavior of
@@ -1293,6 +1604,8 @@ export function Toolbar({
   }, [
     toolbarLayout.rightButtons,
     toolbarLayout.leftButtons,
+    launcherOnRight,
+    unpositionedAgentPins,
     pluginButtonIds,
     pinnedButtons,
     effectiveAgentSettings,
@@ -1366,6 +1679,27 @@ export function Toolbar({
     if (overflowSet.has("notification-center")) {
       useUIStore.getState().closeNotificationCenter();
     }
+    // The panel is portaled to document.body, so the wrapper's `invisible
+    // absolute` eviction styles never reach it — an open panel would strand on
+    // screen and then re-anchor to the hidden button's rect on the next resize.
+    if (overflowSet.has("copy-tree")) {
+      const focusWasInPanel = isInsideCopyTreePanel(document.activeElement);
+      setCopyTreeOpen(false);
+      // The anchor is on its way to being hidden, so it can't take focus back.
+      // The overflow trigger is where the command now lives, which makes it the
+      // honest destination — otherwise a keyboard user is dropped onto <body>.
+      // It has to be the trigger on the side that swallowed the button: the
+      // other one renders display:none and untabbable when its own side has no
+      // overflow, so focusing it would be the silent no-op this prevents.
+      if (focusWasInPanel) {
+        const side = rightOverflow.includes("copy-tree") ? "right" : "left";
+        toolbarRef.current
+          ?.querySelector<HTMLElement>(
+            `[data-toolbar-overflow-trigger][data-toolbar-overflow-side="${side}"][data-visible="true"]`
+          )
+          ?.focus();
+      }
+    }
   }, [leftOverflow, rightOverflow]);
 
   const renderButtons = (buttonIds: AnyToolbarButtonId[], visibleSet: Set<AnyToolbarButtonId>) => {
@@ -1394,10 +1728,17 @@ export function Toolbar({
     visibleSet: Set<AnyToolbarButtonId>
   ) => {
     const available = buttonIds.filter((id) => buttonRegistry[id]?.isAvailable);
-    const visible = available.filter((id) => visibleSet.has(id));
-    const elements: React.ReactNode[] = [];
+    // `buttonIds` arrives already grouped, so a divider belongs after every
+    // visible button whose declared group differs from the next visible one
+    // (#11681). Overflow-hidden buttons stay mounted for measurement but are
+    // excluded, so an evicted button never strands a divider.
+    const dividerAfter = getToolbarDividerAfterIds(
+      available,
+      (id) => visibleSet.has(id),
+      resolveToolbarGroup
+    );
 
-    // Render all available items (visible + hidden for measurement)
+    const elements: React.ReactNode[] = [];
     for (const id of available) {
       const isVisible = visibleSet.has(id);
       elements.push(
@@ -1413,32 +1754,13 @@ export function Toolbar({
           {buttonRegistry[id]!.render()}
         </div>
       );
-    }
-
-    // Insert group dividers between agent and non-agent visible items
-    const withDividers: React.ReactNode[] = [];
-    let visibleIdx = 0;
-    for (const el of elements) {
-      withDividers.push(el);
-      const key = (el as React.ReactElement).key as string;
-      if (visibleSet.has(key as AnyToolbarButtonId)) {
-        if (
-          visibleIdx < visible.length - 1 &&
-          AGENT_TOOLBAR_IDS.has(visible[visibleIdx] as ToolbarButtonId) !==
-            AGENT_TOOLBAR_IDS.has(visible[visibleIdx + 1] as ToolbarButtonId)
-        ) {
-          withDividers.push(
-            <div
-              key={`group-divider-${visibleIdx}`}
-              className={toolbarDividerClass}
-              aria-hidden="true"
-            />
-          );
-        }
-        visibleIdx++;
+      if (isVisible && dividerAfter.has(id)) {
+        elements.push(
+          <div key={`group-divider-${id}`} className={toolbarDividerClass} aria-hidden="true" />
+        );
       }
     }
-    return withDividers;
+    return elements;
   };
 
   const pluginTrayGroups = useMemo(
@@ -1465,7 +1787,7 @@ export function Toolbar({
         void actionService.dispatch("notifications.toggle", undefined, { source: "user" });
       },
       "copy-tree": () => {
-        void handleCopyTreeOverflow();
+        void handleCopyTreeClick();
       },
       "command-palette": () => {
         void actionService.dispatch("action.palette.open", undefined, { source: "user" });
@@ -1496,12 +1818,26 @@ export function Toolbar({
     [
       onLaunchAgent,
       openFileBrowser,
-      handleCopyTreeOverflow,
+      handleCopyTreeClick,
       onSettings,
       onToggleProblems,
       pluginButtonIds,
       pluginConfigs,
     ]
+  );
+
+  // Mirrors the launcher's own row gates so an inlined overflow row degrades
+  // the same way the launcher row does rather than silently opening nothing.
+  const panelTrayDisabled: Partial<Record<string, boolean>> = {
+    "file-browser": !hasWorkspace,
+    "dev-server": !currentProject,
+  };
+
+  // Same filter the launcher's own Launch section applies, so the rows the
+  // overflow menu inlines are exactly the rows the dropdown would have shown.
+  const launcherAgentIds = useMemo(
+    () => LAUNCHABLE_AGENT_IDS.filter((id) => isAgentLaunchable(agentAvailability?.[id])),
+    [agentAvailability]
   );
 
   const overflowShortcutById: Partial<Record<string, string | null>> = {
@@ -1535,6 +1871,8 @@ export function Toolbar({
       overflowActions={overflowActions}
       pluginOverflowMeta={pluginOverflowMeta}
       pluginTrayGroups={pluginTrayGroups}
+      launcherAgentIds={launcherAgentIds}
+      panelTrayDisabled={panelTrayDisabled}
       shortcutById={overflowShortcutById}
     />
   );

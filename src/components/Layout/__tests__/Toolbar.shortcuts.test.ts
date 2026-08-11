@@ -10,6 +10,10 @@ const LAUNCHER_BUTTON_PATH = path.resolve(__dirname, "../ToolbarLauncherButton.t
 const AGENT_BUTTON_PATH = path.resolve(__dirname, "../AgentButton.tsx");
 const VOICE_RECORDING_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
 const PLUGIN_TRAY_PATH = path.resolve(__dirname, "../PluginTrayButton.tsx");
+const COPY_TREE_ACTION_PATH = path.resolve(
+  __dirname,
+  "../../../services/actions/definitions/worktreeContextActions.ts"
+);
 const TOOLBAR_CSS_PATH = path.resolve(__dirname, "../../../styles/components/toolbar.css");
 
 describe("Toolbar shortcut tooltips — issue #3443", () => {
@@ -69,8 +73,8 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(source).toContain('useKeybindingDisplay("devServer.start")');
     });
 
-    it("uses dynamic hook for worktree.openFileBrowser", () => {
-      expect(source).toContain('useKeybindingDisplay("worktree.openFileBrowser")');
+    it("uses dynamic hook for worktree.openFileBrowserPanel", () => {
+      expect(source).toContain('useKeybindingDisplay("worktree.openFileBrowserPanel")');
     });
   });
 
@@ -79,8 +83,8 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       // The three-hook set every shortcut-bearing toolbar button carries: the
       // tooltip display string, the aria-keyshortcuts value for screen readers,
       // and the press-and-hold hover hint.
-      expect(source).toContain('useAriaKeyshortcuts("worktree.openFileBrowser")');
-      expect(source).toContain('useShortcutHintHover("worktree.openFileBrowser")');
+      expect(source).toContain('useAriaKeyshortcuts("worktree.openFileBrowserPanel")');
+      expect(source).toContain('useShortcutHintHover("worktree.openFileBrowserPanel")');
       expect(source).toContain("aria-keyshortcuts={fileBrowserAriaShortcut}");
       // Spread conditionally since #11499: with no workspace the action can
       // resolve no folder, so the button degrades to aria-disabled and the
@@ -210,31 +214,138 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(source).toContain("const showCopyingSpinner = useDohertyGate(isCopyingTree);");
     });
 
-    it("renders the spinner glyph gated on showCopyingSpinner, not raw isCopyingTree", () => {
-      expect(source).toContain(
-        "{showCopyingSpinner ? <Spinner /> : treeCopied ? <Check /> : <Folders />}"
-      );
-      expect(source).not.toContain(
-        "{isCopyingTree ? <Spinner /> : treeCopied ? <Check /> : <Folders />}"
-      );
-    });
-
-    it("uses sentence-case 'Context copied' aria-label", () => {
-      expect(source).toContain('"Context copied"');
-      expect(source).not.toContain('"Context Copied"');
-    });
-
-    it("keeps text-status-success in the treeCopied branch but drops the bg tint — issue #9822", () => {
-      // Scoped to the copy-tree render block so unrelated `bg-status-success/10`
-      // uses (e.g. ghost-success hover) don't false-positive the negative.
+    it("gates the spinner glyph on showCopyingSpinner, not raw isCopyingTree", () => {
       const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
       expect(copyTreeBlock).not.toBeNull();
-      const treeCopiedBranch = copyTreeBlock![0].match(
-        /treeCopied[\s\S]{0,200}?"text-daintree-text"/
+      // The Doherty gate is the point: the raw in-flight flag must never drive
+      // the glyph directly, or a sub-400ms copy flashes a spinner.
+      expect(copyTreeBlock![0]).toMatch(/showCopyingSpinner \?\s*<Spinner \/>/);
+      expect(copyTreeBlock![0]).not.toMatch(/isCopyingTree \?\s*<Spinner \/>/);
+      expect(copyTreeBlock![0]).toContain("<Folders />");
+    });
+
+    it("presents completion as the button's transient tooltip, not a checkmark swap", () => {
+      // Completion feedback is a short-lived tooltip pinned to the button (the
+      // toast it replaced felt heavy for a one-second copy). The presenter,
+      // hide timer, and decline rules are useCopyTreeCompletionNotice's and
+      // are behavior-tested in its own suite; the toolbar's half of the
+      // contract — asserted here — is the wiring: the hook feeds the tooltip's
+      // controlled `open` as a union with ordinary hover, close requests clear
+      // the notice too (Escape and dialog transitions must be able to end the
+      // display window early), and the notice is mirrored into a live region,
+      // since tooltips aren't announced the way the old toast was. The old
+      // check-icon swap stays gone — the glyph slot belongs to the spinner.
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      expect(copyTreeBlock![0]).not.toContain("<Check />");
+      expect(copyTreeBlock![0]).not.toContain("text-status-success");
+      expect(copyTreeBlock![0]).toMatch(
+        /open=\{copyTreeTooltipHovered \|\| copyTreeNotice !== null\}/
       );
-      expect(treeCopiedBranch).not.toBeNull();
-      expect(treeCopiedBranch![0]).toContain("text-status-success");
-      expect(treeCopiedBranch![0]).not.toContain("bg-status-success/10");
+      expect(copyTreeBlock![0]).toContain("if (!open) clearCopyTreeNotice()");
+      expect(copyTreeBlock![0]).toContain('role="status"');
+      expect(copyTreeBlock![0]).toContain("{copyTreeAnnouncement}");
+      expect(source).toContain("useCopyTreeCompletionNotice(copyTreeButtonRef");
+    });
+
+    it("suppresses the completion tooltip while the recents panel holds the anchor", () => {
+      // Both surfaces portal to the same button; an MCP completion landing
+      // mid-browse would stack the tooltip on the open panel.
+      expect(source).toMatch(
+        /useCopyTreeCompletionNotice\(copyTreeButtonRef,\s*\{\s*suppress:\s*copyTreeOpen\s*\}\)/
+      );
+    });
+
+    it("skips the hover hint, matching the action's suppressShortcutHint opt-out", async () => {
+      // Relational, across two files: `suppressShortcutHint` only blocks the
+      // hint ActionService emits after dispatch, and its own contract says an
+      // opted-out button must skip `useShortcutHintHover` too — the hover path
+      // teaches the same hint and a shown one survives the click, landing
+      // beside the completion toast in the same corner. Reading the action
+      // definition here is what makes this an agreement check rather than a
+      // restatement of either side.
+      const definitionSource = await fs.readFile(COPY_TREE_ACTION_PATH, "utf-8");
+      const copyTreeAction = definitionSource.match(/id: "worktree\.copyTree"[\s\S]*?run: async/);
+      expect(copyTreeAction).not.toBeNull();
+      if (!copyTreeAction![0].includes("suppressShortcutHint: true")) return;
+
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      expect(copyTreeBlock![0]).not.toMatch(/\{\.\.\.\w*[Hh]intHover\}/);
+    });
+
+    it("retires the inline-feedback state and its reset timer entirely", () => {
+      // Component-wide, not block-scoped: leftover state or a dangling timeout
+      // would keep the removed behavior alive outside the render block.
+      for (const symbol of [
+        "treeCopied",
+        "copyFeedback",
+        "treeCopyTimeoutRef",
+        "COPY_TREE_FEEDBACK_RESET_MS",
+      ]) {
+        expect(source).not.toContain(symbol);
+      }
+    });
+  });
+
+  describe("copy-tree recents dropdown — issue #11733", () => {
+    // Only invariants that can't be reached from a render live here; the
+    // panel's own dialog role, focus handling and row behavior are covered
+    // behaviorally in CopyTreeRecentsPanel.test.tsx. Toolbar.tsx is too large
+    // to mount in jsdom, which is the reason this file reads source at all.
+
+    it("never replays a recent against the worktree stored on the record", () => {
+      // The history dedupe key covers options alone, so `record.worktreeId` is
+      // whichever worktree ran it last — provenance, not a stable target, and
+      // possibly one that no longer exists. File-wide rather than block-scoped:
+      // the field must not be read anywhere in the toolbar, however the handler
+      // is later refactored or extracted.
+      expect(source).toContain("handleCopyTreeWithOptions(activeWorktree, record.options");
+      expect(source).not.toContain("record.worktreeId");
+    });
+
+    it("closes the panel wherever a sibling dropdown is closed on overflow eviction", () => {
+      // Relational, and the reason it matters: the panel is portaled to
+      // document.body, so the wrapper's `invisible absolute` eviction styles
+      // never reach it. Whatever set of ids that effect closes, copy-tree
+      // belongs in it — asserted against its neighbours rather than as a
+      // standalone literal, so deleting the effect fails here too.
+      const evictionEffect = source.match(
+        /Close open dropdowns when their buttons move into overflow[\s\S]*?\}, \[leftOverflow, rightOverflow\]\);/
+      );
+      expect(evictionEffect).not.toBeNull();
+      expect(evictionEffect![0]).toContain('overflowSet.has("notification-center")');
+      expect(evictionEffect![0]).toContain('overflowSet.has("copy-tree")');
+    });
+
+    it("gates opening the panel on the same condition the trigger reports as disabled", () => {
+      // The shared Button doesn't suppress clicks on aria-disabled alone, so a
+      // trigger that announces "disabled" while copying must also refuse to
+      // open — otherwise the panel appears and every row silently declines.
+      const copyTreeBlock = source.match(/"copy-tree":\s*\{[\s\S]*?isAvailable/);
+      expect(copyTreeBlock).not.toBeNull();
+      const ariaDisabled = copyTreeBlock![0].match(/aria-disabled=\{([^}]+)\}/);
+      expect(ariaDisabled).not.toBeNull();
+
+      // `undefined` is the JSX spelling of "not disabled", not a condition.
+      const disablingTerms = ariaDisabled![1]!
+        .split("||")
+        .map((t) => t.trim().replace(/^!/, ""))
+        .filter((t) => t !== "undefined" && t !== "");
+      // Guard against a vacuous pass: an expression that yielded no terms would
+      // make the loop below assert nothing at all.
+      expect(disablingTerms.length).toBeGreaterThan(0);
+
+      // Read the early-return condition specifically, not the whole callback —
+      // its dependency array names the same identifiers, so a body-wide
+      // substring check would still pass with the guard deleted.
+      const earlyReturn = source.match(
+        /const handleCopyTreeToggle = useCallback\(\(\) => \{\s*if \(([^)]+)\) return;/
+      );
+      expect(earlyReturn).not.toBeNull();
+      for (const term of disablingTerms) {
+        expect(earlyReturn![1]).toContain(term);
+      }
     });
   });
 

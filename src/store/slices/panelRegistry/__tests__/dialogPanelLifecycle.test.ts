@@ -239,6 +239,34 @@ describe("dialog panel ephemeral lifecycle", () => {
       );
     });
 
+    it("refuses a non-file dialog without calling it a file (#11666)", () => {
+      // Promotion serves file, diff, review and file-browser dialogs alike, so
+      // a message naming "this file" told most of them the wrong thing about
+      // what they were opening. A review hub is the fixture precisely because
+      // nothing about it is file-shaped. Asserted as the absence of the wrong
+      // phrase rather than the presence of the new sentence — the copy stays
+      // free to be reworded, but can never re-acquire a kind it doesn't know.
+      usePanelLimitStore.setState({ hardLimit: 1 });
+      seed([
+        makeFilePanel("grid-1"),
+
+        {
+          id: "dialog-review",
+          kind: "review",
+          title: "Review",
+          location: "dialog",
+          excludeFromPersistence: true,
+        } as PanelInstance,
+      ]);
+
+      expect(usePanelStore.getState().promoteDialogPanelToGrid("dialog-review")).toBe(false);
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.not.stringMatching(/\bthis file\b/i) })
+      );
+    });
+
     it("refuses panels that are not dialog-presented", () => {
       seed([makeFilePanel("grid-1")]);
 

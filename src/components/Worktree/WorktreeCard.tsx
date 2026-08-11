@@ -86,7 +86,6 @@ export interface WorktreeCardProps {
   isSingleWorktree?: boolean;
   aggregateCounts?: AggregateCounts;
   onSelect: () => void;
-  onCopyTree: () => Promise<string | undefined> | void;
   onOpenEditor: () => void;
   onSaveLayout?: () => void;
   onLaunchAgent?: (agentId: string) => void;
@@ -120,7 +119,6 @@ export function WorktreeCard({
   isSingleWorktree: _isSingleWorktree,
   aggregateCounts: _aggregateCounts,
   onSelect,
-  onCopyTree,
   onOpenEditor,
   onSaveLayout,
   onLaunchAgent,
@@ -402,7 +400,6 @@ export function WorktreeCard({
     handleResourceTeardown,
   } = useWorktreeActions({
     worktree,
-    onCopyTree,
     teardownCommands,
   });
 
@@ -485,11 +482,11 @@ export function WorktreeCard({
   };
 
   const handleCopyContextFull = () => {
-    void copyContextWithFeedback(worktree.id, "context-menu");
+    void copyContextWithFeedback(worktree.id, "context-menu", undefined, "worktree-card");
   };
 
   const handleCopyContextModified = () => {
-    void copyContextWithFeedback(worktree.id, "context-menu", { modified: true });
+    void copyContextWithFeedback(worktree.id, "context-menu", { modified: true }, "worktree-card");
   };
 
   const { copy: copyWorktreePath } = useCopyWithFeedback();
@@ -519,11 +516,24 @@ export function WorktreeCard({
     void actionService.dispatch("worktree.openChanges", { worktreeId: worktree.id });
   };
 
-  // Same shape as the Review Hub entry point: the action owns which surface the
-  // browser is presented on (dialog first, promotable to the grid), so the card
-  // only names the worktree.
+  // Unlike the Review Hub and Changes entry points above, this one opens a real
+  // grid panel rather than a dialog — and the grid renders only the active
+  // worktree's bucket, so a panel created for an inactive card would be
+  // backgrounded on arrival: counted, persisted, and invisible (#11666). Select
+  // first, exactly as `handleTerminalSelect` below does before focusing a
+  // terminal on an inactive card.
+  // `"user"`, not the menu source: the handler is defined in the card body,
+  // outside any menu Root, so `useMenuActionSource()` would fall back to
+  // exactly this and warn on the way. Naming a foreground source at all is what
+  // matters — it is what lets the panel take focus instead of deferring to the
+  // store's ambient spawn guards.
   const openFileBrowserForThisWorktree = () => {
-    void actionService.dispatch("worktree.openFileBrowser", { worktreeId: worktree.id });
+    if (!isActive) onSelect();
+    void actionService.dispatch(
+      "worktree.openFileBrowserPanel",
+      { worktreeId: worktree.id },
+      { source: "user" }
+    );
   };
 
   // Route attach/detach through the resilient mutation outbox (#9163) instead

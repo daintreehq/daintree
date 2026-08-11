@@ -1,4 +1,4 @@
-import type { StagingStatus } from "../git.js";
+import type { GitRemoteCommitPreview, StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
 import type { VoiceInputError, VoiceInputStatus } from "../voice.js";
 import type {
@@ -847,11 +847,14 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   "git:list-remote-commits": {
     args: [payload: { cwd: string; branchName: string; limit?: number }];
     /**
-     * Returns the parsed commits in `HEAD..refs/remotes/origin/<branch>` so
-     * the force-push confirmation modal can show which remote commits would
-     * be discarded. Capped at `limit` (default 20) entries.
+     * Returns the parsed commits in `HEAD..<the branch's resolved push ref>` so
+     * the force-push confirmation modal can show which remote commits would be
+     * discarded, alongside the destination they live on and the full count over
+     * the same range. Rows are capped at `limit` (default 20); `total` is not.
+     * Rejects when the push destination can't be resolved — an empty list would
+     * read as "nothing to discard" (#11746).
      */
-    result: Array<{ hash: string; date: string; message: string; author: string }>;
+    result: GitRemoteCommitPreview;
   };
   "git:get-staging-status": {
     args: [cwd: string];
@@ -1938,6 +1941,15 @@ export interface IpcEventMap {
   // run is recorded or the log is cleared.
   "run-history:update": import("./runHistory.js").RunHistoryRecord[];
 
+  // Copy-tree run history changed (main → renderer, #11732). Sent only to views
+  // bound to `projectId`, never broadcast: unlike the run-history ring this is
+  // per-project data, so the id rides along and the renderer mirror ignores a
+  // snapshot for anything but its own project.
+  "copy-tree-history:update": {
+    projectId: string;
+    records: import("./copyTreeHistory.js").CopyTreeHistoryRecord[];
+  };
+
   // `daintree://` deep-link intent (main → renderer, #9559). Delivered to the
   // primary window once it has painted; the renderer opens the Plugin Manager
   // (URL pre-filled for install, or scrolled to the plugin for open). Routing
@@ -2067,6 +2079,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:bg-update-available"
   // Run history changed (global broadcast)
   | "run-history:update"
+  // Copy-tree run history changed (project-scoped send)
+  | "copy-tree-history:update"
   // Plugin deep-link intent (targeted at the primary window)
   | "plugin:deep-link"
   // Double-clicked `.dntr` archive awaiting confirmation (targeted at the primary window)

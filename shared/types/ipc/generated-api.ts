@@ -85,6 +85,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["connectivity:get-state"]["args"]
     ): Promise<IpcInvokeMap["connectivity:get-state"]["result"]>;
   };
+  copyTreeHistory: {
+    getRecords(
+      ...args: IpcInvokeMap["copy-tree-history:get-records"]["args"]
+    ): Promise<IpcInvokeMap["copy-tree-history:get-records"]["result"]>;
+  };
   devPreview: {
     ensure(
       ...args: IpcInvokeMap["dev-preview:ensure"]["args"]
@@ -538,6 +543,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["plugin:validate-action-ids"]["result"]>;
   };
   pluginCapability: {
+    acknowledgeConsent(
+      ...args: IpcInvokeMap["plugin-capability:acknowledge-consent"]["args"]
+    ): Promise<IpcInvokeMap["plugin-capability:acknowledge-consent"]["result"]>;
     resolveConsent(
       ...args: IpcInvokeMap["plugin-capability:resolve-consent"]["args"]
     ): Promise<IpcInvokeMap["plugin-capability:resolve-consent"]["result"]>;

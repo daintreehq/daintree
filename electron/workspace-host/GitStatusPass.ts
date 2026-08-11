@@ -115,6 +115,7 @@ export class GitStatusPass {
   private baseAheadCountValue: number | null | undefined;
   private baseBehindCountValue: number | null | undefined;
   private baseMatchesUpstreamValue: boolean | undefined;
+  private baseCompareRefValue: string | null | undefined;
   private activityTimestamp: number | null = null;
 
   constructor(
@@ -168,6 +169,10 @@ export class GitStatusPass {
 
   get baseMatchesUpstream(): boolean | undefined {
     return this.baseMatchesUpstreamValue;
+  }
+
+  get baseCompareRef(): string | null | undefined {
+    return this.baseCompareRefValue;
   }
 
   get lastActivityTimestamp(): number | null {
@@ -370,6 +375,7 @@ export class GitStatusPass {
       const nextBaseAheadCount = baseDivergenceResult?.aheadCount ?? undefined;
       const nextBaseBehindCount = baseDivergenceResult?.behindCount ?? undefined;
       const nextBaseMatchesUpstream = baseDivergenceResult?.matchesUpstream ?? undefined;
+      const nextBaseCompareRef = baseDivergenceResult?.baseCompareRef ?? undefined;
 
       const currentHash = this.calculateStateHash(newChanges);
       const stateChanged = currentHash !== this.previousStateHash;
@@ -385,7 +391,8 @@ export class GitStatusPass {
         nextBaseBranchName !== this.baseBranchNameValue ||
         nextBaseAheadCount !== this.baseAheadCountValue ||
         nextBaseBehindCount !== this.baseBehindCountValue ||
-        nextBaseMatchesUpstream !== this.baseMatchesUpstreamValue;
+        nextBaseMatchesUpstream !== this.baseMatchesUpstreamValue ||
+        nextBaseCompareRef !== this.baseCompareRefValue;
 
       const gitStateChanged =
         this.host.isDetached !== this.host.prevEmittedIsDetached ||
@@ -460,6 +467,7 @@ export class GitStatusPass {
       this.baseAheadCountValue = nextBaseAheadCount;
       this.baseBehindCountValue = nextBaseBehindCount;
       this.baseMatchesUpstreamValue = nextBaseMatchesUpstream;
+      this.baseCompareRefValue = nextBaseCompareRef;
       this.host.hasInitialStatus = true;
 
       this.host.emitUpdate();

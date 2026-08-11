@@ -1611,7 +1611,7 @@ describe("KeybindingService", () => {
         createKeyboardEvent({ key: "f", code: "KeyF", metaKey: true, altKey: true })
       );
 
-      expect(result.match?.actionId).toBe("worktree.openFileBrowser");
+      expect(result.match?.actionId).toBe("worktree.openFileBrowserPanel");
     });
 
     it("registers every default-binding actionId in KEY_ACTION_VALUES", async () => {

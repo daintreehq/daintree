@@ -49,6 +49,7 @@ import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
 import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preload.js";
 import { buildRunHistoryPreloadBindings } from "./ipc/handlers/runHistory.preload.js";
+import { buildCopyTreeHistoryPreloadBindings } from "./ipc/handlers/copyTreeHistory.preload.js";
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
 import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
@@ -92,6 +93,7 @@ import type {
   TerminalSpawnOptions,
   CopyTreeOptions,
   CopyTreeProgress,
+  CopyTreeRunSource,
   CopyTreeTestConfigOptions,
   AppState,
   LogEntry,
@@ -1411,23 +1413,49 @@ function buildElectronApi(): ElectronAPI {
 
     // CopyTree API
     copyTree: {
-      generate: (worktreeId: string, options?: CopyTreeOptions, includeContent?: boolean) =>
-        _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE, { worktreeId, options, includeContent }),
+      generate: (
+        worktreeId: string,
+        options?: CopyTreeOptions,
+        includeContent?: boolean,
+        source?: CopyTreeRunSource,
+        name?: string
+      ) =>
+        _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE, {
+          worktreeId,
+          options,
+          includeContent,
+          source,
+          name,
+        }),
 
-      generateAndCopyFile: (worktreeId: string, options?: CopyTreeOptions) =>
-        _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, { worktreeId, options }),
+      generateAndCopyFile: (
+        worktreeId: string,
+        options?: CopyTreeOptions,
+        source?: CopyTreeRunSource,
+        name?: string
+      ) =>
+        _unwrappingInvoke(CHANNELS.COPYTREE_GENERATE_AND_COPY_FILE, {
+          worktreeId,
+          options,
+          source,
+          name,
+        }),
 
       injectToTerminal: (
         terminalId: string,
         worktreeId: string,
         options?: CopyTreeOptions,
-        injectionId?: string
+        injectionId?: string,
+        source?: CopyTreeRunSource,
+        name?: string
       ) =>
         _unwrappingInvoke(CHANNELS.COPYTREE_INJECT, {
           terminalId,
           worktreeId,
           options,
           injectionId,
+          source,
+          name,
         }),
 
       isAvailable: () => _unwrappingInvoke(CHANNELS.COPYTREE_AVAILABLE),
@@ -2863,6 +2891,7 @@ function buildElectronApi(): ElectronAPI {
     forgeAudit: buildForgeAuditPreloadBindings(_unwrappingInvoke),
 
     runHistory: buildRunHistoryPreloadBindings(_unwrappingInvoke),
+    copyTreeHistory: buildCopyTreeHistoryPreloadBindings(_unwrappingInvoke),
 
     // Voice Input API
     voiceInput: {

@@ -175,9 +175,16 @@ async function run(): Promise<void> {
           `Scenario ${scenario.id} returned non-finite durationMs (${sample.durationMs})`
         );
       }
-      // Negative durationMs is the documented "harness self-times" sentinel
-      // (see TERM scenarios) — substitute the wall-clock bracket.
-      const durationMs = sample.durationMs >= 0 ? sample.durationMs : wallClockMs;
+      // A non-positive durationMs is the "harness self-times" sentinel —
+      // substitute the wall-clock bracket. This must stay `> 0`, not `>= 0`:
+      // ~32 metric-only scenarios (PERF-001, PERF-090, …) hardcode
+      // `durationMs: 0` from before fccf058ee, when the harness wall-clocked
+      // every scenario unconditionally. Treating that 0 as a real measurement
+      // writes a literal-zero p95 into the baseline, which drops the scenario
+      // under gate.ts's MIN_REGRESSION_BASELINE_MS floor and silently disables
+      // its regression gate. That went unnoticed because no baseline has been
+      // regenerated since 2026-02-11 — before the sentinel changed.
+      const durationMs = sample.durationMs > 0 ? sample.durationMs : wallClockMs;
 
       const metrics = sample.metrics ?? {};
       const note = sample.notes?.trim();

@@ -51,6 +51,127 @@ describe("useSearchablePalette", () => {
     expect(result.current.selectedIndex).toBe(-1);
   });
 
+  it("follows the selected item through a reorder the sampled fingerprint can't see", () => {
+    // Same length, same first/middle/last ids — only the interior moves, which
+    // is exactly what pinning a row does. The change-detection fast path must
+    // not treat that as "nothing moved", or the highlight slides onto whichever
+    // row took the index and Enter runs it instead.
+    const before: PaletteItem[] = ["f", "a", "b", "c", "d", "e", "g"].map((id) => ({
+      id,
+      name: id,
+    }));
+    const after: PaletteItem[] = ["f", "b", "a", "c", "d", "e", "g"].map((id) => ({
+      id,
+      name: id,
+    }));
+
+    const { result, rerender } = renderHook(
+      ({ items }: { items: PaletteItem[] }) =>
+        useSearchablePalette<PaletteItem>({ items, maxResults: 20 }),
+      { initialProps: { items: before } }
+    );
+
+    // Select "b" at index 2.
+    act(() => result.current.setSelectedIndex(2));
+    expect(result.current.results[result.current.selectedIndex]?.id).toBe("b");
+
+    rerender({ items: after });
+
+    expect(result.current.results[result.current.selectedIndex]?.id).toBe("b");
+    expect(result.current.selectedIndex).toBe(1);
+  });
+
+  it("keeps the selection anchor consistent across back-to-back updates in one tick", () => {
+    // The index and its anchor id are mirrored in refs that the reconcile
+    // effect trusts to agree. Resolving them through a setState updater would
+    // put those writes in the render phase, where React can re-run or discard
+    // them; two moves in a single tick is the cheap way to prove each write
+    // lands exactly once and in order.
+    const items: PaletteItem[] = ["a", "b", "c"].map((id) => ({ id, name: id }));
+
+    const { result } = renderHook(() =>
+      useSearchablePalette<PaletteItem>({ items, maxResults: 20 })
+    );
+
+    act(() => {
+      result.current.selectNext();
+      result.current.selectNext();
+    });
+
+    expect(result.current.selectedIndex).toBe(2);
+    expect(result.current.results[result.current.selectedIndex]?.id).toBe("c");
+  });
+
+  it("steps from the visible row when the stored index is out of range", () => {
+    const items: PaletteItem[] = [
+      { id: "a", name: "a" },
+      { id: "b", name: "b" },
+    ];
+
+    const { result } = renderHook(() =>
+      useSearchablePalette<PaletteItem>({ items, maxResults: 20 })
+    );
+
+    // Out of range without changing results, so nothing reconciles it. Consumers
+    // clamp this to 0 on read, so ArrowDown has to advance to 1 — computing from
+    // the raw value would wrap to 0 and appear to do nothing.
+    act(() => result.current.setSelectedIndex(99));
+    act(() => result.current.selectNext());
+
+    expect(result.current.selectedIndex).toBe(1);
+  });
+
+  describe("query-sensitive maxResults", () => {
+    const items: PaletteItem[] = Array.from({ length: 25 }, (_, i) => ({
+      id: `item-${i}`,
+      name: `Item ${i}`,
+    }));
+    // Uncapped while browsing, capped once the user searches.
+    const byQuery = (query: string) => (query.trim() ? 20 : Number.POSITIVE_INFINITY);
+
+    it("applies the limit the function returns for the current query", () => {
+      const { result } = renderHook(() =>
+        useSearchablePalette<PaletteItem>({ items, maxResults: byQuery })
+      );
+
+      expect(result.current.results).toHaveLength(items.length);
+
+      act(() => result.current.setQuery("item"));
+
+      expect(result.current.results).toHaveLength(20);
+      expect(result.current.totalResults).toBe(items.length);
+    });
+
+    it("hands back the filter's own array when nothing is sliced off", () => {
+      // The action palette pairs section descriptors with the exact array its
+      // filter produced, so an untruncated pass must preserve that identity.
+      const filtered: PaletteItem[] = items.slice(0, 3);
+      const { result } = renderHook(() =>
+        useSearchablePalette<PaletteItem>({
+          items,
+          filterFn: () => filtered,
+          maxResults: byQuery,
+        })
+      );
+
+      expect(result.current.results).toBe(filtered);
+    });
+
+    it("copies rather than aliases the filter's array once truncation applies", () => {
+      const filtered: PaletteItem[] = items;
+      const { result } = renderHook(() =>
+        useSearchablePalette<PaletteItem>({
+          items,
+          filterFn: () => filtered,
+          maxResults: 5,
+        })
+      );
+
+      expect(result.current.results).not.toBe(filtered);
+      expect(result.current.results).toHaveLength(5);
+    });
+  });
+
   describe("totalResults", () => {
     it("exposes total count before slicing when results exceed maxResults", () => {
       const items: PaletteItem[] = Array.from({ length: 25 }, (_, i) => ({

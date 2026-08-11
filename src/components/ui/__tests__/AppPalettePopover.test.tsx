@@ -4,7 +4,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppPalettePopover } from "../AppPalettePopover";
-import { AppPaletteDialog } from "../AppPaletteDialog";
+import { AppPaletteDialog, type PaletteSurfaceTier } from "../AppPaletteDialog";
 import { useUIStore } from "@/store/uiStore";
 
 /**
@@ -80,6 +80,7 @@ interface HarnessProps {
   modal?: boolean;
   dismissOnForeignOverlay?: boolean;
   restoreFocusOnPointerDismiss?: boolean;
+  consumeCloseAutoFocusSuppression?: () => boolean;
   initialOpen?: boolean;
   /** Drives the open state from the test, overriding the harness's own. */
   open?: boolean;
@@ -97,6 +98,8 @@ interface HarnessProps {
   withInput?: boolean;
   /** Renders a second stamped header in a portal outside this content's DOM. */
   withNestedPortal?: boolean;
+  /** Overrides the content's surface tier; falls through to `contentOverrides`. */
+  tier?: PaletteSurfaceTier;
 }
 
 function Harness({
@@ -133,6 +136,7 @@ function Harness({
       </AppPalettePopover.Trigger>
       <AppPalettePopover.Content
         ariaLabel="Test palette"
+        tier="command"
         inputRef={inputRef}
         onClearQuery={() => setQuery("")}
         restoreFocusOnPointerDismiss={restoreFocusOnPointerDismiss}
@@ -212,6 +216,33 @@ beforeEach(() => {
   useUIStore.setState({ overlayStack: [] });
 });
 
+describe("AppPalettePopover surface tier", () => {
+  /**
+   * The popover resolves its own width rather than inheriting the modal's, so
+   * the wiring is worth its own coverage: a tier honoured by `AppPaletteDialog`
+   * and dropped here is exactly the drift this shell exists to prevent.
+   */
+  function contentWidth(tier: PaletteSurfaceTier): number {
+    const { unmount } = render(<Harness initialOpen tier={tier} />);
+    const className = typeof contentProps.className === "string" ? contentProps.className : "";
+    unmount();
+    const match = /(?:^|\s)w-\[(\d+)px\]/.exec(className);
+    expect(match, `no w-[Npx] class forwarded for the ${tier} surface`).not.toBeNull();
+    return Number(match![1]);
+  }
+
+  it("forwards a narrower box for the anchored tier than the command tier", () => {
+    expect(contentWidth("anchored")).toBeLessThan(contentWidth("command"));
+  });
+
+  it("keeps tier out of the props handed to Radix", () => {
+    // `tier` is shell vocabulary. Forwarded, it reaches the DOM as an unknown
+    // attribute and React warns on every open.
+    render(<Harness initialOpen tier="anchored" />);
+    expect(contentProps).not.toHaveProperty("tier");
+  });
+});
+
 describe("AppPalettePopover", () => {
   it("forwards the open state and the required modal choice to the popover root", () => {
     const { unmount } = render(<Harness modal={true} open={false} />);
@@ -277,7 +308,12 @@ describe("AppPalettePopover", () => {
     const inputRef = { current: null };
     expect(() =>
       render(
-        <AppPalettePopover.Content ariaLabel="Orphan" inputRef={inputRef} onClearQuery={vi.fn()}>
+        <AppPalettePopover.Content
+          ariaLabel="Orphan"
+          tier="command"
+          inputRef={inputRef}
+          onClearQuery={vi.fn()}
+        >
           <span />
         </AppPalettePopover.Content>
       )
@@ -580,6 +616,69 @@ describe("AppPalettePopover", () => {
       fireCloseAutoFocus();
 
       expect(onCloseAutoFocus).toHaveBeenCalledTimes(1);
+    });
+
+    it("suppresses the return when the consumer claims the close", () => {
+      // Opted into pointer restoration, so only the consumer's answer can be
+      // producing the suppression — the two policies are independent.
+      render(
+        <Harness
+          restoreFocusOnPointerDismiss={true}
+          consumeCloseAutoFocusSuppression={() => true}
+        />
+      );
+
+      expect(fireCloseAutoFocus().preventDefault).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the return alone when the consumer declines", () => {
+      render(<Harness consumeCloseAutoFocusSuppression={() => false} />);
+
+      expect(fireCloseAutoFocus().preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("asks the consumer exactly once per close", () => {
+      const consume = vi.fn(() => false);
+      render(<Harness consumeCloseAutoFocusSuppression={consume} />);
+
+      fireCloseAutoFocus();
+      fireCloseAutoFocus();
+
+      // The consumer disarms itself on the call, so a second ask per close
+      // would spend an answer that belongs to the next one.
+      expect(consume).toHaveBeenCalledTimes(2);
+    });
+
+    it("still asks when a pointer dismissal already decided the outcome", () => {
+      // The pointer branch would short-circuit an `||`, leaving the consumer
+      // armed to fire on the following keyboard close.
+      const consume = vi.fn(() => false);
+      render(<Harness consumeCloseAutoFocusSuppression={consume} />);
+      act(() => contentProps.onPointerDownOutside?.());
+
+      expect(fireCloseAutoFocus().preventDefault).toHaveBeenCalledTimes(1);
+      expect(consume).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks the consumer before telling it the close is happening", () => {
+      // All three policies live at once — a pointer dismissal the palette opted
+      // to restore from, plus a consumer claiming the close. The claim still
+      // wins, and the notification still fires on a suppressed close.
+      const calls: string[] = [];
+      render(
+        <Harness
+          restoreFocusOnPointerDismiss={true}
+          consumeCloseAutoFocusSuppression={() => {
+            calls.push("consume");
+            return true;
+          }}
+          onCloseAutoFocus={() => calls.push("notify")}
+        />
+      );
+      act(() => contentProps.onPointerDownOutside?.());
+
+      expect(fireCloseAutoFocus().preventDefault).toHaveBeenCalledTimes(1);
+      expect(calls).toEqual(["consume", "notify"]);
     });
   });
 

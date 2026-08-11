@@ -30,6 +30,7 @@ import type {
 import type { CIStatus, NormalizedPRState } from "../../shared/types/forge.js";
 import type { WorktreeChanges } from "../../shared/types/git.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
+import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import { detectWslPath, getDefaultWslDistro } from "../utils/wsl.js";
 import {
@@ -46,6 +47,19 @@ import { WorktreeMonitor } from "./WorktreeMonitor.js";
 import { WorktreeListService } from "./WorktreeListService.js";
 import { PRIntegrationService, type PRIntegrationCallbacks } from "./PRIntegrationService.js";
 import { RepoFetchCoordinator } from "./RepoFetchCoordinator.js";
+import { planFetchRemotes } from "../../shared/utils/baseRemoteSelection.js";
+
+/**
+ * The remote a worktree's displayed counts depend on. Derived through the same
+ * planner that chose what to fetch, so the "which remote did we fetch for this
+ * card" and "which remote may update this card" answers cannot drift apart.
+ */
+function dependsOnRemote(monitor: WorktreeMonitor): string {
+  return planFetchRemotes({
+    baseRemote: monitor.baseRemote,
+    availableRemotes: monitor.availableRemotes,
+  }).primaryRemote;
+}
 import { waitForPathExists } from "../utils/fs.js";
 import { markHostPerformance } from "../utils/hostPerformance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -355,7 +369,7 @@ export class WorkspaceService {
         // not surface as an unhandled rejection.
         void this.refreshStatusForFetchSiblings(worktreeId).catch(() => {});
       },
-      onAuthFailureConfirmed: (commonDir, reason) =>
+      onAuthFailureConfirmed: (commonDir, _remote, reason) =>
         this.handleAuthFailureConfirmed(commonDir, reason),
     });
     const prCallbacks: PRIntegrationCallbacks = {
@@ -1336,10 +1350,16 @@ export class WorkspaceService {
         onScheduleFetch: async (worktreeId, _isCurrent, force) => {
           const target = this.monitors.get(worktreeId);
           if (!target || !target.isRunning) return;
+          const { remotes, primaryRemote } = planFetchRemotes({
+            baseRemote: target.baseRemote,
+            availableRemotes: target.availableRemotes,
+          });
           const result = await this.fetchCoordinator.fetchForWorktree({
             worktreeId,
             worktreePath: target.path,
             force,
+            remotes,
+            primaryRemote,
           });
           // Skipped for "no-common-dir" (e.g. path was just removed) means we
           // have no commondir to fan out on — bail.
@@ -1354,6 +1374,7 @@ export class WorkspaceService {
             lastFetchedAt: result.lastFetchedAt ?? null,
             authFailed: result.authFailed ?? false,
             networkFailed: result.networkFailed ?? false,
+            remote: result.remote,
           });
         },
       },
@@ -1589,7 +1610,16 @@ export class WorkspaceService {
    */
   private async applyFetchResultToSiblings(
     triggering: WorktreeMonitor,
-    result: { lastFetchedAt: number | null; authFailed: boolean; networkFailed: boolean }
+    result: {
+      lastFetchedAt: number | null;
+      authFailed: boolean;
+      networkFailed: boolean;
+      /**
+       * Remote the result describes. A sibling only adopts it when that is the
+       * remote the sibling's own counts depend on — see the fan-out note below.
+       */
+      remote: string | undefined;
+    }
   ): Promise<void> {
     const triggeringCommonDir = await getGitCommonDir(triggering.path, { logErrors: false });
     if (!triggeringCommonDir) {
@@ -1601,9 +1631,24 @@ export class WorkspaceService {
     for (const monitor of this.monitors.values()) {
       if (!monitor.isRunning) continue;
       const monitorCommonDir = await getGitCommonDir(monitor.path, { logErrors: false });
-      if (monitorCommonDir === triggeringCommonDir) {
-        monitor.setFetchState(result.lastFetchedAt, result.authFailed, result.networkFailed);
-      }
+      if (monitorCommonDir !== triggeringCommonDir) continue;
+      // Sharing a commondir no longer implies sharing a fetch outcome. Once a
+      // repo refreshes more than one remote, a sibling measuring against
+      // `upstream` must not be stamped fresh by an `origin` success, nor
+      // marked failed by an `upstream` failure it doesn't read — whichever
+      // remote finished last would otherwise win across every card, hiding the
+      // stale behind-count this issue exists to fix.
+      // The monitor that asked for this fetch always adopts the answer: the
+      // fetch was planned from its own resolution, and a poll landing mid-fetch
+      // could otherwise re-plan it into never accepting the result it asked for.
+      const isTriggering = monitor.id === triggering.id;
+      if (
+        !isTriggering &&
+        result.remote !== undefined &&
+        dependsOnRemote(monitor) !== result.remote
+      )
+        continue;
+      monitor.setFetchState(result.lastFetchedAt, result.authFailed, result.networkFailed);
     }
   }
 
@@ -3127,7 +3172,13 @@ export class WorkspaceService {
   async listBranches(requestId: string, rootPath: string): Promise<void> {
     try {
       const git = await createHardenedGit(rootPath);
-      const summary: BranchSummary = await git.branch(["-a"]);
+      // The date pass is optional enrichment, so it settles independently:
+      // `readBranchCommitterDates` resolves to an empty map on failure rather
+      // than rejecting, which keeps a metadata error from failing the list.
+      const [summary, committerDates] = await Promise.all([
+        git.branch(["-a"]) as Promise<BranchSummary>,
+        readBranchCommitterDates(git),
+      ]);
       const branches: BranchInfo[] = [];
 
       for (const [branchName, branchDetail] of Object.entries(summary.branches)) {
@@ -3147,6 +3198,7 @@ export class WorkspaceService {
           current: branchDetail.current,
           commit: branchDetail.commit,
           remote: isRemote ? displayName.split("/")[0] : undefined,
+          committerDate: committerDates.get(branchRefName(displayName, isRemote)),
         });
       }
 
@@ -3161,15 +3213,31 @@ export class WorkspaceService {
     }
   }
 
+  /**
+   * Fetch a PR's head into a local branch.
+   *
+   * `remoteName` is the forge remote resolved in main (#11747) — the PR ref
+   * only exists on the repository the PR was opened against, so with GitHub
+   * configured as `upstream` a fetch from `origin` fails outright with
+   * "couldn't find remote ref". Defaults to `origin` when the caller can't
+   * resolve one, which is the pre-fix behavior.
+   *
+   * The refspec itself stays GitHub-shaped (`pull/<n>/head`, also served by
+   * Gitea and Forgejo). GitLab's `merge-requests/<n>/head` and Bitbucket's
+   * variants would need per-provider refspec mapping — a separate gap this
+   * doesn't claim to close.
+   */
   async fetchPRBranch(
     requestId: string,
     rootPath: string,
     prNumber: number,
-    headRefName: string
+    headRefName: string,
+    remoteName?: string
   ): Promise<void> {
     try {
       const git = await createAuthenticatedGit(rootPath);
-      await git.raw(["fetch", "origin", `pull/${prNumber}/head:${headRefName}`]);
+      const remote = remoteName && remoteName.length > 0 ? remoteName : "origin";
+      await git.raw(["fetch", remote, `pull/${prNumber}/head:${headRefName}`]);
       this.sendEvent({ type: "fetch-pr-branch-result", requestId, success: true });
     } catch (error) {
       const gitReason = classifyGitError(error);

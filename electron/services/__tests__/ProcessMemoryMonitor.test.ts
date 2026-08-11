@@ -52,6 +52,7 @@ import {
   MITIGATION_COOLDOWN_MS,
   RECLAIM_SETTLE_MS,
   MIN_RECLAIMED_MB,
+  TIER1_REPRIEVE_MS,
   recordBlinkSample,
   forgetBlinkSample,
   getBlinkSamples,
@@ -65,10 +66,15 @@ import {
   getTrendSnapshot,
   type MemoryPressureActions,
 } from "../ProcessMemoryMonitor.js";
+import type { TrimStateSummary } from "../../../shared/types/pty-host.js";
 
 const EIGHT_GB = 8 * 1024 * 1024 * 1024;
 
 const mockGetAppMetrics = app.getAppMetrics as ReturnType<typeof vi.fn>;
+
+function makeTrimSummary(overrides: Partial<TrimStateSummary> = {}): TrimStateSummary {
+  return { trimmed: 0, skipped: 0, shardsTotal: 1, shardsFailed: 0, ...overrides };
+}
 
 function makeMetric(
   type: string,
@@ -801,10 +807,9 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
     });
 
-    it("does not escalate to tier 2 when tier 1 reclaims above the minimum", async () => {
-      // Tier 1 frees 100 MB (well above MIN_RECLAIMED_MB), and the post-
-      // settle sample drops below the Browser pressure threshold — both
-      // halves of the AND gate should suppress escalation.
+    it("runs tier 1 alone on the first pressure poll, never tier 2", async () => {
+      // Tier 2 needs PRESSURE_COUNT_TIER2 consecutive pressure polls; one is
+      // never enough, whatever the post-settle sample says.
       arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 250 });
       stop = startAppMetricsMonitor(mockActions);
 
@@ -815,8 +820,7 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalledWith(2);
     });
 
-    it("escalates to tier 2 when tier 1 reclaims insufficient memory and pressure remains", async () => {
-      // Tier 1 freed only 10 MB (< MIN_RECLAIMED_MB) and pressure persists.
+    it("escalates to tier 2 when pressure survives tier 1", async () => {
       arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 340 });
       stop = startAppMetricsMonitor(mockActions);
 
@@ -826,10 +830,9 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
     });
 
-    it("does NOT escalate to tier 2 when post-settle re-sample shows pressure cleared", async () => {
-      // Tier 1 freed only 5 MB (< MIN_RECLAIMED_MB) but pressure dropped
-      // below threshold after the settle window — pressureRemains is false,
-      // so the AND gate suppresses escalation even though delta is small.
+    it("stops the ladder at tier 1 when pressure clears before the count builds", async () => {
+      // Pressure drops below threshold after the settle window, so the streak
+      // resets and tier 2 is never reached.
       arrangeClosedLoopMetrics({ beforeMb: 305, afterMb: 295 });
       stop = startAppMetricsMonitor(mockActions);
 
@@ -918,7 +921,7 @@ describe("ProcessMemoryMonitor", () => {
     });
 
     it("calls trimPtyHostState during tier 1 mitigation", async () => {
-      const trimPtyHostState = vi.fn();
+      const trimPtyHostState = vi.fn(async () => makeTrimSummary());
       const actionsWithTrim: MemoryPressureActions = {
         ...mockActions,
         trimPtyHostState,
@@ -931,10 +934,8 @@ describe("ProcessMemoryMonitor", () => {
       expect(trimPtyHostState).toHaveBeenCalledTimes(1);
     });
 
-    it("continues tier 1 even if trimPtyHostState throws", async () => {
-      const trimPtyHostState = vi.fn().mockImplementation(() => {
-        throw new Error("trim failed");
-      });
+    it("continues tier 1 even if trimPtyHostState rejects", async () => {
+      const trimPtyHostState = vi.fn().mockRejectedValue(new Error("trim failed"));
       const actionsWithTrim: MemoryPressureActions = {
         ...mockActions,
         trimPtyHostState,
@@ -948,6 +949,109 @@ describe("ProcessMemoryMonitor", () => {
 
       expect(trimPtyHostState).toHaveBeenCalled();
       expect(actionsWithTrim.destroyHiddenWebviews).toHaveBeenCalledWith(1);
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({ ptyTrimFailed: true })
+      );
+    });
+
+    it("awaits the pty-host trim before opening the settle window (#11674)", async () => {
+      // Fire-and-forget left the host still processing the trim while the
+      // sampler was already reading the "after" footprint, so the bracket
+      // measured a mitigation that had not finished.
+      const order: string[] = [];
+      let releaseTrim: () => void = () => {};
+      const trimPtyHostState = vi.fn(
+        () =>
+          new Promise<ReturnType<typeof makeTrimSummary>>((resolve) => {
+            order.push("trim-started");
+            releaseTrim = () => resolve(makeTrimSummary());
+          })
+      );
+      mockGetAppMetrics.mockImplementation(() => {
+        order.push("sampled");
+        return [makeMetric("Browser", 350 * 1024, 100)];
+      });
+      stop = startAppMetricsMonitor({ ...mockActions, trimPtyHostState });
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      // The trim is still pending, so the post-settle re-sample must not have
+      // run yet — no matter how much time has passed.
+      const sampledBeforeRelease = order.filter((e) => e === "sampled").length;
+      releaseTrim();
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
+
+      expect(order).toContain("trim-started");
+      expect(order.filter((e) => e === "sampled").length).toBeGreaterThan(sampledBeforeRelease);
+    });
+
+    it("logs the trim's own counts so a zero delta stays attributable (#11674)", async () => {
+      // A scrollback trim only drops JS references, so `deltaMb` cannot see it
+      // however many terminals it touched. The counts are the evidence, and
+      // they must distinguish "every terminal was deliberately protected" from
+      // "the trim never reached the host".
+      const trimPtyHostState = vi.fn(async () =>
+        makeTrimSummary({ trimmed: 0, skipped: 8, shardsTotal: 2, shardsFailed: 0 })
+      );
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor({ ...mockActions, trimPtyHostState });
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({
+          deltaMb: 0,
+          ptyTerminalsTrimmed: 0,
+          ptyTerminalsSkipped: 8,
+          ptyTrimShardsTotal: 2,
+          ptyTrimShardsFailed: 0,
+          ptyTrimFailed: false,
+        })
+      );
+    });
+
+    it("surfaces an incomplete fan-out rather than reporting a clean pass", async () => {
+      // A shard that could not be reached must be visible: counts from a
+      // partial fan-out are a floor, and reading them as a census would say
+      // "nothing was eligible" about terminals nobody asked.
+      const trimPtyHostState = vi.fn(async () =>
+        makeTrimSummary({ trimmed: 1, skipped: 2, shardsTotal: 3, shardsFailed: 2 })
+      );
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor({ ...mockActions, trimPtyHostState });
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({
+          ptyTerminalsTrimmed: 1,
+          ptyTerminalsSkipped: 2,
+          ptyTrimShardsTotal: 3,
+          ptyTrimShardsFailed: 2,
+          ptyTrimFailed: false,
+        })
+      );
+    });
+
+    it("does not report an unwired trim action as a failed one", async () => {
+      // trimPtyHostState is optional. "Never asked" and "asked and it threw"
+      // are different states and the log must not conflate them.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor({ ...mockActions, trimPtyHostState: undefined });
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({
+          ptyTerminalsTrimmed: 0,
+          ptyTrimShardsTotal: 0,
+          ptyTrimFailed: false,
+        })
+      );
     });
 
     it("calls destroyHiddenWebviews(1) on tier 1 mitigation", async () => {
@@ -1010,16 +1114,82 @@ describe("ProcessMemoryMonitor", () => {
       expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
     });
 
-    it("escalation gate honors MIN_RECLAIMED_MB at the boundary", async () => {
-      // Reclaim exactly equals MIN_RECLAIMED_MB → the gate `deltaMb <
-      // MIN_RECLAIMED_MB` is false, so no escalation even with pressure
-      // persisting.
+    it("holds tier 2 back while tier 1's measured reclaim is still fresh", async () => {
+      // The half of the old gate worth keeping: memory demonstrably came back
+      // moments ago and system memory is healthy, so wait a beat before
+      // destroying user state. Tier 1 acts on the first pressure poll and tier
+      // 2 becomes eligible two polls later — inside the reprieve window.
       arrangeClosedLoopMetrics({ beforeMb: 400, afterMb: 400 - MIN_RECLAIMED_MB });
       stop = startAppMetricsMonitor(mockActions);
 
       await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
 
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
       expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+      expect(mockActions.destroyHiddenWebviews).not.toHaveBeenCalledWith(2);
+    });
+
+    it("escalates once that reclaim is too old to be evidence about now (#11674)", async () => {
+      // The old gate consulted the reclaim with no expiry, so one successful
+      // tier 1 could suppress escalation long after the number stopped
+      // describing current pressure. Same reclaim as above, a few polls later:
+      // pressure is still over threshold and nothing has acted since.
+      arrangeClosedLoopMetrics({ beforeMb: 400, afterMb: 400 - MIN_RECLAIMED_MB });
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(
+        WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + Math.ceil(TIER1_REPRIEVE_MS / 30_000)
+      );
+
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
+    });
+
+    it("voids a live reprieve when the tier-2 re-sample fails", async () => {
+      // Earn a reprieve, then blind the next poll's re-sample while it is still
+      // fresh. Not seeing current pressure is not a reason to keep waiting on
+      // an earlier reclaim — the failure path has to fall toward escalation,
+      // not inherit the suppression.
+      let postMitigation = false;
+      // The poll's own read must still succeed — blinding it too would abort
+      // the poll before the gate, testing nothing. Allow that one read, then
+      // fail the pre-sample and the post-settle re-sample behind it.
+      let readsBeforeBlinding = Infinity;
+      mockGetAppMetrics.mockImplementation(() => {
+        if (readsBeforeBlinding <= 0) throw new Error("metrics unavailable");
+        readsBeforeBlinding--;
+        const mb = postMitigation ? 400 - MIN_RECLAIMED_MB : 400;
+        return [makeMetric("Browser", mb * 1024, 100, mb * 1024)];
+      });
+      mockActions.destroyHiddenWebviews = vi.fn().mockImplementation(async (tier) => {
+        if (tier === 1) postMitigation = true;
+        return 0;
+      });
+      stop = startAppMetricsMonitor(mockActions);
+
+      // Stop one poll short of tier-2 eligibility, with the reprieve earned.
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 - 1);
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+
+      readsBeforeBlinding = 1;
+      await advancePolls(1);
+
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+    });
+
+    it("never lets the unobservable trim earn a reprieve it cannot demonstrate", async () => {
+      // The reported bug: a scrollback trim cannot move deltaMb inside the
+      // settle window, so tier 1 shows ~0 reclaim however much it did. That
+      // must simply earn nothing — it must never read as proof tier 1 failed,
+      // nor as grounds to suppress a genuine escalation.
+      const trimPtyHostState = vi.fn(async () => makeTrimSummary({ trimmed: 6, skipped: 0 }));
+      arrangeClosedLoopMetrics({ beforeMb: 400, afterMb: 400 });
+      stop = startAppMetricsMonitor({ ...mockActions, trimPtyHostState });
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+
+      expect(trimPtyHostState).toHaveBeenCalled();
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
     });
 
     it("escalates to tier 2 when the post-settle re-sample throws", async () => {
@@ -1204,8 +1374,11 @@ describe("ProcessMemoryMonitor", () => {
 
       expect(mitigation).toBeDefined();
       expect(mitigation?.[1]).not.toHaveProperty("deltaMb");
+      // The tier-2 line no longer republishes tier 1's reclaim (#11674). The
+      // figure still exists as a bounded suppressor, but reporting it here
+      // implied it described this tier, which it never did.
+      expect(mitigation?.[1]).not.toHaveProperty("tier1ReclaimMb");
       expect(mitigation?.[1]).toMatchObject({
-        tier1ReclaimMb: 0,
         systemPressureRemains: false,
       });
     });

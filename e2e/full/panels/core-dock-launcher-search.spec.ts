@@ -212,4 +212,64 @@ test.describe.serial("Core: Dock launcher search", () => {
       .poll(() => getDockPanelIds(window).then((ids) => ids.length), { timeout: T_MEDIUM })
       .toBe(dockBefore + 1);
   });
+
+  // #11689 — the per-row pin. The unit suite mocks the Popover away, so the one
+  // thing it structurally cannot see is how a nested control's pointer events
+  // interact with the real DismissableLayer: stopping propagation on pointerdown
+  // there costs the layer the event it uses to classify the NEXT outside click,
+  // and the launcher then takes two clicks to dismiss.
+  test("pinning from a row leaves the launcher usable and still dismissable in one click", async () => {
+    const { window, app } = ctx;
+    await ensureWindowFocused(app);
+
+    await openLauncher(window);
+    await searchBox(window).fill("browser");
+
+    // By the option's own accessible name, anchored at the start — `hasText`
+    // is a substring match and "browser" also ranks File Browser.
+    const pin = window.locator(`${OPTION}[aria-label^="Browser,"] button[aria-pressed]`);
+    await expect(pin).toHaveAttribute("aria-pressed", "false", { timeout: T_MEDIUM });
+
+    await pin.click();
+
+    // Pinning is a change to the list, not an exit from it: the popover stays
+    // open, the query survives, and focus never left the search box.
+    await expect(searchBox(window)).toBeVisible();
+    await expect(searchBox(window)).toHaveValue("browser");
+    expect(await searchBoxHasFocus(window)).toBe(true);
+    await expect(pin).toHaveAttribute("aria-pressed", "true", { timeout: T_MEDIUM });
+
+    // The point of the affordance: the toolbar button beside the launcher is
+    // how a pin becomes visible. The write is optimistic through an async IPC,
+    // so this waits rather than asserting on the first frame.
+    await expect(window.locator('[aria-label="Open browser"]')).toBeAttached({
+      timeout: T_MEDIUM,
+    });
+
+    // The regression: ONE outside click must dismiss. Aimed relative to the
+    // search box — the launcher anchors `side="top" align="start"` to the
+    // dock's left edge, so a hard-coded dock coordinate risks landing on the
+    // trigger, which toggles by its own path and would prove nothing about the
+    // dismiss layer. `mouse.click`, not a locator click: the popover is modal,
+    // so everything outside it has pointer events disabled and Playwright's
+    // actionability check would retry rather than deliver the event.
+    const surface = await window.locator(SEARCH_BOX).boundingBox();
+    if (!surface) throw new Error("launcher surface has no box");
+    await window.mouse.click(surface.x + surface.width + 240, surface.y);
+    await expect(searchBox(window)).not.toBeVisible({ timeout: T_MEDIUM });
+
+    // Leave the toolbar as this suite found it — the describe block is serial
+    // and later specs share this window.
+    await openLauncher(window);
+    await searchBox(window).fill("browser");
+    const pinAgain = window.locator(`${OPTION}[aria-label^="Browser,"] button[aria-pressed]`);
+    await expect(pinAgain).toHaveAttribute("aria-pressed", "true", { timeout: T_MEDIUM });
+    await pinAgain.click();
+    await expect(pinAgain).toHaveAttribute("aria-pressed", "false", { timeout: T_MEDIUM });
+    // Two presses: the first clears the populated query, the second closes.
+    await window.keyboard.press("Escape");
+    await window.keyboard.press("Escape");
+    await expect(searchBox(window)).not.toBeVisible({ timeout: T_MEDIUM });
+    await window.waitForTimeout(T_SETTLE);
+  });
 });

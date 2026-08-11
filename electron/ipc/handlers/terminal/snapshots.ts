@@ -190,6 +190,11 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
             title: terminal.title,
             titleMode: terminal.titleMode,
             cwd: terminal.cwd,
+            // Restore builds each pane's xterm on this grid instead of 80×24,
+            // so a reconnected pane never parses its live PTY at the wrong
+            // width (#11718).
+            ptyCols: terminal.ptyCols,
+            ptyRows: terminal.ptyRows,
             agentState: terminal.agentState,
             waitingReason: terminal.waitingReason,
             lastStateChange: terminal.lastStateChange,
@@ -460,6 +465,10 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         title: terminal.title,
         titleMode: terminal.titleMode,
         cwd: terminal.cwd,
+        // Same contract as getForProject: the fallback restore path rebuilds
+        // its xterm on the live PTY grid rather than the 80×24 default.
+        ptyCols: terminal.ptyCols,
+        ptyRows: terminal.ptyRows,
         agentState: terminal.agentState,
         waitingReason: terminal.waitingReason,
         lastStateChange: terminal.lastStateChange,

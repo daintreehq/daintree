@@ -6,7 +6,7 @@
  * the most-severe hidden state, plus left/right independence. These tests
  * mock every store the hook reads and assert the priority fold:
  *   critical (errorCount + problems) > warning (agent waiting/directing)
- *   > info (notification unread, agent-tray discovery) > null.
+ *   > info (notification unread, launcher discovery) > null.
  *
  * voice-recording is pinned out of overflow (issue #8158) so it never
  * appears in `overflowIds` — no branch in the hook handles it.
@@ -218,38 +218,38 @@ describe("useOverflowBadgeSeverity", () => {
     expect(result.current).toBeNull();
   });
 
-  it("returns info when agent-tray is overflowed and a launchable agent is unseen", () => {
+  it("returns info when launcher is overflowed and a launchable agent is unseen", () => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     mockAvailability = { claude: "ready" } as unknown as CliAvailability;
     mockSeenAgentIds = ["codex"];
-    const { result } = renderHook(() => useOverflowBadgeSeverity(["agent-tray"], 0));
+    const { result } = renderHook(() => useOverflowBadgeSeverity(["launcher"], 0));
     expect(result.current).toBe("info");
   });
 
-  it("returns null for agent-tray when every launchable agent has been seen", () => {
+  it("returns null for launcher when every launchable agent has been seen", () => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     mockAvailability = { claude: "ready" } as unknown as CliAvailability;
     mockSeenAgentIds = ["claude"];
-    const { result } = renderHook(() => useOverflowBadgeSeverity(["agent-tray"], 0));
+    const { result } = renderHook(() => useOverflowBadgeSeverity(["launcher"], 0));
     expect(result.current).toBeNull();
   });
 
-  it("returns null for agent-tray when onboarding has not yet loaded", () => {
+  it("returns null for launcher when onboarding has not yet loaded", () => {
     mockOnboardingLoaded = false;
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     mockAvailability = { claude: "ready" } as unknown as CliAvailability;
     mockSeenAgentIds = [];
-    const { result } = renderHook(() => useOverflowBadgeSeverity(["agent-tray"], 0));
+    const { result } = renderHook(() => useOverflowBadgeSeverity(["launcher"], 0));
     expect(result.current).toBeNull();
   });
 
-  it("ignores unlaunchable agents when computing agent-tray discovery", () => {
+  it("ignores unlaunchable agents when computing launcher discovery", () => {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     mockAvailability = {
       claude: "missing" as AgentAvailabilityState,
     } as unknown as CliAvailability;
     mockSeenAgentIds = [];
-    const { result } = renderHook(() => useOverflowBadgeSeverity(["agent-tray"], 0));
+    const { result } = renderHook(() => useOverflowBadgeSeverity(["launcher"], 0));
     expect(result.current).toBeNull();
   });
 

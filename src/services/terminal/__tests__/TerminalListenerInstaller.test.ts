@@ -706,6 +706,52 @@ describe("installTerminalBoundListeners", () => {
     });
   });
 
+  describe("onScroll suppression vs unseen-output clearing", () => {
+    // Why the resize re-pin in TerminalResizeController deliberately does NOT
+    // wrap itself in _suppressScrollTracking (#11709): suppression is not free,
+    // it costs the clearUnseen side effect, and the corrective viewport sync
+    // that follows a rows-only resize emits no second event to restore it.
+    function installAtBottom(suppress: boolean) {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      const managed = makeMockManaged();
+      const deps = makeDeps();
+
+      managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+      managed.isUserScrolledBack = true;
+      managed.latestWasAtBottom = false;
+      managed._suppressScrollTracking = suppress;
+      installTerminalBoundListeners(
+        terminal as unknown as Parameters<typeof installTerminalBoundListeners>[0],
+        managed,
+        "t1",
+        deps
+      );
+      // baseY === viewportY === 0 from the mock: an at-bottom scroll.
+      captured.onScroll?.();
+      return { managed, deps };
+    }
+
+    it("clears unseen output when tracking is not suppressed", () => {
+      const { managed, deps } = installAtBottom(false);
+
+      expect(managed.latestWasAtBottom).toBe(true);
+      expect(managed.isUserScrolledBack).toBe(false);
+      expect(deps.clearUnseen).toHaveBeenCalledWith("t1", false);
+    });
+
+    it("keeps tracking position but skips clearUnseen when suppressed", () => {
+      const { managed, deps } = installAtBottom(true);
+
+      // latestWasAtBottom updates ahead of the suppression return, so a
+      // suppressed scroll still reports position...
+      expect(managed.latestWasAtBottom).toBe(true);
+      // ...but the scroll-intent bookkeeping and unseen clearing are skipped.
+      expect(managed.isUserScrolledBack).toBe(true);
+      expect(deps.clearUnseen).not.toHaveBeenCalled();
+    });
+  });
+
   describe("wheel amplification for mouse-tracking TUIs", () => {
     // Wire a real host > xterm element pair so the capture-phase amplifier can
     // intercept a physical wheel and re-dispatch synthetic reports onto the

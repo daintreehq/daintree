@@ -107,6 +107,7 @@ export function NonMainSecondaryRow({
       baseAheadCount={worktree.baseAheadCount}
       baseBehindCount={worktree.baseBehindCount}
       baseMatchesUpstream={worktree.baseMatchesUpstream}
+      baseCompareRef={worktree.baseCompareRef}
       fetchIntervalMs={fetchIntervalMs}
     />
   ) : null;

@@ -576,7 +576,8 @@ port.on("message", async (rawMsg: any) => {
           request.requestId,
           request.rootPath,
           request.prNumber,
-          request.headRefName
+          request.headRefName,
+          request.remoteName
         );
         break;
 

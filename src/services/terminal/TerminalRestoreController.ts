@@ -69,13 +69,42 @@ export class TerminalRestoreController {
    */
   private beginRestoreWindow(managed: ManagedTerminal): number {
     if (!managed.isSerializedRestoreInProgress) {
-      managed.pendingRestoreGeometry = {
-        cols: managed.terminal.cols,
-        rows: managed.terminal.rows,
-      };
+      managed.pendingRestoreGeometry = this.intendedGeometry(managed);
     }
     managed.isSerializedRestoreInProgress = true;
     return ++managed.restoreWindowToken;
+  }
+
+  /**
+   * The grid this pane must end up on, or `undefined` when nothing here knows.
+   *
+   * `terminal.cols/rows` is evidence of the pane's real grid only once xterm has
+   * been opened against a measured host. A pane that has never been opened is
+   * still on whatever it was CONSTRUCTED at — xterm's 80×24 default for anything
+   * the persisted size didn't reach — and seeding that made `endRestoreWindow`
+   * snap a correctly-aligned replay back onto it, leaving a still-live pane
+   * parsing a ~200-column agent into 80 columns until the user finally selected
+   * its worktree (#11718).
+   *
+   * So a parked pane seeds from its attach target: the persisted grid, which is
+   * where the surviving PTY already is. With no valid target we return nothing
+   * rather than guess, which makes `endRestoreWindow` skip its corrective resize
+   * and leave the pane on the capture grid `alignToCaptureGeometry` just put it
+   * on — the grid the mirror and PTY were last agreed on, and the best evidence
+   * left. Deliberately expressed as an absent target rather than as the capture
+   * geometry: `fetchAndRestore` opens its window BEFORE the snapshot exists, so
+   * a seed computed here could never have seen it, and the nested restore cannot
+   * reseed an open window.
+   *
+   * Only the SEED changes. A resize landing mid-window still overwrites this via
+   * `resizeTerminal`, so a parked resize continues to win, exactly as before.
+   */
+  private intendedGeometry(managed: ManagedTerminal): TerminalGeometry | undefined {
+    if (!managed.isOpened) {
+      const target = { cols: managed.targetCols, rows: managed.targetRows };
+      return isValidTerminalGeometry(target) ? target : undefined;
+    }
+    return { cols: managed.terminal.cols, rows: managed.terminal.rows };
   }
 
   /**
@@ -116,6 +145,10 @@ export class TerminalRestoreController {
    * that parked resize on every geometry-less replay, leaving xterm on the old
    * grid while the PTY had already been told the new one. It is a no-op when
    * the grid already matches, which is the common case.
+   *
+   * An ABSENT target is meaningful, not a bug: a never-opened pane with no
+   * attach target has no grid worth returning to, so the capture grid the replay
+   * just landed on stands (#11718).
    *
    * `reflowCursorLine` is off by default in xterm, which leaves the wrapped
    * group containing the cursor untouched by a resize — reflowing to a narrower

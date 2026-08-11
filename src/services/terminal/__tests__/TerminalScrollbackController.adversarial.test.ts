@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { reduceScrollback, restoreScrollback } from "../TerminalScrollbackController";
 import type { ManagedTerminal } from "../types";
+import { TerminalRefreshTier } from "@shared/types/panel";
 import { logInfo } from "@/utils/logger";
 
 const mockState = vi.hoisted(() => ({
@@ -36,11 +37,12 @@ function createManagedTerminal(
 ): ManagedTerminal {
   const write = vi.fn();
   const hasSelection = vi.fn(() => false);
+  const buffer = { length: 3000 };
 
   return {
     terminal: {
       options: { scrollback: 5000 },
-      buffer: { active: { length: 3000 } },
+      buffer: { active: buffer, normal: buffer },
       rows: 24,
       hasSelection,
       write,
@@ -99,7 +101,7 @@ describe("TerminalScrollbackController adversarial", () => {
     const managed = createManagedTerminal({}, {
       options: { scrollback: 4000 },
       rows: 24,
-      buffer: { active: { length: 12 } },
+      buffer: { active: { length: 12 }, normal: { length: 12 } },
     } as unknown as Partial<ManagedTerminal["terminal"]>);
 
     reduceScrollback(managed, 500);
@@ -112,7 +114,7 @@ describe("TerminalScrollbackController adversarial", () => {
   it("HUGE_BUFFER_REDUCTION_LOGS_ONCE_NO_TERMINAL_WRITE", () => {
     const managed = createManagedTerminal({}, {
       options: { scrollback: 2_000_000 },
-      buffer: { active: { length: 5_000_000 } },
+      buffer: { active: { length: 5_000_000 }, normal: { length: 5_000_000 } },
     } as unknown as Partial<ManagedTerminal["terminal"]>);
 
     reduceScrollback(managed, 500);
@@ -129,6 +131,34 @@ describe("TerminalScrollbackController adversarial", () => {
         rows: 24,
       })
     );
+  });
+
+  // #11673 — visibility is read from managed.isVisible, never derived from the
+  // refresh tier. A hidden pane can sit at BURST while streaming, and a visible
+  // pane can lag at BACKGROUND during a handoff; deriving one from the other
+  // protects the wrong terminals in both directions.
+  it("VISIBLE_AT_BACKGROUND_TIER_IS_PROTECTED", () => {
+    const managed = createManagedTerminal({
+      isVisible: true,
+      lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+    });
+
+    restoreScrollback(managed);
+
+    // 3000 - 24 = 2976 retained vs a 1500 plain target ⇒ clamp, not evict.
+    expect(managed.terminal.options.scrollback).toBe(2976);
+  });
+
+  it("HIDDEN_AT_BURST_TIER_IS_NOT_PROTECTED", () => {
+    const managed = createManagedTerminal({
+      isVisible: false,
+      lastAppliedTier: TerminalRefreshTier.BURST,
+    });
+
+    restoreScrollback(managed);
+
+    expect(managed.terminal.options.scrollback).toBe(1500);
+    expect(managed.lastScrollbackReduceAt).toBeDefined();
   });
 
   it("STORE_FLIP_NO_CACHE", () => {

@@ -30,7 +30,7 @@ const SHORT_MARKDOWN = "# Short browser document\n\nOne paragraph, nowhere near 
 interface DispatchResult {
   ok?: boolean;
   error?: { message?: string };
-  result?: { worktrees?: Array<{ id: string; isMain?: boolean }> };
+  result?: { worktrees?: Array<{ id: string; isMain?: boolean }>; panelId?: string };
 }
 
 async function dispatchAction(
@@ -58,13 +58,11 @@ const BROWSER_DIALOG =
   ` [data-testid="file-browser-viewer-toggle"])`;
 
 /**
- * Opens the browser through the real action rather than driving the
- * virtualized tree: `revealPath` seeds the selection, so the preview renders
- * the file without a click that depends on row virtualization.
+ * The main worktree's id, polled rather than read once: the project's worktree
+ * readiness gate is best-effort, so a loaded runner can briefly answer with an
+ * empty list.
  */
-async function openFileBrowser(page: Page, revealPath: string) {
-  // Polled rather than read once: the project's worktree readiness gate is
-  // best-effort, so a loaded runner can briefly answer with an empty list.
+async function mainWorktreeId(page: Page): Promise<string> {
   let worktreeId: string | undefined;
   await expect
     .poll(
@@ -76,6 +74,16 @@ async function openFileBrowser(page: Page, revealPath: string) {
       { timeout: T_MEDIUM }
     )
     .not.toBeNull();
+  return worktreeId!;
+}
+
+/**
+ * Opens the browser through the real action rather than driving the
+ * virtualized tree: `revealPath` seeds the selection, so the preview renders
+ * the file without a click that depends on row virtualization.
+ */
+async function openFileBrowser(page: Page, revealPath: string) {
+  const worktreeId = await mainWorktreeId(page);
 
   const opened = await dispatchAction(page, "worktree.openFileBrowser", {
     worktreeId,
@@ -282,5 +290,39 @@ test.describe.serial("Core: File browser preview", () => {
       .toEqual({ fillsPreview: true, noSpuriousOverflow: true });
 
     await closeDialog(ctx.window);
+  });
+
+  // The dialog tests above are the other half of this contract: the reveal
+  // action stays ephemeral even when handed an explicit worktreeId, and only
+  // this separate action puts a browser in the grid (#11666).
+  test("the panel action opens a grid browser and reuses it on a second press", async () => {
+    const worktreeId = await mainWorktreeId(ctx.window);
+
+    const opened = await dispatchAction(ctx.window, "worktree.openFileBrowserPanel", {
+      worktreeId,
+    });
+    expect(opened.ok, opened.error?.message).toBe(true);
+    const panelId = opened.result?.panelId;
+    expect(panelId).toBeTruthy();
+
+    const panel = ctx.window.locator(`[data-panel-id="${panelId}"]${SEL.panel.gridPanel}`);
+    await expect(panel).toBeVisible({ timeout: T_MEDIUM });
+    // A grid panel, not a modal — the whole point of the split.
+    await expect(ctx.window.locator(BROWSER_DIALOG)).toHaveCount(0);
+
+    // Pressing again focuses what's already open rather than stacking a second
+    // browser onto the same folder.
+    const reopened = await dispatchAction(ctx.window, "worktree.openFileBrowserPanel", {
+      worktreeId,
+    });
+    expect(reopened.result?.panelId).toBe(panelId);
+    await expect(
+      ctx.window.locator(`${SEL.panel.gridPanel}:has([data-testid="file-browser-sidebar-toggle"])`)
+    ).toHaveCount(1);
+
+    // Closed rather than left behind: the panel now persists, so anything added
+    // to this serial suite after it would inherit a populated grid.
+    await panel.locator(SEL.panel.close).first().click();
+    await expect(panel).toHaveCount(0, { timeout: T_SHORT });
   });
 });

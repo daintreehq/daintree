@@ -523,7 +523,14 @@ test.describe("Terminal chrome ↔ live process identity (bidirectional)", () =>
     await test.step("cold-launch Claude terminal", async () => {
       const { window } = ctx;
       await window.locator(SEL.agent.trayButton).click();
-      const launchClaude = window.getByTestId("agent-tray-row-claude");
+      // The launcher is a search-first list of options now (#11691) — narrow to
+      // Claude and activate its row.
+      const search = window.getByRole("combobox", {
+        name: "Search agents, panels, and recipes",
+      });
+      await expect(search).toBeVisible({ timeout: 30_000 * SLOW_HOST_MULTIPLIER });
+      await search.fill("Claude");
+      const launchClaude = window.locator('[role="option"][aria-label^="Claude,"]').first();
       await expect(launchClaude).toBeVisible({ timeout: 30_000 * SLOW_HOST_MULTIPLIER });
       await launchClaude.click();
 

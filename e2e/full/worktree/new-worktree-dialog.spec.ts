@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { mkdirSync, writeFileSync } from "fs";
+import { execSync } from "child_process";
 import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
@@ -28,6 +29,20 @@ function seedRecipe(dir: string): void {
       2
     )
   );
+}
+
+/**
+ * Local branches no worktree holds, so existing-branch mode has something to
+ * offer: the fixture's `main` belongs to the root worktree and
+ * `feature/test-branch` to the linked one, which leaves that list empty.
+ * Distinct first letters so a one-character query narrows to exactly one.
+ */
+const SPARE_BRANCHES = ["e2e-spare-alpha", "e2e-spare-zulu"];
+
+function seedSpareBranches(dir: string): void {
+  for (const branch of SPARE_BRANCHES) {
+    execSync(`git branch ${branch}`, { cwd: dir, stdio: "ignore" });
+  }
 }
 
 async function openDialog(window: Page): Promise<void> {
@@ -65,6 +80,7 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     });
     fixtureCleanup = cleanup;
     seedRecipe(fixture);
+    seedSpareBranches(fixture);
 
     ctx = await launchApp();
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixture, "New Worktree Dialog");
@@ -163,5 +179,98 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     // trigger-text assertion below isn't racing the popover teardown).
     await expect(listbox).toHaveCount(0, { timeout: T_SHORT });
     await expect(trigger).toContainText(/Clone current layout/i, { timeout: T_MEDIUM });
+  });
+
+  test("selecting an in-use base branch keeps the dialog open and the form intact", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    // Dirty the form first: #11714 discarded typed input by closing the dialog,
+    // so a surviving value is the observable proof the diversion is gone.
+    const branchInput = window.locator(SEL.worktree.branchNameInput);
+    await branchInput.fill("e2e-keeps-form-state");
+
+    const trigger = window.locator(SEL.worktree.baseBranchTrigger);
+    await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
+    await trigger.click();
+
+    // The popover portals to <body>, so query the listbox from the page root.
+    const listbox = window.locator(SEL.worktree.baseBranchListbox);
+    await expect(listbox).toBeVisible({ timeout: T_MEDIUM });
+
+    // withFeatureBranch checks feature/test-branch out into a linked worktree,
+    // so its row is the one carrying the "in use" badge.
+    const inUseOption = listbox.getByRole("option", { name: /feature\/test-branch/ });
+    await expect(inUseOption).toContainText("in use", { timeout: T_MEDIUM });
+    await inUseOption.click();
+
+    // #6289: gate on the portaled listbox unmounting before asserting on the trigger.
+    await expect(listbox).toHaveCount(0, { timeout: T_SHORT });
+    await expect(window.locator(SEL.worktree.newDialog)).toBeVisible();
+    await expect(trigger).toContainText("feature/test-branch", { timeout: T_MEDIUM });
+    await expect(branchInput).toHaveValue("e2e-keeps-form-state");
+  });
+
+  test("the existing-branch panel searches from one character and drives from the keyboard", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    await window
+      .locator(SEL.worktree.branchModeGroup)
+      .getByRole("radio", { name: "Existing Branch" })
+      .click();
+
+    const trigger = window.locator(SEL.worktree.existingBranchTrigger);
+    await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
+    await trigger.click();
+
+    const listbox = window.locator(SEL.worktree.existingBranchListbox);
+    await expect(listbox).toBeVisible({ timeout: T_MEDIUM });
+
+    // `main` belongs to the root worktree and feature/test-branch to the linked
+    // one, so the seeded spares are the only selectable candidates here.
+    const search = window.getByLabel("Search existing branches");
+    await expect(listbox.getByRole("option")).toHaveCount(SPARE_BRANCHES.length, {
+      timeout: T_MEDIUM,
+    });
+
+    // A single character used to blank the list entirely.
+    await search.fill("z");
+    await expect(listbox.getByRole("option")).toHaveCount(1, { timeout: T_MEDIUM });
+    await expect(listbox.getByRole("option").first()).toHaveText(/e2e-spare-zulu/);
+
+    // Multi-token, which the single-Bitap-pattern search could never match.
+    await search.fill("spare alpha");
+    await expect(listbox.getByRole("option")).toHaveCount(1, { timeout: T_MEDIUM });
+
+    // This field had no arrow-key or Enter handling at all — mouse only.
+    await search.fill("");
+    await expect(listbox.getByRole("option")).toHaveCount(SPARE_BRANCHES.length, {
+      timeout: T_MEDIUM,
+    });
+    const cursor = listbox.locator('[role="option"][aria-selected="true"]');
+    await expect(cursor).toHaveCount(1);
+    const beforeArrow = await cursor.getAttribute("id");
+
+    await search.press("ArrowDown");
+
+    // The cursor must actually MOVE — recording whichever row is current after the
+    // key and then checking Enter picked it would pass with ArrowDown unhandled.
+    await expect(cursor).toHaveCount(1);
+    const afterArrow = await cursor.getAttribute("id");
+    expect(afterArrow).toBeTruthy();
+    expect(afterArrow).not.toBe(beforeArrow);
+    expect(await search.getAttribute("aria-activedescendant")).toBe(afterArrow);
+
+    // The row's first span is the bare branch name; its whole textContent also
+    // carries the recency badge ("just now" for these fresh branches), which the
+    // trigger deliberately does not render.
+    const chosen = ((await cursor.locator("span").first().textContent()) ?? "").trim();
+    expect(SPARE_BRANCHES).toContain(chosen);
+    await search.press("Enter");
+
+    await expect(listbox).toHaveCount(0, { timeout: T_SHORT });
+    await expect(window.locator(SEL.worktree.newDialog)).toBeVisible();
+    await expect(trigger).toContainText(chosen, { timeout: T_MEDIUM });
   });
 });

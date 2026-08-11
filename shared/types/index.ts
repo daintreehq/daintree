@@ -424,6 +424,21 @@ export {
   RUN_HISTORY_MAX_TARGETS,
 } from "./ipc/runHistory.js";
 
+// Copy-tree run history - per-project record of copy-tree runs (#11732)
+export type {
+  CopyTreeHistoryRecord,
+  CopyTreeHistoryAppendInput,
+  CopyTreeHistoryFile,
+  CopyTreeRunSource,
+  CopyTreeRunStats,
+} from "./ipc/copyTreeHistory.js";
+export {
+  COPY_TREE_HISTORY_SCHEMA_VERSION,
+  COPY_TREE_HISTORY_MAX_RECORDS,
+  COPY_TREE_HISTORY_NAME_MAX_LENGTH,
+  COPY_TREE_RUN_SOURCES,
+} from "./ipc/copyTreeHistory.js";
+
 // Event types - event context for correlation
 export type { EventContext } from "./events.js";
 

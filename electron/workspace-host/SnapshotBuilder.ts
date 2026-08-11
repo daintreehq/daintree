@@ -59,6 +59,7 @@ export interface SnapshotBuilderHost {
   readonly baseAheadCount: number | null | undefined;
   readonly baseBehindCount: number | null | undefined;
   readonly baseMatchesUpstream: boolean | undefined;
+  readonly baseCompareRef: string | null | undefined;
   readonly lastFetchedAt: number | null;
   readonly lastGitStatusCheckedAt: number;
   readonly workingTreeChangedAt: number;
@@ -165,6 +166,7 @@ export class SnapshotBuilder {
       baseAheadCount: this.host.baseAheadCount ?? undefined,
       baseBehindCount: this.host.baseBehindCount ?? undefined,
       baseMatchesUpstream: this.host.baseMatchesUpstream ?? undefined,
+      baseCompareRef: this.host.baseCompareRef ?? undefined,
       lastFetchedAt: this.host.lastFetchedAt ?? undefined,
       lastGitStatusCheckedAt: this.host.lastGitStatusCheckedAt,
       // 0 → undefined so a worktree that has never seen a raw fs write serializes

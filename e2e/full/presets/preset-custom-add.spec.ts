@@ -19,7 +19,7 @@ let fixtureCleanup: (() => void) | undefined;
 let fakeBinDir: string;
 
 // A fake `claude` binary on PATH makes Claude `launchable`, which is the
-// precondition for the toolbar split-button chevron and the agent-tray
+// precondition for the toolbar split-button chevron and the launcher
 // submenu trigger to render. Without it those surfaces never mount and the
 // tests asserting them would silently pass.
 function writeFakeClaude(): void {
@@ -138,8 +138,8 @@ test.describe.serial("Presets: Custom Add (13–24)", () => {
 
     // Submenu-trigger rows render in the tray only for unpinned, launchable
     // agents. The fake `claude` binary on PATH (beforeAll) makes Claude
-    // launchable; unpin it here so the tray builds a SplitLaunchItem rather
-    // than routing Claude to the main toolbar.
+    // launchable; unpin it here so Claude stays a launcher row rather than
+    // being routed to a button of its own on the main toolbar.
     await setClaudePinned(ctx.window, false);
 
     const closeButton = ctx.window.locator(SEL.settings.closeButton);
@@ -147,20 +147,25 @@ test.describe.serial("Presets: Custom Add (13–24)", () => {
       await closeButton.click();
     }
 
-    const trayButton = ctx.window.locator('[aria-label^="Agent tray"]');
+    const trayButton = ctx.window.locator('[aria-label^="Launcher"]');
     await trayButton.click();
-    const submenuTrigger = ctx.window.locator('[data-testid="submenu-trigger"]', {
-      hasText: "Claude",
+    // Flat preset rows (#11691): narrow to Claude, then Right Arrow expands its
+    // presets as sibling options in the same list.
+    const search = ctx.window.getByRole("combobox", {
+      name: "Search agents, panels, and recipes",
     });
-    await expect(submenuTrigger).toBeVisible({ timeout: T_LONG });
-    await submenuTrigger.press("ArrowRight");
-    const submenuContent = ctx.window.locator('[data-testid="submenu-content"]');
-    await expect(submenuContent).toBeVisible({ timeout: T_SHORT });
-    // Preset name renders as a text node inside DropdownMenuItem (not inside
-    // a span). Use getByText so the matcher walks both nodes and spans.
-    await expect(submenuContent.getByText("New preset").first()).toBeVisible({
-      timeout: T_SHORT,
+    await expect(search).toBeVisible({ timeout: T_LONG });
+    await search.fill("Claude");
+    await expect(ctx.window.locator(SEL.preset.trayLaunchPresetParent).first()).toBeVisible({
+      timeout: T_LONG,
     });
+    await search.press("ArrowRight");
+    // `.first()` because the flat list (#11691) renders every "New preset" this
+    // describe has accumulated as a sibling row — this step only pins that a
+    // newly-added preset reaches the launcher, not how many of them exist.
+    await expect(
+      ctx.window.locator(SEL.preset.trayLaunchPresetItem, { hasText: "New preset" }).first()
+    ).toBeVisible({ timeout: T_SHORT });
 
     await ctx.window.mouse.click(10, 10);
     await setClaudePinned(ctx.window, true);
@@ -193,10 +198,13 @@ test.describe.serial("Presets: Custom Add (13–24)", () => {
     await goToClaudeSettings();
     await addCustomPreset(ctx.window);
     const name = "New preset";
+    // T_MEDIUM, not T_SHORT: the settings list re-renders after the add round
+    // trips through the store, and 3s is tight enough to lose the race when the
+    // whole E2E surface is running and the machine is loaded.
     await expect(
       ctx.window.locator(SEL.preset.section).locator("span", { hasText: name }).first()
     ).toBeVisible({
-      timeout: T_SHORT,
+      timeout: T_MEDIUM,
     });
     const countBefore = await getClaudeCustomPresetCount(ctx.window);
     expect(countBefore).toBeGreaterThanOrEqual(1);

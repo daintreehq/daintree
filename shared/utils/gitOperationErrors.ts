@@ -116,8 +116,10 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
   ["lfs-missing", /external filter 'git-lfs filter-process' failed|smudge filter lfs failed/i],
   [
     "config-missing",
-    // Covers the older 'has no upstream branch' and the newer 'no upstream configured for branch'.
-    /fatal: unable to read config file|fatal: bad config|fatal: The current branch .* has no upstream branch|fatal: no upstream configured for branch/i,
+    // Covers the older 'has no upstream branch', the newer 'no upstream configured for branch',
+    // and the variants raised when a branch resolves to no push destination or no
+    // upstream to rebase onto (#11746).
+    /fatal: unable to read config file|fatal: bad config|fatal: The current branch .* has no upstream branch|fatal: no upstream configured for branch|fatal: no push destination configured for branch|fatal: could not resolve the (?:push destination|upstream) for branch|fatal: the remote configured for branch .* has an unusable name/i,
   ],
   [
     "system-io-error",
@@ -145,7 +147,8 @@ const RECOVERY_HINTS: Record<GitOperationReason, string | undefined> = {
   "not-a-repository": "Run 'git init' or open a folder containing a git repo.",
   "dubious-ownership":
     "Git refuses to operate on this repo because its owner doesn't match the current user.",
-  "config-missing": "The current branch is missing upstream or config — set an upstream to push.",
+  "config-missing":
+    "This branch has no upstream or push destination — set an upstream, or configure branch.<name>.pushRemote or remote.pushDefault.",
   "worktree-dirty":
     "You have local changes that would be overwritten — commit or stash them first.",
   "conflict-unresolved": "Resolve the merge conflicts and commit before continuing.",

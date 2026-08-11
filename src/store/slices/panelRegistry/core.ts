@@ -700,7 +700,11 @@ export const createCorePanelActions = (
         type: "warning",
         priority: "high",
         title: "Panel limit reached",
-        message: `Maximum of ${hardLimit} panels reached. Close some panels before opening this file as a panel.`,
+        // Kind-agnostic, matching `addPanel`'s own ceiling message: promotion
+        // serves file, diff, review and file-browser dialogs alike, and naming
+        // "this file" told most of them the wrong thing about what they were
+        // opening (#11666).
+        message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
         duration: 5000,
         // Direct feedback on a click the user just made — it has to reach them
         // where they are, which is the open dialog.

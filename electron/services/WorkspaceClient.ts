@@ -929,7 +929,12 @@ export class WorkspaceClient extends EventEmitter {
     return result.branches;
   }
 
-  async fetchPRBranch(rootPath: string, prNumber: number, headRefName: string): Promise<void> {
+  async fetchPRBranch(
+    rootPath: string,
+    prNumber: number,
+    headRefName: string,
+    remoteName?: string
+  ): Promise<void> {
     const host = this.pool.resolveHostForPath(rootPath);
     if (!host) throw new Error("No workspace host for project");
     const requestId = host.generateRequestId();
@@ -939,6 +944,7 @@ export class WorkspaceClient extends EventEmitter {
       rootPath,
       prNumber,
       headRefName,
+      remoteName,
     });
   }
 

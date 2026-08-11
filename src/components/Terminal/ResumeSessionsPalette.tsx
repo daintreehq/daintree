@@ -167,7 +167,7 @@ export function ResumeSessionsPalette() {
   const activeDescendant = selected ? `resume-session-option-${selected.id}` : undefined;
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="Resume session">
+    <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="Resume session" tier="command">
       <AppPaletteDialog.Header label="Resume session" shortcut={shortcut} isLoading={isLoading}>
         <AppPaletteDialog.Input
           inputRef={inputRef}
@@ -233,10 +233,6 @@ export function ResumeSessionsPalette() {
             keys: ["↵"],
             label: selected ? `to resume ${selected.name.toLowerCase()}` : "to resume",
           }}
-          hints={[
-            { keys: ["↑", "↓"], label: "navigate" },
-            { keys: ["Esc"], label: "close" },
-          ]}
         />
       </AppPaletteDialog.Footer>
     </AppPaletteDialog>

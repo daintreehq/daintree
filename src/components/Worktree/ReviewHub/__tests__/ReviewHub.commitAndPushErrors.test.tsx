@@ -280,6 +280,8 @@ const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
   isDetachedHead: false,
   currentBranch: "feature/test",
   hasRemote: false,
+  pushDestination: { remote: "origin", branch: "feature/test" },
+  pullSource: { remote: "origin", branch: "feature/test" },
   repoState: "DIRTY",
   rebaseStep: null,
   rebaseTotalSteps: null,
@@ -352,7 +354,11 @@ describe("ReviewHub", () => {
     pushMock.mockReset().mockResolvedValue(undefined);
     pullRebaseMock.mockReset().mockResolvedValue(undefined);
     forcePushWithLeaseMock.mockReset().mockResolvedValue(undefined);
-    listRemoteCommitsMock.mockReset().mockResolvedValue([]);
+    listRemoteCommitsMock.mockReset().mockResolvedValue({
+      destination: { remote: "origin", branch: "feature/test" },
+      total: 0,
+      commits: [],
+    });
     listCommitsMock.mockReset().mockResolvedValue({ items: [], hasMore: false, total: 0 });
     actionDispatchMock.mockReset().mockResolvedValue({ ok: true });
     openExternalMock.mockReset().mockResolvedValue(undefined);
@@ -782,10 +788,24 @@ describe("ReviewHub", () => {
           branchName: "feature/x",
         })
       );
-      listRemoteCommitsMock.mockResolvedValueOnce([
-        { hash: "abcd1234567", date: "2026-01-01", message: "first remote commit", author: "Bob" },
-        { hash: "efgh1234567", date: "2026-01-02", message: "second remote commit", author: "Bob" },
-      ]);
+      listRemoteCommitsMock.mockResolvedValueOnce({
+        destination: { remote: "origin", branch: "feature/x" },
+        total: 2,
+        commits: [
+          {
+            hash: "abcd1234567",
+            date: "2026-01-01",
+            message: "first remote commit",
+            author: "Bob",
+          },
+          {
+            hash: "efgh1234567",
+            date: "2026-01-02",
+            message: "second remote commit",
+            author: "Bob",
+          },
+        ],
+      });
 
       await triggerCommitAndPush();
       await screen.findByTestId("review-hub-push-error");

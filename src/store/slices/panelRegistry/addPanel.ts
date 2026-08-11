@@ -39,6 +39,7 @@ import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { countPanelsTowardLimit } from "./panelCount";
+import { isValidTerminalGeometry } from "@shared/types/terminal";
 
 // Lazy accessor to break circular dependency: addPanel -> projectStore -> panelPersistence -> addPanel.
 // Resolved on first call (after app init), then cached.
@@ -460,6 +461,19 @@ export const createAddPanelActions = (
         ? estimateOverlayGridDims(getTerminalAppearanceSnapshot().fontSize)
         : null;
 
+    // The grid this pane is BORN on. Hydration supplies the persisted size for
+    // a restored pane so it never exists at 80×24 — a restore into a
+    // non-selected worktree is prewarmed and never fitted, so the default would
+    // stand for as long as the user stays away while the surviving PTY streams
+    // into it (#11718). Overlay keeps precedence: its estimate is the grid its
+    // XtermAdapter is about to fit to, and the two never co-occur (an overlay
+    // is never a restore). Re-validated here because `addPanel` is also reached
+    // from plugins and MCP.
+    const restoredDims = isValidTerminalGeometry(options.initialTerminalGeometry)
+      ? options.initialTerminalGeometry
+      : null;
+    const constructionDims = overlayDims ?? restoredDims;
+
     // Single active-grid launches mount their visible xterm immediately
     // (TerminalPane skips the spawnStatus gate), overlapping xterm.open()
     // and the first fit with the env fetch + spawn IPC below. Decided at
@@ -484,8 +498,8 @@ export const createAddPanelActions = (
       ...(options.titleMode && { titleMode: options.titleMode }),
       worktreeId: options.worktreeId,
       cwd: options.cwd ?? "",
-      cols: overlayDims?.cols ?? 80,
-      rows: overlayDims?.rows ?? 24,
+      cols: constructionDims?.cols ?? 80,
+      rows: constructionDims?.rows ?? 24,
       agentState,
       waitingReason,
       lastStateChange,
@@ -708,8 +722,8 @@ export const createAddPanelActions = (
       originalPresetId: options.originalPresetId ?? options.agentPresetId,
       agentLaunchFlags: options.agentLaunchFlags,
       env: computeEnvProvenance(options.env),
-      initialCols: 80,
-      initialRows: 24,
+      initialCols: constructionDims?.cols ?? 80,
+      initialRows: constructionDims?.rows ?? 24,
       spawnedBy: options.spawnedBy,
       resumedFromSessionId: options.agentSessionId,
     });
@@ -790,9 +804,10 @@ export const createAddPanelActions = (
       // Overlay panes are BORN at their estimated grid (xterm constructor
       // cols/rows) so pre-attach CLI output wraps near the final width — a
       // prewarmed-but-unattached xterm otherwise sits at the 80×24 default
-      // until the help panel's XtermAdapter mounts (#10863).
-      const prewarmOptions = overlayDims
-        ? { ...terminalOptions, cols: overlayDims.cols, rows: overlayDims.rows }
+      // until the help panel's XtermAdapter mounts (#10863). Restored panes get
+      // their persisted grid the same way, for the same reason (#11718).
+      const prewarmOptions = constructionDims
+        ? { ...terminalOptions, cols: constructionDims.cols, rows: constructionDims.rows }
         : terminalOptions;
 
       // Prewarm ALL terminal types to ensure the managed instance and data
@@ -839,8 +854,12 @@ export const createAddPanelActions = (
         // spawn path just fixed (#10863), and for a settled-strategy agent
         // this call arms a 500ms timer that can land AFTER the spawn. When the
         // estimate is unavailable (non-finite inputs), skip entirely and let
-        // the spawn-time dims own overlay geometry.
-        if (!isDockOrInactive && (location !== "overlay" || overlayDims)) {
+        // the spawn-time dims own overlay geometry. A restored pane skips it
+        // too: its PTY is already on the persisted grid we just constructed at,
+        // and this estimate is a fixed DOCK_TERM-derived guess, not a
+        // measurement — sending it would move a healthy PTY off that grid
+        // (#11718).
+        if (!isDockOrInactive && !restoredDims && (location !== "overlay" || overlayDims)) {
           const { cols, rows } =
             overlayDims ?? calculateTerminalDimensions(widthPx, heightPx, fontSize);
           terminalInstanceService.sendPtyResize(id, cols, rows);
@@ -926,8 +945,8 @@ export const createAddPanelActions = (
           // pty-host (no terminal yet), and booting at 80×24 anyway left the
           // CLI painting a width the renderer wasn't wrapping at (#10863).
           const attachedDims = getAttachedGridDims(id);
-          const spawnCols = attachedDims?.cols ?? overlayDims?.cols ?? 80;
-          const spawnRows = attachedDims?.rows ?? overlayDims?.rows ?? 24;
+          const spawnCols = attachedDims?.cols ?? constructionDims?.cols ?? 80;
+          const spawnRows = attachedDims?.rows ?? constructionDims?.rows ?? 24;
           await terminalClient.spawn({
             id,
             projectId: capturedWorkspaceId,

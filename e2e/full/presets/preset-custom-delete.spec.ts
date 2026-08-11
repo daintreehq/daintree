@@ -24,7 +24,7 @@ let fakeBinDir: string;
 let fixtureCleanup: (() => void) | undefined;
 
 // A fake `claude` binary on PATH makes the agent "launchable", which is what
-// surfaces it on the toolbar split-button and in the agent-tray sub-menu —
+// surfaces it on the toolbar split-button and in the launcher sub-menu —
 // without it those launch surfaces never render and the dropdown/sub-menu
 // assertions below would be silently skipped. Mirrors the harness in
 // core-agent-preset-icon-color.spec.ts.
@@ -166,17 +166,23 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
     await addCustomPreset(ctx.window);
     await ctx.window.waitForTimeout(T_SETTLE);
 
-    const openClaudeSubmenu = async () => {
-      const trayButton = ctx.window.locator('[aria-label^="Agent tray"]');
+    // Presets are flat sibling options now, not a submenu (#11691): search
+    // narrows to Claude, Right Arrow expands its presets in place.
+    const openClaudePresets = async () => {
+      const trayButton = ctx.window.locator('[aria-label^="Launcher"]');
       await expect(trayButton).toBeVisible({ timeout: T_MEDIUM });
       await trayButton.click();
-      const submenuTrigger = ctx.window
-        .locator(SEL.preset.trayLaunchPresetSubmenu, { hasText: "Claude" })
-        .first();
-      await expect(submenuTrigger).toBeVisible({ timeout: T_MEDIUM });
-      await submenuTrigger.press("ArrowRight");
-      const submenuContent = ctx.window.locator('[data-testid="submenu-content"]');
-      await expect(submenuContent).toBeVisible({ timeout: T_SHORT });
+      const search = ctx.window.getByRole("combobox", {
+        name: "Search agents, panels, and recipes",
+      });
+      await expect(search).toBeVisible({ timeout: T_MEDIUM });
+      await search.fill("Claude");
+      const parent = ctx.window.locator(SEL.preset.trayLaunchPresetParent).first();
+      await expect(parent).toBeVisible({ timeout: T_MEDIUM });
+      await search.press("ArrowRight");
+      await expect(ctx.window.locator(SEL.preset.trayLaunchPresetItem).first()).toBeVisible({
+        timeout: T_SHORT,
+      });
     };
 
     const closeSettings = async () => {
@@ -188,14 +194,10 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
     };
 
     await closeSettings();
-    await openClaudeSubmenu();
-    // Each preset in the sub-menu renders as a DropdownMenuRadioItem
-    // (role="menuitemradio"), not role="menuitem", so scope the count to the
-    // submenu content's radio items.
-    const submenuItems = ctx.window.locator(
-      '[data-testid="submenu-content"] [role="menuitemradio"]'
-    );
-    const countBefore = await submenuItems.count();
+    await openClaudePresets();
+    // Every preset is an option row of its own, including the synthetic Default.
+    const presetItems = ctx.window.locator(SEL.preset.trayLaunchPresetItem);
+    const countBefore = await presetItems.count();
     expect(countBefore).toBeGreaterThan(0);
     await ctx.window.mouse.click(10, 10);
 
@@ -205,8 +207,8 @@ test.describe.serial("Presets: Custom Delete (45–52)", () => {
     await ctx.window.waitForTimeout(T_SETTLE);
 
     await closeSettings();
-    await openClaudeSubmenu();
-    await expect.poll(() => submenuItems.count(), { timeout: T_MEDIUM }).toBeLessThan(countBefore);
+    await openClaudePresets();
+    await expect.poll(() => presetItems.count(), { timeout: T_MEDIUM }).toBeLessThan(countBefore);
     await ctx.window.mouse.click(10, 10);
   });
 

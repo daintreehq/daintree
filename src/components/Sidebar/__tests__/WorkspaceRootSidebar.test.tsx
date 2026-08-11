@@ -181,7 +181,7 @@ describe("WorkspaceRootSidebar", () => {
 
     screen.getByRole("button", { name: "Browse files" }).click();
 
-    expect(dispatch).toHaveBeenCalledWith("worktree.openFileBrowser", undefined, {
+    expect(dispatch).toHaveBeenCalledWith("worktree.openFileBrowserPanel", undefined, {
       source: "user",
     });
   });
@@ -196,7 +196,7 @@ describe("WorkspaceRootSidebar", () => {
       .getAllByRole("menuitem")
       .map((el) => el.getAttribute("data-action-id"));
 
-    expect(actionIds).toEqual(["worktree.openFileBrowser", "system.openPath"]);
+    expect(actionIds).toEqual(["worktree.openFileBrowserPanel", "system.openPath"]);
   });
 
   it("exposes no worktree-shaped control outside the menu either", () => {

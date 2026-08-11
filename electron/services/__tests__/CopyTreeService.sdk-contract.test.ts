@@ -219,6 +219,272 @@ describe("CopyTreeService against the installed CopyTree", () => {
       expect(paths).not.toContain("src/d/other.ts");
     });
 
+    // #11750. `.copytreeignore` is layered at every depth on every SDK code
+    // path, with no option or config key that drops it, so "bypass the ignore
+    // file" is not literally expressible. What IS exposed is the ignore-FILE
+    // escape for a named subtree, and these pin how much it lifts — because the
+    // alternative (promoting the selection into `always`) globs with
+    // `ignore: []` and then outranks the caller's own `exclude`, which is the
+    // reason it was rejected. Run against the installed package: every claim in
+    // the wire description is a claim about the SDK, not about our adapter.
+    describe("bypassing an ignore file that blocks a scoped path", () => {
+      async function buildIgnoredDocs() {
+        // One file, two rules: `docs/` stands between the root and the
+        // selection, `*.secret` does not. Both live in the same ignore file, so
+        // a bypass that dropped the file wholesale would take `*.secret` with it.
+        await fs.writeFile(path.join(tempDir, ".copytreeignore"), "docs/\n*.secret\n");
+        await fs.mkdir(path.join(tempDir, "docs"), { recursive: true });
+        await fs.writeFile(path.join(tempDir, "docs", "guide.md"), "# guide\n");
+        await fs.writeFile(path.join(tempDir, "docs", "key.secret"), "shhh\n");
+      }
+
+      it("drops the scoped folder by default, and returns it when the bypass is on", async () => {
+        await buildIgnoredDocs();
+
+        const obeyed = await copyTreeService.testConfig(tempDir, { scopePaths: ["docs"] });
+        const bypassed = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["docs"],
+          scopeIgnoresIgnoreFiles: true,
+        });
+
+        // Paired rather than asserted alone: the default half is what proves the
+        // fixture's rule actually bites, so the bypass half cannot pass for the
+        // wrong reason (an unwritten ignore file would satisfy it silently).
+        // Both errors checked, or the default half passes on a failed run.
+        expect(obeyed.error).toBeUndefined();
+        expect(bypassed.error).toBeUndefined();
+        expect(obeyed.files?.map((file) => file.path) ?? []).not.toContain("docs/guide.md");
+        expect(bypassed.files?.map((file) => file.path)).toContain("docs/guide.md");
+      });
+
+      it("lifts only the rule that blocked the way in, not the rest of the file", async () => {
+        await buildIgnoredDocs();
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["docs"],
+          scopeIgnoresIgnoreFiles: true,
+        });
+
+        const paths = result.files?.map((file) => file.path) ?? [];
+        expect(paths).toContain("docs/guide.md");
+        // The whole reason this is safe: `*.secret` never stood between the root
+        // and `docs`, so it survives. Dropping the layer instead of the blocking
+        // rule would exfiltrate exactly the files an ignore file exists to hide.
+        expect(paths).not.toContain("docs/key.secret");
+      });
+
+      it("keeps honouring an ignore file that lives inside the selection", async () => {
+        await buildIgnoredDocs();
+        await fs.writeFile(path.join(tempDir, "docs", ".copytreeignore"), "draft.md\n");
+        await fs.writeFile(path.join(tempDir, "docs", "draft.md"), "# draft\n");
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["docs"],
+          scopeIgnoresIgnoreFiles: true,
+        });
+
+        const paths = result.files?.map((file) => file.path) ?? [];
+        expect(paths).toContain("docs/guide.md");
+        // Rules at or below the selection describe the subtree the caller asked
+        // for, so they are not what "let me in" was about.
+        expect(paths).not.toContain("docs/draft.md");
+      });
+
+      it("still applies the caller's own exclude inside the unblocked folder", async () => {
+        await buildIgnoredDocs();
+        // A control the `exclude` does NOT name. Without it this test passes on a
+        // bypass that silently stopped working: `docs/` is ignored by the
+        // fixture either way, so "guide.md is absent" alone proves nothing about
+        // `exclude` having run.
+        await fs.writeFile(path.join(tempDir, "docs", "intro.md"), "# intro\n");
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["docs"],
+          scopeIgnoresIgnoreFiles: true,
+          exclude: ["**/guide.md"],
+        });
+
+        expect(result.error).toBeUndefined();
+        const paths = result.files?.map((file) => file.path) ?? [];
+        // The bypass worked...
+        expect(paths).toContain("docs/intro.md");
+        // ...and `exclude` still bit inside it. This is the single behaviour that
+        // ruled out force-including the selection: `always` would have
+        // resurrected this file, since ProfileFilterStage returns on
+        // `alwaysInclude` before it ever consults `exclude`.
+        expect(paths).not.toContain("docs/guide.md");
+        // Attribution, so the absence is booked to `exclude` and not to some
+        // other layer that happened to drop it.
+        expect(result.excluded?.byReason.optionExclude ?? 0).toBeGreaterThan(0);
+      });
+
+      it("still applies the file-count budget inside the unblocked folder", async () => {
+        await buildIgnoredDocs();
+        await fs.writeFile(path.join(tempDir, "docs", "intro.md"), "# intro\n");
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["docs"],
+          scopeIgnoresIgnoreFiles: true,
+          maxFileCount: 1,
+          sort: "path",
+        });
+
+        expect(result.error).toBeUndefined();
+        // Two files are reachable inside the unblocked folder once the root rule
+        // is lifted (`key.secret` is dropped earlier by the surviving rule), so
+        // the budget has to bound them.
+        expect(result.files?.length).toBe(1);
+        expect(result.excluded?.byReason.fileCountBudget ?? 0).toBeGreaterThan(0);
+      });
+
+      it("bounds even a force-include by the file-count budget", async () => {
+        await buildIgnoredDocs();
+        await fs.writeFile(path.join(tempDir, "docs", "intro.md"), "# intro\n");
+
+        const forced = await copyTreeService.testConfig(tempDir, { always: ["docs/*.md"] });
+        const budgeted = await copyTreeService.testConfig(tempDir, {
+          always: ["docs/*.md"],
+          maxFileCount: 1,
+          sort: "path",
+        });
+
+        expect(forced.error).toBeUndefined();
+        expect(budgeted.error).toBeUndefined();
+        // Unbudgeted, `always` really does drag both ignored docs back in — that
+        // is the blast radius the wire text warns about, and asserting it here
+        // stops the budgeted half passing because the force-include silently
+        // stopped working. Containment rather than an exact list: this run is
+        // unscoped, so the fixture's root-level files come along too.
+        expect(forced.files?.map((file) => file.path)).toEqual(
+          expect.arrayContaining(["docs/guide.md", "docs/intro.md"])
+        );
+        // Budgeted, it does not: `BudgetStage` has no `alwaysInclude` exemption,
+        // which is the one bound the `always` description promises survives a
+        // force-include. Nothing else in the suite pins that claim.
+        expect(budgeted.files?.length).toBe(1);
+        expect(budgeted.excluded?.byReason.fileCountBudget ?? 0).toBeGreaterThan(0);
+      });
+
+      it("lets a directory scope subsume a file scope, so the child gets no override", async () => {
+        await buildIgnoredDocs();
+        await fs.writeFile(path.join(tempDir, "docs", ".copytreeignore"), "draft.md\n");
+        await fs.writeFile(path.join(tempDir, "docs", "draft.md"), "# draft\n");
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          // `resolveScope` drops an entry already covered by a directory
+          // ancestor, so this collapses to `["docs"]` and `draft.md` never gets
+          // its own root-to-entry override. Naming the exact file INSTEAD of its
+          // parent is the remedy, which is why the wire text says so.
+          scopePaths: ["docs", "docs/draft.md"],
+          scopeIgnoresIgnoreFiles: true,
+        });
+
+        expect(result.error).toBeUndefined();
+        const paths = result.files?.map((file) => file.path) ?? [];
+        expect(paths).toContain("docs/guide.md");
+        expect(paths).not.toContain("docs/draft.md");
+
+        // The remedy actually works: scope the file on its own and it arrives.
+        const exact = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["docs/draft.md"],
+          scopeIgnoresIgnoreFiles: true,
+        });
+        expect(exact.files?.map((file) => file.path)).toContain("docs/draft.md");
+      });
+
+      it("still applies the per-file size gate inside the unblocked folder", async () => {
+        await buildIgnoredDocs();
+        await fs.writeFile(path.join(tempDir, "docs", "big.md"), "x".repeat(300 * 1024));
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["docs"],
+          scopeIgnoresIgnoreFiles: true,
+          maxFileSize: 100 * 1024,
+        });
+
+        const paths = result.files?.map((file) => file.path) ?? [];
+        expect(paths).toContain("docs/guide.md");
+        // `always` lifts the gate; this must not, or "bypass an ignore file"
+        // would quietly also mean "ignore the size limit I set".
+        expect(paths).not.toContain("docs/big.md");
+      });
+
+      // Both names sit in the SDK's `globalExcludedDirectories`, and they are
+      // excluded by that config layer rather than by any ignore file — so the
+      // bypass has nothing to lift for them even when a caller scopes straight
+      // in. `build` is the one worth pinning alongside `node_modules`: it is the
+      // directory a caller is most likely to scope into expecting this flag to
+      // work, precisely because its own `.gitignore` usually names it too.
+      it.each(["node_modules", "build"])(
+        "leaves the config exclusion on %s standing even under the bypass",
+        async (excludedDir) => {
+          await fs.mkdir(path.join(tempDir, excludedDir, "nested"), { recursive: true });
+          await fs.writeFile(
+            path.join(tempDir, excludedDir, "nested", "index.js"),
+            "module.exports = 1;\n"
+          );
+
+          const result = await copyTreeService.testConfig(tempDir, {
+            scopePaths: [excludedDir],
+            scopeIgnoresIgnoreFiles: true,
+          });
+
+          // Errors first: `includedFiles === 0` is also what a failed run and an
+          // empty traversal look like, so on its own it would pass without the
+          // config layer doing anything.
+          expect(result.error).toBeUndefined();
+          expect(result.includedFiles).toBe(0);
+          // The companion `scopeIgnoresConfigExcludes` escape is deliberately
+          // never set: lifting an ignore rule is a different request from
+          // dragging a dependency tree or a build output in, and only the first
+          // one is on offer. Attribution proves it was that layer.
+          expect(result.excluded?.byReason.configExclude ?? 0).toBeGreaterThan(0);
+        }
+      );
+
+      it("also lifts a .gitignore rule blocking the way in, which the wire text has to admit", async () => {
+        // Deliberately not a name from `globalExcludedDirectories` — `build` or
+        // `dist` would be held out by the config layer and this would pass
+        // without the ignore rule ever being consulted.
+        await fs.writeFile(path.join(tempDir, ".gitignore"), "local-notes/\n");
+        await fs.mkdir(path.join(tempDir, "local-notes"), { recursive: true });
+        await fs.writeFile(path.join(tempDir, "local-notes", "todo.md"), "# todo\n");
+
+        const obeyed = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["local-notes"],
+        });
+        const result = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["local-notes"],
+          scopeIgnoresIgnoreFiles: true,
+        });
+
+        expect(obeyed.files?.map((file) => file.path) ?? []).not.toContain("local-notes/todo.md");
+        // Pinning the over-reach, not endorsing it: the SDK's escape covers both
+        // ignore files and cannot be narrowed to `.copytreeignore`. If a future
+        // SDK separates them this test is what says the description must change.
+        expect(result.files?.map((file) => file.path)).toContain("local-notes/todo.md");
+      });
+
+      it("scopes each named file independently, so a scattered curated bundle works", async () => {
+        await buildIgnoredDocs();
+        await fs.mkdir(path.join(tempDir, "src"), { recursive: true });
+        await fs.writeFile(path.join(tempDir, "src", "gen.ts"), "export const g = 1;\n");
+
+        const result = await copyTreeService.testConfig(tempDir, {
+          scopePaths: ["src/gen.ts", "docs/guide.md"],
+          scopeIgnoresIgnoreFiles: true,
+        });
+
+        // The issue's actual shape: source files plus a few docs the ignore file
+        // dropped. Each entry gets its own root-to-entry override, so mixing an
+        // ignored path with an ordinary one needs no per-file `always` patterns.
+        expect((result.files?.map((file) => file.path) ?? []).sort()).toEqual([
+          "docs/guide.md",
+          "src/gen.ts",
+        ]);
+      });
+    });
+
     it("explains an excluded folder as an exclusion rather than an empty result", async () => {
       await fs.mkdir(path.join(tempDir, "node_modules", "left-pad"), { recursive: true });
       await fs.writeFile(
@@ -234,6 +500,10 @@ describe("CopyTreeService against the installed CopyTree", () => {
       // The renderer's "why is this empty" toast reads byReason, so a pruned
       // folder has to be accounted for rather than vanishing silently.
       expect(result.excluded?.total).toBeGreaterThan(0);
+      // No pattern was supplied and none could have run — the walk was already
+      // empty. Naming a selector here would send a caller to fix the one part
+      // of its request that was correct (#11731).
+      expect(result.unmatchedSelector).toBeUndefined();
     });
 
     it("reports a scoped path that doesn't exist as a sanitized error", async () => {
@@ -448,6 +718,262 @@ describe("CopyTreeService against the installed CopyTree", () => {
       const nodes = await copyTreeService.getFileTree(tempDir);
 
       expect(nodes.map((node) => node.name)).not.toContain("logs");
+    });
+  });
+
+  // The shape an assistant produces when asked for "everything relevant to X,
+  // including supporting files and tests" (#11722): a handful of exact paths
+  // mixed with globs, scattered across the tree rather than under one subtree.
+  // `scopePaths` cannot express it — it takes literal subtrees and recomputes
+  // budgets over them — so this rides entirely on `includePaths`/`filter`.
+  describe("curated mixed selection", () => {
+    async function writeFixture(relativePath: string, contents: string) {
+      const absolute = path.join(tempDir, relativePath);
+      await fs.mkdir(path.dirname(absolute), { recursive: true });
+      await fs.writeFile(absolute, contents);
+    }
+
+    beforeEach(async () => {
+      await writeFixture("src/landscape/generator.ts", "export const GENERATOR_SENTINEL = 1;\n");
+      await writeFixture("src/landscape/support/math.ts", "export const SUPPORT_SENTINEL = 1;\n");
+      await writeFixture(
+        "src/landscape/support/nested/seed.ts",
+        "export const NESTED_SENTINEL = 1;\n"
+      );
+      await writeFixture("tests/landscape/generator.test.ts", "export const TEST_SENTINEL = 1;\n");
+      // Decoys: same tree, same extensions, deliberately unselected.
+      await writeFixture("src/landscape/preview.ts", "export const PREVIEW_DECOY = 1;\n");
+      await writeFixture("tests/terrain.test.ts", "export const TERRAIN_DECOY = 1;\n");
+      await writeFixture("docs/landscape.md", "# decoy\n");
+    });
+
+    const CURATED = [
+      "src/landscape/generator.ts",
+      "src/landscape/support/**/*.ts",
+      "tests/landscape/*.test.ts",
+    ];
+
+    it("selects exact paths and globs together, and nothing else", async () => {
+      const result = await copyTreeService.testConfig(tempDir, { includePaths: CURATED });
+
+      expect(result.error).toBeUndefined();
+      expect((result.files ?? []).map((file) => file.path).sort()).toEqual([
+        "src/landscape/generator.ts",
+        "src/landscape/support/math.ts",
+        "src/landscape/support/nested/seed.ts",
+        "tests/landscape/generator.test.ts",
+      ]);
+      // Exclusion accounting: files were walked and then ruled out by the
+      // pattern, so the count above is a filtered result rather than an empty
+      // traversal. (The exact-list assertion is what proves the selection; this
+      // catches the accounting going silent.)
+      expect(result.excluded?.byReason.filterPattern).toBeGreaterThan(0);
+      // ...and that same count is why blame is gated on `noFilesMatched` too:
+      // this run succeeded, so nothing is to blame for it (#11731).
+      expect(result.unmatchedSelector).toBeUndefined();
+    });
+
+    // The failure #11731 traced, reproduced against the real SDK: every path a
+    // caller sent named a directory that exists, and the run came back empty
+    // with no error and nothing to correct.
+    it("blames the patterns when a bare directory selects nothing", async () => {
+      const result = await copyTreeService.testConfig(tempDir, {
+        includePaths: ["src/landscape"],
+      });
+
+      // The directory is real — the same fixture the curated selection above
+      // pulls four files out of — so "no such path" is not the explanation.
+      expect(result.error).toBeUndefined();
+      expect(result.includedFiles).toBe(0);
+      expect(result.noFilesMatched).toBe(true);
+      // Files reached the pattern check and every one was rejected there, which
+      // is what makes the patterns rather than the traversal the culprit.
+      expect(result.excluded?.byReason.filterPattern).toBeGreaterThan(0);
+      expect(result.unmatchedSelector).toBe("includePaths");
+    });
+
+    it("blames neither selector when the glob form of the same folder works", async () => {
+      // The remedy the description now prescribes has to actually be the
+      // remedy, or the hint sends callers somewhere that fails the same way.
+      const result = await copyTreeService.testConfig(tempDir, {
+        includePaths: ["src/landscape/**"],
+      });
+
+      // The deepest fixture file specifically: a `/**` that regressed to direct
+      // children only would still leave `includedFiles` non-zero, so a count
+      // check alone would not notice the folder remedy half-working.
+      expect(result.files?.map((file) => file.path)).toContain(
+        "src/landscape/support/nested/seed.ts"
+      );
+      expect(result.noFilesMatched).toBeFalsy();
+      expect(result.unmatchedSelector).toBeUndefined();
+    });
+
+    // `noFilesMatched` is `files.length === 0` measured once the whole pipeline
+    // has run, and the size gate, the git filter and the budgets all run after
+    // the pattern check. So "some file failed the patterns" and "the run came
+    // back empty" can both be true while the patterns matched perfectly — the
+    // decoys supply the first, a later stage removes the real match. Blaming
+    // the patterns there would send a caller to rewrite the one field that
+    // worked, which is #11731 pointed the other way.
+    describe("a later stage, not the patterns, emptying the run", () => {
+      it("stays quiet when the size gate dropped the only match", async () => {
+        // The pattern selects exactly one real file; the gate then rejects it,
+        // while the unselected decoys have already been booked as filterPattern.
+        const result = await copyTreeService.testConfig(tempDir, {
+          includePaths: ["src/landscape/generator.ts"],
+          maxFileSize: 1,
+        });
+
+        expect(result.noFilesMatched).toBe(true);
+        // The precondition that makes this test meaningful: without it the run
+        // could be empty for some third reason and pass vacuously.
+        expect(result.excluded?.byReason.filterPattern).toBeGreaterThan(0);
+        expect(result.excluded?.byReason.sizeGate).toBeGreaterThan(0);
+        expect(result.unmatchedSelector).toBeUndefined();
+      });
+
+      // The git filter is the other post-pattern stage that can empty a run
+      // this way, but reaching it needs a real repository with a real diff.
+      // Its mapping is covered by the mocked `gitFilter` row in
+      // CopyTreeService.test.ts; the size gate above is what proves the
+      // post-pattern rule against the real pipeline, so a git fixture here
+      // would add process spawning without adding a distinct guarantee.
+    });
+
+    it("still blames a bare directory on a repo that has configured excludes", async () => {
+      // `exclude` is installed as an ignore LAYER on the walker, so it prunes
+      // before the patterns are consulted and proves nothing about them. It is
+      // also not optional in practice: the IPC handler folds a project's
+      // `excludedPaths` and `alwaysExclude` into `exclude` whenever the caller
+      // omits it, so treating its accounting as post-pattern would silence the
+      // #11731 diagnostic on exactly the configured repositories that need it.
+      const result = await copyTreeService.testConfig(tempDir, {
+        includePaths: ["src/landscape"],
+        exclude: ["docs/**"],
+      });
+
+      expect(result.noFilesMatched).toBe(true);
+      // The precondition: the exclude really did book entries, so this is not
+      // passing because the layer never fired.
+      expect(result.excluded?.byReason.optionExclude).toBeGreaterThan(0);
+      expect(result.unmatchedSelector).toBe("includePaths");
+    });
+
+    it("carries the curated files, and only those, into a real generated bundle", async () => {
+      const result = await copyTreeService.generate(tempDir, { includePaths: CURATED });
+
+      expect(result.error).toBeUndefined();
+      expect(result.fileCount).toBe(4);
+      for (const sentinel of [
+        "GENERATOR_SENTINEL",
+        "SUPPORT_SENTINEL",
+        "NESTED_SENTINEL",
+        "TEST_SENTINEL",
+      ]) {
+        expect(result.content).toContain(sentinel);
+      }
+      for (const decoy of ["PREVIEW_DECOY", "TERRAIN_DECOY"]) {
+        expect(result.content).not.toContain(decoy);
+      }
+    });
+
+    // The regression for the `||` collapse: `includePaths` used to win outright,
+    // so a caller that split its selection across both fields silently lost the
+    // `filter` half with no error and no diagnostic (#11722).
+    it("unions includePaths with filter instead of letting one win", async () => {
+      const result = await copyTreeService.testConfig(tempDir, {
+        includePaths: ["src/landscape/generator.ts"],
+        filter: ["tests/landscape/*.test.ts"],
+      });
+
+      expect(result.error).toBeUndefined();
+      expect((result.files ?? []).map((file) => file.path).sort()).toEqual([
+        "src/landscape/generator.ts",
+        "tests/landscape/generator.test.ts",
+      ]);
+    });
+
+    it("accepts a bare string filter alongside includePaths", async () => {
+      const result = await copyTreeService.testConfig(tempDir, {
+        includePaths: ["src/landscape/generator.ts"],
+        filter: "tests/landscape/*.test.ts",
+      });
+
+      expect((result.files ?? []).map((file) => file.path).sort()).toEqual([
+        "src/landscape/generator.ts",
+        "tests/landscape/generator.test.ts",
+      ]);
+    });
+
+    // KNOWN UPSTREAM GAP, not a Daintree one: a curated glob cannot reach a
+    // dotfile. CopyTree 0.17 builds its include matcher as
+    // `micromatch.matcher(this.patterns)` (FileDiscoveryStage.js:485) with no
+    // `dot: true`, while the force-include matcher three lines up
+    // (FileDiscoveryStage.js:472) sets it — so `always` sees dotfiles and
+    // `filter`/`includePaths` do not. That costs a curated bundle things like
+    // `.github/workflows/**` or a dotfile config; ordinary sources and tests,
+    // which is what the feature is for, are unaffected.
+    //
+    // Pinned as current behavior rather than `it.fails`, which flips ANY
+    // failure to green — a broken fixture write or a renamed option would have
+    // "passed" it forever. The non-dot control is what makes this honest: it
+    // proves the glob and the traversal work, so the dotfile's absence is the
+    // upstream gap and not a typo. When a copytree release with `{ dot: true }`
+    // lands and this repo's dependency is raised to it, the second assertion
+    // starts failing — flip it to `toContain` and delete this comment.
+    it("does not reach a dotfile through a curated glob (upstream copytree gap)", async () => {
+      await writeFixture("config/landscape/.defaults.json", '{"DOTFILE_SENTINEL":1}\n');
+      await writeFixture("config/landscape/visible.json", '{"CONTROL_SENTINEL":1}\n');
+
+      const result = await copyTreeService.testConfig(tempDir, {
+        includePaths: ["config/landscape/**"],
+      });
+
+      expect(result.error).toBeUndefined();
+      const selected = (result.files ?? []).map((file) => file.path);
+      expect(selected).toContain("config/landscape/visible.json");
+      expect(selected).not.toContain("config/landscape/.defaults.json");
+    });
+
+    it("still selects everything when neither field is given", async () => {
+      const result = await copyTreeService.testConfig(tempDir, {});
+
+      expect((result.files ?? []).map((file) => file.path)).toContain("src/landscape/preview.ts");
+    });
+
+    // The merge must never widen a selection. An absent filter means "the whole
+    // worktree" to the SDK, so a supplied-but-unmatchable selection that got
+    // normalized away would put the entire repo on the user's clipboard — the
+    // opposite of what the caller asked for, and worst exactly when an
+    // assistant emits a malformed list.
+    it("copies nothing, not everything, when the selection matches nothing", async () => {
+      const result = await copyTreeService.testConfig(tempDir, {
+        includePaths: ["does/not/exist/**"],
+      });
+
+      const selected = (result.files ?? []).map((file) => file.path);
+      expect(selected).toEqual([]);
+      expect(selected).not.toContain("src/landscape/preview.ts");
+    });
+
+    it("treats a blank pattern as unmatchable rather than as no selection", async () => {
+      // Both validated boundaries reject a blank entry before this point; if one
+      // ever reaches the service it must still fail closed rather than widen.
+      const result = await copyTreeService.testConfig(tempDir, { includePaths: [""] });
+
+      expect((result.files ?? []).map((file) => file.path)).not.toContain(
+        "src/landscape/preview.ts"
+      );
+    });
+
+    // An empty array cannot express "select nothing" to the SDK — it reads as
+    // "no filter" and copies everything — which is why the schemas reject it
+    // rather than the service trying to render it harmless.
+    it("documents that an empty selection array would widen, hence the schema guard", async () => {
+      const result = await copyTreeService.testConfig(tempDir, { includePaths: [] });
+
+      expect((result.files ?? []).map((file) => file.path)).toContain("src/landscape/preview.ts");
     });
   });
 });

@@ -14,6 +14,7 @@ import { useHomeDir } from "@/hooks/app/useHomeDir";
 import { logError, logWarn } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
 import { resolveWorkspaceCwd } from "@/utils/workspaceCwd";
+import { readViewDevServerCommand } from "@/utils/devServerCommand";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -408,9 +409,16 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         // Handle dev-preview pane specially
         if (agentId === "dev-preview") {
           try {
+            // The same command `devServer.start` seeds. Without it a preview
+            // opened from the worktree menu or over MCP carries none of its
+            // own, so it behaves differently from one opened anywhere else
+            // (#11668). Resolved from the view's own project, never the
+            // globally-current one.
+            const devCommand = await readViewDevServerCommand();
             const terminalId = await addPanel({
               kind: "dev-preview",
               title: "Dev Server",
+              devCommand,
               cwd,
               worktreeId: effectiveWorktreeId || undefined,
               location: launchOptions?.location,

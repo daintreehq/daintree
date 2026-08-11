@@ -33,6 +33,7 @@ import {
 } from "../helpers/launch";
 import { dismissTelemetryConsent } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
+import { isToolbarButtonReachable, openDevPreview } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { configureClaudeAuthEnv, hasClaudeApiKey } from "../helpers/claudeAuth";
 import { writeTerminalInput, getTerminalText } from "../helpers/terminal";
@@ -169,7 +170,7 @@ async function snap(page: Page, slug: string): Promise<string> {
 
 async function launchClaude(app: ElectronApplication, page: Page): Promise<Locator> {
   await page.locator(SEL.agent.trayButton).click();
-  await page.getByRole("menuitem", { name: "Claude" }).click();
+  await page.locator(SEL.agent.launcherRow("Claude")).first().click();
   const panel = page.locator(SEL.agent.panel).first();
   await expect(panel).toBeVisible({ timeout: 60_000 });
   void app;
@@ -178,7 +179,7 @@ async function launchClaude(app: ElectronApplication, page: Page): Promise<Locat
 
 async function launchOpenCode(page: Page): Promise<Locator> {
   await page.locator(SEL.agent.trayButton).click();
-  await page.getByRole("menuitem", { name: "OpenCode" }).click();
+  await page.locator(SEL.agent.launcherRow("OpenCode")).first().click();
   const panel = page.locator(SEL.opencodeAgent.panel).first();
   await expect(panel).toBeVisible({ timeout: 60_000 });
   return panel;
@@ -436,10 +437,13 @@ test.describe.serial("Marketing Screenshots — Daintree Store Reel", () => {
       });
       annotateAgentResponse(devResponded, "Claude (dev preview)", 240_000);
 
-      // Open the dev preview panel.
-      const devBtn = page.locator(SEL.toolbar.openDevPreview);
-      if (await devBtn.isVisible({ timeout: T_MEDIUM }).catch(() => false)) {
-        await devBtn.click();
+      // Open the dev preview panel. Reachability rather than a direct locator:
+      // since #11667 `dev-server` is not a default toolbar button, so on this
+      // scene's fresh profile it is reached through the panel tray — a direct
+      // probe would silently skip the panel and produce a screenshot of the
+      // wrong scene.
+      if (await isToolbarButtonReachable(page, SEL.toolbar.openDevPreview, T_MEDIUM)) {
+        await openDevPreview(page);
       }
 
       // Wait for the panel to reach a "Running" state if possible — gracefully

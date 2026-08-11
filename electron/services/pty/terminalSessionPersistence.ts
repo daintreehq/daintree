@@ -234,6 +234,43 @@ export function resizeMirror(
 }
 
 /**
+ * Whether this mirror still owes a resize to reach `cols`x`rows` (#11719).
+ *
+ * The live grid alone is not the answer. While a replay window is open the
+ * mirror is parked at the capture grid and the resize that matters is the
+ * PARKED TARGET — the geometry the replay will reflow to when it lands. A
+ * mirror whose visible grid happens to match while its parked target is stale
+ * is about to diverge, so it needs the re-assert just as much as one whose
+ * grid is already wrong.
+ *
+ * Lives here rather than at the call sites so `replayWindows` stays private.
+ */
+export function mirrorNeedsResize(
+  headlessTerminal: HeadlessTerminalType,
+  cols: number,
+  rows: number
+): boolean {
+  const window = replayWindows.get(headlessTerminal);
+  if (window) {
+    return window.target.cols !== cols || window.target.rows !== rows;
+  }
+  return headlessTerminal.cols !== cols || headlessTerminal.rows !== rows;
+}
+
+/**
+ * Whether a session replay currently owns this mirror's grid.
+ *
+ * Callers need this to tell a mirror that has DRIFTED off the PTY grid from one
+ * deliberately parked on a capture grid: the parked mirror's live geometry is
+ * expected to disagree, and treating that as divergence produces a false report
+ * out of healthy behaviour. It also marks the resizes that will only record an
+ * intent, so callers can skip work that only pays off for a resize applying now.
+ */
+export function mirrorReplayInFlight(headlessTerminal: HeadlessTerminalType): boolean {
+  return replayWindows.has(headlessTerminal);
+}
+
+/**
  * Park `headlessTerminal` on the grid a snapshot was captured at for the
  * duration of its replay, remembering the grid to return to.
  *

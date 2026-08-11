@@ -9,6 +9,7 @@ import { clearPluginAgentRegistryForTests } from "../../../../shared/config/plug
 import { getEffectiveAgentConfig } from "../../../../shared/config/agentRegistry.js";
 import { clearPluginProcessToolRegistryForTests } from "../../../../shared/config/pluginProcessToolRegistry.js";
 import { buildDetectedCandidate } from "../../../services/ProcessDetector/candidateHelpers.js";
+import { normalizeScrollbackLines } from "../../../../shared/config/scrollback.js";
 
 function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
   const ptyManager = {
@@ -44,7 +45,8 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     markChecked: vi.fn(),
     updateObservedTitle: vi.fn(),
     transitionState: vi.fn(() => true),
-    trimScrollback: vi.fn(),
+    trimScrollback: vi.fn(() => ({ trimmed: 7, skipped: 0 })),
+    trimIdleAnalysisSessions: vi.fn(() => ({ trimmed: 2, skipped: 5 })),
     setActivityMonitorTier: vi.fn(),
     setProcessTreeCache: vi.fn(),
     setPtyPool: vi.fn(),
@@ -358,6 +360,61 @@ describe("createPtyHostMessageDispatcher", () => {
       requestId: 7,
       id: "term-1",
       agentSessionId: "session-42",
+    });
+  });
+
+  describe("trim-state (#11674)", () => {
+    it("routes an idle-only trim through the guarded pass, never the bulk flatten", () => {
+      // trimScrollback exempts nothing by design — it is an emergency lever.
+      // A graduated pressure trim reaching it would flatten a working agent's
+      // scrollback (and its serialize source) for a reclaim main cannot even
+      // measure.
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+
+      dispatch({ type: "trim-state", targetLines: 500, requestId: "trim-1", scope: "idle-only" });
+
+      expect(ctx.ptyManager.trimIdleAnalysisSessions).toHaveBeenCalledWith({ targetLines: 500 });
+      expect(ctx.ptyManager.trimScrollback).not.toHaveBeenCalled();
+    });
+
+    it("routes an 'all' trim through the unguarded flatten (#10948)", () => {
+      // The post-pause emergency: the governor skips its own pre-pause trim at
+      // critical utilization, so this is the last reclaim available. Applying
+      // the governance policy here would spare exactly the active agents
+      // holding the memory and leave nothing to reclaim.
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+
+      dispatch({ type: "trim-state", targetLines: 500, requestId: "trim-2", scope: "all" });
+
+      expect(ctx.ptyManager.trimScrollback).toHaveBeenCalledWith(500);
+      expect(ctx.ptyManager.trimIdleAnalysisSessions).not.toHaveBeenCalled();
+    });
+
+    it("replies with the manager's counts against the request id", () => {
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+
+      dispatch({ type: "trim-state", targetLines: 500, requestId: "trim-3", scope: "idle-only" });
+
+      expect(ctx.sendEvent).toHaveBeenCalledWith({
+        type: "trim-state-result",
+        requestId: "trim-3",
+        result: { trimmed: 2, skipped: 5 },
+      });
+    });
+
+    it("normalizes the target before applying it", () => {
+      // 0 is the legacy "unlimited" sentinel; passing it through unnormalized
+      // would ask xterm for a scrollback it rejects.
+      const ctx = makeCtx();
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+
+      dispatch({ type: "trim-state", targetLines: 0, requestId: "trim-4", scope: "idle-only" });
+
+      const [[opts]] = vi.mocked(ctx.ptyManager.trimIdleAnalysisSessions).mock.calls;
+      expect(opts?.targetLines).toBe(normalizeScrollbackLines(0));
     });
   });
 });

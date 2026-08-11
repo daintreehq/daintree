@@ -58,6 +58,7 @@ import { registerForgeSettingsHandlers } from "./handlers/forgeSettings.js";
 import { registerForgeAuditHandlers } from "./handlers/forgeAudit.js";
 import { initForgeHealthRelay, disposeForgeHealthRelay } from "../services/forgeHealthRelay.js";
 import { registerRunHistoryHandlers } from "./handlers/runHistory.js";
+import { registerCopyTreeHistoryHandlers } from "./handlers/copyTreeHistory.js";
 import { registerFleetHandlers } from "./handlers/fleet.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
@@ -187,6 +188,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     });
     register(() => registerForgeAuditHandlers());
     register(() => registerRunHistoryHandlers());
+    register(() => registerCopyTreeHistoryHandlers(deps));
     register(() => registerFleetHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerMcpServerHandlers());

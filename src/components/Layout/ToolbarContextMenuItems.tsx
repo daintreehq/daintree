@@ -43,7 +43,7 @@ interface ToolbarContextMenuItemsProps {
 // (issue #9825). The Customize entry dispatches the existing
 // `app.settings.openTab` action with `{ tab: "toolbar" }` so the action's
 // `source` tag (set by `useMenuActionSource`) is correct for each surface —
-// `context-menu` for the right-click, `menu` for the agent-tray dropdown.
+// `context-menu` for the right-click, `menu` for the launcher dropdown.
 export function ToolbarContextMenuItems({
   buttonId,
   side,

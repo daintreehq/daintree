@@ -39,6 +39,8 @@ import {
 import type { ProjectSwitchOutgoingState } from "@shared/types/ipc/project";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { isEphemeralPanel } from "./slices/panelRegistry/panelCount";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { isValidTerminalGeometry } from "@shared/types/terminal";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -53,6 +55,50 @@ function shouldPersistTerminal(t: NonNullable<CarrierPanel>): boolean {
     !isEphemeralPanel(t) &&
     !isSmokeTestTerminalId(t.id)
   );
+}
+
+/**
+ * Per-panel grids for the outgoing project, keyed by panel id.
+ *
+ * Restored by #11718's construction-geometry fix, which reads this map to build
+ * each pane's xterm on the grid its PTY is already on instead of xterm's 80×24
+ * default. The writer this replaces was deleted as collateral in `30ed7877f`
+ * (the per-project WebContentsView rewrite, which replaced `switchProject`
+ * wholesale); nothing has written the map since, so it was empty on disk and
+ * the August fix silently defaulted every restored pane back to 80×24.
+ *
+ * Reads `terminal.cols/rows` — the grid xterm is actually on, and therefore the
+ * renderer's belief about where the PTY sits — not `latestCols/latestRows`,
+ * which is the target cache and can describe a resize that has not been applied
+ * (or reached the PTY) yet. Prewarmed panes count: their construction grid is
+ * that same belief, and carrying it across the restore is the point. A live
+ * reconnect overrides all of this with the PTY's own grid anyway
+ * (`resolveRestoreGeometry`); this map is what the no-live-PTY paths fall back
+ * to.
+ */
+function collectTerminalSizes(
+  panels: NonNullable<CarrierPanel>[]
+): Record<string, { cols: number; rows: number }> {
+  const sizes: Record<string, { cols: number; rows: number }> = {};
+  for (const panel of panels) {
+    const managed = terminalInstanceService.get(panel.id);
+    if (!managed) continue;
+    // Mid serialized restore, `terminal.cols` is deliberately the SNAPSHOT's
+    // capture grid — a snapshot only decodes at the width it was captured on —
+    // and `pendingRestoreGeometry` holds where the pane actually belongs
+    // (#11552). Switching projects during a replay would otherwise persist a
+    // temporary capture width as the pane's real grid.
+    const grid =
+      managed.isSerializedRestoreInProgress && managed.pendingRestoreGeometry
+        ? managed.pendingRestoreGeometry
+        : { cols: managed.terminal.cols, rows: managed.terminal.rows };
+    // Main sanitizes too, but an implausible grid should never reach the wire:
+    // a rejected entry restores at the default, a bad one restores wrong.
+    if (isValidTerminalGeometry(grid)) {
+      sizes[panel.id] = grid;
+    }
+  }
+  return sizes;
 }
 
 function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
@@ -93,10 +139,11 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   // without preservation here a switch would silently overwrite an extension
   // panel's on-disk fields with a base-only snapshot.
   const prevSnapshotMap = panelPersistence.getPreviousSnapshotMap(projectId);
-  const terminals = panelIds
+  const persistablePanels = panelIds
     .map((id) => panelsById[id])
-    .filter((t): t is NonNullable<CarrierPanel> => t != null && shouldPersistTerminal(t))
-    .map((t) => panelToSnapshot(t, prevSnapshotMap?.get(t.id)));
+    .filter((t): t is NonNullable<CarrierPanel> => t != null && shouldPersistTerminal(t));
+  const terminals = persistablePanels.map((t) => panelToSnapshot(t, prevSnapshotMap?.get(t.id)));
+  const terminalSizes = collectTerminalSizes(persistablePanels);
 
   const tabGroupArray = Array.from(tabGroups.values()).filter((g) => g.panelIds.length > 1);
 
@@ -109,6 +156,7 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
 
   return {
     terminals,
+    terminalSizes,
     draftInputs,
     tabGroups: tabGroupArray,
     activeWorktreeId,

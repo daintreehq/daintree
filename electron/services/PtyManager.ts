@@ -142,10 +142,36 @@ export class PtyManager extends EventEmitter {
     }
   }
 
-  trimScrollback(targetLines: number): void {
+  /**
+   * Uniform, unguarded flatten of every terminal's analysis scrollback.
+   *
+   * Deliberately exempts nothing, and both its callers are emergencies: the
+   * resource governor's `trimBuffers` fallback (`electron/pty-host.ts`) and the
+   * `"all"`-scoped `trim-state` main sends after the governor has already
+   * paused every PTY. On the host's fixed heap budget active agents ARE the
+   * dominant consumer, so sparing them leaves nothing to reclaim and
+   * self-defeats into the visible pause this exists to avoid (#10948,
+   * reverted). Graduated pressure levers — which are redundant with the
+   * governor and must not cost more than they reclaim — use
+   * {@link trimIdleAnalysisSessions} instead (#11674).
+   *
+   * Counts are reported for the same reason they are on the guarded pass: the
+   * caller cannot observe this trim any other way. `skipped` here means "was
+   * already at or below the target", never "was protected".
+   */
+  trimScrollback(targetLines: number): { trimmed: number; skipped: number } {
+    let trimmed = 0;
+    let skipped = 0;
     for (const terminal of this.registry.getAll()) {
+      const before = terminal.getCurrentScrollback();
       terminal.trimScrollback(targetLines);
+      if (terminal.getCurrentScrollback() < before) {
+        trimmed++;
+      } else {
+        skipped++;
+      }
     }
+    return { trimmed, skipped };
   }
 
   /**
@@ -202,9 +228,22 @@ export class PtyManager extends EventEmitter {
    * Governance trim pass: shrink the analysis scrollback of terminals that have
    * been quiet past the idle floor and have no active agent
    * (ACTIVE_AGENT_STATES — the same set that protects against eviction and
-   * hibernation). Unlike the resource governor's heap-pressure trims this is
-   * profile-driven (efficiency entry), so the per-session policy is the only
-   * thing between it and a working agent — it must stay conservative.
+   * hibernation).
+   *
+   * Two callers, both reaching it through a host handler: the profile-driven
+   * efficiency entry, and the `idle-only` scope of main's memory-pressure
+   * `trim-state`. Neither is a last-resort lever, so the per-session policy is
+   * the only thing between either of them and a working agent and it must stay
+   * conservative. The post-pause emergency (`trim-state` scope `all`) and the
+   * governor's own fallback deliberately bypass this and use
+   * {@link trimScrollback}. The buffer this shrinks is also what
+   * `getSerializedStateAsync()` serializes, so an over-eager trim costs restore
+   * fidelity, not just live scrollback.
+   *
+   * `trimmed` counts only terminals whose cap moved: the analysis backend can
+   * refuse a resize, and reporting those as trimmed would be exactly the
+   * unfalsifiable telemetry #11674 is about. It still describes the shrink this
+   * process applied and dispatched, not a worker's confirmation of it.
    */
   trimIdleAnalysisSessions(opts?: { now?: number; targetLines?: number; idleTrimMs?: number }): {
     trimmed: number;
@@ -216,11 +255,12 @@ export class PtyManager extends EventEmitter {
     let skipped = 0;
     for (const terminal of this.registry.getAll()) {
       const info = terminal.getInfo();
+      const before = terminal.getCurrentScrollback();
       const eligible = shouldTrimAnalysisSession({
         agentState: info.agentState,
         lastInputTime: info.lastInputTime,
         lastOutputTime: info.lastOutputTime,
-        scrollbackLines: terminal.getCurrentScrollback(),
+        scrollbackLines: before,
         minScrollbackLines: targetLines,
         now,
         idleTrimMs: opts?.idleTrimMs,
@@ -230,7 +270,11 @@ export class PtyManager extends EventEmitter {
         continue;
       }
       terminal.trimScrollback(targetLines);
-      trimmed++;
+      if (terminal.getCurrentScrollback() < before) {
+        trimmed++;
+      } else {
+        skipped++;
+      }
     }
     return { trimmed, skipped };
   }

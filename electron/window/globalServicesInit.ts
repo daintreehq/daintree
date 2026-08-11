@@ -6,10 +6,7 @@ import {
   isStoreMigrationError,
 } from "../services/StoreMigrations.js";
 import { initializeTelemetry, setOnboardingCompleteTag } from "../services/TelemetryService.js";
-import {
-  agentConnectivityService,
-  getServiceConnectivityRegistry,
-} from "../services/connectivity/index.js";
+import { getServiceConnectivityRegistry } from "../services/connectivity/index.js";
 import { notificationService } from "../services/NotificationService.js";
 import { getActionBreadcrumbService } from "../services/ActionBreadcrumbService.js";
 import { getPluginActionAuditService } from "../services/PluginActionAuditService.js";
@@ -42,6 +39,10 @@ import {
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
 import { runScratchCleanup } from "../services/ScratchCleanupService.js";
+import {
+  initializeAgentCompileCacheCleanup,
+  requestAgentCompileCacheCleanup,
+} from "../services/AgentCompileCacheCleanupService.js";
 import { runAssistantScratchCleanup } from "../services/AssistantScratchService.js";
 import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
 import {
@@ -366,6 +367,13 @@ export async function initGlobalServices(
               runAssistantScratchCleanup().catch((err) => {
                 logError("[DiskSpaceMonitor] assistant scratch cleanup threw", err);
               });
+              // The agent compile cache is itself a plausible cause of the
+              // pressure — it reached 9.3 GB unbounded in #11699 — so it is
+              // worth reclaiming on the critical edge rather than waiting for
+              // the next idle tick.
+              requestAgentCompileCacheCleanup().catch((err) => {
+                logError("[DiskSpaceMonitor] agent compile cache cleanup threw", err);
+              });
               try {
                 const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
                 if (retentionDays > 0) {
@@ -456,8 +464,11 @@ export async function initGlobalServices(
             }
             return viewsEvicted;
           },
-          trimPtyHostState: () => {
-            getPtyClient()?.trimState(SCROLLBACK_BACKGROUND);
+          trimPtyHostState: async () => {
+            const client = getPtyClient();
+            if (!client) return { trimmed: 0, skipped: 0, shardsTotal: 0, shardsFailed: 0 };
+            // Graduated lever: never at the cost of a working agent's history.
+            return client.trimState(SCROLLBACK_BACKGROUND, "idle-only");
           },
           sampleBlinkMemory: () => {
             if (!windowRegistry) return;
@@ -527,18 +538,10 @@ export async function initGlobalServices(
   // module load; probing starts in activate() and stops on deactivation), so
   // a disabled plugin issues no GitHub network and holds no token state.
 
-  // Background agent provider reachability probes (Claude, Gemini, Codex)
-  // and the registry that aggregates GitHub, agents, and MCP into a single
+  // The registry that aggregates GitHub token health and MCP into a single
   // per-service connectivity snapshot for renderers. Registry must register
   // before mcp-server so it wires onStatusChange before MCP's first event —
   // preserved by the group split (mcp-server drains in the heavy group 3).
-  registerDeferredTask({
-    name: "agent-connectivity",
-    run: () => {
-      agentConnectivityService.start();
-    },
-  });
-
   registerDeferredTask({
     name: "service-connectivity-registry",
     run: () => {
@@ -882,27 +885,28 @@ export async function initGlobalServices(
   // and return empty lists from internal Maps until initialize() populates them.
   // Plugin contributions broadcast on registration, so late init is renderer-safe.
   //
-  // Timing note (#10322): `initialize()` registers panel-kind contributions
-  // mid-chain, so the `plugin:panel-kinds-changed` broadcast can reach the
-  // renderer a microtask before `setPluginDirResolver()` below swaps the
-  // `plugin://` handler off its placeholder. A plugin panel restored from
-  // persisted state could therefore 404 its first asset fetch. That window is
-  // self-healing: `PluginViewHost`'s `ErrorBoundary` offers a "Try again" that
-  // re-imports once the live resolver is in place.
   registerDeferredTask({
     name: "plugin-service",
     run: async () => {
       const { pluginService } = await import("../services/PluginService.js");
+      // Point the already-registered `plugin://` handler at the live resolver
+      // BEFORE `initialize()` runs, not after (#11728). `getPluginDir` is a
+      // plain lookup in a map that exists from construction, so it is safe to
+      // call at any point — it simply returns `undefined` until a plugin
+      // registers. Wiring it after `initialize()` left the placeholder resolver
+      // live for the whole scan: `initialize()` sweeps temp dirs, fetches the
+      // blocklist over the network, then awaits three sequential `loadFromDir`
+      // passes (builtin, user, sideload), while the FIRST plugin's
+      // `registerPanelKind` already broadcast an addressable `componentPath`.
+      // Every `plugin://` module request in that window 404'd, and a rejected
+      // dynamic import is permanent for that specifier — the module map has no
+      // eviction, so "Try again" re-imported the same poisoned URL forever.
+      setPluginDirResolver((pluginId) => pluginService.getPluginDir(pluginId));
       try {
         await pluginService.initialize();
       } catch (err) {
         console.error("[MAIN] PluginService initialization failed:", err);
       }
-      // Point the already-registered `plugin://` handler at the live resolver
-      // (#10322). main.ts registers the handler before first paint with a
-      // placeholder that 404s; now that the singleton is initialized, swap in
-      // the real `getPluginDir` so plugin asset requests resolve.
-      setPluginDirResolver((pluginId) => pluginService.getPluginDir(pluginId));
       // macOS: drain any `.dntr` paths queued during cold launch (Finder
       // double-click / "Open With") and take over live open-file events now
       // that PluginService can install an approved archive. Each path is queued
@@ -1110,6 +1114,13 @@ export async function initGlobalServices(
   // `child-process-gone` listener BEFORE the GPU process spawns (first
   // window creation), or startup-window GPU crashes are silently dropped.
   // It stays as an eager pre-window call in main.ts.
+  registerDeferredTask({
+    name: "agent-compile-cache-cleanup",
+    // Fire-and-forget: the first sweep on an affected install may delete
+    // gigabytes, which must not serialize the rest of the deferred queue.
+    run: () => initializeAgentCompileCacheCleanup(),
+  });
+
   registerDeferredTask({
     name: "trashed-pid-cleanup",
     run: async () => {

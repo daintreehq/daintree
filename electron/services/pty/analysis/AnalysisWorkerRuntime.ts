@@ -29,6 +29,7 @@ const HEAP_ACTIVITY_MESSAGE_TYPES: ReadonlySet<HostToWorkerMessage["type"]> = ne
   "data",
   "prelude",
   "resize",
+  "ensure-geometry",
   "request",
   "free",
   "set-scrollback",
@@ -85,7 +86,13 @@ export class AnalysisWorkerRuntime {
     for (const [terminalId, session] of this.sessions) {
       const stats = session.bufferStats();
       if (stats) {
-        sessions.push({ terminalId, bufferLines: stats.bufferLines, cols: stats.cols });
+        sessions.push({
+          terminalId,
+          bufferLines: stats.bufferLines,
+          cols: stats.cols,
+          rows: stats.rows,
+          replayInFlight: stats.replayInFlight,
+        });
       }
     }
     return {
@@ -190,6 +197,9 @@ export class AnalysisWorkerRuntime {
         return;
       case "resize":
         this.sessions.get(msg.terminalId)?.resize(msg.cols, msg.rows);
+        return;
+      case "ensure-geometry":
+        this.sessions.get(msg.terminalId)?.ensureGeometry(msg.cols, msg.rows);
         return;
       case "input":
         this.sessions.get(msg.terminalId)?.notifyInput(msg.data);

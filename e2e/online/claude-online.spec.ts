@@ -123,11 +123,11 @@ test.describe("Claude Online Flow", () => {
     await test.step("launch Claude agent", async () => {
       const { window } = ctx;
 
-      // Agents are unpinned by default, so the toolbar shows the Agent Tray
-      // rather than a direct "Start Claude Agent" button. Open the tray and
-      // click the Claude entry under "Launch".
+      // Agents are unpinned by default, so the toolbar shows the launcher
+      // rather than a direct "Start Claude Agent" button. Open it and click the
+      // Claude row under "Launch".
       await window.locator(SEL.agent.trayButton).click();
-      await window.getByRole("menuitem", { name: "Claude" }).click();
+      await window.locator(SEL.agent.launcherRow("Claude")).first().click();
 
       const agentPanel = window.locator(SEL.agent.panel).first();
       await expect(agentPanel).toBeVisible({ timeout: 30_000 });

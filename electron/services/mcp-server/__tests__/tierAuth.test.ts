@@ -397,6 +397,33 @@ describe("external tool surface invariants (#10701, #11537)", () => {
     }
   );
 
+  // The clipboard bundle is the one CopyTree tool an external agent gets: it
+  // can read files for itself, but only Daintree can write the user's system
+  // clipboard. Its siblings stay off the surface, so this pins the membership
+  // rather than the whole namespace (#11722).
+  it("exposes the curated clipboard bundle to the external tier", () => {
+    expect(builtInIds.has("copyTree.generateAndCopyFile")).toBe(true);
+    expect(isTierPermitted("external", "copyTree.generateAndCopyFile")).toBe(true);
+    expect(shouldExposeTool(makeEntry({ id: "copyTree.generateAndCopyFile" }), "external")).toBe(
+      true
+    );
+  });
+
+  it("keeps every other copyTree tool off the external surface", () => {
+    // Derived from the registry rather than listed by hand: a hardcoded list
+    // silently stops covering any copyTree tool added later, which is exactly
+    // when this guard matters.
+    const others = [...BUILT_IN_ACTION_IDS].filter(
+      (id) => id.startsWith("copyTree.") && id !== "copyTree.generateAndCopyFile"
+    );
+
+    expect(others.length).toBeGreaterThan(0);
+    for (const id of others) {
+      expect(isTierPermitted("external", id)).toBe(false);
+      expect(shouldExposeTool(makeEntry({ id }), "external")).toBe(false);
+    }
+  });
+
   it("exposure and dispatch gates agree for a sensitive non-allowlisted action", () => {
     const entry = makeEntry({ id: "system.openExternal", danger: "safe" });
     expect(shouldExposeTool(entry, "external")).toBe(

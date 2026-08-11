@@ -89,10 +89,10 @@ describe("dispatchToolbarVisibility", () => {
     expect(deps.toggleButtonVisibility).toHaveBeenCalledWith("browser", "left");
   });
 
-  it("agent-tray is not an agent ID — routes through toggleButtonVisibility", () => {
+  it("launcher is not an agent ID — routes through toggleButtonVisibility", () => {
     const deps = makeDeps();
-    dispatchToolbarVisibility("agent-tray", "left", deps);
-    expect(deps.toggleButtonVisibility).toHaveBeenCalledWith("agent-tray", "left");
+    dispatchToolbarVisibility("launcher", "left", deps);
+    expect(deps.toggleButtonVisibility).toHaveBeenCalledWith("launcher", "left");
     expect(deps.setAgentPinned).not.toHaveBeenCalled();
   });
 

@@ -57,7 +57,7 @@ test.describe.serial("Core: Browser Panel", () => {
         let count = await getGridPanelCount(window);
         while (count > 0) {
           const panel = window.locator(SEL.panel.gridPanel).first();
-          await panel.locator(SEL.panel.close).first().click({ force: true });
+          await panel.locator(SEL.panel.close).first().click();
           await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(count - 1);
           count--;
         }
@@ -181,7 +181,7 @@ test.describe.serial("Core: Browser Panel", () => {
         let count = await getGridPanelCount(window);
         while (count > 0) {
           const panel = window.locator(SEL.panel.gridPanel).first();
-          await panel.locator(SEL.panel.close).first().click({ force: true });
+          await panel.locator(SEL.panel.close).first().click();
           await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(count - 1);
           count--;
         }
@@ -263,7 +263,7 @@ test.describe.serial("Core: Browser Panel", () => {
 
       const count = await getGridPanelCount(window);
       const panel = window.locator(SEL.panel.gridPanel).first();
-      await panel.locator(SEL.panel.close).first().click({ force: true });
+      await panel.locator(SEL.panel.close).first().click();
 
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(count - 1);
     });
@@ -277,7 +277,7 @@ test.describe.serial("Core: Browser Panel", () => {
       let count = await getGridPanelCount(window);
       while (count > 0) {
         const panel = window.locator(SEL.panel.gridPanel).first();
-        await panel.locator(SEL.panel.close).first().click({ force: true });
+        await panel.locator(SEL.panel.close).first().click();
         await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(count - 1);
         count -= 1;
       }
@@ -350,7 +350,7 @@ test.describe.serial("Core: Browser Panel", () => {
         let count = await getGridPanelCount(window);
         while (count > 0) {
           const panel = window.locator(SEL.panel.gridPanel).first();
-          await panel.locator(SEL.panel.close).first().click({ force: true });
+          await panel.locator(SEL.panel.close).first().click();
           await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(count - 1);
           count--;
         }

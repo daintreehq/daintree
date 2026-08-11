@@ -60,6 +60,7 @@
   --color-border-strong: var(--theme-border-strong);
   --color-border-divider: var(--theme-border-divider);
   --color-border-interactive: var(--theme-border-interactive);
+  --color-selection-outline: var(--theme-selection-outline);
   --color-accent-primary: var(--theme-accent-primary);
   --color-accent-hover: var(--theme-accent-hover);
   --color-accent-foreground: var(--theme-accent-foreground);
@@ -2582,6 +2583,22 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
      Fall back to a system outline so the active menu/select row stays visible. */
   [data-highlighted] {
     outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  /* The palette selected row is a raised fill plus a neutral outline, both
+     stripped here, so it falls back to a system outline like the Radix rule
+     above. Deliberately an outline and not a SelectedItem fill: these rows carry
+     independently surfaced children (theme "Active" badges, action category
+     chips, panel-kind icons with inline colour), and the engine maps each of
+     those to the forced palette on its own — a fill would leave them painting
+     CanvasText-on-SelectedItem, a pair with no contrast guarantee. An outline
+     leaves the whole subtree on its Canvas/CanvasText pair and still marks the
+     row. Scoped to the `.palette-row` marker rather than [role="option"], which
+     the file pane, the settings selectors and the agent/forge dropdowns use
+     too. */
+  .palette-row[aria-selected="true"] {
+    outline: 2px solid SelectedItem;
     outline-offset: -2px;
   }
 

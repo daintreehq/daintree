@@ -848,9 +848,12 @@ export function FileBrowserPane({
       if (!sourceWorktreeId) return;
       // Literal path, not a pattern: scoping keeps the worktree's ignore rules
       // in play, so the folder yields what a whole-worktree copy would have.
-      void copyContextWithFeedback(sourceWorktreeId, "context-menu", {
-        scopePaths: [path],
-      });
+      void copyContextWithFeedback(
+        sourceWorktreeId,
+        "context-menu",
+        { scopePaths: [path] },
+        "file-browser"
+      );
     },
     [sourceWorktreeId]
   );

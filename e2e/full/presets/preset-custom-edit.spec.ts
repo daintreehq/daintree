@@ -172,16 +172,19 @@ test.describe.serial("Presets: Custom Edit (25–34)", () => {
     await expect(trayButton).toBeVisible({ timeout: T_MEDIUM });
     await trayButton.click({ force: true, noWaitAfter: true });
 
-    const submenuTrigger = ctx.window
-      .getByRole("menu", { name: "Agent tray" })
-      .locator(SEL.preset.trayLaunchPresetSubmenu, { hasText: "Claude" });
-    await expect(submenuTrigger).toBeVisible({ timeout: T_MEDIUM });
-    await submenuTrigger.hover();
+    // Flat preset rows (#11691): narrow to Claude, then Right Arrow expands its
+    // presets as sibling options rather than opening a submenu.
+    const search = ctx.window.getByRole("combobox", {
+      name: "Search agents, panels, and recipes",
+    });
+    await expect(search).toBeVisible({ timeout: T_MEDIUM });
+    await search.fill("Claude");
+    const parent = ctx.window.locator(SEL.preset.trayLaunchPresetParent).first();
+    await expect(parent).toBeVisible({ timeout: T_MEDIUM });
+    await search.press("ArrowRight");
 
-    const submenuContent = ctx.window.locator('[data-testid="submenu-content"]');
-    await expect(submenuContent).toBeVisible({ timeout: T_MEDIUM });
     await expect(
-      submenuContent.locator('[role^="menuitem"]', { hasText: "Renamed Preset" })
+      ctx.window.locator(SEL.preset.trayLaunchPresetItem, { hasText: "Renamed Preset" })
     ).toBeVisible({ timeout: T_MEDIUM });
 
     await ctx.window.keyboard.press("Escape");

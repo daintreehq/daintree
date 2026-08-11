@@ -22,6 +22,31 @@ const toolbarButtonIds: Record<string, string> = {
   Notifications: "notification-center",
 };
 
+/**
+ * Toolbar commands that live in the panel tray (#11667).
+ *
+ * `browser` and `dev-server` left the default toolbar in v13, so on a fresh
+ * profile — which is every e2e profile — they have no direct button and no
+ * overflow row of their own. The tray dropdown is their route. Keyed by the
+ * button's aria-label, valued by the tray row's item id.
+ */
+// The launcher offers panels straight from the kind registry now (#11691), so a
+// row is found by the kind's own name rather than a toolbar button id.
+const toolbarPanelTrayItemNames: Record<string, string> = {
+  "Open browser": "Browser",
+  "Open dev preview": "Dev Preview",
+  "Browse files": "File Browser",
+};
+
+/**
+ * A launcher row, matched on the leading segment of its accessible name. The
+ * rows are `role="option"` inside a search-first popover — there are no menu
+ * items or per-row test ids to key off any more.
+ */
+function launcherRow(page: Page, name: string): Locator {
+  return page.locator(`[role="option"][aria-label^="${name},"]`);
+}
+
 const toolbarShortcuts: Record<string, string> = {
   "Open terminal": `${mod}+Alt+t`,
   "Open browser": `${mod}+Alt+b`,
@@ -233,6 +258,70 @@ async function clickToolbarOverflowItem(
   return false;
 }
 
+/**
+ * Open the panel tray and activate one of its rows.
+ *
+ * Sits between the overflow attempt and the keyboard fallback in
+ * `clickToolbarButton`: when the tray is itself in overflow its rows are inlined
+ * and the overflow path already found them, so this only runs for the case the
+ * overflow path can't cover — a visible tray whose items have no button of their
+ * own.
+ */
+async function clickPanelTrayItem(
+  page: Page,
+  toolbar: Locator,
+  label: string,
+  timeout: number
+): Promise<boolean> {
+  const itemName = toolbarPanelTrayItemNames[label];
+  if (!itemName) return false;
+
+  const tray = toolbar.locator('[data-toolbar-button-id="launcher"] button');
+  const trayReady = await tray
+    .first()
+    .waitFor({ state: "visible", timeout: Math.min(timeout, 3000) })
+    .then(() => true)
+    .catch(() => false);
+  if (!trayReady) return false;
+  if (!(await clickFirstVisible(tray, 1000, Math.min(timeout, 3000)))) return false;
+
+  // The caller's timeout, not a fixed second: the popover primitives are
+  // lazy-loaded, so the first launcher open on a cold release runner can be
+  // slower than any menu this suite has already warmed.
+  const row = launcherRow(page, itemName);
+  const rowReady = await row
+    .first()
+    .waitFor({ state: "visible", timeout })
+    .then(() => true)
+    .catch(() => false);
+  if (!rowReady) {
+    await page.keyboard.press("Escape").catch(() => undefined);
+    return false;
+  }
+
+  try {
+    await row.click({ timeout });
+  } catch {
+    // Same ambiguity as a direct toolbar button: once the row was there, don't
+    // retry a non-idempotent command through another route.
+  }
+  return true;
+}
+
+async function hasPanelTrayItem(page: Page, toolbar: Locator, label: string): Promise<boolean> {
+  const itemName = toolbarPanelTrayItemNames[label];
+  if (!itemName) return false;
+
+  const tray = toolbar.locator('[data-toolbar-button-id="launcher"] button');
+  if (!(await clickFirstVisible(tray, 1000, 250))) return false;
+
+  const visible = await launcherRow(page, itemName)
+    .isVisible({ timeout: 500 })
+    .catch(() => false);
+  await page.keyboard.press("Escape").catch(() => undefined);
+  return visible;
+}
+
 async function hasToolbarOverflowItem(
   page: Page,
   toolbar: Locator,
@@ -265,6 +354,14 @@ async function hasToolbarOverflowItem(
 }
 
 /**
+ * Which route a toolbar command was actually invoked through. Callers whose
+ * expectations differ per route (a button that opens a panel when visible but
+ * runs immediately from the overflow menu) need this to stay deterministic —
+ * which route applies depends on the CI viewport width.
+ */
+export type ToolbarClickRoute = "visible" | "overflow" | "tray" | "shortcut";
+
+/**
  * Click a toolbar button, handling the case where it may be hidden
  * in the overflow menu on small displays (e.g., Windows CI).
  * Checks direct visibility first, then falls back to the overflow menu.
@@ -273,7 +370,7 @@ export async function clickToolbarButton(
   page: Page,
   selector: string,
   timeout = 5000
-): Promise<void> {
+): Promise<ToolbarClickRoute> {
   await dismissBlockingPalette(page);
 
   const toolbar = page.getByRole("toolbar", { name: "Main toolbar" });
@@ -281,20 +378,47 @@ export async function clickToolbarButton(
 
   for (const candidate of getToolbarButtonLocators(toolbar, selector, label)) {
     if (await clickFirstVisible(candidate, 3000, 1000)) {
-      return;
+      return "visible";
     }
   }
 
   if (label && (await clickToolbarOverflowItem(page, toolbar, label, timeout))) {
-    return;
+    return "overflow";
+  }
+
+  if (label && (await clickPanelTrayItem(page, toolbar, label, timeout))) {
+    return "tray";
   }
 
   if (label && toolbarShortcuts[label]) {
     await page.keyboard.press(toolbarShortcuts[label]);
-    return;
+    return "shortcut";
   }
 
   throw new Error(`Toolbar button ${label ?? selector} was not visible or present`);
+}
+
+/**
+ * Copy the active worktree's full context from the toolbar (#11733).
+ *
+ * The visible copy-tree button no longer copies — it opens a recents dropdown
+ * whose first row does. Every other route still copies on the spot: the overflow
+ * row and the `Cmd+Shift+C` fallback both bypass the panel by design.
+ *
+ * Branching on the returned route rather than probing for the panel is what
+ * makes this deterministic. `locator.isVisible()` does not wait — its `timeout`
+ * option is a no-op — so a probe would race a cold lazy chunk and silently
+ * return having copied nothing, leaving the caller's clipboard assertion to pass
+ * on whatever was there before.
+ */
+export async function copyFullContextFromToolbar(page: Page, timeout = 5000): Promise<void> {
+  const route = await clickToolbarButton(page, SEL.toolbar.copyContext, timeout);
+  if (route !== "visible") return;
+
+  const panel = page.getByRole("dialog", { name: "Copy context" });
+  const fullCopyRow = panel.getByRole("button", { name: "Copy full context", exact: true });
+  await fullCopyRow.waitFor({ state: "visible", timeout });
+  await fullCopyRow.click({ timeout });
 }
 
 /**
@@ -326,6 +450,10 @@ export async function expectToolbarButtonReachable(
     }
 
     if (label && (await hasToolbarOverflowItem(page, toolbar, label))) {
+      return;
+    }
+
+    if (label && (await hasPanelTrayItem(page, toolbar, label))) {
       return;
     }
 
@@ -376,6 +504,39 @@ export async function openTerminal(page: Page): Promise<void> {
  */
 export async function openBrowser(page: Page): Promise<void> {
   await clickToolbarButton(page, SEL.toolbar.openBrowser);
+}
+
+/**
+ * Open the dev preview panel.
+ *
+ * Always route through here rather than clicking `SEL.toolbar.openDevPreview`
+ * directly: since #11667 `dev-server` is not a default toolbar button, so on a
+ * fresh profile — which every e2e profile is — that locator matches nothing and
+ * the panel is reached through the panel tray instead. A direct click would
+ * fail, and a direct `isVisible()` probe guarding a `test.skip()` would skip
+ * forever while still reporting green.
+ */
+export async function openDevPreview(page: Page): Promise<void> {
+  await clickToolbarButton(page, SEL.toolbar.openDevPreview);
+}
+
+/**
+ * Whether a toolbar command can be reached at all — as a direct button, an
+ * overflow row, or a launcher panel row. The boolean sibling of
+ * `expectToolbarButtonReachable`, for specs that legitimately skip when an entry
+ * point is absent in a given launch state rather than failing.
+ */
+export async function isToolbarButtonReachable(
+  page: Page,
+  selector: string,
+  timeout = 5000
+): Promise<boolean> {
+  try {
+    await expectToolbarButtonReachable(page, selector, timeout);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function getFirstGridPanel(page: Page): Locator {

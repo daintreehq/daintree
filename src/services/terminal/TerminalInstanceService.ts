@@ -2945,6 +2945,25 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
     viewportY: number;
     baseY: number;
     isUserScrolledBack: boolean;
+    cols: number;
+    rows: number;
+    // Where the viewport ACTUALLY sits, versus the furthest it can go. The
+    // logical fields above cannot see #11709 at all: a rows-only resize leaves
+    // them reporting "at bottom" while the scrollable element is still parked
+    // rows higher, and it is that stale offset which later drags the buffer
+    // back into scrollback. xterm's scrollable element is not a natively
+    // scrolling node, so its own state is the only reading that means anything.
+    scrollTop: number | null;
+    maxScrollTop: number | null;
+  };
+
+  type XtermScrollableForE2E = {
+    _viewport?: {
+      _scrollableElement?: {
+        getScrollPosition?: () => { scrollTop?: number };
+        getScrollDimensions?: () => { height?: number; scrollHeight?: number };
+      };
+    };
   };
 
   const readTerminalScrollSnapshotForE2E = (
@@ -2953,10 +2972,33 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
     const managed = terminalInstanceService.getInstanceForE2E(panelId);
     if (!managed) return null;
     const buffer = managed.terminal.buffer.active;
+    const finite = (value: unknown): number | null =>
+      typeof value === "number" && Number.isFinite(value) ? value : null;
+
+    let scrollTop: number | null = null;
+    let maxScrollTop: number | null = null;
+    try {
+      const scrollable = (
+        managed.terminal as typeof managed.terminal & { _core?: XtermScrollableForE2E }
+      )._core?._viewport?._scrollableElement;
+      scrollTop = finite(scrollable?.getScrollPosition?.().scrollTop);
+      const dimensions = scrollable?.getScrollDimensions?.();
+      const height = finite(dimensions?.height);
+      const scrollHeight = finite(dimensions?.scrollHeight);
+      maxScrollTop =
+        height !== null && scrollHeight !== null ? Math.max(0, scrollHeight - height) : null;
+    } catch {
+      // Private shape absent — the assertions that need it will see null.
+    }
+
     return {
       viewportY: buffer.viewportY,
       baseY: buffer.baseY,
       isUserScrolledBack: managed.isUserScrolledBack,
+      cols: managed.terminal.cols,
+      rows: managed.terminal.rows,
+      scrollTop,
+      maxScrollTop,
     };
   };
 

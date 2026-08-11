@@ -225,6 +225,22 @@ export async function waitForServerReady(
 
     if (signal.aborted) return false;
 
+    // Sleep only up to the caller's deadline. A flat poll-interval wait
+    // overshoots short timeouts by nearly a full interval — waitForServerReady(
+    // url, signal, 100) used to take 500ms+ to report failure — and burns that
+    // time on a round the loop condition is about to reject anyway.
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) break;
+    const sleepMs = Math.min(READINESS_POLL_INTERVAL_MS, remaining);
+    // A wait that consumes the rest of the budget ends the loop on its own
+    // terms rather than on a clock reading taken after it. Node schedules
+    // timers off libuv's millisecond-granular loop time, which is cached per
+    // iteration and drifts from `performance.now()`, so re-deriving "is the
+    // deadline past?" after waking could report a hair of budget left and buy
+    // one extra unbudgeted round. That is a real overshoot in production and
+    // was a CI flake here.
+    const isFinalWait = remaining <= READINESS_POLL_INTERVAL_MS;
+
     try {
       await new Promise<void>((resolve, reject) => {
         if (signal.aborted) {
@@ -238,12 +254,14 @@ export async function waitForServerReady(
         const timer = setTimeout(() => {
           signal.removeEventListener("abort", onAbort);
           resolve();
-        }, READINESS_POLL_INTERVAL_MS);
+        }, sleepMs);
         signal.addEventListener("abort", onAbort, { once: true });
       });
     } catch {
       return false;
     }
+
+    if (isFinalWait) break;
   }
 
   return false;

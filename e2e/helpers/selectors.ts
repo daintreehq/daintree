@@ -129,6 +129,10 @@ export const SEL = {
     environmentGroup: '[role="radiogroup"][aria-label="Worktree environment mode"]',
     recipeTrigger: "#recipe-selector-trigger",
     recipeListbox: "#recipe-selector",
+    baseBranchTrigger: "#base-branch",
+    baseBranchListbox: "#branch-list",
+    existingBranchTrigger: '[data-testid="existing-branch-picker"]',
+    existingBranchListbox: "#existing-branch-list",
     validationError: "#validation-error",
     overviewCell: "[data-worktree-overview-cell]",
     overviewCellFor: (id: string) => `[data-worktree-overview-cell="${id}"]`,
@@ -254,7 +258,12 @@ export const SEL = {
   agent: {
     panel: '[aria-label^="Claude agent:"]',
     startButton: '[aria-label="Start Claude"]',
-    trayButton: '[aria-label^="Agent tray"]',
+    trayButton: '[aria-label^="Launcher"]',
+    // The launcher replaced the tray dropdown (#11691): rows are `role="option"`
+    // in a search-first popover, not `role="menuitem"`. A row's accessible name
+    // leads with the agent name followed by a comma-separated qualifier
+    // ("Claude, Agent. …"), so match on that prefix rather than the whole label.
+    launcherRow: (name: string) => `[role="option"][aria-label^="${name},"]`,
     chromeAgentPanel: (agentId: string) => `[data-chrome-agent-id="${agentId}"]`,
     everDetectedAgentPanel: '[data-ever-detected-agent="true"]',
   },
@@ -381,8 +390,10 @@ export const SEL = {
     deleteButton: '[aria-label^="Delete"]',
     duplicateButton: '[aria-label^="Duplicate"]',
     toolbarChevron: '[aria-label^="Choose"][aria-label$="preset"]',
-    trayLaunchPresetSubmenu: '[data-testid="submenu-trigger"]',
-    trayLaunchPresetItem: '[data-testid="submenu-content"] [role="menuitem"]',
+    // Presets are flat sibling options now, opened with Right Arrow rather than
+    // a submenu (#11691) — the parent row announces itself with aria-expanded.
+    trayLaunchPresetParent: '[role="option"][data-row-kind="item"][aria-expanded]',
+    trayLaunchPresetItem: '[role="option"][data-row-kind="preset"]',
     contextPresetSubmenu: '[role="menu"]:text("Launch with Preset")',
     defaultOption: '[data-testid="preset-option-default"]',
     customPresetOption: '[data-testid="preset-selector-listbox"] [role="option"]',
@@ -499,7 +510,9 @@ export const SEL = {
     rows: "#searchable-palette-list > div",
   },
   palettePrefix: {
-    // Footer affordance listing the @/#/:/> prefixes; rendered only on empty query.
+    // Footer affordance listing the @/#/:/> prefixes. Empty query only, and
+    // only until the first action-palette opening that showed it closes — it
+    // teaches once per profile, then retires (#11690).
     discoverabilityRow: '[aria-label="Prefix shortcuts"]',
     // Mode chip (e.g. "Commands") rendered as the action-palette input prefix.
     modeChip: '[role="dialog"][aria-label="Command palette"] [role="status"][aria-live="polite"]',

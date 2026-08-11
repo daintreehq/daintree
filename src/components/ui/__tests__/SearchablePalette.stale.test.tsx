@@ -51,6 +51,7 @@ function renderPalette(isFiltering: boolean | undefined) {
       renderItem={(item) => <div key={item.id}>{item.id}</div>}
       label="Test"
       ariaLabel="Test palette"
+      tier="command"
       listId="test-palette-list"
       isFiltering={isFiltering}
     />

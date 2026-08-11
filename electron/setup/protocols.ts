@@ -58,7 +58,7 @@ let cachedGetPluginDir: GetPluginDir | null = null;
  * preload (#11635), and the stage is the only thing that tells the otherwise
  * identical branches apart in a production log.
  */
-type AppNotFoundStage = "resolve" | "stat" | "not-a-file" | "open" | "read";
+type AppNotFoundStage = "resolve" | "stat" | "not-a-file" | "read";
 
 function appNotFound(
   stage: AppNotFoundStage,
@@ -74,6 +74,12 @@ function appNotFound(
     ...(typeof cause === "string" ? { reason: cause } : {}),
     ...(errno?.code ? { code: errno.code } : {}),
     ...(errno?.errno !== undefined ? { errno: errno.errno } : {}),
+    // The path the failing syscall itself reported, kept alongside the
+    // handler-resolved filePath: when the two disagree the report names the
+    // layer that rewrote it, which is the only way to tell a damaged dist tree
+    // apart from a packaging indirection failing underneath us (#11726).
+    ...(errno?.path !== undefined ? { path: errno.path } : {}),
+    ...(errno?.syscall !== undefined ? { syscall: errno.syscall } : {}),
   });
   return new Response("Not Found", {
     status: 404,
@@ -128,37 +134,34 @@ function createAppProtocolHandler(distPath: string) {
     // Read the bytes directly off disk instead of round-tripping through
     // net.fetch(). Custom-scheme responses never enter Chromium's HTTP disk
     // cache, so the fetch path added a Chromium network-stack hop plus a second
-    // in-memory copy on every asset load for no caching benefit. No O_NOFOLLOW:
-    // unlike daintree-file:// / plugin://, resolveAppUrlToDistPath does lexical
-    // (path.resolve + startsWith) containment with no realpath, so there is no
-    // realpath/open TOCTOU window for the flag to close — adding it would imply
-    // a defense that isn't set up here. dist assets are application-owned.
-    let fileHandle: Awaited<ReturnType<typeof fs.open>>;
+    // in-memory copy on every asset load for no caching benefit.
+    //
+    // This must stay fs.readFile, never fs.open: dist/ ships inside the asar
+    // (it is deliberately not in asarUnpack), and Electron backs fs.open on an
+    // archived path with Archive::CopyFileOut — an extraction to a temp file
+    // memoized in external_files_ for callers that need a real fd. If that temp
+    // file is reaped out from under a long-running app, the memoized entry goes
+    // stale and every later open throws ENOENT while stat keeps succeeding off
+    // the archive header, so index.html stops loading until restart and every
+    // project switch fails (#11726). fs.readFile is patched separately to read
+    // straight off the archive's own backing fd and never extracts.
+    //
+    // No O_NOFOLLOW to reach for either: unlike daintree-file:// / plugin://,
+    // resolveAppUrlToDistPath does lexical (path.resolve + startsWith)
+    // containment with no realpath, so there is no realpath/open TOCTOU window
+    // for the flag to close — adding it would imply a defense that isn't set up
+    // here. dist assets are application-owned.
     try {
-      fileHandle = await fs.open(filePath, fs.constants.O_RDONLY);
-    } catch (err) {
-      const errCode = (err as NodeJS.ErrnoException).code;
-      if (errCode === "ENOENT" || errCode === "EISDIR") {
-        return appNotFound("open", request.url, filePath, err);
-      }
-      console.error("[MAIN] Error serving file:", filePath, err);
-      return new Response("Internal Server Error", {
-        status: 500,
-        headers: buildHeaders("text/plain"),
-      });
-    }
-
-    try {
-      const buffer = await fileHandle.readFile();
+      const buffer = await fs.readFile(filePath);
       return new Response(buffer, {
         status: 200,
         headers: buildHeaders(getMimeType(filePath), { stats, filePath }),
       });
     } catch (err) {
-      // fs.open on a directory succeeds on macOS/Linux; the EISDIR only surfaces
-      // here at readFile. Map it to 404 like the open path so a directory URL
-      // never returns a 500.
-      if ((err as NodeJS.ErrnoException).code === "EISDIR") {
+      // A directory that slipped past the isFile() guard surfaces as EISDIR;
+      // map it and a vanished file to 404 so neither returns a 500.
+      const errCode = (err as NodeJS.ErrnoException).code;
+      if (errCode === "ENOENT" || errCode === "EISDIR") {
         return appNotFound("read", request.url, filePath, err);
       }
       console.error("[MAIN] Error serving file:", filePath, err);
@@ -166,9 +169,6 @@ function createAppProtocolHandler(distPath: string) {
         status: 500,
         headers: buildHeaders("text/plain"),
       });
-    } finally {
-      // Swallow close errors so they don't mask a preceding readFile failure.
-      await fileHandle.close().catch(() => {});
     }
   };
 }
@@ -1336,8 +1336,14 @@ export function registerPluginProtocol(getPluginDir: GetPluginDir): void {
  * import settles (#10322). `registerPluginProtocol` runs before `createWindow`
  * with a placeholder resolver that returns `undefined` (every request 404s),
  * keeping the heavy ~2900-line PluginService module off the first-paint path.
- * Once the deferred `plugin-service` task initializes the singleton, it calls
- * this to point the already-registered handler at the real `getPluginDir`. The
+ *
+ * Ordering is load-bearing (#11728): the deferred `plugin-service` task must
+ * call this immediately after importing the singleton and BEFORE `initialize()`
+ * — not after it. `getPluginDir` is a plain map lookup, safe to install at any
+ * time, whereas waiting for `initialize()` leaves the placeholder live across
+ * the whole scan, during which the first plugin already publishes an addressable
+ * `plugin://` componentPath. A 404 served in that window is permanent for that
+ * specifier in the renderer's module map. The
  * handler delegates through `resolvePluginDir`, which reads `cachedGetPluginDir`
  * live, so the swap reaches every handler already registered (default session
  * plus any per-session handlers wired during `createWindow`).

@@ -95,7 +95,7 @@ async function launchWorkingClaude(page: Page): Promise<{ panelId: string; panel
   const beforeIds = new Set(await getGridPanelIds(page));
   await dismissBlockingPalette(page);
   await page.locator(SEL.agent.trayButton).click();
-  await page.getByRole("menuitem", { name: "Claude" }).click();
+  await page.locator(SEL.agent.launcherRow("Claude")).first().click();
 
   const panelId = await newestPanelId(page, beforeIds);
   const panel = page.locator(`[data-panel-id="${panelId}"]`);

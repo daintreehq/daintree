@@ -66,13 +66,7 @@ export function QuickSwitcher({
       const label = getQuickSwitcherActionLabel(item);
       return (
         <div id={footerHintId} className="w-full">
-          <PaletteFooterHints
-            primaryHint={{ keys: ["↵"], label }}
-            hints={[
-              { keys: ["↑", "↓"], label: "navigate" },
-              { keys: ["Esc"], label: "close" },
-            ]}
-          />
+          <PaletteFooterHints primaryHint={{ keys: ["↵"], label }} />
         </div>
       );
     },
@@ -84,6 +78,7 @@ export function QuickSwitcher({
 
   return (
     <SearchablePalette<QuickSwitcherItemData>
+      tier="command"
       isOpen={isOpen}
       query={query}
       results={results}

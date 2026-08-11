@@ -287,7 +287,10 @@ test.describe.serial("Core: Focus Management", () => {
     });
 
     await test.step("Clean up the browser panel", async () => {
-      await browserPanel.locator(SEL.panel.close).first().click({ force: true });
+      // No force: it skips the actionability and stability wait, so the click
+      // lands at stale coordinates while the panel is still settling and misses
+      // the close button entirely.
+      await browserPanel.locator(SEL.panel.close).first().click();
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before);
     });
   });

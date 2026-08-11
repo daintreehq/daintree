@@ -25,6 +25,7 @@ import type {
   FileTreeNode,
   CopyTreeOptions,
 } from "../../types/index.js";
+import type { CopyTreeRunSource } from "../../../shared/types/ipc/copyTreeHistory.js";
 
 type CopyTreeFormat = NonNullable<CopyTreeOptions["format"]>;
 
@@ -102,9 +103,12 @@ import {
 import type {
   CopyTreeCancelPayload,
   CopyTreeTestConfigOptions,
+  Project,
   ProjectSettings,
 } from "../../types/index.js";
+import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import { projectStore } from "../../services/ProjectStore.js";
+import { recordCopyTreeRun } from "../../services/copyTreeHistoryService.js";
 import { contextInjectionTracker } from "../../services/ContextInjectionTracker.js";
 import {
   fitContentToResultBudget,
@@ -228,12 +232,128 @@ export function mergeCopyTreeOptions(
  * can be evicted while a later await is in flight, and a binding that vanishes
  * mid-request would silently drop the project's exclusions from the context.
  */
-function resolveCopyTreeProjectId(ctx: IpcContext, deps: HandlerDependencies): string | null {
+export function resolveCopyTreeProjectId(
+  ctx: IpcContext,
+  deps: HandlerDependencies
+): string | null {
   const scopedProject = resolveScopedProjectForIpcContext(ctx, deps);
   if (scopedProject === null) {
     return projectStore.getCurrentProjectId();
   }
   return scopedProject.project?.id ?? null;
+}
+
+/**
+ * The sender view's project id and its row, resolved together so the worktree
+ * lookup and the settings load can never answer for two different projects.
+ */
+interface CopyTreeSender {
+  projectId: string | null;
+  /** Null for an unbound view, a scratch (#11484), or an unknown id. */
+  project: Project | null;
+}
+
+/**
+ * Both halves of the sender's identity, resolved synchronously.
+ *
+ * Call this exactly where `resolveCopyTreeProjectId` used to be called — before
+ * the handler's first `await`, for the reason documented on that function. The
+ * row lookup is synchronous too, so pinning it here costs nothing.
+ */
+function resolveCopyTreeSender(ctx: IpcContext, deps: HandlerDependencies): CopyTreeSender {
+  const projectId = resolveCopyTreeProjectId(ctx, deps);
+  return {
+    projectId,
+    project: projectId ? (projectStore.getProjectById(projectId) ?? null) : null,
+  };
+}
+
+/**
+ * The requested worktree, looked up in the *sender's* project rather than the
+ * window's (#11751).
+ *
+ * `getAllStatesAsync(windowId)` resolves through `WorkspaceHostPool`'s
+ * `windowToProject`, which is repointed to the incoming project the instant a
+ * switch starts — so a call from a backgrounded view was answered by whichever
+ * project the window happens to show, and its own worktree came back "not
+ * found" while `worktree.list` reported that same id as valid. Worse, a sender
+ * with no window at all fell into the `windowId === undefined` branch, which
+ * unions every live host: worktree ids are normalized absolute paths, so a
+ * guessed one could bundle a sibling project's file contents (the containment
+ * `fileBrowser.ts` states for its own worktree lookup, #11366).
+ *
+ * Takes the already-resolved sender instead of `ctx` so it *cannot* re-resolve
+ * the project after the await — the eviction race #6015/#11103 fixed for
+ * settings applies verbatim here.
+ *
+ * A sender with no project row resolves nothing. Every copyTree channel makes
+ * `worktreeId` mandatory, and a supplied worktree id demands a project row —
+ * the workspace root a scratch or worktree-less project has is not a worktree,
+ * and falling back to one would silently widen the bundle to a folder the
+ * caller never named.
+ */
+async function findSenderWorktree(
+  sender: CopyTreeSender,
+  worktreeId: string,
+  worktreeService: NonNullable<HandlerDependencies["worktreeService"]>
+): Promise<WorktreeSnapshot | undefined> {
+  if (!sender.project) {
+    return undefined;
+  }
+  // Path and id come from the one row: the path selects the host, the id
+  // authorizes it (a project's path is mutable, so it is not an identity).
+  const states = await worktreeService.getAllStatesForProjectAsync(
+    sender.project.path,
+    sender.project.id
+  );
+  return states.find((wt) => wt.id === worktreeId);
+}
+
+/**
+ * Record a completed run in the project's copy-tree history (#11732).
+ *
+ * Takes the *validated* payload rather than the merged options: merging folds
+ * in live project settings, and a record that froze those in would replay a
+ * stale configuration the next time it is re-run.
+ *
+ * `projectId` must be the value captured synchronously before the handler's
+ * first await — re-resolving here would read whatever project the sender's view
+ * has since been repointed at.
+ *
+ * Awaited by its callers so the write and its snapshot push stay ordered behind
+ * the per-project queue, and swallowing here rather than only inside the service
+ * so that ordering can never cost the caller its result: by this point the
+ * bundle has already been delivered, and no bookkeeping failure may turn a
+ * completed copy into an error the user sees.
+ */
+async function recordCompletedCopyTreeRun(
+  projectId: string | null,
+  validated: {
+    worktreeId: string;
+    options?: CopyTreeOptions;
+    name?: string;
+    source?: CopyTreeRunSource;
+  },
+  result: CopyTreeResult
+): Promise<void> {
+  try {
+    await recordCopyTreeRun(projectId, {
+      // Forwarded raw, including blank and untrimmed values: `applyCopyTreeRun`
+      // is the authoritative normalization seam (blank-as-absent, trim,
+      // truncate), and normalizing twice would let the two drift.
+      name: validated.name,
+      options: validated.options ?? {},
+      source: validated.source ?? "unknown",
+      worktreeId: validated.worktreeId,
+      stats: {
+        fileCount: result.fileCount,
+        totalSize: result.stats?.totalSize,
+        duration: result.stats?.duration,
+      },
+    });
+  } catch (error) {
+    console.warn("[CopyTree] Failed to record run in the project history:", error);
+  }
 }
 
 /** Load the CopyTree-relevant settings for a project resolved by `resolveCopyTreeProjectId`. */
@@ -344,10 +464,9 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     // Capture the sender's project before awaiting: the view can be evicted
     // while the workspace call is in flight, taking its binding with it.
-    const settingsProjectId = resolveCopyTreeProjectId(ctx, deps);
+    const sender = resolveCopyTreeSender(ctx, deps);
 
-    const states = await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
-    const worktree = states.find((wt) => wt.id === validated.worktreeId);
+    const worktree = await findSenderWorktree(sender, validated.worktreeId, deps.worktreeService);
 
     if (!worktree) {
       return {
@@ -367,11 +486,17 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     };
 
     // Merge project settings with runtime options
-    const projectSettings = await loadCopyTreeProjectSettings(settingsProjectId);
+    const projectSettings = await loadCopyTreeProjectSettings(sender.projectId);
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
     const result = await generateToFile(worktree, mergedOptions, onProgress);
-    if (result.error || !result.filePath || !validated.includeContent) {
+    if (result.error) {
+      return result;
+    }
+
+    await recordCompletedCopyTreeRun(sender.projectId, validated, result);
+
+    if (!result.filePath || !validated.includeContent) {
       return result;
     }
 
@@ -431,10 +556,9 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     // Capture the sender's project before awaiting: the view can be evicted
     // while the workspace call is in flight, taking its binding with it.
-    const settingsProjectId = resolveCopyTreeProjectId(ctx, deps);
+    const sender = resolveCopyTreeSender(ctx, deps);
 
-    const states = await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
-    const worktree = states.find((wt) => wt.id === validated.worktreeId);
+    const worktree = await findSenderWorktree(sender, validated.worktreeId, deps.worktreeService);
 
     if (!worktree) {
       return {
@@ -454,7 +578,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     };
 
     // Merge project settings with runtime options
-    const projectSettings = await loadCopyTreeProjectSettings(settingsProjectId);
+    const projectSettings = await loadCopyTreeProjectSettings(sender.projectId);
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
     // Written by the workspace host straight to disk. This handler used to pull
@@ -465,6 +589,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     if (result.error || !result.filePath) {
       return result;
     }
+
+    // Recorded on generation, not on the clipboard write below. The bundle now
+    // exists and its path rides back even when the clipboard step throws, so a
+    // run the user would most want to retry is exactly the one that must not be
+    // missing from the history.
+    await recordCompletedCopyTreeRun(sender.projectId, validated, result);
 
     const filePath = result.filePath;
 
@@ -574,13 +704,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     // Capture the sender's project before awaiting: the view can be evicted
     // while the workspace call is in flight, taking its binding with it.
-    const settingsProjectId = resolveCopyTreeProjectId(ctx, deps);
+    const sender = resolveCopyTreeSender(ctx, deps);
 
     contextInjectionTracker.beginInjection(validated.terminalId, injectionId);
 
     try {
-      const states = await deps.worktreeService.getAllStatesAsync(senderWindow?.id);
-      const worktree = states.find((wt) => wt.id === validated.worktreeId);
+      const worktree = await findSenderWorktree(sender, validated.worktreeId, deps.worktreeService);
 
       if (!worktree) {
         return {
@@ -608,7 +737,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
 
       // Merge project settings with runtime options
-      const projectSettings = await loadCopyTreeProjectSettings(settingsProjectId);
+      const projectSettings = await loadCopyTreeProjectSettings(sender.projectId);
       const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options || {});
 
       const result = await deps.worktreeService.generateContext(
@@ -660,6 +789,12 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       }
 
       console.log(`[${traceId}] CopyTree inject completed successfully`);
+
+      // Injection is the same intent as a copy with a different delivery, so it
+      // earns a history entry too — and dedupes against the clipboard run that
+      // used the same options.
+      await recordCompletedCopyTreeRun(sender.projectId, validated, result);
+
       // The renderer reads only fileCount/stats; drop the (possibly multi-MB)
       // content so the contextBridge doesn't clone a second copy into the heap.
       return {
@@ -740,10 +875,9 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     // Capture the sender's project before awaiting: the view can be evicted
     // while the workspace call is in flight, taking its binding with it.
-    const settingsProjectId = resolveCopyTreeProjectId(ctx, deps);
+    const sender = resolveCopyTreeSender(ctx, deps);
 
-    const states = await deps.worktreeService.getAllStatesAsync(ctx.senderWindow?.id);
-    const worktree = states.find((wt) => wt.id === validated.worktreeId);
+    const worktree = await findSenderWorktree(sender, validated.worktreeId, deps.worktreeService);
 
     if (!worktree) {
       throw new Error(`Worktree not found: ${validated.worktreeId}`);
@@ -753,7 +887,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     // CopyTree's defaults while the bundle is built with the project's
     // exclusions and budgets — the disagreement this channel exists to end
     // (#11439).
-    const projectSettings = await loadCopyTreeProjectSettings(settingsProjectId);
+    const projectSettings = await loadCopyTreeProjectSettings(sender.projectId);
     const mergedOptions = mergeCopyTreeOptions(projectSettings, undefined);
 
     return deps.worktreeService.getContextFileTree(
@@ -799,11 +933,9 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
 
     // Capture the sender's project before awaiting: the view can be evicted
     // while the workspace call is in flight, taking its binding with it.
-    const settingsProjectId = resolveCopyTreeProjectId(ctx, deps);
+    const sender = resolveCopyTreeSender(ctx, deps);
 
-    const senderWindowTestConfig = ctx.senderWindow;
-    const states = await deps.worktreeService.getAllStatesAsync(senderWindowTestConfig?.id);
-    const worktree = states.find((wt) => wt.id === validated.worktreeId);
+    const worktree = await findSenderWorktree(sender, validated.worktreeId, deps.worktreeService);
 
     if (!worktree) {
       return {
@@ -814,7 +946,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     // Merge project settings with runtime options
-    const projectSettings = await loadCopyTreeProjectSettings(settingsProjectId);
+    const projectSettings = await loadCopyTreeProjectSettings(sender.projectId);
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
     return deps.worktreeService.testConfig(worktree.path, mergedOptions);

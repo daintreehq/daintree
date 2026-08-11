@@ -59,10 +59,6 @@ function SidebarWorktreeRow({
   );
 
   const onSelect = useCallback(() => selectWorktree(worktreeId), [selectWorktree, worktreeId]);
-  const onCopyTree = useCallback(
-    () => worktree && worktreeActions.handleCopyTree(worktree),
-    [worktree, worktreeActions]
-  );
   const onOpenEditor = useCallback(
     () => worktree && worktreeActions.handleOpenEditor(worktree),
     [worktree, worktreeActions]
@@ -132,7 +128,6 @@ function SidebarWorktreeRow({
             isFocused={isFocused}
             isSingleWorktree={isSingleWorktree}
             onSelect={onSelect}
-            onCopyTree={onCopyTree}
             onOpenEditor={onOpenEditor}
             onSaveLayout={onSaveLayout}
             onLaunchAgent={onLaunchAgent}
