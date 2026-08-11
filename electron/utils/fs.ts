@@ -1,7 +1,12 @@
 // eager-import-allow: wraps the sync fs primitives used across the main process
 import { dirname } from "path";
-import { access, chmod as fsChmod, open, unlink as fsUnlink } from "fs/promises";
-import { constants as fsConstants } from "fs/promises";
+import {
+  access,
+  chmod as fsChmod,
+  constants as fsConstants,
+  open,
+  unlink as fsUnlink,
+} from "fs/promises";
 import { chmodSync, closeSync, fsyncSync, openSync, unlinkSync, writeFileSync } from "fs";
 import stubbornFs from "stubborn-fs";
 

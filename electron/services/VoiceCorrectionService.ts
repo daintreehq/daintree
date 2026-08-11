@@ -12,6 +12,7 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 import {
   createTimeoutSignal,
+  withTimeoutSignal,
   type DisposableTimeoutSignal,
 } from "../../shared/utils/timeoutSignal.js";
 
@@ -425,19 +426,12 @@ export class VoiceCorrectionService {
       segmentCount: request.segmentCount ?? 0,
     });
 
-    const deadline = this.buildFetchSignal(this.getCorrectionTimeoutMs(request));
-    try {
-      return await this.requestCorrection(
-        request,
-        settings,
-        model,
-        systemPrompt,
-        userMessage,
-        deadline.signal
-      );
-    } finally {
-      deadline.dispose();
-    }
+    return await withTimeoutSignal(
+      this.getCorrectionTimeoutMs(request),
+      (signal) =>
+        this.requestCorrection(request, settings, model, systemPrompt, userMessage, signal),
+      this.sessionSignal
+    );
   }
 
   private async requestCorrection(
