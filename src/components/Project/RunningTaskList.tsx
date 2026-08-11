@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
-import { terminalClient } from "@/clients/terminalClient";
+import { terminalClient } from "@/clients";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";

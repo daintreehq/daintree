@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from "rea
 import { ArrowLeft, Plus, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
-import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { useEscapeStack } from "@/hooks";
 import { useFleetPicker } from "@/hooks/useFleetPicker";
 import { FleetPickerContent } from "@/components/Fleet/FleetPickerContent";
 import type { AgentState } from "@/types";

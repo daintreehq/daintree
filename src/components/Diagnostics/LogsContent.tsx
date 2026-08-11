@@ -4,8 +4,12 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { useLogsStore, filterLogs, collapseConsecutiveDuplicates } from "@/store/logsStore";
-import type { DisplayEntry } from "@/store/logsStore";
+import {
+  useLogsStore,
+  filterLogs,
+  collapseConsecutiveDuplicates,
+  type DisplayEntry,
+} from "@/store";
 import { LogEntry, type LogEntryCopyMeta } from "../Logs/LogEntry";
 import { LogFilters } from "../Logs/LogFilters";
 import type { LogEntry as LogEntryType, LogLevel } from "@/types";

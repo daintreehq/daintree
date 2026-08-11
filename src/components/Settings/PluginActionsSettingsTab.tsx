@@ -4,7 +4,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { PluginActionAuditLogViewer } from "@/components/Settings/PluginActionAuditLogViewer";
-import { appClient } from "@/clients/appClient";
+import { appClient } from "@/clients";
 import { logError } from "@/utils/logger";
 import { type PluginActionAuditRecord, PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "@shared/types";
 

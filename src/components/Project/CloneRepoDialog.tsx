@@ -7,7 +7,7 @@ import { FolderGit2 } from "@/components/icons";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { validateFolderName } from "@shared/utils/folderName";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";

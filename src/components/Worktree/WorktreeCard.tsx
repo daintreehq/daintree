@@ -24,8 +24,7 @@ import {
   areProjectNotificationsMuted,
 } from "../../store/projectSettingsStore";
 import { useWorktreeFilterStore } from "../../store/worktreeFilterStore";
-import { errorsClient } from "@/clients/errorsClient";
-import { worktreeClient } from "@/clients/worktreeClient";
+import { errorsClient, worktreeClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { McpServerContribution } from "@shared/types/plugin";

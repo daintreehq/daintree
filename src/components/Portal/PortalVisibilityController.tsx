@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
-import { usePortalStore } from "@/store/portalStore";
+import { usePortalStore } from "@/store";
 import { useUIStore } from "@/store/uiStore";
 import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
 import { logError } from "@/utils/logger";

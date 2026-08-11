@@ -23,13 +23,16 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { ScrollIndicator } from "@/components/Worktree/ScrollIndicator";
-import { useAgentLauncher } from "@/hooks/useAgentLauncher";
-import { useWorktrees } from "@/hooks/useWorktrees";
-import { useProjectSettings } from "@/hooks/useProjectSettings";
-import { useWorktreeActions } from "@/hooks/useWorktreeActions";
-import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks/useKeybinding";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { useKeepMounted } from "@/hooks/useKeepMounted";
+import {
+  useAgentLauncher,
+  useWorktrees,
+  useProjectSettings,
+  useWorktreeActions,
+  useAriaKeyshortcuts,
+  useKeybindingDisplay,
+  useDohertyGate,
+  useKeepMounted,
+} from "@/hooks";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { WorktreeSidebarSearchBar, QuickStateFilterBar } from "@/components/Worktree";
 import { useBuiltinView } from "@/registry/builtinRendererRegistry";
@@ -65,7 +68,7 @@ import {
   computePanelStateByWorktree,
 } from "./sidebarPanelDerivation";
 import { useShallow } from "zustand/react/shallow";
-import { systemClient } from "@/clients/systemClient";
+import { systemClient } from "@/clients";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
 import {

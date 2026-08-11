@@ -4,8 +4,7 @@ import { SquareTerminal, Globe } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks/useKeybinding";
-import { useShortcutHintHover } from "@/hooks/useShortcutHintHover";
+import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 
 type LauncherType = "terminal" | "browser";

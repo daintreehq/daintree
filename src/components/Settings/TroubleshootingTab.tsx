@@ -16,9 +16,7 @@ import {
   Square,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { appClient } from "@/clients/appClient";
-import { systemClient } from "@/clients/systemClient";
-import { logsClient } from "@/clients/logsClient";
+import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";

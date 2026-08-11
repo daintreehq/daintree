@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from "react";
 import type React from "react";
 import { useShallow } from "zustand/react/shallow";
-import { usePortalStore } from "@/store/portalStore";
+import { usePortalStore } from "@/store";
 import { cn } from "@/lib/utils";
 import { PortalToolbar } from "./PortalToolbar";
 import { PortalLaunchpad } from "./PortalLaunchpad";

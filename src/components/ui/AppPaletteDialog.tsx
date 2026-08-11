@@ -15,8 +15,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { KBD_CLASS, KbdChord } from "@/components/ui/Kbd";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { PALETTE_HEADER_ATTR } from "./paletteHeaderAttr";
-import { useOverlayState } from "@/hooks/useOverlayState";
-import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { useOverlayState, useEscapeStack } from "@/hooks";
 import {
   ESCAPE_BACKSTOP_DIALOG_ATTR,
   registerDialogEscapeBackstop,

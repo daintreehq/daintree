@@ -1,7 +1,9 @@
-import { useWorktrees } from "@/hooks/useWorktrees";
-import { useNewTerminalPalette } from "@/hooks/useNewTerminalPalette";
-import { usePanelPalette } from "@/hooks/usePanelPalette";
-import { useProjectSwitcherPalette } from "@/hooks/useProjectSwitcherPalette";
+import {
+  useWorktrees,
+  useNewTerminalPalette,
+  usePanelPalette,
+  useProjectSwitcherPalette,
+} from "@/hooks";
 import { useActionPalette } from "@/hooks/useActionPalette";
 import { useQuickSwitcher } from "@/hooks/useQuickSwitcher";
 import { useWorktreePalette } from "@/hooks/useWorktreePalette";

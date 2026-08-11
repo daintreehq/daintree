@@ -1,7 +1,6 @@
 import { useMemo, useCallback, useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { useErrorStore, RECURRENCE_THRESHOLD } from "@/store/errorStore";
-import type { ErrorRecord, RetryAction } from "@/store/errorStore";
+import { useErrorStore, type ErrorRecord, type RetryAction, RECURRENCE_THRESHOLD } from "@/store";
 import { Copy, Check, Lightbulb } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/ui/EmptyState";

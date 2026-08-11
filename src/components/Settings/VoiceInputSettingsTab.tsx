@@ -27,7 +27,7 @@ import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
 import { logWarn } from "@/utils/logger";
 import { useAudioDevices, SYSTEM_DEFAULT_VALUE } from "@/hooks/useAudioDevices";
-import { useTabLoad } from "@/hooks/useTabLoad";
+import { useTabLoad } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { CORE_CORRECTION_PROMPT, VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
 import type {

@@ -13,8 +13,7 @@ import { cn } from "@/lib/utils";
 import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { logError } from "@/utils/logger";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import { useOverlayState } from "@/hooks/useOverlayState";
-import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { useOverlayState, useEscapeStack } from "@/hooks";
 import {
   registerDialogEscapeBackstop,
   isTopmostDialogBackstop,

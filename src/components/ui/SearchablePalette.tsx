@@ -6,7 +6,7 @@ import {
   type PaletteSurfaceTier,
 } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
-import { useEscapeStack } from "@/hooks/useEscapeStack";
+import { useEscapeStack } from "@/hooks";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";

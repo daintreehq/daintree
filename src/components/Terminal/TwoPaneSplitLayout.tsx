@@ -2,7 +2,7 @@ import { useCallback, useRef, useEffect, useState, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { cn } from "@/lib/utils";
-import { useTwoPaneSplitStore } from "@/store/twoPaneSplitStore";
+import { useTwoPaneSplitStore } from "@/store";
 import { resolveEffectiveRatio } from "@/store/twoPaneSplitStore";
 import type { PanelInstance } from "@shared/types/panel";
 import { SortableTerminal } from "@/components/DragDrop";

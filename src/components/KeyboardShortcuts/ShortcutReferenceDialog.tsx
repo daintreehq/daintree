@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useId } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { useOverlayState } from "@/hooks/useOverlayState";
+import { useOverlayState } from "@/hooks";
 import { Kbd, KbdChord } from "@/components/ui/Kbd";
 import { MODIFIER_SEARCH_MAP, isChordPrefix, normalizeQuery } from "@/lib/kbdShortcut";
 import { keybindingService } from "../../services/KeybindingService";

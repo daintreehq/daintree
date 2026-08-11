@@ -19,8 +19,7 @@ import {
 import * as semver from "semver";
 import { DaintreeIcon, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { useHelpSessionLiveStatus } from "@/hooks/useHelpSessionLiveStatus";
+import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";

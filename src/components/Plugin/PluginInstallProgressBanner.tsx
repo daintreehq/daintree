@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Download } from "lucide-react";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { useDeferredLoading } from "@/hooks";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import type { PluginInstallPhase, PluginInstallProgressEvent } from "@shared/types/plugin";
 

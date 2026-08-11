@@ -2,9 +2,8 @@ import { Button } from "@/components/ui/button";
 import { MessageSquareMore } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks/useKeybinding";
-import { useShortcutHintHover } from "@/hooks/useShortcutHintHover";
-import { usePortalStore } from "@/store/portalStore";
+import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
+import { usePortalStore } from "@/store";
 
 const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
 

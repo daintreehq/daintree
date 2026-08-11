@@ -28,7 +28,7 @@ import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { PostHydrationListeners } from "./components/PostHydrationListeners";
-import { PanelTransitionOverlay } from "@/components/Panel/PanelTransitionOverlay";
+import { PanelTransitionOverlay } from "./components/Panel";
 import { usePluginManagerStore } from "./store";
 import { actionService } from "./services/ActionService";
 import {

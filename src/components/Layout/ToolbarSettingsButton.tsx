@@ -10,8 +10,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
-import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks/useKeybinding";
-import { useShortcutHintHover } from "@/hooks/useShortcutHintHover";
+import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from "@/hooks";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { TOOLBAR_UNPIN_LABEL } from "./toolbarMenuStrings";
 

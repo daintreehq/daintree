@@ -33,7 +33,7 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePortalStore } from "@/store/portalStore";
 import { PortalIcon } from "./PortalIcon";
-import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { useAriaKeyshortcuts, useKeybindingDisplay } from "@/hooks";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   ContextMenu,
