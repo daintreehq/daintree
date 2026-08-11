@@ -1,5 +1,76 @@
 # Changelog
 
+## [0.31.0] - 2026-08-11
+
+The toolbar's agent and panel trays and the dock's `+` collapse into one searchable launcher, the copy-context button becomes a recents dropdown backed by per-project history, and the palette learns to browse its whole inventory under a quieter selection model. Underneath: terminal geometry work closes the last routes by which a restored or backgrounded pane commits output into the wrong grid, and every git write path stops assuming the remote is called `origin`.
+
+### Features
+
+**Launcher & toolbar**
+
+- One searchable launcher serves both the toolbar and the dock `+`, replacing the separate agent and panel trays — same inventory, per-row pin, shortcut capture, preset rows and running-state pips on both surfaces (#11680, #11689, #11691)
+- The file browser opens as a persistent grid panel from every global entry point — toolbar, Cmd+Alt+F, command palette, empty-grid launcher, worktree card — instead of only as a modal dialog (#11666)
+- The file browser ships visible on the toolbar, and the web browser and dev preview move into a panel tray; no existing saved layout changes (#11667)
+- Toolbar buttons declare a group, so a divider marks a real boundary instead of landing wherever a predicate flipped after a reorder (#11681)
+- Every launcher surface routes a panel kind through one launch path: Dev Preview from the dock loads the project's configured command, and a second file browser focuses the one already open (#11668)
+
+**Copy context**
+
+- The toolbar copy-context button opens a dropdown — copy the full context, or re-run one of the five most recent copies for the project, each showing name, file count, size and age (#11732, #11733)
+- Copies driven by the in-app assistant or an external MCP client can carry a name, and land in the same history and completion feedback as any other (#11722, #11734)
+- Every route confirms a finished copy the same way: a tooltip on the toolbar button with file count and size, falling back to a toast when the button can't show it (#11735)
+- A scoped copy can opt past the ignore rule pruning the folder you named, via `scopeIgnoresIgnoreFiles` (#11750)
+- The MCP copy-tree schema states that patterns match file paths, and an empty bundle names the selector that matched nothing (#11731)
+
+**Palette**
+
+- The empty query browses the full action inventory grouped by category — Worktrees, Panels, Git, Projects — instead of favourites plus a short recents band (#11688)
+- Palette selection and search-field focus drop the stacked accent for a neutral raised row and hairline, across all 16 palette surfaces (#11686)
+- Palette chrome scales to the surface, so a toolbar launcher and a command palette no longer share one box, and a footer renders only when it names what Enter does (#11687, #11690, #11736)
+- The project switcher marks the current project separately from where Enter lands, and rows collapse to one line (#11692)
+
+**Elsewhere**
+
+- Fleet overview groups read most-recently-opened first, so the project you're in stops sinking below one holding waiting agents (#11678)
+- The fleet overview matches the rest of the app: working is green, review/finished blue, vocabulary follows the sidebar, ordering stays live, and the keyboard model grows past a single Enter (#11669)
+- Hiding the worktree sidebar from the keyboard names the combo that did it and offers an Undo — Cmd+B sits next to Cmd+V (#11704)
+- A visible button deletes all scratch workspaces, and the confirmation names every workspace instead of counting them (#11705)
+- Both branch fields in the New Worktree dialog use one picker, with fuzzy search, a Recent band and full keyboard support (#11724)
+
+### Bug Fixes
+
+**Terminal**
+
+- A pane restored into a background worktree builds on its persisted grid instead of xterm's 80×24 default, so a wide agent's repaints stop being committed into an 80-column buffer and surviving every redraw (#11718)
+- The pty-host's headless mirror can no longer parse output at a geometry the PTY never had — the route by which corrupted scrollback replayed forever after an eviction or host restart (#11719)
+- The Efficiency profile stops clipping the scrollback of every visible unfocused agent pane, and alt-buffer accounting measures the buffer that's actually trimmed (#11673)
+- Tier-1 memory pressure trims only idle terminals instead of flattening every live agent's scrollback, and its reclaim measurement no longer authorizes the eviction it exists to prevent (#11674)
+- A bottom-pinned terminal stays pinned when the hybrid input grows, instead of jumping into scrollback mid-sentence (#11709)
+- Dropping a file onto the hybrid input inserts the reference chip without also pasting the file's raw text (#11710)
+- File-reference chips show the full path and wrap, so two long paths differing only at the tail are distinguishable (#11725)
+
+**Git & worktrees**
+
+- Git writes — upstream set, rescue push, pull --rebase, force-with-lease and its discard preview — resolve the branch's real push remote instead of hardcoding `origin`, so a fork-configured branch stops writing to the wrong repository (#11746)
+- Behind-counts and PR-branch fetches resolve the base branch's own remote, so a fork/`upstream` setup stops reading ↓0 while sitting hundreds of commits behind (#11747)
+- Clicking an in-use base branch selects it instead of closing the New Worktree dialog and discarding the form (#11714)
+- The new-branch name stops rewriting itself mid-typing when the debounced availability check resolves (#11715)
+
+**Panels, plugins & app**
+
+- Plugin capability consent prompts reach the app renderer instead of silently timing out five minutes later as a denial (#11708)
+- A plugin panel restored from persisted state no longer 404s permanently on its view asset, unrecoverable without Force Reload (#11728)
+- `app://` assets are read directly rather than through an ASAR extraction whose temp file can be reaped, which broke every project switch until restart (#11726)
+- The file browser tree stays put when a folder above the cursor expands (#11684)
+- Launching from the dock's `+` leaves focus on the new panel rather than on the button (#11664)
+- CopyTree IPC resolves worktrees by the sender's own project rather than the window's current one, so a call from a backgrounded view stops failing or reaching a sibling project (#11751)
+- The Node agent compile cache is bounded by TTL and budget — one report measured 9.3 GB across 890,589 files (#11699)
+
+### Other Changes
+
+- Agent provider reachability probes are gone: Daintree no longer pings Anthropic, OpenAI and Google every 30 minutes and on every window focus, regardless of which agents you use (#11702)
+- xterm 6.1.0-beta.300 and copytree 0.17.0
+
 ## [0.30.1] - 2026-08-04
 
 A correctness patch on 0.30.0. Most of it closes routes by which one project's state reached another's — a new project inheriting the legacy global terminal list, reconnect and spawn resolving across the project boundary, a non-git folder adopting a foreign worktree — alongside a round of terminal geometry repairs and a cold project switch that could land on a blank Not Found page.
