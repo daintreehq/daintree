@@ -19,7 +19,7 @@ import { notify } from "@/lib/notify";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { getRecipeScope } from "@/utils/recipeScope";
 import { logError } from "@/utils/logger";
-import { isAgentBlocked, isAgentLaunchable } from "@shared/utils/agentAvailability";
+import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type {
   ActionSource,
   AgentAvailabilityState,
@@ -795,21 +795,6 @@ export interface ActivateDockLaunchItemContext {
   /** Dispatch source for everything this activation dispatches. Must stay a
    * foreground source, or panel actions silently skip their focus handling. */
   source: ActionSource;
-}
-
-/**
- * Hint for an agent row whose last probe came back unlaunchable. Shared by the
- * searchable launcher and the dock/context menus so both name the same outcome:
- * selecting still launches, and the recovery panel — not Settings — is what
- * opens (#11760).
- */
-export function unavailableAgentHint(
-  name: string,
-  availability: AgentAvailabilityState | undefined
-): string {
-  return isAgentBlocked(availability)
-    ? `${name} is blocked by endpoint security. Select to see recovery options`
-    : `${name} needs setup. Select to see recovery options`;
 }
 
 /** Route a cue row — the launcher entries that navigate rather than launch. */

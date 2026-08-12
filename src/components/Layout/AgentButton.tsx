@@ -54,6 +54,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
+import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
 
 import { resolveEffectivePresetId } from "@shared/types";
 import {
@@ -322,24 +323,26 @@ export function AgentButton({
   const showSeam = !isLoading && isLaunchable;
 
   const presetSegment = activePresetName ? ` · ${activePresetName}` : "";
+  // The click still launches when the CLI is unavailable — it lands on the
+  // recovery panel, not Settings — so both surfaces borrow the dock's hint
+  // rather than naming an action this button no longer performs (#11760).
+  const unavailableLabel = unavailableAgentHint(config.name, availability);
   const tooltipLabel = isLoading
     ? `Checking ${config.name} CLI…`
     : isLaunchable
       ? signInUnconfirmed
         ? `Start ${config.name}${presetSegment}${visibleStateSuffix} — sign-in not detected`
         : `Start ${config.name}${presetSegment}${visibleStateSuffix}`
-      : needsSetup
-        ? `Configure ${config.name}`
-        : `Install ${config.name} CLI`;
+      : unavailableLabel;
   const tooltipShortcut = isLaunchable ? displayCombo : undefined;
   const chevronTooltip = isLoading
     ? `Checking ${config.name} CLI availability...`
     : isLaunchable
       ? `Set ${config.name} preset`
       : needsSetup
-        ? // The chevron blocks clicks when not launchable, so its copy
-          // names the precondition instead of promising an action the
-          // primary button owns (mirrors the `ariaLabel` strings below).
+        ? // The chevron blocks clicks when not launchable, so its copy names
+          // the precondition alone — unlike the primary button, it opens
+          // nothing, so it must not offer the recovery route.
           `${config.name} needs setup`
         : `${config.name} CLI not found`;
   const isChevronDisabled = isLoading || !isLaunchable;
@@ -348,9 +351,7 @@ export function AgentButton({
     ? `Checking ${config.name} CLI`
     : isLaunchable
       ? `Start ${config.name}${visibleStateSuffix}`
-      : needsSetup
-        ? `Configure ${config.name}`
-        : `Install ${config.name} CLI`;
+      : unavailableLabel;
 
   const handleClick = (e?: ReactMouseEvent<HTMLElement>) => {
     if (isLoading) return;

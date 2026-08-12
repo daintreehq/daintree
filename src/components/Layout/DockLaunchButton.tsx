@@ -53,8 +53,8 @@ import {
   type DockLaunchInventoryState,
   type DockLaunchItem,
   type DockLaunchRow,
-  unavailableAgentHint,
 } from "./dockLaunchItems";
+import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
 import type { RecipeContext } from "@/utils/recipeVariables";
 
 // Same weighting as the ⌘⇧P panel palette so a name match outranks an alias or

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildMissingCliContinueArgs,
   buildMissingCliRelaunchOptions,
   findEquivalentMissingCliGate,
 } from "@/utils/missingCliGate";
@@ -80,6 +81,70 @@ describe("buildMissingCliRelaunchOptions", () => {
   it("normalises any non-dock location to the grid", () => {
     expect(buildMissingCliRelaunchOptions(gate({ location: "trash" }))?.location).toBe("grid");
     expect(buildMissingCliRelaunchOptions(gate({ location: "dock" }))?.location).toBe("dock");
+  });
+});
+
+describe("buildMissingCliContinueArgs", () => {
+  it("replays every choice the caller made, not just the ones the panel shows", () => {
+    const args = buildMissingCliContinueArgs(
+      gate({
+        agentModelId: "opus",
+        agentPresetId: "fast",
+        extensionState: { presetEnv: { TOKEN: "secret" } },
+        excludeFromPersistence: true,
+        removeOnExit: true,
+        spawnedBy: "mcp",
+        focusPolicy: "preserve",
+      })
+    );
+
+    // Asserted as a whole because a dropped field silently rewrites the launch
+    // on the way through: `removeOnExit` was lost here, so an ephemeral launch
+    // recovered into a permanent panel.
+    expect(args).toMatchObject({
+      agentId: "claude",
+      location: "grid",
+      cwd: "/repo",
+      worktreeId: "wt-1",
+      model: "opus",
+      presetId: "fast",
+      env: { TOKEN: "secret" },
+      excludeFromPersistence: true,
+      removeOnExit: true,
+      spawnedBy: "mcp",
+      focusPolicy: "preserve",
+    });
+  });
+
+  // The whole point of re-dispatching is that the launcher rebuilds these
+  // against the path the probe just found; the captured flags are already a
+  // resolved set, so forwarding them would append them a second time.
+  it("leaves what the launcher rebuilds to the launcher", () => {
+    const args = buildMissingCliContinueArgs(
+      gate({ command: "claude --resume", agentLaunchFlags: ["--verbose"], titleMode: "custom" })
+    );
+
+    expect(args).not.toHaveProperty("agentLaunchFlags");
+    expect(args).not.toHaveProperty("command");
+  });
+
+  it("keeps a deliberately preset-free launch preset-free", () => {
+    // undefined would let the agent-level default reappear on recovery.
+    expect(buildMissingCliContinueArgs(gate({ agentPresetId: undefined }))?.presetId).toBeNull();
+  });
+
+  it("activates the dock only for a gate that lived in it", () => {
+    expect(buildMissingCliContinueArgs(gate({ location: "dock" }))).toMatchObject({
+      location: "dock",
+      activateDockOnCreate: true,
+    });
+    expect(buildMissingCliContinueArgs(gate({ location: "trash" }))?.activateDockOnCreate).toBe(
+      undefined
+    );
+  });
+
+  it("refuses a panel with no agent to relaunch", () => {
+    expect(buildMissingCliContinueArgs(gate({ launchAgentId: undefined }))).toBeNull();
   });
 });
 

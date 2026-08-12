@@ -216,7 +216,7 @@ export function MissingCliGate({
     // still resolving, so details can be stale here. Availability is always
     // replaced by a refresh that resolved.
     const availability = useCliAvailabilityStore.getState().availability;
-    if (isAgentLaunchable(availability[agentId as keyof typeof availability])) {
+    if (isAgentLaunchable(availability[agentId])) {
       onAvailabilityReady();
     }
   };

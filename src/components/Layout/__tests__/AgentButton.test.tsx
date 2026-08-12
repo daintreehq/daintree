@@ -1766,11 +1766,14 @@ describe("AgentButton preset UX", () => {
       expect(primary!.getAttribute("aria-label")).toBe("Checking Claude CLI");
     });
 
-    it("non-launchable copy is verb-noun with no gesture language", () => {
+    // The click routes to the recovery panel, so the accessible name has to
+    // describe that outcome — and word it the way the dock rows already do,
+    // or the same agent announces two different things in two surfaces.
+    it("non-launchable copy names the recovery panel, matching the dock hint", () => {
       const cases: Array<[string, string]> = [
-        ["missing", "Install Claude CLI"],
-        ["installed", "Configure Claude"],
-        ["blocked", "Configure Claude"],
+        ["missing", "Claude needs setup. Select to see recovery options"],
+        ["installed", "Claude needs setup. Select to see recovery options"],
+        ["blocked", "Claude is blocked by endpoint security. Select to see recovery options"],
       ];
       for (const [state, expected] of cases) {
         mockMergedPresetsFn = () => [];

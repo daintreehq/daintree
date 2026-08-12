@@ -15,8 +15,8 @@ import {
   type DockLaunchPanelItem,
   type DockLaunchRecipeItem,
   type DockLaunchSurface,
-  unavailableAgentHint,
 } from "./dockLaunchItems";
+import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
 
 export type { DockLaunchAgent } from "./dockLaunchItems";
 

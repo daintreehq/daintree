@@ -2,17 +2,6 @@ import type { AddPanelOptions } from "@shared/types";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 
 /**
- * Rebuild the launch a missing-CLI gate panel stood in for.
- *
- * Single source of truth for which fields survive the hop. Both recovery exits
- * relaunch through this — "Run anyway" and the post-refresh continuation — and
- * `missingCliRelaunchKey` derives gate identity from the same output, so a
- * field added here is automatically carried AND compared instead of drifting
- * out of one of three hand-maintained lists.
- *
- * Returns null when the panel carries no agent, which makes it unrelaunchable.
- */
-/**
  * Narrow the preset environment out of the panel's untyped extension bag.
  * Non-string values are dropped rather than trusted: this feeds a real
  * subprocess environment, where a non-string would stringify into something
@@ -28,6 +17,21 @@ export function readPresetEnv(panel: PtyPanelData): Record<string, string> | und
   return Object.keys(env).length > 0 ? env : undefined;
 }
 
+/**
+ * Rebuild the launch a missing-CLI gate panel stood in for.
+ *
+ * Single source of truth for which fields survive the "Run anyway" hop, which
+ * hands them straight to `addPanel`. `missingCliRelaunchKey` derives gate
+ * identity from the same output, so a field added here is automatically carried
+ * AND compared instead of drifting out of two hand-maintained lists.
+ *
+ * The re-check exit does not relaunch through this — it re-dispatches
+ * `agent.launch` so the launcher re-resolves the command against the path the
+ * probe just found, and so replays only the caller's own choices. See
+ * `buildMissingCliContinueArgs`.
+ *
+ * Returns null when the panel carries no agent, which makes it unrelaunchable.
+ */
 export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOptions | null {
   const agentId = panel.launchAgentId;
   if (!agentId) return null;
@@ -61,6 +65,64 @@ export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOpt
     removeOnExit: panel.removeOnExit,
     spawnedBy: panel.spawnedBy,
     focusPolicy: panel.focusPolicy,
+  };
+}
+
+/** `agent.launch` arguments that continue the launch a gate stood in for. */
+export interface MissingCliContinueArgs {
+  agentId: string;
+  location: "grid" | "dock";
+  cwd?: string;
+  worktreeId?: string;
+  model?: string;
+  presetId: string | null;
+  activateDockOnCreate?: true;
+  env?: Record<string, string>;
+  excludeFromPersistence?: boolean;
+  removeOnExit?: boolean;
+  spawnedBy?: PtyPanelData["spawnedBy"];
+  focusPolicy?: PtyPanelData["focusPolicy"];
+}
+
+/**
+ * Continue a gated launch through the launcher after a re-check found the CLI.
+ *
+ * Deliberately not the relaunch options above: this exit re-dispatches
+ * `agent.launch`, so the launcher rebuilds the command, the flag set and the
+ * title against the freshly resolved path. Only what the original caller chose
+ * is replayed — forwarding the gate's already-resolved `agentLaunchFlags` would
+ * append them a second time on top of the set the launcher rebuilds, and its
+ * title is recomposed from the same agent, preset and model.
+ *
+ * Returns null when the panel carries no agent, which makes it unrelaunchable.
+ */
+export function buildMissingCliContinueArgs(panel: PtyPanelData): MissingCliContinueArgs | null {
+  const agentId = panel.launchAgentId;
+  if (!agentId) return null;
+
+  const location = panel.location === "dock" ? "dock" : "grid";
+  return {
+    agentId,
+    location,
+    cwd: panel.cwd,
+    worktreeId: panel.worktreeId,
+    model: panel.agentModelId,
+    // Explicit null preserves a deliberately preset-free launch; forwarding
+    // undefined would let the agent-level default reappear on recovery.
+    presetId: panel.agentPresetId ?? null,
+    // A dock replacement that doesn't activate starts parked and offscreen, so
+    // the recovery the user just asked for would produce nothing visible.
+    activateDockOnCreate: location === "dock" ? true : undefined,
+    env: readPresetEnv(panel),
+    // Since env is persisted onto the panel (#10922), dropping this would let a
+    // session-scoped secret leak into the on-disk snapshot on relaunch.
+    excludeFromPersistence: panel.excludeFromPersistence,
+    // Dropping these three rewrote the launch on the way through: an ephemeral
+    // pane came back permanent, a background spawn stole focus, and an
+    // automated one came back attributed to the user.
+    removeOnExit: panel.removeOnExit,
+    focusPolicy: panel.focusPolicy,
+    spawnedBy: panel.spawnedBy,
   };
 }
 

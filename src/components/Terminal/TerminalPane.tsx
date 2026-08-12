@@ -66,7 +66,10 @@ import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { notifyWorktreeTerminalAttached } from "@/services/terminal/worktreeRevealCoordinator";
 import { actionService } from "@/services/ActionService";
-import { buildMissingCliRelaunchOptions, readPresetEnv } from "@/utils/missingCliGate";
+import {
+  buildMissingCliContinueArgs,
+  buildMissingCliRelaunchOptions,
+} from "@/utils/missingCliGate";
 import { useReviewDialogOpenForWorktree } from "./useReviewDialogOpenForWorktree";
 import { InputTracker } from "@/services/clearCommandDetection";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
@@ -451,27 +454,12 @@ function TerminalPaneComponent({
    */
   const continueMissingCliLaunch = () => {
     const panel = usePanelStore.getState().panelsById[id];
-    if (!panel || !isPtyPanel(panel) || !panel.launchAgentId) return;
-    const location = panel.location === "dock" ? "dock" : "grid";
+    if (!panel || !isPtyPanel(panel)) return;
+    const args = buildMissingCliContinueArgs(panel);
+    if (!args) return;
 
     removePanel(id);
-    void actionService.dispatch(
-      "agent.launch",
-      {
-        agentId: panel.launchAgentId,
-        location,
-        cwd: panel.cwd,
-        worktreeId: panel.worktreeId,
-        model: panel.agentModelId,
-        // Explicit null preserves a deliberately preset-free launch; forwarding
-        // undefined would let the agent-level default reappear on recovery.
-        presetId: panel.agentPresetId ?? null,
-        ...(location === "dock" ? { activateDockOnCreate: true } : {}),
-        env: readPresetEnv(panel),
-        excludeFromPersistence: panel.excludeFromPersistence,
-      },
-      { source: "user" }
-    );
+    void actionService.dispatch("agent.launch", args, { source: "user" });
   };
 
   // Fleet arming store for multi-select gestures. Selection treatment is
