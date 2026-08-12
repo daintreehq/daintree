@@ -127,6 +127,34 @@ describe("GitService", () => {
     expect(diff).toContain("diff --git");
   });
 
+  it("returns the diff for a tracked file whose added lines quote the binary marker", async () => {
+    const trackedDiff = `diff --git a/README.md b/README.md
+index 1a2b3c4..5d6e7f8 100644
+--- a/README.md
++++ b/README.md
+@@ -1,2 +1,3 @@
+ # Notes
++Git prints Binary files a/x and b/x differ when it skips a blob.
+`;
+    gitClientMock.diff.mockResolvedValue(trackedDiff);
+
+    const service = new GitService(tempDir);
+    const diff = await service.getFileDiff("README.md", "modified");
+
+    expect(diff).toBe(trackedDiff);
+  });
+
+  it("returns BINARY_FILE for a tracked file git reports as binary", async () => {
+    gitClientMock.diff.mockResolvedValue(
+      "diff --git a/logo.png b/logo.png\nindex 1a2b3c4..5d6e7f8 100644\nBinary files a/logo.png and b/logo.png differ\n"
+    );
+
+    const service = new GitService(tempDir);
+    const diff = await service.getFileDiff("logo.png", "modified");
+
+    expect(diff).toBe("BINARY_FILE");
+  });
+
   it("finds next local branch suffix while ignoring remote-only conflicts", async () => {
     gitClientMock.branch.mockResolvedValue({
       branches: {
@@ -342,6 +370,34 @@ describe("GitService", () => {
       const result = await service.compareWorktrees("main", "feature/test", "src/app.ts");
 
       expect(result).toBe("NO_CHANGES");
+    });
+
+    it("returns the diff when a compared file's added lines quote the binary marker", async () => {
+      const comparedDiff = `diff --git a/README.md b/README.md
+index 1a2b3c4..5d6e7f8 100644
+--- a/README.md
++++ b/README.md
+@@ -1,2 +1,3 @@
+ # Notes
++Git prints Binary files a/x and b/x differ when it skips a blob.
+`;
+      gitClientMock.raw.mockResolvedValue(comparedDiff);
+
+      const service = new GitService(tempDir);
+      const result = await service.compareWorktrees("main", "feature/test", "README.md");
+
+      expect(result).toBe(comparedDiff);
+    });
+
+    it("returns BINARY_FILE when git reports a compared file as binary", async () => {
+      gitClientMock.raw.mockResolvedValue(
+        "diff --git a/logo.png b/logo.png\nindex 1a2b3c4..5d6e7f8 100644\nBinary files a/logo.png and b/logo.png differ\n"
+      );
+
+      const service = new GitService(tempDir);
+      const result = await service.compareWorktrees("main", "feature/test", "logo.png");
+
+      expect(result).toBe("BINARY_FILE");
     });
 
     it("returns empty file list without calling git when branch1 equals branch2", async () => {

@@ -14,6 +14,7 @@ import { settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
 import { createHardenedGit, createAuthenticatedGit } from "../utils/hardenedGit.js";
 import { classifyGitError, getGitRecoveryAction } from "../../shared/utils/gitOperationErrors.js";
+import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import type { Worktree, WslGitEligibility } from "../../shared/types/worktree.js";
 import type {
   WorkspaceHostEvent,
@@ -3405,7 +3406,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         normalizedPath,
       ]);
 
-      if (diff.includes("Binary files")) {
+      if (isBinaryDiffOutput(diff)) {
         sendSentinel("BINARY_FILE");
         return;
       }
