@@ -133,7 +133,7 @@ vi.mock("../../../projectMenuState.js", () => ({
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
-import { registerProjectCrudHandlers } from "../projectCrud/index.js";
+import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
 import type { HandlerDependencies } from "../../types.js";
 import type {
   WindowRegistry,
@@ -141,6 +141,9 @@ import type {
   WindowServices,
 } from "../../../window/WindowRegistry.js";
 import { DisposableStore } from "../../../utils/lifecycle.js";
+// Disposes the stats/fleet pollers this registration starts; see the helper for
+// why dropping the disposer leaks live timers into the rest of the file.
+const registerProjectCrudHandlers = createProjectCrudRegistrar();
 
 function makeWindowContext(
   windowId: number,

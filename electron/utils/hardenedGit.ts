@@ -261,9 +261,25 @@ const BLOCKED_INHERITED_GIT_ENV_KEYS = new Set([
   "GIT_EDITOR",
   "GIT_EXEC_PATH",
   "GIT_EXTERNAL_DIFF",
+  // The other three global pathspec modes, stripped so the hardened env owns
+  // pathspec interpretation outright instead of negotiating with whatever the
+  // user's shell exported.
+  //
+  // GLOB and ICASE are the load-bearing pair: git hard-fails when either is set
+  // alongside the GIT_LITERAL_PATHSPECS we add below — "fatal: global 'literal'
+  // pathspec setting is incompatible with all other global pathspec settings",
+  // exit 128 — which would turn every path-bearing command (diff, add, reset,
+  // checkout) into a hard failure for anyone who exports one.
+  //
+  // NOGLOB is the exception: git accepts it together with literal (verified on
+  // 2.50.1). It is stripped anyway, because inheriting a second, contradictory
+  // opinion about how to read our paths has no upside.
+  "GIT_GLOB_PATHSPECS",
+  "GIT_ICASE_PATHSPECS",
   // Inherited GIT_MERGE_AUTOEDIT=yes would re-open the editor on
   // `git merge --continue`; strip it so buildContinueEnv's explicit "no" wins.
   "GIT_MERGE_AUTOEDIT",
+  "GIT_NOGLOB_PATHSPECS",
   "GIT_PAGER",
   "GIT_PROXY_COMMAND",
   "GIT_SEQUENCE_EDITOR",
@@ -336,6 +352,21 @@ export function buildHardenedGitEnv(
     // git add/commit are unaffected, so this is safe even when the hardened
     // factory is used for write paths.
     GIT_OPTIONAL_LOCKS: "0",
+    // Everything Daintree passes to git as a pathspec is meant as a literal
+    // file or directory path — a name from a git file list, a directory
+    // derived from the search root, `.` from git init — never a user-authored
+    // glob. Without this, git parses them as pathspecs, so wildmatch
+    // metacharacters in a legal filename select the wrong files:
+    // `pages/[...slug].tsx` is a character class matching one of `.slug`, so
+    // it resolves to siblings like `pages/s.tsx` and NOT to the file itself.
+    // That mis-selection reaches destructive commands — `git checkout --
+    // <path>` to discard one file's changes silently discards a different
+    // file's instead. `--` alone does not help; it only stops a leading `-`
+    // being read as an option. Set here rather than per-call so no future call
+    // site can reintroduce the class. The competing pathspec modes are
+    // stripped from the inherited env (see BLOCKED_INHERITED_GIT_ENV_KEYS) —
+    // git errors out if any of them survives alongside this one.
+    GIT_LITERAL_PATHSPECS: "1",
     // Block git's built-in TTY prompt for credentials/passphrases. Some
     // commands (clone, fetch, push) still touch credential helpers even
     // through the hardened factory's `-c credential.helper=` blank, and an
@@ -489,6 +520,33 @@ export async function createWslHardenedGit(
     // must reach the WSL distro too. GCM_INTERACTIVE is harmless inside
     // WSL (no GCM there) but kept for defense in depth in case wsl.exe ever
     // surfaces it back to the host credential helper chain.
+    //
+    // Setting a variable here is NOT enough to make the Linux process see it:
+    // wsl.exe forwards only the variables named in WSLENV (plus PATH and the
+    // proxy trio), and drops everything else. `GIT_LITERAL_PATHSPECS` has to
+    // cross, because this route runs pathspec-bearing commands with real
+    // filenames — `getWorktreeChangesWithStats` reaches the `--numstat ... --
+    // <paths>` calls in utils/git.ts through `gitForChanges`. So it is
+    // declared below with the `/u` flag (share Windows → Linux); `/u` rather
+    // than `/p` because it is a flag, not a path to translate.
+    //
+    // The credential/prompt vars beneath it predate this and are NOT in
+    // WSLENV, so they do not currently reach the distro either. Left alone on
+    // purpose: routing them through would newly change credential-prompt
+    // behaviour inside WSL, which needs a Windows box to verify and belongs in
+    // its own change rather than riding along with a pathspec fix.
+    GIT_LITERAL_PATHSPECS: "1",
+    // Colon-delimited on BOTH sides — WSLENV is read by the interop layer, not
+    // by Windows, so it does not follow the `;` convention that PATH-style
+    // Windows variables use. Any inherited value is extended rather than
+    // replaced, and a pre-existing entry for this variable is dropped first so
+    // the list cannot accumulate duplicates across nested launches.
+    WSLENV: [
+      ...(process.env.WSLENV ?? "")
+        .split(":")
+        .filter((entry) => entry && entry.split("/")[0] !== "GIT_LITERAL_PATHSPECS"),
+      "GIT_LITERAL_PATHSPECS/u",
+    ].join(":"),
     GIT_TERMINAL_PROMPT: "0",
     GIT_ASKPASS: "true",
     GCM_INTERACTIVE: "Never",
@@ -526,6 +584,11 @@ export async function createAuthenticatedGit(
     // Same lock-suppression and Windows-GCM hardening as createHardenedGit.
     // GIT_ASKPASS is intentionally NOT set here — credentialed commands
     // (clone/push) need legitimate ASKPASS resolution.
+    // GIT_LITERAL_PATHSPECS matches the hardened profile: this factory is for
+    // network commands that take refspecs rather than pathspecs today, but
+    // pinning it keeps the guarantee whole if a pathspec-bearing command is
+    // ever routed through the authenticated profile.
+    GIT_LITERAL_PATHSPECS: "1",
     GIT_OPTIONAL_LOCKS: "0",
     GCM_INTERACTIVE: "Never",
   });
@@ -595,6 +658,7 @@ export async function createBackgroundFetchGit(
       // flags from createAuthenticatedGit's first .env() call must be
       // re-stated here or they will be lost on POSIX.
       GIT_OPTIONAL_LOCKS: "0",
+      GIT_LITERAL_PATHSPECS: "1",
       GCM_INTERACTIVE: "Never",
     });
   }

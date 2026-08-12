@@ -26,10 +26,24 @@ vi.mock("electron", () => ({
 
 const checkRateLimitMock = vi.hoisted(() => vi.fn());
 
+// Kept strictly hand-listed rather than spreading the real module: an export
+// that goes missing here fails loudly the moment a new effectful dependency
+// crosses this unit's boundary, which is the signal we want. Spreading would
+// silence that by running the real thing — real rate-limit queues, real timers,
+// real renderer plumbing — and it would not even be complete, since overriding
+// the export object does not rewrite calls made inside the module itself.
 vi.mock("../../utils.js", () => ({
   checkRateLimit: checkRateLimitMock,
   broadcastToRenderer: vi.fn(),
   sendToRenderer: vi.fn(),
+  // Registering the CRUD handlers starts real `ProjectStatsService` and
+  // `FleetSnapshotService` pollers whose compute broadcasts through this.
+  // Omitting it is what produced the CI red: the poller tick rejected with
+  // "No 'typedBroadcast' export is defined on the mock", and because that
+  // rejection only lands if the tick fires before teardown, it surfaced on a
+  // loaded runner and not locally. The disposer below stops the pollers; this
+  // stub keeps a tick that fires mid-test inside the unit boundary.
+  typedBroadcast: vi.fn(),
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
       (handler as (...a: unknown[]) => unknown)(...args)
@@ -123,11 +137,17 @@ vi.mock("../../../window/deferredInitQueue.js", () => ({
 
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
-import { registerProjectCrudHandlers } from "../projectCrud/index.js";
 import type { HandlerDependencies } from "../../types.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
+import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
+
+// Disposes the stats/fleet pollers after each test; see the helper for why
+// dropping the disposer is what produced this file's CI flake. Still returns
+// the disposer, because two tests below stop the services themselves to assert
+// the post-stop behaviour of the deferred initial compute.
+const registerProjectCrudHandlers = createProjectCrudRegistrar();
 
 function makePtyClient(overrides: Record<string, unknown> = {}) {
   return {
@@ -137,6 +157,13 @@ function makePtyClient(overrides: Record<string, unknown> = {}) {
       processIds: [100, 200],
     }),
     getAllTerminalsAsync: vi.fn().mockResolvedValue([]),
+    // FleetSnapshotService's poll calls this. Answering it explicitly — rather
+    // than letting the fake come up short and throw a caught TypeError inside
+    // the poller — keeps a tick that fires mid-test from muddying these tests'
+    // logs. `degraded: false` is the honest fake: the shards all answered.
+    getAllTerminalsWithCompletenessAsync: vi
+      .fn()
+      .mockResolvedValue({ terminals: [], degraded: false }),
     getTerminalsForProjectAsync: vi.fn().mockResolvedValue([]),
     getTerminalAsync: vi.fn().mockResolvedValue(null),
     getMemoryRollup: vi.fn().mockResolvedValue({
