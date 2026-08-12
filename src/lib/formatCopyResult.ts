@@ -94,3 +94,29 @@ export function describeEmptyFolderCopy(stats?: CopyTreeBudgetStats | null): str
     ? "Every file in this folder is excluded by an ignore rule"
     : "Every file in this folder was excluded by ignore rules or context settings";
 }
+
+/**
+ * The single-file counterpart, for the file-row menu's `Copy context`
+ * (#11757). Same shape as the folder wording and the same reason to exist —
+ * "Copied 0 files" reads as a failure when the honest answer is that an ignore
+ * rule covers the file the user picked. A file is one path, so the exclusion
+ * breakdown collapses to whichever single reason accounts for it.
+ */
+export function describeEmptyFileCopy(stats?: CopyTreeBudgetStats | null): string {
+  const byReason = stats?.excluded?.byReason;
+  const total = stats?.excluded?.total ?? 0;
+
+  if (total <= 0) {
+    return "This file has no content to copy";
+  }
+
+  if ((byReason?.unreadable ?? 0) === total) {
+    return "This file couldn't be read";
+  }
+
+  const ignored = IGNORE_RULE_REASONS.reduce((sum, reason) => sum + (byReason?.[reason] ?? 0), 0);
+
+  return ignored === total
+    ? "This file is excluded by an ignore rule"
+    : "This file was excluded by ignore rules or context settings";
+}

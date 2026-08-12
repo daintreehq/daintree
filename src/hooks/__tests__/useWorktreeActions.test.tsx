@@ -374,6 +374,73 @@ describe("copyContextWithFeedback", () => {
     );
   });
 
+  it("names a single-file scope as a file, and keeps scopeKind out of the action args", async () => {
+    // The file-row menu's Copy context scopes one file (#11757); calling that a
+    // folder would be a lie the transient toast gets away with exactly once.
+    dispatchMock.mockResolvedValueOnce({
+      ok: true,
+      result: { fileCount: 1, stats: null, format: "xml" },
+    });
+
+    await copyContextWithFeedback("wt-1", "context-menu", {
+      scopePaths: ["src/index.ts"],
+      scopeKind: "file",
+    });
+
+    expect(addNotificationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Copying file context…" })
+    );
+    expect(dispatchMock).toHaveBeenLastCalledWith(
+      "worktree.copyTree",
+      expect.objectContaining({ worktreeId: "wt-1", scopePaths: ["src/index.ts"] }),
+      { source: "context-menu" }
+    );
+    // The kind is feedback-only; forwarding it would put an unknown key on the
+    // action's args, where Zod strips it silently rather than complaining.
+    expect(dispatchMock).not.toHaveBeenLastCalledWith(
+      "worktree.copyTree",
+      expect.objectContaining({ scopeKind: expect.anything() }),
+      expect.anything()
+    );
+  });
+
+  it("still reads a scoped copy as a folder when the caller says nothing", async () => {
+    dispatchMock.mockResolvedValueOnce({
+      ok: true,
+      result: { fileCount: 2, stats: null, format: "xml" },
+    });
+
+    await copyContextWithFeedback("wt-1", "context-menu", { scopePaths: ["src"] });
+
+    expect(addNotificationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Copying folder context…" })
+    );
+  });
+
+  it("explains an empty file scope in file words, not folder words", async () => {
+    dispatchMock.mockResolvedValueOnce({
+      ok: true,
+      result: {
+        fileCount: 0,
+        stats: { excluded: { total: 1, byReason: { gitignore: 1 } } },
+        format: "xml",
+      },
+    });
+
+    await copyContextWithFeedback("wt-1", "context-menu", {
+      scopePaths: ["dist/bundle.js"],
+      scopeKind: "file",
+    });
+
+    expect(updateNotificationMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        title: "No files copied",
+        message: expect.stringMatching(/^(?!.*folder).*file/i),
+      })
+    );
+  });
+
   describe("a folder copy that came back empty", () => {
     async function copyFolderYielding(stats: unknown) {
       dispatchMock.mockResolvedValueOnce({

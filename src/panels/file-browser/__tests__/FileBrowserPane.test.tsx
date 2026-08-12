@@ -283,7 +283,7 @@ const { insertFileReferenceMock, canInsertRef } = vi.hoisted(() => ({
   insertFileReferenceMock: vi.fn<(path: string) => boolean>(() => true),
   canInsertRef: { current: true },
 }));
-vi.mock("../useInsertFileReference", () => ({
+vi.mock("@/hooks/useInsertFileReference", () => ({
   useInsertFileReference: () => ({
     canInsert: canInsertRef.current,
     insert: insertFileReferenceMock,
@@ -306,6 +306,32 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
       {children}
     </button>
   ),
+  // Stubbed explicitly: the real `ContextMenuActionItem` closes over the
+  // module's own `ContextMenuItem`, so replacing that export alone would leave
+  // every action item rendering the real (portal-only) primitive.
+  ContextMenuActionItem: ({
+    children,
+    actionId,
+    args,
+    onSelect,
+    ...rest
+  }: {
+    children: React.ReactNode;
+    actionId: string;
+    args?: unknown;
+    onSelect?: () => void;
+  } & React.ButtonHTMLAttributes<HTMLButtonElement>) => (
+    <button
+      onClick={() => {
+        onSelect?.();
+        void dispatchMock(actionId, args, { source: "context-menu" });
+      }}
+      {...rest}
+    >
+      {children}
+    </button>
+  ),
+  ContextMenuShortcut: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
   ContextMenuSeparator: () => null,
 }));
 
@@ -1035,7 +1061,7 @@ describe("FileBrowserPane resizable sidebar (#11331)", () => {
 describe("tree-header root path copy (#11407)", () => {
   const ROOT = "src/panels";
   // The worktree in the store mock is `/repo`, so this is what a row's
-  // "Copy full path" would produce for the same folder.
+  // "Copy path" would produce for the same folder.
   const ABSOLUTE = "/repo/src/panels";
 
   const paneJsx = () => (
@@ -1386,7 +1412,7 @@ describe("workspace-rooted browser", () => {
     renderPane({});
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Copy full path" }));
+      fireEvent.click(screen.getByRole("button", { name: "Copy path" }));
     });
 
     expect(writeTextMock).toHaveBeenCalledWith(`/scratches/one/${FOLDER_ROW.path}`);
@@ -1429,7 +1455,7 @@ describe("promoted workspace-rooted browser (#11489)", () => {
     renderPane({ worktreeId: "wt-1" });
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Copy full path" }));
+      fireEvent.click(screen.getByRole("button", { name: "Copy path" }));
     });
 
     // wt-1 resolves to "/repo", which is what this joined against before the fix.
@@ -1860,7 +1886,7 @@ describe("FileBrowserPane row activation (#11496)", () => {
     await activate("src/app.ts");
 
     // The worktree in the store mock is /repo, so the action gets the same
-    // absolute path a row's "Copy full path" would produce.
+    // absolute path a row's "Copy path" would produce.
     expect(dispatchMock.mock.calls).toEqual([
       ["file.openPanel", { path: "/repo/src/app.ts" }, { source: "user" }],
     ]);

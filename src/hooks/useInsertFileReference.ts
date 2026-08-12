@@ -10,7 +10,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { resolveRescueTarget } from "@/lib/typeAnywhere";
-import { appendFileReference } from "./fileReference";
+import { appendFileReference } from "@/panels/file-browser/fileReference";
 
 interface TargetInputs {
   panelsById: Record<string, PanelInstance>;
@@ -85,11 +85,12 @@ export interface InsertFileReference {
 /**
  * Send an `@file` reference to the agent the user was last talking to (#11577).
  *
- * The file browser is a sibling panel with no handle on any terminal's
- * editor, so the token goes through the draft store — the sanctioned
- * outside-write path that voice transcription and the type-anywhere rescue
- * already use — and `HybridInputBar`'s `externalDraftRevision` effect syncs the
- * mounted document.
+ * Every file surface that offers this (the file browser, the worktree card's
+ * changed-files list, the Review Hub, the diff sidebar) is a sibling of the
+ * terminal with no handle on its editor, so the token goes through the draft
+ * store — the sanctioned outside-write path that voice transcription and the
+ * type-anywhere rescue already use — and `HybridInputBar`'s
+ * `externalDraftRevision` effect syncs the mounted document.
  *
  * Deliberately does NOT move focus. The user is mid-flow in the tree and
  * likely to reference several files; pulling focus (or the grid viewport) to

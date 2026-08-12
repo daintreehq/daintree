@@ -76,13 +76,19 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // Handle Shift+F10 and ContextMenu key for panel context menus.
       // Must be checked before the editable/terminal bailouts below.
       // Respects user overrides — if the binding is disabled, fall through.
-      // Target-guarded: a surface marked `data-row-menu` (the file-browser
-      // tree) routes these keys to its own row-level menu, and this capture
-      // handler consuming them first would make that menu mouse-only.
+      // Target-guarded twice. A surface marked `data-row-menu` (the file
+      // browser's tree, the worktree card's changed files, the Review Hub list,
+      // the diff sidebar) routes these keys to its own row-level menu, and this
+      // capture handler consuming them first would make that menu mouse-only.
+      // An already-open menu is the second case: Radix portals its content to
+      // `document.body`, outside every `data-row-menu` marker, so a repeat
+      // press inside the open menu would otherwise fall through to here and
+      // open the focused panel's menu on top of it.
       if (
         (e.key === "ContextMenu" ||
           (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)) &&
-        target.closest("[data-row-menu]") === null
+        target.closest("[data-row-menu]") === null &&
+        target.closest('[role="menu"]') === null
       ) {
         const effectiveCombo = keybindingService.getEffectiveCombo("terminal.contextMenu");
         if (effectiveCombo !== undefined) {

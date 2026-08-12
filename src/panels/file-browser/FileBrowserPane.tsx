@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type React from "react";
 import {
-  Copy,
   CornerLeftUp,
   EyeOff,
   FolderRoot,
@@ -10,11 +9,8 @@ import {
   PanelRightOpen,
   RefreshCw,
 } from "lucide-react";
-import { AtSign, FolderOpen, Folders } from "@/components/icons";
 import { basename, join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
-import { isMac } from "@/lib/platform";
-import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -22,15 +18,10 @@ import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { FileViewerToolbar } from "@/components/FileViewer/FileViewerToolbar";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { Skeleton, SkeletonText } from "@/components/ui/Skeleton";
-import {
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuShortcut,
-} from "@/components/ui/context-menu";
+import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
-import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
+import { useFileRowMenuItems } from "@/hooks/useFileRowMenuItems";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { actionService } from "@/services/ActionService";
@@ -45,8 +36,6 @@ import { FileBrowserViewer } from "./FileBrowserViewer";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
 import { buildFileBrowserGitStatusIndex, isReadableRelativePath } from "./fileBrowserGitStatus";
 import { useFileBrowserTree } from "./useFileBrowserTree";
-import { useInsertFileReference } from "./useInsertFileReference";
-import { INSERT_FILE_REFERENCE_COMBO } from "./fileReference";
 import {
   FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH,
   FILE_BROWSER_SIDEBAR_MAX_WIDTH,
@@ -843,64 +832,6 @@ export function FileBrowserPane({
     focusTree();
   }, [id, rootPath, setFileBrowserView, focusTree]);
 
-  const handleCopyFolderContext = useCallback(
-    (path: string) => {
-      if (!sourceWorktreeId) return;
-      // Literal path, not a pattern: scoping keeps the worktree's ignore rules
-      // in play, so the folder yields what a whole-worktree copy would have.
-      void copyContextWithFeedback(
-        sourceWorktreeId,
-        "context-menu",
-        { scopePaths: [path] },
-        "file-browser"
-      );
-    },
-    [sourceWorktreeId]
-  );
-
-  const copyToClipboard = useCallback((text: string, errorTitle: string) => {
-    const write = () =>
-      navigator.clipboard.writeText(text).catch((error: unknown) => {
-        // A silent failure leaves the previous clipboard contents in place,
-        // and the user's next paste would be the wrong value.
-        notify({
-          type: "error",
-          title: errorTitle,
-          message:
-            error instanceof Error && error.name === "NotAllowedError"
-              ? "The clipboard is unavailable while another app holds it."
-              : "The clipboard rejected the write.",
-          action: { label: "Retry", onClick: () => void write() },
-        });
-      });
-    void write();
-  }, []);
-
-  const handleCopyFullPath = useCallback(
-    (path: string) => {
-      if (!basePath) return;
-      copyToClipboard(join(basePath, path), "Couldn't copy path");
-    },
-    [basePath, copyToClipboard]
-  );
-
-  // row.path is already relative to the true worktree root even when the tree
-  // has been re-rooted to a subfolder, so it copies verbatim — no rootPath
-  // stripping or re-joining, which would only double-prefix a correct value.
-  const handleCopyRelativePath = useCallback(
-    (path: string) => {
-      copyToClipboard(path, "Couldn't copy path");
-    },
-    [copyToClipboard]
-  );
-
-  const handleCopyFileName = useCallback(
-    (name: string) => {
-      copyToClipboard(name, "Couldn't copy file name");
-    },
-    [copyToClipboard]
-  );
-
   // The header label copies the folder the tree is rooted at. Only a re-rooted
   // tree has a path worth copying — at the worktree root the label is a bare
   // basename, so the affordance stays absent rather than disabled.
@@ -940,12 +871,26 @@ export function FileBrowserPane({
     attempt();
   }, [rootAbsolutePath, copyRootPath]);
 
+  // The one file-row menu, shared with the worktree card's changed files, the
+  // Review Hub and the diff sidebar (#11757). It owns everything that acts on
+  // a row — reveal, the three copies, insert reference, Copy context, the open
+  // items — plus the plugin `file` section this surface never had.
+  const {
+    renderItems: renderFileRowMenuItems,
+    canInsertFileReference,
+    insertFileReference,
+  } = useFileRowMenuItems({
+    worktreePath: basePath,
+    // A workspace root has no worktree behind it, which is what drops
+    // `Copy context` there — CopyTree is worktree-scoped (#11482).
+    worktreeId: isWorktreeSource && sourceWorktreeId ? sourceWorktreeId : null,
+    copyTreeRunSource: "file-browser",
+  });
+
   // Hand a row to the agent the user was last talking to, without a drag
   // (#11577). `basePath` turns the tree's relative row into the absolute path
   // the hook needs; the hook then relativizes it against the destination
   // agent's cwd, exactly as a Finder drop into that agent's input would.
-  const { canInsert: canInsertFileReference, insert: insertFileReference } =
-    useInsertFileReference();
   const handleInsertFileReference = useCallback(
     (path: string) => {
       // Same guard as the copy handlers: a relative token would name nothing
@@ -957,41 +902,14 @@ export function FileBrowserPane({
     },
     [basePath, insertFileReference]
   );
-  const insertShortcutHint = isMac() ? "⌘I" : "Ctrl+I";
-  const insertAriaKeyshortcuts = comboToAriaKeyshortcuts(INSERT_FILE_REFERENCE_COMBO, isMac());
-
-  const reveal = useMemo(() => revealCopy(), []);
-  const handleReveal = useCallback(
-    (path: string) => {
-      if (!basePath) return;
-      const run = async () => {
-        const result = await actionService.dispatch(
-          "file.showItemInFolder",
-          { path: join(basePath, path) },
-          { source: "context-menu" }
-        );
-        // The menu has already closed by the time this settles, so a failure
-        // here is invisible without a toast — e.g. the entry was deleted
-        // between listing and click.
-        if (!result.ok) {
-          notify({
-            type: "error",
-            title: reveal.errorTitle,
-            message: result.error.message,
-            action: { label: "Retry", onClick: () => void run() },
-          });
-        }
-      };
-      void run();
-    },
-    [basePath, reveal]
-  );
-
   // Typed on the shared entry shape rather than on `FlatTreeRow` so the tree and
   // the folder listing hand it their own row types and get the identical menu
-  // (#11620). Nothing below reads a tree-only field — the handlers all take a
-  // path or a name — and a second copy of this menu for the listing would be
-  // sixty lines that have to stay in lockstep forever.
+  // (#11620).
+  //
+  // Only the folder prefix lives here now; everything else comes from the
+  // shared core. `Copy context` moved into that core, where it covers files as
+  // well and stays gated on a real worktree — keeping a folder-only copy here
+  // too would render it twice on a directory row.
   const rowContextMenu = useCallback(
     (row: FileEntryLike) => (
       <>
@@ -1014,69 +932,25 @@ export function FileBrowserPane({
               <FolderRoot className="w-3.5 h-3.5 mr-2" />
               Set as root
             </ContextMenuItem>
-            {/* Always enabled for a worktree: the browser no longer knows a
-                folder's gitignore status, and CopyTree still applies its own
-                .gitignore-aware discovery (reporting when nothing was
-                eligible), so this stays safe for a gitignored folder. Absent
-                for a workspace root — CopyTree is worktree-scoped, so leaving
-                it on would be a dead menu item (#11482). */}
-            {isWorktreeSource && (
-              <ContextMenuItem onSelect={() => handleCopyFolderContext(row.path)}>
-                <Folders className="w-3.5 h-3.5 mr-2" />
-                Copy context
-              </ContextMenuItem>
-            )}
             <ContextMenuSeparator />
           </>
         )}
-        {/* Disabled rather than hidden when nothing resolves: the gesture is
-            the point of the menu entry, and a row that silently drops it would
-            read as broken. The agent is resolved from typing history, so this
-            is off until the user has actually talked to one. */}
-        <ContextMenuItem
-          onSelect={() => handleInsertFileReference(row.path)}
-          disabled={!canInsertFileReference}
-          {...(canInsertFileReference ? { "aria-keyshortcuts": insertAriaKeyshortcuts } : {})}
-        >
-          <AtSign className="w-3.5 h-3.5 mr-2" />
-          Insert file reference
-          <ContextMenuShortcut>{insertShortcutHint}</ContextMenuShortcut>
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => handleCopyFullPath(row.path)}>
-          <Copy className="w-3.5 h-3.5 mr-2" />
-          Copy full path
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => handleCopyRelativePath(row.path)}>
-          <Copy className="w-3.5 h-3.5 mr-2" />
-          Copy relative path
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => handleCopyFileName(row.name)}>
-          <Copy className="w-3.5 h-3.5 mr-2" />
-          Copy file name
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => handleReveal(row.path)}>
-          <FolderOpen className="w-3.5 h-3.5 mr-2" />
-          {reveal.label}
-        </ContextMenuItem>
+        {renderFileRowMenuItems({
+          // `basePath` is the true worktree root even when the tree has been
+          // re-rooted to a subfolder, and `row.path` stays relative to it — so
+          // one join gives the absolute path and the row path copies verbatim.
+          absolutePath: basePath ? join(basePath, row.path) : row.path,
+          relativePath: row.path,
+          name: row.name,
+          isDirectory: row.isDirectory,
+          // Exact file status only. A folder's index entry is the worst status
+          // anywhere beneath it, which would offer "Open diff" on a directory
+          // that has no diff of its own.
+          status: row.isDirectory ? null : (gitStatusIndex?.fileStatus.get(row.path) ?? null),
+        })}
       </>
     ),
-    [
-      isWorktreeSource,
-      showFolderContents,
-      handleSetRoot,
-      handleCopyFolderContext,
-      handleInsertFileReference,
-      canInsertFileReference,
-      insertShortcutHint,
-      insertAriaKeyshortcuts,
-      handleCopyFullPath,
-      handleCopyRelativePath,
-      handleCopyFileName,
-      handleReveal,
-      reveal,
-    ]
+    [showFolderContents, handleSetRoot, renderFileRowMenuItems, basePath, gitStatusIndex]
   );
 
   // A restored panel remembers a selection whose ancestors may be collapsed.
@@ -1205,7 +1079,7 @@ export function FileBrowserPane({
                 </span>
               )}
               {/* Re-rooted, so the label names a real folder: it copies the
-                  absolute path, matching a row's "Copy full path". The tooltip
+                  absolute path, matching a row's "Copy path". The tooltip
                   carries the untruncated path the `title` used to show, and
                   hosts the copied confirmation; autoDismiss is off because the
                   path IS the tooltip's body. */}
