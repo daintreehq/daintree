@@ -54,6 +54,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
+import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
 
 import { resolveEffectivePresetId } from "@shared/types";
 import {
@@ -302,8 +303,8 @@ export function AgentButton({
   const isLaunchable = isAgentLaunchable(availability);
   // `installed` now only fires for WSL-capped binaries (launch not wired
   // through wsl.exe yet); all other binary-on-PATH agents reach `ready`.
-  // `needsSetup` dims the button and routes clicks to Settings for these
-  // genuinely non-launchable cases.
+  // `needsSetup` dims the button for these genuinely non-launchable cases —
+  // presentation only. Clicking still launches; the gate owns recovery (#11760).
   const needsSetup = isAgentInstalled(availability) && !isLaunchable;
   // Surfaced in the tooltip only — launchable agents whose passive auth
   // probe came back empty get a soft cue rather than a disabled look,
@@ -322,24 +323,26 @@ export function AgentButton({
   const showSeam = !isLoading && isLaunchable;
 
   const presetSegment = activePresetName ? ` · ${activePresetName}` : "";
+  // The click still launches when the CLI is unavailable — it lands on the
+  // recovery panel, not Settings — so both surfaces borrow the dock's hint
+  // rather than naming an action this button no longer performs (#11760).
+  const unavailableLabel = unavailableAgentHint(config.name, availability);
   const tooltipLabel = isLoading
     ? `Checking ${config.name} CLI…`
     : isLaunchable
       ? signInUnconfirmed
         ? `Start ${config.name}${presetSegment}${visibleStateSuffix} — sign-in not detected`
         : `Start ${config.name}${presetSegment}${visibleStateSuffix}`
-      : needsSetup
-        ? `Configure ${config.name}`
-        : `Install ${config.name} CLI`;
+      : unavailableLabel;
   const tooltipShortcut = isLaunchable ? displayCombo : undefined;
   const chevronTooltip = isLoading
     ? `Checking ${config.name} CLI availability...`
     : isLaunchable
       ? `Set ${config.name} preset`
       : needsSetup
-        ? // The chevron blocks clicks when not launchable, so its copy
-          // names the precondition instead of promising an action the
-          // primary button owns (mirrors the `ariaLabel` strings below).
+        ? // The chevron blocks clicks when not launchable, so its copy names
+          // the precondition alone — unlike the primary button, it opens
+          // nothing, so it must not offer the recovery route.
           `${config.name} needs setup`
         : `${config.name} CLI not found`;
   const isChevronDisabled = isLoading || !isLaunchable;
@@ -348,30 +351,27 @@ export function AgentButton({
     ? `Checking ${config.name} CLI`
     : isLaunchable
       ? `Start ${config.name}${visibleStateSuffix}`
-      : needsSetup
-        ? `Configure ${config.name}`
-        : `Install ${config.name} CLI`;
+      : unavailableLabel;
 
   const handleClick = (e?: ReactMouseEvent<HTMLElement>) => {
     if (isLoading) return;
-    if (isLaunchable) {
-      // Drop focus on launch so Enter at a CLI prompt can't re-fire this button
-      // and spawn a duplicate agent before the input bar claims focus. See #10541.
-      e?.currentTarget?.blur();
-      // Defer all preset resolution to useAgentLauncher. Forwarding the
-      // resolved savedPresetId explicitly would block the launcher's
-      // stale-fallback path: when a worktree-scoped pick references a
-      // deleted preset, an explicit presetId bypasses the agent-level
-      // default and launches preset-free instead. Omitting presetId lets
-      // the launcher run resolveEffectivePresetId + fallback in one place.
-      void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
-    } else {
-      void actionService.dispatch(
-        "app.settings.openTab",
-        { tab: "agents", subtab: type },
-        { source: "user" }
-      );
-    }
+    // Drop focus on launch so Enter at a CLI prompt can't re-fire this button
+    // and spawn a duplicate agent before the input bar claims focus. See #10541.
+    // Unconditional: an unavailable agent now opens a recovery panel that can
+    // take Enter just as readily, so the blur can't be scoped to the ready path.
+    e?.currentTarget?.blur();
+    // Every click dispatches the launch, whatever the last probe reported.
+    // `useAgentLauncher` re-probes availability and owns the decision to spawn a
+    // PTY or a missing-CLI recovery panel, so routing to Settings here would
+    // both act on a stale reading and skip the gate entirely (#11760).
+    //
+    // Defer all preset resolution to useAgentLauncher. Forwarding the
+    // resolved savedPresetId explicitly would block the launcher's
+    // stale-fallback path: when a worktree-scoped pick references a
+    // deleted preset, an explicit presetId bypasses the agent-level
+    // default and launches preset-free instead. Omitting presetId lets
+    // the launcher run resolveEffectivePresetId + fallback in one place.
+    void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
   };
 
   // Per-agent unpin: agent IDs read pin state from agentSettingsStore
@@ -540,25 +540,15 @@ export function AgentButton({
             }
           }}
         >
-          <ContextMenuActionItem
-            actionId="agent.launch"
-            args={{ agentId: type }}
-            disabled={!isLaunchable}
-          >
+          <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
             Launch {config.name}
           </ContextMenuActionItem>
-          <ContextMenuActionItem
-            actionId="agent.launch"
-            args={{ agentId: type, location: "dock" }}
-            disabled={!isLaunchable}
-          >
+          <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type, location: "dock" }}>
             Launch {config.name} in Dock
           </ContextMenuActionItem>
           {hasWorktrees && (
             <ContextMenuSub>
-              <ContextMenuSubTrigger disabled={!isLaunchable}>
-                Launch in Worktree
-              </ContextMenuSubTrigger>
+              <ContextMenuSubTrigger>Launch in Worktree</ContextMenuSubTrigger>
               <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
                 <WorktreeMenuItems agentType={type} />
               </ContextMenuSubContent>
@@ -780,18 +770,10 @@ export function AgentButton({
           }
         }}
       >
-        <ContextMenuActionItem
-          actionId="agent.launch"
-          args={{ agentId: type }}
-          disabled={!isLaunchable}
-        >
+        <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
           Launch {config.name}
         </ContextMenuActionItem>
-        <ContextMenuActionItem
-          actionId="agent.launch"
-          args={{ agentId: type, location: "dock" }}
-          disabled={!isLaunchable}
-        >
+        <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type, location: "dock" }}>
           Launch {config.name} in Dock
         </ContextMenuActionItem>
         {hasPresets && (
@@ -852,9 +834,7 @@ export function AgentButton({
         )}
         {hasWorktrees && (
           <ContextMenuSub>
-            <ContextMenuSubTrigger disabled={!isLaunchable}>
-              Launch in Worktree
-            </ContextMenuSubTrigger>
+            <ContextMenuSubTrigger>Launch in Worktree</ContextMenuSubTrigger>
             <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
               <WorktreeMenuItems agentType={type} />
             </ContextMenuSubContent>

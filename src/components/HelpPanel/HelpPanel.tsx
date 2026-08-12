@@ -1094,6 +1094,22 @@ export function HelpPanel({
     controller.runAnyway();
   }, [controller]);
 
+  // Once a re-check confirms the CLI, the launch no longer needs to bypass the
+  // probe — take the ordinary session path so the gate can still catch a state
+  // that changed again underneath us.
+  const handleAvailabilityReady = useCallback(() => {
+    controller.newSession();
+  }, [controller]);
+
+  const handleOpenAgentSettings = useCallback(() => {
+    if (!agentId) return;
+    void actionService.dispatch(
+      "app.settings.openTab",
+      { tab: "agents", subtab: agentId },
+      { source: "user" }
+    );
+  }, [agentId]);
+
   // The agent the idle empty state's "Start assistant" CTA would launch — the
   // user's preference, or the sole installed assistant backend. Mirrors the
   // controller's own auto-launch eligibility so the CTA is shown only when a
@@ -1287,6 +1303,8 @@ export function HelpPanel({
               agentId={agentId}
               detail={cliDetail ?? { state: "missing", resolvedPath: null, via: null }}
               onRunAnyway={handleRunAnyway}
+              onAvailabilityReady={handleAvailabilityReady}
+              onOpenAgentSettings={handleOpenAgentSettings}
             />
           ) : (
             <>

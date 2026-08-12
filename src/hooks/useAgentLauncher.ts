@@ -31,6 +31,8 @@ import {
   resolveEffectivePresetId,
 } from "@shared/types";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
+import { findEquivalentMissingCliGate } from "@/utils/missingCliGate";
+import { isAssistantFocused } from "@/store/macroFocusStore";
 import { escapeShellArgOptional } from "@shared/utils/shellEscape";
 import {
   getAgentConfig,
@@ -718,30 +720,45 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               spawnedBy,
               focusPolicy,
             };
+            // Resolved inside the updater, read after it: the gate may reuse a
+            // panel that already exists rather than the id minted above.
+            let resolvedGateId = gateId;
             usePanelStore.setState((state) => {
-              const next: Partial<typeof state> = {
-                panelsById: { ...state.panelsById, [gateId]: gatePanel },
-                panelIds: [...state.panelIds, gateId],
-                // The gate panel bypasses `addPanel`, so it must join the
-                // per-worktree index here — sidebar summaries and worktree
-                // cycling derive terminal counts from it.
-                panelIdsByWorktreeId: addToWorktreeIndex(
-                  state.panelIdsByWorktreeId,
-                  gatePanel.worktreeId,
-                  gateId
-                ),
-              };
+              // The in-flight guard above only spans a single call, so repeated
+              // clicks on an unavailable agent would each append another gate.
+              const existingGateId = findEquivalentMissingCliGate(
+                state.panelsById,
+                state.panelIds,
+                gatePanel,
+                { requestedId: launchOptions?.requestedId }
+              );
+              resolvedGateId = existingGateId ?? gateId;
+
+              const next: Partial<typeof state> = existingGateId
+                ? {}
+                : {
+                    panelsById: { ...state.panelsById, [gateId]: gatePanel },
+                    panelIds: [...state.panelIds, gateId],
+                    // The gate panel bypasses `addPanel`, so it must join the
+                    // per-worktree index here — sidebar summaries and worktree
+                    // cycling derive terminal counts from it.
+                    panelIdsByWorktreeId: addToWorktreeIndex(
+                      state.panelIdsByWorktreeId,
+                      gatePanel.worktreeId,
+                      gateId
+                    ),
+                  };
               // Atomic dock activation — same race fix as `addPanel`. The gate
               // panel bypasses `addPanel`, so the activation must be folded
               // into this `set()` directly. See #6590.
               if (launchOptions?.activateDockOnCreate && launchOptions?.location === "dock") {
                 const prevFocusedId = state.focusedId ?? null;
-                const focusActuallyChanged = gateId !== prevFocusedId;
-                next.activeDockTerminalId = gateId;
+                const focusActuallyChanged = resolvedGateId !== prevFocusedId;
+                next.activeDockTerminalId = resolvedGateId;
                 // Focus-preserve launches still expose the gate panel in the
                 // dock but never claim keyboard focus. See #6959.
                 if (focusPolicy !== "preserve") {
-                  next.focusedId = gateId;
+                  next.focusedId = resolvedGateId;
                   if (focusActuallyChanged) {
                     next.previousFocusedId = prevFocusedId;
                   }
@@ -749,8 +766,25 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               }
               return next;
             });
+
+            // Grid gates bypass `addPanel`, so they never inherited its focus
+            // handling. Both halves matter: a gate created behind a maximized
+            // panel renders nowhere (#11060), and without taking focus the
+            // keyboard is stranded — the toolbar button blurs on click and the
+            // launcher suppresses its own focus return because this IS a launch.
+            // Reuse needs it too, or a repeated click reads as a dead button.
+            // `setFocused` rather than a raw write, so the dock/recency
+            // invariants it owns keep holding.
+            const takesFocus =
+              gatePanel.location !== "dock" &&
+              focusPolicy !== "preserve" &&
+              !(focusPolicy === undefined && isAssistantFocused());
+            if (takesFocus) {
+              usePanelStore.getState().exitMaximize();
+              usePanelStore.getState().setFocused(resolvedGateId);
+            }
             return {
-              terminalId: gateId,
+              terminalId: resolvedGateId,
               location: gatePanel.location === "dock" ? "dock" : "grid",
               spawnStatus: "missing-cli" as const,
               ...launchIdentity,

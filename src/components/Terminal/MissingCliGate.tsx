@@ -1,9 +1,13 @@
-import { AlertTriangle, Terminal, Check, ExternalLink } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, Terminal, Check, ExternalLink, KeyRound, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { CopyableCommand } from "@/components/Setup/CopyableCommand";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { getAgentConfig } from "@/config/agents";
 import { isMac, isLinux } from "@/lib/platform";
-import { cn } from "@/lib/utils";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type { AgentCliDetail, AgentAvailabilityState } from "@shared/types/ipc";
 import type { AgentInstallBlock } from "@shared/config/agentRegistry";
 
@@ -27,7 +31,26 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
         <div>
           <p className="text-sm font-medium">CLI is now available</p>
           <p className="text-xs text-daintree-text/60 mt-1">
-            The agent binary was detected. Close this panel and re-launch to start a session.
+            The agent binary was detected. Re-check to continue the launch.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Launchable by design — the CLI prompts for sign-in itself — so this is
+  // reachable only when a re-check lands here mid-flight or a probe reports it
+  // defensively. Without its own branch it fell through to "blocked", which
+  // sends the user hunting through endpoint security for a sign-in prompt.
+  if (state === "unauthenticated") {
+    return (
+      <div className="flex items-start gap-3 px-4 py-3 rounded-[var(--radius-md)] border border-status-success/20 bg-status-success/5">
+        <KeyRound className="w-5 h-5 text-status-success shrink-0 mt-px" />
+        <div>
+          <p className="text-sm font-medium">Sign-in not detected</p>
+          <p className="text-xs text-daintree-text/60 mt-1">
+            The CLI is available but no signed-in session was found. Re-check to continue — the CLI
+            prompts for sign-in on its first run.
           </p>
         </div>
       </div>
@@ -132,12 +155,71 @@ export interface MissingCliGateProps {
   agentId: string;
   detail: AgentCliDetail;
   onRunAnyway: () => void;
+  /**
+   * Continue the launch this gate stood in for. Fired only after a re-check
+   * confirms the CLI became launchable — the gate owns the probe, the caller
+   * owns what relaunching means for its own surface.
+   */
+  onAvailabilityReady: () => void;
+  /** Secondary route to the agent's persistent CLI configuration. */
+  onOpenAgentSettings: () => void;
 }
 
-export function MissingCliGate({ agentId, detail, onRunAnyway }: MissingCliGateProps) {
+export function MissingCliGate({
+  agentId,
+  detail,
+  onRunAnyway,
+  onAvailabilityReady,
+  onOpenAgentSettings,
+}: MissingCliGateProps) {
   const agentConfig = getAgentConfig(agentId);
   const agentName = agentConfig?.name ?? agentId;
   const state = detail.state;
+
+  const refresh = useCliAvailabilityStore((s) => s.refresh);
+  const isRefreshing = useCliAvailabilityStore((s) => s.isRefreshing);
+  const [refreshFailed, setRefreshFailed] = useState(false);
+
+  // The probe outlives the panel: closing the gate mid-re-check must not
+  // relaunch an agent into a pane that no longer exists.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  // Held in a ref, not read off `isRefreshing`: that value is captured at
+  // render, so a second press landing before React re-renders would sail past
+  // it. The store singleflights the probe itself, but two handlers resuming
+  // would both reach the continuation below and launch twice.
+  const probeInFlightRef = useRef(false);
+
+  const handleRefresh = async () => {
+    if (probeInFlightRef.current) return;
+    probeInFlightRef.current = true;
+    setRefreshFailed(false);
+    try {
+      // `force` skips the passive throttle window — this is an explicit gesture,
+      // and a user who just installed the CLI is exactly who the window blocks.
+      await refresh(true);
+    } catch {
+      if (mountedRef.current) setRefreshFailed(true);
+      return;
+    } finally {
+      probeInFlightRef.current = false;
+    }
+    if (!mountedRef.current) return;
+    // Read `availability`, not `details`: the store's fetch deliberately
+    // swallows a `getDetails` failure and keeps the previous details while
+    // still resolving, so details can be stale here. Availability is always
+    // replaced by a refresh that resolved.
+    const availability = useCliAvailabilityStore.getState().availability;
+    if (isAgentLaunchable(availability[agentId])) {
+      onAvailabilityReady();
+    }
+  };
 
   const osKey = getOsKey();
   const installBlocks = agentConfig?.install?.byOs?.[osKey];
@@ -153,7 +235,11 @@ export function MissingCliGate({ agentId, detail, onRunAnyway }: MissingCliGateP
           </div>
           <div>
             <h2 className="text-sm font-semibold">{agentName}</h2>
-            <p className="text-xs text-daintree-text/40">Setup required before launch</p>
+            <p className="text-xs text-daintree-text/40">
+              {isAgentLaunchable(state)
+                ? "Ready to continue launch"
+                : "Setup required before launch"}
+            </p>
           </div>
         </div>
 
@@ -179,12 +265,16 @@ export function MissingCliGate({ agentId, detail, onRunAnyway }: MissingCliGateP
           </div>
         )}
 
-        <div
-          className={cn(
-            "flex items-center gap-2 pt-1",
-            state === "missing" ? "justify-between" : "justify-end"
-          )}
-        >
+        {refreshFailed && (
+          <InlineStatusBanner
+            severity="error"
+            icon={AlertTriangle}
+            title="Couldn't re-check the CLI"
+            description="The availability probe didn't finish. Try again, or run the agent anyway if you know the binary works."
+          />
+        )}
+
+        <div className="flex flex-wrap items-center gap-2 pt-1">
           {docsUrl && (
             <Button
               size="sm"
@@ -195,9 +285,25 @@ export function MissingCliGate({ agentId, detail, onRunAnyway }: MissingCliGateP
               Docs
             </Button>
           )}
-          <Button size="sm" variant="outline" onClick={onRunAnyway}>
-            Run anyway
-          </Button>
+          {/* `ml-auto` right-aligns the recovery group whether or not Docs
+              renders, so the row needs no state-dependent justification. */}
+          <div className="flex flex-wrap items-center gap-2 ml-auto">
+            <Button size="sm" variant="ghost" onClick={onOpenAgentSettings}>
+              Agent settings
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void handleRefresh()}
+              disabled={isRefreshing}
+            >
+              <SpinningIcon icon={RefreshCw} active={isRefreshing} size={14} className="mr-1.5" />
+              Re-check
+            </Button>
+            <Button size="sm" variant="outline" onClick={onRunAnyway}>
+              Run anyway
+            </Button>
+          </div>
         </div>
       </div>
     </div>

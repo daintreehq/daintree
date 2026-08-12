@@ -826,17 +826,15 @@ export function activateDockLaunchItem(
 ): void {
   if (item.category === "agent") {
     const { agent } = item;
-    if (!isAgentLaunchable(agent.availability)) {
-      // Mirrors AgentButton.tsx: a non-launchable agent routes to its settings
-      // subtab so the user can resolve the precondition instead of bouncing off
-      // a disabled row. Not a launch, so it must not pollute the MRU band.
-      void actionService.dispatch(
-        "app.settings.openTab",
-        { tab: "agents", subtab: agent.id },
-        { source: ctx.source }
-      );
-      return;
-    }
+    // Mirrors AgentButton.tsx: every agent row launches, whatever the last
+    // probe reported. `useAgentLauncher` re-probes and decides between a PTY
+    // and a missing-CLI recovery panel, so redirecting to settings here would
+    // act on a stale reading and skip the gate entirely (#11760).
+    //
+    // Recorded in the MRU because it is a launch attempt like any other. An
+    // unavailable agent still stays out of the visible recency band, which
+    // filters to `agentBand === "launch"` — it becomes eligible only once the
+    // agent actually resolves.
     useActionMruStore.getState().recordActionMru(`${AGENT_MRU_PREFIX}${agent.id}`);
     ctx.onLaunchAgent(agent.id, presetId);
     return;
