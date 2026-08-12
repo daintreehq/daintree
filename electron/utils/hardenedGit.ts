@@ -261,14 +261,19 @@ const BLOCKED_INHERITED_GIT_ENV_KEYS = new Set([
   "GIT_EDITOR",
   "GIT_EXEC_PATH",
   "GIT_EXTERNAL_DIFF",
-  // The other three global pathspec modes. Git rejects `literal` combined with
-  // any of them — "fatal: global 'literal' pathspec setting is incompatible
-  // with all other global pathspec settings", exit 128 — so an inherited
-  // GIT_GLOB_PATHSPECS or GIT_ICASE_PATHSPECS would turn every path-bearing
-  // command (diff, add, reset, checkout) into a hard failure once we set
-  // GIT_LITERAL_PATHSPECS below. Stripping them here means the hardened env
-  // owns pathspec interpretation outright rather than negotiating with
-  // whatever the user's shell exported.
+  // The other three global pathspec modes, stripped so the hardened env owns
+  // pathspec interpretation outright instead of negotiating with whatever the
+  // user's shell exported.
+  //
+  // GLOB and ICASE are the load-bearing pair: git hard-fails when either is set
+  // alongside the GIT_LITERAL_PATHSPECS we add below — "fatal: global 'literal'
+  // pathspec setting is incompatible with all other global pathspec settings",
+  // exit 128 — which would turn every path-bearing command (diff, add, reset,
+  // checkout) into a hard failure for anyone who exports one.
+  //
+  // NOGLOB is the exception: git accepts it together with literal (verified on
+  // 2.50.1). It is stripped anyway, because inheriting a second, contradictory
+  // opinion about how to read our paths has no upside.
   "GIT_GLOB_PATHSPECS",
   "GIT_ICASE_PATHSPECS",
   // Inherited GIT_MERGE_AUTOEDIT=yes would re-open the editor on

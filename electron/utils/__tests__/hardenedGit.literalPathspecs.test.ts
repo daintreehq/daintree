@@ -18,10 +18,10 @@ import path from "node:path";
  * matching one of `.slug`, so it resolves to siblings like `pages/s.tsx` and
  * not to the file itself.
  *
- * Bracket names are the realistic case (Next.js and Nuxt route files ship
- * them, and this repo has one). `*` and `?` are the other metacharacters, but
- * they are illegal in filenames on Windows, so they are left out to keep this
- * suite cross-platform.
+ * Bracket names are the realistic case — Next.js and Nuxt route files ship them
+ * routinely, and any repo Daintree opens may contain one. `*` and `?` are the
+ * other metacharacters, but they are illegal in filenames on Windows, so they
+ * are left out to keep this suite cross-platform.
  */
 
 const TEST_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-literal-pathspec-ud-"));
@@ -41,8 +41,13 @@ let repoDir: string;
 /**
  * Fixture git, isolated from the developer's own config: an inherited
  * `commit.gpgSign=true` would hang the setup commit on a passphrase prompt.
- * `os.devNull` rather than a literal `/dev/null` so the isolation also holds on
- * Windows.
+ *
+ * `/dev/null` is hardcoded rather than taken from `os.devNull`. Git treats that
+ * exact string as its "no config file" sentinel and special-cases it on every
+ * platform, including Git for Windows. `os.devNull` would substitute the native
+ * `\\.\nul` there, which git rejects outright ("fatal: unable to access
+ * 'NUL'"), so the portable-looking option is the one that breaks — and this
+ * suite does run on Windows in stabilize.
  */
 function git(cwd: string, args: string[]): void {
   execFileSync("git", args, {
@@ -51,8 +56,8 @@ function git(cwd: string, args: string[]): void {
     timeout: 10_000,
     env: {
       ...process.env,
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_CONFIG_SYSTEM: os.devNull,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_SYSTEM: "/dev/null",
       GIT_TERMINAL_PROMPT: "0",
     },
   });
@@ -140,10 +145,12 @@ describe("hardened git treats file paths literally, not as globs (real git)", ()
     expect(staged).toEqual([GLOBBY]);
   });
 
-  // Git refuses `literal` alongside any other global pathspec mode — "fatal:
-  // global 'literal' pathspec setting is incompatible with all other global
-  // pathspec settings", exit 128. A developer who exports one of these in their
-  // shell would otherwise have every path-bearing git call in the app fail.
+  // Git refuses `literal` alongside GLOB or ICASE — "fatal: global 'literal'
+  // pathspec setting is incompatible with all other global pathspec settings",
+  // exit 128 — so a developer who exports either would otherwise have every
+  // path-bearing git call in the app fail. NOGLOB is included to pin the
+  // asymmetry: git accepts that one next to literal, so this case documents the
+  // non-conflict rather than guarding a failure.
   describe.each(["GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS"])(
     "with an inherited %s",
     (inheritedVar) => {
