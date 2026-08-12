@@ -302,8 +302,8 @@ export function AgentButton({
   const isLaunchable = isAgentLaunchable(availability);
   // `installed` now only fires for WSL-capped binaries (launch not wired
   // through wsl.exe yet); all other binary-on-PATH agents reach `ready`.
-  // `needsSetup` dims the button and routes clicks to Settings for these
-  // genuinely non-launchable cases.
+  // `needsSetup` dims the button for these genuinely non-launchable cases —
+  // presentation only. Clicking still launches; the gate owns recovery (#11760).
   const needsSetup = isAgentInstalled(availability) && !isLaunchable;
   // Surfaced in the tooltip only — launchable agents whose passive auth
   // probe came back empty get a soft cue rather than a disabled look,
@@ -354,24 +354,23 @@ export function AgentButton({
 
   const handleClick = (e?: ReactMouseEvent<HTMLElement>) => {
     if (isLoading) return;
-    if (isLaunchable) {
-      // Drop focus on launch so Enter at a CLI prompt can't re-fire this button
-      // and spawn a duplicate agent before the input bar claims focus. See #10541.
-      e?.currentTarget?.blur();
-      // Defer all preset resolution to useAgentLauncher. Forwarding the
-      // resolved savedPresetId explicitly would block the launcher's
-      // stale-fallback path: when a worktree-scoped pick references a
-      // deleted preset, an explicit presetId bypasses the agent-level
-      // default and launches preset-free instead. Omitting presetId lets
-      // the launcher run resolveEffectivePresetId + fallback in one place.
-      void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
-    } else {
-      void actionService.dispatch(
-        "app.settings.openTab",
-        { tab: "agents", subtab: type },
-        { source: "user" }
-      );
-    }
+    // Drop focus on launch so Enter at a CLI prompt can't re-fire this button
+    // and spawn a duplicate agent before the input bar claims focus. See #10541.
+    // Unconditional: an unavailable agent now opens a recovery panel that can
+    // take Enter just as readily, so the blur can't be scoped to the ready path.
+    e?.currentTarget?.blur();
+    // Every click dispatches the launch, whatever the last probe reported.
+    // `useAgentLauncher` re-probes availability and owns the decision to spawn a
+    // PTY or a missing-CLI recovery panel, so routing to Settings here would
+    // both act on a stale reading and skip the gate entirely (#11760).
+    //
+    // Defer all preset resolution to useAgentLauncher. Forwarding the
+    // resolved savedPresetId explicitly would block the launcher's
+    // stale-fallback path: when a worktree-scoped pick references a
+    // deleted preset, an explicit presetId bypasses the agent-level
+    // default and launches preset-free instead. Omitting presetId lets
+    // the launcher run resolveEffectivePresetId + fallback in one place.
+    void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
   };
 
   // Per-agent unpin: agent IDs read pin state from agentSettingsStore

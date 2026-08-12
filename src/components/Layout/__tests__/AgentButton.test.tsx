@@ -1054,20 +1054,66 @@ describe("AgentButton preset UX", () => {
   });
 
   describe("not-ready state", () => {
-    it("primary click when CLI is not installed opens settings (does not launch)", () => {
+    // Every unlaunchable state now launches: the last probe can be stale, and
+    // `useAgentLauncher` re-probes and owns the choice between a PTY and the
+    // recovery gate. Routing to settings here skipped that gate entirely
+    // (#11760), so the redirect must be gone from all three states.
+    it.each(["missing", "installed", "blocked"])(
+      "primary click dispatches the launch and never the settings redirect when %s",
+      (availability) => {
+        mockSettings = settingsWith({ claude: {} });
+        mockMergedPresetsFn = () => [];
+
+        const { getByRole } = render(
+          <AgentButton
+            type="claude"
+            availability={availability as unknown as CliAvailability[string]}
+          />
+        );
+        fireEvent.click(getByRole("button"));
+
+        expect(dispatchMock).toHaveBeenCalledWith(
+          "agent.launch",
+          { agentId: "claude" },
+          { source: "user" }
+        );
+        expect(dispatchMock).not.toHaveBeenCalledWith(
+          "app.settings.openTab",
+          expect.anything(),
+          expect.anything()
+        );
+      }
+    );
+
+    // The gate panel takes Enter as readily as a terminal does, so the blur
+    // that stops a trust-prompt Enter re-firing the button (#10541) has to
+    // survive on the path that used to skip it.
+    it("drops focus on an unlaunchable launch click", () => {
       mockSettings = settingsWith({ claude: {} });
       mockMergedPresetsFn = () => [];
 
       const { getByRole } = render(
         <AgentButton type="claude" availability={"missing" as unknown as CliAvailability[string]} />
       );
+      const button = getByRole("button");
+      button.focus();
+      expect(document.activeElement).toBe(button);
+
+      fireEvent.click(button);
+
+      expect(document.activeElement).not.toBe(button);
+    });
+
+    it("stays inert while the availability probe is still loading", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockMergedPresetsFn = () => [];
+
+      const { getByRole } = render(
+        <AgentButton type="claude" availability={undefined as unknown as CliAvailability[string]} />
+      );
       fireEvent.click(getByRole("button"));
 
-      expect(dispatchMock).toHaveBeenCalledWith(
-        "app.settings.openTab",
-        { tab: "agents", subtab: "claude" },
-        { source: "user" }
-      );
+      expect(dispatchMock).not.toHaveBeenCalled();
     });
   });
 

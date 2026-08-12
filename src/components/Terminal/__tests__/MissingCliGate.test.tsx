@@ -1,8 +1,30 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import { MissingCliGate } from "../MissingCliGate";
 import type { AgentCliDetail } from "@shared/types/ipc";
+
+// A hand-rolled store double rather than the real one: the gate reads it both
+// as a hook (`refresh`, `isRefreshing`) and imperatively (`getState().availability`),
+// and the availability half is what the continuation decision hangs on.
+const cliStore = vi.hoisted(() => {
+  const state = {
+    refresh: vi.fn<(force?: boolean) => Promise<void>>(),
+    isRefreshing: false,
+    availability: {} as Record<string, string>,
+  };
+  const useStore = ((selector?: (s: typeof state) => unknown) =>
+    selector ? selector(state) : state) as unknown as {
+    (selector?: (s: typeof state) => unknown): unknown;
+    getState: () => typeof state;
+  };
+  useStore.getState = () => state;
+  return { state, useStore };
+});
+
+vi.mock("@/store/cliAvailabilityStore", () => ({
+  useCliAvailabilityStore: cliStore.useStore,
+}));
 
 // Mock platform detection
 const mockPlatform = vi.hoisted(() => ({
@@ -58,66 +80,69 @@ function detail(overrides: Partial<AgentCliDetail> = {}): AgentCliDetail {
   };
 }
 
+function renderGate(
+  props: Partial<React.ComponentProps<typeof MissingCliGate>> & { detail: AgentCliDetail }
+) {
+  const handlers = {
+    onRunAnyway: vi.fn(),
+    onAvailabilityReady: vi.fn(),
+    onOpenAgentSettings: vi.fn(),
+  };
+  const view = render(<MissingCliGate agentId="claude" {...handlers} {...props} />);
+  return { ...view, ...handlers };
+}
+
+// `InlineStatusBanner` reads the reduced-motion preference on render, and jsdom
+// ships no `matchMedia`. Same stub the banner's own suite installs.
+beforeAll(() => {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+});
+
 describe("MissingCliGate", () => {
   beforeEach(() => {
     mockPlatform.isMac.mockReturnValue(true);
     mockPlatform.isLinux.mockReturnValue(false);
+    cliStore.state.refresh = vi.fn<(force?: boolean) => Promise<void>>().mockResolvedValue();
+    cliStore.state.isRefreshing = false;
+    cliStore.state.availability = {};
   });
 
   it("renders the agent name", () => {
-    render(
-      <MissingCliGate
-        agentId="claude"
-        detail={detail({ state: "missing" })}
-        onRunAnyway={() => {}}
-      />
-    );
+    renderGate({ detail: detail({ state: "missing" }) });
     expect(screen.getByText("Claude")).toBeTruthy();
   });
 
   it("shows 'CLI binary not found' for missing state", () => {
-    render(
-      <MissingCliGate
-        agentId="claude"
-        detail={detail({ state: "missing" })}
-        onRunAnyway={() => {}}
-      />
-    );
+    renderGate({ detail: detail({ state: "missing" }) });
     expect(screen.getByText("CLI binary not found")).toBeTruthy();
   });
 
   it("shows install commands for missing state on macOS", () => {
-    render(
-      <MissingCliGate
-        agentId="claude"
-        detail={detail({ state: "missing" })}
-        onRunAnyway={() => {}}
-      />
-    );
+    renderGate({ detail: detail({ state: "missing" }) });
     expect(screen.getByText("Install on macOS")).toBeTruthy();
     expect(screen.getByText("npm install -g @anthropic-ai/claude-code")).toBeTruthy();
   });
 
   it("shows troubleshooting tips for missing state", () => {
-    render(
-      <MissingCliGate
-        agentId="claude"
-        detail={detail({ state: "missing" })}
-        onRunAnyway={() => {}}
-      />
-    );
+    renderGate({ detail: detail({ state: "missing" }) });
     expect(screen.getByText("Troubleshooting")).toBeTruthy();
     expect(screen.getByText("Restart Daintree after install")).toBeTruthy();
   });
 
   it("shows WSL message for installed state via wsl", () => {
-    render(
-      <MissingCliGate
-        agentId="claude"
-        detail={detail({ state: "installed", via: "wsl", wslDistro: "Ubuntu" })}
-        onRunAnyway={() => {}}
-      />
-    );
+    renderGate({ detail: detail({ state: "installed", via: "wsl", wslDistro: "Ubuntu" }) });
     expect(screen.getByText("Detected in WSL")).toBeTruthy();
     expect(
       screen.getByText(/Found in WSL \(Ubuntu\).*only host binaries can be launched directly/)
@@ -125,72 +150,157 @@ describe("MissingCliGate", () => {
   });
 
   it("shows blocked message for blocked state", () => {
-    render(
-      <MissingCliGate
-        agentId="claude"
-        detail={detail({ state: "blocked", message: "EACCES: permission denied" })}
-        onRunAnyway={() => {}}
-      />
-    );
+    renderGate({ detail: detail({ state: "blocked", message: "EACCES: permission denied" }) });
     expect(screen.getByText("Blocked by security software")).toBeTruthy();
     expect(screen.getByText("EACCES: permission denied")).toBeTruthy();
   });
 
   it("calls onRunAnyway when 'Run anyway' button is clicked", () => {
-    const onRunAnyway = vi.fn();
-    render(
-      <MissingCliGate
-        agentId="claude"
-        detail={detail({ state: "missing" })}
-        onRunAnyway={onRunAnyway}
-      />
-    );
+    const { onRunAnyway } = renderGate({ detail: detail({ state: "missing" }) });
     fireEvent.click(screen.getByText("Run anyway"));
     expect(onRunAnyway).toHaveBeenCalledOnce();
   });
 
   it("shows docs link when docsUrl is present", () => {
-    render(
-      <MissingCliGate
-        agentId="claude"
-        detail={detail({ state: "missing" })}
-        onRunAnyway={() => {}}
-      />
-    );
+    renderGate({ detail: detail({ state: "missing" }) });
     expect(screen.getByText("Docs")).toBeTruthy();
   });
 
   it("shows resolved path when present in detail", () => {
-    render(
-      <MissingCliGate
-        agentId="claude"
-        detail={detail({ state: "missing", resolvedPath: "/usr/local/bin/claude" })}
-        onRunAnyway={() => {}}
-      />
-    );
+    renderGate({ detail: detail({ state: "missing", resolvedPath: "/usr/local/bin/claude" }) });
     expect(screen.getByText("Last known path: /usr/local/bin/claude")).toBeTruthy();
   });
 
   it("does not show install commands for installed state", () => {
-    render(
-      <MissingCliGate
-        agentId="claude"
-        detail={detail({ state: "installed", via: "npm-global" })}
-        onRunAnyway={() => {}}
-      />
-    );
+    renderGate({ detail: detail({ state: "installed", via: "npm-global" }) });
     expect(screen.queryByText("Install on macOS")).toBeNull();
     expect(screen.queryByText("Troubleshooting")).toBeNull();
   });
 
   it("does not show install commands for blocked state", () => {
-    render(
-      <MissingCliGate
-        agentId="claude"
-        detail={detail({ state: "blocked" })}
-        onRunAnyway={() => {}}
-      />
-    );
+    renderGate({ detail: detail({ state: "blocked" }) });
     expect(screen.queryByText("Install on macOS")).toBeNull();
+  });
+
+  // `unauthenticated` used to fall through to the blocked branch, sending a
+  // user who only needs to sign in hunting through endpoint-security settings.
+  it("distinguishes unauthenticated from blocked", () => {
+    renderGate({ detail: detail({ state: "unauthenticated" }) });
+    expect(screen.getByText("Sign-in not detected")).toBeTruthy();
+    expect(screen.queryByText("Blocked by security software")).toBeNull();
+  });
+
+  it("routes to the agent's settings without making it the only way out", () => {
+    const { onOpenAgentSettings } = renderGate({ detail: detail({ state: "missing" }) });
+    fireEvent.click(screen.getByText("Agent settings"));
+    expect(onOpenAgentSettings).toHaveBeenCalledOnce();
+    // Settings is demoted, not promoted: the recovery actions stay on the panel.
+    expect(screen.getByText("Run anyway")).toBeTruthy();
+    expect(screen.getByText("Re-check")).toBeTruthy();
+  });
+
+  describe("re-check", () => {
+    it("forces the probe past the passive throttle window", async () => {
+      renderGate({ detail: detail({ state: "missing" }) });
+      await act(async () => {
+        fireEvent.click(screen.getByText("Re-check"));
+      });
+      // A user who just installed the CLI is exactly who the throttle blocks.
+      expect(cliStore.state.refresh).toHaveBeenCalledWith(true);
+    });
+
+    it.each(["ready", "unauthenticated"])(
+      "continues the original launch when the probe comes back %s",
+      async (state) => {
+        cliStore.state.refresh = vi.fn(async () => {
+          cliStore.state.availability = { claude: state };
+        });
+        const { onAvailabilityReady } = renderGate({ detail: detail({ state: "missing" }) });
+
+        await act(async () => {
+          fireEvent.click(screen.getByText("Re-check"));
+        });
+
+        await waitFor(() => expect(onAvailabilityReady).toHaveBeenCalledOnce());
+      }
+    );
+
+    it("stays on the gate when the probe still reports it unlaunchable", async () => {
+      cliStore.state.refresh = vi.fn(async () => {
+        cliStore.state.availability = { claude: "missing" };
+      });
+      const { onAvailabilityReady, onRunAnyway } = renderGate({
+        detail: detail({ state: "missing" }),
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByText("Re-check"));
+      });
+
+      expect(onAvailabilityReady).not.toHaveBeenCalled();
+      expect(onRunAnyway).not.toHaveBeenCalled();
+      expect(screen.getByText("Re-check")).toBeTruthy();
+    });
+
+    it("reads availability rather than details, which a resolved probe may leave stale", async () => {
+      // The store swallows a `getDetails` failure and keeps the old details
+      // while still resolving, so a details-driven decision would never fire.
+      cliStore.state.refresh = vi.fn(async () => {
+        cliStore.state.availability = { claude: "ready" };
+      });
+      const { onAvailabilityReady } = renderGate({
+        detail: detail({ state: "missing" }),
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByText("Re-check"));
+      });
+
+      await waitFor(() => expect(onAvailabilityReady).toHaveBeenCalledOnce());
+    });
+
+    it("surfaces a failed probe inline and keeps the recovery actions", async () => {
+      cliStore.state.refresh = vi.fn().mockRejectedValue(new Error("IPC down"));
+      const { onAvailabilityReady } = renderGate({ detail: detail({ state: "missing" }) });
+
+      await act(async () => {
+        fireEvent.click(screen.getByText("Re-check"));
+      });
+
+      await waitFor(() => expect(screen.getByText("Couldn't re-check the CLI")).toBeTruthy());
+      expect(onAvailabilityReady).not.toHaveBeenCalled();
+      expect(screen.getByText("Run anyway")).toBeTruthy();
+    });
+
+    it("blocks a second probe while one is already in flight", () => {
+      cliStore.state.isRefreshing = true;
+      renderGate({ detail: detail({ state: "missing" }) });
+
+      fireEvent.click(screen.getByText("Re-check"));
+
+      expect(cliStore.state.refresh).not.toHaveBeenCalled();
+    });
+
+    it("does not continue a launch into a panel that closed mid-probe", async () => {
+      let settle: (() => void) | undefined;
+      cliStore.state.refresh = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            settle = () => {
+              cliStore.state.availability = { claude: "ready" };
+              resolve();
+            };
+          })
+      );
+      const { onAvailabilityReady, unmount } = renderGate({ detail: detail({ state: "missing" }) });
+
+      fireEvent.click(screen.getByText("Re-check"));
+      unmount();
+      await act(async () => {
+        settle?.();
+      });
+
+      expect(onAvailabilityReady).not.toHaveBeenCalled();
+    });
   });
 });

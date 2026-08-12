@@ -31,6 +31,7 @@ import {
   resolveEffectivePresetId,
 } from "@shared/types";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
+import { findEquivalentMissingCliGate } from "@/utils/missingCliGate";
 import { escapeShellArgOptional } from "@shared/utils/shellEscape";
 import {
   getAgentConfig,
@@ -718,39 +719,62 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               spawnedBy,
               focusPolicy,
             };
+            // Resolved inside the updater, read after it: the gate may reuse a
+            // panel that already exists rather than the id minted above.
+            let resolvedGateId = gateId;
             usePanelStore.setState((state) => {
-              const next: Partial<typeof state> = {
-                panelsById: { ...state.panelsById, [gateId]: gatePanel },
-                panelIds: [...state.panelIds, gateId],
-                // The gate panel bypasses `addPanel`, so it must join the
-                // per-worktree index here — sidebar summaries and worktree
-                // cycling derive terminal counts from it.
-                panelIdsByWorktreeId: addToWorktreeIndex(
-                  state.panelIdsByWorktreeId,
-                  gatePanel.worktreeId,
-                  gateId
-                ),
-              };
+              // The in-flight guard above only spans a single call, so repeated
+              // clicks on an unavailable agent would each append another gate.
+              // A launch carrying `requestedId` opts out — that id is an
+              // identity contract with the caller, so it must get its own panel.
+              const existingGateId = launchOptions?.requestedId
+                ? null
+                : findEquivalentMissingCliGate(state.panelsById, state.panelIds, gatePanel);
+              resolvedGateId = existingGateId ?? gateId;
+
+              const next: Partial<typeof state> = existingGateId
+                ? {}
+                : {
+                    panelsById: { ...state.panelsById, [gateId]: gatePanel },
+                    panelIds: [...state.panelIds, gateId],
+                    // The gate panel bypasses `addPanel`, so it must join the
+                    // per-worktree index here — sidebar summaries and worktree
+                    // cycling derive terminal counts from it.
+                    panelIdsByWorktreeId: addToWorktreeIndex(
+                      state.panelIdsByWorktreeId,
+                      gatePanel.worktreeId,
+                      gateId
+                    ),
+                  };
               // Atomic dock activation — same race fix as `addPanel`. The gate
               // panel bypasses `addPanel`, so the activation must be folded
               // into this `set()` directly. See #6590.
               if (launchOptions?.activateDockOnCreate && launchOptions?.location === "dock") {
                 const prevFocusedId = state.focusedId ?? null;
-                const focusActuallyChanged = gateId !== prevFocusedId;
-                next.activeDockTerminalId = gateId;
+                const focusActuallyChanged = resolvedGateId !== prevFocusedId;
+                next.activeDockTerminalId = resolvedGateId;
                 // Focus-preserve launches still expose the gate panel in the
                 // dock but never claim keyboard focus. See #6959.
                 if (focusPolicy !== "preserve") {
-                  next.focusedId = gateId;
+                  next.focusedId = resolvedGateId;
                   if (focusActuallyChanged) {
                     next.previousFocusedId = prevFocusedId;
                   }
+                }
+              } else if (existingGateId && focusPolicy !== "preserve") {
+                // Relaunching onto an existing grid gate changes nothing on
+                // screen, so the re-click would read as a dead button. Reveal
+                // the panel already holding the answer instead.
+                const prevFocusedId = state.focusedId ?? null;
+                if (existingGateId !== prevFocusedId) {
+                  next.focusedId = existingGateId;
+                  next.previousFocusedId = prevFocusedId;
                 }
               }
               return next;
             });
             return {
-              terminalId: gateId,
+              terminalId: resolvedGateId,
               location: gatePanel.location === "dock" ? "dock" : "grid",
               spawnStatus: "missing-cli" as const,
               ...launchIdentity,

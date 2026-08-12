@@ -66,6 +66,7 @@ import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { notifyWorktreeTerminalAttached } from "@/services/terminal/worktreeRevealCoordinator";
 import { actionService } from "@/services/ActionService";
+import { buildMissingCliRelaunchOptions } from "@/utils/missingCliGate";
 import { useReviewDialogOpenForWorktree } from "./useReviewDialogOpenForWorktree";
 import { InputTracker } from "@/services/clearCommandDetection";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
@@ -424,33 +425,20 @@ function TerminalPaneComponent({
     return cliDetails[agentId];
   };
 
-  const handleRunAnyway = () => {
-    const _panel = usePanelStore.getState().panelsById[id];
-    if (!_panel || !agentId || !isPtyPanel(_panel)) return;
-    const panel = _panel;
-
-    const presetEnv = panel.extensionState?.presetEnv as Record<string, string> | undefined;
+  /**
+   * Replace the gate with the launch it stood in for. Both recovery exits use
+   * it: "Run anyway" (bypassing the probe on the user's word) and the
+   * post-re-check continuation (the probe now agrees). `addPanel` never
+   * re-checks the gate, so one path serves both.
+   */
+  const continueMissingCliLaunch = () => {
+    const panel = usePanelStore.getState().panelsById[id];
+    if (!panel || !isPtyPanel(panel)) return;
+    const options = buildMissingCliRelaunchOptions(panel);
+    if (!options) return;
 
     removePanel(id);
-    void addPanel({
-      kind: "terminal",
-      launchAgentId: agentId,
-      command: panel.command,
-      title: panel.title,
-      cwd: panel.cwd ?? "",
-      worktreeId: panel.worktreeId,
-      location: panel.location as "grid" | "dock" | undefined,
-      agentLaunchFlags: panel.agentLaunchFlags,
-      agentModelId: panel.agentModelId,
-      agentPresetId: panel.agentPresetId,
-      env: presetEnv,
-      // Carry the gate panel's persistence policy through the re-launch. Since
-      // env is now persisted onto the panel (#10922), dropping these would let a
-      // session-scoped secret (e.g. DAINTREE_MCP_TOKEN on a help session, which
-      // launches excluded) leak into the on-disk snapshot on "Run anyway".
-      excludeFromPersistence: panel.excludeFromPersistence,
-      removeOnExit: panel.removeOnExit,
-    });
+    void addPanel(options);
   };
 
   // Fleet arming store for multi-select gestures. Selection treatment is
@@ -1411,7 +1399,15 @@ function TerminalPaneComponent({
           <MissingCliGate
             agentId={agentId}
             detail={getPanelCliDetail() ?? { state: "missing", resolvedPath: null, via: null }}
-            onRunAnyway={handleRunAnyway}
+            onRunAnyway={continueMissingCliLaunch}
+            onAvailabilityReady={continueMissingCliLaunch}
+            onOpenAgentSettings={() =>
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "agents", subtab: agentId },
+                { source: "user" }
+              )
+            }
           />
         ) : spawnStatus === "spawning" && !eagerAttach ? (
           <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />

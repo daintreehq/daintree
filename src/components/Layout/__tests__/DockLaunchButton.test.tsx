@@ -565,19 +565,18 @@ describe("DockLaunchButton", () => {
     expect(recordActionMruMock).toHaveBeenCalledWith("agent.claude");
   });
 
-  it("routes non-launchable agent clicks to the agent settings subtab", () => {
+  it("launches non-launchable agent clicks instead of routing to settings", () => {
     const onLaunchAgent = vi.fn();
     const { getByText } = renderButton({ onLaunchAgent });
 
     fireEvent.click(getByText("Gemini"));
-    expect(onLaunchAgent).not.toHaveBeenCalled();
-    expect(actionDispatchMock).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      { tab: "agents", subtab: "gemini" },
-      { source: "menu" }
-    );
-    // A settings redirect is not a launch — it must not pollute the band.
-    expect(recordActionMruMock).not.toHaveBeenCalled();
+    // The launcher re-probes and answers with a session or the recovery gate;
+    // deciding it here on a stale reading skipped the gate entirely (#11760).
+    // `undefined` is the inherit-the-saved-preset sentinel, same as a
+    // launchable row — an unavailable agent is not a different kind of launch.
+    expect(onLaunchAgent).toHaveBeenCalledWith("gemini", undefined);
+    expect(actionDispatchMock).not.toHaveBeenCalled();
+    expect(recordActionMruMock).toHaveBeenCalledWith("agent.gemini");
   });
 
   it("discriminates tooltip copy between blocked and installed-only agents", () => {
@@ -593,10 +592,10 @@ describe("DockLaunchButton", () => {
     // row itself.
     expect(getByText("Claude").closest(OPTION)?.getAttribute("title")).toBeNull();
     expect(getByText("Gemini").closest(OPTION)?.getAttribute("title")).toBe(
-      "Gemini is blocked by endpoint security. Click to configure."
+      "Gemini is blocked by endpoint security. Select to see recovery options"
     );
     expect(getByText("Codex").closest(OPTION)?.getAttribute("title")).toBe(
-      "Codex needs setup. Click to configure."
+      "Codex needs setup. Select to see recovery options"
     );
   });
 
@@ -1363,14 +1362,17 @@ describe("DockLaunchButton", () => {
       expect(fireCloseAutoFocus()).not.toHaveBeenCalled();
     });
 
-    it("keeps the return when a row routes to settings instead of launching", () => {
+    // An unavailable agent opens the recovery panel, which claims focus exactly
+    // like a terminal — so the trigger must not pull focus back from it either
+    // (#11760). Cue rows keep the return; they navigate rather than launch.
+    it("cancels the return for an unavailable agent row now that it launches", () => {
       const onLaunchAgent = vi.fn();
       const { getByText } = renderButton({ onLaunchAgent });
 
       fireEvent.click(getByText("Gemini"));
 
-      expect(onLaunchAgent).not.toHaveBeenCalled();
-      expect(fireCloseAutoFocus()).not.toHaveBeenCalled();
+      expect(onLaunchAgent).toHaveBeenCalledWith("gemini", undefined);
+      expect(fireCloseAutoFocus()).toHaveBeenCalledTimes(1);
     });
 
     it("keeps the return for the Create a recipe cue", () => {
