@@ -54,6 +54,12 @@ const mockGetWindowForWebContents = vi.fn();
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: (...args: unknown[]) => mockGetWindowForWebContents(...args),
   getProjectForWebContents: vi.fn(() => null),
+  // Registering the CRUD handlers starts real stats/fleet pollers, and their
+  // compute broadcasts through the real `typedBroadcast`, which enumerates the
+  // registry. Leaving this out made the poller tick reject with a missing-export
+  // error — the failure only lands if a tick beats teardown, so it reads as an
+  // intermittent CI red rather than a broken test.
+  getAllAppWebContents: vi.fn(() => []),
 }));
 
 vi.mock("../../../window/portDistribution.js", () => ({
@@ -62,7 +68,7 @@ vi.mock("../../../window/portDistribution.js", () => ({
 
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
-import { registerProjectCrudHandlers } from "../projectCrud/index.js";
+import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
 import type { HandlerDependencies } from "../../types.js";
 import type {
   WindowRegistry,
@@ -70,6 +76,9 @@ import type {
   WindowServices,
 } from "../../../window/WindowRegistry.js";
 import { DisposableStore } from "../../../utils/lifecycle.js";
+// Disposes the stats/fleet pollers this registration starts; see the helper for
+// why dropping the disposer leaks live timers into the rest of the file.
+const registerProjectCrudHandlers = createProjectCrudRegistrar();
 
 function makeWindowContext(
   windowId: number,
