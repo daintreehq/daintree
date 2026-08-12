@@ -39,6 +39,20 @@ describe("isBinaryDiffOutput", () => {
       expect(isBinaryDiffOutput(`Binary files /dev/null and b/${path} differ`)).toBe(true);
     });
 
+    it("classifies a marker followed by a further diff record", () => {
+      // A pathspec can select more than one file, so the marker is not always
+      // the last record in the output.
+      const diff = `${header("logo.png")}
+Binary files a/logo.png and b/logo.png differ
+${header("notes.md")}
+@@ -1 +1 @@
+-old
++new
+`;
+
+      expect(isBinaryDiffOutput(diff)).toBe(true);
+    });
+
     it("does not assume the a/ and b/ path prefixes", () => {
       // --no-prefix, custom --src-prefix/--dst-prefix, and diff.mnemonicPrefix
       // all re-render these tokens.
