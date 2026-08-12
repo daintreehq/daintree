@@ -17,14 +17,26 @@ describe("isBinaryDiffOutput", () => {
       const withNewline = `${header("logo.png")}\nBinary files a/logo.png and b/logo.png differ\n`;
       const withoutNewline = withNewline.trimEnd();
 
-      expect(isBinaryDiffOutput(withoutNewline)).toBe(isBinaryDiffOutput(withNewline));
       expect(isBinaryDiffOutput(withoutNewline)).toBe(true);
+      expect(isBinaryDiffOutput(withoutNewline)).toBe(isBinaryDiffOutput(withNewline));
     });
 
     it("is insensitive to CRLF line endings", () => {
       const lf = `${header("logo.png")}\nBinary files a/logo.png and b/logo.png differ\n`;
 
+      expect(isBinaryDiffOutput(lf.replace(/\n/g, "\r\n"))).toBe(true);
       expect(isBinaryDiffOutput(lf.replace(/\n/g, "\r\n"))).toBe(isBinaryDiffOutput(lf));
+    });
+
+    it.each([
+      ["U+2028 line separator", "\u2028"],
+      ["U+2029 paragraph separator", "\u2029"],
+    ])("classifies a marker whose path contains a %s", (_label, char) => {
+      // Legal in a path, but ECMAScript line terminators: a `.`-based pattern
+      // refuses to match them and would silently miss a real binary file.
+      const path = `assets/ic${char}on.png`;
+
+      expect(isBinaryDiffOutput(`Binary files /dev/null and b/${path} differ`)).toBe(true);
     });
 
     it("does not assume the a/ and b/ path prefixes", () => {
@@ -55,10 +67,9 @@ describe("isBinaryDiffOutput", () => {
       const diff = `${header("README.md")}
 --- a/README.md
 +++ b/README.md
-@@ -1,3 +1,4 @@
+@@ -1,2 +1,3 @@
  # Notes
 +Git prints Binary files a/x and b/x differ when it skips a blob.
- Nothing else changed.
 `;
 
       expect(isBinaryDiffOutput(diff)).toBe(false);
@@ -72,7 +83,20 @@ describe("isBinaryDiffOutput", () => {
       }
     });
 
-    it("distinguishes a marker-shaped line only by its column-zero position", () => {
+    it.each([
+      ["a bare carriage return", "\r"],
+      ["a U+2028 line separator", "\u2028"],
+      ["a U+2029 paragraph separator", "\u2029"],
+    ])("does not treat %s inside a hunk line as a record boundary", (_label, char) => {
+      // Git frames patch records with \n alone. ECMAScript also counts these
+      // three as line terminators, so a multiline-anchored pattern would let
+      // marker-shaped content masquerade as metadata.
+      const diff = `@@ -0,0 +1 @@\n+intro${char}Binary files a/x and b/x differ\n`;
+
+      expect(isBinaryDiffOutput(diff)).toBe(false);
+    });
+
+    it("distinguishes a marker-shaped line only by its position after a newline", () => {
       const marker = "Binary files a/x and b/x differ";
 
       expect(isBinaryDiffOutput(`@@ -1 +1 @@\n+${marker}`)).toBe(false);
@@ -93,7 +117,7 @@ describe("isBinaryDiffOutput", () => {
       ["the no-newline sentinel", "@@ -1 +1 @@\n-old\n\\ No newline at end of file\n"],
       ["a plain text diff", `${header("a.ts")}\n@@ -1 +1 @@\n-old\n+new\n`],
       ["trailing content after differ", "Binary files a/x and b/x differ later"],
-      ["a marker with no paths", "Binary files  differ"],
+      ["a marker with an empty middle", "Binary files  differ"],
       ["a lowercase marker", "binary files a/x and b/x differ"],
     ])("rejects %s", (_label, input) => {
       expect(isBinaryDiffOutput(input)).toBe(false);

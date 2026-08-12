@@ -400,6 +400,36 @@ index 1a2b3c4..5d6e7f8 100644
       expect(result).toBe("BINARY_FILE");
     });
 
+    it("classifies the deleted-file marker form, which names /dev/null second", async () => {
+      gitClientMock.raw.mockResolvedValue(
+        "diff --git a/logo.png b/logo.png\ndeleted file mode 100644\nBinary files a/logo.png and /dev/null differ\n"
+      );
+
+      const service = new GitService(tempDir);
+      const result = await service.compareWorktrees("main", "feature/test", "logo.png");
+
+      expect(result).toBe("BINARY_FILE");
+    });
+
+    it("classifies on content, not on whether --ignore-all-space was requested", async () => {
+      const markerDiff =
+        "diff --git a/logo.png b/logo.png\nindex 1a2b3c4..5d6e7f8 100644\nBinary files a/logo.png and b/logo.png differ\n";
+      gitClientMock.raw.mockResolvedValue(markerDiff);
+
+      const service = new GitService(tempDir);
+      const ignoring = await service.compareWorktrees(
+        "main",
+        "feature/test",
+        "logo.png",
+        false,
+        true
+      );
+      const notIgnoring = await service.compareWorktrees("main", "feature/test", "logo.png");
+
+      expect(ignoring).toBe(notIgnoring);
+      expect(ignoring).toBe("BINARY_FILE");
+    });
+
     it("returns empty file list without calling git when branch1 equals branch2", async () => {
       const service = new GitService(tempDir);
       const result = await service.compareWorktrees("main", "main");
