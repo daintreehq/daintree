@@ -272,13 +272,35 @@ describe("MissingCliGate", () => {
       expect(screen.getByText("Run anyway")).toBeTruthy();
     });
 
-    it("blocks a second probe while one is already in flight", () => {
+    // Two independent stops, asserted separately — a disabled button alone
+    // would hide a missing guard, and the guard alone would let a
+    // programmatic/Enter-during-transition press through.
+    it("disables the control while a probe is in flight", () => {
       cliStore.state.isRefreshing = true;
       renderGate({ detail: detail({ state: "missing" }) });
 
-      fireEvent.click(screen.getByText("Re-check"));
+      expect(screen.getByText("Re-check").closest("button")?.disabled).toBe(true);
+    });
 
-      expect(cliStore.state.refresh).not.toHaveBeenCalled();
+    it("refuses a second probe even when the disabled control is bypassed", async () => {
+      let inFlight = 0;
+      cliStore.state.refresh = vi.fn(() => {
+        inFlight += 1;
+        // Mirror the store flipping its flag for the duration of the probe.
+        cliStore.state.isRefreshing = true;
+        return Promise.resolve();
+      });
+      renderGate({ detail: detail({ state: "missing" }) });
+      const button = screen.getByText("Re-check").closest("button")!;
+
+      await act(async () => {
+        // `click()` bypasses the disabled attribute the way a stale render or a
+        // keyboard press mid-transition can; only the guard stops this one.
+        button.click();
+        button.click();
+      });
+
+      expect(inFlight).toBe(1);
     });
 
     it("does not continue a launch into a panel that closed mid-probe", async () => {

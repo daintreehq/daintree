@@ -426,12 +426,12 @@ function TerminalPaneComponent({
   };
 
   /**
-   * Replace the gate with the launch it stood in for. Both recovery exits use
-   * it: "Run anyway" (bypassing the probe on the user's word) and the
-   * post-re-check continuation (the probe now agrees). `addPanel` never
-   * re-checks the gate, so one path serves both.
+   * "Run anyway" — spawn the command the gate captured, on the user's word.
+   * Goes straight to `addPanel` precisely because that skips the probe: the
+   * whole point is overriding a verdict the user believes is wrong (an alias,
+   * a wrapper, a version-manager shim, a false-negative probe).
    */
-  const continueMissingCliLaunch = () => {
+  const runMissingCliAnyway = () => {
     const panel = usePanelStore.getState().panelsById[id];
     if (!panel || !isPtyPanel(panel)) return;
     const options = buildMissingCliRelaunchOptions(panel);
@@ -439,6 +439,39 @@ function TerminalPaneComponent({
 
     removePanel(id);
     void addPanel(options);
+  };
+
+  /**
+   * Re-check found the CLI — continue the original launch through the launcher
+   * rather than replaying the captured command. The gate's command was resolved
+   * while the CLI was unavailable, so it fell back to the bare registry name;
+   * re-dispatching re-resolves it against the freshly probed path, which is the
+   * whole reason the binary is now reachable. It also re-runs the gate check,
+   * so a state that flipped back lands on a gate instead of a failed spawn.
+   */
+  const continueMissingCliLaunch = () => {
+    const panel = usePanelStore.getState().panelsById[id];
+    if (!panel || !isPtyPanel(panel) || !panel.launchAgentId) return;
+    const location = panel.location === "dock" ? "dock" : "grid";
+
+    removePanel(id);
+    void actionService.dispatch(
+      "agent.launch",
+      {
+        agentId: panel.launchAgentId,
+        location,
+        cwd: panel.cwd,
+        worktreeId: panel.worktreeId,
+        model: panel.agentModelId,
+        // Explicit null preserves a deliberately preset-free launch; forwarding
+        // undefined would let the agent-level default reappear on recovery.
+        presetId: panel.agentPresetId ?? null,
+        ...(location === "dock" ? { activateDockOnCreate: true } : {}),
+        env: panel.extensionState?.presetEnv as Record<string, string> | undefined,
+        excludeFromPersistence: panel.excludeFromPersistence,
+      },
+      { source: "user" }
+    );
   };
 
   // Fleet arming store for multi-select gestures. Selection treatment is
@@ -1399,7 +1432,7 @@ function TerminalPaneComponent({
           <MissingCliGate
             agentId={agentId}
             detail={getPanelCliDetail() ?? { state: "missing", resolvedPath: null, via: null }}
-            onRunAnyway={continueMissingCliLaunch}
+            onRunAnyway={runMissingCliAnyway}
             onAvailabilityReady={continueMissingCliLaunch}
             onOpenAgentSettings={() =>
               void actionService.dispatch(

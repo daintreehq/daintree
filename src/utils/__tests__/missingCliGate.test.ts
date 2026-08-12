@@ -56,6 +56,7 @@ describe("buildMissingCliRelaunchOptions", () => {
     expect(options).toMatchObject({
       launchAgentId: "claude",
       command: "claude --resume",
+      title: "Claude",
       titleMode: "custom",
       cwd: "/repo",
       worktreeId: "wt-1",
@@ -116,12 +117,30 @@ describe("findEquivalentMissingCliGate", () => {
     expect(findEquivalentMissingCliGate(panelsById, panelIds, candidate)).toBeNull();
   });
 
-  it("does not resurrect a gate the user already dismissed", () => {
-    const trashed = gate({ id: "gate-trashed", location: "trash" });
+  // Reusing a gate the user can't see answers the click by pointing at nothing.
+  it.each([
+    ["dismissed to the trash", "trash"],
+    ["sent to the background", "background"],
+  ])("does not reuse a gate %s", (_label, location) => {
+    const hidden = gate({ id: "gate-hidden", location: location as PtyPanelData["location"] });
     const candidate = gate({ id: "gate-new" });
 
-    const { panelsById, panelIds } = index([trashed]);
+    const { panelsById, panelIds } = index([hidden]);
     expect(findEquivalentMissingCliGate(panelsById, panelIds, candidate)).toBeNull();
+  });
+
+  // A caller that reserved an id (the help panel, MCP automation) is promised
+  // that exact panel, so collapsing its launch onto someone else's gate would
+  // hand back an id it never asked for.
+  it("opts a launch with a caller-owned id out of reuse entirely", () => {
+    const existing = gate({ id: "gate-existing" });
+    const candidate = gate({ id: "gate-new" });
+    const { panelsById, panelIds } = index([existing]);
+
+    expect(findEquivalentMissingCliGate(panelsById, panelIds, candidate)).toBe("gate-existing");
+    expect(
+      findEquivalentMissingCliGate(panelsById, panelIds, candidate, { requestedId: "terminal-X" })
+    ).toBeNull();
   });
 
   it("never matches the candidate against itself", () => {

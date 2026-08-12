@@ -27,6 +27,10 @@ export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOpt
     cwd: panel.cwd ?? "",
     worktreeId: panel.worktreeId,
     location: panel.location === "dock" ? "dock" : "grid",
+    // A dock replacement that doesn't activate starts parked and offscreen, so
+    // the recovery the user just asked for would produce nothing visible. The
+    // gate itself is what they were looking at, so the dock is already open.
+    activateDockOnCreate: panel.location === "dock" ? true : undefined,
     agentLaunchFlags: panel.agentLaunchFlags,
     agentModelId: panel.agentModelId,
     agentPresetId: panel.agentPresetId,
@@ -69,14 +73,22 @@ export function missingCliRelaunchKey(panel: PtyPanelData): string | null {
  *
  * The gate bypasses `addPanel`, so nothing else caps how many can exist: without
  * this, clicking an unavailable agent three times would append three identical
- * diagnostic panels. Trashed panels are excluded — a dismissed gate must not
- * silently resurrect in place of a fresh one.
+ * diagnostic panels.
+ *
+ * Only gates the user can actually see are reusable. A trashed or backgrounded
+ * gate still sits in the registry, and matching one would answer the click by
+ * pointing at a panel that renders nowhere — worse than making a second gate.
  */
 export function findEquivalentMissingCliGate(
   panelsById: Record<string, PanelInstance>,
   panelIds: string[],
-  candidate: PtyPanelData
+  candidate: PtyPanelData,
+  options: { requestedId?: string } = {}
 ): string | null {
+  // A caller-owned id is an identity contract — that launch is owed its own
+  // panel, so it must never collapse onto someone else's gate.
+  if (options.requestedId) return null;
+
   const key = missingCliRelaunchKey(candidate);
   if (key === null) return null;
 
@@ -85,7 +97,7 @@ export function findEquivalentMissingCliGate(
     const panel = panelsById[id];
     if (!panel || !isPtyPanel(panel)) continue;
     if (panel.spawnStatus !== "missing-cli") continue;
-    if (panel.location === "trash") continue;
+    if (panel.location !== "grid" && panel.location !== "dock") continue;
     if (missingCliRelaunchKey(panel) === key) return id;
   }
   return null;

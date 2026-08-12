@@ -539,25 +539,15 @@ export function AgentButton({
             }
           }}
         >
-          <ContextMenuActionItem
-            actionId="agent.launch"
-            args={{ agentId: type }}
-            disabled={!isLaunchable}
-          >
+          <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
             Launch {config.name}
           </ContextMenuActionItem>
-          <ContextMenuActionItem
-            actionId="agent.launch"
-            args={{ agentId: type, location: "dock" }}
-            disabled={!isLaunchable}
-          >
+          <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type, location: "dock" }}>
             Launch {config.name} in Dock
           </ContextMenuActionItem>
           {hasWorktrees && (
             <ContextMenuSub>
-              <ContextMenuSubTrigger disabled={!isLaunchable}>
-                Launch in Worktree
-              </ContextMenuSubTrigger>
+              <ContextMenuSubTrigger>Launch in Worktree</ContextMenuSubTrigger>
               <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
                 <WorktreeMenuItems agentType={type} />
               </ContextMenuSubContent>
@@ -779,18 +769,10 @@ export function AgentButton({
           }
         }}
       >
-        <ContextMenuActionItem
-          actionId="agent.launch"
-          args={{ agentId: type }}
-          disabled={!isLaunchable}
-        >
+        <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
           Launch {config.name}
         </ContextMenuActionItem>
-        <ContextMenuActionItem
-          actionId="agent.launch"
-          args={{ agentId: type, location: "dock" }}
-          disabled={!isLaunchable}
-        >
+        <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type, location: "dock" }}>
           Launch {config.name} in Dock
         </ContextMenuActionItem>
         {hasPresets && (
@@ -851,9 +833,7 @@ export function AgentButton({
         )}
         {hasWorktrees && (
           <ContextMenuSub>
-            <ContextMenuSubTrigger disabled={!isLaunchable}>
-              Launch in Worktree
-            </ContextMenuSubTrigger>
+            <ContextMenuSubTrigger>Launch in Worktree</ContextMenuSubTrigger>
             <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
               <WorktreeMenuItems agentType={type} />
             </ContextMenuSubContent>

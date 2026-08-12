@@ -32,6 +32,7 @@ import {
 } from "@shared/types";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { findEquivalentMissingCliGate } from "@/utils/missingCliGate";
+import { isAssistantFocused } from "@/store/macroFocusStore";
 import { escapeShellArgOptional } from "@shared/utils/shellEscape";
 import {
   getAgentConfig,
@@ -725,11 +726,12 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             usePanelStore.setState((state) => {
               // The in-flight guard above only spans a single call, so repeated
               // clicks on an unavailable agent would each append another gate.
-              // A launch carrying `requestedId` opts out — that id is an
-              // identity contract with the caller, so it must get its own panel.
-              const existingGateId = launchOptions?.requestedId
-                ? null
-                : findEquivalentMissingCliGate(state.panelsById, state.panelIds, gatePanel);
+              const existingGateId = findEquivalentMissingCliGate(
+                state.panelsById,
+                state.panelIds,
+                gatePanel,
+                { requestedId: launchOptions?.requestedId }
+              );
               resolvedGateId = existingGateId ?? gateId;
 
               const next: Partial<typeof state> = existingGateId
@@ -761,18 +763,26 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
                     next.previousFocusedId = prevFocusedId;
                   }
                 }
-              } else if (existingGateId && focusPolicy !== "preserve") {
-                // Relaunching onto an existing grid gate changes nothing on
-                // screen, so the re-click would read as a dead button. Reveal
-                // the panel already holding the answer instead.
-                const prevFocusedId = state.focusedId ?? null;
-                if (existingGateId !== prevFocusedId) {
-                  next.focusedId = existingGateId;
-                  next.previousFocusedId = prevFocusedId;
-                }
               }
               return next;
             });
+
+            // Grid gates bypass `addPanel`, so they never inherited its focus
+            // handling. Both halves matter: a gate created behind a maximized
+            // panel renders nowhere (#11060), and without taking focus the
+            // keyboard is stranded — the toolbar button blurs on click and the
+            // launcher suppresses its own focus return because this IS a launch.
+            // Reuse needs it too, or a repeated click reads as a dead button.
+            // `setFocused` rather than a raw write, so the dock/recency
+            // invariants it owns keep holding.
+            const takesFocus =
+              gatePanel.location !== "dock" &&
+              focusPolicy !== "preserve" &&
+              !(focusPolicy === undefined && isAssistantFocused());
+            if (takesFocus) {
+              usePanelStore.getState().exitMaximize();
+              usePanelStore.getState().setFocused(resolvedGateId);
+            }
             return {
               terminalId: resolvedGateId,
               location: gatePanel.location === "dock" ? "dock" : "grid",

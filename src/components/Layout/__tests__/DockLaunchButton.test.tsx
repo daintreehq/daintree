@@ -715,14 +715,19 @@ describe("DockLaunchButton", () => {
     });
 
     it("explains a blocked agent in the results with its setup tooltip", () => {
-      // A filtered row that looks ordinary but silently opens Settings is worse
-      // than the unfiltered one, which explains itself before you click. The
-      // dimming that accompanies it is styling, so it isn't asserted here.
+      // A filtered row that looks ordinary is worse than the unfiltered one,
+      // which explains before you click that this lands on recovery rather than
+      // a session. Asserted as the invariant "both rows say the same thing" so
+      // it keeps holding when the copy changes. The dimming that accompanies it
+      // is styling, so it isn't asserted here.
       const { container, getByText } = renderButton();
-      fireEvent.change(searchInput(container), { target: { value: "gemini" } });
+      const unfiltered = getByText("Gemini").closest(OPTION)?.getAttribute("title");
 
-      const row = getByText("Gemini").closest(OPTION);
-      expect(row?.getAttribute("title")).toContain("blocked by endpoint security");
+      fireEvent.change(searchInput(container), { target: { value: "gemini" } });
+      const filtered = getByText("Gemini").closest(OPTION)?.getAttribute("title");
+
+      expect(filtered).toBeTruthy();
+      expect(filtered).toBe(unfiltered);
     });
 
     it("keeps the Overridden marker on a shadowed recipe in the results", () => {

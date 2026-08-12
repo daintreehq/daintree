@@ -190,8 +190,15 @@ export function MissingCliGate({
     };
   }, []);
 
+  // Held in a ref, not read off `isRefreshing`: that value is captured at
+  // render, so a second press landing before React re-renders would sail past
+  // it. The store singleflights the probe itself, but two handlers resuming
+  // would both reach the continuation below and launch twice.
+  const probeInFlightRef = useRef(false);
+
   const handleRefresh = async () => {
-    if (isRefreshing) return;
+    if (probeInFlightRef.current) return;
+    probeInFlightRef.current = true;
     setRefreshFailed(false);
     try {
       // `force` skips the passive throttle window — this is an explicit gesture,
@@ -200,6 +207,8 @@ export function MissingCliGate({
     } catch {
       if (mountedRef.current) setRefreshFailed(true);
       return;
+    } finally {
+      probeInFlightRef.current = false;
     }
     if (!mountedRef.current) return;
     // Read `availability`, not `details`: the store's fetch deliberately
