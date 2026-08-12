@@ -64,6 +64,10 @@ export function DiffFileSidebar({
     worktreePath,
     worktreeId,
   });
+  // Whether rows get a menu at all — see the comment at the row's return below.
+  // Everything that stands the global menu key down hangs off this, so a row
+  // without a trigger never claims a key it can't answer.
+  const hasRowMenu = worktreePath !== "";
   const listRef = useRef<HTMLDivElement | null>(null);
   const viewedSet = useDiffViewedStore(
     useCallback((state) => selectViewedSet(state, worktreePath), [worktreePath])
@@ -208,8 +212,10 @@ export function DiffFileSidebar({
                     data-file-index={file.index}
                     // Stands the global Shift+F10 / Menu-key handler down so
                     // the row's own menu opens instead of the focused panel's
-                    // (`useGlobalKeybindings`).
-                    data-row-menu=""
+                    // (`useGlobalKeybindings` matches on the attribute's
+                    // presence). Absent without a menu to open, so the key
+                    // falls through to that handler as it did before.
+                    data-row-menu={hasRowMenu ? "" : undefined}
                     className={cn(
                       "group/diffrow flex items-center rounded px-1.5 py-1 text-xs font-mono transition-colors",
                       isCurrent ? "bg-overlay-subtle" : "hover:bg-tint/5",
@@ -222,7 +228,7 @@ export function DiffFileSidebar({
                       type="button"
                       onClick={() => onSelect(file.index)}
                       onKeyDown={(event) => {
-                        if (!isFileRowMenuKey(event)) return;
+                        if (!hasRowMenu || !isFileRowMenuKey(event)) return;
                         // Anchored to the whole row, not this button: the menu
                         // targets the file, and the row is what lifts to show
                         // which one.
@@ -286,7 +292,7 @@ export function DiffFileSidebar({
                 // the *current project* — a different repo, a different file.
                 // No root, no row menu: the same state this surface shipped in
                 // before it had one.
-                if (worktreePath === "") return row;
+                if (!hasRowMenu) return row;
 
                 return (
                   <ContextMenu key={`${file.viewedKey}-${file.index}`}>

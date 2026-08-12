@@ -157,6 +157,21 @@ describe("DiffFileSidebar — file row menu", () => {
     expect(screen.queryByRole("menuitem", { name: /Copy path/ })).toBeNull();
   });
 
+  it("stands the global menu key down only while rows have a menu to open", () => {
+    const { unmount } = renderSidebar();
+    const withRoot = screen.getByTestId("diff-sidebar-file").parentElement!;
+    expect(withRoot.hasAttribute("data-row-menu")).toBe(true);
+    unmount();
+
+    renderSidebar({ worktreePath: "" });
+    const rootless = screen.getByTestId("diff-sidebar-file");
+    // `useGlobalKeybindings` stands down on the marker alone. With no trigger
+    // rendered here, keeping it would swallow Shift+F10 into nothing — the row
+    // has to leave the key for the global handler.
+    expect(rootless.parentElement!.hasAttribute("data-row-menu")).toBe(false);
+    expect(fireEvent.keyDown(rootless, { key: "ContextMenu" })).toBe(true);
+  });
+
   it("carries plugin file items onto this surface too", async () => {
     itemsRef.current = [
       { pluginId: "acme", item: { label: "Acme thing", actionId: "acme.do", location: "file" } },
