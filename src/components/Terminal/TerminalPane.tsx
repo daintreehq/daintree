@@ -66,7 +66,7 @@ import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { notifyWorktreeTerminalAttached } from "@/services/terminal/worktreeRevealCoordinator";
 import { actionService } from "@/services/ActionService";
-import { buildMissingCliRelaunchOptions } from "@/utils/missingCliGate";
+import { buildMissingCliRelaunchOptions, readPresetEnv } from "@/utils/missingCliGate";
 import { useReviewDialogOpenForWorktree } from "./useReviewDialogOpenForWorktree";
 import { InputTracker } from "@/services/clearCommandDetection";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
@@ -467,7 +467,7 @@ function TerminalPaneComponent({
         // undefined would let the agent-level default reappear on recovery.
         presetId: panel.agentPresetId ?? null,
         ...(location === "dock" ? { activateDockOnCreate: true } : {}),
-        env: panel.extensionState?.presetEnv as Record<string, string> | undefined,
+        env: readPresetEnv(panel),
         excludeFromPersistence: panel.excludeFromPersistence,
       },
       { source: "user" }

@@ -12,6 +12,22 @@ import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types
  *
  * Returns null when the panel carries no agent, which makes it unrelaunchable.
  */
+/**
+ * Narrow the preset environment out of the panel's untyped extension bag.
+ * Non-string values are dropped rather than trusted: this feeds a real
+ * subprocess environment, where a non-string would stringify into something
+ * nobody wrote.
+ */
+export function readPresetEnv(panel: PtyPanelData): Record<string, string> | undefined {
+  const raw = panel.extensionState?.presetEnv;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === "string") env[key] = value;
+  }
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
 export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOptions | null {
   const agentId = panel.launchAgentId;
   if (!agentId) return null;
@@ -38,7 +54,7 @@ export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOpt
     // the relaunched pane's chrome, so the continued launch would not be the
     // launch that was originally asked for.
     agentPresetColor: panel.agentPresetColor,
-    env: panel.extensionState?.presetEnv as Record<string, string> | undefined,
+    env: readPresetEnv(panel),
     // Since env is persisted onto the panel (#10922), dropping these would let
     // a session-scoped secret leak into the on-disk snapshot on relaunch.
     excludeFromPersistence: panel.excludeFromPersistence,
@@ -52,7 +68,7 @@ export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOpt
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
+  const entries = Object.entries(value)
     .filter(([, v]) => v !== undefined)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;

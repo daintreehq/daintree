@@ -28,7 +28,7 @@ function index(panels: PtyPanelData[]): {
   panelIds: string[];
 } {
   const panelsById: Record<string, PanelInstance> = {};
-  for (const panel of panels) panelsById[panel.id] = panel as unknown as PanelInstance;
+  for (const panel of panels) panelsById[panel.id] = panel;
   return { panelsById, panelIds: panels.map((p) => p.id) };
 }
 
@@ -45,7 +45,7 @@ describe("buildMissingCliRelaunchOptions", () => {
         extensionState: { presetEnv: { TOKEN: "secret" } },
         excludeFromPersistence: true,
         removeOnExit: true,
-        spawnedBy: "user",
+        spawnedBy: "palette",
         focusPolicy: "preserve",
       })
     );
@@ -68,7 +68,7 @@ describe("buildMissingCliRelaunchOptions", () => {
       env: { TOKEN: "secret" },
       excludeFromPersistence: true,
       removeOnExit: true,
-      spawnedBy: "user",
+      spawnedBy: "palette",
       focusPolicy: "preserve",
     });
   });
@@ -121,8 +121,8 @@ describe("findEquivalentMissingCliGate", () => {
   it.each([
     ["dismissed to the trash", "trash"],
     ["sent to the background", "background"],
-  ])("does not reuse a gate %s", (_label, location) => {
-    const hidden = gate({ id: "gate-hidden", location: location as PtyPanelData["location"] });
+  ] as const)("does not reuse a gate %s", (_label, location) => {
+    const hidden = gate({ id: "gate-hidden", location });
     const candidate = gate({ id: "gate-new" });
 
     const { panelsById, panelIds } = index([hidden]);

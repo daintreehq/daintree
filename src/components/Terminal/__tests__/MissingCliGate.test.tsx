@@ -8,17 +8,21 @@ import type { AgentCliDetail } from "@shared/types/ipc";
 // as a hook (`refresh`, `isRefreshing`) and imperatively (`getState().availability`),
 // and the availability half is what the continuation decision hangs on.
 const cliStore = vi.hoisted(() => {
-  const state = {
+  const state: {
+    refresh: (force?: boolean) => Promise<void>;
+    isRefreshing: boolean;
+    availability: Record<string, string>;
+  } = {
     refresh: vi.fn<(force?: boolean) => Promise<void>>(),
     isRefreshing: false,
-    availability: {} as Record<string, string>,
+    availability: {},
   };
-  const useStore = ((selector?: (s: typeof state) => unknown) =>
-    selector ? selector(state) : state) as unknown as {
-    (selector?: (s: typeof state) => unknown): unknown;
-    getState: () => typeof state;
-  };
-  useStore.getState = () => state;
+  // `Object.assign` rather than an assertion — the store is callable with a
+  // selector AND carries `getState`, and the intersection falls out for free.
+  const useStore = Object.assign(
+    (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state),
+    { getState: () => state }
+  );
   return { state, useStore };
 });
 
