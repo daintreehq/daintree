@@ -261,6 +261,24 @@ describe("WorkspaceService.getFileDiff", () => {
     );
   });
 
+  it("windows a text diff whose added lines quote the binary marker", async () => {
+    const textDiff = `diff --git a/README.md b/README.md
+index 1a2b3c4..5d6e7f8 100644
+--- a/README.md
++++ b/README.md
+@@ -1,2 +1,3 @@
+ # Notes
++Git prints Binary files a/x and b/x differ when it skips a blob.
+`;
+    mockSimpleGit.diff.mockResolvedValueOnce(textDiff);
+
+    await service.getFileDiff("req-18", "/test/repo", "README.md", "modified");
+
+    const event = mockSendEvent.mock.calls.at(-1)?.[0];
+    expect(event.diff).toBe(textDiff);
+    expect(event.totalBytes).toBe(Buffer.byteLength(textDiff, "utf8"));
+  });
+
   it("reconstructs a multibyte diff across windows without replacement characters", async () => {
     const full = "diff --git a/f.ts b/f.ts\n" + "+日本語テキスト😀\n".repeat(50);
     mockSimpleGit.diff.mockResolvedValue(full);

@@ -11,6 +11,7 @@ import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "../../shared/ty
 import { createHardenedGit } from "../utils/hardenedGit.js";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import { parseNumstat } from "../utils/git.js";
 import type { DiffStat } from "../utils/git.js";
 import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
@@ -304,7 +305,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         await this.getGit()
       ).diff(["HEAD", "--no-ext-diff", "--no-textconv", "--no-color", "--", normalizedPath]);
 
-      if (diff.includes("Binary files")) {
+      if (isBinaryDiffOutput(diff)) {
         return "BINARY_FILE";
       }
 
@@ -510,7 +511,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
           return "NO_CHANGES";
         }
 
-        if (diff.includes("Binary files")) {
+        if (isBinaryDiffOutput(diff)) {
           return "BINARY_FILE";
         }
 
