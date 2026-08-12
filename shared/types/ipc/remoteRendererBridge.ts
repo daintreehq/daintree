@@ -1,6 +1,8 @@
 import { z } from "zod";
-import { RemoteLaunchableAgentsSchema, RemoteOpaqueIdSchema } from "../remote/index.js";
+import { RemoteLaunchableAgentSchema, RemoteOpaqueIdSchema } from "../remote/index.js";
 import { RendererPanelProjectionPublishSchema } from "./remotePanelProjection.js";
+
+const WorktreeSourceIdSchema = z.string().min(1).max(4_096);
 
 const RemoteRendererBindingFields = {
   requestId: RemoteOpaqueIdSchema,
@@ -17,13 +19,13 @@ export const RemoteRendererGetPanelProjectionRequestSchema = z.strictObject({
 export const RemoteRendererGetLaunchableAgentsRequestSchema = z.strictObject({
   ...RemoteRendererBindingFields,
   method: z.literal("remote:getLaunchableAgents"),
-  worktreeId: RemoteOpaqueIdSchema,
+  worktreeId: WorktreeSourceIdSchema,
 });
 
 export const RemoteRendererLaunchAgentRequestSchema = z.strictObject({
   ...RemoteRendererBindingFields,
   method: z.literal("remote:launchAgent"),
-  worktreeId: RemoteOpaqueIdSchema,
+  worktreeId: WorktreeSourceIdSchema,
   agentId: RemoteOpaqueIdSchema,
   requestedPanelId: RemoteOpaqueIdSchema,
   prompt: z.string().min(1).max(65_536).optional(),
@@ -43,7 +45,7 @@ export const RemoteRendererRequestSchema = z.discriminatedUnion("method", [
 
 export const RemoteRendererLaunchResultSchema = z.strictObject({
   projectId: RemoteOpaqueIdSchema,
-  worktreeId: RemoteOpaqueIdSchema,
+  worktreeId: WorktreeSourceIdSchema,
   requestedPanelId: RemoteOpaqueIdSchema,
   panelId: RemoteOpaqueIdSchema,
   launchGeneration: z.number().int().positive(),
@@ -72,7 +74,11 @@ export const RemoteRendererResponseSchema = z.union([
     ...RemoteRendererResponseFields,
     method: z.literal("remote:getLaunchableAgents"),
     ok: z.literal(true),
-    result: RemoteLaunchableAgentsSchema,
+    result: z.strictObject({
+      projectId: RemoteOpaqueIdSchema,
+      worktreeId: WorktreeSourceIdSchema,
+      agents: z.array(RemoteLaunchableAgentSchema),
+    }),
   }),
   z.strictObject({
     ...RemoteRendererResponseFields,

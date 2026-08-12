@@ -25,6 +25,9 @@ const DEVICE_ID_SCHEMA = z.strictObject({ deviceId: z.string().min(1).max(128) }
 const DEVICE_CAPABILITIES_SCHEMA = DEVICE_ID_SCHEMA.extend({
   capabilities: RemoteCapabilitiesSchema,
 });
+const RENAME_DEVICE_SCHEMA = DEVICE_ID_SCHEMA.extend({
+  displayName: z.string().trim().min(1).max(128),
+});
 const REVOKE_DEVICE_SCHEMA = DEVICE_ID_SCHEMA.extend({
   reason: z.string().trim().min(1).max(256),
 });
@@ -69,6 +72,12 @@ export const remoteAccessNamespace = defineIpcNamespace({
       DEVICE_CAPABILITIES_SCHEMA,
       async ({ deviceId, capabilities }): Promise<RemoteAccessSnapshot> =>
         (await management()).setDeviceCapabilities(deviceId, capabilities)
+    ),
+    renameDevice: opValidated(
+      REMOTE_ACCESS_METHOD_CHANNELS.renameDevice,
+      RENAME_DEVICE_SCHEMA,
+      async ({ deviceId, displayName }): Promise<RemoteAccessSnapshot> =>
+        (await management()).renameDevice(deviceId, displayName)
     ),
     disconnectDevice: opValidated(
       REMOTE_ACCESS_METHOD_CHANNELS.disconnectDevice,

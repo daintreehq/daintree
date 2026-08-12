@@ -54,6 +54,8 @@ type CreatedInspection =
 
 export const MAX_CONCURRENT_REMOTE_LAUNCHES = 4;
 export const MAX_CONCURRENT_REMOTE_LAUNCHES_PER_DEVICE = 2;
+const REMOTE_LAUNCH_GENERATION_SETTLE_MS = 1_000;
+const REMOTE_LAUNCH_GENERATION_POLL_MS = 20;
 
 export class RemoteAgentLaunchService {
   private readonly panelReservations = new Map<string, LaunchReservation>();
@@ -89,26 +91,37 @@ export class RemoteAgentLaunchService {
       this.error(session, requestId, "NOT_FOUND", "Project or worktree was not found");
       return;
     }
-    let lease: RemoteProjectViewLease | null = null;
-    try {
-      lease = await this.views.ensureBackgroundView(request.projectId);
-      if (!this.authorized(session, requestId, "launch-agents")) return;
-      const currentSource = await this.resolveWorktree(request.projectId, request.worktreeId);
-      if (currentSource !== sourceWorktreeId) {
-        this.error(session, requestId, "NOT_FOUND", "Worktree ownership changed");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      let lease: RemoteProjectViewLease | null = null;
+      try {
+        lease = await this.views.ensureBackgroundView(request.projectId);
+        if (!this.authorized(session, requestId, "launch-agents")) return;
+        const currentSource = await this.resolveWorktree(request.projectId, request.worktreeId);
+        if (currentSource !== sourceWorktreeId) {
+          this.error(session, requestId, "NOT_FOUND", "Worktree ownership changed");
+          return;
+        }
+        const result = await this.renderer.getLaunchableAgents(lease, sourceWorktreeId);
+        const response: RemoteLaunchableAgents = {
+          projectId: request.projectId,
+          worktreeId: request.worktreeId,
+          agents: result.agents,
+        };
+        this.send(session, requestId, "agents.launchable", response);
         return;
+      } catch (error) {
+        if (
+          attempt === 0 &&
+          error instanceof RemoteRendererBridgeError &&
+          (error.code === "UNAVAILABLE" || error.code === "BINDING_STALE")
+        ) {
+          continue;
+        }
+        this.error(session, requestId, "HOST_UI_UNAVAILABLE", "Project renderer is unavailable");
+        return;
+      } finally {
+        lease?.release();
       }
-      const result = await this.renderer.getLaunchableAgents(lease, sourceWorktreeId);
-      const response: RemoteLaunchableAgents = {
-        projectId: request.projectId,
-        worktreeId: request.worktreeId,
-        agents: result.agents,
-      };
-      this.send(session, requestId, "agents.launchable", response);
-    } catch {
-      this.error(session, requestId, "HOST_UI_UNAVAILABLE", "Project renderer is unavailable");
-    } finally {
-      lease?.release();
     }
   }
 
@@ -332,7 +345,7 @@ export class RemoteAgentLaunchService {
         ...(request.modelId ? { modelId: request.modelId } : {}),
         ...(request.name ? { name: request.name } : {}),
       });
-      const generation = this.details.currentGeneration(launched.panelId);
+      const generation = await this.waitForGeneration(launched.panelId, launched.launchGeneration);
       const created =
         launched.panelId === request.requestedPanelId && generation === launched.launchGeneration
           ? {
@@ -461,6 +474,23 @@ export class RemoteAgentLaunchService {
     } catch {
       return null;
     }
+  }
+
+  private async waitForGeneration(panelId: string, expected: number): Promise<number | undefined> {
+    if (expected <= 0) return this.details.currentGeneration(panelId);
+    let current = this.details.currentGeneration(panelId);
+    for (
+      let elapsed = 0;
+      current === undefined && elapsed < REMOTE_LAUNCH_GENERATION_SETTLE_MS;
+      elapsed += REMOTE_LAUNCH_GENERATION_POLL_MS
+    ) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, REMOTE_LAUNCH_GENERATION_POLL_MS);
+        timer.unref?.();
+      });
+      current = this.details.currentGeneration(panelId);
+    }
+    return current;
   }
 
   private reserveLaunch(

@@ -57,6 +57,22 @@ export class RemoteCapabilityService {
     return updated;
   }
 
+  rename(deviceId: string, displayName: string): RemotePairedDevice {
+    const normalized = displayName.trim();
+    if (normalized.length === 0 || normalized.length > 128) {
+      throw new Error("Device name must be between 1 and 128 characters");
+    }
+    const device = this.requireOwnedActiveDevice(deviceId);
+    const updated = { ...device, displayName: normalized };
+    this.store.saveDevice(updated);
+    this.audit?.record({
+      actorDeviceId: deviceId,
+      operation: "device.rename",
+      result: "committed",
+    });
+    return updated;
+  }
+
   revoke(deviceId: string, reason: string): RemotePairedDevice {
     const device = this.requireOwnedActiveDevice(deviceId);
     this.sessions.closeDeviceSessions(deviceId, "device-revoked");

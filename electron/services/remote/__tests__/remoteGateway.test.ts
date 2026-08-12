@@ -436,6 +436,29 @@ describe("RemoteProtocolRouter", () => {
     );
   });
 
+  it("does not charge console acknowledgements against the request budget", async () => {
+    const { connection, handler, sessions, sessionId } = await readyConnection();
+    expect(sessions.reserveConsoleSubscription(connection.id, "subscribe-01")).toBe(true);
+    expect(sessions.registerConsoleStream(connection.id, "subscribe-01", "stream-01")).toBe(true);
+    expect(sessions.trackConsoleOutput(connection.id, "stream-01", 0, 1)).toBe(true);
+    handler.mockClear();
+
+    for (let index = 0; index <= REMOTE_GATEWAY_LIMITS.maxRequestsPerMinute; index += 1) {
+      connection.receive({
+        protocolVersion: REMOTE_PROTOCOL_VERSION,
+        sessionId,
+        kind: "ack",
+        type: "stream.ack",
+        streamId: "stream-01",
+        ack: 0,
+      });
+    }
+    connection.receive(request(sessionId, "projects.list", 901));
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledOnce());
+    expect(connection.closes).toEqual([]);
+  });
+
   it("shares launch throttling across a device's concurrent sessions", () => {
     const registry = new RemoteSessionRegistry();
     for (let index = 0; index < REMOTE_GATEWAY_LIMITS.maxLaunchesPerMinute; index += 1) {

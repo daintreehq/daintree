@@ -43,7 +43,7 @@ export class RemoteRendererBridge {
   private disposed = false;
 
   constructor(
-    private readonly registry: Pick<RemoteRendererPanelRegistry, "getBinding">,
+    private readonly registry: Pick<RemoteRendererPanelRegistry, "getBinding" | "markEvicted">,
     private readonly timeoutMs = REMOTE_RENDERER_REQUEST_TIMEOUT_MS
   ) {}
 
@@ -149,6 +149,7 @@ export class RemoteRendererBridge {
     }
     const sender = webContents.fromId(request.webContentsId);
     if (!sender || sender.isDestroyed()) {
+      this.registry.markEvicted(request.projectId, request.webContentsId);
       return Promise.reject(
         new RemoteRendererBridgeError("UNAVAILABLE", "Project renderer is unavailable")
       );
@@ -156,6 +157,7 @@ export class RemoteRendererBridge {
 
     return new Promise((resolve, reject) => {
       const onDestroyed = () => {
+        this.registry.markEvicted(request.projectId, request.webContentsId);
         const pending = this.pending.get(request.requestId);
         if (!pending) return;
         clearTimeout(pending.timer);

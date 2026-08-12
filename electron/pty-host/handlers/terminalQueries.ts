@@ -146,7 +146,7 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
           msg.afterSeq
         );
         const state =
-          started.mode === "snapshot" ? await ctx.ptyManager.getSerializedStateAsync(msg.id) : null;
+          started.mode === "snapshot" ? await ctx.ptyManager.getConsoleSnapshotAsync(msg.id) : null;
         if (started.mode === "snapshot" && state === null) {
           ctx.consoleObservationHub.end(msg.id, msg.observerId);
           ctx.sendEvent({
@@ -155,8 +155,7 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
             id: msg.id,
             observerId: msg.observerId,
             launchGeneration: msg.launchGeneration,
-            mode: "resync",
-            reason: "generation-changed",
+            mode: "snapshot",
             throughSeq: started.throughSeq,
             state: null,
             chunks: [],

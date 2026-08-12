@@ -126,6 +126,28 @@ class PortalAgent {
   );
 }
 
+class PortalLaunchableAgent {
+  const PortalLaunchableAgent({
+    required this.agentId,
+    required this.displayName,
+    required this.iconId,
+    required this.brandColor,
+  });
+
+  final String agentId;
+  final String displayName;
+  final String? iconId;
+  final String? brandColor;
+
+  factory PortalLaunchableAgent.fromJson(Map<String, dynamic> value) =>
+      PortalLaunchableAgent(
+        agentId: value['agentId'] as String,
+        displayName: value['displayName'] as String,
+        iconId: value['iconId'] as String?,
+        brandColor: value['brandColor'] as String?,
+      );
+}
+
 class PortalController extends ChangeNotifier {
   PortalController({
     required this.credential,
@@ -133,18 +155,33 @@ class PortalController extends ChangeNotifier {
     required this.client,
     Uuid? uuid,
     PortalTerminalModel? consoleRenderer,
+    this.launchConsoleRecoveryDelay = const Duration(seconds: 2),
+    this.launchTargetRetryDelay = const Duration(milliseconds: 250),
+    this.launchTargetRetryAttempts = 8,
+    this.onAccessRevoked,
   }) : _uuid = uuid ?? const Uuid(),
        consoleRenderer =
            consoleRenderer ??
            PortalTerminalModel(
              platform: terminalPlatformFor(defaultTargetPlatform),
-           );
+           ) {
+    if (credential.accessRevoked) {
+      connectionState = PortalConnectionState.revoked;
+      statusMessage =
+          'This device was revoked on the host · pair it again to reconnect';
+      _revocationNotified = true;
+    }
+  }
 
   final PairedHostCredential credential;
   final DeviceIdentityStore identityStore;
   final RemoteProtocolClient client;
   final Uuid _uuid;
+  final Duration launchConsoleRecoveryDelay;
+  final Duration launchTargetRetryDelay;
+  final int launchTargetRetryAttempts;
   final PortalTerminalModel consoleRenderer;
+  final VoidCallback? onAccessRevoked;
   StreamSubscription<Map<String, dynamic>>? _events;
 
   PortalConnectionState connectionState = PortalConnectionState.offline;
@@ -162,11 +199,25 @@ class PortalController extends ChangeNotifier {
   String? statusMessage;
   String? _resumeSessionId;
   bool _refreshingProjection = false;
+  bool _resyncingConsole = false;
+  int _automaticConsoleResyncs = 0;
+  int _consoleSubscriptionEpoch = 0;
+  String? _subscribingPanelId;
+  final List<Map<String, dynamic>> _subscriptionBoundaryEvents = [];
+  Timer? _launchConsoleRecoveryTimer;
+  bool _revocationNotified = false;
 
   bool get readOnly =>
       connectionState != PortalConnectionState.ready || consoleStale;
 
   Future<void> connect() async {
+    if (credential.accessRevoked) {
+      connectionState = PortalConnectionState.revoked;
+      statusMessage =
+          'This device was revoked on the host · pair it again to reconnect';
+      notifyListeners();
+      return;
+    }
     final targetProjectId = selectedProject?.id;
     final targetPanelId = selectedAgent?.panelId;
     final targetGeneration = selectedAgent?.generation;
@@ -224,6 +275,7 @@ class PortalController extends ChangeNotifier {
       };
       statusMessage = error.message;
       consoleStale = selectedAgent != null;
+      if (error.code == 'DEVICE_REVOKED') _notifyAccessRevoked();
       notifyListeners();
     } catch (_) {
       connectionState = PortalConnectionState.offline;
@@ -340,6 +392,11 @@ class PortalController extends ChangeNotifier {
   }
 
   Future<void> openAgent(PortalAgent agent, {bool forceResync = false}) async {
+    if (!forceResync) {
+      _automaticConsoleResyncs = 0;
+      _launchConsoleRecoveryTimer?.cancel();
+      _launchConsoleRecoveryTimer = null;
+    }
     final previous = selectedAgent;
     if (!forceResync &&
         previous != null &&
@@ -356,28 +413,52 @@ class PortalController extends ChangeNotifier {
     consoleStale = connectionState != PortalConnectionState.ready;
     notifyListeners();
     if (!client.connected) return;
-    final response = await client.request('console.subscribe', {
-      'projectId': selectedProject!.id,
-      'worktreeId': agent.worktreeId,
-      'panelId': agent.panelId,
-      'launchGeneration': agent.generation,
-      if (!forceResync && consoleSequence > 0) 'afterSeq': consoleSequence,
-    });
-    final payload = RemoteProtocolClient.payloadOf(response);
-    streamId = payload['streamId'] as String;
-    final mode = payload['mode'] as String;
-    if (mode == 'snapshot') {
-      final snapshot = (payload['snapshot'] as Map).cast<String, dynamic>();
-      consoleRenderer.replace(snapshot['data'] as String);
-    } else if (mode == 'resync') {
-      consoleRenderer.replace('');
+    final subscriptionEpoch = ++_consoleSubscriptionEpoch;
+    _subscribingPanelId = agent.panelId;
+    _subscriptionBoundaryEvents.clear();
+    try {
+      final response = await client.request('console.subscribe', {
+        'projectId': selectedProject!.id,
+        'worktreeId': agent.worktreeId,
+        'panelId': agent.panelId,
+        'launchGeneration': agent.generation,
+        if (!forceResync && consoleSequence > 0) 'afterSeq': consoleSequence,
+      });
+      final payload = RemoteProtocolClient.payloadOf(response);
+      if (subscriptionEpoch != _consoleSubscriptionEpoch) return;
+      streamId = payload['streamId'] as String;
+      final mode = payload['mode'] as String;
+      if (mode == 'snapshot') {
+        final snapshot = (payload['snapshot'] as Map).cast<String, dynamic>();
+        consoleRenderer.replace(
+          snapshot['data'] as String,
+          columns: snapshot['cols'] as int,
+          rows: snapshot['rows'] as int,
+        );
+      }
+      for (final raw in payload['chunks'] as List) {
+        _appendChunk((raw as Map).cast<String, dynamic>());
+      }
+      consoleSequence = payload['throughSeq'] as int;
+      consoleStale = mode == 'resync';
+      if (mode == 'resync') {
+        statusMessage = 'Console resync paused · tap Retry to try again';
+      }
+      final boundaryEvents = List<Map<String, dynamic>>.of(
+        _subscriptionBoundaryEvents,
+      );
+      _subscriptionBoundaryEvents.clear();
+      _subscribingPanelId = null;
+      for (final event in boundaryEvents) {
+        _handleEvent(event);
+      }
+      notifyListeners();
+    } finally {
+      if (subscriptionEpoch == _consoleSubscriptionEpoch) {
+        _subscribingPanelId = null;
+        _subscriptionBoundaryEvents.clear();
+      }
     }
-    for (final raw in payload['chunks'] as List) {
-      _appendChunk((raw as Map).cast<String, dynamic>());
-    }
-    consoleSequence = payload['throughSeq'] as int;
-    consoleStale = false;
-    notifyListeners();
   }
 
   void updateComposer(String value) {
@@ -481,7 +562,63 @@ class PortalController extends ChangeNotifier {
     }
   }
 
-  Future<List<Map<String, dynamic>>> launchableAgents(
+  Future<Map<String, dynamic>> launchAgentAndOpen({
+    required PortalWorktree worktree,
+    required PortalLaunchableAgent agent,
+  }) async {
+    final result = await launchAgent(
+      worktree: worktree,
+      agentId: agent.agentId,
+    );
+    if (result['disposition'] != 'created' &&
+        result['disposition'] != 'existing') {
+      return result;
+    }
+    final launched = PortalAgent(
+      panelId: result['panelId'] as String,
+      generation: result['launchGeneration'] as int,
+      worktreeId: worktree.id,
+      agentId: agent.agentId,
+      displayName: agent.displayName,
+      title: agent.displayName,
+      state: 'starting',
+      continuityState: 'live',
+      resumeState: 'not-ready',
+      waitingReason: null,
+      stateSince: DateTime.now().millisecondsSinceEpoch,
+      spawnedRemotely: true,
+    );
+    agents = [
+      ...agents.where(
+        (candidate) =>
+            candidate.panelId != launched.panelId ||
+            candidate.generation != launched.generation,
+      ),
+      launched,
+    ];
+    await _openLaunchedAgent(launched);
+    _scheduleLaunchConsoleRecovery(launched);
+    return result;
+  }
+
+  Future<void> _openLaunchedAgent(PortalAgent agent) async {
+    for (var attempt = 0; attempt < launchTargetRetryAttempts; attempt += 1) {
+      try {
+        await openAgent(agent);
+        return;
+      } on RemoteProtocolException catch (error) {
+        final targetIsStillPublishing =
+            error.code == 'NOT_FOUND' || error.code == 'STALE_GENERATION';
+        if (!targetIsStillPublishing ||
+            attempt == launchTargetRetryAttempts - 1) {
+          rethrow;
+        }
+        await Future<void>.delayed(launchTargetRetryDelay);
+      }
+    }
+  }
+
+  Future<List<PortalLaunchableAgent>> launchableAgents(
     PortalWorktree worktree,
   ) async {
     final response = await client.request('agents.launchable', {
@@ -490,8 +627,18 @@ class PortalController extends ChangeNotifier {
     });
     final payload = RemoteProtocolClient.payloadOf(response);
     return (payload['agents'] as List)
-        .map((value) => (value as Map).cast<String, dynamic>())
+        .map(
+          (value) => PortalLaunchableAgent.fromJson(
+            (value as Map).cast<String, dynamic>(),
+          ),
+        )
         .toList(growable: false);
+  }
+
+  Future<void> refreshSelectedProject() async {
+    final projectId = selectedProject?.id;
+    if (projectId == null) return;
+    await openProject(projectId, preserveConsoleTarget: true);
   }
 
   Future<void> pause() async {
@@ -505,6 +652,8 @@ class PortalController extends ChangeNotifier {
   }
 
   Future<void> _unsubscribeCurrent() async {
+    _launchConsoleRecoveryTimer?.cancel();
+    _launchConsoleRecoveryTimer = null;
     final currentStreamId = streamId;
     streamId = null;
     if (currentStreamId == null || !client.connected) return;
@@ -519,6 +668,13 @@ class PortalController extends ChangeNotifier {
 
   Future<void> resume() => connect();
 
+  void retryConsole() {
+    final agent = selectedAgent;
+    if (agent == null || _resyncingConsole) return;
+    _automaticConsoleResyncs = 1;
+    _startConsoleResync(agent);
+  }
+
   void _handleEvent(Map<String, dynamic> envelope) {
     final type = envelope['type'];
     if (type == 'projects.updated' || type == 'project.updated') {
@@ -528,9 +684,17 @@ class PortalController extends ChangeNotifier {
       return;
     }
     if (type == 'session.disconnected') {
-      connectionState = PortalConnectionState.offline;
+      final error = envelope['error'];
+      final revoked =
+          error is RemoteProtocolException && error.code == 'DEVICE_REVOKED';
+      connectionState = revoked
+          ? PortalConnectionState.revoked
+          : PortalConnectionState.offline;
       consoleStale = selectedAgent != null;
-      statusMessage = 'Connection lost · showing the last received state';
+      statusMessage = revoked
+          ? 'This device was revoked on the host · pair it again to reconnect'
+          : 'Connection lost · showing the last received state';
+      if (revoked) _notifyAccessRevoked();
       notifyListeners();
       return;
     }
@@ -538,18 +702,37 @@ class PortalController extends ChangeNotifier {
       connectionState = PortalConnectionState.revoked;
       consoleStale = true;
       statusMessage = 'This device was revoked on the host';
+      _notifyAccessRevoked();
       notifyListeners();
       return;
     }
     if (type == 'console.resyncRequired') {
+      final payload = RemoteProtocolClient.payloadOf(envelope);
+      if (_subscribingPanelId != null && payload['streamId'] != streamId) {
+        _subscriptionBoundaryEvents.add(envelope);
+        return;
+      }
       consoleStale = true;
       statusMessage = 'Console continuity was interrupted · resync required';
       final agent = selectedAgent;
-      if (agent != null) unawaited(openAgent(agent, forceResync: true));
+      if (agent != null &&
+          !_resyncingConsole &&
+          _automaticConsoleResyncs == 0) {
+        _automaticConsoleResyncs += 1;
+        _startConsoleResync(agent);
+      } else {
+        statusMessage = 'Console resync paused · tap Retry to try again';
+        notifyListeners();
+      }
       return;
     }
     if (type == 'console.output') {
       final payload = RemoteProtocolClient.payloadOf(envelope);
+      if (payload['panelId'] == _subscribingPanelId &&
+          payload['streamId'] != streamId) {
+        _subscriptionBoundaryEvents.add(envelope);
+        return;
+      }
       if (payload['streamId'] != streamId ||
           payload['panelId'] != selectedAgent?.panelId) {
         return;
@@ -559,12 +742,82 @@ class PortalController extends ChangeNotifier {
         consoleStale = true;
         statusMessage = 'Console output has a gap · resyncing';
         final agent = selectedAgent;
-        if (agent != null) unawaited(openAgent(agent, forceResync: true));
+        if (agent != null) _startConsoleResync(agent);
+        notifyListeners();
         return;
       }
       _appendChunk(payload);
       consoleSequence = sequence;
+      _automaticConsoleResyncs = 0;
+      _launchConsoleRecoveryTimer?.cancel();
+      _launchConsoleRecoveryTimer = null;
       client.acknowledge(streamId!, sequence);
+    }
+  }
+
+  void _notifyAccessRevoked() {
+    if (_revocationNotified) return;
+    _revocationNotified = true;
+    onAccessRevoked?.call();
+  }
+
+  void _scheduleLaunchConsoleRecovery(PortalAgent agent) {
+    if (consoleSequence > 0 ||
+        consoleRenderer.normalizedText.trim().isNotEmpty) {
+      return;
+    }
+    _launchConsoleRecoveryTimer?.cancel();
+    _launchConsoleRecoveryTimer = Timer(launchConsoleRecoveryDelay, () {
+      if (selectedAgent?.panelId != agent.panelId ||
+          selectedAgent?.generation != agent.generation ||
+          consoleSequence > 0 ||
+          consoleRenderer.normalizedText.trim().isNotEmpty ||
+          !client.connected ||
+          _resyncingConsole) {
+        return;
+      }
+      _resyncingConsole = true;
+      unawaited(_recoverSilentLaunch(agent));
+    });
+  }
+
+  Future<void> _recoverSilentLaunch(PortalAgent agent) async {
+    try {
+      await _unsubscribeCurrent();
+      await openAgent(agent, forceResync: true);
+    } on RemoteProtocolException catch (error) {
+      consoleStale = true;
+      statusMessage = '${error.message} · tap Retry to try again';
+      notifyListeners();
+    } catch (_) {
+      consoleStale = true;
+      statusMessage = 'Console could not be loaded · tap Retry to try again';
+      notifyListeners();
+    } finally {
+      _resyncingConsole = false;
+    }
+  }
+
+  void _startConsoleResync(PortalAgent agent) {
+    if (_resyncingConsole) return;
+    _resyncingConsole = true;
+    unawaited(_resyncConsole(agent));
+  }
+
+  Future<void> _resyncConsole(PortalAgent agent) async {
+    try {
+      await _unsubscribeCurrent();
+      await openAgent(agent, forceResync: true);
+    } on RemoteProtocolException catch (error) {
+      consoleStale = true;
+      statusMessage = '${error.message} · tap Retry to try again';
+      notifyListeners();
+    } catch (_) {
+      consoleStale = true;
+      statusMessage = 'Console could not be resynced · tap Retry to try again';
+      notifyListeners();
+    } finally {
+      _resyncingConsole = false;
     }
   }
 
@@ -597,6 +850,7 @@ class PortalController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _launchConsoleRecoveryTimer?.cancel();
     _events?.cancel();
     client.close();
     consoleRenderer.dispose();

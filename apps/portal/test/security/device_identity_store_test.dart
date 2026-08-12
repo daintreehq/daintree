@@ -76,6 +76,18 @@ void main() {
       expect(restored.single.host, 'daintree.internal');
       expect(restored.single.hostFingerprint, first.hostFingerprint);
       expect(restored.single.capabilities, contains('prompt-agents'));
+
+      await store.rename('host-01', '  Travel Mac  ');
+      final renamed = (await store.load()).single;
+      expect(renamed.displayName, 'Travel Mac');
+      expect(renamed.hostFingerprint, first.hostFingerprint);
+      expect(renamed.tlsFingerprint, first.tlsFingerprint);
+
+      await store.markRevoked('host-01');
+      expect((await store.load()).single.accessRevoked, isTrue);
+
+      await store.save(moved);
+      expect((await store.load()).single.accessRevoked, isFalse);
     },
   );
 }

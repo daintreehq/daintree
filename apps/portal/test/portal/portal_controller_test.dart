@@ -8,10 +8,14 @@ import 'package:flutter_test/flutter_test.dart';
 import '../security/device_identity_store_test.dart';
 
 class FakePortalClient extends RemoteProtocolClient {
-  final queued = <String, List<Map<String, dynamic>>>{};
+  final queued = <String, List<Object>>{};
+  final deferred = <String, Completer<Map<String, dynamic>>>{};
+  final beforeResponse = <String, void Function()>{};
   final calls = <String>[];
   final payloads = <Map<String, Object?>>[];
-  final eventController = StreamController<Map<String, dynamic>>.broadcast();
+  final eventController = StreamController<Map<String, dynamic>>.broadcast(
+    sync: true,
+  );
   bool isConnected = false;
 
   @override
@@ -43,11 +47,16 @@ class FakePortalClient extends RemoteProtocolClient {
   }) async {
     calls.add(type);
     payloads.add(payload);
+    final pending = deferred.remove(type);
+    if (pending != null) return pending.future;
     final responses = queued[type];
     if (responses == null || responses.isEmpty) {
       throw StateError('No response for $type');
     }
-    return responses.removeAt(0);
+    beforeResponse.remove(type)?.call();
+    final response = responses.removeAt(0);
+    if (response is Map<String, dynamic>) return response;
+    throw response;
   }
 
   @override
@@ -149,6 +158,30 @@ void main() {
     },
   );
 
+  test('revoked socket close remains explicit and read-only', () async {
+    final client = FakePortalClient();
+    _queueInitialJourney(client);
+    client.queued['console.subscribe'] = [_snapshot()];
+    final controller = _controller(client);
+    await controller.connect();
+    await controller.openProject('project-01');
+    await controller.openAgent(controller.agents.single);
+
+    client.eventController.add({
+      'kind': 'local',
+      'type': 'session.disconnected',
+      'error': const RemoteProtocolException(
+        'DEVICE_REVOKED',
+        'This device was revoked on the host',
+      ),
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.connectionState, PortalConnectionState.revoked);
+    expect(controller.readOnly, isTrue);
+    expect(controller.statusMessage, contains('pair it again'));
+  });
+
   test(
     'unknown launch is reconciled without dispatching a second launch',
     () async {
@@ -195,18 +228,138 @@ void main() {
   );
 
   test(
+    'toolbar-equivalent launch omits stale overrides and opens its console',
+    () async {
+      final client = FakePortalClient();
+      _queueInitialJourney(client);
+      client.queued['agent.launch'] = [
+        _response('agent.launchResult', {
+          'idempotencyKey': 'launch-key',
+          'requestedPanelId': 'panel-created',
+          'panelId': 'panel-created',
+          'launchGeneration': 3,
+          'projectId': 'project-01',
+          'worktreeId': 'worktree-01',
+          'agentId': 'codex',
+          'placement': 'grid',
+          'spawnStatus': 'starting',
+          'disposition': 'created',
+        }),
+      ];
+      client.queued['console.subscribe'] = [
+        _snapshot(data: ''),
+        _snapshot(streamId: 'stream-02', data: 'Codex startup screen\n'),
+      ];
+      client.queued['console.unsubscribe'] = [
+        _response('console.unsubscribe', const {}),
+      ];
+      final controller = _controller(
+        client,
+        launchConsoleRecoveryDelay: const Duration(milliseconds: 1),
+      );
+      await controller.connect();
+      await controller.openProject('project-01');
+
+      final result = await controller.launchAgentAndOpen(
+        worktree: controller.worktrees.single,
+        agent: const PortalLaunchableAgent(
+          agentId: 'codex',
+          displayName: 'Codex',
+          iconId: 'codex',
+          brandColor: '#10A37F',
+        ),
+      );
+
+      expect(result['disposition'], 'created');
+      expect(controller.selectedAgent?.panelId, 'panel-created');
+      expect(controller.consoleStale, isFalse);
+      expect(
+        client.calls,
+        containsAllInOrder(['agent.launch', 'console.subscribe']),
+      );
+      final launchPayload =
+          client.payloads[client.calls.indexOf('agent.launch')];
+      expect(launchPayload, isNot(contains('modelId')));
+      expect(launchPayload, isNot(contains('presetId')));
+      expect(launchPayload, isNot(contains('name')));
+      expect(launchPayload, isNot(contains('prompt')));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(
+        client.calls,
+        containsAllInOrder([
+          'console.subscribe',
+          'console.unsubscribe',
+          'console.subscribe',
+        ]),
+      );
+      expect(
+        controller.consoleRenderer.normalizedText,
+        contains('Codex startup screen'),
+      );
+    },
+  );
+
+  test('new launch waits for its host projection before opening', () async {
+    final client = FakePortalClient();
+    _queueInitialJourney(client);
+    client.queued['agent.launch'] = [
+      _response('agent.launchResult', {
+        'idempotencyKey': 'launch-key',
+        'requestedPanelId': 'panel-created',
+        'panelId': 'panel-created',
+        'launchGeneration': 3,
+        'projectId': 'project-01',
+        'worktreeId': 'worktree-01',
+        'agentId': 'codex',
+        'placement': 'grid',
+        'spawnStatus': 'starting',
+        'disposition': 'created',
+      }),
+    ];
+    client.queued['console.subscribe'] = [
+      const RemoteProtocolException('NOT_FOUND', 'Agent target was not found'),
+      _snapshot(data: 'Codex is ready\n'),
+    ];
+    final controller = _controller(
+      client,
+      launchTargetRetryDelay: Duration.zero,
+      launchTargetRetryAttempts: 2,
+    );
+    await controller.connect();
+    await controller.openProject('project-01');
+
+    await controller.launchAgentAndOpen(
+      worktree: controller.worktrees.single,
+      agent: const PortalLaunchableAgent(
+        agentId: 'codex',
+        displayName: 'Codex',
+        iconId: 'codex',
+        brandColor: '#10A37F',
+      ),
+    );
+
+    expect(
+      client.calls.where((call) => call == 'console.subscribe'),
+      hasLength(2),
+    );
+    expect(
+      controller.consoleRenderer.normalizedText,
+      contains('Codex is ready'),
+    );
+  });
+
+  test(
     'ordered console output is acknowledged and a gap requests explicit resync',
     () async {
       final client = FakePortalClient();
       _queueInitialJourney(client);
-      client.queued['console.subscribe'] = [
-        _snapshot(),
-        _snapshot(mode: 'snapshot', throughSeq: 0),
-      ];
+      client.queued['console.subscribe'] = [_snapshot()];
       final controller = _controller(client);
       await controller.connect();
       await controller.openProject('project-01');
       await controller.openAgent(controller.agents.single);
+      expect(controller.consoleRenderer.terminal.viewWidth, 80);
+      expect(controller.consoleRenderer.terminal.viewHeight, 24);
       var broadUpdates = 0;
       var consoleUpdates = 0;
       controller.addListener(() => broadUpdates += 1);
@@ -219,16 +372,170 @@ void main() {
       expect(broadUpdates, 0);
       expect(client.calls, contains('ack:stream-01:1'));
 
-      client.eventController.add(_consoleOutput(sequence: 3, data: 'gap'));
+      final resync = Completer<Map<String, dynamic>>();
+      client.queued['console.unsubscribe'] = [
+        _response('console.unsubscribe', const {}),
+      ];
+      client.deferred['console.subscribe'] = resync;
+      for (var sequence = 3; sequence <= 150; sequence += 1) {
+        client.eventController.add(
+          _consoleOutput(sequence: sequence, data: 'gap-$sequence'),
+        );
+      }
       await Future<void>.delayed(Duration.zero);
       await Future<void>.delayed(Duration.zero);
       expect(
         client.calls.where((call) => call == 'console.subscribe'),
         hasLength(2),
       );
+      resync.complete(_snapshot(streamId: 'stream-02'));
+      await Future<void>.delayed(Duration.zero);
       expect(controller.selectedAgent?.panelId, 'panel-01');
     },
   );
+
+  test(
+    'first console output is retained when it arrives at the subscription boundary',
+    () async {
+      final client = FakePortalClient();
+      _queueInitialJourney(client);
+      client.queued['console.subscribe'] = [_snapshot()];
+      client.beforeResponse['console.subscribe'] = () {
+        client.eventController.add(
+          _consoleOutput(sequence: 1, data: 'Codex is ready'),
+        );
+      };
+      final controller = _controller(client);
+      await controller.connect();
+      await controller.openProject('project-01');
+
+      await controller.openAgent(controller.agents.single);
+
+      expect(
+        controller.consoleRenderer.normalizedText,
+        contains('Codex is ready'),
+      );
+      expect(controller.consoleSequence, 1);
+      expect(client.calls, contains('ack:stream-01:1'));
+    },
+  );
+
+  test(
+    'repeated resync events cannot create a console subscription storm',
+    () async {
+      final client = FakePortalClient();
+      _queueInitialJourney(client);
+      client.queued['console.subscribe'] = [
+        _snapshot(),
+        _snapshot(mode: 'snapshot', throughSeq: 0),
+      ];
+      client.queued['console.unsubscribe'] = [
+        _response('console.unsubscribe', const {}),
+      ];
+      final controller = _controller(client);
+      await controller.connect();
+      await controller.openProject('project-01');
+      await controller.openAgent(controller.agents.single);
+      final event = {
+        'protocolVersion': 1,
+        'sessionId': 'session-new',
+        'kind': 'event',
+        'type': 'console.resyncRequired',
+        'payload': {'streamId': 'stream-01', 'reason': 'gap'},
+      };
+
+      client.eventController.add(event);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      client.eventController.add(event);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        client.calls.where((call) => call == 'console.subscribe'),
+        hasLength(2),
+      );
+      expect(
+        client.calls,
+        containsAllInOrder([
+          'console.subscribe',
+          'console.unsubscribe',
+          'console.subscribe',
+        ]),
+      );
+      expect(controller.connectionState, PortalConnectionState.ready);
+      expect(controller.consoleStale, isTrue);
+      expect(controller.statusMessage, contains('Retry'));
+    },
+  );
+
+  test(
+    'gap recovery isolates the replacement stream from late output',
+    () async {
+      final client = FakePortalClient();
+      _queueInitialJourney(client);
+      client.queued['console.subscribe'] = [_snapshot(data: 'stable screen')];
+      client.queued['console.unsubscribe'] = [
+        _response('console.unsubscribe', const {}),
+      ];
+      final replacement = Completer<Map<String, dynamic>>();
+      final controller = _controller(client);
+      await controller.connect();
+      await controller.openProject('project-01');
+      await controller.openAgent(controller.agents.single);
+      client.deferred['console.subscribe'] = replacement;
+
+      client.eventController.add(_consoleOutput(sequence: 2, data: 'gap'));
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      client.eventController.add(
+        _consoleOutput(sequence: 3, data: 'old stream'),
+      );
+      replacement.complete(
+        _snapshot(
+          streamId: 'stream-02',
+          throughSeq: 3,
+          data: 'recovered screen',
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.streamId, 'stream-02');
+      expect(controller.consoleSequence, 3);
+      expect(controller.consoleStale, isFalse);
+      expect(
+        controller.consoleRenderer.normalizedText,
+        contains('recovered screen'),
+      );
+    },
+  );
+
+  test('unsatisfied resync retains the last received console', () async {
+    final client = FakePortalClient();
+    _queueInitialJourney(client);
+    client.queued['console.subscribe'] = [
+      _snapshot(data: 'last good screen'),
+      _snapshot(mode: 'resync', streamId: 'stream-02', throughSeq: 4),
+    ];
+    client.queued['console.unsubscribe'] = [
+      _response('console.unsubscribe', const {}),
+    ];
+    final controller = _controller(client);
+    await controller.connect();
+    await controller.openProject('project-01');
+    await controller.openAgent(controller.agents.single);
+
+    client.eventController.add(_consoleOutput(sequence: 2, data: 'gap'));
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.consoleStale, isTrue);
+    expect(controller.statusMessage, contains('Retry'));
+    expect(
+      controller.consoleRenderer.normalizedText,
+      contains('last good screen'),
+    );
+  });
 
   test(
     'foreground reconnect resumes the exact panel generation and target',
@@ -336,7 +643,12 @@ void main() {
   );
 }
 
-PortalController _controller(FakePortalClient client) {
+PortalController _controller(
+  FakePortalClient client, {
+  Duration launchConsoleRecoveryDelay = const Duration(seconds: 2),
+  Duration launchTargetRetryDelay = const Duration(milliseconds: 250),
+  int launchTargetRetryAttempts = 8,
+}) {
   final values = MemoryProtectedValues();
   return PortalController(
     credential: PairedHostCredential(
@@ -355,6 +667,9 @@ PortalController _controller(FakePortalClient client) {
     ),
     identityStore: DeviceIdentityStore(values),
     client: client,
+    launchConsoleRecoveryDelay: launchConsoleRecoveryDelay,
+    launchTargetRetryDelay: launchTargetRetryDelay,
+    launchTargetRetryAttempts: launchTargetRetryAttempts,
   );
 }
 
@@ -426,16 +741,18 @@ void _queueInitialJourney(
 Map<String, dynamic> _snapshot({
   String mode = 'snapshot',
   int throughSeq = 0,
+  String streamId = 'stream-01',
+  String data = 'screen\n',
 }) => _response('console.snapshot', {
   'projectId': 'project-01',
   'worktreeId': 'worktree-01',
   'panelId': 'panel-01',
   'launchGeneration': 1,
-  'streamId': 'stream-01',
+  'streamId': streamId,
   'mode': mode,
   'throughSeq': throughSeq,
   'snapshot': mode == 'snapshot'
-      ? {'data': 'screen\n', 'cols': 80, 'rows': 24}
+      ? {'data': data, 'cols': 80, 'rows': 24}
       : null,
   'chunks': <Object>[],
 });

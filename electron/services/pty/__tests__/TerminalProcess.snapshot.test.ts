@@ -232,6 +232,23 @@ describe("TerminalProcess — snapshot and dispose preserved exited terminals", 
     });
   });
 
+  it("falls back to the live viewport when full console serialization is unavailable", async () => {
+    const terminal = createTerminal();
+    vi.spyOn(terminal, "getSerializedStateAsync").mockResolvedValue(null);
+    const analysis = (
+      terminal as unknown as {
+        analysis: { getViewportLines: (count: number) => string[] };
+      }
+    ).analysis;
+    vi.spyOn(analysis, "getViewportLines").mockReturnValue(["Codex", "Ready"]);
+
+    await expect(terminal.getConsoleSnapshotAsync()).resolves.toEqual({
+      data: "Codex\r\nReady",
+      cols: 80,
+      rows: 24,
+    });
+  });
+
   it("drains pending headless writes before snapshotting (tail of output is captured)", async () => {
     const pty = createControllablePty();
     const terminal = createTerminal(undefined, pty);

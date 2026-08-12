@@ -5,7 +5,6 @@ import {
 import { getFleetSnapshotService } from "../../ipc/handlers/projectCrud/index.js";
 import { projectStore } from "../ProjectStore.js";
 import { getWorkspaceClient } from "../WorkspaceClient.js";
-import { getPtyClient } from "../PtyClient.js";
 import { getLifecycleLedger } from "../pty/lifecycleLedger.js";
 import { getSharedDb } from "../persistence/db.js";
 import { safeStorageCipher } from "../plugin/secretCipher.js";
@@ -33,6 +32,7 @@ import { remoteRendererPanelRegistry } from "./RemoteRendererPanelRegistry.js";
 import { RemoteSessionRegistry } from "./RemoteSessionRegistry.js";
 import { RemoteTlsIdentityService } from "./RemoteTlsIdentityService.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
+import { getPtyClient } from "../../window/serviceRefs.js";
 import { store } from "../../store.js";
 import { RemoteManagementService } from "./RemoteManagementService.js";
 
@@ -58,6 +58,8 @@ export interface RemoteRuntime {
 let runtime: RemoteRuntime | null = null;
 
 function createRemoteRuntime(appVersion: string): RemoteRuntime {
+  const ptyClient = getPtyClient();
+  if (!ptyClient) throw new Error("Remote gateway requires the initialized PTY client");
   const db = getSharedDb();
   const identityStore = new SqliteRemoteIdentityStore(db);
   const identity = new RemoteIdentityService(identityStore, safeStorageCipher);
@@ -104,13 +106,13 @@ function createRemoteRuntime(appVersion: string): RemoteRuntime {
   );
   const consoleObservation = new RemoteConsoleObservationService(
     detailProjection,
-    getPtyClient(),
+    ptyClient,
     sessions,
     router
   );
   const prompts = new RemotePromptSubmissionService(
     detailProjection,
-    getPtyClient(),
+    ptyClient,
     capabilities,
     sessions,
     mutations,

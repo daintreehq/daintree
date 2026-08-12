@@ -665,4 +665,51 @@ describe("RemoteAgentLaunchService", () => {
       agents: [{ agentId: "codex" }],
     });
   });
+
+  it("waits for Main to observe the renderer-minted launch generation", async () => {
+    const h = harness();
+    h.setGeneration(undefined);
+    h.launchAgent.mockImplementationOnce(async (_lease, input) => {
+      setTimeout(() => h.setGeneration(9), 0);
+      return {
+        projectId: "project-1",
+        worktreeId: input.worktreeId,
+        requestedPanelId: input.requestedPanelId,
+        panelId: input.requestedPanelId,
+        launchGeneration: 9,
+        placement: "grid",
+        spawnStatus: "starting",
+        source: "remote",
+        persistent: true,
+        focusPolicy: "preserve",
+      };
+    });
+
+    await h.service.launch(h.session, "generation-settle", launchRequest);
+
+    expect(result(h, "generation-settle")).toMatchObject({
+      disposition: "created",
+      panelId: launchRequest.requestedPanelId,
+      launchGeneration: 9,
+    });
+  });
+
+  it("rematerializes a stale renderer once before returning the launch catalog", async () => {
+    const h = harness();
+    h.getLaunchableAgents.mockRejectedValueOnce(
+      new RemoteRendererBridgeError("UNAVAILABLE", "Project renderer is unavailable")
+    );
+
+    await h.service.launchable(h.session, "catalog-retry", {
+      projectId: "project-1",
+      worktreeId: "remote-worktree-1",
+    });
+
+    expect(h.ensureBackgroundView).toHaveBeenCalledTimes(2);
+    expect(h.getLaunchableAgents).toHaveBeenCalledTimes(2);
+    expect(h.resolveWorktreeSource).toHaveBeenCalledTimes(3);
+    expect(h.release).toHaveBeenCalledTimes(2);
+    expect(result(h, "catalog-retry")).toMatchObject({ agents: [{ agentId: "codex" }] });
+    expect(h.errors).toEqual([]);
+  });
 });

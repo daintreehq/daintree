@@ -1376,6 +1376,10 @@ export interface GeneratedIpcInvokeMap {
     args: [__0: { pairingId: string }];
     result: import("../remote/management.js").RemoteAccessSnapshot;
   };
+  "remote-access:rename-device": {
+    args: [__0: { deviceId: string; displayName: string }];
+    result: import("../remote/management.js").RemoteAccessSnapshot;
+  };
   "remote-access:revoke-device": {
     args: [__0: { deviceId: string; reason: string }];
     result: import("../remote/management.js").RemoteAccessSnapshot;

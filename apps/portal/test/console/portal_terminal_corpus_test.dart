@@ -149,6 +149,55 @@ void main() {
     },
   );
 
+  test('Codex inline region scrolling keeps xterm buffer ownership valid', () {
+    final model = PortalTerminalModel(
+      platform: TerminalTargetPlatform.ios,
+      columns: 80,
+      rows: 24,
+    );
+
+    model.append(
+      '${List.generate(24, (index) => 'line $index').join('\r\n')}\r\n',
+    );
+    model.append(
+      '\x1b[?2026h\x1b[3;64r\x1b[3;1H${List.filled(12, '\x1bM').join()}\x1b[r',
+    );
+    model.append(
+      '${List.filled(30, 'Codex continued after scrolling').join('\r\n')}\r\n',
+    );
+
+    expect(model.normalizedText, contains('Codex continued after scrolling'));
+    expect(model.parserRecoveryCount, 0);
+    expect(
+      model.terminal.buffer.lines.toList().every((line) => line.attached),
+      isTrue,
+    );
+  });
+
+  test('xterm assertion retains the last readable screen', () {
+    var terminalsCreated = 0;
+    final model = PortalTerminalModel(
+      platform: TerminalTargetPlatform.ios,
+      terminalFactory: ({required columns, required rows}) {
+        terminalsCreated += 1;
+        final terminal = terminalsCreated == 1
+            ? _ThrowOnSecondWriteTerminal()
+            : Terminal();
+        terminal.resize(columns, rows);
+        return terminal;
+      },
+    );
+
+    model.append('last readable screen');
+    model.append('\x1b[5Sbroken update');
+    model.append('\r\nstream continued');
+
+    expect(model.normalizedText, contains('last readable screen'));
+    expect(model.normalizedText, contains('stream continued'));
+    expect(terminalsCreated, 2);
+    expect(model.parserRecoveryCount, 1);
+  });
+
   test('bounded burst stays responsive and scrollback remains capped', () {
     final model = PortalTerminalModel(
       platform: TerminalTargetPlatform.android,
@@ -221,4 +270,88 @@ void main() {
       expect(semantics.value, isNot(contains('before reconnect')));
     },
   );
+
+  testWidgets(
+    'source-width console can be panned horizontally without shrinking text',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final model =
+          PortalTerminalModel(platform: TerminalTargetPlatform.android)
+            ..replace(
+              'left${List.filled(110, 'x').join()}right',
+              columns: 120,
+              rows: 24,
+            );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PortalTerminalView(
+              model: model,
+              semanticsLabel: 'Wide console',
+            ),
+          ),
+        ),
+      );
+
+      final surface = find.byKey(const ValueKey('portal-terminal-surface'));
+      expect(tester.getSize(surface).width, greaterThan(390));
+      final horizontalScrollable = find.byWidgetPredicate(
+        (widget) =>
+            widget is SingleChildScrollView &&
+            widget.scrollDirection == Axis.horizontal,
+      );
+      expect(horizontalScrollable, findsOneWidget);
+      await tester.drag(horizontalScrollable, const Offset(-250, 0));
+      await tester.pumpAndSettle();
+      final scrollable = tester.widget<SingleChildScrollView>(
+        horizontalScrollable,
+      );
+      expect(scrollable.controller!.offset, greaterThan(0));
+    },
+  );
+
+  testWidgets('snapshot opens on content above trailing blank source rows', (
+    tester,
+  ) async {
+    final model = PortalTerminalModel(
+      platform: TerminalTargetPlatform.ios,
+      columns: 80,
+      rows: 64,
+    )..replace('visible content\x1b[64;1H', columns: 80, rows: 64);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          height: 300,
+          child: PortalTerminalView(
+            model: model,
+            semanticsLabel: 'Tall source console',
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final terminalScrollable = find.descendant(
+      of: find.byType(TerminalView),
+      matching: find.byType(Scrollable),
+    );
+    final state = tester.state<ScrollableState>(terminalScrollable);
+    expect(state.position.maxScrollExtent, greaterThan(0));
+    expect(state.position.pixels, 0);
+    expect(model.normalizedText, contains('visible content'));
+  });
+}
+
+class _ThrowOnSecondWriteTerminal extends Terminal {
+  var _writes = 0;
+
+  @override
+  void write(String data) {
+    _writes += 1;
+    if (_writes == 2) throw AssertionError('detached xterm buffer line');
+    super.write(data);
+  }
 }

@@ -124,11 +124,65 @@ void main() {
     expect(controller.errorMessage, contains('private-network endpoint'));
     expect(client.requests, isEmpty);
   });
+
+  test(
+    're-pairing rejects a different host before opening a connection',
+    () async {
+      final client = FakePairingClient();
+      final controller = _controller(
+        client,
+        replacingHost: _existingHost(accessRevoked: true),
+      );
+
+      await controller.scan(
+        jsonEncode({
+          ..._bootstrap(),
+          'host': {..._bootstrap()['host'] as Map, 'hostId': 'host-02'},
+        }),
+      );
+
+      expect(controller.phase, PairingPhase.failed);
+      expect(controller.errorMessage, contains('different Daintree host'));
+      expect(client.requests, isEmpty);
+    },
+  );
+
+  test(
+    're-pairing preserves the host alias and clears revoked state',
+    () async {
+      final client = FakePairingClient()
+        ..approvalAvailable = true
+        ..responses.addAll([
+          _response('hosts.pair.verify', {
+            'pairingId': 'pair-01',
+            'verificationCode': '381902',
+            'state': 'match-required',
+          }),
+          _response('hosts.pair.verify', {
+            'pairingId': 'pair-01',
+            'verificationCode': '381902',
+            'state': 'awaiting-approval',
+          }),
+        ]);
+      final controller = _controller(
+        client,
+        replacingHost: _existingHost(accessRevoked: true),
+      );
+
+      await controller.scan(jsonEncode(_bootstrap()));
+      await controller.confirmMatchingCode();
+      final credential = await controller.checkApproval(displayName: 'Ignored');
+
+      expect(credential?.displayName, 'Studio Mac');
+      expect(credential?.accessRevoked, isFalse);
+    },
+  );
 }
 
 PairingController _controller(
   FakePairingClient client, {
   MemoryProtectedValues? values,
+  PairedHostCredential? replacingHost,
 }) {
   final protected = values ?? MemoryProtectedValues();
   return PairingController(
@@ -136,8 +190,23 @@ PairingController _controller(
     hostStore: PairedHostStore(protected),
     client: client,
     platform: 'ios',
+    replacingHost: replacingHost,
   );
 }
+
+PairedHostCredential _existingHost({bool accessRevoked = false}) =>
+    PairedHostCredential(
+      hostId: 'host-01',
+      displayName: 'Studio Mac',
+      host: '192.168.1.5',
+      port: 45123,
+      hostPublicKey:
+          '-----BEGIN PUBLIC KEY-----\nkey\n-----END PUBLIC KEY-----\n',
+      hostFingerprint: 'sha256:${List.filled(43, 'h').join()}',
+      tlsFingerprint: 'sha256:${List.filled(43, 't').join()}',
+      capabilities: const ['observe-projects'],
+      accessRevoked: accessRevoked,
+    );
 
 Map<String, dynamic> _response(String type, Map<String, Object> payload) => {
   'protocolVersion': 1,

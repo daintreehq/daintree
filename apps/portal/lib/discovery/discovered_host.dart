@@ -74,7 +74,10 @@ class DiscoveredHost {
   );
 
   static DiscoveredHost? fromService(RawDiscoveredService service) {
-    final type = service.type?.replaceFirst(RegExp(r'\.$'), '');
+    final rawType = service.type?.replaceFirst(RegExp(r'\.$'), '');
+    final type = rawType == daintreePortalServiceType.substring(1)
+        ? '_$rawType'
+        : rawType;
     if (type != daintreePortalServiceType) return null;
     final txt = _decodeTxt(service.txt);
     if (txt == null) return null;

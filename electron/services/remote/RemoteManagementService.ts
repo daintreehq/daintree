@@ -16,7 +16,7 @@ import type { RemoteGatewayService } from "./RemoteGatewayService.js";
 import type { RemoteIdentityStore } from "./RemoteIdentityStore.js";
 import type { RemotePairingService } from "./RemotePairingService.js";
 import type { RemoteSessionRegistry } from "./RemoteSessionRegistry.js";
-import { isAllowedRemoteBindAddress } from "./RemoteListener.js";
+import { isAllowedRemoteBindAddress, isRemoteLoopbackAddress } from "./RemoteListener.js";
 
 interface RemoteConfigStore {
   get(): RemoteGatewayConfig;
@@ -73,13 +73,21 @@ export class RemoteManagementService {
         status.state === "listening" ? formatEndpoint(status.bindAddress, status.port) : null,
       interfaces: this.networkInterfaceOptions(),
       devices,
-      pendingApprovals: this.pairing.pendingApprovals().map((candidate) => ({
-        pairingId: candidate.pairingId,
-        deviceId: candidate.deviceId,
-        displayName: candidate.displayName,
-        platform: candidate.platform,
-        verificationCode: candidate.verificationCode,
-      })),
+      pendingApprovals: this.pairing.pendingApprovals().map((candidate) => {
+        const existing = this.identityStore.getDevice(candidate.deviceId);
+        const reauthorization =
+          existing !== null &&
+          existing.revokedAt !== null &&
+          existing.publicKey === candidate.publicKey;
+        return {
+          pairingId: candidate.pairingId,
+          deviceId: candidate.deviceId,
+          displayName: reauthorization ? existing!.displayName : candidate.displayName,
+          platform: candidate.platform,
+          verificationCode: candidate.verificationCode,
+          reauthorization,
+        };
+      }),
       activeSessions: devices.reduce((total, device) => total + device.activeSessions, 0),
       activeDevices,
       activeSubscriptions,
@@ -99,6 +107,9 @@ export class RemoteManagementService {
     const status = this.gateway.status();
     if (status.state !== "listening") {
       throw new Error("Enable Remote access before pairing a device");
+    }
+    if (isRemoteLoopbackAddress(status.bindAddress)) {
+      throw new Error("Select a private network interface before pairing a device");
     }
     const bootstrap = this.pairing.beginPairing({
       endpointHints: [formatEndpoint(status.bindAddress, status.port)],
@@ -121,6 +132,11 @@ export class RemoteManagementService {
     return this.snapshot();
   }
 
+  renameDevice(deviceId: string, displayName: string): RemoteAccessSnapshot {
+    this.capabilities.rename(deviceId, displayName);
+    return this.snapshot();
+  }
+
   disconnectDevice(deviceId: string): RemoteAccessSnapshot {
     this.sessions.disconnectDeviceSessions(deviceId);
     return this.snapshot();
@@ -140,9 +156,12 @@ export class RemoteManagementService {
     const options: RemoteAccessSnapshot["interfaces"] = [
       { address: "127.0.0.1", name: "This device only", family: "IPv4", internal: true },
     ];
+    const seen = new Set(options.map((option) => option.address));
     for (const [name, entries] of Object.entries(networkInterfaces())) {
       for (const entry of entries ?? []) {
-        if (entry.internal || !isAllowedRemoteBindAddress(entry.address)) continue;
+        if (entry.internal || seen.has(entry.address) || !isAllowedRemoteBindAddress(entry.address))
+          continue;
+        seen.add(entry.address);
         options.push({
           address: entry.address,
           name,

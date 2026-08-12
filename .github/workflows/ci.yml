@@ -163,6 +163,8 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
 
       # Hard security gate (#9148) — no continue-on-error. Fails the build if any
       # E2E test backdoor survived the production strip in dist-electron/electron/preload.cjs.

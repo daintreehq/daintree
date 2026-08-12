@@ -654,6 +654,7 @@ export const CHANNELS = {
   REMOTE_ACCESS_APPROVE_PAIRING: "remote-access:approve-pairing",
   REMOTE_ACCESS_REJECT_PAIRING: "remote-access:reject-pairing",
   REMOTE_ACCESS_SET_DEVICE_CAPABILITIES: "remote-access:set-device-capabilities",
+  REMOTE_ACCESS_RENAME_DEVICE: "remote-access:rename-device",
   REMOTE_ACCESS_DISCONNECT_DEVICE: "remote-access:disconnect-device",
   REMOTE_ACCESS_DISCONNECT_ALL_DEVICES: "remote-access:disconnect-all-devices",
   REMOTE_ACCESS_REVOKE_DEVICE: "remote-access:revoke-device",

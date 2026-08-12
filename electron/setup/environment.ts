@@ -235,6 +235,12 @@ const SHELL_PROBE_KILL_GRACE_MS = 500;
 // of one extra probe.
 let shellProbePromise: Promise<string | null> | null = null;
 
+function mergePath(preferred: string, inherited: string | undefined): string {
+  return deduplicatePath(
+    inherited ? `${preferred}${path.delimiter}${inherited}` : preferred,
+    false
+  );
+}
 /**
  * Fallback shim/bin directories to add to PATH on macOS/Linux when the
  * shell-env probe fails or times out. Each candidate is gated by
@@ -486,7 +492,7 @@ async function runRefreshPath(): Promise<void> {
           const probedPath = await resolvePathViaShellProbe();
           if (timedOut) return;
           if (probedPath) {
-            process.env.PATH = deduplicatePath(probedPath, false);
+            process.env.PATH = mergePath(probedPath, process.env.PATH);
           } else {
             shellEnvFailed = true;
           }
@@ -498,7 +504,7 @@ async function runRefreshPath(): Promise<void> {
             const env = await shellEnv();
             if (timedOut) return;
             if (env.PATH) {
-              process.env.PATH = deduplicatePath(env.PATH, false);
+              process.env.PATH = mergePath(env.PATH, process.env.PATH);
             }
           } catch (err) {
             // shell-env can throw when the user's shell profile errors out

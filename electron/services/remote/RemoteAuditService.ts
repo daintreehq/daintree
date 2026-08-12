@@ -13,6 +13,7 @@ export type RemoteAuditOperation =
   | "pairing.attempt"
   | "pairing.result"
   | "capability.change"
+  | "device.rename"
   | "device.revoke"
   | "project.select"
   | "agent.launch.request"

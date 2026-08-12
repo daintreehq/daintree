@@ -671,6 +671,9 @@ export interface GeneratedElectronAPI {
     rejectPairing(
       ...args: IpcInvokeMap["remote-access:reject-pairing"]["args"]
     ): Promise<IpcInvokeMap["remote-access:reject-pairing"]["result"]>;
+    renameDevice(
+      ...args: IpcInvokeMap["remote-access:rename-device"]["args"]
+    ): Promise<IpcInvokeMap["remote-access:rename-device"]["result"]>;
     revokeDevice(
       ...args: IpcInvokeMap["remote-access:revoke-device"]["args"]
     ): Promise<IpcInvokeMap["remote-access:revoke-device"]["result"]>;

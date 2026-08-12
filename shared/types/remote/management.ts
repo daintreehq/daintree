@@ -25,6 +25,7 @@ export interface RemotePendingApproval {
   displayName: string;
   platform: "ios" | "android";
   verificationCode: string;
+  reauthorization: boolean;
 }
 
 export interface RemoteActivityEvent {

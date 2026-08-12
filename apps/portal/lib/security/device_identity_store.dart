@@ -147,6 +147,7 @@ class PairedHostCredential {
     required this.hostFingerprint,
     required this.tlsFingerprint,
     required this.capabilities,
+    this.accessRevoked = false,
   });
 
   final String hostId;
@@ -157,6 +158,25 @@ class PairedHostCredential {
   final String hostFingerprint;
   final String tlsFingerprint;
   final List<String> capabilities;
+  final bool accessRevoked;
+
+  PairedHostCredential copyWith({
+    String? displayName,
+    String? host,
+    int? port,
+    List<String>? capabilities,
+    bool? accessRevoked,
+  }) => PairedHostCredential(
+    hostId: hostId,
+    displayName: displayName ?? this.displayName,
+    host: host ?? this.host,
+    port: port ?? this.port,
+    hostPublicKey: hostPublicKey,
+    hostFingerprint: hostFingerprint,
+    tlsFingerprint: tlsFingerprint,
+    capabilities: capabilities ?? this.capabilities,
+    accessRevoked: accessRevoked ?? this.accessRevoked,
+  );
 
   Map<String, Object> toJson() => {
     'hostId': hostId,
@@ -167,6 +187,7 @@ class PairedHostCredential {
     'hostFingerprint': hostFingerprint,
     'tlsFingerprint': tlsFingerprint,
     'capabilities': capabilities,
+    'accessRevoked': accessRevoked,
   };
 
   factory PairedHostCredential.fromJson(Map<String, dynamic> value) =>
@@ -179,6 +200,7 @@ class PairedHostCredential {
         hostFingerprint: value['hostFingerprint'] as String,
         tlsFingerprint: value['tlsFingerprint'] as String,
         capabilities: (value['capabilities'] as List).cast<String>(),
+        accessRevoked: (value['accessRevoked'] as bool?) ?? false,
       );
 }
 
@@ -228,5 +250,35 @@ class PairedHostStore {
         jsonEncode(updated.map((host) => host.toJson()).toList()),
       );
     }
+  }
+
+  Future<void> rename(String hostId, String displayName) async {
+    final normalized = displayName.trim();
+    if (normalized.isEmpty || normalized.length > 63) {
+      throw const FormatException(
+        'Host name must be between 1 and 63 characters',
+      );
+    }
+    final hosts = await load();
+    final index = hosts.indexWhere((host) => host.hostId == hostId);
+    if (index == -1) throw const FormatException('Paired host not found');
+    final updated = [...hosts]
+      ..[index] = hosts[index].copyWith(displayName: normalized);
+    await values.write(
+      _key,
+      jsonEncode(updated.map((host) => host.toJson()).toList()),
+    );
+  }
+
+  Future<void> markRevoked(String hostId) async {
+    final hosts = await load();
+    final index = hosts.indexWhere((host) => host.hostId == hostId);
+    if (index == -1 || hosts[index].accessRevoked) return;
+    final updated = [...hosts]
+      ..[index] = hosts[index].copyWith(accessRevoked: true);
+    await values.write(
+      _key,
+      jsonEncode(updated.map((host) => host.toJson()).toList()),
+    );
   }
 }

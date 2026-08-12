@@ -177,8 +177,8 @@ export class RemoteConsoleObservationService {
     }
     if (observation.stopped) return;
     if (result.mode === "snapshot" && result.state === null) {
-      this.sessions.cancelConsoleSubscription(session.connection.id, requestId);
-      this.requireResync(streamId, "generation-changed");
+      this.stop(streamId);
+      this.error(session, requestId, "HOST_UI_UNAVAILABLE", "Console snapshot is unavailable");
       return;
     }
     if (

@@ -3,7 +3,11 @@ import QRCode from "qrcode";
 import {
   Activity,
   AlertTriangle,
+  Check,
+  ChevronDown,
+  ChevronUp,
   Clock3,
+  Copy,
   KeyRound,
   Laptop,
   RadioTower,
@@ -13,6 +17,7 @@ import {
 } from "lucide-react";
 import type {
   RemoteAccessSnapshot,
+  RemoteActivityEvent,
   RemoteCapability,
   RemoteManagedDevice,
   RemotePairingWindow,
@@ -23,6 +28,8 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
+import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
@@ -80,11 +87,53 @@ function statusLabel(snapshot: RemoteAccessSnapshot): string {
   return "Off";
 }
 
+function preferredBindAddress(snapshot: RemoteAccessSnapshot): string {
+  const configured = snapshot.interfaces.find(
+    (option) => option.address === snapshot.config.bindAddress
+  );
+  if (snapshot.config.enabled || (configured && !configured.internal)) {
+    return snapshot.config.bindAddress;
+  }
+  return (
+    snapshot.interfaces.find((option) => !option.internal && option.family === "IPv4")?.address ??
+    snapshot.interfaces.find((option) => !option.internal)?.address ??
+    snapshot.config.bindAddress
+  );
+}
+
 function DeviceIcon({ platform }: { platform: RemoteManagedDevice["platform"] }) {
   return platform === "ios" ? (
     <Smartphone className="h-4 w-4" aria-hidden="true" />
   ) : (
     <Laptop className="h-4 w-4" aria-hidden="true" />
+  );
+}
+
+function ActivityEventRow({
+  event,
+  deviceName,
+}: {
+  event: RemoteActivityEvent;
+  deviceName: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-[var(--radius-md)] border border-daintree-border px-3 py-2.5">
+      <Clock3 className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-xs text-daintree-text">
+          {event.operation.replaceAll(".", " ")} · {event.result}
+        </p>
+        <p className="mt-0.5 truncate text-[11px] text-text-muted">
+          {deviceName} · {relativeTime(event.occurredAt)}
+        </p>
+      </div>
+      {(event.characterCount !== null || event.byteCount !== null) && (
+        <span className="shrink-0 font-mono text-[10px] text-text-muted">
+          {event.characterCount ?? event.byteCount}{" "}
+          {event.characterCount !== null ? "chars" : "bytes"}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -102,16 +151,20 @@ export function RemoteAccessSettingsTab() {
     ...REMOTE_COMPANION_CAPABILITIES,
   ]);
   const [revokeDevice, setRevokeDevice] = useState<RemoteManagedDevice | null>(null);
+  const [editingDeviceId, setEditingDeviceId] = useState<string | null>(null);
+  const [deviceNameDraft, setDeviceNameDraft] = useState("");
   const [showDisableConfirm, setShowDisableConfirm] = useState(false);
   const [showDisconnectAllConfirm, setShowDisconnectAllConfirm] = useState(false);
+  const [activityExpanded, setActivityExpanded] = useState(false);
   const errorId = useId();
+  const pairingDataCopy = useCopyWithFeedback({ announcement: "Pairing data copied" });
 
   useSettingsTabValidation("remote-access", Boolean(error));
 
   const applySnapshot = useCallback((next: RemoteAccessSnapshot) => {
     setSnapshot(next);
     setHostName(next.config.displayName ?? "Daintree host");
-    setBindAddress(next.config.bindAddress);
+    setBindAddress(preferredBindAddress(next));
     setDiscoveryEnabled(next.config.discoveryEnabled !== false);
     setLoaded(true);
   }, []);
@@ -171,13 +224,15 @@ export function RemoteAccessSettingsTab() {
     : undefined;
 
   const run = useCallback(
-    async (operation: () => Promise<RemoteAccessSnapshot>) => {
+    async (operation: () => Promise<RemoteAccessSnapshot>): Promise<boolean> => {
       setBusy(true);
       try {
         applySnapshot(await operation());
         setError(null);
+        return true;
       } catch (cause) {
         setError(formatErrorMessage(cause, "Remote access couldn't be updated"));
+        return false;
       } finally {
         setBusy(false);
       }
@@ -190,7 +245,19 @@ export function RemoteAccessSettingsTab() {
       setShowDisableConfirm(true);
       return;
     }
-    void run(() => window.electron.remoteAccess.updateConfig({ enabled }));
+    const patch =
+      enabled &&
+      (hostName.trim() !== (snapshot.config.displayName ?? "Daintree host") ||
+        bindAddress !== snapshot.config.bindAddress ||
+        discoveryEnabled !== (snapshot.config.discoveryEnabled !== false))
+        ? {
+            enabled: true,
+            bindAddress,
+            discoveryEnabled,
+            displayName: hostName.trim(),
+          }
+        : { enabled };
+    void run(() => window.electron.remoteAccess.updateConfig(patch));
   };
 
   const handleSaveConnection = () => {
@@ -248,6 +315,26 @@ export function RemoteAccessSettingsTab() {
     );
   };
 
+  const startRenamingDevice = (device: RemoteManagedDevice) => {
+    setEditingDeviceId(device.id);
+    setDeviceNameDraft(device.displayName);
+  };
+
+  const saveDeviceName = (deviceId: string) => {
+    const displayName = deviceNameDraft.trim();
+    if (displayName.length === 0) return;
+    safeFireAndForget(
+      run(() => window.electron.remoteAccess.renameDevice({ deviceId, displayName })).then(
+        (saved) => {
+          if (!saved) return;
+          setEditingDeviceId(null);
+          setDeviceNameDraft("");
+        }
+      ),
+      { context: "save remote device name" }
+    );
+  };
+
   const interfaceOptions = useMemo(() => {
     const options = [...snapshot.interfaces];
     if (!options.some((option) => option.address === bindAddress)) {
@@ -265,9 +352,14 @@ export function RemoteAccessSettingsTab() {
     hostName.trim() !== (snapshot.config.displayName ?? "Daintree host") ||
     bindAddress !== snapshot.config.bindAddress ||
     discoveryEnabled !== (snapshot.config.discoveryEnabled !== false);
+  const listeningBindAddress =
+    snapshot.status.state === "listening" ? snapshot.status.bindAddress : null;
+  const pairingAvailable =
+    listeningBindAddress !== null &&
+    !snapshot.interfaces.find((option) => option.address === listeningBindAddress)?.internal;
 
   return (
-    <div className="grid grid-cols-[minmax(180px,0.9fr)_minmax(280px,1.4fr)] gap-x-6 gap-y-8">
+    <div className="grid grid-cols-1 gap-y-8">
       <SettingsSection
         id="remote-access-gateway"
         icon={RadioTower}
@@ -404,7 +496,7 @@ export function RemoteAccessSettingsTab() {
           </div>
 
           {snapshot.host && (
-            <div className="rounded-[var(--radius-md)] border border-daintree-border px-4 py-3 font-mono text-[11px] text-text-muted select-text">
+            <div className="break-all rounded-[var(--radius-md)] border border-daintree-border px-4 py-3 font-mono text-[11px] text-text-muted select-text">
               Host {snapshot.host.hostId} · {snapshot.host.fingerprint}
             </div>
           )}
@@ -421,13 +513,15 @@ export function RemoteAccessSettingsTab() {
           <div>
             <p className="text-sm text-daintree-text">Daintree Portal</p>
             <p className="mt-1 text-xs text-text-muted">
-              Scan the QR code, compare the six-digit code, then approve the device here
+              {snapshot.status.state === "listening" && !pairingAvailable
+                ? "Choose a private network interface before pairing a phone or tablet"
+                : "Scan the QR code, compare the six-digit code, then approve the device here"}
             </p>
           </div>
           <Button
             size="sm"
             onClick={() => void handleOpenPairing()}
-            disabled={busy || snapshot.status.state !== "listening"}
+            disabled={busy || !pairingAvailable}
           >
             Pair a device
           </Button>
@@ -464,9 +558,9 @@ export function RemoteAccessSettingsTab() {
                         <p className="truncate text-sm font-medium text-daintree-text">
                           {device.displayName}
                         </p>
-                        {device.activeSessions > 0 && (
+                        {device.revokedAt === null && (
                           <span className="rounded-full border border-daintree-border px-2 py-0.5 text-[10px] text-text-secondary">
-                            Connected
+                            {device.activeSessions > 0 ? "Connected" : "Paired"}
                           </span>
                         )}
                         {device.revokedAt !== null && (
@@ -482,6 +576,14 @@ export function RemoteAccessSettingsTab() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy || device.revokedAt !== null}
+                      onClick={() => startRenamingDevice(device)}
+                    >
+                      Rename
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"
@@ -504,6 +606,37 @@ export function RemoteAccessSettingsTab() {
                     </Button>
                   </div>
                 </div>
+                {editingDeviceId === device.id && (
+                  <div className="mt-4 flex flex-wrap items-end gap-2 rounded-[var(--radius-md)] bg-overlay-subtle p-3">
+                    <label className="min-w-48 flex-1 space-y-1.5 text-xs text-text-muted">
+                      <span>Device name</span>
+                      <input
+                        autoFocus
+                        value={deviceNameDraft}
+                        onChange={(event) => setDeviceNameDraft(event.target.value)}
+                        maxLength={128}
+                        className="h-9 w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 text-sm text-daintree-text focus:border-daintree-accent/40 focus:outline-hidden"
+                      />
+                    </label>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setEditingDeviceId(null);
+                        setDeviceNameDraft("");
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={busy || deviceNameDraft.trim().length === 0}
+                      onClick={() => saveDeviceName(device.id)}
+                    >
+                      Save name
+                    </Button>
+                  </div>
+                )}
                 <div className="mt-4 grid gap-2 sm:grid-cols-2">
                   {EDITABLE_CAPABILITIES.map((capability) => (
                     <label
@@ -558,31 +691,54 @@ export function RemoteAccessSettingsTab() {
               Remote activity will appear here
             </div>
           ) : (
-            snapshot.recentActivity.slice(0, 20).map((event) => {
-              const device = snapshot.devices.find((item) => item.id === event.actorDeviceId);
-              return (
-                <div
-                  key={event.id}
-                  className="flex items-center gap-3 rounded-[var(--radius-md)] border border-daintree-border px-3 py-2.5"
+            <div className="rounded-[var(--radius-md)] border border-daintree-border p-3">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs font-medium text-daintree-text">Latest activity</p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-expanded={activityExpanded}
+                  aria-controls="remote-activity-history"
+                  onClick={() => setActivityExpanded((expanded) => !expanded)}
                 >
-                  <Clock3 className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs text-daintree-text">
-                      {event.operation.replaceAll(".", " ")} · {event.result}
-                    </p>
-                    <p className="mt-0.5 truncate text-[11px] text-text-muted">
-                      {device?.displayName ?? "Host policy"} · {relativeTime(event.occurredAt)}
-                    </p>
-                  </div>
-                  {(event.characterCount !== null || event.byteCount !== null) && (
-                    <span className="shrink-0 font-mono text-[10px] text-text-muted">
-                      {event.characterCount ?? event.byteCount}{" "}
-                      {event.characterCount !== null ? "chars" : "bytes"}
-                    </span>
+                  {activityExpanded ? (
+                    <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+                  ) : (
+                    <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
                   )}
+                  {activityExpanded
+                    ? "Hide history"
+                    : `Show history (${snapshot.recentActivity.length})`}
+                </Button>
+              </div>
+              <div className="mt-2">
+                <ActivityEventRow
+                  event={snapshot.recentActivity[0]!}
+                  deviceName={
+                    snapshot.devices.find(
+                      (device) => device.id === snapshot.recentActivity[0]!.actorDeviceId
+                    )?.displayName ?? "Host policy"
+                  }
+                />
+              </div>
+              {activityExpanded && (
+                <div
+                  id="remote-activity-history"
+                  className="mt-2 max-h-72 space-y-2 overflow-y-auto overscroll-contain pr-1"
+                >
+                  {snapshot.recentActivity.slice(1, 20).map((event) => (
+                    <ActivityEventRow
+                      key={event.id}
+                      event={event}
+                      deviceName={
+                        snapshot.devices.find((device) => device.id === event.actorDeviceId)
+                          ?.displayName ?? "Host policy"
+                      }
+                    />
+                  ))}
                 </div>
-              );
-            })
+              )}
+            </div>
           )}
           <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle p-3 text-xs text-text-muted select-text">
             For private VPNs or routed networks, turn LAN discovery off and enter this host's
@@ -598,10 +754,18 @@ export function RemoteAccessSettingsTab() {
         title="Pair a Portal device"
         description={
           pendingApproval
-            ? `Confirm that ${pendingApproval.displayName} shows the same code`
+            ? pendingApproval.reauthorization
+              ? `Confirm the code to re-authorize ${pendingApproval.displayName}`
+              : `Confirm that ${pendingApproval.displayName} shows the same code`
             : "Scan this QR code in Daintree Portal, then compare the code on both devices"
         }
-        confirmLabel={pendingApproval ? "Approve device" : "Waiting for device"}
+        confirmLabel={
+          pendingApproval
+            ? pendingApproval.reauthorization
+              ? "Re-authorize device"
+              : "Approve device"
+            : "Waiting for device"
+        }
         cancelLabel="Cancel pairing"
         onConfirm={handleApprovePairing}
         confirmDisabled={!pendingApproval || pairingCapabilities.length === 0}
@@ -627,12 +791,38 @@ export function RemoteAccessSettingsTab() {
                 {pairingWindow.bootstrap.verificationCode}
               </p>
             </div>
+            <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle p-3 text-center">
+              <p className="text-xs text-text-muted">
+                No camera? Copy this pairing data, then paste it under Enter pairing data manually
+                in Portal.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => void pairingDataCopy.copy(pairingWindow.encodedPayload)}
+              >
+                {pairingDataCopy.copiedText === pairingWindow.encodedPayload ? (
+                  <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+                {pairingDataCopy.copiedText === pairingWindow.encodedPayload
+                  ? "Pairing data copied"
+                  : "Copy pairing data"}
+              </Button>
+            </div>
             {pendingApproval && (
               <div className="rounded-[var(--radius-md)] border border-daintree-border p-3">
                 <p className="text-sm font-medium text-daintree-text">
                   {pendingApproval.displayName}
                 </p>
                 <p className="mt-1 text-xs text-text-muted">Choose what this device may do</p>
+                {pendingApproval.reauthorization && (
+                  <p className="mt-1 text-xs text-text-muted">
+                    This replaces the revoked authorization for the same verified device
+                  </p>
+                )}
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {EDITABLE_CAPABILITIES.map((capability) => (
                     <label

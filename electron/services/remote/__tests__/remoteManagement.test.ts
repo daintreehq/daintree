@@ -59,6 +59,7 @@ function createHarness(overrides: { protectedStorage?: boolean } = {}) {
   };
   const capabilities = {
     setCapabilities: vi.fn(),
+    rename: vi.fn(),
     revoke: vi.fn(),
   };
   const sessions = {
@@ -122,10 +123,55 @@ describe("RemoteManagementService", () => {
     expect(passing.service.snapshot().config.enabled).toBe(true);
   });
 
+  it("labels a fresh approval for the same revoked key as re-authorization", () => {
+    const harness = createHarness();
+    harness.identityStore.devices = [
+      {
+        id: "device-1",
+        hostId: "host-1",
+        displayName: "Justin's phone",
+        platform: "ios",
+        publicKey: "device-key",
+        capabilities: ["observe-projects"],
+        createdAt: 100,
+        lastSeenAt: 200,
+        revokedAt: 300,
+        revocationReason: "Revoked by the desktop user",
+      },
+    ];
+    harness.pairing.pendingApprovals.mockReturnValue([
+      {
+        pairingId: "pair-1",
+        deviceId: "device-1",
+        displayName: "My Portal device",
+        platform: "ios",
+        publicKey: "device-key",
+        verificationCode: "123456",
+        state: "awaiting-approval",
+      },
+    ] as never);
+
+    expect(harness.service.snapshot().pendingApprovals).toEqual([
+      expect.objectContaining({
+        displayName: "Justin's phone",
+        reauthorization: true,
+      }),
+    ]);
+  });
+
   it("opens pairing only on a listening gateway and delegates grants and revocation", () => {
     const harness = createHarness();
     expect(() => harness.service.openPairingWindow()).toThrow(
       "Enable Remote access before pairing a device"
+    );
+
+    harness.gateway.status.mockReturnValue({
+      state: "listening",
+      bindAddress: "127.0.0.1",
+      port: 45_123,
+    });
+    expect(() => harness.service.openPairingWindow()).toThrow(
+      "Select a private network interface before pairing a device"
     );
 
     harness.gateway.status.mockReturnValue({
@@ -148,6 +194,9 @@ describe("RemoteManagementService", () => {
       "observe-projects",
       "prompt-agents",
     ]);
+
+    harness.service.renameDevice("device-1", "Travel phone");
+    expect(harness.capabilities.rename).toHaveBeenCalledWith("device-1", "Travel phone");
 
     harness.service.disconnectDevice("device-1");
     expect(harness.sessions.disconnectDeviceSessions).toHaveBeenCalledWith("device-1");

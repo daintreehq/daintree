@@ -141,9 +141,11 @@ export class RemotePairingService {
       }
       throw new Error("Pairing window already has a device candidate");
     }
-    if (this.store.getDevice(input.deviceId)) {
+    try {
+      this.assertDeviceMayPair(input.deviceId, input.publicKey);
+    } catch (error) {
       this.destroyPairing(input.pairingId);
-      throw new Error("Device identity is already paired");
+      throw error;
     }
     const candidate: PendingPairingCandidate = {
       pairingId: input.pairingId,
@@ -203,14 +205,19 @@ export class RemotePairingService {
     if (capabilities.includes("administer-host")) {
       throw new Error("Host administration cannot be granted remotely");
     }
+    const existing = this.store.getDevice(candidate.deviceId);
+    const reauthorization =
+      existing !== null &&
+      existing.revokedAt !== null &&
+      existing.publicKey === candidate.publicKey;
     const device = RemotePairedDeviceSchema.parse({
       id: candidate.deviceId,
       hostId: this.identity.publicIdentity().hostId,
-      displayName: candidate.displayName,
+      displayName: reauthorization ? existing!.displayName : candidate.displayName,
       platform: candidate.platform,
       publicKey: candidate.publicKey,
       capabilities: [...new Set(capabilities)],
-      createdAt: this.now(),
+      createdAt: reauthorization ? existing!.createdAt : this.now(),
       lastSeenAt: null,
       revokedAt: null,
       revocationReason: null,
@@ -295,19 +302,24 @@ export class RemotePairingService {
       this.destroyPairing(input.pairingId);
       throw new Error("Host administration cannot be granted remotely");
     }
-    if (this.store.getDevice(input.deviceId)) {
+    try {
+      this.assertDeviceMayPair(input.deviceId, input.publicKey);
+    } catch (error) {
       this.destroyPairing(input.pairingId);
-      throw new Error("Device identity is already paired");
+      throw error;
     }
+    const existing = this.store.getDevice(input.deviceId);
+    const reauthorization =
+      existing !== null && existing.revokedAt !== null && existing.publicKey === input.publicKey;
 
     const device = RemotePairedDeviceSchema.parse({
       id: input.deviceId,
       hostId: this.identity.publicIdentity().hostId,
-      displayName: input.displayName,
+      displayName: reauthorization ? existing!.displayName : input.displayName,
       platform: input.platform,
       publicKey: input.publicKey,
       capabilities: [...new Set(capabilities)],
-      createdAt: this.now(),
+      createdAt: reauthorization ? existing!.createdAt : this.now(),
       lastSeenAt: null,
       revokedAt: null,
       revocationReason: null,
@@ -351,6 +363,13 @@ export class RemotePairingService {
     } catch {
       return false;
     }
+  }
+
+  private assertDeviceMayPair(deviceId: string, publicKey: string): void {
+    const existing = this.store.getDevice(deviceId);
+    if (!existing) return;
+    if (existing.revokedAt !== null && existing.publicKey === publicKey) return;
+    throw new Error("Device identity is already paired");
   }
 
   private destroyPairing(pairingId: string): void {

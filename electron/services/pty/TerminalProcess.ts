@@ -1538,6 +1538,20 @@ export class TerminalProcess {
     return this.analysis.serialize();
   }
 
+  async getConsoleSnapshotAsync(): Promise<SerializedTerminalSnapshot | null> {
+    const serialized = await this.getSerializedStateAsync();
+    if (serialized) return serialized;
+
+    const geometry = this.readPtyGeometry();
+    if (geometry.cols === null || geometry.rows === null) return null;
+    const lines = this.analysis.getViewportLines(geometry.rows);
+    return {
+      data: lines.join("\r\n"),
+      cols: geometry.cols,
+      rows: geometry.rows,
+    };
+  }
+
   serializeForPersistence(): SerializedTerminalSnapshot | null {
     return serializeForPersistence(
       this.terminalInfo,

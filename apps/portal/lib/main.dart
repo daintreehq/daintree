@@ -146,7 +146,7 @@ class _PortalEntryScreenState extends State<PortalEntryScreen> {
                   children: [
                     Expanded(
                       child: FilledButton.icon(
-                        onPressed: _showPairing,
+                        onPressed: _startNewPairing,
                         icon: const Icon(Icons.qr_code_scanner_rounded),
                         label: const Text('Pair a new host'),
                         style: FilledButton.styleFrom(
@@ -204,11 +204,25 @@ class _PortalEntryScreenState extends State<PortalEntryScreen> {
                 host.displayName,
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
-              subtitle: Text('${host.host}:${host.port}'),
-              trailing: IconButton(
-                icon: const Icon(Icons.more_vert_rounded),
-                tooltip: 'Host settings',
-                onPressed: () => _showHostSettings(host),
+              subtitle: Text(
+                host.accessRevoked
+                    ? 'Access revoked · Pair again to reconnect'
+                    : '${host.host}:${host.port}',
+              ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (host.accessRevoked)
+                    TextButton(
+                      onPressed: () => _repairFromHostList(host),
+                      child: const Text('Pair again'),
+                    ),
+                  IconButton(
+                    icon: const Icon(Icons.more_vert_rounded),
+                    tooltip: 'Host settings',
+                    onPressed: () => _showHostSettings(host),
+                  ),
+                ],
               ),
               onTap: () => _openHost(host),
             ),
@@ -219,22 +233,37 @@ class _PortalEntryScreenState extends State<PortalEntryScreen> {
   }
 
   void _openHost(PairedHostCredential credential) {
-    Navigator.push(
-      context,
+    Navigator.push(context, _hostRoute(credential));
+  }
+
+  MaterialPageRoute<void> _hostRoute(PairedHostCredential credential) =>
       MaterialPageRoute(
-        builder: (_) => PortalShell(
+        builder: (routeContext) => PortalShell(
           controller: PortalController(
             credential: credential,
             identityStore: identityStore,
             client: RemoteProtocolClient(),
+            onAccessRevoked: () {
+              hostStore.markRevoked(credential.hostId).then((_) => _load());
+            },
           ),
+          onPairAgain: () => _repairOpenHost(credential, routeContext),
         ),
-      ),
-    );
-  }
+      );
 
   Future<void> _showHostSettings(PairedHostCredential host) async {
-    final forget = await showDialog<bool>(
+    final result = await showDialog<_HostSettingsResult>(
+      context: context,
+      builder: (context) => _HostSettingsDialog(host: host),
+    );
+    if (!mounted) return;
+    if (result?.displayName != null) {
+      await hostStore.rename(host.hostId, result!.displayName!);
+      await _load();
+      return;
+    }
+    if (result?.forget != true) return;
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text("Forget '${host.displayName}'?"),
@@ -244,7 +273,7 @@ class _PortalEntryScreenState extends State<PortalEntryScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: const Text('Keep host'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
@@ -253,31 +282,56 @@ class _PortalEntryScreenState extends State<PortalEntryScreen> {
         ],
       ),
     );
-    if (forget == true) {
+    if (confirmed == true) {
       await hostStore.forget(host.hostId);
       await _load();
     }
   }
 
-  void _showPairing() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => PairingScreen(
-          controller: PairingController(
-            identityStore: identityStore,
-            hostStore: hostStore,
-            client: RemoteProtocolClient(),
-            platform: Platform.isIOS ? 'ios' : 'android',
-          ),
-          onPaired: (credential) {
-            Navigator.pop(context);
-            _load();
-            _openHost(credential);
-          },
+  Future<PairedHostCredential?> _showPairing({
+    PairedHostCredential? replacingHost,
+  }) => Navigator.push<PairedHostCredential>(
+    context,
+    MaterialPageRoute(
+      builder: (routeContext) => PairingScreen(
+        controller: PairingController(
+          identityStore: identityStore,
+          hostStore: hostStore,
+          client: RemoteProtocolClient(),
+          platform: Platform.isIOS ? 'ios' : 'android',
+          replacingHost: replacingHost,
         ),
+        onPaired: (credential) {
+          Navigator.pop(routeContext, credential);
+        },
       ),
-    );
+    ),
+  );
+
+  Future<void> _startNewPairing() async {
+    final credential = await _showPairing();
+    if (credential == null || !mounted) return;
+    await _load();
+    if (mounted) _openHost(credential);
+  }
+
+  Future<void> _repairFromHostList(PairedHostCredential host) async {
+    final credential = await _showPairing(replacingHost: host);
+    if (credential == null || !mounted) return;
+    await _load();
+    if (mounted) _openHost(credential);
+  }
+
+  Future<void> _repairOpenHost(
+    PairedHostCredential host,
+    BuildContext routeContext,
+  ) async {
+    final credential = await _showPairing(replacingHost: host);
+    if (credential == null || !mounted || !routeContext.mounted) return;
+    await _load();
+    if (routeContext.mounted) {
+      Navigator.pushReplacement(routeContext, _hostRoute(credential));
+    }
   }
 
   void _showDiscovery() {
@@ -288,7 +342,7 @@ class _PortalEntryScreenState extends State<PortalEntryScreen> {
           controller: HostDiscoveryController(NsdDiscoveryAdapter()),
           onScanPairing: () {
             Navigator.pop(routeContext);
-            _showPairing();
+            _startNewPairing();
           },
           onHostSelected: (host) => _openDiscovered(host, routeContext),
         ),
@@ -316,7 +370,7 @@ class _PortalEntryScreenState extends State<PortalEntryScreen> {
             label: 'Pair',
             onPressed: () {
               Navigator.pop(routeContext);
-              _showPairing();
+              _startNewPairing();
             },
           ),
         ),
@@ -337,6 +391,80 @@ class _PortalEntryScreenState extends State<PortalEntryScreen> {
     Navigator.pop(routeContext);
     _openHost(endpoint);
   }
+}
+
+class _HostSettingsResult {
+  const _HostSettingsResult({this.displayName, this.forget = false});
+
+  final String? displayName;
+  final bool forget;
+}
+
+class _HostSettingsDialog extends StatefulWidget {
+  const _HostSettingsDialog({required this.host});
+
+  final PairedHostCredential host;
+
+  @override
+  State<_HostSettingsDialog> createState() => _HostSettingsDialogState();
+}
+
+class _HostSettingsDialogState extends State<_HostSettingsDialog> {
+  late final TextEditingController nameController = TextEditingController(
+    text: widget.host.displayName,
+  );
+
+  @override
+  void dispose() {
+    nameController.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final displayName = nameController.text.trim();
+    if (displayName.isEmpty) return;
+    Navigator.pop(context, _HostSettingsResult(displayName: displayName));
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Host settings'),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: nameController,
+          autofocus: true,
+          maxLength: 63,
+          textInputAction: TextInputAction.done,
+          decoration: const InputDecoration(labelText: 'Host name'),
+          onChanged: (_) => setState(() {}),
+          onSubmitted: (_) => _save(),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '${widget.host.host}:${widget.host.port}',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ],
+    ),
+    actions: [
+      TextButton(
+        onPressed: () =>
+            Navigator.pop(context, const _HostSettingsResult(forget: true)),
+        child: const Text('Forget host'),
+      ),
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        onPressed: nameController.text.trim().isEmpty ? null : _save,
+        child: const Text('Save name'),
+      ),
+    ],
+  );
 }
 
 class _EntryEmptyState extends StatelessWidget {

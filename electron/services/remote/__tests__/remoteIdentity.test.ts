@@ -309,6 +309,86 @@ describe("RemotePairingService", () => {
     expect(store.getDevice(device.id)).toEqual(device);
   });
 
+  it("re-pairs a revoked device only through fresh proof and desktop approval", () => {
+    let now = 10_000;
+    const store = new MemoryIdentityStore();
+    const identity = new RemoteIdentityService(store, fakeCipher(), () => now);
+    const first = pairDevice(store, identity, () => now);
+    store.saveDevice({
+      ...first.device,
+      revokedAt: now,
+      revocationReason: "User revoked device",
+    });
+    now += 1;
+    const pairing = new RemotePairingService(
+      store,
+      identity,
+      tlsFingerprintProvider,
+      () => now,
+      () => "r".repeat(43)
+    );
+    const bootstrap = pairing.beginPairing({ endpointHints: [] });
+
+    const candidate = pairing.beginPairingRequest({
+      pairingId: bootstrap.pairingId,
+      oneTimeSecret: bootstrap.oneTimeSecret,
+      deviceId: first.device.id,
+      displayName: "Re-paired Portal",
+      platform: "ios",
+      publicKey: first.keys.publicKey,
+    });
+    pairing.verifyPairingRequest(
+      bootstrap.pairingId,
+      first.keys.sign(`${bootstrap.pairingId}.${first.device.id}.${bootstrap.verificationCode}`)
+    );
+
+    expect(store.getDevice(first.device.id)?.revokedAt).toBe(10_000);
+    const reauthorized = pairing.approvePairing(candidate.pairingId, [
+      ...REMOTE_COMPANION_CAPABILITIES,
+    ]);
+    expect(reauthorized).toMatchObject({
+      id: first.device.id,
+      displayName: first.device.displayName,
+      createdAt: first.device.createdAt,
+      publicKey: first.keys.publicKey,
+      revokedAt: null,
+      revocationReason: null,
+    });
+  });
+
+  it("does not let a different key reclaim a revoked device identity", () => {
+    const store = new MemoryIdentityStore();
+    const identity = new RemoteIdentityService(store, fakeCipher());
+    const first = pairDevice(store, identity, Date.now);
+    store.saveDevice({
+      ...first.device,
+      revokedAt: Date.now(),
+      revocationReason: "User revoked device",
+    });
+    const pairing = new RemotePairingService(
+      store,
+      identity,
+      tlsFingerprintProvider,
+      Date.now,
+      () => "r".repeat(43)
+    );
+    const bootstrap = pairing.beginPairing({ endpointHints: [] });
+    const impostor = deviceKeys();
+
+    expect(() =>
+      pairing.beginPairingRequest({
+        pairingId: bootstrap.pairingId,
+        oneTimeSecret: bootstrap.oneTimeSecret,
+        deviceId: first.device.id,
+        displayName: "Impostor Portal",
+        platform: "ios",
+        publicKey: impostor.publicKey,
+      })
+    ).toThrow("already paired");
+    expect(pairing.activePairingCount()).toBe(0);
+    expect(store.getDevice(first.device.id)?.revokedAt).not.toBeNull();
+  });
+
   it("automatically destroys expired pairing material", () => {
     const store = new MemoryIdentityStore();
     const identity = new RemoteIdentityService(store, fakeCipher());
@@ -519,6 +599,23 @@ describe("RemoteAuthenticationService", () => {
 });
 
 describe("RemoteCapabilityService", () => {
+  it("renames only an owned active device without changing its trust identity", () => {
+    const store = new MemoryIdentityStore();
+    const identity = new RemoteIdentityService(store, fakeCipher());
+    const { device } = pairDevice(store, identity, Date.now, ["observe-projects"]);
+    const capabilities = new RemoteCapabilityService(store, identity, {
+      closeDeviceSessions: vi.fn(),
+      deviceCapabilitiesChanged: vi.fn(),
+    });
+
+    const renamed = capabilities.rename(device.id, "  Travel phone  ");
+
+    expect(renamed.displayName).toBe("Travel phone");
+    expect(renamed.publicKey).toBe(device.publicKey);
+    expect(renamed.capabilities).toEqual(device.capabilities);
+    expect(() => capabilities.rename(device.id, "   ")).toThrow("between 1 and 128");
+  });
+
   it("re-reads least-privilege grants so changes immediately affect live authorization", () => {
     const store = new MemoryIdentityStore();
     const identity = new RemoteIdentityService(store, fakeCipher());

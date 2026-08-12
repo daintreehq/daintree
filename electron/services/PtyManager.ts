@@ -849,6 +849,12 @@ export class PtyManager extends EventEmitter {
     return terminal.getSerializedStateAsync();
   }
 
+  async getConsoleSnapshotAsync(id: string): Promise<SerializedTerminalSnapshot | null> {
+    const terminal = this.registry.get(id);
+    if (!terminal) return null;
+    return terminal.getConsoleSnapshotAsync();
+  }
+
   private resolveTtyPath(pid: number): string | undefined {
     try {
       if (process.platform === "win32") return undefined;

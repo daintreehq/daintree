@@ -18,12 +18,12 @@ describe("console observation host handler", () => {
     const output = vi.fn();
     const hub = new ConsoleObservationHub(output);
     const begin = vi.spyOn(hub, "begin");
-    const getSerializedStateAsync = vi.fn(() => serialized.promise);
+    const getConsoleSnapshotAsync = vi.fn(() => serialized.promise);
     const sendEvent = vi.fn();
     const handlers = createTerminalQueryHandlers({
       ptyManager: {
         getTerminal: vi.fn(() => ({ launchGeneration: 4 })),
-        getSerializedStateAsync,
+        getConsoleSnapshotAsync,
       },
       consoleObservationHub: hub,
       sendEvent,
@@ -39,7 +39,7 @@ describe("console observation host handler", () => {
 
     expect(begin).toHaveBeenCalledWith("panel-1", 4, "stream-1", undefined);
     expect(begin.mock.invocationCallOrder[0]).toBeLessThan(
-      getSerializedStateAsync.mock.invocationCallOrder[0]!
+      getConsoleSnapshotAsync.mock.invocationCallOrder[0]!
     );
     expect(sendEvent).not.toHaveBeenCalled();
     hub.onData("panel-1", 4, "during snapshot");
@@ -62,5 +62,37 @@ describe("console observation host handler", () => {
         })
       )
     );
+  });
+
+  it("reports an unavailable snapshot without mislabelling it as a generation change", async () => {
+    const hub = new ConsoleObservationHub(vi.fn());
+    const sendEvent = vi.fn();
+    const handlers = createTerminalQueryHandlers({
+      ptyManager: {
+        getTerminal: vi.fn(() => ({ launchGeneration: 4 })),
+        getConsoleSnapshotAsync: vi.fn(async () => null),
+      },
+      consoleObservationHub: hub,
+      sendEvent,
+    } as unknown as HostContext);
+
+    handlers["console-observe"]({
+      type: "console-observe",
+      id: "panel-1",
+      observerId: "stream-1",
+      launchGeneration: 4,
+      requestId: "request-1",
+    });
+
+    await vi.waitFor(() =>
+      expect(sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "console-observe-result",
+          mode: "snapshot",
+          state: null,
+        })
+      )
+    );
+    expect(hub.diagnostics("panel-1")).toMatchObject({ historyFrames: 0 });
   });
 });

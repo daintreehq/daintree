@@ -22,6 +22,11 @@ export function isAllowedRemoteBindAddress(address: string): boolean {
   );
 }
 
+export function isRemoteLoopbackAddress(address: string): boolean {
+  if (isIP(address) === 0) return false;
+  return ipaddr.parse(address).range() === "loopback";
+}
+
 class WebSocketRemoteConnection implements RemoteConnection {
   readonly id = randomUUID();
   private readonly events = new EventEmitter();

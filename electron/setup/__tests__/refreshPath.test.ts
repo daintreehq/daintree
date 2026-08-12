@@ -90,9 +90,21 @@ describe("refreshPath", () => {
     expect(process.env.PATH).toBe("/usr/local/bin:/usr/bin:/home/user/.nvm/versions/node/v20/bin");
   });
 
+  it("preserves inherited CLI directories omitted by the shell environment", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.env.PATH = "/active/nvm/bin:/usr/bin";
+    shellEnvMock.mockResolvedValue({ PATH: "/usr/local/bin:/usr/bin" });
+
+    const { refreshPath } = await import("../environment.js");
+    await refreshPath();
+
+    expect(process.env.PATH).toBe("/usr/local/bin:/usr/bin:/active/nvm/bin");
+  });
+
   it("deduplicates PATH entries", async () => {
     Object.defineProperty(process, "platform", { value: "darwin", writable: true });
     const d = path.delimiter;
+    process.env.PATH = "/usr/bin";
 
     shellEnvMock.mockResolvedValue({
       PATH: ["/usr/bin", "/usr/local/bin", "/usr/bin", "/usr/local/bin"].join(d),
@@ -288,6 +300,7 @@ describe("refreshPath", () => {
     Object.defineProperty(process, "platform", { value: "darwin", writable: true });
 
     const shellPath = "/usr/local/bin:/usr/bin";
+    process.env.PATH = shellPath;
     shellEnvMock.mockResolvedValue({ PATH: shellPath });
 
     const { refreshPath } = await import("../environment.js");
@@ -324,7 +337,7 @@ describe("refreshPath — shell probe (DAINTREE_SHELL_PROBE=1)", () => {
 
     expect(spawnMock).not.toHaveBeenCalled();
     expect(shellEnvMock).toHaveBeenCalled();
-    expect(process.env.PATH).toBe("/from/shell-env");
+    expect(process.env.PATH).toBe("/from/shell-env:/usr/bin");
   });
 
   it("updates PATH from a markered probe response", async () => {
@@ -421,7 +434,7 @@ describe("refreshPath — shell probe (DAINTREE_SHELL_PROBE=1)", () => {
     const { refreshPath } = await import("../environment.js");
     await refreshPath();
 
-    expect(process.env.PATH).toBe("/from/probe");
+    expect(process.env.PATH).toBe("/from/probe:/orig");
   });
 
   it("ignores prompt-tool noise outside the markers", async () => {
@@ -444,7 +457,7 @@ describe("refreshPath — shell probe (DAINTREE_SHELL_PROBE=1)", () => {
     const { refreshPath } = await import("../environment.js");
     await refreshPath();
 
-    expect(process.env.PATH).toBe("/clean/bin");
+    expect(process.env.PATH).toBe("/clean/bin:/orig");
   });
 
   it("preserves PATH when the probe stdout has no markers", async () => {
@@ -555,10 +568,11 @@ describe("refreshPath — shell probe (DAINTREE_SHELL_PROBE=1)", () => {
     const { refreshPath } = await import("../environment.js");
     await refreshPath();
 
-    expect(process.env.PATH).toBe(["/a", "/b"].join(d));
+    expect(process.env.PATH).toBe(["/a", "/b", "/usr/bin"].join(d));
   });
 
   it("spawns once for concurrent refreshPath() calls (singleton cache)", async () => {
+    process.env.PATH = "/orig";
     let resolveChild: (() => void) | undefined;
 
     spawnMock.mockImplementation((_shell: string, args: string[]) => {
@@ -583,7 +597,7 @@ describe("refreshPath — shell probe (DAINTREE_SHELL_PROBE=1)", () => {
     resolveChild!();
     await Promise.all([p1, p2, p3]);
 
-    expect(process.env.PATH).toBe("/probed");
+    expect(process.env.PATH).toBe("/probed:/orig");
   });
 
   it("re-spawns on a subsequent refreshPath() if the previous probe returned null", async () => {
@@ -618,7 +632,7 @@ describe("refreshPath — shell probe (DAINTREE_SHELL_PROBE=1)", () => {
     await refreshPath();
 
     expect(spawnMock).toHaveBeenCalledTimes(2);
-    expect(process.env.PATH).toBe("/recovered");
+    expect(process.env.PATH).toBe("/recovered:/orig");
   });
 
   it("kills the child with SIGTERM then SIGKILL on probe timeout", async () => {

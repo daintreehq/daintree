@@ -87,12 +87,196 @@ class WidgetPortalController extends PortalController {
   }
 
   @override
-  Future<List<Map<String, dynamic>>> launchableAgents(
+  Future<List<PortalLaunchableAgent>> launchableAgents(
     PortalWorktree worktree,
   ) async => const [];
 }
 
+class EmptyWidgetPortalController extends WidgetPortalController {
+  int connectCount = 0;
+
+  @override
+  Future<void> connect() async {
+    connectCount += 1;
+    connectionState = PortalConnectionState.ready;
+    projects = const [];
+    notifyListeners();
+  }
+}
+
+class LoadingWidgetPortalController extends WidgetPortalController {
+  @override
+  Future<void> connect() async {
+    connectionState = PortalConnectionState.loading;
+    projects = const [];
+    notifyListeners();
+  }
+}
+
+class RevokedWidgetPortalController extends PortalController {
+  RevokedWidgetPortalController()
+    : super(
+        credential: PairedHostCredential(
+          hostId: 'host-01',
+          displayName: 'Studio Mac',
+          host: '192.168.1.5',
+          port: 45123,
+          hostPublicKey: 'host-key',
+          hostFingerprint: 'sha256:${List.filled(43, 'h').join()}',
+          tlsFingerprint: 'sha256:${List.filled(43, 't').join()}',
+          capabilities: const ['observe-projects'],
+          accessRevoked: true,
+        ),
+        identityStore: DeviceIdentityStore(MemoryProtectedValues()),
+        client: RemoteProtocolClient(),
+      );
+}
+
+class LaunchableWidgetPortalController extends WidgetPortalController {
+  @override
+  Future<void> openProject(
+    String projectId, {
+    bool preserveConsoleTarget = false,
+  }) async {
+    selectedProject = project;
+    worktrees = [worktree];
+    agents = const [];
+    notifyListeners();
+  }
+
+  @override
+  Future<List<PortalLaunchableAgent>> launchableAgents(
+    PortalWorktree worktree,
+  ) async => const [
+    PortalLaunchableAgent(
+      agentId: 'codex',
+      displayName: 'Codex',
+      iconId: 'codex',
+      brandColor: '#10A37F',
+    ),
+  ];
+}
+
+class FailedLaunchableWidgetPortalController
+    extends LaunchableWidgetPortalController {
+  @override
+  Future<List<PortalLaunchableAgent>> launchableAgents(
+    PortalWorktree worktree,
+  ) async => throw const RemoteProtocolException(
+    'HOST_UI_UNAVAILABLE',
+    'Project renderer is unavailable',
+    retryable: true,
+  );
+}
+
 void main() {
+  testWidgets('revoked host offers fresh pairing instead of generic retry', (
+    tester,
+  ) async {
+    var pairAgainCalls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PortalShell(
+          controller: RevokedWidgetPortalController(),
+          onPairAgain: () => pairAgainCalls += 1,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Pair Studio Mac again'), findsOneWidget);
+    expect(find.text('Check again'), findsNothing);
+    await tester.tap(find.widgetWithText(FilledButton, 'Pair again'));
+    expect(pairAgainCalls, 1);
+  });
+
+  testWidgets('project loading uses one host-specific status surface', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PortalShell(controller: LoadingWidgetPortalController()),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Checking Studio Mac for projects'), findsOneWidget);
+    expect(find.textContaining('Desktop project state'), findsOneWidget);
+    expect(find.text('Loading from host…'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+  });
+
+  testWidgets(
+    'empty project chooser explains the completed state and offers recovery',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final controller = EmptyWidgetPortalController();
+
+      await tester.pumpWidget(
+        MaterialApp(home: PortalShell(controller: controller)),
+      );
+      await tester.pump();
+
+      expect(find.text('Open a project on Studio Mac'), findsOneWidget);
+      expect(find.textContaining('no open projects'), findsOneWidget);
+      expect(find.textContaining('appear here automatically'), findsOneWidget);
+      await tester.tap(find.widgetWithText(OutlinedButton, 'Check again'));
+      await tester.pump();
+      expect(controller.connectCount, 2);
+    },
+  );
+
+  testWidgets('empty worktree launch action opens the configured agent flow', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = LaunchableWidgetPortalController();
+
+    await tester.pumpWidget(
+      MaterialApp(home: PortalShell(controller: controller)),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Daintree'));
+    await tester.pump();
+
+    expect(find.text('Start work in this worktree'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Launch an agent'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Launch agent'), findsOneWidget);
+    expect(find.text('Codex'), findsOneWidget);
+    expect(
+      find.text('Uses the same defaults as the Daintree agent toolbar'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('launch catalog failure offers a visible retry action', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = FailedLaunchableWidgetPortalController();
+
+    await tester.pumpWidget(
+      MaterialApp(home: PortalShell(controller: controller)),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Daintree'));
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Launch an agent'));
+    await tester.pump();
+
+    expect(find.text('Project renderer is unavailable'), findsOneWidget);
+    expect(find.widgetWithText(SnackBarAction, 'Retry'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'tablet layout exposes the full hierarchy as three touch-friendly panes',
     (tester) async {

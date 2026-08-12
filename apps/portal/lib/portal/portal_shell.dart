@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import '../console/portal_terminal.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
+import '../transport/remote_protocol_client.dart';
 import 'portal_controller.dart';
 
 class PortalShell extends StatefulWidget {
-  const PortalShell({required this.controller, super.key});
+  const PortalShell({required this.controller, this.onPairAgain, super.key});
 
   final PortalController controller;
+  final VoidCallback? onPairAgain;
 
   @override
   State<PortalShell> createState() => _PortalShellState();
@@ -86,54 +88,69 @@ class _PortalShellState extends State<PortalShell> with WidgetsBindingObserver {
               _StatusBanner(
                 message: controller.statusMessage!,
                 canRetry:
-                    controller.connectionState == PortalConnectionState.offline,
-                onRetry: controller.connect,
+                    controller.connectionState ==
+                        PortalConnectionState.offline ||
+                    (controller.consoleStale &&
+                        controller.selectedAgent != null),
+                onRetry:
+                    controller.consoleStale && controller.selectedAgent != null
+                    ? controller.retryConsole
+                    : controller.connect,
+                onPairAgain:
+                    controller.connectionState == PortalConnectionState.revoked
+                    ? widget.onPairAgain
+                    : null,
               ),
             Expanded(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  if (constraints.maxWidth >= 980) {
-                    return Row(
-                      children: [
-                        SizedBox(
-                          width: 280,
-                          child: _ProjectsPane(controller: controller),
-                        ),
-                        const VerticalDivider(width: 1),
-                        SizedBox(
-                          width: 330,
-                          child: _AgentsPane(controller: controller),
-                        ),
-                        const VerticalDivider(width: 1),
-                        Expanded(
-                          child: _ConsolePane(
+              child: controller.connectionState == PortalConnectionState.revoked
+                  ? _RevokedHostState(
+                      hostName: controller.credential.displayName,
+                      onPairAgain: widget.onPairAgain,
+                    )
+                  : LayoutBuilder(
+                      builder: (context, constraints) {
+                        if (constraints.maxWidth >= 980) {
+                          return Row(
+                            children: [
+                              SizedBox(
+                                width: 280,
+                                child: _ProjectsPane(controller: controller),
+                              ),
+                              const VerticalDivider(width: 1),
+                              SizedBox(
+                                width: 330,
+                                child: _AgentsPane(controller: controller),
+                              ),
+                              const VerticalDivider(width: 1),
+                              Expanded(
+                                child: _ConsolePane(
+                                  controller: controller,
+                                  composer: composerController,
+                                ),
+                              ),
+                            ],
+                          );
+                        }
+                        if (controller.selectedAgent != null) {
+                          return _ConsolePane(
                             controller: controller,
                             composer: composerController,
-                          ),
-                        ),
-                      ],
-                    );
-                  }
-                  if (controller.selectedAgent != null) {
-                    return _ConsolePane(
-                      controller: controller,
-                      composer: composerController,
-                      onBack: () {
-                        unawaited(controller.closeAgent());
+                            onBack: () {
+                              unawaited(controller.closeAgent());
+                            },
+                          );
+                        }
+                        if (controller.selectedProject != null) {
+                          return _AgentsPane(
+                            controller: controller,
+                            onBack: () {
+                              unawaited(controller.closeProject());
+                            },
+                          );
+                        }
+                        return _ProjectsPane(controller: controller);
                       },
-                    );
-                  }
-                  if (controller.selectedProject != null) {
-                    return _AgentsPane(
-                      controller: controller,
-                      onBack: () {
-                        unawaited(controller.closeProject());
-                      },
-                    );
-                  }
-                  return _ProjectsPane(controller: controller);
-                },
-              ),
+                    ),
             ),
           ],
         ),
@@ -204,10 +221,10 @@ class _ProjectsPaneState extends State<_ProjectsPane> {
             child: switch (controller.connectionState) {
               PortalConnectionState.connecting || PortalConnectionState.loading
                   when controller.projects.isEmpty =>
-                const _LoadingRows(),
-              _ when controller.projects.isEmpty => const _EmptyMessage(
-                icon: Icons.folder_open_rounded,
-                message: 'Open or add a project on the desktop host',
+                _LoadingProjects(hostName: controller.credential.displayName),
+              _ when controller.projects.isEmpty => _ProjectEmptyState(
+                hostName: controller.credential.displayName,
+                onRefresh: () => unawaited(controller.connect()),
               ),
               _ when filtered.isEmpty => const _EmptyMessage(
                 icon: Icons.search_off_rounded,
@@ -298,73 +315,115 @@ class _AgentsPane extends StatelessWidget {
               icon: Icons.account_tree_outlined,
               message: 'Create a worktree on the desktop host',
             )
-          : ListView.builder(
-              itemCount: controller.worktrees.length,
-              itemBuilder: (context, index) {
-                final worktree = controller.worktrees[index];
-                final agents = controller.agents
-                    .where((agent) => agent.worktreeId == worktree.id)
-                    .toList();
-                return ExpansionTile(
-                  initiallyExpanded:
-                      worktree.isCurrent ||
-                      controller.selectedWorktree?.id == worktree.id,
-                  leading: Icon(
-                    worktree.availability == 'available'
-                        ? Icons.account_tree_rounded
-                        : Icons.cloud_off_rounded,
-                  ),
-                  title: Text(worktree.name),
-                  subtitle: Text(
-                    [
-                      if (worktree.branch != null) worktree.branch!,
-                      if (worktree.isMain) 'Main worktree',
-                      '${agents.length} ${agents.length == 1 ? 'agent' : 'agents'}',
-                      if (worktree.availability != 'available')
-                        worktree.availability,
-                    ].join(' · '),
-                  ),
-                  onExpansionChanged: (expanded) {
-                    if (expanded) controller.selectWorktree(worktree);
-                  },
-                  children: [
-                    if (agents.isEmpty)
-                      const ListTile(
-                        minTileHeight: 56,
-                        title: Text('Launch an agent to start work'),
-                      ),
-                    for (final agent in agents)
-                      ListTile(
-                        minTileHeight: 60,
-                        selected:
-                            controller.selectedAgent?.panelId == agent.panelId,
-                        leading: Icon(_agentIcon(agent.state)),
-                        title: Text(
-                          agent.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(_agentDetails(agent)),
-                        trailing: const Icon(Icons.chevron_right_rounded),
-                        onTap: () => controller.openAgent(agent),
-                      ),
-                    if (worktree.availability == 'available')
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
-                        child: OutlinedButton.icon(
-                          onPressed: controller.readOnly
-                              ? null
-                              : () => _showLaunch(context, worktree),
-                          icon: const Icon(Icons.add_rounded),
-                          label: const Text('Launch agent'),
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: const Size.fromHeight(48),
+          : RefreshIndicator(
+              onRefresh: controller.refreshSelectedProject,
+              child: ListView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
+                itemCount: controller.worktrees.length,
+                itemBuilder: (context, index) {
+                  final worktree = controller.worktrees[index];
+                  final agents = controller.agents
+                      .where((agent) => agent.worktreeId == worktree.id)
+                      .toList();
+                  return ExpansionTile(
+                    initiallyExpanded:
+                        worktree.isCurrent ||
+                        controller.selectedWorktree?.id == worktree.id,
+                    leading: Icon(
+                      worktree.availability == 'available'
+                          ? Icons.account_tree_rounded
+                          : Icons.cloud_off_rounded,
+                    ),
+                    title: Text(worktree.name),
+                    subtitle: Text(
+                      [
+                        if (worktree.branch != null) worktree.branch!,
+                        if (worktree.isMain) 'Main worktree',
+                        '${agents.length} ${agents.length == 1 ? 'agent' : 'agents'}',
+                        if (worktree.availability != 'available')
+                          worktree.availability,
+                      ].join(' · '),
+                    ),
+                    onExpansionChanged: (expanded) {
+                      if (expanded) controller.selectWorktree(worktree);
+                    },
+                    children: [
+                      if (agents.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+                          child: Card(
+                            elevation: 0,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.surfaceContainerLow,
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Start work in this worktree',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleMedium,
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'Choose an agent configured on ${controller.credential.displayName}.',
+                                  ),
+                                  const SizedBox(height: 14),
+                                  FilledButton.icon(
+                                    onPressed:
+                                        controller.readOnly ||
+                                            worktree.availability != 'available'
+                                        ? null
+                                        : () => _showLaunch(context, worktree),
+                                    icon: const Icon(Icons.add_rounded),
+                                    label: const Text('Launch an agent'),
+                                    style: FilledButton.styleFrom(
+                                      minimumSize: const Size.fromHeight(48),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                  ],
-                );
-              },
+                      for (final agent in agents)
+                        ListTile(
+                          minTileHeight: 60,
+                          selected:
+                              controller.selectedAgent?.panelId ==
+                              agent.panelId,
+                          leading: Icon(_agentIcon(agent.state)),
+                          title: Text(
+                            agent.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(_agentDetails(agent)),
+                          trailing: const Icon(Icons.chevron_right_rounded),
+                          onTap: () => controller.openAgent(agent),
+                        ),
+                      if (agents.isNotEmpty &&
+                          worktree.availability == 'available')
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+                          child: OutlinedButton.icon(
+                            onPressed: controller.readOnly
+                                ? null
+                                : () => _showLaunch(context, worktree),
+                            icon: const Icon(Icons.add_rounded),
+                            label: const Text('Launch agent'),
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size.fromHeight(48),
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
             ),
     );
   }
@@ -406,7 +465,14 @@ class _AgentsPane extends StatelessWidget {
     BuildContext context,
     PortalWorktree worktree,
   ) async {
-    final choices = await controller.launchableAgents(worktree);
+    List<PortalLaunchableAgent> choices;
+    try {
+      choices = await controller.launchableAgents(worktree);
+    } on RemoteProtocolException catch (error) {
+      if (!context.mounted) return;
+      _showLaunchError(context, worktree, error.message);
+      return;
+    }
     if (!context.mounted) return;
     if (choices.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -416,118 +482,189 @@ class _AgentsPane extends StatelessWidget {
       );
       return;
     }
-    final prompt = TextEditingController();
-    final name = TextEditingController();
-    var selected = choices.first;
-    String? selectedModel = (selected['modelIds'] as List)
-        .cast<String>()
-        .firstOrNull;
-    final confirmed = await showDialog<bool>(
+    final selected = await showModalBottomSheet<PortalLaunchableAgent>(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text('Launch agent?'),
-          content: SizedBox(
-            width: 430,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '${controller.selectedProject!.name} / ${worktree.name}',
-                  ),
-                  const SizedBox(height: 16),
-                  DropdownButtonFormField<Map<String, dynamic>>(
-                    initialValue: selected,
-                    decoration: const InputDecoration(labelText: 'Agent'),
-                    items: [
-                      for (final choice in choices)
-                        DropdownMenuItem(
-                          value: choice,
-                          child: Text(choice['displayName'] as String),
-                        ),
-                    ],
-                    onChanged: (value) => setState(() {
-                      selected = value!;
-                      selectedModel = (selected['modelIds'] as List)
-                          .cast<String>()
-                          .firstOrNull;
-                    }),
-                  ),
-                  const SizedBox(height: 12),
-                  InputDecorator(
-                    decoration: const InputDecoration(labelText: 'Preset'),
-                    child: const Text('Host default'),
-                  ),
-                  if ((selected['modelIds'] as List).isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    DropdownButtonFormField<String>(
-                      initialValue: selectedModel,
-                      decoration: const InputDecoration(labelText: 'Model'),
-                      items: [
-                        for (final modelId
-                            in (selected['modelIds'] as List).cast<String>())
-                          DropdownMenuItem(
-                            value: modelId,
-                            child: Text(modelId),
-                          ),
-                      ],
-                      onChanged: (value) =>
-                          setState(() => selectedModel = value),
-                    ),
-                  ],
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: name,
-                    maxLength: 256,
-                    decoration: const InputDecoration(
-                      labelText: 'Name (optional)',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: prompt,
-                    minLines: 2,
-                    maxLines: 5,
-                    decoration: const InputDecoration(
-                      labelText: 'Initial prompt (optional)',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Launch agent'),
-            ),
-          ],
+      showDragHandle: true,
+      useSafeArea: true,
+      isScrollControlled: true,
+      builder: (context) => _AgentLaunchSheet(
+        projectName: controller.selectedProject!.name,
+        worktreeName: worktree.name,
+        choices: choices,
+      ),
+    );
+    if (selected == null || !context.mounted) return;
+    try {
+      final result = await controller.launchAgentAndOpen(
+        worktree: worktree,
+        agent: selected,
+      );
+      if (!context.mounted) return;
+      if (result['disposition'] != 'created' &&
+          result['disposition'] != 'existing') {
+        _showLaunchError(
+          context,
+          worktree,
+          controller.statusMessage ?? 'The agent was not launched',
+        );
+      }
+    } on RemoteProtocolException catch (error) {
+      if (context.mounted) _showLaunchError(context, worktree, error.message);
+    }
+  }
+
+  void _showLaunchError(
+    BuildContext context,
+    PortalWorktree worktree,
+    String message,
+  ) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        action: SnackBarAction(
+          label: 'Retry',
+          onPressed: () => unawaited(_showLaunch(context, worktree)),
         ),
       ),
     );
-    if (confirmed == true) {
-      await controller.launchAgent(
-        worktree: worktree,
-        agentId: selected['agentId'] as String,
-        prompt: prompt.text,
-        modelId: selectedModel,
-        name: name.text,
-      );
-      await controller.openProject(controller.selectedProject!.id);
-    }
-    prompt.dispose();
-    name.dispose();
   }
 }
 
-extension _FirstOrNull<T> on List<T> {
-  T? get firstOrNull => isEmpty ? null : first;
+class _AgentLaunchSheet extends StatelessWidget {
+  const _AgentLaunchSheet({
+    required this.projectName,
+    required this.worktreeName,
+    required this.choices,
+  });
+
+  final String projectName;
+  final String worktreeName;
+  final List<PortalLaunchableAgent> choices;
+
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+    constraints: const BoxConstraints(maxWidth: 560),
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Launch agent',
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            '$projectName / $worktreeName',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Uses the same defaults as the Daintree agent toolbar',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 18),
+          Flexible(
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: choices.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 8),
+              itemBuilder: (context, index) {
+                final choice = choices[index];
+                return Semantics(
+                  button: true,
+                  label: 'Launch ${choice.displayName}',
+                  child: Material(
+                    color: Theme.of(context).colorScheme.surfaceContainerLow,
+                    borderRadius: BorderRadius.circular(16),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(16),
+                      onTap: () => Navigator.pop(context, choice),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 14,
+                        ),
+                        child: Row(
+                          children: [
+                            _AgentBrandIcon(agent: choice),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Text(
+                                choice.displayName,
+                                style: Theme.of(context).textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                            const Icon(Icons.arrow_forward_rounded, size: 20),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _AgentBrandIcon extends StatelessWidget {
+  const _AgentBrandIcon({required this.agent});
+
+  final PortalLaunchableAgent agent;
+
+  @override
+  Widget build(BuildContext context) {
+    final color =
+        _parseColor(agent.brandColor) ??
+        Theme.of(context).colorScheme.onSurface;
+    final asset = switch (agent.iconId ?? agent.agentId) {
+      'claude' => 'assets/agents/claude.svg',
+      'codex' => 'assets/agents/codex.svg',
+      'gemini' => 'assets/agents/gemini.svg',
+      _ => null,
+    };
+    return Container(
+      width: 42,
+      height: 42,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(13),
+      ),
+      child: asset == null
+          ? Text(
+              agent.displayName.characters.first.toUpperCase(),
+              style: TextStyle(color: color, fontWeight: FontWeight.w800),
+            )
+          : SvgPicture.asset(
+              asset,
+              width: 23,
+              height: 23,
+              colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+            ),
+    );
+  }
+
+  Color? _parseColor(String? value) {
+    if (value == null || !RegExp(r'^#[0-9A-Fa-f]{6}$').hasMatch(value)) {
+      return null;
+    }
+    return Color(int.parse('FF${value.substring(1)}', radix: 16));
+  }
 }
 
 class _ConsolePane extends StatelessWidget {
@@ -689,11 +826,13 @@ class _StatusBanner extends StatelessWidget {
     required this.message,
     required this.canRetry,
     required this.onRetry,
+    this.onPairAgain,
   });
 
   final String message;
   final bool canRetry;
   final VoidCallback onRetry;
+  final VoidCallback? onPairAgain;
 
   @override
   Widget build(BuildContext context) => Material(
@@ -707,7 +846,12 @@ class _StatusBanner extends StatelessWidget {
             const Icon(Icons.info_outline_rounded, size: 20),
             const SizedBox(width: 10),
             Expanded(child: Text(message)),
-            if (canRetry)
+            if (onPairAgain != null)
+              TextButton(
+                onPressed: onPairAgain,
+                child: const Text('Pair again'),
+              )
+            else if (canRetry)
               TextButton(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
@@ -716,26 +860,157 @@ class _StatusBanner extends StatelessWidget {
   );
 }
 
-class _LoadingRows extends StatelessWidget {
-  const _LoadingRows();
+class _RevokedHostState extends StatelessWidget {
+  const _RevokedHostState({required this.hostName, this.onPairAgain});
+
+  final String hostName;
+  final VoidCallback? onPairAgain;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 460),
+        child: Card(
+          elevation: 0,
+          color: Theme.of(context).colorScheme.surfaceContainerLow,
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.phonelink_lock_rounded, size: 48),
+                const SizedBox(height: 18),
+                Text(
+                  'Pair $hostName again',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Access was revoked on the host. Use a fresh pairing code and approve this device again. Your saved host name will be preserved.',
+                  textAlign: TextAlign.center,
+                ),
+                if (onPairAgain != null) ...[
+                  const SizedBox(height: 20),
+                  FilledButton.icon(
+                    onPressed: onPairAgain,
+                    icon: const Icon(Icons.qr_code_scanner_rounded),
+                    label: const Text('Pair again'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _LoadingProjects extends StatelessWidget {
+  const _LoadingProjects({required this.hostName});
+
+  final String hostName;
 
   @override
   Widget build(BuildContext context) {
     final reducedMotion = MediaQuery.disableAnimationsOf(context);
-    return ListView.builder(
-      itemCount: 4,
-      itemBuilder: (_, index) => ListTile(
-        minTileHeight: 62,
-        leading: reducedMotion
-            ? const Icon(Icons.hourglass_top_rounded)
-            : const SizedBox.square(
-                dimension: 22,
-                child: CircularProgressIndicator(strokeWidth: 2),
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Card(
+        elevation: 0,
+        margin: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              reducedMotion
+                  ? const Icon(Icons.hourglass_top_rounded)
+                  : const SizedBox.square(
+                      dimension: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Checking $hostName for projects',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Desktop project state will appear here when it is ready.',
+                    ),
+                  ],
+                ),
               ),
-        title: const Text('Loading from host…'),
+            ],
+          ),
+        ),
       ),
     );
   }
+}
+
+class _ProjectEmptyState extends StatelessWidget {
+  const _ProjectEmptyState({required this.hostName, required this.onRefresh});
+
+  final String hostName;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) => Align(
+    alignment: Alignment.topCenter,
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 20, 16, 28),
+      child: Card(
+        elevation: 0,
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.folder_open_rounded),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                'Open a project on $hostName',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'The host is connected, but it has no open projects. Open or add one in desktop Daintree and it will appear here automatically.',
+              ),
+              const SizedBox(height: 18),
+              OutlinedButton.icon(
+                onPressed: onRefresh,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Check again'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class _EmptyMessage extends StatelessWidget {

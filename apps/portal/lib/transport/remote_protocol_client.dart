@@ -84,13 +84,23 @@ class RemoteProtocolClient {
     _subscription = channel.stream.listen(
       _handleFrame,
       onError: (Object error, StackTrace stack) => _disconnect(error),
-      onDone: () => _disconnect(
-        const RemoteProtocolException(
-          'DISCONNECTED',
-          'Host disconnected',
-          retryable: true,
-        ),
-      ),
+      onDone: () {
+        final revoked =
+            channel.closeCode == 4003 &&
+            channel.closeReason == 'device-revoked';
+        _disconnect(
+          revoked
+              ? const RemoteProtocolException(
+                  'DEVICE_REVOKED',
+                  'This device was revoked on the host',
+                )
+              : const RemoteProtocolException(
+                  'DISCONNECTED',
+                  'Host disconnected',
+                  retryable: true,
+                ),
+        );
+      },
     );
   }
 

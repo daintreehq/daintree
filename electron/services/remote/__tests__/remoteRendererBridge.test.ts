@@ -47,7 +47,10 @@ const binding = { projectId: "project-1", webContentsId: 41, generation: 3 };
 function fixture() {
   const sender = new Sender();
   const current = { ...binding, status: "available" as const };
-  const registry = { getBinding: vi.fn(() => current) };
+  const registry = {
+    getBinding: vi.fn(() => current),
+    markEvicted: vi.fn(),
+  };
   electronMock.fromId.mockReturnValue(sender);
   const bridge = new RemoteRendererBridge(registry, 20);
   bridge.start();
@@ -57,6 +60,45 @@ function fixture() {
 beforeEach(() => electronMock.reset());
 
 describe("RemoteRendererBridge", () => {
+  it("accepts source worktree paths after opaque remote IDs are resolved", async () => {
+    const f = fixture();
+    const worktreeId = "/Users/example/Developer/project worktree";
+    const launchable = f.bridge.getLaunchableAgents(binding, worktreeId);
+    const request = f.sender.send.mock.calls[0]![1];
+
+    expect(request).toMatchObject({
+      method: "remote:getLaunchableAgents",
+      worktreeId,
+    });
+    electronMock.ipcMain.emit(
+      CHANNELS.REMOTE_RENDERER_RESPONSE,
+      { sender: f.sender },
+      {
+        requestId: request.requestId,
+        projectId: request.projectId,
+        webContentsId: request.webContentsId,
+        rendererGeneration: request.rendererGeneration,
+        method: request.method,
+        ok: true,
+        result: {
+          projectId: "project-1",
+          worktreeId,
+          agents: [
+            {
+              agentId: "codex",
+              displayName: "Codex",
+              supportsPrompt: true,
+              modelIds: [],
+            },
+          ],
+        },
+      }
+    );
+
+    await expect(launchable).resolves.toMatchObject({ worktreeId, agents: [{ agentId: "codex" }] });
+    f.bridge.dispose();
+  });
+
   it("sends a generation-bound launch with host-controlled source, persistence, and focus", async () => {
     const f = fixture();
     const launched = f.bridge.launchAgent(binding, {
@@ -114,6 +156,7 @@ describe("RemoteRendererBridge", () => {
     await expect(f.bridge.getPanelProjection(binding)).rejects.toMatchObject({
       code: "UNAVAILABLE",
     } satisfies Partial<RemoteRendererBridgeError>);
+    expect(f.registry.markEvicted).toHaveBeenCalledWith("project-1", 41);
     expect(f.sender.send).not.toHaveBeenCalled();
     f.bridge.dispose();
   });

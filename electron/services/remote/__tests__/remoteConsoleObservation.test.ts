@@ -230,6 +230,22 @@ describe("RemoteConsoleObservationService", () => {
     expect(f.pty.endConsoleObservation).toHaveBeenCalledWith("panel-1", "stream-1");
   });
 
+  it("returns a request error when the host cannot produce an initial snapshot", async () => {
+    const f = fixture();
+    f.pty.beginConsoleObservation.mockResolvedValue({
+      mode: "snapshot",
+      throughSeq: 0,
+      state: null,
+      chunks: [],
+    });
+
+    await f.service.subscribe(f.session, "request-1", f.target);
+
+    expect(f.sent).toEqual([]);
+    expect(f.errors).toEqual([{ requestId: "request-1", code: "HOST_UI_UNAVAILABLE" }]);
+    expect(f.pty.endConsoleObservation).toHaveBeenCalledWith("panel-1", "stream-1");
+  });
+
   it("tears observations down on unsubscribe and session removal", async () => {
     const f = fixture();
     f.pty.beginConsoleObservation.mockResolvedValue({

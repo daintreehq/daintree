@@ -48,7 +48,9 @@ class _PairingScreenState extends State<PairingScreen> {
   Widget build(BuildContext context) {
     final controller = widget.controller;
     return Scaffold(
-      appBar: AppBar(title: const Text('Pair a host')),
+      appBar: AppBar(
+        title: Text(controller.isRePairing ? 'Pair again' : 'Pair a host'),
+      ),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
@@ -66,11 +68,14 @@ class _PairingScreenState extends State<PairingScreen> {
                 ),
                 PairingPhase.verifyIdentity => _verification(),
                 PairingPhase.awaitingApproval => _awaitingApproval(),
-                PairingPhase.paired => const _PairingMessage(
+                PairingPhase.paired => _PairingMessage(
                   icon: Icons.check_circle_outline_rounded,
-                  title: 'Host paired',
-                  body:
-                      'Protected device credentials are ready for future connections',
+                  title: controller.isRePairing
+                      ? 'Host re-authorized'
+                      : 'Host paired',
+                  body: controller.isRePairing
+                      ? 'This host has replaced its revoked connection and is ready to use'
+                      : 'Protected device credentials are ready for future connections',
                 ),
                 PairingPhase.failed => _failed(),
               },
@@ -85,13 +90,19 @@ class _PairingScreenState extends State<PairingScreen> {
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Text(
-        'Scan the code shown by Daintree',
+        widget.controller.isRePairing
+            ? 'Pair ${widget.controller.replacingHostName} again'
+            : 'Scan the code shown by Daintree',
         style: Theme.of(
           context,
         ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
       ),
       const SizedBox(height: 8),
-      const Text('On the desktop, open Settings → Remote access → Pair device'),
+      Text(
+        widget.controller.isRePairing
+            ? 'Open Settings → Remote access → Pair a device on the same host. A fresh code and desktop approval are required.'
+            : 'On the desktop, open Settings → Remote access → Pair device',
+      ),
       const SizedBox(height: 20),
       Expanded(
         child: ClipRRect(

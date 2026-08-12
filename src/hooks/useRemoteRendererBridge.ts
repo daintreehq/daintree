@@ -142,6 +142,8 @@ function getLaunchableAgents(projectId: string, worktreeId: string): RemoteLaunc
           return {
             agentId,
             displayName: config.name,
+            iconId: config.iconId,
+            brandColor: config.color,
             supportsPrompt: true,
             modelIds: config.models?.map((model) => model.id) ?? [],
           };

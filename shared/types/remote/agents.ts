@@ -50,6 +50,11 @@ export const RemoteLaunchableAgentsRequestSchema = z.strictObject({
 export const RemoteLaunchableAgentSchema = z.strictObject({
   agentId: RemoteOpaqueIdSchema,
   displayName: z.string().min(1).max(256),
+  iconId: RemoteOpaqueIdSchema.optional(),
+  brandColor: z
+    .string()
+    .regex(/^#[0-9A-Fa-f]{6}$/)
+    .optional(),
   supportsPrompt: z.boolean(),
   modelIds: z.array(RemoteOpaqueIdSchema),
 });

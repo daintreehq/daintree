@@ -49,6 +49,23 @@ void main() {
       expect(host.fingerprintPrefix, 'abcdefghijklmnop');
     });
 
+    test('accepts Android NSD service-type normalization', () {
+      final raw = service();
+      final host = DiscoveredHost.fromService(
+        RawDiscoveredService(
+          name: raw.name,
+          type: daintreePortalServiceType.substring(1),
+          host: raw.host,
+          port: raw.port,
+          txt: raw.txt,
+          addresses: raw.addresses,
+        ),
+      );
+
+      expect(host?.id, 'host-1');
+      expect(host?.reachability, HostReachability.available);
+    });
+
     test('marks incompatible protocol ranges without hiding the host', () {
       final host = DiscoveredHost.fromService(
         service(minimum: '2', maximum: '3'),

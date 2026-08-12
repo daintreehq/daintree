@@ -20,12 +20,14 @@ class PairingController extends ChangeNotifier {
     required this.hostStore,
     required this.client,
     required this.platform,
+    this.replacingHost,
   });
 
   final DeviceIdentityStore identityStore;
   final PairedHostStore hostStore;
   final RemoteProtocolClient client;
   final String platform;
+  final PairedHostCredential? replacingHost;
 
   PairingPhase phase = PairingPhase.idle;
   PairingBootstrap? bootstrap;
@@ -34,6 +36,8 @@ class PairingController extends ChangeNotifier {
   DeviceIdentity? _identity;
 
   String? get verificationCode => bootstrap?.verificationCode;
+  bool get isRePairing => replacingHost != null;
+  String? get replacingHostName => replacingHost?.displayName;
 
   Future<void> scan(
     String raw, {
@@ -46,6 +50,16 @@ class PairingController extends ChangeNotifier {
       final parsed = PairingBootstrap.parse(raw);
       if (parsed.expired) {
         throw const FormatException('This pairing code has expired');
+      }
+      final expected = replacingHost;
+      if (expected != null &&
+          (parsed.hostId != expected.hostId ||
+              parsed.hostPublicKey != expected.hostPublicKey ||
+              parsed.hostFingerprint != expected.hostFingerprint)) {
+        throw const RemoteProtocolException(
+          'HOST_IDENTITY_MISMATCH',
+          'This pairing data belongs to a different Daintree host',
+        );
       }
       final endpoint = _selectEndpoint(parsed.endpointHints);
       final identity = await identityStore.loadOrCreate();
@@ -113,9 +127,7 @@ class PairingController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<PairedHostCredential?> checkApproval({
-    String displayName = 'Daintree host',
-  }) async {
+  Future<PairedHostCredential?> checkApproval({String? displayName}) async {
     final parsed = bootstrap;
     final endpoint = _endpoint;
     final identity = _identity;
@@ -130,13 +142,15 @@ class PairingController extends ChangeNotifier {
       );
       final credential = PairedHostCredential(
         hostId: parsed.hostId,
-        displayName: displayName,
+        displayName:
+            replacingHost?.displayName ?? displayName ?? 'Daintree host',
         host: endpoint.host,
         port: endpoint.port,
         hostPublicKey: parsed.hostPublicKey,
         hostFingerprint: parsed.hostFingerprint,
         tlsFingerprint: parsed.tlsFingerprint,
         capabilities: capabilities,
+        accessRevoked: false,
       );
       await hostStore.save(credential);
       phase = PairingPhase.paired;

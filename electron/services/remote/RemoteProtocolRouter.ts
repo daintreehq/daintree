@@ -82,7 +82,11 @@ export class RemoteProtocolRouter {
     }
     const session = this.sessions.get(connection.id);
     if (!session) return;
-    if (!this.consumeRate(session.requestTimes, REMOTE_GATEWAY_LIMITS.maxRequestsPerMinute)) {
+    const envelope = parsed.envelope;
+    if (
+      envelope.kind === "request" &&
+      !this.consumeRate(session.requestTimes, REMOTE_GATEWAY_LIMITS.maxRequestsPerMinute)
+    ) {
       this.audit?.record({
         actorDeviceId: session.deviceId ?? undefined,
         sessionId: session.id,
@@ -101,7 +105,6 @@ export class RemoteProtocolRouter {
       return;
     }
 
-    const envelope = parsed.envelope;
     if (session.state === "connected") {
       if (
         envelope.kind === "request" &&
