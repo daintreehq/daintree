@@ -143,6 +143,20 @@ describe("DiffFileSidebar — file row menu", () => {
     expect(within(menu).getByRole("menuitem", { name: /Copy path/ })).toBeTruthy();
   });
 
+  it("offers no row menu at all when the worktree root has not resolved", async () => {
+    // `DiffPane` reports an empty root rather than guessing one. Every item here
+    // names a path on disk, and joining onto "" would leave a relative path that
+    // `file.view` resolves against whatever project is current — a different
+    // repo, a different file. Falling through to the enclosing menu is the
+    // honest answer, and is what this surface did before it had a row menu.
+    renderSidebar({ worktreePath: "" });
+
+    fireEvent.contextMenu(screen.getByTestId("diff-sidebar-file").parentElement!);
+
+    expect(await screen.findByText(OUTER_SENTINEL)).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /Copy path/ })).toBeNull();
+  });
+
   it("carries plugin file items onto this surface too", async () => {
     itemsRef.current = [
       { pluginId: "acme", item: { label: "Acme thing", actionId: "acme.do", location: "file" } },

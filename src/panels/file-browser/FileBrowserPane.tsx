@@ -911,11 +911,17 @@ export function FileBrowserPane({
   // well and stays gated on a real worktree — keeping a folder-only copy here
   // too would render it twice on a directory row.
   const rowContextMenu = useCallback(
-    (row: FileEntryLike) => (
-      <>
-        {row.isDirectory && (
-          <>
-            {/* The mouse's way to what Enter does on a tree row. It has to exist
+    (row: FileEntryLike): React.ReactNode =>
+      // Every item names a path on disk, built by joining the row's relative
+      // path onto the root. With no root the join yields a relative path that
+      // `file.view` would resolve against whatever project is current — a
+      // different folder entirely. The tree doesn't render without a base, so
+      // this is the invariant's guard rather than a reachable branch.
+      basePath === "" ? null : (
+        <>
+          {row.isDirectory && (
+            <>
+              {/* The mouse's way to what Enter does on a tree row. It has to exist
                 as an explicit item now that clicking a folder no longer sends it
                 to the viewer: without it the folder listing would be reachable
                 only from the keyboard, which would make the whole surface look
@@ -924,32 +930,33 @@ export function FileBrowserPane({
                 necessarily the row this menu was opened on. Routed through the
                 same handler as Enter so the label stays honest with the viewer
                 collapsed: an item that promises contents must not no-op. */}
-            <ContextMenuItem onSelect={() => showFolderContents(row.path)}>
-              <PanelRightOpen className="w-3.5 h-3.5 mr-2" />
-              Show contents
-            </ContextMenuItem>
-            <ContextMenuItem onSelect={() => handleSetRoot(row.path)}>
-              <FolderRoot className="w-3.5 h-3.5 mr-2" />
-              Set as root
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-          </>
-        )}
-        {renderFileRowMenuItems({
-          // `basePath` is the true worktree root even when the tree has been
-          // re-rooted to a subfolder, and `row.path` stays relative to it — so
-          // one join gives the absolute path and the row path copies verbatim.
-          absolutePath: basePath ? join(basePath, row.path) : row.path,
-          relativePath: row.path,
-          name: row.name,
-          isDirectory: row.isDirectory,
-          // Exact file status only. A folder's index entry is the worst status
-          // anywhere beneath it, which would offer "Open diff" on a directory
-          // that has no diff of its own.
-          status: row.isDirectory ? null : (gitStatusIndex?.fileStatus.get(row.path) ?? null),
-        })}
-      </>
-    ),
+              <ContextMenuItem onSelect={() => showFolderContents(row.path)}>
+                <PanelRightOpen className="w-3.5 h-3.5 mr-2" />
+                Show contents
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => handleSetRoot(row.path)}>
+                <FolderRoot className="w-3.5 h-3.5 mr-2" />
+                Set as root
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
+          )}
+          {renderFileRowMenuItems({
+            // `basePath` is the true worktree root even when the tree has been
+            // re-rooted to a subfolder, and `row.path` stays relative to it —
+            // so one join gives the absolute path and the row path copies
+            // verbatim.
+            absolutePath: join(basePath, row.path),
+            relativePath: row.path,
+            name: row.name,
+            isDirectory: row.isDirectory,
+            // Exact file status only. A folder's index entry is the worst
+            // status anywhere beneath it, which would offer "Open diff" on a
+            // directory that has no diff of its own.
+            status: row.isDirectory ? null : (gitStatusIndex?.fileStatus.get(row.path) ?? null),
+          })}
+        </>
+      ),
     [showFolderContents, handleSetRoot, renderFileRowMenuItems, basePath, gitStatusIndex]
   );
 

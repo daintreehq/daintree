@@ -204,6 +204,7 @@ export function DiffFileSidebar({
                 const isCurrent = file.index === currentIndex;
                 const row = (
                   <div
+                    key={`${file.viewedKey}-${file.index}`}
                     data-file-index={file.index}
                     // Stands the global Shift+F10 / Menu-key handler down so
                     // the row's own menu opens instead of the focused panel's
@@ -277,6 +278,16 @@ export function DiffFileSidebar({
                   </div>
                 );
 
+                // Every item in the row menu names a path on disk, and the
+                // entries here are worktree-relative. A pane whose worktree
+                // hasn't resolved reports an empty root (`DiffPane` does this
+                // deliberately rather than guessing), and joining against it
+                // would hand `file.view` a relative path it resolves against
+                // the *current project* — a different repo, a different file.
+                // No root, no row menu: the same state this surface shipped in
+                // before it had one.
+                if (worktreePath === "") return row;
+
                 return (
                   <ContextMenu key={`${file.viewedKey}-${file.index}`}>
                     <ContextMenuTrigger asChild onContextMenu={stopFileRowMenuPropagation}>
@@ -285,7 +296,7 @@ export function DiffFileSidebar({
                     <ContextMenuContent>
                       {renderFileRowMenuItems(
                         {
-                          absolutePath: worktreePath ? join(worktreePath, file.path) : file.path,
+                          absolutePath: join(worktreePath, file.path),
                           relativePath: file.path,
                           name: basename(file.path),
                           isDirectory: false,

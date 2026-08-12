@@ -1133,3 +1133,55 @@ describe("useGlobalKeybindings — terminal-reserved keys", () => {
     expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("useGlobalKeybindings — row-menu stand-down", () => {
+  // The capture handler claims Shift+F10 / the ContextMenu key for the focused
+  // panel's menu. Surfaces that own a row-level menu mark themselves
+  // `data-row-menu` so the keypress reaches their own handler instead; an
+  // already-open Radix menu is the second case, and it portals to
+  // `document.body` where no such marker is in scope (#11757).
+  function pressMenuKey(target: HTMLElement): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", {
+      key: "F10",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  function mount(html: string): HTMLElement {
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((actionId: string) =>
+      actionId === "terminal.contextMenu" ? "Shift+F10" : undefined
+    );
+    render(<Host />);
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    document.body.appendChild(host);
+    return host;
+  }
+
+  afterEach(() => {
+    document.querySelectorAll("body > div:not([id])").forEach((node) => node.remove());
+  });
+
+  it("claims the menu key on an ordinary target", () => {
+    const host = mount(`<div id="plain"></div>`);
+    // Consuming the event is the whole behaviour — the dispatch itself is gated
+    // on a focused panel, which this harness deliberately has none of.
+    expect(pressMenuKey(host.querySelector<HTMLElement>("#plain")!).defaultPrevented).toBe(true);
+  });
+
+  it("stands down inside a surface that owns its rows' menus", () => {
+    const host = mount(`<div data-row-menu=""><div id="row"></div></div>`);
+    expect(pressMenuKey(host.querySelector<HTMLElement>("#row")!).defaultPrevented).toBe(false);
+  });
+
+  it("stands down inside an already-open menu, which portals outside every marker", () => {
+    const host = mount(`<div role="menu"><div id="item" role="menuitem"></div></div>`);
+    expect(pressMenuKey(host.querySelector<HTMLElement>("#item")!).defaultPrevented).toBe(false);
+  });
+});

@@ -136,7 +136,11 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  dispatchMock.mockClear();
+  // Reset the implementation, not just the calls: the reveal-failure test swaps
+  // it, and restoring inline leaves the next test running against a rejecting
+  // dispatch the moment an assertion before the restore fails.
+  dispatchMock.mockReset();
+  dispatchMock.mockImplementation(() => Promise.resolve({ ok: true, result: undefined }));
   notifyMock.mockClear();
   copyContextMock.mockClear();
   itemsRef.current = [];
@@ -201,6 +205,18 @@ describe("useFileRowMenuItems — conditional items", () => {
     expect(rendered).toContain("Copy path");
     expect(rendered).toContain("Copy context");
     expect(rendered).toContain("Reveal in Finder");
+  });
+
+  it("drops the current-content items for a deleted file but keeps its diff", async () => {
+    // The file is still listed — the change set would be a lie without it — but
+    // nothing is on disk, so opening it would resolve to a file-not-found.
+    const menu = await openMenu({ row: { status: "deleted" } });
+    const rendered = labels(menu);
+
+    expect(rendered).toContain("Open diff");
+    expect(rendered).not.toContain("Open file");
+    expect(rendered).not.toContain("Open in editor");
+    expect(rendered).toContain("Copy path");
   });
 
   it("drops Copy context on a surface with no worktree behind it", async () => {
@@ -279,10 +295,9 @@ describe("useFileRowMenuItems — path semantics", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("pkg/a.ts"));
   });
 
-  it("raises a retryable toast when the clipboard rejects", async () => {
-    (navigator.clipboard.writeText as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error("nope")
-    );
+  it("raises a retryable toast when the clipboard rejects, and Retry rewrites the same path", async () => {
+    const writeText = navigator.clipboard.writeText as ReturnType<typeof vi.fn>;
+    writeText.mockRejectedValueOnce(new Error("nope"));
     const menu = await openMenu();
 
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Copy path" }));
@@ -291,6 +306,12 @@ describe("useFileRowMenuItems — path semantics", () => {
     const [payload] = notifyMock.mock.calls[0]!;
     expect(payload.type).toBe("error");
     expect(payload.action?.label).toBe("Retry");
+
+    // A Retry that re-enters nothing would satisfy a label-only assertion, so
+    // fire it and prove the same path goes back to the clipboard.
+    writeText.mockClear();
+    payload.action!.onClick();
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("/repo/src/index.ts"));
   });
 });
 
@@ -322,7 +343,7 @@ describe("useFileRowMenuItems — Copy context", () => {
 });
 
 describe("useFileRowMenuItems — reveal", () => {
-  it("toasts with a Retry when the dispatch fails", async () => {
+  it("toasts with a Retry when the dispatch fails, and Retry reruns the same reveal", async () => {
     dispatchMock.mockImplementation((actionId: string) =>
       actionId === "file.showItemInFolder"
         ? Promise.resolve({ ok: false, error: { message: "gone" } })
@@ -337,7 +358,16 @@ describe("useFileRowMenuItems — reveal", () => {
     expect(payload.type).toBe("error");
     expect(payload.message).toBe("gone");
     expect(payload.action?.label).toBe("Retry");
-    dispatchMock.mockImplementation(() => Promise.resolve({ ok: true, result: undefined }));
+
+    dispatchMock.mockClear();
+    payload.action!.onClick();
+    await waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "file.showItemInFolder",
+        { path: "/repo/src/index.ts" },
+        { source: "context-menu" }
+      )
+    );
   });
 
   it("stays quiet on success", async () => {

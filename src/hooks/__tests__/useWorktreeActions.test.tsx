@@ -12,7 +12,10 @@ const {
 } = vi.hoisted(() => ({
   dispatchMock: vi.fn(),
   addErrorMock: vi.fn(),
-  addNotificationMock: vi.fn(() => "toast-123"),
+  // Typed so `mock.lastCall` is a labeled tuple rather than `[]` — reading the
+  // progress message back is how the file-vs-folder distinction is asserted
+  // without pinning either literal string.
+  addNotificationMock: vi.fn<(notification: { message: string }) => string>(() => "toast-123"),
   updateNotificationMock: vi.fn(),
   addErrorStoreMock: vi.fn(),
 }));
@@ -52,6 +55,7 @@ import {
   useWorktreeActions,
   formatCopyResultMessage,
   copyContextWithFeedback,
+  describeEmptyFileCopy,
   describeEmptyFolderCopy,
 } from "../useWorktreeActions";
 
@@ -374,9 +378,37 @@ describe("copyContextWithFeedback", () => {
     );
   });
 
-  it("names a single-file scope as a file, and keeps scopeKind out of the action args", async () => {
+  it("distinguishes a single-file scope from a folder one, and defaults to folder", async () => {
     // The file-row menu's Copy context scopes one file (#11757); calling that a
     // folder would be a lie the transient toast gets away with exactly once.
+    // The invariant is the distinction, not either literal string.
+    async function progressMessageFor(options: Parameters<typeof copyContextWithFeedback>[2]) {
+      addNotificationMock.mockClear();
+      dispatchMock.mockResolvedValueOnce({
+        ok: true,
+        result: { fileCount: 1, stats: null, format: "xml" },
+      });
+      await copyContextWithFeedback("wt-1", "context-menu", options);
+      return addNotificationMock.mock.lastCall![0].message;
+    }
+
+    const fileMessage = await progressMessageFor({
+      scopePaths: ["src/index.ts"],
+      scopeKind: "file",
+    });
+    const folderMessage = await progressMessageFor({ scopePaths: ["src"], scopeKind: "folder" });
+    // Every scoped caller before #11757 meant a folder, so an absent kind has
+    // to keep reading as one.
+    const defaultMessage = await progressMessageFor({ scopePaths: ["src"] });
+
+    expect(fileMessage).not.toBe(folderMessage);
+    expect(fileMessage).toMatch(/file/i);
+    expect(fileMessage).not.toMatch(/folder/i);
+    expect(folderMessage).toMatch(/folder/i);
+    expect(defaultMessage).toBe(folderMessage);
+  });
+
+  it("keeps scopeKind out of the dispatched action args", async () => {
     dispatchMock.mockResolvedValueOnce({
       ok: true,
       result: { fileCount: 1, stats: null, format: "xml" },
@@ -387,33 +419,17 @@ describe("copyContextWithFeedback", () => {
       scopeKind: "file",
     });
 
-    expect(addNotificationMock).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Copying file context…" })
-    );
+    // The kind is feedback-only; forwarding it would put an unknown key on the
+    // action's args, where Zod strips it silently rather than complaining.
     expect(dispatchMock).toHaveBeenLastCalledWith(
       "worktree.copyTree",
       expect.objectContaining({ worktreeId: "wt-1", scopePaths: ["src/index.ts"] }),
       { source: "context-menu" }
     );
-    // The kind is feedback-only; forwarding it would put an unknown key on the
-    // action's args, where Zod strips it silently rather than complaining.
     expect(dispatchMock).not.toHaveBeenLastCalledWith(
       "worktree.copyTree",
       expect.objectContaining({ scopeKind: expect.anything() }),
       expect.anything()
-    );
-  });
-
-  it("still reads a scoped copy as a folder when the caller says nothing", async () => {
-    dispatchMock.mockResolvedValueOnce({
-      ok: true,
-      result: { fileCount: 2, stats: null, format: "xml" },
-    });
-
-    await copyContextWithFeedback("wt-1", "context-menu", { scopePaths: ["src"] });
-
-    expect(addNotificationMock).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Copying folder context…" })
     );
   });
 
@@ -526,6 +542,55 @@ describe("copyContextWithFeedback", () => {
       expect(updateNotificationMock).toHaveBeenLastCalledWith(
         "toast-123",
         expect.objectContaining({ type: "success" })
+      );
+    });
+  });
+
+  describe("describeEmptyFileCopy", () => {
+    // Same four branches as the folder describer, in file words (#11757).
+    const cases = [
+      { name: "no exclusions at all", stats: undefined },
+      { name: "a zero exclusion total", stats: { excluded: { total: 0, byReason: {} } } },
+      {
+        name: "an unreadable file",
+        stats: { excluded: { total: 1, byReason: { unreadable: 1 } } },
+      },
+      {
+        name: "a purely ignored file",
+        stats: { excluded: { total: 1, byReason: { gitignore: 1 } } },
+      },
+      {
+        name: "a mixed exclusion set",
+        stats: { excluded: { total: 2, byReason: { gitignore: 1, unreadable: 1 } } },
+      },
+    ];
+
+    it.each(cases)("never describes $name as a folder", ({ stats }) => {
+      const message = describeEmptyFileCopy(stats);
+      expect(message).toMatch(/file/i);
+      expect(message).not.toMatch(/folder/i);
+    });
+
+    it("separates unreadable from ignored, and only claims a single cause when it explains everything", () => {
+      const unreadable = describeEmptyFileCopy({
+        excluded: { total: 1, byReason: { unreadable: 1 } },
+      });
+      const ignored = describeEmptyFileCopy({
+        excluded: { total: 1, byReason: { gitignore: 1 } },
+      });
+      const mixed = describeEmptyFileCopy({
+        excluded: { total: 2, byReason: { gitignore: 1, unreadable: 1 } },
+      });
+
+      expect(unreadable).not.toBe(ignored);
+      // A mixed set gets the neutral wording rather than a confident half-truth.
+      expect(mixed).not.toBe(ignored);
+      expect(mixed).not.toBe(unreadable);
+    });
+
+    it("reads an absent stats object the same as a zero exclusion total", () => {
+      expect(describeEmptyFileCopy(undefined)).toBe(
+        describeEmptyFileCopy({ excluded: { total: 0, byReason: {} } })
       );
     });
   });

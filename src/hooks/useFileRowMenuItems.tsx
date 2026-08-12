@@ -226,6 +226,12 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
       // them keeps the menu scope-honest: the surface's own folder prefix is
       // what a directory row is meant to act through.
       const showOpenDiff = !isDirectory && (options?.hasChanges ?? status !== null);
+      // A deleted file is still listed — the change set would be a lie without
+      // it — but there is nothing on disk to open, so the two "show me the
+      // current content" items would resolve to a file-not-found. Its diff is
+      // exactly what the user wants here and stays. Same call the file browser
+      // already makes for its viewer selection (`isSelectedChangedFile`).
+      const showOpenCurrent = !isDirectory && status !== "deleted";
 
       return (
         <>
@@ -248,7 +254,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
                 Open diff
               </ContextMenuActionItem>
             ))}
-          {!isDirectory && (
+          {showOpenCurrent && (
             <>
               <ContextMenuActionItem actionId="file.view" args={{ path: absolutePath }}>
                 <FileText className={ICON_CLASS} />
@@ -260,7 +266,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
               </ContextMenuActionItem>
             </>
           )}
-          {!isDirectory && <ContextMenuSeparator />}
+          {(showOpenDiff || showOpenCurrent) && <ContextMenuSeparator />}
           {/* Disabled rather than hidden when nothing resolves: the gesture is
               the point of the menu entry, and a row that silently drops it
               would read as broken. The agent is resolved from typing history,

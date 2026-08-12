@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { render, act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // FileBrowserPane hosts the tree column beside the viewer. #11328 adds a
@@ -217,6 +217,20 @@ const FOLDER_ROW = {
   depth: 0,
   isExpanded: false,
 };
+// A file row alongside it, so the pane's mapping onto the shared file-row menu
+// (#11757) is exercised on the branch that actually has open/diff items.
+const FILE_ROW = {
+  path: "src/index.ts",
+  name: "index.ts",
+  isDirectory: false,
+  depth: 1,
+  isExpanded: false,
+};
+/** Flip to render FILE_ROW's menu instead of FOLDER_ROW's. */
+const { renderFileRowRef } = vi.hoisted(() => ({
+  renderFileRowRef: { current: false },
+}));
+
 // `onActivate` is captured rather than driven through a real row: Enter and
 // double-click both land on it, and the pane's own file-vs-directory guard is
 // what these tests are after.
@@ -271,7 +285,13 @@ vi.mock("../FileTreeView", () => ({
     treeProps.gitStatusIndex = gitStatusIndex;
     return (
       <div data-testid="file-tree-view" role="tree" tabIndex={-1}>
-        {rowContextMenu?.(FOLDER_ROW)}
+        {/* Opt-in: both rows render the same shared core, so having them up at
+            once would make every "Copy path"/"Copy context" query ambiguous. */}
+        {renderFileRowRef.current ? (
+          <div data-testid="file-row-menu">{rowContextMenu?.(FILE_ROW)}</div>
+        ) : (
+          rowContextMenu?.(FOLDER_ROW)
+        )}
       </div>
     );
   },
@@ -499,6 +519,7 @@ beforeEach(() => {
   treeProps.openPath = undefined;
   insertFileReferenceMock.mockClear();
   canInsertRef.current = true;
+  renderFileRowRef.current = false;
   dispatchMock.mockReset();
   dispatchMock.mockResolvedValue({ ok: true, result: { panelId: "file-1" } });
   worktreeTicks.git = undefined;
@@ -1268,6 +1289,55 @@ describe("tree-header root path copy (#11407)", () => {
     expect(copyButton().className).not.toBe(idle);
     // The successful retry raises no second toast.
     expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("file row context menu", () => {
+  // The pane's job here is the mapping: it turns a tree row into the shared
+  // menu's target (#11757). What the menu then renders is the hook's own
+  // contract, so these assert the join and the gating, not the item list.
+  function renderFileRow() {
+    renderFileRowRef.current = true;
+    renderPane();
+    return screen.getByTestId("file-row-menu");
+  }
+
+  it("joins the row path onto the browser root for the path-scoped actions", async () => {
+    const menu = renderFileRow();
+
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("button", { name: "Copy path" }));
+    });
+
+    expect(writeTextMock).toHaveBeenCalledWith(`/repo/${FILE_ROW.path}`);
+  });
+
+  it("copies the row path verbatim as the relative path", async () => {
+    const menu = renderFileRow();
+
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("button", { name: "Copy relative path" }));
+    });
+
+    // `row.path` is already relative to the true root even when the tree has
+    // been re-rooted, so re-deriving it would double-prefix a correct value.
+    expect(writeTextMock).toHaveBeenCalledWith(FILE_ROW.path);
+  });
+
+  it("offers no diff for a file git reported no change on", () => {
+    const menu = renderFileRow();
+
+    expect(within(menu).queryByRole("button", { name: "Open diff" })).toBeNull();
+    // …while the rest of the core is still there: a file must not lose Copy
+    // path by which panel happens to list it.
+    expect(within(menu).getByRole("button", { name: "Copy path" })).toBeTruthy();
+  });
+
+  it("offers the diff once the file appears in the worktree's changes", () => {
+    worktreeMock.changes = [{ path: FILE_ROW.path, status: "modified" }];
+    const menu = renderFileRow();
+
+    expect(within(menu).getByRole("button", { name: "Open diff" })).toBeTruthy();
   });
 });
 
