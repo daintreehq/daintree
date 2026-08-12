@@ -1,11 +1,14 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useRef } from "react";
 import type React from "react";
+import type { RefObject } from "react";
 import type { StagingFileEntry } from "@shared/types";
 import type { GitStatus } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { Plus, Minus } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
 import { isGeneratedFile } from "../generatedFileClassifier";
 
 const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string }> = {
@@ -76,6 +79,16 @@ interface FileStageRowProps {
   density?: "comfortable" | "compact";
   viewed?: boolean;
   onViewedChange?: (viewed: boolean) => void;
+  /**
+   * The shared file-row menu's items for this row (#11757). Built by the hub
+   * once for the whole list — a hook per row would be a store subscription per
+   * changed file, and this list windows nothing.
+   */
+  renderRowMenu?: (
+    file: StagingFileEntry,
+    section: FileStageRowSection,
+    triggerRef: RefObject<HTMLElement | null>
+  ) => React.ReactNode;
 }
 
 function splitPath(filePath: string): { dir: string; base: string } {
@@ -98,7 +111,9 @@ function FileStageRowComponent({
   density = "comfortable",
   viewed = false,
   onViewedChange,
+  renderRowMenu,
 }: FileStageRowProps) {
+  const rowRef = useRef<HTMLDivElement | null>(null);
   const config = STATUS_CONFIG[file.status] || STATUS_CONFIG.untracked;
   const { dir, base } = splitPath(file.path);
   const generated = isGeneratedFile(file.path);
@@ -133,8 +148,9 @@ function FileStageRowComponent({
     e.stopPropagation();
   }, []);
 
-  return (
+  const row = (
     <div
+      ref={rowRef}
       id={id}
       role="option"
       data-row-index={rowIndex}
@@ -147,6 +163,10 @@ function FileStageRowComponent({
         "relative group/stagerow flex items-center text-xs rounded px-1.5 transition-colors",
         density === "compact" ? "py-0.5" : "py-1.5",
         isStaged ? "bg-status-success/[0.06] hover:bg-status-success/[0.10]" : "hover:bg-tint/5",
+        // The row whose menu is open lifts to a neutral raised tier — a
+        // distinct level from the selection's subtle fill, so it reads as
+        // "the menu targets this row" rather than as a second selection.
+        "data-[state=open]:bg-overlay-raised",
         viewed && "opacity-60"
       )}
       // The staging lists render every changed file with no windowing; a big
@@ -287,6 +307,20 @@ function FileStageRowComponent({
         <TooltipContent side="left">{isStaged ? "Unstage" : "Stage"}</TooltipContent>
       </Tooltip>
     </div>
+  );
+
+  if (!renderRowMenu) return row;
+
+  // The whole row is the trigger, not the nested view/stage buttons: a
+  // right-click anywhere on the line means "this file", and per-button triggers
+  // would leave the churn column and the padding as dead zones.
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild onContextMenu={stopFileRowMenuPropagation}>
+        {row}
+      </ContextMenuTrigger>
+      <ContextMenuContent>{renderRowMenu(file, section, rowRef)}</ContextMenuContent>
+    </ContextMenu>
   );
 }
 

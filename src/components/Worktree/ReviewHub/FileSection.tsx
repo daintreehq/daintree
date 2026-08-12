@@ -61,6 +61,17 @@ interface FileSectionProps {
   viewedFiles: ReadonlySet<string>;
   onViewedChange: (viewedKey: string, viewed: boolean) => void;
   sectionRef?: Ref<HTMLDivElement>;
+  /**
+   * The shared file-row menu's items for one row (#11757). Built once by the
+   * hub and passed down rather than resolved per row, so a large changeset
+   * doesn't mint a store subscription per file. `triggerRef` is the row's own
+   * node, which `Open diff` hands focus back to.
+   */
+  renderRowMenu: (
+    file: StagingFileEntry,
+    section: FileStageRowSection,
+    triggerRef: RefObject<HTMLElement | null>
+  ) => React.ReactNode;
 }
 
 export function FileSection({
@@ -84,6 +95,7 @@ export function FileSection({
   viewedFiles,
   onViewedChange,
   sectionRef,
+  renderRowMenu,
 }: FileSectionProps) {
   const section: FileStageRowSection = isStaged ? "staged" : "unstaged";
   const title = isStaged ? "Staged" : "Changes";
@@ -262,6 +274,7 @@ export function FileSection({
                 density={view.density}
                 viewed={viewedFiles.has(viewedKey)}
                 onViewedChange={(v) => onViewedChange(viewedKey, v)}
+                renderRowMenu={renderRowMenu}
               />
             );
           })}

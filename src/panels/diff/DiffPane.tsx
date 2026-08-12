@@ -708,6 +708,9 @@ export function DiffPane({
             files={changeSet}
             currentIndex={currentIndex}
             worktreePath={worktreePath}
+            // Already resolved here; the sidebar would otherwise repeat the
+            // path→worktree lookup the pane has done above.
+            worktreeId={worktreeId ?? null}
             onSelect={(index) => {
               if (index === currentIndex) return;
               selectFileAt(index);

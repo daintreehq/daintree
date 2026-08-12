@@ -1,9 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Folder, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { basename, dirname } from "@shared/utils/path";
+import { basename, dirname, join } from "@shared/utils/path";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { EmptyState } from "@/components/ui/EmptyState";
+import {
+  isFileRowMenuKey,
+  openFileRowMenuFromKeyboard,
+  stopFileRowMenuPropagation,
+  useFileRowMenuItems,
+} from "@/hooks/useFileRowMenuItems";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { DIFF_STATUS_CONFIG, summarizeChangeSet } from "./diffChangeSet";
 import type { DiffChangeSetEntry } from "./diffChangeSet";
@@ -13,6 +20,11 @@ export interface DiffFileSidebarProps {
   /** Index of the open file within `files`; -1 when nothing matches. */
   currentIndex: number;
   worktreePath: string;
+  /**
+   * Worktree the files belong to, resolved by the pane. `null` drops
+   * `Copy context` from the row menu — CopyTree is worktree-scoped (#11482).
+   */
+  worktreeId?: string | null;
   onSelect: (index: number) => void;
 }
 
@@ -42,9 +54,20 @@ export function DiffFileSidebar({
   files,
   currentIndex,
   worktreePath,
+  worktreeId = null,
   onSelect,
 }: DiffFileSidebarProps) {
   const [filter, setFilter] = useState("");
+  // The one file-row menu, shared with the worktree card, the file browser and
+  // the Review Hub (#11757). Built once for the list, rendered per row.
+  const { renderItems: renderFileRowMenuItems } = useFileRowMenuItems({
+    worktreePath,
+    worktreeId,
+  });
+  // Whether rows get a menu at all — see the comment at the row's return below.
+  // Everything that stands the global menu key down hangs off this, so a row
+  // without a trigger never claims a key it can't answer.
+  const hasRowMenu = worktreePath !== "";
   const listRef = useRef<HTMLDivElement | null>(null);
   const viewedSet = useDiffViewedStore(
     useCallback((state) => selectViewedSet(state, worktreePath), [worktreePath])
@@ -183,18 +206,36 @@ export function DiffFileSidebar({
                 const config = DIFF_STATUS_CONFIG[file.status] ?? DIFF_STATUS_CONFIG.untracked;
                 const viewed = viewedSet.has(file.viewedKey);
                 const isCurrent = file.index === currentIndex;
-                return (
+                const row = (
                   <div
                     key={`${file.viewedKey}-${file.index}`}
                     data-file-index={file.index}
+                    // Stands the global Shift+F10 / Menu-key handler down so
+                    // the row's own menu opens instead of the focused panel's
+                    // (`useGlobalKeybindings` matches on the attribute's
+                    // presence). Absent without a menu to open, so the key
+                    // falls through to that handler as it did before.
+                    data-row-menu={hasRowMenu ? "" : undefined}
                     className={cn(
                       "group/diffrow flex items-center rounded px-1.5 py-1 text-xs font-mono transition-colors",
-                      isCurrent ? "bg-overlay-subtle" : "hover:bg-tint/5"
+                      isCurrent ? "bg-overlay-subtle" : "hover:bg-tint/5",
+                      // The row whose menu is open lifts a tier above the open
+                      // file's own subtle fill, so the two never read as one.
+                      "data-[state=open]:bg-overlay-raised"
                     )}
                   >
                     <button
                       type="button"
                       onClick={() => onSelect(file.index)}
+                      onKeyDown={(event) => {
+                        if (!hasRowMenu || !isFileRowMenuKey(event)) return;
+                        // Anchored to the whole row, not this button: the menu
+                        // targets the file, and the row is what lifts to show
+                        // which one.
+                        event.preventDefault();
+                        event.stopPropagation();
+                        openFileRowMenuFromKeyboard(event.currentTarget.parentElement);
+                      }}
                       aria-current={isCurrent || undefined}
                       aria-label={`Open ${file.path}`}
                       className="flex min-w-0 flex-1 items-center text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-daintree-accent"
@@ -241,6 +282,41 @@ export function DiffFileSidebar({
                       <TooltipContent side="right">Viewed</TooltipContent>
                     </Tooltip>
                   </div>
+                );
+
+                // Every item in the row menu names a path on disk, and the
+                // entries here are worktree-relative. A pane whose worktree
+                // hasn't resolved reports an empty root (`DiffPane` does this
+                // deliberately rather than guessing), and joining against it
+                // would hand `file.view` a relative path it resolves against
+                // the *current project* — a different repo, a different file.
+                // No root, no row menu: the same state this surface shipped in
+                // before it had one.
+                if (!hasRowMenu) return row;
+
+                return (
+                  <ContextMenu key={`${file.viewedKey}-${file.index}`}>
+                    <ContextMenuTrigger asChild onContextMenu={stopFileRowMenuPropagation}>
+                      {row}
+                    </ContextMenuTrigger>
+                    <ContextMenuContent>
+                      {renderFileRowMenuItems(
+                        {
+                          absolutePath: join(worktreePath, file.path),
+                          relativePath: file.path,
+                          name: basename(file.path),
+                          isDirectory: false,
+                          status: file.status,
+                        },
+                        {
+                          // Steps this sidebar's own viewer rather than opening
+                          // a second diff dialog over it.
+                          onOpenDiff: () => onSelect(file.index),
+                          hasChanges: true,
+                        }
+                      )}
+                    </ContextMenuContent>
+                  </ContextMenu>
                 );
               })}
             </div>
