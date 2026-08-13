@@ -34,6 +34,7 @@ import { RemoteTlsIdentityService } from "./RemoteTlsIdentityService.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import { store } from "../../store.js";
+import { RemoteAppearanceSyncService } from "./RemoteAppearanceSyncService.js";
 import { RemoteManagementService } from "./RemoteManagementService.js";
 
 export interface RemoteRuntime {
@@ -52,6 +53,7 @@ export interface RemoteRuntime {
   prompts: RemotePromptSubmissionService;
   launches: RemoteAgentLaunchService;
   management: RemoteManagementService;
+  appearance: RemoteAppearanceSyncService;
   projectionCleanup: () => void;
 }
 
@@ -69,6 +71,16 @@ function createRemoteRuntime(appVersion: string): RemoteRuntime {
   const pairing = new RemotePairingService(identityStore, identity, tlsIdentity);
   const capabilities = new RemoteCapabilityService(identityStore, identity, sessions);
   const router = new RemoteProtocolRouter(sessions, authentication, appVersion);
+  const appearance = new RemoteAppearanceSyncService(
+    {
+      get: () => store.get("appTheme"),
+      subscribe: (listener) => store.onDidAnyChange(listener),
+    },
+    sessions,
+    router
+  );
+  appearance.start();
+  router.setAppearanceProvider(() => appearance.current());
   router.setPairingService(pairing);
   const audit = new RemoteAuditService(db);
   const mutations = new RemoteMutationLedgerService(db);
@@ -205,6 +217,7 @@ function createRemoteRuntime(appVersion: string): RemoteRuntime {
     prompts,
     launches,
     management,
+    appearance,
     projectionCleanup,
   };
 }
@@ -231,6 +244,7 @@ export async function disposeRemoteGateway(): Promise<void> {
   const current = runtime;
   runtime = null;
   current.projectionCleanup();
+  current.appearance.dispose();
   current.projection.stop();
   current.detailSubscriptions.stop();
   current.consoleObservation.dispose();

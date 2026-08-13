@@ -149,6 +149,17 @@ export function blendOverBackground(fgHex: string, bgHex: string, opacity: numbe
   return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
 }
 
+export function compositedContrastRatio(foreground: string, background: string): number {
+  const clean = foreground.trim().replace("#", "");
+  const opacity =
+    clean.length === 4
+      ? parseInt(clean.slice(3, 4).repeat(2), 16) / 255
+      : clean.length === 8
+        ? parseInt(clean.slice(6, 8), 16) / 255
+        : 1;
+  return contrastRatio(blendOverBackground(foreground, background, opacity), background);
+}
+
 const FRESHNESS_OPACITY_TIERS: Array<{ opacity: number; tier: string }> = [
   { opacity: 0.75, tier: "aging" },
 ];

@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../security/device_identity_store.dart';
+import '../theme/portal_icons.dart';
+import '../theme/portal_theme.dart';
 import 'pairing_controller.dart';
 
 class PairingScreen extends StatefulWidget {
@@ -60,7 +62,7 @@ class _PairingScreenState extends State<PairingScreen> {
               child: switch (controller.phase) {
                 PairingPhase.idle => _scanner(),
                 PairingPhase.connecting => const _PairingMessage(
-                  icon: Icons.sync_rounded,
+                  icon: PortalIcons.refresh,
                   title: 'Verifying host identity',
                   body:
                       'Portal is checking the certificate and one-time pairing material',
@@ -69,7 +71,7 @@ class _PairingScreenState extends State<PairingScreen> {
                 PairingPhase.verifyIdentity => _verification(),
                 PairingPhase.awaitingApproval => _awaitingApproval(),
                 PairingPhase.paired => _PairingMessage(
-                  icon: Icons.check_circle_outline_rounded,
+                  icon: PortalIcons.verified,
                   title: controller.isRePairing
                       ? 'Host re-authorized'
                       : 'Host paired',
@@ -146,7 +148,7 @@ class _PairingScreenState extends State<PairingScreen> {
   Widget _verification() => Column(
     mainAxisAlignment: MainAxisAlignment.center,
     children: [
-      const Icon(Icons.verified_user_outlined, size: 52),
+      const Icon(PortalIcons.verified, size: 52),
       const SizedBox(height: 20),
       Text(
         'Do both screens show this code?',
@@ -161,7 +163,8 @@ class _PairingScreenState extends State<PairingScreen> {
         child: SelectableText(
           widget.controller.verificationCode!,
           style: const TextStyle(
-            fontFamily: 'monospace',
+            fontFamily: portalTechnicalFontFamily,
+            fontFamilyFallback: portalTechnicalFontFallback,
             fontSize: 42,
             fontWeight: FontWeight.w700,
             letterSpacing: 8,
@@ -190,7 +193,7 @@ class _PairingScreenState extends State<PairingScreen> {
   Widget _awaitingApproval() => Column(
     mainAxisAlignment: MainAxisAlignment.center,
     children: [
-      const Icon(Icons.phonelink_lock_rounded, size: 52),
+      const Icon(PortalIcons.secureDevice, size: 52),
       const SizedBox(height: 20),
       Text(
         'Approve this device on the host',
@@ -210,7 +213,7 @@ class _PairingScreenState extends State<PairingScreen> {
           final credential = await widget.controller.checkApproval();
           if (credential != null && mounted) widget.onPaired(credential);
         },
-        icon: const Icon(Icons.refresh_rounded),
+        icon: const Icon(PortalIcons.refresh),
         label: const Text('Check approval'),
         style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
       ),
@@ -218,7 +221,7 @@ class _PairingScreenState extends State<PairingScreen> {
   );
 
   Widget _failed() => _PairingMessage(
-    icon: Icons.error_outline_rounded,
+    icon: PortalIcons.failure,
     title: 'Pairing failed',
     body: widget.controller.errorMessage ?? 'Try a fresh code from the host',
     action: TextButton(

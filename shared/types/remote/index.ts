@@ -1,4 +1,5 @@
 export * from "./agents.js";
+export * from "./appearance.js";
 export * from "./console.js";
 export * from "./errors.js";
 export * from "./gateway.js";

@@ -67,7 +67,12 @@ describe("appThemeStore.recentSchemeIds LRU", () => {
     expect(useAppThemeStore.getState().recentSchemeIds).toEqual(["svalbard"]);
   });
 
-  it("injectTheme does NOT mutate recentSchemeIds (hover preview)", () => {
+  it("injectTheme keeps hover previews renderer-only without persistence", () => {
+    const setColorScheme = vi.fn();
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      value: { appTheme: { setColorScheme } },
+    });
     useAppThemeStore.getState().setSelectedSchemeId("daintree");
     const before = useAppThemeStore.getState().recentSchemeIds;
 
@@ -81,6 +86,7 @@ describe("appThemeStore.recentSchemeIds LRU", () => {
     }
 
     expect(useAppThemeStore.getState().recentSchemeIds).toEqual(before);
+    expect(setColorScheme).not.toHaveBeenCalled();
   });
 
   it("setRecentSchemeIds replaces the list and caps at 5", () => {

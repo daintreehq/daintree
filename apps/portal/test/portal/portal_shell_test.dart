@@ -1,13 +1,21 @@
+import 'dart:convert';
+
+import 'package:daintree_portal/console/portal_terminal.dart';
 import 'package:daintree_portal/portal/portal_controller.dart';
 import 'package:daintree_portal/portal/portal_shell.dart';
 import 'package:daintree_portal/security/device_identity_store.dart';
+import 'package:daintree_portal/theme/generated_daintree_appearance.dart';
+import 'package:daintree_portal/theme/portal_appearance.dart';
+import 'package:daintree_portal/theme/portal_icons.dart';
+import 'package:daintree_portal/theme/portal_theme.dart';
 import 'package:daintree_portal/transport/remote_protocol_client.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import '../security/device_identity_store_test.dart';
 
 class WidgetPortalController extends PortalController {
-  WidgetPortalController()
+  WidgetPortalController({PortalAppearance? appearance})
     : super(
         credential: PairedHostCredential(
           hostId: 'host-01',
@@ -25,7 +33,9 @@ class WidgetPortalController extends PortalController {
         ),
         identityStore: DeviceIdentityStore(MemoryProtectedValues()),
         client: RemoteProtocolClient(),
-      );
+      ) {
+    hostAppearance = appearance;
+  }
 
   final project = const PortalProject(
     id: 'project-01',
@@ -222,6 +232,302 @@ class FailedLaunchableWidgetPortalController
 }
 
 void main() {
+  testWidgets(
+    'authenticated appearance is scoped to shell, system chrome, overlays, and terminal',
+    (tester) async {
+      final appearance = _hostAppearance(
+        themeId: 'studio-host',
+        canvas: '#123456ff',
+        terminalBackground: '#07111fff',
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildPortalTheme(generatedDaintreeAppearance),
+          home: Column(
+            children: [
+              const _OfflineThemeProbe(),
+              Expanded(
+                child: PortalShell(
+                  controller: WidgetPortalController(appearance: appearance),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final scaffoldContext = tester.element(find.byType(Scaffold));
+      final hostTheme = Theme.of(scaffoldContext);
+      expect(hostTheme.colorScheme.surface, appearance.surfaces.canvas);
+      expect(
+        hostTheme.dialogTheme.backgroundColor,
+        appearance.surfaces.elevatedPanel,
+      );
+      expect(
+        hostTheme.bottomSheetTheme.backgroundColor,
+        appearance.surfaces.elevatedPanel,
+      );
+      expect(
+        buildPortalTerminalTheme(
+          scaffoldContext,
+          highContrast: false,
+        ).background,
+        appearance.terminal.background,
+      );
+      final overlays = tester
+          .widgetList<AnnotatedRegion<SystemUiOverlayStyle>>(
+            find.byType(AnnotatedRegion<SystemUiOverlayStyle>),
+          )
+          .map((region) => region.value);
+      expect(
+        overlays,
+        contains(
+          isA<SystemUiOverlayStyle>()
+              .having(
+                (style) => style.statusBarColor,
+                'status bar color',
+                appearance.surfaces.toolbar,
+              )
+              .having(
+                (style) => style.systemNavigationBarColor,
+                'navigation bar color',
+                appearance.surfaces.canvas,
+              ),
+        ),
+      );
+      expect(
+        tester
+            .widget<ColoredBox>(
+              find.byKey(const ValueKey('offline-theme-probe')),
+            )
+            .color,
+        generatedDaintreeAppearance.surfaces.canvas,
+      );
+    },
+  );
+
+  testWidgets(
+    'replacing the host context applies only the replacement appearance',
+    (tester) async {
+      final first = _hostAppearance(themeId: 'first', canvas: '#123456ff');
+      final second = _hostAppearance(themeId: 'second', canvas: '#654321ff');
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PortalShell(
+            controller: WidgetPortalController(appearance: first),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(
+        Theme.of(tester.element(find.byType(Scaffold))).colorScheme.surface,
+        first.surfaces.canvas,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PortalShell(
+            controller: WidgetPortalController(appearance: second),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(
+        Theme.of(tester.element(find.byType(Scaffold))).colorScheme.surface,
+        second.surfaces.canvas,
+      );
+    },
+  );
+
+  testWidgets(
+    'popping a host route reveals the generated system chrome owner',
+    (tester) async {
+      final host = _hostAppearance(themeId: 'host', canvas: '#654321ff');
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => PortalSystemChrome(
+            appearance: generatedDaintreeAppearance,
+            child: child!,
+          ),
+          home: Builder(
+            builder: (context) => FilledButton(
+              onPressed: () => Navigator.push<void>(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PortalShell(
+                    controller: WidgetPortalController(appearance: host),
+                  ),
+                ),
+              ),
+              child: const Text('Open host'),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Open host'));
+      await tester.pumpAndSettle();
+      expect(_overlayColors(tester), contains(host.surfaces.canvas));
+
+      Navigator.of(tester.element(find.byType(PortalShell))).pop();
+      await tester.pumpAndSettle();
+      expect(find.byType(PortalShell), findsNothing);
+      expect(
+        _overlayColors(tester),
+        contains(generatedDaintreeAppearance.surfaces.canvas),
+      );
+      expect(_overlayColors(tester), isNot(contains(host.surfaces.canvas)));
+    },
+  );
+
+  testWidgets(
+    'host theme preserves device high contrast and accessibility data',
+    (tester) async {
+      final appearance = _hostAppearance(
+        themeId: 'contrast',
+        canvas: '#123456ff',
+      );
+      const media = MediaQueryData(
+        highContrast: true,
+        disableAnimations: true,
+        textScaler: TextScaler.linear(1.6),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MediaQuery(
+            data: media,
+            child: PortalShell(
+              controller: WidgetPortalController(appearance: appearance),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final context = tester.element(find.byType(Scaffold));
+      expect(Theme.of(context).colorScheme.outline, appearance.borders.strong);
+      expect(MediaQuery.of(context).disableAnimations, isTrue);
+      expect(MediaQuery.of(context).textScaler.scale(10), 16);
+    },
+  );
+
+  testWidgets(
+    'authenticated host status and console match their semantic palette',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final appearance = _hostAppearance(
+        themeId: 'studio-host',
+        canvas: '#111827ff',
+        terminalBackground: '#07111fff',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: PortalShell(
+            controller: WidgetPortalController(appearance: appearance),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Daintree'));
+      await tester.pump();
+      await tester.tap(find.text('Portal implementation'));
+      await tester.pump();
+      final controller = tester
+          .widget<PortalShell>(find.byType(PortalShell))
+          .controller;
+      controller.connectionState = PortalConnectionState.degraded;
+      controller.statusMessage =
+          'Showing the host’s last successful project state';
+      controller.notifyListeners();
+      await tester.pump();
+
+      expect(
+        tester
+            .widget<ColoredBox>(
+              find
+                  .ancestor(
+                    of: find.byKey(const ValueKey('portal-terminal-surface')),
+                    matching: find.byType(ColoredBox),
+                  )
+                  .first,
+            )
+            .color,
+        appearance.terminal.background,
+      );
+      expect(
+        tester.widget<Icon>(find.byIcon(PortalIcons.warning).first).color,
+        appearance.activity.waiting.foreground,
+      );
+      final banner = tester.widget<Material>(
+        find
+            .ancestor(
+              of: find.text('Showing the host’s last successful project state'),
+              matching: find.byType(Material),
+            )
+            .first,
+      );
+      expect(banner.color, appearance.status.warning.surface);
+      expect(
+        tester.widget<Icon>(find.byIcon(Icons.info_outline_rounded)).color,
+        appearance.status.warning.foreground,
+      );
+      expect(
+        tester.widget<Icon>(find.byIcon(PortalIcons.terminal).last).color,
+        appearance.activity.working.foreground,
+      );
+
+      await expectLater(
+        find.byType(PortalShell),
+        matchesGoldenFile('goldens/authenticated_host_context.png'),
+      );
+    },
+  );
+
+  testWidgets(
+    'Bondi host appearance renders the complete connected experience',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final controller = WidgetPortalController(
+        appearance: generatedBondiAppearance,
+      );
+      await controller.connect();
+      await controller.openProject('project-01');
+      await controller.openAgent(controller.agent);
+
+      await tester.pumpWidget(
+        MaterialApp(home: PortalShell(controller: controller)),
+      );
+      await tester.pump();
+
+      expect(
+        Theme.of(tester.element(find.byType(Scaffold))).colorScheme.surface,
+        generatedBondiAppearance.surfaces.canvas,
+      );
+      expect(
+        tester
+            .widget<ColoredBox>(
+              find
+                  .ancestor(
+                    of: find.byKey(const ValueKey('portal-terminal-surface')),
+                    matching: find.byType(ColoredBox),
+                  )
+                  .first,
+            )
+            .color,
+        generatedBondiAppearance.terminal.background,
+      );
+      await expectLater(
+        find.byType(PortalShell),
+        matchesGoldenFile('goldens/bondi_host_context.png'),
+      );
+    },
+  );
+
   testWidgets('revoked host offers fresh pairing instead of generic retry', (
     tester,
   ) async {
@@ -321,7 +627,12 @@ void main() {
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final controller = LaunchableWidgetPortalController();
+    final appearance = _hostAppearance(
+      themeId: 'sheet-host',
+      canvas: '#123456ff',
+    );
+    final controller = LaunchableWidgetPortalController()
+      ..hostAppearance = appearance;
 
     await tester.pumpWidget(
       MaterialApp(home: PortalShell(controller: controller)),
@@ -336,6 +647,15 @@ void main() {
 
     expect(find.text('Launch agent'), findsOneWidget);
     expect(find.text('Codex'), findsOneWidget);
+    final sheetMaterial = tester.widget<Material>(
+      find
+          .ancestor(
+            of: find.text('Launch agent'),
+            matching: find.byType(Material),
+          )
+          .first,
+    );
+    expect(sheetMaterial.color, appearance.surfaces.elevatedPanel);
     expect(
       find.text('Uses the same defaults as the Daintree agent toolbar'),
       findsOneWidget,
@@ -435,7 +755,11 @@ void main() {
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final controller = WidgetPortalController();
+    final appearance = _hostAppearance(
+      themeId: 'dialog-host',
+      canvas: '#123456ff',
+    );
+    final controller = WidgetPortalController(appearance: appearance);
     await tester.pumpWidget(
       MaterialApp(home: PortalShell(controller: controller)),
     );
@@ -449,6 +773,15 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text("Close 'Portal implementation'?"), findsOneWidget);
+    final dialogMaterial = tester.widget<Material>(
+      find
+          .ancestor(
+            of: find.text("Close 'Portal implementation'?"),
+            matching: find.byType(Material),
+          )
+          .first,
+    );
+    expect(dialogMaterial.color, appearance.surfaces.elevatedPanel);
     expect(controller.closeAgentPaneCount, 0);
     await tester.tap(find.widgetWithText(FilledButton, 'Close pane'));
     await tester.pumpAndSettle();
@@ -535,3 +868,45 @@ void main() {
     },
   );
 }
+
+class _OfflineThemeProbe extends StatelessWidget {
+  const _OfflineThemeProbe();
+
+  @override
+  Widget build(BuildContext context) => ColoredBox(
+    key: const ValueKey('offline-theme-probe'),
+    color: Theme.of(context).colorScheme.surface,
+    child: const SizedBox(height: 1),
+  );
+}
+
+PortalAppearance _hostAppearance({
+  required String themeId,
+  required String canvas,
+  String? terminalBackground,
+}) {
+  final json =
+      jsonDecode(jsonEncode(generatedDaintreeAppearanceJson))
+          as Map<String, dynamic>;
+  json['revision'] = 4;
+  json['themeId'] = themeId;
+  (json['surfaces']! as Map<String, dynamic>)['canvas'] = canvas;
+  final status = json['status']! as Map<String, dynamic>;
+  (status['warning']! as Map<String, dynamic>)
+    ..['foreground'] = '#ff44aaff'
+    ..['surface'] = '#552244ff';
+  final activity = json['activity']! as Map<String, dynamic>;
+  (activity['waiting']! as Map<String, dynamic>)['foreground'] = '#ffd500ff';
+  (activity['working']! as Map<String, dynamic>)['foreground'] = '#00e5ffff';
+  if (terminalBackground != null) {
+    (json['terminal']! as Map<String, dynamic>)['background'] =
+        terminalBackground;
+  }
+  return PortalAppearance.parse(json);
+}
+
+Iterable<Color?> _overlayColors(WidgetTester tester) => tester
+    .widgetList<AnnotatedRegion<SystemUiOverlayStyle>>(
+      find.byType(AnnotatedRegion<SystemUiOverlayStyle>),
+    )
+    .map((region) => region.value.systemNavigationBarColor);

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:crypto/crypto.dart' as crypto;
@@ -9,6 +10,40 @@ import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../security/device_identity_store.dart';
+import '../theme/portal_appearance.dart';
+
+class RemoteAuthenticationResult {
+  const RemoteAuthenticationResult({
+    required this.capabilities,
+    this.appearance,
+  });
+
+  factory RemoteAuthenticationResult.fromWelcomePayload(
+    Map<String, dynamic> payload, {
+    void Function(String message)? onDiagnostic,
+  }) {
+    final capabilities = (payload['capabilities'] as List).cast<String>();
+    PortalAppearance? appearance;
+    if (payload.containsKey('appearance')) {
+      try {
+        appearance = PortalAppearance.parse(payload['appearance']);
+      } on FormatException {
+        appearance = null;
+        onDiagnostic?.call('Ignored invalid host appearance snapshot');
+      } on TypeError {
+        appearance = null;
+        onDiagnostic?.call('Ignored invalid host appearance snapshot');
+      }
+    }
+    return RemoteAuthenticationResult(
+      capabilities: capabilities,
+      appearance: appearance,
+    );
+  }
+
+  final List<String> capabilities;
+  final PortalAppearance? appearance;
+}
 
 class RemoteProtocolException implements Exception {
   const RemoteProtocolException(
@@ -61,24 +96,44 @@ class PinnedPortalChannelFactory implements PortalChannelFactory {
 }
 
 class RemoteProtocolClient {
-  RemoteProtocolClient({PortalChannelFactory? channelFactory, Uuid? uuid})
-    : _channelFactory = channelFactory ?? const PinnedPortalChannelFactory(),
-      _uuid = uuid ?? const Uuid();
+  RemoteProtocolClient({
+    PortalChannelFactory? channelFactory,
+    Uuid? uuid,
+    void Function(String message)? diagnosticSink,
+  }) : _channelFactory = channelFactory ?? const PinnedPortalChannelFactory(),
+       _uuid = uuid ?? const Uuid(),
+       _diagnosticSink = diagnosticSink ?? _logDiagnostic;
 
   final PortalChannelFactory _channelFactory;
   final Uuid _uuid;
+  final void Function(String message) _diagnosticSink;
   final _pending = <String, Completer<Map<String, dynamic>>>{};
   final _events = StreamController<Map<String, dynamic>>.broadcast();
   WebSocketChannel? _channel;
   StreamSubscription<Object?>? _subscription;
   String _sessionId = 'opening';
+  bool _hostIdentityVerified = false;
 
   Stream<Map<String, dynamic>> get events => _events.stream;
   bool get connected => _channel != null;
   String get sessionId => _sessionId;
+  bool get appearanceEventsTrusted => _hostIdentityVerified;
+
+  PortalAppearance? parseAppearance(Object? value) {
+    try {
+      return PortalAppearance.parse(value);
+    } on FormatException {
+      _diagnosticSink('Ignored invalid host appearance snapshot');
+      return null;
+    } on TypeError {
+      _diagnosticSink('Ignored invalid host appearance snapshot');
+      return null;
+    }
+  }
 
   Future<void> open(Uri endpoint, String tlsFingerprint) async {
     await close();
+    _hostIdentityVerified = false;
     final channel = await _channelFactory.connect(endpoint, tlsFingerprint);
     _channel = channel;
     _subscription = channel.stream.listen(
@@ -143,7 +198,7 @@ class RemoteProtocolClient {
     }
   }
 
-  Future<List<String>> authenticate({
+  Future<RemoteAuthenticationResult> authenticate({
     required DeviceIdentity identity,
     required String hostPublicKey,
     required String hostFingerprint,
@@ -176,9 +231,13 @@ class RemoteProtocolClient {
         'The host identity signature is invalid',
       );
     }
+    _hostIdentityVerified = true;
     _sessionId = payload['sessionId'] as String;
     await request('session.ready', const {'ready': true});
-    return (payload['capabilities'] as List).cast<String>();
+    return RemoteAuthenticationResult.fromWelcomePayload(
+      payload,
+      onDiagnostic: _diagnosticSink,
+    );
   }
 
   void acknowledge(String streamId, int sequence) {
@@ -198,6 +257,7 @@ class RemoteProtocolClient {
     final channel = _channel;
     _channel = null;
     _sessionId = 'opening';
+    _hostIdentityVerified = false;
     await _subscription?.cancel();
     _subscription = null;
     await channel?.sink.close(1000, 'client-close');
@@ -247,6 +307,10 @@ class RemoteProtocolClient {
           _pending[requestId]?.complete(envelope);
         }
       } else if (kind == 'event') {
+        if (envelope['type'] == 'appearance.updated' &&
+            !_hostIdentityVerified) {
+          return;
+        }
         _events.add(envelope);
       } else {
         throw const FormatException();
@@ -264,6 +328,7 @@ class RemoteProtocolClient {
   void _disconnect(Object error) {
     _channel = null;
     _sessionId = 'opening';
+    _hostIdentityVerified = false;
     _failPending(error);
     if (!_events.isClosed) {
       _events.add({
@@ -308,4 +373,8 @@ class RemoteProtocolClient {
 
   static Map<String, dynamic> payloadOf(Map<String, dynamic> envelope) =>
       _payload(envelope);
+
+  static void _logDiagnostic(String message) {
+    developer.log(message, name: 'daintree.portal.transport');
+  }
 }

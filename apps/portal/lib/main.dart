@@ -10,6 +10,9 @@ import 'pairing/pairing_screen.dart';
 import 'portal/portal_controller.dart';
 import 'portal/portal_shell.dart';
 import 'security/device_identity_store.dart';
+import 'theme/portal_appearance.dart';
+import 'theme/portal_icons.dart';
+import 'theme/portal_theme.dart';
 import 'transport/remote_protocol_client.dart';
 
 void main() {
@@ -22,42 +25,18 @@ class DaintreePortalApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const ink = Color(0xFF17211B);
-    const moss = Color(0xFF315C45);
-    const paper = Color(0xFFF2F1E9);
-    final scheme = ColorScheme.fromSeed(
-      seedColor: moss,
-      brightness: Brightness.light,
-      surface: paper,
-    );
-    final theme = ThemeData(
-      useMaterial3: true,
-      colorScheme: scheme,
-      scaffoldBackgroundColor: paper,
-      fontFamily: 'Avenir Next',
-      textTheme: ThemeData.light().textTheme.apply(
-        bodyColor: ink,
-        displayColor: ink,
-        fontFamilyFallback: const ['Inter', 'sans-serif'],
-      ),
-      visualDensity: VisualDensity.standard,
-      inputDecorationTheme: const InputDecorationTheme(
-        border: OutlineInputBorder(),
-      ),
-    );
+    final theme = buildPortalTheme(generatedDaintreeAppearance);
     return MaterialApp(
       title: 'Daintree Portal',
       debugShowCheckedModeBanner: false,
       theme: theme,
-      highContrastTheme: theme.copyWith(
-        colorScheme: scheme.copyWith(
-          outline: Colors.black,
-          surfaceContainerHighest: Colors.white,
-        ),
-        dividerTheme: const DividerThemeData(
-          color: Colors.black,
-          thickness: 1.5,
-        ),
+      highContrastTheme: buildPortalTheme(
+        generatedDaintreeAppearance,
+        highContrast: true,
+      ),
+      builder: (context, child) => PortalSystemChrome(
+        appearance: generatedDaintreeAppearance,
+        child: child ?? const SizedBox.shrink(),
       ),
       home: PortalEntryScreen(valueStore: PlatformProtectedValueStore()),
     );
@@ -116,7 +95,8 @@ class _PortalEntryScreenState extends State<PortalEntryScreen> {
                 const Text(
                   'DAINTREE / PORTAL',
                   style: TextStyle(
-                    fontFamily: 'monospace',
+                    fontFamily: portalTechnicalFontFamily,
+                    fontFamilyFallback: portalTechnicalFontFallback,
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
                     letterSpacing: 1.8,
@@ -147,7 +127,7 @@ class _PortalEntryScreenState extends State<PortalEntryScreen> {
                     Expanded(
                       child: FilledButton.icon(
                         onPressed: _startNewPairing,
-                        icon: const Icon(Icons.qr_code_scanner_rounded),
+                        icon: const Icon(PortalIcons.scanPairing),
                         label: const Text('Pair a new host'),
                         style: FilledButton.styleFrom(
                           minimumSize: const Size.fromHeight(52),
@@ -158,7 +138,7 @@ class _PortalEntryScreenState extends State<PortalEntryScreen> {
                     Expanded(
                       child: OutlinedButton.icon(
                         onPressed: _showDiscovery,
-                        icon: const Icon(Icons.radar_rounded),
+                        icon: const Icon(PortalIcons.discover),
                         label: const Text('Find nearby'),
                         style: OutlinedButton.styleFrom(
                           minimumSize: const Size.fromHeight(52),
@@ -199,7 +179,7 @@ class _PortalEntryScreenState extends State<PortalEntryScreen> {
             clipBehavior: Clip.antiAlias,
             child: ListTile(
               minTileHeight: 74,
-              leading: const CircleAvatar(child: Icon(Icons.computer_rounded)),
+              leading: const CircleAvatar(child: Icon(PortalIcons.host)),
               title: Text(
                 host.displayName,
                 style: const TextStyle(fontWeight: FontWeight.w700),
@@ -474,7 +454,7 @@ class _EntryEmptyState extends StatelessWidget {
   Widget build(BuildContext context) => const Column(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Icon(Icons.phonelink_lock_rounded, size: 44),
+      Icon(PortalIcons.secureDevice, size: 44),
       SizedBox(height: 14),
       Text(
         'Pair your first host to continue an agent',

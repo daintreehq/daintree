@@ -29,7 +29,7 @@ class FakePairingClient extends RemoteProtocolClient {
   }
 
   @override
-  Future<List<String>> authenticate({
+  Future<RemoteAuthenticationResult> authenticate({
     required DeviceIdentity identity,
     required String hostPublicKey,
     required String hostFingerprint,
@@ -41,7 +41,7 @@ class FakePairingClient extends RemoteProtocolClient {
         'Approval is still pending',
       );
     }
-    return approvedCapabilities;
+    return RemoteAuthenticationResult(capabilities: approvedCapabilities);
   }
 
   @override

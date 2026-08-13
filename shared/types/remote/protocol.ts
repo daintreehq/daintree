@@ -20,6 +20,7 @@ import {
   RemoteSubmitPromptRequestSchema,
 } from "./console.js";
 import { RemoteErrorSchema, type RemoteError } from "./errors.js";
+import { RemoteAppearanceSnapshotSchema } from "./appearance.js";
 import {
   RemotePairBeginRequestSchema,
   RemotePairCompleteSchema,
@@ -128,6 +129,7 @@ const remoteEnvelopeSchemas = [
   requestEnvelope("session.ping", pingPayloadSchema),
   responseEnvelope("session.pong", pingPayloadSchema),
   eventEnvelope("session.revoked", RemoteSessionRevokedSchema),
+  eventEnvelope("appearance.updated", RemoteAppearanceSnapshotSchema, { revision: true }),
   responseEnvelope("request.error", RemoteErrorSchema),
   z.strictObject({
     ...baseEnvelopeShape,

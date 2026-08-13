@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { RemoteAppearanceSnapshotSchema } from "./appearance.js";
 
 export const REMOTE_CAPABILITIES = [
   "observe-projects",
@@ -43,6 +44,7 @@ export const RemoteSessionWelcomeSchema = z.strictObject({
   capabilities: RemoteCapabilitiesSchema,
   appVersion: z.string().min(1).max(64),
   resumeAccepted: z.boolean(),
+  appearance: RemoteAppearanceSnapshotSchema.optional(),
 });
 
 export const RemoteSessionReadySchema = z.strictObject({

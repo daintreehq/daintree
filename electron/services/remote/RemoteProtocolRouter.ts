@@ -3,6 +3,8 @@ import {
   REMOTE_PROTOCOL_VERSION,
   type RemoteErrorCode,
   type RemoteEnvelope,
+  type RemoteAppearanceSnapshot,
+  RemoteAppearanceSnapshotSchema,
   negotiateRemoteProtocol,
   parseRemoteFrame,
 } from "../../../shared/types/remote/index.js";
@@ -25,6 +27,8 @@ export class RemoteProtocolRouter {
   private applicationHandler: RemoteApplicationHandler;
   private audit: RemoteAuditService | null = null;
   private pairing: RemotePairingService | null = null;
+  private appearanceProvider: (() => RemoteAppearanceSnapshot | null) | null = null;
+  private appearanceWarningIssued = false;
 
   constructor(
     private readonly sessions: RemoteSessionRegistry,
@@ -47,6 +51,10 @@ export class RemoteProtocolRouter {
 
   setPairingService(pairing: RemotePairingService): void {
     this.pairing = pairing;
+  }
+
+  setAppearanceProvider(provider: () => RemoteAppearanceSnapshot | null): void {
+    this.appearanceProvider = provider;
   }
 
   attach(connection: RemoteConnection): void {
@@ -381,8 +389,26 @@ export class RemoteProtocolRouter {
         capabilities: authentication.capabilities,
         appVersion: this.appVersion,
         resumeAccepted: false,
+        ...this.authenticatedAppearance(),
       },
     });
+  }
+
+  private authenticatedAppearance(): { appearance?: RemoteAppearanceSnapshot } {
+    if (!this.appearanceProvider) return {};
+    try {
+      const snapshot = this.appearanceProvider();
+      if (snapshot === null) return {};
+      const result = RemoteAppearanceSnapshotSchema.safeParse(snapshot);
+      if (result.success) return { appearance: result.data };
+    } catch {
+      // The authenticated session remains usable when appearance projection fails.
+    }
+    if (!this.appearanceWarningIssued) {
+      this.appearanceWarningIssued = true;
+      console.warn("[RemoteProtocolRouter] Ignoring invalid appearance snapshot");
+    }
+    return {};
   }
 
   private handleReady(session: RemoteSession, envelope: RemoteEnvelope): void {

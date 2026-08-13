@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../console/portal_terminal.dart';
 import '../security/device_identity_store.dart';
+import '../theme/portal_appearance.dart';
 import '../transport/remote_protocol_client.dart';
 
 enum PortalConnectionState {
@@ -197,6 +198,8 @@ class PortalController extends ChangeNotifier {
   bool consoleStale = false;
   bool mutationPending = false;
   String? statusMessage;
+  PortalAppearance? hostAppearance;
+  PortalAppearance? _sessionAppearance;
   String? _resumeSessionId;
   bool _refreshingProjection = false;
   bool _resyncingConsole = false;
@@ -230,6 +233,7 @@ class PortalController extends ChangeNotifier {
     final targetProjectId = selectedProject?.id;
     final targetPanelId = selectedAgent?.panelId;
     final targetGeneration = selectedAgent?.generation;
+    _sessionAppearance = null;
     connectionState = PortalConnectionState.connecting;
     statusMessage = null;
     notifyListeners();
@@ -239,21 +243,29 @@ class PortalController extends ChangeNotifier {
         Uri(scheme: 'wss', host: credential.host, port: credential.port),
         credential.tlsFingerprint,
       );
-      final capabilities = await client.authenticate(
+      await _events?.cancel();
+      _events = client.events.listen(_handleEvent);
+      final authentication = await client.authenticate(
         identity: identity,
         hostPublicKey: credential.hostPublicKey,
         hostFingerprint: credential.hostFingerprint,
         resumeSessionId: _resumeSessionId,
       );
       _resumeSessionId = client.sessionId;
-      if (!capabilities.contains('observe-projects')) {
+      if (authentication.appearance != null &&
+          (_sessionAppearance == null ||
+              authentication.appearance!.revision >
+                  _sessionAppearance!.revision)) {
+        hostAppearance = authentication.appearance;
+        _sessionAppearance = authentication.appearance;
+        notifyListeners();
+      }
+      if (!authentication.capabilities.contains('observe-projects')) {
         connectionState = PortalConnectionState.degraded;
         statusMessage = 'This device can no longer observe projects';
         notifyListeners();
         return;
       }
-      await _events?.cancel();
-      _events = client.events.listen(_handleEvent);
       await loadProjects();
       if (targetProjectId != null &&
           projects.any((project) => project.id == targetProjectId)) {
@@ -284,7 +296,10 @@ class PortalController extends ChangeNotifier {
       };
       statusMessage = error.message;
       consoleStale = selectedAgent != null;
-      if (error.code == 'DEVICE_REVOKED') _notifyAccessRevoked();
+      if (error.code == 'DEVICE_REVOKED') {
+        hostAppearance = null;
+        _notifyAccessRevoked();
+      }
       notifyListeners();
     } catch (_) {
       connectionState = PortalConnectionState.offline;
@@ -761,6 +776,18 @@ class PortalController extends ChangeNotifier {
 
   void _handleEvent(Map<String, dynamic> envelope) {
     final type = envelope['type'];
+    if (type == 'appearance.updated') {
+      if (!client.appearanceEventsTrusted) return;
+      final payload = envelope['payload'];
+      final next = client.parseAppearance(payload);
+      if (next != null &&
+          next.revision > (_sessionAppearance?.revision ?? -1)) {
+        hostAppearance = next;
+        _sessionAppearance = next;
+        notifyListeners();
+      }
+      return;
+    }
     if (type == 'projects.updated' || type == 'project.updated') {
       if (!_refreshingProjection) {
         unawaited(_refreshProjection(type));
@@ -778,12 +805,14 @@ class PortalController extends ChangeNotifier {
       statusMessage = revoked
           ? 'This device was revoked on the host · pair it again to reconnect'
           : 'Connection lost · showing the last received state';
+      if (revoked) hostAppearance = null;
       if (revoked) _notifyAccessRevoked();
       notifyListeners();
       return;
     }
     if (type == 'session.revoked') {
       connectionState = PortalConnectionState.revoked;
+      hostAppearance = null;
       consoleStale = true;
       statusMessage = 'This device was revoked on the host';
       _notifyAccessRevoked();

@@ -1,9 +1,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import '../console/portal_terminal.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
+import '../console/portal_terminal.dart';
+import '../theme/portal_icons.dart';
+import '../theme/portal_appearance.dart';
+import '../theme/portal_theme.dart';
 import '../transport/remote_protocol_client.dart';
 import 'portal_controller.dart';
 
@@ -24,6 +27,16 @@ class _PortalShellState extends State<PortalShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    widget.controller.addListener(_refresh);
+    unawaited(widget.controller.connect());
+  }
+
+  @override
+  void didUpdateWidget(PortalShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller == widget.controller) return;
+    oldWidget.controller.removeListener(_refresh);
+    oldWidget.controller.dispose();
     widget.controller.addListener(_refresh);
     unawaited(widget.controller.connect());
   }
@@ -62,113 +75,139 @@ class _PortalShellState extends State<PortalShell> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(controller.credential.displayName),
-        actions: [
-          Semantics(
-            label: 'Connection ${_connectionLabel(controller.connectionState)}',
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  if (controller.connectionState ==
-                          PortalConnectionState.connecting ||
-                      controller.connectionState ==
-                          PortalConnectionState.loading)
-                    const SizedBox.square(
-                      dimension: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  else
-                    Icon(_connectionIcon(controller.connectionState), size: 18),
-                  const SizedBox(width: 7),
-                  Text(_connectionLabel(controller.connectionState)),
-                ],
+    final appearance = controller.hostAppearance ?? generatedDaintreeAppearance;
+    final theme = buildPortalTheme(
+      appearance,
+      highContrast: MediaQuery.highContrastOf(context),
+    );
+    return Theme(
+      data: theme,
+      child: PortalSystemChrome(
+        appearance: appearance,
+        child: Scaffold(
+          appBar: AppBar(
+            title: Text(controller.credential.displayName),
+            actions: [
+              Semantics(
+                label:
+                    'Connection ${_connectionLabel(controller.connectionState)}',
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      if (controller.connectionState ==
+                              PortalConnectionState.connecting ||
+                          controller.connectionState ==
+                              PortalConnectionState.loading)
+                        const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      else
+                        Icon(
+                          _connectionIcon(controller.connectionState),
+                          size: 18,
+                          color: _connectionColor(
+                            appearance,
+                            controller.connectionState,
+                          ),
+                        ),
+                      const SizedBox(width: 7),
+                      Text(_connectionLabel(controller.connectionState)),
+                    ],
+                  ),
+                ),
               ),
+            ],
+          ),
+          body: SafeArea(
+            child: Column(
+              children: [
+                if (controller.statusMessage != null)
+                  _StatusBanner(
+                    message: controller.statusMessage!,
+                    tone: _statusTone(appearance, controller.connectionState),
+                    canRetry:
+                        controller.connectionState ==
+                            PortalConnectionState.offline ||
+                        (controller.connectionState ==
+                                PortalConnectionState.degraded &&
+                            controller.selectedProject != null) ||
+                        (controller.consoleStale &&
+                            controller.selectedAgent != null),
+                    onRetry:
+                        controller.consoleStale &&
+                            controller.selectedAgent != null
+                        ? controller.retryConsole
+                        : controller.connectionState ==
+                                  PortalConnectionState.degraded &&
+                              controller.selectedProject != null
+                        ? () => unawaited(controller.refreshSelectedProject())
+                        : controller.connect,
+                    onPairAgain:
+                        controller.connectionState ==
+                            PortalConnectionState.revoked
+                        ? widget.onPairAgain
+                        : null,
+                  ),
+                Expanded(
+                  child:
+                      controller.connectionState ==
+                          PortalConnectionState.revoked
+                      ? _RevokedHostState(
+                          hostName: controller.credential.displayName,
+                          onPairAgain: widget.onPairAgain,
+                        )
+                      : LayoutBuilder(
+                          builder: (context, constraints) {
+                            if (constraints.maxWidth >= 980) {
+                              return Row(
+                                children: [
+                                  SizedBox(
+                                    width: 280,
+                                    child: _ProjectsPane(
+                                      controller: controller,
+                                    ),
+                                  ),
+                                  const VerticalDivider(width: 1),
+                                  SizedBox(
+                                    width: 330,
+                                    child: _AgentsPane(controller: controller),
+                                  ),
+                                  const VerticalDivider(width: 1),
+                                  Expanded(
+                                    child: _ConsolePane(
+                                      controller: controller,
+                                      composer: composerController,
+                                    ),
+                                  ),
+                                ],
+                              );
+                            }
+                            if (controller.selectedAgent != null) {
+                              return _ConsolePane(
+                                controller: controller,
+                                composer: composerController,
+                                onBack: () {
+                                  unawaited(controller.leaveAgentConsole());
+                                },
+                              );
+                            }
+                            if (controller.selectedProject != null) {
+                              return _AgentsPane(
+                                controller: controller,
+                                onBack: () {
+                                  unawaited(controller.closeProject());
+                                },
+                              );
+                            }
+                            return _ProjectsPane(controller: controller);
+                          },
+                        ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            if (controller.statusMessage != null)
-              _StatusBanner(
-                message: controller.statusMessage!,
-                canRetry:
-                    controller.connectionState ==
-                        PortalConnectionState.offline ||
-                    (controller.connectionState ==
-                            PortalConnectionState.degraded &&
-                        controller.selectedProject != null) ||
-                    (controller.consoleStale &&
-                        controller.selectedAgent != null),
-                onRetry:
-                    controller.consoleStale && controller.selectedAgent != null
-                    ? controller.retryConsole
-                    : controller.connectionState ==
-                              PortalConnectionState.degraded &&
-                          controller.selectedProject != null
-                    ? () => unawaited(controller.refreshSelectedProject())
-                    : controller.connect,
-                onPairAgain:
-                    controller.connectionState == PortalConnectionState.revoked
-                    ? widget.onPairAgain
-                    : null,
-              ),
-            Expanded(
-              child: controller.connectionState == PortalConnectionState.revoked
-                  ? _RevokedHostState(
-                      hostName: controller.credential.displayName,
-                      onPairAgain: widget.onPairAgain,
-                    )
-                  : LayoutBuilder(
-                      builder: (context, constraints) {
-                        if (constraints.maxWidth >= 980) {
-                          return Row(
-                            children: [
-                              SizedBox(
-                                width: 280,
-                                child: _ProjectsPane(controller: controller),
-                              ),
-                              const VerticalDivider(width: 1),
-                              SizedBox(
-                                width: 330,
-                                child: _AgentsPane(controller: controller),
-                              ),
-                              const VerticalDivider(width: 1),
-                              Expanded(
-                                child: _ConsolePane(
-                                  controller: controller,
-                                  composer: composerController,
-                                ),
-                              ),
-                            ],
-                          );
-                        }
-                        if (controller.selectedAgent != null) {
-                          return _ConsolePane(
-                            controller: controller,
-                            composer: composerController,
-                            onBack: () {
-                              unawaited(controller.leaveAgentConsole());
-                            },
-                          );
-                        }
-                        if (controller.selectedProject != null) {
-                          return _AgentsPane(
-                            controller: controller,
-                            onBack: () {
-                              unawaited(controller.closeProject());
-                            },
-                          );
-                        }
-                        return _ProjectsPane(controller: controller);
-                      },
-                    ),
-            ),
-          ],
         ),
       ),
     );
@@ -185,13 +224,36 @@ class _PortalShellState extends State<PortalShell> with WidgetsBindingObserver {
   };
 
   IconData _connectionIcon(PortalConnectionState state) => switch (state) {
-    PortalConnectionState.ready => Icons.link_rounded,
+    PortalConnectionState.ready => PortalIcons.connected,
     PortalConnectionState.connecting ||
-    PortalConnectionState.loading => Icons.sync_rounded,
-    PortalConnectionState.degraded => Icons.warning_amber_rounded,
-    PortalConnectionState.revoked => Icons.block_rounded,
-    PortalConnectionState.incompatible => Icons.system_update_rounded,
-    PortalConnectionState.offline => Icons.link_off_rounded,
+    PortalConnectionState.loading => PortalIcons.refresh,
+    PortalConnectionState.degraded => PortalIcons.warning,
+    PortalConnectionState.revoked => PortalIcons.revoked,
+    PortalConnectionState.incompatible => PortalIcons.refresh,
+    PortalConnectionState.offline => PortalIcons.disconnected,
+  };
+
+  PortalTonePair _statusTone(
+    PortalAppearance appearance,
+    PortalConnectionState state,
+  ) => switch (state) {
+    PortalConnectionState.revoked ||
+    PortalConnectionState.incompatible => appearance.status.danger,
+    PortalConnectionState.degraded => appearance.status.warning,
+    _ => appearance.status.info,
+  };
+
+  Color _connectionColor(
+    PortalAppearance appearance,
+    PortalConnectionState state,
+  ) => switch (state) {
+    PortalConnectionState.ready => appearance.activity.active.foreground,
+    PortalConnectionState.connecting ||
+    PortalConnectionState.loading => appearance.activity.working.foreground,
+    PortalConnectionState.degraded => appearance.activity.waiting.foreground,
+    PortalConnectionState.revoked ||
+    PortalConnectionState.incompatible => appearance.status.danger.foreground,
+    PortalConnectionState.offline => appearance.activity.idle.foreground,
   };
 }
 
@@ -301,10 +363,10 @@ class _ProjectIcon extends StatelessWidget {
         width: 24,
         height: 24,
         semanticsLabel: '${project.name} project icon',
-        placeholderBuilder: (_) => const Icon(Icons.folder_outlined),
+        placeholderBuilder: (_) => const Icon(PortalIcons.project),
       );
     }
-    return const Icon(Icons.folder_outlined);
+    return const Icon(PortalIcons.project);
   }
 }
 
@@ -333,7 +395,7 @@ class _AgentsPane extends StatelessWidget {
             )
           : controller.worktrees.isEmpty
           ? const _EmptyMessage(
-              icon: Icons.account_tree_outlined,
+              icon: PortalIcons.worktree,
               message: 'Create a worktree on the desktop host',
             )
           : RefreshIndicator(
@@ -352,7 +414,7 @@ class _AgentsPane extends StatelessWidget {
                         controller.selectedWorktree?.id == worktree.id,
                     leading: Icon(
                       worktree.availability == 'available'
-                          ? Icons.account_tree_rounded
+                          ? PortalIcons.worktree
                           : Icons.cloud_off_rounded,
                     ),
                     title: Text(worktree.name),
@@ -416,7 +478,10 @@ class _AgentsPane extends StatelessWidget {
                           selected:
                               controller.selectedAgent?.panelId ==
                               agent.panelId,
-                          leading: Icon(_agentIcon(agent.state)),
+                          leading: Icon(
+                            _agentIcon(agent.state),
+                            color: _agentColor(context, agent.state),
+                          ),
                           title: Text(
                             agent.title,
                             maxLines: 1,
@@ -480,8 +545,19 @@ class _AgentsPane extends StatelessWidget {
     'waiting' => Icons.pause_circle_outline_rounded,
     'completed' => Icons.check_circle_outline_rounded,
     'exited' || 'unavailable' => Icons.cancel_outlined,
-    _ => Icons.terminal_rounded,
+    _ => PortalIcons.terminal,
   };
+
+  Color _agentColor(BuildContext context, String state) {
+    final activity = context.portalAppearance.activity;
+    return switch (state) {
+      'waiting' => activity.waiting.foreground,
+      'completed' => activity.completed.foreground,
+      'working' || 'directing' => activity.working.foreground,
+      'exited' || 'unavailable' => activity.idle.foreground,
+      _ => activity.active.foreground,
+    };
+  }
 
   String _agentState(PortalAgent agent) => switch (agent.continuityState) {
     'restored-screen' => 'Restored screen',
@@ -851,7 +927,7 @@ class _ConsolePane extends StatelessWidget {
       onBack: onBack,
       child: agent == null
           ? const _EmptyMessage(
-              icon: Icons.terminal_rounded,
+              icon: PortalIcons.terminal,
               message: 'Open an agent to observe its console',
             )
           : Column(
@@ -958,7 +1034,8 @@ class _Pane extends StatelessWidget {
                   Text(
                     eyebrow,
                     style: const TextStyle(
-                      fontFamily: 'monospace',
+                      fontFamily: portalTechnicalFontFamily,
+                      fontFamilyFallback: portalTechnicalFontFallback,
                       fontSize: 11,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 1.4,
@@ -988,26 +1065,28 @@ class _Pane extends StatelessWidget {
 class _StatusBanner extends StatelessWidget {
   const _StatusBanner({
     required this.message,
+    required this.tone,
     required this.canRetry,
     required this.onRetry,
     this.onPairAgain,
   });
 
   final String message;
+  final PortalTonePair tone;
   final bool canRetry;
   final VoidCallback onRetry;
   final VoidCallback? onPairAgain;
 
   @override
   Widget build(BuildContext context) => Material(
-    color: const Color(0xFFFFE7BE),
+    color: tone.surface,
     child: SafeArea(
       bottom: false,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Row(
           children: [
-            const Icon(Icons.info_outline_rounded, size: 20),
+            Icon(Icons.info_outline_rounded, size: 20, color: tone.foreground),
             const SizedBox(width: 10),
             Expanded(child: Text(message)),
             if (onPairAgain != null)
@@ -1044,7 +1123,7 @@ class _RevokedHostState extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.phonelink_lock_rounded, size: 48),
+                const Icon(PortalIcons.secureDevice, size: 48),
                 const SizedBox(height: 18),
                 Text(
                   'Pair $hostName again',
@@ -1062,7 +1141,7 @@ class _RevokedHostState extends StatelessWidget {
                   const SizedBox(height: 20),
                   FilledButton.icon(
                     onPressed: onPairAgain,
-                    icon: const Icon(Icons.qr_code_scanner_rounded),
+                    icon: const Icon(PortalIcons.scanPairing),
                     label: const Text('Pair again'),
                   ),
                 ],
@@ -1150,7 +1229,7 @@ class _ProjectEmptyState extends StatelessWidget {
                   color: Theme.of(context).colorScheme.primaryContainer,
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: const Icon(Icons.folder_open_rounded),
+                child: const Icon(PortalIcons.project),
               ),
               const SizedBox(height: 18),
               Text(

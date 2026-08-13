@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:daintree_portal/portal/portal_controller.dart';
 import 'package:daintree_portal/security/device_identity_store.dart';
+import 'package:daintree_portal/theme/generated_daintree_appearance.dart';
+import 'package:daintree_portal/theme/portal_appearance.dart';
 import 'package:daintree_portal/transport/remote_protocol_client.dart';
 import 'package:flutter_test/flutter_test.dart';
 import '../security/device_identity_store_test.dart';
@@ -18,12 +20,19 @@ class FakePortalClient extends RemoteProtocolClient {
     sync: true,
   );
   bool isConnected = false;
+  bool trustAppearanceEvents = true;
+  RemoteProtocolException? authenticationError;
+  final authenticationResults = <RemoteAuthenticationResult>[];
+  void Function()? onAuthenticate;
 
   @override
   Stream<Map<String, dynamic>> get events => eventController.stream;
 
   @override
   bool get connected => isConnected;
+
+  @override
+  bool get appearanceEventsTrusted => trustAppearanceEvents;
 
   @override
   String get sessionId => 'session-new';
@@ -33,12 +42,24 @@ class FakePortalClient extends RemoteProtocolClient {
       isConnected = true;
 
   @override
-  Future<List<String>> authenticate({
+  Future<RemoteAuthenticationResult> authenticate({
     required DeviceIdentity identity,
     required String hostPublicKey,
     required String hostFingerprint,
     String? resumeSessionId,
-  }) async => const ['observe-projects', 'prompt-agents', 'launch-agents'];
+  }) async {
+    onAuthenticate?.call();
+    if (authenticationError != null) throw authenticationError!;
+    return authenticationResults.isEmpty
+        ? const RemoteAuthenticationResult(
+            capabilities: [
+              'observe-projects',
+              'prompt-agents',
+              'launch-agents',
+            ],
+          )
+        : authenticationResults.removeAt(0);
+  }
 
   @override
   Future<Map<String, dynamic>> request(
@@ -70,6 +91,152 @@ class FakePortalClient extends RemoteProtocolClient {
 }
 
 void main() {
+  test(
+    'authenticated appearance survives transient disconnect and absent reconnect data',
+    () async {
+      final client = FakePortalClient();
+      final appearance = _hostAppearance(revision: 7);
+      client.authenticationResults.addAll([
+        RemoteAuthenticationResult(
+          capabilities: const ['observe-projects'],
+          appearance: appearance,
+        ),
+        const RemoteAuthenticationResult(capabilities: ['observe-projects']),
+      ]);
+      _queueInitialJourney(client);
+      _queueInitialJourney(client);
+      final controller = _controller(client);
+
+      await controller.connect();
+      expect(controller.hostAppearance, same(appearance));
+      client.eventController.add({
+        'kind': 'local',
+        'type': 'session.disconnected',
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.hostAppearance, same(appearance));
+
+      await controller.connect();
+      expect(controller.hostAppearance, same(appearance));
+    },
+  );
+
+  test('live appearance applies only valid newer revisions', () async {
+    final client = FakePortalClient();
+    final initial = _hostAppearance(revision: 4);
+    client.authenticationResults.add(
+      RemoteAuthenticationResult(
+        capabilities: const ['observe-projects'],
+        appearance: initial,
+      ),
+    );
+    _queueInitialJourney(client);
+    final controller = _controller(client);
+    await controller.connect();
+
+    for (final update in [
+      _hostAppearance(revision: 4),
+      _hostAppearance(revision: 3),
+      {'version': 999, 'revision': 20},
+    ]) {
+      client.eventController.add({
+        'kind': 'event',
+        'type': 'appearance.updated',
+        'payload': update is PortalAppearance
+            ? _hostAppearanceJson(update.revision)
+            : update,
+      });
+    }
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.hostAppearance, same(initial));
+    expect(controller.connectionState, PortalConnectionState.ready);
+
+    client.eventController.add({
+      'kind': 'event',
+      'type': 'appearance.updated',
+      'payload': _hostAppearanceJson(5),
+    });
+    await Future<void>.delayed(Duration.zero);
+    expect(controller.hostAppearance?.revision, 5);
+    expect(controller.hostAppearance?.themeId, 'host-5');
+  });
+
+  test(
+    'ready-transition update cannot be overwritten by the older welcome snapshot',
+    () async {
+      final client = FakePortalClient();
+      client.authenticationResults.add(
+        RemoteAuthenticationResult(
+          capabilities: const ['observe-projects'],
+          appearance: _hostAppearance(revision: 4),
+        ),
+      );
+      client.onAuthenticate = () => client.eventController.add({
+        'kind': 'event',
+        'type': 'appearance.updated',
+        'payload': _hostAppearanceJson(5),
+      });
+      _queueInitialJourney(client);
+      final controller = _controller(client);
+
+      await controller.connect();
+
+      expect(controller.hostAppearance?.revision, 5);
+      expect(controller.hostAppearance?.themeId, 'host-5');
+    },
+  );
+
+  test(
+    'unverified appearance events cannot alter state when authentication fails',
+    () async {
+      final client = FakePortalClient()
+        ..trustAppearanceEvents = false
+        ..authenticationError = const RemoteProtocolException(
+          'HOST_IDENTITY_MISMATCH',
+          'The trusted host identity changed',
+        );
+      client.onAuthenticate = () => client.eventController.add({
+        'kind': 'event',
+        'type': 'appearance.updated',
+        'payload': _hostAppearanceJson(99),
+      });
+      final controller = _controller(client);
+
+      await controller.connect();
+
+      expect(controller.hostAppearance, isNull);
+      expect(controller.connectionState, PortalConnectionState.offline);
+      expect(controller.statusMessage, contains('trusted host identity'));
+    },
+  );
+
+  test(
+    'authenticated reconnect accepts a changed appearance from a new revision epoch',
+    () async {
+      final client = FakePortalClient();
+      client.authenticationResults.addAll([
+        RemoteAuthenticationResult(
+          capabilities: const ['observe-projects'],
+          appearance: _hostAppearance(revision: 7),
+        ),
+        RemoteAuthenticationResult(
+          capabilities: const ['observe-projects'],
+          appearance: _hostAppearance(revision: 1),
+        ),
+      ]);
+      _queueInitialJourney(client);
+      _queueInitialJourney(client);
+      final controller = _controller(client);
+
+      await controller.connect();
+      expect(controller.hostAppearance?.revision, 7);
+      await controller.connect();
+
+      expect(controller.hostAppearance?.revision, 1);
+      expect(controller.hostAppearance?.themeId, 'host-1');
+    },
+  );
+
   test('project-open failure leaves a retryable degraded state', () async {
     final client = FakePortalClient();
     _queueInitialJourney(client);
@@ -182,6 +349,12 @@ void main() {
 
   test('revoked socket close remains explicit and read-only', () async {
     final client = FakePortalClient();
+    client.authenticationResults.add(
+      RemoteAuthenticationResult(
+        capabilities: const ['observe-projects'],
+        appearance: _hostAppearance(revision: 3),
+      ),
+    );
     _queueInitialJourney(client);
     client.queued['console.subscribe'] = [_snapshot()];
     final controller = _controller(client);
@@ -200,8 +373,32 @@ void main() {
     await Future<void>.delayed(Duration.zero);
 
     expect(controller.connectionState, PortalConnectionState.revoked);
+    expect(controller.hostAppearance, isNull);
     expect(controller.readOnly, isTrue);
     expect(controller.statusMessage, contains('pair it again'));
+  });
+
+  test('revocation event clears the authenticated host appearance', () async {
+    final client = FakePortalClient();
+    client.authenticationResults.add(
+      RemoteAuthenticationResult(
+        capabilities: const ['observe-projects'],
+        appearance: _hostAppearance(revision: 9),
+      ),
+    );
+    _queueInitialJourney(client);
+    final controller = _controller(client);
+    await controller.connect();
+
+    client.eventController.add({
+      'kind': 'event',
+      'type': 'session.revoked',
+      'payload': {'reason': 'device-revoked'},
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.connectionState, PortalConnectionState.revoked);
+    expect(controller.hostAppearance, isNull);
   });
 
   test(
@@ -716,6 +913,20 @@ void main() {
       );
     },
   );
+}
+
+PortalAppearance _hostAppearance({required int revision}) {
+  return PortalAppearance.parse(_hostAppearanceJson(revision));
+}
+
+Map<String, dynamic> _hostAppearanceJson(int revision) {
+  final json =
+      jsonDecode(jsonEncode(generatedDaintreeAppearanceJson))
+          as Map<String, dynamic>;
+  json['revision'] = revision;
+  json['themeId'] = 'host-$revision';
+  (json['surfaces']! as Map<String, dynamic>)['canvas'] = '#123456ff';
+  return json;
 }
 
 PortalController _controller(

@@ -4,6 +4,48 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:xterm/xterm.dart';
 
+import '../theme/portal_theme.dart';
+
+const portalTerminalStyle = TerminalStyle(
+  fontSize: 13,
+  height: 1.35,
+  fontFamily: portalTechnicalFontFamily,
+  fontFamilyFallback: portalTechnicalFontFallback,
+);
+
+TerminalTheme buildPortalTerminalTheme(
+  BuildContext context, {
+  required bool highContrast,
+}) {
+  final appearance = context.portalAppearance;
+  final terminal = appearance.terminal;
+  return TerminalTheme(
+    cursor: terminal.cursor,
+    selection: highContrast ? appearance.accent.muted : terminal.selection,
+    foreground: terminal.foreground,
+    background: terminal.background,
+    black: terminal.black,
+    red: terminal.red,
+    green: terminal.green,
+    yellow: terminal.yellow,
+    blue: terminal.blue,
+    magenta: terminal.magenta,
+    cyan: terminal.cyan,
+    white: terminal.white,
+    brightBlack: terminal.brightBlack,
+    brightRed: terminal.brightRed,
+    brightGreen: terminal.brightGreen,
+    brightYellow: terminal.brightYellow,
+    brightBlue: terminal.brightBlue,
+    brightMagenta: terminal.brightMagenta,
+    brightCyan: terminal.brightCyan,
+    brightWhite: terminal.brightWhite,
+    searchHitBackground: appearance.status.warning.surface,
+    searchHitBackgroundCurrent: appearance.accent.muted,
+    searchHitForeground: appearance.text.primary,
+  );
+}
+
 const portalTerminalColumns = 100;
 const portalTerminalRows = 30;
 const portalTerminalMaxLines = 10000;
@@ -332,10 +374,11 @@ class _PortalTerminalViewState extends State<PortalTerminalView> {
       listenable: widget.model,
       builder: (context, _) {
         final media = MediaQuery.of(context);
-        final terminalTheme = media.highContrast
-            ? TerminalThemes.whiteOnBlack
-            : TerminalThemes.defaultTheme;
-        const terminalStyle = TerminalStyle(fontSize: 13, height: 1.35);
+        final terminalTheme = buildPortalTerminalTheme(
+          context,
+          highContrast: media.highContrast,
+        );
+        const terminalStyle = portalTerminalStyle;
         final textPainter = TextPainter(
           text: TextSpan(
             text: 'mmmmmmmmmm',

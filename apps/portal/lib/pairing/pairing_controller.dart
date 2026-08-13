@@ -135,7 +135,7 @@ class PairingController extends ChangeNotifier {
     try {
       await client.close();
       await client.open(endpoint, parsed.tlsFingerprint);
-      final capabilities = await client.authenticate(
+      final authentication = await client.authenticate(
         identity: identity,
         hostPublicKey: parsed.hostPublicKey,
         hostFingerprint: parsed.hostFingerprint,
@@ -149,7 +149,7 @@ class PairingController extends ChangeNotifier {
         hostPublicKey: parsed.hostPublicKey,
         hostFingerprint: parsed.hostFingerprint,
         tlsFingerprint: parsed.tlsFingerprint,
-        capabilities: capabilities,
+        capabilities: authentication.capabilities,
         accessRevoked: false,
       );
       await hostStore.save(credential);

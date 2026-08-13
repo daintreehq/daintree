@@ -41,6 +41,7 @@ export class RemoteSessionRegistry implements RemoteSessionPolicySink {
     (connectionId: string, streamId: string) => void
   >();
   private readonly sessionRemovedListeners = new Set<(connectionId: string) => void>();
+  private readonly sessionReadyListeners = new Set<(session: RemoteSession) => void>();
 
   create(connection: RemoteConnection): RemoteSession {
     const session: RemoteSession = {
@@ -94,6 +95,7 @@ export class RemoteSessionRegistry implements RemoteSessionPolicySink {
     const session = this.require(connectionId);
     if (session.state !== "authenticated") throw new Error("Remote session is not authenticated");
     session.state = "ready";
+    for (const listener of this.sessionReadyListeners) listener(session);
     return session;
   }
 
@@ -237,6 +239,11 @@ export class RemoteSessionRegistry implements RemoteSessionPolicySink {
   onSessionRemoved(listener: (connectionId: string) => void): () => void {
     this.sessionRemovedListeners.add(listener);
     return () => this.sessionRemovedListeners.delete(listener);
+  }
+
+  onSessionReady(listener: (session: RemoteSession) => void): () => void {
+    this.sessionReadyListeners.add(listener);
+    return () => this.sessionReadyListeners.delete(listener);
   }
 
   trackConsoleOutput(connectionId: string, streamId: string, seq: number, bytes: number): boolean {

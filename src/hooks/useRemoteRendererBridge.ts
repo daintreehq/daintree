@@ -92,7 +92,7 @@ export function createRemoteRendererRequestHandler(deps: RemoteRendererHandlerDe
       if (deps.getLaunchGeneration(request.panelId) !== request.launchGeneration) {
         return errorResponse(request, "ACTION_FAILED", "Agent launch identity changed");
       }
-      let closed = false;
+      let closed: boolean;
       try {
         closed = await deps.closeAgent(request.panelId, request.projectId, request.worktreeId);
       } catch {

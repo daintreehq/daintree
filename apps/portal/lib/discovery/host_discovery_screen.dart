@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/portal_icons.dart';
+import '../theme/portal_theme.dart';
 import 'discovered_host.dart';
 import 'host_discovery_controller.dart';
 
@@ -83,7 +85,8 @@ class _HostDiscoveryScreenState extends State<HostDiscoveryScreen>
                   const Text(
                     'DAINTREE / PORTAL',
                     style: TextStyle(
-                      fontFamily: 'monospace',
+                      fontFamily: portalTechnicalFontFamily,
+                      fontFamilyFallback: portalTechnicalFontFallback,
                       fontSize: 12,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 1.8,
@@ -101,14 +104,14 @@ class _HostDiscoveryScreenState extends State<HostDiscoveryScreen>
                   Text(
                     'Portal looks only on this local network. Trust is verified when you pair.',
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      color: const Color(0xFF566159),
+                      color: context.portalAppearance.text.secondary,
                     ),
                   ),
                   const SizedBox(height: 30),
                   if (widget.onScanPairing != null) ...[
                     FilledButton.icon(
                       onPressed: widget.onScanPairing,
-                      icon: const Icon(Icons.qr_code_scanner_rounded),
+                      icon: const Icon(PortalIcons.scanPairing),
                       label: const Text('Pair a new host'),
                       style: FilledButton.styleFrom(
                         minimumSize: const Size(180, 52),
@@ -164,11 +167,12 @@ class _DiscoveryPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final appearance = context.portalAppearance;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xFFE5E8DE),
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: const Color(0xFFC7CEC3)),
+        color: appearance.surfaces.panel,
+        borderRadius: BorderRadius.circular(16 * appearance.radiusScale),
+        border: Border.all(color: appearance.borders.defaultColor),
       ),
       child: Padding(
         padding: const EdgeInsets.all(22),
@@ -180,7 +184,8 @@ class _DiscoveryPanel extends StatelessWidget {
                 const Text(
                   'NEARBY',
                   style: TextStyle(
-                    fontFamily: 'monospace',
+                    fontFamily: portalTechnicalFontFamily,
+                    fontFamilyFallback: portalTechnicalFontFallback,
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
                     letterSpacing: 1.5,
@@ -199,7 +204,7 @@ class _DiscoveryPanel extends StatelessWidget {
             if (controller.recoveryMessage != null) ...[
               const SizedBox(height: 18),
               Material(
-                color: const Color(0xFFFFE5C2),
+                color: appearance.status.warning.surface,
                 borderRadius: BorderRadius.circular(14),
                 child: Padding(
                   padding: const EdgeInsets.all(14),
@@ -252,10 +257,12 @@ class _ManualPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final appearance = context.portalAppearance;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xFF1D2A22),
-        borderRadius: BorderRadius.circular(28),
+        color: appearance.surfaces.elevatedPanel,
+        borderRadius: BorderRadius.circular(16 * appearance.radiusScale),
+        border: Border.all(color: appearance.borders.defaultColor),
       ),
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -263,40 +270,44 @@ class _ManualPanel extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(
-                Icons.route_rounded,
-                color: Color(0xFFD5E8D4),
+              Icon(
+                PortalIcons.manualRoute,
+                color: appearance.text.secondary,
                 size: 30,
               ),
               const SizedBox(height: 36),
-              const Text(
+              Text(
                 'Private network?',
                 style: TextStyle(
-                  color: Colors.white,
+                  color: appearance.text.primary,
                   fontSize: 24,
                   fontWeight: FontWeight.w700,
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 'Connect by private DNS name or IP when multicast discovery cannot cross your VPN.',
-                style: TextStyle(color: Color(0xFFB7C5BA), height: 1.45),
+                style: TextStyle(
+                  color: appearance.text.secondary,
+                  height: 1.45,
+                ),
               ),
               const SizedBox(height: 20),
               TextField(
                 controller: endpointController,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontFamily: 'monospace',
+                style: TextStyle(
+                  color: appearance.text.primary,
+                  fontFamily: portalTechnicalFontFamily,
+                  fontFamilyFallback: portalTechnicalFontFallback,
                 ),
                 keyboardType: TextInputType.url,
                 textInputAction: TextInputAction.go,
                 onSubmitted: (_) => onConnect(),
                 decoration: InputDecoration(
                   hintText: 'host.internal:45123',
-                  hintStyle: const TextStyle(color: Color(0xFF7E9082)),
+                  hintStyle: TextStyle(color: appearance.text.placeholder),
                   filled: true,
-                  fillColor: const Color(0xFF27372D),
+                  fillColor: appearance.surfaces.input,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(14),
                     borderSide: BorderSide.none,
@@ -306,12 +317,12 @@ class _ManualPanel extends StatelessWidget {
               const SizedBox(height: 12),
               FilledButton.icon(
                 onPressed: onConnect,
-                icon: const Icon(Icons.arrow_forward_rounded),
+                icon: const Icon(PortalIcons.next),
                 label: const Text('Connect manually'),
                 style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(52),
-                  backgroundColor: const Color(0xFFD5E8D4),
-                  foregroundColor: const Color(0xFF18231C),
+                  backgroundColor: appearance.accent.primary,
+                  foregroundColor: appearance.accent.foreground,
                 ),
               ),
             ],
@@ -330,6 +341,7 @@ class _HostRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final appearance = context.portalAppearance;
     final state = switch (host.reachability) {
       HostReachability.available => 'Available',
       HostReachability.stale => 'No longer advertised',
@@ -343,7 +355,7 @@ class _HostRow extends StatelessWidget {
         onTap: host.reachability == HostReachability.available && onTap != null
             ? () => onTap!(host)
             : null,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(10 * appearance.radiusScale),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 4),
           child: Row(
@@ -352,10 +364,12 @@ class _HostRow extends StatelessWidget {
                 width: 46,
                 height: 46,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFCCD8CB),
-                  borderRadius: BorderRadius.circular(13),
+                  color: appearance.surfaces.active,
+                  borderRadius: BorderRadius.circular(
+                    10 * appearance.radiusScale,
+                  ),
                 ),
-                child: const Icon(Icons.computer_rounded),
+                child: const Icon(PortalIcons.host),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -371,14 +385,14 @@ class _HostRow extends StatelessWidget {
                       state,
                       style: TextStyle(
                         color: host.reachability == HostReachability.available
-                            ? const Color(0xFF315C45)
-                            : const Color(0xFF6F5B3E),
+                            ? appearance.status.success.foreground
+                            : appearance.status.warning.foreground,
                       ),
                     ),
                   ],
                 ),
               ),
-              const Icon(Icons.chevron_right_rounded),
+              const Icon(PortalIcons.next),
             ],
           ),
         ),
@@ -398,7 +412,9 @@ class _StatusDot extends StatelessWidget {
     height: 9,
     decoration: BoxDecoration(
       shape: BoxShape.circle,
-      color: active ? const Color(0xFF3E7A57) : const Color(0xFF8B918B),
+      color: active
+          ? context.portalAppearance.activity.active.foreground
+          : context.portalAppearance.activity.idle.foreground,
     ),
   );
 }
