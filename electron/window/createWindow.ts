@@ -41,6 +41,8 @@ import {
   INITIAL_COLOR_SCHEME_ARG,
   INSTANCE_ROLE_ARG,
 } from "./skeletonCss.js";
+import { getPlatformWindowOptions } from "./platformWindowOptions.js";
+import { seedTitleBarOverlay } from "./titleBarOverlay.js";
 import { readLastActiveProjectIdentitySync } from "../services/persistence/readLastProjectId.js";
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { markPerformance } from "../utils/performance.js";
@@ -218,36 +220,16 @@ export function setupBrowserWindow(
       show: false,
       minWidth: 800,
       minHeight: 600,
-      ...(process.platform === "darwin"
-        ? {
-            titleBarStyle: "hiddenInset" as const,
-            trafficLightPosition: { x: 12, y: 18 },
-            // Deliver the window-activating click to the content instead of
-            // swallowing it (macOS default), so clicking a panel in an
-            // inactive window focuses that panel. Propagates to all child
-            // WebContentsViews. Matches VS Code (clickThroughInactive) and iTerm2.
-            acceptFirstMouse: true,
-          }
-        : process.platform === "win32"
-          ? {
-              titleBarStyle: "hidden" as const,
-              titleBarOverlay: {
-                color: windowBg,
-                symbolColor: "#a1a1aa",
-                height: 48,
-              },
-              // Hide the native menu bar so the custom 48px toolbar is the
-              // only chrome; Alt still reveals the menu. Must be set in the
-              // constructor — calling setAutoHideMenuBar after creation can
-              // cause Window Controls Overlay layout shifts.
-              autoHideMenuBar: true,
-            }
-          : { autoHideMenuBar: true }),
+      ...getPlatformWindowOptions(windowBg),
       backgroundColor: windowBg,
     },
     projectPath ?? undefined
   );
   markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
+
+  // Record the overlay colour the constructor just applied natively, so the
+  // first banner or theme change doesn't repaint the frame redundantly.
+  seedTitleBarOverlay(win, scheme.tokens);
 
   // Register the window's own webContents for getWindowForWebContents() fallback
   registerWebContents(win.webContents, win);

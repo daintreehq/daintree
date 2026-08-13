@@ -382,3 +382,66 @@ describe("GlobalBannerCoordinator", () => {
     expect(screen.queryByText("Running under Rosetta")).toBeNull();
   });
 });
+
+/**
+ * Issue #11766. The Windows caption strip is painted by the OS above every
+ * WebContentsView, so main has to be told which banner severity currently sits
+ * under it — otherwise the strip keeps the canvas colour and reads as a pale
+ * rectangle punched into a tinted banner.
+ */
+describe("GlobalBannerCoordinator caption-strip reporting", () => {
+  let setBannerSeverity: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    setBannerSeverity = vi.fn().mockResolvedValue(undefined);
+    (window as unknown as { electron?: unknown }).electron = {
+      windowChrome: { setBannerSeverity },
+    };
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { electron?: unknown }).electron;
+  });
+
+  it("reports the severity of the banner actually on screen", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("reports the winning banner's severity, not the suppressed one's", () => {
+    // Host crash (error) outranks cloud sync (warning); the strip must follow
+    // whichever banner actually renders.
+    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "error" });
+    expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("stays silent while no banner occupies the band", () => {
+    render(<GlobalBannerCoordinator />);
+    expect(setBannerSeverity).not.toHaveBeenCalled();
+  });
+
+  it("clears the report when the banner goes away", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    const { unmount } = render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    unmount();
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: null });
+  });
+
+  it("survives a host without the windowChrome bridge", () => {
+    delete (window as unknown as { electron?: unknown }).electron;
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    expect(() => render(<GlobalBannerCoordinator />)).not.toThrow();
+  });
+});

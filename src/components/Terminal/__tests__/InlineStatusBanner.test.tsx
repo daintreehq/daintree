@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { useEffect, useState } from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { AlertTriangle, CheckCircle2, FileEdit, Info, XCircle } from "lucide-react";
 import { InlineStatusBanner } from "../InlineStatusBanner";
+import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -523,5 +524,126 @@ describe("InlineStatusBanner", () => {
     } finally {
       document.body.removeAttribute("data-performance-mode");
     }
+  });
+});
+
+/**
+ * Issue #11766. In the global banner host this component owns the window's
+ * title-bar band: the toolbar that normally supplies the drag region and
+ * top-edge resize strip has been pushed below the caption buttons, and the
+ * native caption strip needs to know which severity is painted beneath it.
+ * None of that may leak into the far more common inline usage — a banner
+ * inside a terminal must never become a window drag handle.
+ */
+describe("InlineStatusBanner as the window title-bar surface", () => {
+  function renderGlobal(
+    props: Partial<React.ComponentProps<typeof InlineStatusBanner>> = {},
+    onSeverityChange = vi.fn()
+  ) {
+    const result = render(
+      <WindowControlsInsetProvider onSeverityChange={onSeverityChange}>
+        <InlineStatusBanner
+          icon={AlertTriangle}
+          title="Project in a synced folder"
+          severity="warning"
+          animated={false}
+          {...props}
+        />
+      </WindowControlsInsetProvider>
+    );
+    return { ...result, onSeverityChange };
+  }
+
+  function root(): HTMLElement {
+    return screen.getByRole("alert");
+  }
+
+  it("becomes draggable and fills the caption band's height", () => {
+    renderGlobal();
+    // A banner shorter than the 48px native strip would let the tint applied to
+    // that strip bleed over the toolbar below it.
+    expect(root().className).toContain("app-drag-region");
+    expect(root().className).toContain("min-h-12");
+  });
+
+  it("leaves an inline banner undraggable and unconstrained", () => {
+    render(
+      <InlineStatusBanner icon={AlertTriangle} title="Inline" severity="warning" animated={false} />
+    );
+    expect(root().className).not.toContain("app-drag-region");
+    expect(root().className).not.toContain("min-h-12");
+    expect(root().querySelector(".window-resize-strip")).toBeNull();
+  });
+
+  it("carries the top-edge resize strip the displaced toolbar can no longer provide", () => {
+    renderGlobal();
+    expect(root().querySelector(".window-resize-strip")).not.toBeNull();
+  });
+
+  it("keeps every interactive control out of the drag region", () => {
+    renderGlobal({
+      description: "This project is in a synced folder.",
+      onClose: vi.fn(),
+      actions: [
+        { id: "dismiss", label: "Don't warn for this project", onClick: vi.fn() },
+        { id: "more", label: "Learn more", onClick: vi.fn() },
+      ],
+      descriptionExtras: <a href="#extra">Details</a>,
+    });
+
+    // A control swallowed by the drag region becomes unclickable, which is
+    // exactly what the issue calls out for "Don't warn for this project".
+    for (const name of ["Don't warn for this project", "Learn more", "Dismiss"]) {
+      expect(screen.getByRole("button", { name }).closest(".app-no-drag")).not.toBeNull();
+    }
+    expect(screen.getByRole("link", { name: "Details" }).closest(".app-no-drag")).not.toBeNull();
+  });
+
+  it("still fires the dismiss action while inside the drag region", () => {
+    const onClick = vi.fn();
+    renderGlobal({
+      description: "This project is in a synced folder.",
+      actions: [{ id: "dismiss", label: "Don't warn for this project", onClick }],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Don't warn for this project" }));
+
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports its severity on mount so the caption strip can match it", () => {
+    const { onSeverityChange } = renderGlobal({ severity: "error" });
+    expect(onSeverityChange).toHaveBeenCalledWith("error");
+  });
+
+  it("re-reports when the severity changes", () => {
+    const onSeverityChange = vi.fn();
+    const { rerender } = renderGlobal({ severity: "warning" }, onSeverityChange);
+    onSeverityChange.mockClear();
+
+    rerender(
+      <WindowControlsInsetProvider onSeverityChange={onSeverityChange}>
+        <InlineStatusBanner icon={AlertTriangle} title="t" severity="info" animated={false} />
+      </WindowControlsInsetProvider>
+    );
+
+    expect(onSeverityChange).toHaveBeenLastCalledWith("info");
+  });
+
+  it("clears the report on unmount so the strip returns to the canvas", () => {
+    const { onSeverityChange, unmount } = renderGlobal();
+    onSeverityChange.mockClear();
+
+    unmount();
+
+    expect(onSeverityChange).toHaveBeenCalledWith(null);
+  });
+
+  it("never reports from an inline banner", () => {
+    const onSeverityChange = vi.fn();
+    render(
+      <InlineStatusBanner icon={AlertTriangle} title="Inline" severity="warning" animated={false} />
+    );
+    expect(onSeverityChange).not.toHaveBeenCalled();
   });
 });

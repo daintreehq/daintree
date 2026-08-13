@@ -5,8 +5,10 @@ import { RestoreConfirmationBanner } from "./RestoreConfirmationBanner";
 import { ForgeTokenBanner } from "./ForgeTokenBanner";
 import { CloudSyncBanner } from "./CloudSyncBanner";
 import { RosettaBanner } from "./RosettaBanner";
+import { useCallback } from "react";
 import { useGlobalBannerPriority } from "./useGlobalBannerPriority";
 import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
+import type { BannerSeverity } from "@shared/config/windowChrome";
 
 function activeBanner(slot: ReturnType<typeof useGlobalBannerPriority>) {
   switch (slot) {
@@ -42,7 +44,22 @@ function activeBanner(slot: ReturnType<typeof useGlobalBannerPriority>) {
 // them, on every platform.
 export function GlobalBannerCoordinator() {
   const slot = useGlobalBannerPriority();
+
+  // The native Windows caption strip is painted above all web content, so it
+  // has to be told which banner colour it is sitting on. The report comes from
+  // the mounted banner rather than the slot: a slot can be claimed by a banner
+  // that renders nothing (HostCrashBanner during its Doherty gate,
+  // ForgeTokenBanner resolving to null), and tinting for an absent banner would
+  // recreate the mismatch this fixes.
+  const reportSeverity = useCallback((severity: BannerSeverity | null) => {
+    void window.electron?.windowChrome?.setBannerSeverity({ severity });
+  }, []);
+
   const banner = activeBanner(slot);
   if (!banner) return null;
-  return <WindowControlsInsetProvider>{banner}</WindowControlsInsetProvider>;
+  return (
+    <WindowControlsInsetProvider onSeverityChange={reportSeverity}>
+      {banner}
+    </WindowControlsInsetProvider>
+  );
 }

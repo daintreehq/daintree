@@ -25,6 +25,7 @@ import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { logError } from "@/utils/logger";
 import { cn } from "@/lib/utils";
 import { isMac, isWindows } from "@/lib/platform";
+import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { usePluginManager } from "./usePluginManager";
 import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
 import { PluginInstallProgressBanner } from "./PluginInstallProgressBanner";
@@ -496,11 +497,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
                 isFullscreen && "w-0"
               )}
-              style={
-                isFullscreen
-                  ? undefined
-                  : { width: "calc(100vw - env(titlebar-area-width, calc(100vw - 138px)))" }
-              }
+              style={isFullscreen ? undefined : { width: `${WINDOWS_CAPTION_WIDTH_PX}px` }}
             />
           )}
         </div>
