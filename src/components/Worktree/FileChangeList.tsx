@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type RefObject,
 } from "react";
 import type { FileChangeDetail } from "../../types";
 import { cn } from "../../lib/utils";
@@ -64,6 +65,159 @@ interface FolderGroup {
   dir: string;
   displayDir: string;
   files: WorkingTreeFileChange[];
+}
+
+interface FileChangeRowProps {
+  change: WorkingTreeFileChange;
+  showDir: boolean;
+  rootPath: string;
+  isNew: boolean;
+  index: number;
+  decoration: Parameters<typeof FileDecorationBadge>[0]["decoration"];
+  openFileAt: (index: number, triggerEl: HTMLElement | null) => void;
+  renderItems: ReturnType<typeof useFileRowMenuItems>["renderItems"];
+  triggerElementRef: RefObject<HTMLElement | null>;
+}
+
+// Extracted as a genuine component (rather than a plain helper invoked via
+// `.map()`) so the React Compiler can correctly scope the `triggerElementRef`
+// writes to their owning event handlers. A helper function called directly
+// during render — even one whose ref access is nested inside further handler
+// closures — reads as a render-time ref access to the compiler's static
+// analysis; a component boundary resolves that ambiguity.
+function FileChangeRow({
+  change,
+  showDir,
+  rootPath,
+  isNew,
+  index,
+  decoration,
+  openFileAt,
+  renderItems,
+  triggerElementRef,
+}: FileChangeRowProps) {
+  const presentation = getGitStatusPresentation(change.status);
+  const { dir, base } = splitPath(change.relativePath);
+  const displayDir = formatDirForDisplay(dir);
+
+  const absolutePath = isAbsolute(change.path) ? change.path : join(rootPath, change.relativePath);
+
+  // Passes `null` rather than reading `triggerElementRef.current` here: the
+  // ref access has to stay out of any value that flows into `renderItems(...)`
+  // below, since that call runs synchronously during render and the compiler
+  // flags a ref-derived value reaching it regardless of a `useCallback`
+  // wrapper. `openFileAt` (owned by the parent) already treats `null` as
+  // "keep whatever the row's `onContextMenu` handler just stamped in" — see
+  // its definition for why that is equivalent.
+  const handleOpenDiffFromMenu = useCallback(() => {
+    openFileAt(index, null);
+  }, [index, openFileAt]);
+
+  // `ContextMenuTrigger` wraps `TooltipTrigger`, not the other way round and
+  // never `<Tooltip>` itself. Both Radix triggers write `data-state` and
+  // both spread consumer props *after* their own, so the outer one wins on
+  // the merged row node — which has to be the context menu's, since that is
+  // what the open-state lift reads. Wrapping `<Tooltip>` (the Root) instead
+  // drops the trigger's props entirely: the Root renders no DOM.
+  return (
+    <ContextMenu>
+      <Tooltip autoDismiss={false}>
+        <ContextMenuTrigger
+          asChild
+          onContextMenu={(event) => {
+            stopFileRowMenuPropagation(event);
+            // The row that opened the menu is the element a diff opened
+            // from it should hand focus back to. Set here rather than in
+            // the item's onSelect, which fires after Radix has already
+            // begun closing the menu.
+            triggerElementRef.current = event.currentTarget;
+          }}
+        >
+          <TooltipTrigger asChild>
+            <div
+              data-recency-new={isNew ? "true" : undefined}
+              // Stands the global Shift+F10 / Menu-key handler down so the
+              // row's own handler below can open this menu instead of the
+              // focused panel's (`useGlobalKeybindings`).
+              data-row-menu=""
+              role="button"
+              tabIndex={0}
+              aria-label={`Open ${change.relativePath}`}
+              className={cn(
+                "group/filerow flex items-center text-xs font-mono hover:bg-tint/5 rounded px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-daintree-accent",
+                // The row whose menu is open lifts to a neutral raised tier
+                // so it reads as "the menu targets this row" — these rows
+                // are ~20px and densely stacked, and the menu otherwise
+                // names no file at all.
+                "data-[state=open]:bg-overlay-raised",
+                isNew && "file-change-row-new"
+              )}
+              onClick={(e) => openFileAt(index, e.currentTarget)}
+              onKeyDown={(e) => {
+                if (isFileRowMenuKey(e)) {
+                  // preventDefault also suppresses the browser's own
+                  // contextmenu for the keypress, so it can't double-fire.
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openFileRowMenuFromKeyboard(e.currentTarget);
+                  return;
+                }
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  openFileAt(index, e.currentTarget);
+                }
+              }}
+            >
+              <span className={cn("w-4 font-bold shrink-0", presentation.colorClass)}>
+                {presentation.marker}
+              </span>
+
+              <div className="flex-1 min-w-0 flex items-center mr-2">
+                {showDir && displayDir && (
+                  <span className="truncate min-w-0 text-daintree-text/60 opacity-60 group-hover/filerow:opacity-80">
+                    {displayDir}/
+                  </span>
+                )}
+                <span className="text-daintree-text group-hover/filerow:text-daintree-text font-medium truncate min-w-0">
+                  {base}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 text-[11px]">
+                {(change.insertions ?? 0) > 0 && (
+                  <span className="text-status-success/80">+{change.insertions}</span>
+                )}
+                {(change.deletions ?? 0) > 0 && (
+                  <span className="text-status-error/80">-{change.deletions}</span>
+                )}
+                <FileDecorationBadge decoration={decoration} />
+              </div>
+            </div>
+          </TooltipTrigger>
+        </ContextMenuTrigger>
+        <TooltipContent side="bottom">{change.relativePath}</TooltipContent>
+      </Tooltip>
+      <ContextMenuContent>
+        {renderItems(
+          {
+            absolutePath,
+            relativePath: change.relativePath,
+            name: base,
+            isDirectory: false,
+            status: change.status,
+          },
+          {
+            // Routed through the list's own opener so the menu and a plain
+            // click land on the same panel with the same `changeSet` —
+            // `file.openDiff` would open a second, changeset-less diff.
+            onOpenDiff: handleOpenDiffFromMenu,
+            hasChanges: true,
+          }
+        )}
+      </ContextMenuContent>
+    </ContextMenu>
+  );
 }
 
 export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListProps>(
@@ -211,11 +365,18 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
         });
     }, [visibleChanges, groupByFolder]);
 
+    // `triggerEl: null` means "opened via the context menu, not a direct
+    // click/keypress" — the row's `onContextMenu` handler already stamped
+    // `triggerElementRef` with the row that opened the menu, so this leaves
+    // it untouched rather than clobbering it. Keeping that read on this side
+    // of the prop boundary (never passed down as a plain value into
+    // `FileChangeRow`'s render-time `renderItems()` call) is what keeps the
+    // ref access out of the compiler's per-component analysis there.
     const openFileAt = useCallback(
       (index: number, triggerEl: HTMLElement | null) => {
         const change = sortedChanges[index];
         if (!change) return;
-        triggerElementRef.current = triggerEl;
+        if (triggerEl) triggerElementRef.current = triggerEl;
         openDiffPanel(change);
       },
       [sortedChanges, openDiffPanel]
@@ -235,125 +396,6 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
     if (changes.length === 0) {
       return null;
     }
-
-    const renderFileItem = (change: WorkingTreeFileChange, showDir: boolean) => {
-      const presentation = getGitStatusPresentation(change.status);
-      const { dir, base } = splitPath(change.relativePath);
-      const displayDir = formatDirForDisplay(dir);
-      const key = getWorkingTreeChangeKey(change);
-      const isNew = newRowKeys.has(key);
-      const index = indexByKey.get(key) ?? 0;
-
-      const absolutePath = isAbsolute(change.path)
-        ? change.path
-        : join(rootPath, change.relativePath);
-
-      // `ContextMenuTrigger` wraps `TooltipTrigger`, not the other way round and
-      // never `<Tooltip>` itself. Both Radix triggers write `data-state` and
-      // both spread consumer props *after* their own, so the outer one wins on
-      // the merged row node — which has to be the context menu's, since that is
-      // what the open-state lift reads. Wrapping `<Tooltip>` (the Root) instead
-      // drops the trigger's props entirely: the Root renders no DOM.
-      return (
-        <ContextMenu key={key}>
-          <Tooltip autoDismiss={false}>
-            <ContextMenuTrigger
-              asChild
-              onContextMenu={(event) => {
-                stopFileRowMenuPropagation(event);
-                // The row that opened the menu is the element a diff opened
-                // from it should hand focus back to. Set here rather than in
-                // the item's onSelect, which fires after Radix has already
-                // begun closing the menu.
-                triggerElementRef.current = event.currentTarget;
-              }}
-            >
-              <TooltipTrigger asChild>
-                <div
-                  data-recency-new={isNew ? "true" : undefined}
-                  // Stands the global Shift+F10 / Menu-key handler down so the
-                  // row's own handler below can open this menu instead of the
-                  // focused panel's (`useGlobalKeybindings`).
-                  data-row-menu=""
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`Open ${change.relativePath}`}
-                  className={cn(
-                    "group/filerow flex items-center text-xs font-mono hover:bg-tint/5 rounded px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-daintree-accent",
-                    // The row whose menu is open lifts to a neutral raised tier
-                    // so it reads as "the menu targets this row" — these rows
-                    // are ~20px and densely stacked, and the menu otherwise
-                    // names no file at all.
-                    "data-[state=open]:bg-overlay-raised",
-                    isNew && "file-change-row-new"
-                  )}
-                  onClick={(e) => openFileAt(index, e.currentTarget)}
-                  onKeyDown={(e) => {
-                    if (isFileRowMenuKey(e)) {
-                      // preventDefault also suppresses the browser's own
-                      // contextmenu for the keypress, so it can't double-fire.
-                      e.preventDefault();
-                      e.stopPropagation();
-                      openFileRowMenuFromKeyboard(e.currentTarget);
-                      return;
-                    }
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      openFileAt(index, e.currentTarget);
-                    }
-                  }}
-                >
-                  <span className={cn("w-4 font-bold shrink-0", presentation.colorClass)}>
-                    {presentation.marker}
-                  </span>
-
-                  <div className="flex-1 min-w-0 flex items-center mr-2">
-                    {showDir && displayDir && (
-                      <span className="truncate min-w-0 text-daintree-text/60 opacity-60 group-hover/filerow:opacity-80">
-                        {displayDir}/
-                      </span>
-                    )}
-                    <span className="text-daintree-text group-hover/filerow:text-daintree-text font-medium truncate min-w-0">
-                      {base}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0 text-[11px]">
-                    {(change.insertions ?? 0) > 0 && (
-                      <span className="text-status-success/80">+{change.insertions}</span>
-                    )}
-                    {(change.deletions ?? 0) > 0 && (
-                      <span className="text-status-error/80">-{change.deletions}</span>
-                    )}
-                    <FileDecorationBadge decoration={decorations[change.path]} />
-                  </div>
-                </div>
-              </TooltipTrigger>
-            </ContextMenuTrigger>
-            <TooltipContent side="bottom">{change.relativePath}</TooltipContent>
-          </Tooltip>
-          <ContextMenuContent>
-            {renderItems(
-              {
-                absolutePath,
-                relativePath: change.relativePath,
-                name: base,
-                isDirectory: false,
-                status: change.status,
-              },
-              {
-                // Routed through the list's own opener so the menu and a plain
-                // click land on the same panel with the same `changeSet` —
-                // `file.openDiff` would open a second, changeset-less diff.
-                onOpenDiff: () => openFileAt(index, triggerElementRef.current),
-                hasChanges: true,
-              }
-            )}
-          </ContextMenuContent>
-        </ContextMenu>
-      );
-    };
 
     if (groupByFolder && groupedChanges.length > 0) {
       return (
@@ -379,7 +421,23 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
                   <span className="shrink-0 text-daintree-text/30">({group.files.length})</span>
                 </div>
                 <div className="pl-4 flex flex-col gap-0.5">
-                  {group.files.map((file) => renderFileItem(file, false))}
+                  {group.files.map((file) => {
+                    const key = getWorkingTreeChangeKey(file);
+                    return (
+                      <FileChangeRow
+                        key={key}
+                        change={file}
+                        showDir={false}
+                        rootPath={rootPath}
+                        isNew={newRowKeys.has(key)}
+                        index={indexByKey.get(key) ?? 0}
+                        decoration={decorations[file.path]}
+                        openFileAt={openFileAt}
+                        renderItems={renderItems}
+                        triggerElementRef={triggerElementRef}
+                      />
+                    );
+                  })}
                 </div>
               </div>
             ))}
@@ -411,7 +469,23 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
           )}
           aria-busy={isStale || undefined}
         >
-          {visibleChanges.map((change) => renderFileItem(change, true))}
+          {visibleChanges.map((change) => {
+            const key = getWorkingTreeChangeKey(change);
+            return (
+              <FileChangeRow
+                key={key}
+                change={change}
+                showDir={true}
+                rootPath={rootPath}
+                isNew={newRowKeys.has(key)}
+                index={indexByKey.get(key) ?? 0}
+                decoration={decorations[change.path]}
+                openFileAt={openFileAt}
+                renderItems={renderItems}
+                triggerElementRef={triggerElementRef}
+              />
+            );
+          })}
 
           {remainingCount > 0 && (
             <div className="text-[11px] text-daintree-text/60 pl-5 pt-1">
