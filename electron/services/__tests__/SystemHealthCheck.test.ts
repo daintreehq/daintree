@@ -4,6 +4,7 @@ import {
   runSystemHealthCheck,
   resolvePrerequisites,
   resetSystemHealthCheckCache,
+  checkPrerequisite,
   BASELINE_PREREQUISITES,
 } from "../SystemHealthCheck.js";
 import { refreshPath } from "../../setup/environment.js";
@@ -539,6 +540,38 @@ describe("runSystemHealthCheck", () => {
 
       expect(result.prerequisites.find((p) => p.tool === "git")?.available).toBe(false);
       expect(mockedExecFile.mock.calls.filter((c) => c[0] === "git")).toHaveLength(1);
+    });
+
+    it("only shells out for a shim when every argument is inert", async () => {
+      // `system:check-tool` hands checkPrerequisite a caller-supplied spec, and
+      // Node flattens command + args into the cmd.exe line without escaping, so
+      // a `&&` argument would run a second command. It has to be rejected before
+      // the spawn, not merely quoted.
+      const invocations: string[][] = [];
+      mockExec((cmd, args) => {
+        if (cmd === "where") return `C:\\Program Files\\nodejs\\${args[0]}.cmd\r\n`;
+        invocations.push([cmd, ...args]);
+        return "10.2.4\n";
+      });
+
+      const injected = await checkPrerequisite({
+        tool: "npm",
+        label: "npm",
+        versionArgs: ["--version", "&&", "calc"],
+        severity: "warn",
+      });
+      const inert = await checkPrerequisite({
+        tool: "npm",
+        label: "npm",
+        versionArgs: ["--version"],
+        severity: "warn",
+      });
+
+      expect(injected.available).toBe(false);
+      expect(injected.unavailableReason).toBe("version-command-failed");
+      expect(inert.available).toBe(true);
+      // Only the inert spec ever reached a spawn.
+      expect(invocations).toEqual([["npm", "--version"]]);
     });
   });
 

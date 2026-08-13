@@ -85,12 +85,16 @@ export function useMissingPrerequisiteWarning(enabled: boolean) {
     let frame = 0;
     const handleFocus = () => {
       // document.hasFocus() is stale when read synchronously inside the focus
-      // handler on Chromium 148 (#10230), so the read is deferred a frame. The
-      // guard keeps a project-view switch inside the same window from forcing a
-      // re-probe; main's in-flight dedup covers whatever slips through.
+      // handler on Chromium 148 (#10230), so the read is deferred a frame. It
+      // only rules out a window that lost focus — a project-view switch calls
+      // webContents.focus() on the incoming view, so it passes too. What keeps
+      // this off the switch path is having something to re-confirm: a forced
+      // probe bypasses main's cache for a login shell plus a spawn per tool, and
+      // with nothing missing there is no banner for it to clear.
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         if (!document.hasFocus()) return;
+        if (useMissingPrerequisiteStore.getState().missing.length === 0) return;
         void runCheck(true);
       });
     };

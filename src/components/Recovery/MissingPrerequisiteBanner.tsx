@@ -330,10 +330,13 @@ export function MissingPrerequisiteBanner() {
   // A failed install is an error the user has to act on; everything else here
   // is an advisory about the environment.
   if (failed) {
+    // The job carries the tool id; the banner speaks the display name.
+    const failedLabel =
+      missing.find((m) => m.tool === install.tool)?.label ?? guidance?.result.label ?? "the tool";
     return (
       <InlineStatusBanner
         icon={AlertTriangle}
-        title={`Couldn't install ${install.tool || "the tool"}`}
+        title={`Couldn't install ${failedLabel}`}
         description={description}
         contextLine={command}
         severity="error"

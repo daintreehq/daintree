@@ -129,6 +129,25 @@ function isWindowsShellShim(resolvedPath: string): boolean {
   return /\.(cmd|bat)$/i.test(resolvedPath.split("\n")[0]?.trim() ?? "");
 }
 
+/** A bare binary name or version flag — nothing cmd.exe treats as syntax. */
+const SHELL_INERT_TOKEN = /^[A-Za-z0-9._\-/=]+$/;
+
+/**
+ * Whether a version invocation can survive being flattened into a shell line.
+ * Node joins command and args with spaces and hands the result to
+ * `cmd.exe /d /s /c` without escaping anything (the reason passing args
+ * alongside `shell` is deprecated as DEP0190), so a `&&` or a quote in an
+ * argument is cmd.exe syntax rather than an argument. `checkPrerequisite` is
+ * reachable from the `system:check-tool` IPC channel with a caller-supplied
+ * spec, so the tokens are treated as untrusted wherever a shell is involved.
+ */
+export function isShellInertInvocation(command: unknown, versionArgs: unknown): boolean {
+  if (typeof command !== "string" || !Array.isArray(versionArgs)) return false;
+  return [command, ...versionArgs].every(
+    (token) => typeof token === "string" && SHELL_INERT_TOKEN.test(token)
+  );
+}
+
 /**
  * Runs a tool's version command. On Windows the entry point for a lot of tools
  * is a `.cmd`/`.bat` shim (`npm.cmd`, and anything installed as an npm global
@@ -141,7 +160,10 @@ function isWindowsShellShim(resolvedPath: string): boolean {
  * main established from `where`, not something a caller can assert. A tool that
  * can be spawned directly is never re-run through a shell just because it
  * exited nonzero, which would both double-execute it and start interpreting its
- * arguments as shell syntax.
+ * arguments as shell syntax. Because a shim leaves no argv-safe way to invoke it
+ * (spawning `cmd.exe` directly still hands cmd the raw line), the tokens are
+ * checked instead: an invocation that isn't inert never reaches the shell, and
+ * the caller sees the same unavailable result as any other failed probe.
  */
 async function runVersionCommand(
   command: string,
@@ -149,6 +171,9 @@ async function runVersionCommand(
   resolvedPath: string
 ): Promise<string> {
   const useShell = process.platform === "win32" && isWindowsShellShim(resolvedPath);
+  if (useShell && !isShellInertInvocation(command, versionArgs)) {
+    throw new Error(`Refusing to run "${command}" through a shell: unsafe version arguments`);
+  }
   const { stdout } = await execFileAsync(command, versionArgs, {
     encoding: "utf8",
     timeout: CHECK_TIMEOUT_MS,

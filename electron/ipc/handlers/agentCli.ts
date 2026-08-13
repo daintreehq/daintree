@@ -180,7 +180,22 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
   const handleSystemCheckTool = async (
     spec: import("../../../shared/types/ipc/system.js").PrerequisiteSpec
   ) => {
-    const { checkPrerequisite } = await import("../../services/SystemHealthCheck.js");
+    const { checkPrerequisite, isShellInertInvocation } =
+      await import("../../services/SystemHealthCheck.js");
+
+    // The spec names a binary and the flags main will execute, so it is checked
+    // here rather than trusted: on Windows a `.cmd` shim has to be spawned
+    // through cmd.exe, which parses whatever it is handed.
+    if (
+      !spec ||
+      typeof spec.tool !== "string" ||
+      !spec.tool ||
+      (spec.command !== undefined && typeof spec.command !== "string") ||
+      !isShellInertInvocation(spec.command ?? spec.tool, spec.versionArgs)
+    ) {
+      throw new Error("Invalid PrerequisiteSpec");
+    }
+
     return await checkPrerequisite(spec);
   };
   handlers.push(typedHandle(CHANNELS.SYSTEM_CHECK_TOOL, handleSystemCheckTool));

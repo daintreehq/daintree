@@ -325,6 +325,19 @@ describe("MissingPrerequisiteBanner", () => {
       expect(await screen.findByRole("button", { name: "Retry" })).toBeTruthy();
     });
 
+    it("titles a failed install with the display name, not the tool id", async () => {
+      installAgentMock.mockResolvedValue({ success: false, exitCode: 1 });
+      const spec = missingGit({ tool: "some-tool", label: "Some Tool" });
+      useMissingPrerequisiteStore.setState({ missing: [spec] });
+      render(<MissingPrerequisiteBanner />);
+
+      await click(await screen.findByRole("button", { name: `Install ${spec.label}` }));
+
+      expect(await screen.findByText(`Couldn't install ${spec.label}`)).toBeTruthy();
+      expect(useMissingPrerequisiteStore.getState().install?.tool).toBe(spec.tool);
+      expect(screen.queryByText(`Couldn't install ${spec.tool}`)).toBeNull();
+    });
+
     it("removes the progress listener when the job settles", async () => {
       installAgentMock.mockResolvedValue({ success: true, exitCode: 0 });
       useMissingPrerequisiteStore.setState({ missing: [missingGit()] });

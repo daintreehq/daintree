@@ -164,12 +164,27 @@ describe("useMissingPrerequisiteWarning", () => {
   });
 
   it("ignores a focus event that arrives while the window is not focused", async () => {
-    healthCheckMock.mockResolvedValue(health([result()]));
+    healthCheckMock.mockResolvedValue(health([MISSING_GIT]));
 
     renderHook(() => useMissingPrerequisiteWarning(true));
     await waitFor(() => expect(healthCheckMock).toHaveBeenCalledTimes(1));
 
     vi.mocked(document.hasFocus).mockReturnValue(false);
+    await focusWindow();
+
+    expect(healthCheckMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not force a re-probe on focus when nothing is missing", async () => {
+    // A project-view switch focuses the incoming view, so document.hasFocus()
+    // is true on every switch. A forced probe skips main's cache for a login
+    // shell plus a spawn per tool, which buys nothing with no banner to clear.
+    healthCheckMock.mockResolvedValue(health([result()]));
+
+    renderHook(() => useMissingPrerequisiteWarning(true));
+    await waitFor(() => expect(healthCheckMock).toHaveBeenCalledTimes(1));
+
+    await focusWindow();
     await focusWindow();
 
     expect(healthCheckMock).toHaveBeenCalledTimes(1);
