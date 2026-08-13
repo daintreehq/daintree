@@ -45,8 +45,13 @@ export interface PaintGate {
    */
   softTimeout: ReturnType<typeof setTimeout>;
   /**
-   * Hard timer — resolves the gate as `"hard-timeout"`, signalling the
-   * caller to detach the outgoing view as a last resort.
+   * Hard timer — resolves the gate as `"hard-timeout"`, which hands the
+   * decision back to the caller rather than deciding anything itself. The
+   * policy is per channel: a warm gate falls through and detaches, a cold one
+   * must abandon and roll back BEFORE any detach, or it strands the user on a
+   * view that never rendered (#11635). Replaced in place once when a cold
+   * skeleton gate is retimed after its load settles (#11765); `resolve` always
+   * clears whichever handle is current.
    */
   hardTimeout: ReturnType<typeof setTimeout>;
   /**

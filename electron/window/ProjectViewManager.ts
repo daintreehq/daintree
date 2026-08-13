@@ -234,10 +234,12 @@ export class ProjectViewManager {
    * view being detached (or the switch rolling back).
    *
    * `pendingPaintGate` cannot answer "is the outgoing view still on screen?":
-   * the gate resolves on the incoming view's skeleton signal — or its own 4s
-   * hard timeout — and nulls itself, while the outgoing view stays attached
-   * and visible until `loadView` resolves. With the load ceiling raised to
-   * 30s (#11459) that divergence is wide enough to matter, so the two
+   * the gate resolves on the incoming view's skeleton signal — which lands
+   * during the load — and nulls itself, while the outgoing view stays attached
+   * and visible until `loadView` resolves. (A focus-intent `"painted"` gate can
+   * also hard-time-out inside the load window; a skeleton gate no longer can,
+   * since #11765 sizes it past the load's own ceiling.) With the load ceiling
+   * raised to 30s (#11459) that divergence is wide enough to matter, so the two
    * consumers that need the real answer read this instead:
    *   - eviction, so a pressure pass can't destroy the visible outgoing view
    *     and leave a blank window behind (the guard in
@@ -486,6 +488,18 @@ export class ProjectViewManager {
   }
 
   /**
+   * Restart an open skeleton-channel gate's hard timer from now, so the paint
+   * bound is spent on the paint rather than on the load that preceded it
+   * (#11765). See ProjectViewPaintGateController for the full rationale.
+   *
+   * A real instance method for the same reason as `waitForPaint`: suites that
+   * stub that out never open a gate, and this has to stay a safe no-op there.
+   */
+  retimeSkeletonPaintGateHardTimeout(webContentsId: number, hardMs: number): boolean {
+    return PaintGateController.retimeSkeletonPaintGateHardTimeout(this, webContentsId, hardMs);
+  }
+
+  /**
    * Renderer-driven gate release. Called from the `APP_VIEW_PAINTED` IPC
    * handler with the webContentsId of the renderer that just painted.
    */
@@ -533,9 +547,9 @@ export class ProjectViewManager {
    * must skip both (mirrors the LRU guard in `evictStaleViews`).
    *
    * Spans the whole load, not just the paint gate: the gate resolves on the
-   * incoming skeleton signal (or its own hard timeout) and nulls itself, while
-   * the outgoing view stays attached until `loadView` settles — up to the load
-   * ceiling (#11459). Falling back to `pendingColdSwitch` closes that window
+   * incoming skeleton signal — which lands during the load — and nulls itself,
+   * while the outgoing view stays attached until `loadView` settles, up to the
+   * load ceiling (#11459). Falling back to `pendingColdSwitch` closes that window
    * for every consumer (hibernation, idle auto-close, relocation, menu state),
    * any of which would otherwise destroy the visible outgoing view and leave
    * rollback with nothing to restore.
