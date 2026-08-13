@@ -37,6 +37,13 @@ import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
 import type { ProjectFocusOnActivateIntent } from "../../shared/types/ipc/project.js";
 
+/**
+ * Largest delay `setTimeout` stores as-is (INT32_MAX ms, ~24.9 days). Anything
+ * beyond it wraps to 1ms, turning a deliberately distant deadline into an
+ * immediate one.
+ */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
 function consumePendingFocusIntent(
   host: ProjectViewManager,
   projectId: string
@@ -347,8 +354,16 @@ export async function performSwitch(
   // bootstrap id (#11635), well before this gate is ever awaited. That leaves a
   // verdict only meaningful once the load has settled — which is exactly when
   // the tight bound now starts.
+  //
+  // Clamped to the largest delay Node can hold: a sum past it wraps to a 1ms
+  // timer, which would fire the provisional gate almost immediately and abandon
+  // every cold switch. The clamp cannot cost anything the load does not already
+  // cost — a `loadHardMs` big enough to reach it overflows loadView's own timer
+  // the same way, and that rejection clears this gate.
   const hardMs =
-    coldReleaseChannel === "painted" ? Math.max(paintHardMs, loadSoftMs) : loadHardMs + paintHardMs;
+    coldReleaseChannel === "painted"
+      ? Math.max(paintHardMs, loadSoftMs)
+      : Math.min(loadHardMs + paintHardMs, MAX_TIMEOUT_MS);
 
   const paintGatePromise = host.waitForPaint(
     view.webContents.id,

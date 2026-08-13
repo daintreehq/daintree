@@ -269,6 +269,12 @@ function expectRejection(promise: Promise<unknown>): Promise<Error> {
 }
 
 describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
+  // Small, non-zero bounds so each phase is observable. Named because the
+  // timeout telemetry asserts against them: comparing a reported bound to the
+  // fixture's own input is the only way to catch it reporting the wrong one.
+  const PAINT_SOFT_MS = 50;
+  const PAINT_HARD_MS = 150;
+
   let manager: ProjectViewManager;
   let win: ReturnType<typeof createMockWindow>;
   let initialWc: MockWc;
@@ -288,8 +294,8 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     // Both must be set explicitly because the PVM defaults are 1.5 s / 4 s.
     manager = new ProjectViewManager(win as never, {
       dirname: "/test",
-      paintGateTimeoutMs: 50,
-      paintGateHardTimeoutMs: 150,
+      paintGateTimeoutMs: PAINT_SOFT_MS,
+      paintGateHardTimeoutMs: PAINT_HARD_MS,
       // Compressed onto the same scale: the focus-intent (`painted`) channel
       // stretches its hard bound to this value, and the hard-timeout tests
       // below are written against the 150 ms bound.
@@ -455,13 +461,21 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       const slowWc = createMockWebContents({ autoFinishLoad: false });
       wcQueue.push(slowWc);
 
+      // Compress the load ceiling onto the same scale as the paint bounds, so
+      // "the gate outlasts the load" is measured against the load's own budget
+      // rather than against some arbitrary larger number. Without this the
+      // default 30 s ceiling makes any widened bound pass.
+      const loadHardMs = 1_000;
+      manager.setViewLoadHardTimeoutMs(loadHardMs);
+
       const switchPromise = manager.switchTo("proj-b", "/path/b");
       await vi.advanceTimersByTimeAsync(0);
 
-      // Well past the skeleton channel's own hard bound (150 ms), but the load
-      // has not settled — nothing has been learned about this view yet, so the
-      // gate must still be open and the outgoing view still bridging.
-      await vi.advanceTimersByTimeAsync(400);
+      // Right up to the load's own fatal ceiling — the whole window in which a
+      // legitimately slow load can still settle. The gate must survive all of
+      // it: until the load settles nothing has been learned about this view.
+      // (The old bound expired at 150 ms, a fraction of the way in.)
+      await vi.advanceTimersByTimeAsync(loadHardMs - 1);
       expect(manager.pendingPaintGate).not.toBeNull();
       expect(win.contentView.removeChildView).not.toHaveBeenCalled();
 
@@ -518,8 +532,11 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       expect(err.message).toContain("View never painted");
       expect(manager.getActiveProjectId()).toBe("proj-a");
 
-      // The retimed bound is what expired, and the log must say so rather than
-      // reporting the provisional ceiling the gate was armed with.
+      // The retimed bound is what expired, and both the log and the error must
+      // say so rather than reporting the provisional ceiling the gate was armed
+      // with — that one outlasts the load, so it would overstate the wait by
+      // the whole load. PAINT_HARD_MS is this fixture's own input, not a
+      // production literal.
       const hardTimeouts = vi
         .mocked(logWarn)
         .mock.calls.filter(([event]) => event === "projectview.paintgate.hardtimeout");
@@ -528,21 +545,26 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
         projectId: "proj-b",
         releaseChannel: "skeleton-painted",
         hardTimeoutOrigin: "load-finished",
+        waitedMs: PAINT_HARD_MS,
       });
-      // The provisional bound outlasts the load ceiling by design, so a
-      // `waitedMs` still carrying it would be off by the whole load.
-      const waited = (hardTimeouts[0]?.[1] as { waitedMs: number }).waitedMs;
-      expect(waited).toBeLessThan(400);
+      expect((err as { context?: Record<string, unknown> }).context).toMatchObject({
+        phase: "paint",
+        waitedMs: PAINT_HARD_MS,
+      });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("leaves no provisional timer behind after the gate releases", async () => {
-    // The retime replaces `gate.hardTimeout` in place. Clearing the old handle
-    // is what keeps the provisional timer from firing later against a gate that
-    // has already settled — a leak the `settled` latch would mask but which
-    // would still resolve a superseded gate's promise.
+  it("replaces the provisional hard timer rather than leaving it armed", async () => {
+    // The retime swaps `gate.hardTimeout` in place, so the old handle is the
+    // only reference that can cancel the provisional timer. Dropping it without
+    // clearing is invisible from behaviour alone: the orphan fires ~30 s later,
+    // hits the `settled` latch and changes nothing observable, while its
+    // closure pins the gate and the views it captures for that whole window.
+    // Only a timer inventory catches it — same reason the load-timer test does
+    // this. Counting rather than advancing is also what keeps this honest: an
+    // orphan that never fires still fails here.
     vi.useFakeTimers();
     try {
       const slowWc = createMockWebContents({ autoFinishLoad: false });
@@ -551,13 +573,27 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       const switchPromise = manager.switchTo("proj-b", "/path/b");
       await vi.advanceTimersByTimeAsync(0);
 
+      const gate = manager.pendingPaintGate;
+      expect(gate).not.toBeNull();
+      const provisionalHandle = gate?.hardTimeout;
+
+      // Measured around the retime alone, with the load deliberately still in
+      // flight. Straddling the load settle instead would net this against
+      // loadView's own two timers clearing, and the swap would vanish into
+      // that noise.
+      const armedCount = vi.getTimerCount();
+      expect(manager.retimeSkeletonPaintGateHardTimeout(slowWc.id, PAINT_HARD_MS)).toBe(true);
+
+      // A different handle proves the swap happened; an unchanged total proves
+      // the one it replaced was cancelled rather than orphaned.
+      expect(manager.pendingPaintGate).toBe(gate);
+      expect(gate?.hardTimeout).not.toBe(provisionalHandle);
+      expect(vi.getTimerCount()).toBe(armedCount);
+
       slowWc._fireOnce("did-finish-load");
       await vi.advanceTimersByTimeAsync(0);
       manager.signalSkeletonPainted(slowWc.id);
       await switchPromise;
-
-      // Run past every deadline either timer could have been armed with.
-      await vi.advanceTimersByTimeAsync(60_000);
 
       expect(manager.getActiveProjectId()).toBe("proj-b");
       expect(
@@ -572,8 +608,9 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
 
   it("retime is a no-op for a gate that is missing, superseded or on another channel", async () => {
     // The retime lands after an await, so by the time it runs the gate it was
-    // meant for may be gone. Every mismatch must leave the pending gate alone —
-    // a late call from a superseded switch must never retime its replacement.
+    // meant for may be gone, replaced, or waiting on a different channel. Every
+    // mismatch must leave the pending gate's timer alone — a late call from a
+    // superseded switch must never retime whatever replaced it.
     vi.useFakeTimers();
     try {
       // No gate at all — the shape suites that stub `waitForPaint` produce.
@@ -587,20 +624,93 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       const gate = manager.pendingPaintGate;
       expect(gate?.releaseChannel).toBe("skeleton-painted");
 
+      // A rejected call must leave the timer alone, not just the pointer: the
+      // retime mutates `hardTimeout` in place, so an implementation that
+      // retimed and *then* returned false would keep gate identity and slip
+      // past a pointer-only assertion.
+      const untouched = gate?.hardTimeout;
+
       // Wrong webContents — a stale call from an earlier switch.
-      expect(manager.retimeSkeletonPaintGateHardTimeout(slowWc.id + 1, 150)).toBe(false);
+      expect(manager.retimeSkeletonPaintGateHardTimeout(slowWc.id + 1, PAINT_HARD_MS)).toBe(false);
       expect(manager.pendingPaintGate).toBe(gate);
+      expect(gate?.hardTimeout).toBe(untouched);
 
       // Matching open skeleton gate — the only case that retimes.
-      expect(manager.retimeSkeletonPaintGateHardTimeout(slowWc.id, 150)).toBe(true);
+      expect(manager.retimeSkeletonPaintGateHardTimeout(slowWc.id, PAINT_HARD_MS)).toBe(true);
       expect(manager.pendingPaintGate).toBe(gate);
+      expect(gate?.hardTimeout).not.toBe(untouched);
 
       manager.signalSkeletonPainted(slowWc.id);
       slowWc._fireOnce("did-finish-load");
       await switchPromise;
 
       // Released gate — the common fast path's result.
-      expect(manager.retimeSkeletonPaintGateHardTimeout(slowWc.id, 150)).toBe(false);
+      expect(manager.retimeSkeletonPaintGateHardTimeout(slowWc.id, PAINT_HARD_MS)).toBe(false);
+
+      // Wrong channel: a warm gate on the very same webContents. Only the
+      // skeleton channel is spent from before its load, so retiming any other
+      // would shorten a bound that was never oversized to begin with.
+      const warmGatePromise = manager.waitForPaint(slowWc.id, null, null, undefined, {
+        releaseChannel: "warm-painted",
+      });
+      const warmGate = manager.pendingPaintGate;
+      const warmHandle = warmGate?.hardTimeout;
+      expect(manager.retimeSkeletonPaintGateHardTimeout(slowWc.id, PAINT_HARD_MS)).toBe(false);
+      expect(warmGate?.hardTimeout).toBe(warmHandle);
+      manager.clearPaintGate();
+      await warmGatePromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("abandons a painted-channel switch whose gate expired while the load ran", async () => {
+    // Only the skeleton channel's bound moved (#11765); the focus-intent
+    // `"painted"` gate is still spent from arm time, so it can still expire
+    // with the load in flight. Nothing acts on that until the load settles —
+    // the gate is awaited after it — and the verdict when it does is abandon
+    // and roll back, never a commit onto a view that never painted (#11635).
+    vi.useFakeTimers();
+    try {
+      const slowWc = createMockWebContents({ autoFinishLoad: false });
+      wcQueue.push(slowWc);
+
+      manager.setPendingFocusIntent("proj-b", { intent: "focus-next-waiting" });
+
+      const switchPromise = manager.switchTo("proj-b", "/path/b");
+      const rejection = expectRejection(switchPromise);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Gate expires mid-load. The outgoing view stays attached and is still
+      // reported as the on-screen bridge across that boundary — from
+      // `pendingColdSwitch` now that the gate has dropped itself.
+      await vi.advanceTimersByTimeAsync(PAINT_HARD_MS + 10);
+      expect(manager.pendingPaintGate).toBeNull();
+      expect(manager.getOutgoingBridgeProjectId()).toBe("proj-a");
+      expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+      // The load settles successfully — and the already-expired gate still
+      // abandons, because a load that finished is not a view that painted.
+      slowWc._fireOnce("did-finish-load");
+      await vi.advanceTimersByTimeAsync(0);
+      const err = await rejection;
+
+      expect(err.message).toContain("View never painted");
+      expect(manager.getActiveProjectId()).toBe("proj-a");
+      expect(manager.getOutgoingBridgeProjectId()).toBeNull();
+
+      // The non-retimed regime: this bound really was spent from the arm, and
+      // the telemetry has to name that clock rather than implying the
+      // post-load window the skeleton channel now gets.
+      const hardTimeouts = vi
+        .mocked(logWarn)
+        .mock.calls.filter(([event]) => event === "projectview.paintgate.hardtimeout");
+      expect(hardTimeouts).toHaveLength(1);
+      expect(hardTimeouts[0]?.[1]).toMatchObject({
+        releaseChannel: "painted",
+        hardTimeoutOrigin: "gate-armed",
+        waitedMs: PAINT_HARD_MS,
+      });
     } finally {
       vi.useRealTimers();
     }
