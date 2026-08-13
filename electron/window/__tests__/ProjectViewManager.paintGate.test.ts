@@ -375,9 +375,10 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
 
   it("abandons the switch at hard timeout when the signal never arrives", async () => {
     // Both release signals are document-owned, so exhausting the budget means
-    // the incoming view produced no evidence it can render — including having
-    // committed the wrong document entirely (#11635). Committing here is what
-    // stranded users on a bare "Not Found" frame with no in-app recovery.
+    // the incoming view produced no evidence it can render. Committing anyway
+    // is what stranded users on a frame with no in-app recovery (#11635). This
+    // load settles immediately, so the retimed window (#11765) opens at once
+    // and the bound behaves exactly as it did before it moved.
     vi.useFakeTimers();
     try {
       const slowWc = createMockWebContents();
@@ -438,6 +439,168 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       expect(
         vi.mocked(logInfo).mock.calls.filter(([event]) => event === "projectview.coldstart")
       ).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a slow cold load outlive the skeleton paint bound", async () => {
+    // #11765: the gate is armed before `loadView` starts, so its bound used to
+    // be spent on renderer spawn, preload eval and the load itself. A cold load
+    // slower than the paint bound but well inside the load budget expired the
+    // gate mid-flight and the switch was abandoned — a rollback and an error
+    // toast for a switch that was about to succeed. Slow is not broken.
+    vi.useFakeTimers();
+    try {
+      const slowWc = createMockWebContents({ autoFinishLoad: false });
+      wcQueue.push(slowWc);
+
+      const switchPromise = manager.switchTo("proj-b", "/path/b");
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Well past the skeleton channel's own hard bound (150 ms), but the load
+      // has not settled — nothing has been learned about this view yet, so the
+      // gate must still be open and the outgoing view still bridging.
+      await vi.advanceTimersByTimeAsync(400);
+      expect(manager.pendingPaintGate).not.toBeNull();
+      expect(win.contentView.removeChildView).not.toHaveBeenCalled();
+
+      // The real renderer fires the parse-time skeleton signal during the load,
+      // so drive that ordering rather than a post-settle signal.
+      slowWc._emitIpcOnce(CHANNELS.APP_SKELETON_PARSED);
+      slowWc._fireOnce("did-finish-load");
+      await switchPromise;
+
+      expect(manager.getActiveProjectId()).toBe("proj-b");
+      expect(
+        vi
+          .mocked(logWarn)
+          .mock.calls.filter(([event]) => event === "projectview.paintgate.hardtimeout")
+      ).toHaveLength(0);
+      expect(
+        vi
+          .mocked(logInfo)
+          .mock.calls.filter(([event]) => event === "projectview.coldstart.rejected")
+      ).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("spends the skeleton paint bound from load settle, not from gate arm", async () => {
+    // The other half of #11765: widening the bound must not also slow the
+    // abandon of a view that genuinely never renders. A load that settles late
+    // and then never signals still gets the same tight paint window it always
+    // had — just measured from the settle rather than from before the load.
+    vi.useFakeTimers();
+    try {
+      const slowWc = createMockWebContents({ autoFinishLoad: false });
+      wcQueue.push(slowWc);
+
+      const switchPromise = manager.switchTo("proj-b", "/path/b");
+      const rejection = expectRejection(switchPromise);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Hold the load past the paint bound with no signal at all, then settle.
+      await vi.advanceTimersByTimeAsync(400);
+      slowWc._fireOnce("did-finish-load");
+      // Flush the bootstrap probe so the retime has actually run.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(manager.pendingPaintGate).not.toBeNull();
+
+      // Just short of the paint bound measured from the settle — still waiting.
+      await vi.advanceTimersByTimeAsync(140);
+      expect(manager.pendingPaintGate).not.toBeNull();
+
+      // Crossing it abandons, exactly as it did before this window moved.
+      await vi.advanceTimersByTimeAsync(20);
+      const err = await rejection;
+      expect(err.message).toContain("View never painted");
+      expect(manager.getActiveProjectId()).toBe("proj-a");
+
+      // The retimed bound is what expired, and the log must say so rather than
+      // reporting the provisional ceiling the gate was armed with.
+      const hardTimeouts = vi
+        .mocked(logWarn)
+        .mock.calls.filter(([event]) => event === "projectview.paintgate.hardtimeout");
+      expect(hardTimeouts).toHaveLength(1);
+      expect(hardTimeouts[0]?.[1]).toMatchObject({
+        projectId: "proj-b",
+        releaseChannel: "skeleton-painted",
+        hardTimeoutOrigin: "load-finished",
+      });
+      // The provisional bound outlasts the load ceiling by design, so a
+      // `waitedMs` still carrying it would be off by the whole load.
+      const waited = (hardTimeouts[0]?.[1] as { waitedMs: number }).waitedMs;
+      expect(waited).toBeLessThan(400);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves no provisional timer behind after the gate releases", async () => {
+    // The retime replaces `gate.hardTimeout` in place. Clearing the old handle
+    // is what keeps the provisional timer from firing later against a gate that
+    // has already settled — a leak the `settled` latch would mask but which
+    // would still resolve a superseded gate's promise.
+    vi.useFakeTimers();
+    try {
+      const slowWc = createMockWebContents({ autoFinishLoad: false });
+      wcQueue.push(slowWc);
+
+      const switchPromise = manager.switchTo("proj-b", "/path/b");
+      await vi.advanceTimersByTimeAsync(0);
+
+      slowWc._fireOnce("did-finish-load");
+      await vi.advanceTimersByTimeAsync(0);
+      manager.signalSkeletonPainted(slowWc.id);
+      await switchPromise;
+
+      // Run past every deadline either timer could have been armed with.
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(manager.getActiveProjectId()).toBe("proj-b");
+      expect(
+        vi
+          .mocked(logWarn)
+          .mock.calls.filter(([event]) => event === "projectview.paintgate.hardtimeout")
+      ).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retime is a no-op for a gate that is missing, superseded or on another channel", async () => {
+    // The retime lands after an await, so by the time it runs the gate it was
+    // meant for may be gone. Every mismatch must leave the pending gate alone —
+    // a late call from a superseded switch must never retime its replacement.
+    vi.useFakeTimers();
+    try {
+      // No gate at all — the shape suites that stub `waitForPaint` produce.
+      expect(manager.retimeSkeletonPaintGateHardTimeout(999, 150)).toBe(false);
+
+      const slowWc = createMockWebContents({ autoFinishLoad: false });
+      wcQueue.push(slowWc);
+      const switchPromise = manager.switchTo("proj-b", "/path/b");
+      await vi.advanceTimersByTimeAsync(0);
+
+      const gate = manager.pendingPaintGate;
+      expect(gate?.releaseChannel).toBe("skeleton-painted");
+
+      // Wrong webContents — a stale call from an earlier switch.
+      expect(manager.retimeSkeletonPaintGateHardTimeout(slowWc.id + 1, 150)).toBe(false);
+      expect(manager.pendingPaintGate).toBe(gate);
+
+      // Matching open skeleton gate — the only case that retimes.
+      expect(manager.retimeSkeletonPaintGateHardTimeout(slowWc.id, 150)).toBe(true);
+      expect(manager.pendingPaintGate).toBe(gate);
+
+      manager.signalSkeletonPainted(slowWc.id);
+      slowWc._fireOnce("did-finish-load");
+      await switchPromise;
+
+      // Released gate — the common fast path's result.
+      expect(manager.retimeSkeletonPaintGateHardTimeout(slowWc.id, 150)).toBe(false);
     } finally {
       vi.useRealTimers();
     }

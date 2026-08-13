@@ -312,6 +312,14 @@ export async function performSwitch(
     });
   }
 
+  // Both load bounds are captured once, here: the gate's provisional ceiling is
+  // sized against them and `loadView` below runs on the same numbers, so a
+  // resource-profile push landing between the two reads cannot leave the gate
+  // sized for a load budget the load is no longer using. `loadHardMs` mirrors
+  // loadView's own `max(hard, soft)` clamp so this is the bound it will apply.
+  const loadSoftMs = host.viewLoadTimeoutMs;
+  const loadHardMs = Math.max(host.viewLoadHardTimeoutMs, loadSoftMs);
+
   // The `"painted"` channel holds for the whole React cold boot — ~1.5–4s per
   // the note above, which the paint-gate hard bound (4s balanced) does not
   // bracket, and the bound is spent from before `loadView` so it also pays for
@@ -319,16 +327,28 @@ export async function performSwitch(
   // "slow", not "wrong document", and abandoning would turn a cold
   // focus-next-waiting into an error toast. Stretch it to the view-load soft
   // bound — the same family's profile-scaled "something is genuinely wrong"
-  // threshold. `"skeleton-painted"` keeps the tight bound: its signal is a
-  // parse-time script tag that lands during the load, so a skeleton gate still
-  // open when the load settles really has seen a document that cannot render.
+  // threshold.
   //
-  // Deliberate consequence of pre-arming: on a cold switch this bound, not
-  // `viewLoadHardTimeoutMs`, is the effective ceiling — a load slower than it
-  // expires the gate mid-flight and the switch is abandoned once the load
-  // settles. `viewLoadHardTimeoutMs` still bounds a load that never settles.
+  // `"skeleton-painted"` keeps that same tight bound but spends it from when
+  // the load settles rather than from here: it is armed wide enough to outlast
+  // the load's own fatal ceiling, then retimed back down to `paintHardMs` the
+  // moment `loadView` resolves (#11765). Pre-arming is what makes the one-shot
+  // signal reliable, and it is also what made the bound pay for the load — a
+  // cold load slow enough to blow 4s of it (cold disk cache, no V8 code cache,
+  // a contended main process) is slow, not broken, and abandoning it lost a
+  // switch that was about to succeed. The provisional bound is deliberately
+  // larger than `loadHardMs` rather than equal to it: this timer is armed
+  // before `loadView` arms its own, so equal delays would expire this one first.
+  //
+  // What the gate still catches is unchanged, and is now the whole of its job —
+  // a document that loaded and verified, then produced no readiness frame at
+  // all. The wrong-document case it used to also cover now rejects inside
+  // `loadView`, where `verifyProjectBootstrap` probes for `#root` and the
+  // bootstrap id (#11635), well before this gate is ever awaited. That leaves a
+  // verdict only meaningful once the load has settled — which is exactly when
+  // the tight bound now starts.
   const hardMs =
-    coldReleaseChannel === "painted" ? Math.max(paintHardMs, host.viewLoadTimeoutMs) : paintHardMs;
+    coldReleaseChannel === "painted" ? Math.max(paintHardMs, loadSoftMs) : loadHardMs + paintHardMs;
 
   const paintGatePromise = host.waitForPaint(
     view.webContents.id,
@@ -360,10 +380,19 @@ export async function performSwitch(
     // primitives so a resource-profile transition mid-load can't retime an
     // in-flight load, matching the paint gate's capture-at-creation contract.
     await loadView(view, projectId, {
-      softMs: host.viewLoadTimeoutMs,
-      hardMs: host.viewLoadHardTimeoutMs,
+      softMs: loadSoftMs,
+      hardMs: loadHardMs,
     });
     loadFinishedAt = performance.now();
+
+    // The skeleton gate's tight paint bound starts HERE, not at arm time — see
+    // the sizing note above. `false` on the common fast path, where the
+    // parse-time skeleton signal already released the gate during the load, and
+    // on a switch a later one has superseded. Runs before the unfreeze below so
+    // the window a slow rAF is measured against is already the right one.
+    const paintGateRetimed =
+      coldReleaseChannel === "skeleton-painted" &&
+      host.retimeSkeletonPaintGateHardTimeout(view.webContents.id, paintHardMs);
 
     // The incoming view is stacked behind the still-visible outgoing view,
     // so Chromium's compositor marks it occluded and throttles its
@@ -389,15 +418,26 @@ export async function performSwitch(
     const gateResult = await paintGatePromise;
     visibleAt = performance.now();
     if (gateResult === "hard-timeout") {
+      // The bound that actually expired: once a skeleton gate has been retimed
+      // the provisional `hardMs` is dead, and reporting it would overstate the
+      // wait by the whole load. `hardTimeoutOrigin` says which clock it was
+      // spent from — `waitedMs` alone cannot distinguish a paint that never
+      // came from a budget that also paid for the load.
+      const effectiveHardMs = paintGateRetimed ? paintHardMs : hardMs;
       logWarn("projectview.paintgate.hardtimeout", {
         projectId,
-        waitedMs: hardMs,
+        waitedMs: effectiveHardMs,
+        releaseChannel: coldReleaseChannel,
+        hardTimeoutOrigin: paintGateRetimed ? "load-finished" : "gate-armed",
       });
       // Abandon rather than commit. Both release signals are document-owned
       // (APP_SKELETON_PARSED from a script tag in index.html, APP_VIEW_PAINTED
       // from React), so exhausting the budget without either means this view
-      // gave no evidence it can render — including having committed the wrong
-      // document entirely (#11635). Detaching the outgoing view here strands
+      // gave no evidence it can render. Reaching here now means specifically
+      // that: the load already settled and `verifyProjectBootstrap` already
+      // vouched for the document (#11635), so what timed out is a verified
+      // application document that produced no frame — not a wrong document, and
+      // not merely a slow one (#11765). Detaching the outgoing view here strands
       // the user on that frame with no in-app recovery, while rolling back
       // keeps a known-good view on screen and stays retryable. Thrown BEFORE
       // any detach so the rollback restores an attached view. #11462 still
@@ -417,7 +457,7 @@ export async function performSwitch(
       throw new AppError({
         code: "INTERNAL",
         message: "View never painted: project view abandoned after paint gate hard timeout",
-        context: { phase: "paint", projectId, waitedMs: hardMs },
+        context: { phase: "paint", projectId, waitedMs: effectiveHardMs },
       });
     }
 

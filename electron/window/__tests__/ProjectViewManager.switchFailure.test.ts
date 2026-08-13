@@ -496,8 +496,13 @@ describe("ProjectViewManager — switch failure rollback", () => {
   });
 
   /**
-   * A manager whose paint gate expires strictly inside the load window, so the
+   * A manager whose paint gate clears strictly inside the load window, so the
    * gap between "gate gone" and "load settled" can be observed on both sides.
+   * The gate clears on the incoming skeleton signal, which is how it happens in
+   * production — a parse-time script tag fires while the load is still running.
+   * It can no longer clear by hard timeout there: since #11765 a skeleton gate
+   * is armed past the load's own ceiling and only tightened once the load
+   * settles, so a slow load can't expire it mid-flight.
    */
   const GATE_HARD_MS = 50;
   function startBridgedSwitch() {
@@ -528,12 +533,12 @@ describe("ProjectViewManager — switch failure rollback", () => {
   }
 
   it("keeps reporting the outgoing bridge after the paint gate clears mid-load", async () => {
-    // The gate resolves on the incoming skeleton signal — or its own hard
-    // timeout — and nulls itself, while the outgoing view stays attached and
-    // visible until the load settles. Answering from the gate alone left every
-    // consumer (hibernation, idle auto-close, relocation, menu state) blind for
-    // that whole gap, free to destroy the view rollback needs and strand the
-    // window on a project with no live entry (#11459).
+    // The gate resolves on the incoming skeleton signal and nulls itself, while
+    // the outgoing view stays attached and visible until the load settles.
+    // Answering from the gate alone left every consumer (hibernation, idle
+    // auto-close, relocation, menu state) blind for that whole gap, free to
+    // destroy the view rollback needs and strand the window on a project with
+    // no live entry (#11459).
     const { bridgeManager, slowWc, switchPromise } = startBridgedSwitch();
 
     // Gate still open: this is the case that passed before the fix too.
@@ -542,8 +547,13 @@ describe("ProjectViewManager — switch failure rollback", () => {
     const whileGateOpen = bridgeManager.getOutgoingBridgeProjectId();
     expect(whileGateOpen).toBe("bridge-a");
 
-    // Gate hard-times-out and drops itself; the load is still in flight.
+    // A bound that would once have expired the gate passes without touching it
+    // — the load is still in flight, so nothing has been learned yet (#11765).
     await vi.advanceTimersByTimeAsync(GATE_HARD_MS);
+    expect(bridgeManager.pendingPaintGate).not.toBeNull();
+
+    // The skeleton parses and drops the gate; the load is still in flight.
+    bridgeManager.signalSkeletonPainted(slowWc.id);
     expect(bridgeManager.pendingPaintGate).toBeNull();
     expect(bridgeManager.pendingColdSwitch?.projectId).toBe("bridge-b");
 
@@ -551,16 +561,13 @@ describe("ProjectViewManager — switch failure rollback", () => {
     // still the painted frame.
     expect(bridgeManager.getOutgoingBridgeProjectId()).toBe(whileGateOpen);
 
-    // Only once the load settles is the bridge genuinely gone. The already-
-    // expired gate abandons this switch the moment the load resolves (#11635),
-    // so the bridge clears via the rollback rather than via a commit — either
-    // way no view is left reported as on screen.
-    const rejection = expectRejection(switchPromise);
+    // Only once the load settles is the bridge genuinely gone — here via the
+    // commit, since the gate released on its signal rather than expiring.
     slowWc._fireOnce("did-finish-load");
     await vi.advanceTimersByTimeAsync(1);
-    await rejection;
+    await switchPromise;
     expect(bridgeManager.getOutgoingBridgeProjectId()).toBeNull();
-    expect(bridgeManager.getActiveProjectId()).toBe("bridge-a");
+    expect(bridgeManager.getActiveProjectId()).toBe("bridge-b");
   });
 
   it("stops reporting an outgoing bridge once the manager is disposed", async () => {
@@ -571,8 +578,10 @@ describe("ProjectViewManager — switch failure rollback", () => {
     const { bridgeManager, switchPromise } = startBridgedSwitch();
     const errPromise = expectRejection(switchPromise);
 
+    // The gate is still open here — a skeleton gate outlasts the load window
+    // (#11765) — so the bridge is reported from it rather than from
+    // `pendingColdSwitch`. Either source must answer the same.
     await vi.advanceTimersByTimeAsync(GATE_HARD_MS + 1);
-    expect(bridgeManager.pendingPaintGate).toBeNull();
     expect(bridgeManager.getOutgoingBridgeProjectId()).toBe("bridge-a");
 
     bridgeManager.dispose();
