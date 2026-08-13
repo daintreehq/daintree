@@ -500,7 +500,7 @@ describe("MissingPrerequisiteBanner", () => {
       await waitFor(() => expect(notifyMock).toHaveBeenCalled());
       // It must not claim everything works while Node is still missing, and it
       // must not list the tool it just installed as outstanding.
-      const message = notifyMock.mock.calls[0]?.[0].message as string;
+      const message = String(notifyMock.mock.calls[0]?.[0].message);
       const outstanding = useMissingPrerequisiteStore.getState().missing.map((p) => p.label);
       expect(outstanding).toEqual(["Node.js"]);
       for (const label of outstanding) expect(message).toContain(label);

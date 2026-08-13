@@ -161,7 +161,7 @@ export async function checkPrerequisite(spec: PrerequisiteSpec): Promise<Prerequ
   const checkCmd = process.platform === "win32" ? "where" : "which";
   const command = spec.command ?? spec.tool;
 
-  let resolvedPath = "";
+  let resolvedPath: string;
   try {
     const { stdout } = await execFileAsync(checkCmd, [command], {
       encoding: "utf8",

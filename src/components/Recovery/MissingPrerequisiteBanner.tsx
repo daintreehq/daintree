@@ -211,6 +211,10 @@ export function MissingPrerequisiteBanner() {
           stillMissing.length > 0
             ? `Still missing: ${stillMissing.map((p) => p.label).join(", ")}.`
             : `Daintree found ${result.label} on PATH.`,
+        // One-shot: the banner going away is the durable signal, so this
+        // doesn't earn an inbox row.
+        transient: true,
+        context: { eventKind: "host" },
       });
     } catch (err) {
       logError("Prerequisite install failed", err);
