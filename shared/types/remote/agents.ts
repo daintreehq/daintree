@@ -98,6 +98,28 @@ export const RemoteLaunchAgentResultSchema = z.discriminatedUnion("disposition",
   }),
 ]);
 
+export const RemoteCloseAgentRequestSchema = z.strictObject({
+  projectId: RemoteOpaqueIdSchema,
+  worktreeId: RemoteOpaqueIdSchema,
+  panelId: RemoteOpaqueIdSchema,
+  launchGeneration: z.number().int().positive(),
+  idempotencyKey: RemoteOpaqueIdSchema,
+});
+
+export const RemoteCloseAgentResultSchema = z.discriminatedUnion("disposition", [
+  z.strictObject({
+    idempotencyKey: RemoteOpaqueIdSchema,
+    panelId: RemoteOpaqueIdSchema,
+    disposition: z.literal("closed"),
+  }),
+  z.strictObject({
+    idempotencyKey: RemoteOpaqueIdSchema,
+    panelId: RemoteOpaqueIdSchema,
+    disposition: z.literal("unknown"),
+    resultCode: z.enum(["commit-in-progress", "internal-error", "unavailable"]),
+  }),
+]);
+
 export type RemoteAgentRun = z.infer<typeof RemoteAgentRunSchema>;
 export type RemoteProjectSnapshot = z.infer<typeof RemoteProjectSnapshotSchema>;
 export type RemoteLaunchableAgent = z.infer<typeof RemoteLaunchableAgentSchema>;
@@ -105,3 +127,5 @@ export type RemoteLaunchableAgents = z.infer<typeof RemoteLaunchableAgentsSchema
 export type RemoteLaunchableAgentsRequest = z.infer<typeof RemoteLaunchableAgentsRequestSchema>;
 export type RemoteLaunchAgentRequest = z.infer<typeof RemoteLaunchAgentRequestSchema>;
 export type RemoteLaunchAgentResult = z.infer<typeof RemoteLaunchAgentResultSchema>;
+export type RemoteCloseAgentRequest = z.infer<typeof RemoteCloseAgentRequestSchema>;
+export type RemoteCloseAgentResult = z.infer<typeof RemoteCloseAgentResultSchema>;

@@ -4,18 +4,20 @@ import type { ProjectViewManager } from "../ProjectViewManager.js";
 const mocks = vi.hoisted(() => ({
   createView: vi.fn(),
   loadView: vi.fn(),
+  updateViewBounds: vi.fn(),
   cleanupEntry: vi.fn(),
   deactivateEntry: vi.fn(),
   setupViewHandlers: vi.fn(),
   registerWebContents: vi.fn(),
   registerProjectView: vi.fn(),
-  registerCachedViewWebContents: vi.fn(),
+  unregisterCachedViewWebContents: vi.fn(),
   evictStaleViews: vi.fn(),
 }));
 
 vi.mock("../ProjectViewFactory.js", () => ({
   createView: mocks.createView,
   loadView: mocks.loadView,
+  updateViewBounds: mocks.updateViewBounds,
 }));
 
 vi.mock("../ProjectViewLifecycleController.js", () => ({
@@ -30,7 +32,7 @@ vi.mock("../ProjectViewHandlers.js", () => ({
 vi.mock("../webContentsRegistry.js", () => ({
   registerWebContents: mocks.registerWebContents,
   registerProjectView: mocks.registerProjectView,
-  registerCachedViewWebContents: mocks.registerCachedViewWebContents,
+  unregisterCachedViewWebContents: mocks.unregisterCachedViewWebContents,
 }));
 
 vi.mock("../ProjectViewEvictionController.js", () => ({
@@ -115,7 +117,7 @@ describe("ProjectViewBackgroundController", () => {
       projectPath: "/target",
       view: existing,
       lastUsed: 1,
-      state: "cached",
+      state: "active",
     });
 
     const result = await ensureBackgroundView(
@@ -130,9 +132,11 @@ describe("ProjectViewBackgroundController", () => {
     expect(f.host.activeProjectId).toBe("foreground-project");
   });
 
-  it("loads and registers a detached cached view without focus, attachment, or foreground mutation", async () => {
+  it("loads behind the foreground until readiness without focus or foreground mutation", async () => {
     const f = hostFixture();
     const created = view(11);
+    const onBackgroundViewReady = vi.fn().mockResolvedValue(undefined);
+    f.host.onBackgroundViewReady = onBackgroundViewReady;
     mocks.createView.mockReturnValue(created);
 
     const result = await ensureBackgroundView(f.host, "project-target", "/target");
@@ -145,9 +149,14 @@ describe("ProjectViewBackgroundController", () => {
     expect(mocks.setupViewHandlers).toHaveBeenCalledOnce();
     expect(mocks.registerWebContents).toHaveBeenCalledWith(created.webContents, f.win);
     expect(f.windowRegistry.registerAppViewWebContents).toHaveBeenCalledWith(7, 11);
-    expect(mocks.registerCachedViewWebContents).toHaveBeenCalledWith(created.webContents);
-    expect(created.setVisible).toHaveBeenCalledWith(false);
-    expect(f.win.contentView.addChildView).not.toHaveBeenCalled();
+    expect(f.win.contentView.addChildView).toHaveBeenCalledWith(created, 0);
+    expect(mocks.updateViewBounds).toHaveBeenCalledWith(f.host, created);
+    expect(onBackgroundViewReady).toHaveBeenCalledWith(
+      created.webContents,
+      "project-target",
+      "/target"
+    );
+    expect(created.setVisible).not.toHaveBeenCalled();
     expect(f.win.focus).not.toHaveBeenCalled();
     expect(f.win.show).not.toHaveBeenCalled();
     expect(f.host.activeProjectId).toBe("foreground-project");

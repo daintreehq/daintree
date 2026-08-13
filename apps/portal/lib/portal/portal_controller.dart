@@ -204,11 +204,20 @@ class PortalController extends ChangeNotifier {
   int _consoleSubscriptionEpoch = 0;
   String? _subscribingPanelId;
   final List<Map<String, dynamic>> _subscriptionBoundaryEvents = [];
+  final Set<String> _closingAgentKeys = {};
   Timer? _launchConsoleRecoveryTimer;
   bool _revocationNotified = false;
 
   bool get readOnly =>
       connectionState != PortalConnectionState.ready || consoleStale;
+
+  bool get canCloseAgents =>
+      connectionState == PortalConnectionState.ready &&
+      credential.capabilities.contains('launch-agents') &&
+      !mutationPending;
+
+  bool isClosingAgent(PortalAgent agent) =>
+      mutationPending && _closingAgentKeys.contains(_agentKey(agent));
 
   Future<void> connect() async {
     if (credential.accessRevoked) {
@@ -328,46 +337,60 @@ class PortalController extends ChangeNotifier {
     agents = const [];
     connectionState = PortalConnectionState.loading;
     notifyListeners();
-    final response = await client.request('project.open', {
-      'projectId': projectId,
-    });
-    final payload = RemoteProtocolClient.payloadOf(response);
-    worktrees = (payload['worktrees'] as List)
-        .map(
-          (value) =>
-              PortalWorktree.fromJson((value as Map).cast<String, dynamic>()),
-        )
-        .toList();
-    agents = (payload['agents'] as List)
-        .map(
-          (value) =>
-              PortalAgent.fromJson((value as Map).cast<String, dynamic>()),
-        )
-        .toList();
-    if (preservedAgent != null) {
-      selectedAgent = agents
-          .where(
-            (agent) =>
-                agent.panelId == preservedAgent.panelId &&
-                agent.generation == preservedAgent.generation,
+    try {
+      final response = await client.request('project.open', {
+        'projectId': projectId,
+      }, timeout: const Duration(seconds: 90));
+      final payload = RemoteProtocolClient.payloadOf(response);
+      worktrees = (payload['worktrees'] as List)
+          .map(
+            (value) =>
+                PortalWorktree.fromJson((value as Map).cast<String, dynamic>()),
           )
-          .firstOrNull;
-      selectedWorktree = worktrees
-          .where((worktree) => worktree.id == preservedAgent.worktreeId)
-          .firstOrNull;
+          .toList();
+      final projectedAgents = (payload['agents'] as List)
+          .map(
+            (value) =>
+                PortalAgent.fromJson((value as Map).cast<String, dynamic>()),
+          )
+          .toList();
+      final projectedKeys = projectedAgents.map(_agentKey).toSet();
+      _closingAgentKeys.removeWhere((key) => !projectedKeys.contains(key));
+      agents = projectedAgents
+          .where((agent) => !_closingAgentKeys.contains(_agentKey(agent)))
+          .toList(growable: false);
+      if (preservedAgent != null) {
+        selectedAgent = agents
+            .where(
+              (agent) =>
+                  agent.panelId == preservedAgent.panelId &&
+                  agent.generation == preservedAgent.generation,
+            )
+            .firstOrNull;
+        selectedWorktree = worktrees
+            .where((worktree) => worktree.id == preservedAgent.worktreeId)
+            .firstOrNull;
+      }
+      connectionState = payload['degraded'] == true
+          ? PortalConnectionState.degraded
+          : PortalConnectionState.ready;
+      statusMessage = switch (payload['projectionState']) {
+        'loading' => 'The desktop is preparing this project',
+        'evicted' => 'The project view is waking up',
+        'unavailable' => 'This project is temporarily unavailable',
+        _ =>
+          payload['degraded'] == true
+              ? 'Showing the last successful project state'
+              : null,
+      };
+    } on RemoteProtocolException catch (error) {
+      connectionState = PortalConnectionState.degraded;
+      statusMessage = '${error.message} · tap Retry to try again';
+    } catch (_) {
+      connectionState = PortalConnectionState.degraded;
+      statusMessage =
+          'Project details could not be loaded · tap Retry to try again';
     }
-    connectionState = payload['degraded'] == true
-        ? PortalConnectionState.degraded
-        : PortalConnectionState.ready;
-    statusMessage = switch (payload['projectionState']) {
-      'loading' => 'The desktop is preparing this project',
-      'evicted' => 'The project view is waking up',
-      'unavailable' => 'This project is temporarily unavailable',
-      _ =>
-        payload['degraded'] == true
-            ? 'Showing the last successful project state'
-            : null,
-    };
     notifyListeners();
   }
 
@@ -377,11 +400,72 @@ class PortalController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> closeAgent() async {
+  Future<void> leaveAgentConsole() async {
     await _unsubscribeCurrent();
     selectedAgent = null;
     notifyListeners();
   }
+
+  Future<bool> closeAgentPane(PortalAgent agent) async {
+    if (!canCloseAgents || selectedProject == null) return false;
+    _closingAgentKeys.add(_agentKey(agent));
+    mutationPending = true;
+    notifyListeners();
+    final idempotencyKey = _uuid.v4();
+    try {
+      var result = RemoteProtocolClient.payloadOf(
+        await client.request('agent.close', {
+          'projectId': selectedProject!.id,
+          'worktreeId': agent.worktreeId,
+          'panelId': agent.panelId,
+          'launchGeneration': agent.generation,
+          'idempotencyKey': idempotencyKey,
+        }),
+      );
+      if (result['disposition'] == 'unknown') {
+        result = RemoteProtocolClient.payloadOf(
+          await client.request('request.status', {
+            'idempotencyKey': idempotencyKey,
+          }),
+        );
+      }
+      final closed =
+          result['disposition'] == 'closed' ||
+          result['disposition'] == 'committed';
+      if (!closed) {
+        _closingAgentKeys.remove(_agentKey(agent));
+        statusMessage =
+            'The host could not confirm that this pane was closed. Retry before closing it again';
+        return false;
+      }
+      if (selectedAgent?.panelId == agent.panelId &&
+          selectedAgent?.generation == agent.generation) {
+        await _unsubscribeCurrent();
+        selectedAgent = null;
+        consoleRenderer.replace('');
+        consoleSequence = 0;
+        consoleStale = false;
+      }
+      agents = agents
+          .where(
+            (candidate) =>
+                candidate.panelId != agent.panelId ||
+                candidate.generation != agent.generation,
+          )
+          .toList(growable: false);
+      statusMessage = null;
+      unawaited(refreshSelectedProject());
+      return true;
+    } catch (_) {
+      _closingAgentKeys.remove(_agentKey(agent));
+      rethrow;
+    } finally {
+      mutationPending = false;
+      notifyListeners();
+    }
+  }
+
+  String _agentKey(PortalAgent agent) => '${agent.panelId}:${agent.generation}';
 
   Future<void> closeProject() async {
     await _unsubscribeCurrent();

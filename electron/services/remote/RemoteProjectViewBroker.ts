@@ -42,6 +42,11 @@ interface ProjectSource {
   getProjectById(projectId: string): Project | null;
 }
 
+interface WorkspaceSource {
+  prewarmProject(projectPath: string): void;
+  waitForProjectReady?(projectPath: string): Promise<void>;
+}
+
 type WindowSource = () => WindowContext[];
 
 interface PendingMaterialization {
@@ -55,6 +60,7 @@ interface PendingMaterialization {
 export class RemoteProjectViewBroker {
   private readonly pending = new Map<string, PendingMaterialization>();
   private readonly activeReleases = new Set<() => void>();
+  private readonly leaseCounts = new Map<string, number>();
   private disposed = false;
 
   constructor(
@@ -65,7 +71,8 @@ export class RemoteProjectViewBroker {
       "getBinding" | "subscribe"
     >,
     private readonly readyTimeoutMs = DEFAULT_REMOTE_VIEW_READY_TIMEOUT_MS,
-    private readonly maxConcurrentMaterializations = DEFAULT_MAX_CONCURRENT_MATERIALIZATIONS
+    private readonly maxConcurrentMaterializations = DEFAULT_MAX_CONCURRENT_MATERIALIZATIONS,
+    private readonly workspaces?: WorkspaceSource
   ) {}
 
   async ensureBackgroundView(
@@ -110,7 +117,16 @@ export class RemoteProjectViewBroker {
         ...binding,
         status: "available",
       });
-      const release = this.trackLeaseRelease(releaseHold);
+      this.leaseCounts.set(projectId, (this.leaseCounts.get(projectId) ?? 0) + 1);
+      const release = this.trackLeaseRelease(releaseHold, () => {
+        const remaining = (this.leaseCounts.get(projectId) ?? 1) - 1;
+        if (remaining > 0) {
+          this.leaseCounts.set(projectId, remaining);
+          return;
+        }
+        this.leaseCounts.delete(projectId);
+        pending.manager.finalizeBackgroundView(projectId, binding.webContentsId);
+      });
       keepHold = true;
       return { ...binding, release };
     } finally {
@@ -129,6 +145,7 @@ export class RemoteProjectViewBroker {
     for (const pending of this.pending.values()) pending.controller.abort();
     this.pending.clear();
     for (const release of [...this.activeReleases]) release();
+    this.leaseCounts.clear();
   }
 
   private selectOwner(projectId: string): WindowContext {
@@ -189,13 +206,23 @@ export class RemoteProjectViewBroker {
       interrupt(this.error("CANCELLED", "Remote view request cancelled"));
     };
     signal.addEventListener("abort", onAbort, { once: true });
-    const timer = setTimeout(() => {
-      interrupt(this.error("TIMEOUT", "Project view did not become ready in time"));
-      operationController.abort();
-    }, this.readyTimeoutMs);
-    timer.unref?.();
+    let timer: ReturnType<typeof setTimeout> | null = null;
     try {
       if (signal.aborted) onAbort();
+      // Workspace utility processes can legitimately queue behind Electron's
+      // process and memory-pressure governors. Do not spend the renderer's
+      // readiness budget before the producer that supplies its worktree port
+      // is ready; the host owns its own bounded startup/load requests.
+      if (this.workspaces?.waitForProjectReady) {
+        await Promise.race([this.workspaces.waitForProjectReady(project.path), interrupted]);
+      } else {
+        this.workspaces?.prewarmProject(project.path);
+      }
+      timer = setTimeout(() => {
+        interrupt(this.error("TIMEOUT", "Project view did not become ready in time"));
+        operationController.abort();
+      }, this.readyTimeoutMs);
+      timer.unref?.();
       const result = await Promise.race([
         manager.ensureBackgroundView(project.id, project.path, operationController.signal),
         interrupted,
@@ -215,7 +242,6 @@ export class RemoteProjectViewBroker {
       ]);
       this.assertCurrentOwner(owner, manager);
       this.assertCurrentBinding(manager, binding);
-      manager.finalizeBackgroundView(project.id, webContentsId);
       this.assertCurrentOwner(owner, manager);
       this.assertCurrentBinding(manager, binding);
       return {
@@ -231,7 +257,7 @@ export class RemoteProjectViewBroker {
       if (signal.aborted) throw this.error("CANCELLED", "Remote view request cancelled");
       throw this.error("VIEW_INVALIDATED", "Project view became unavailable");
     } finally {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
     }
   }
@@ -335,13 +361,14 @@ export class RemoteProjectViewBroker {
     });
   }
 
-  private trackLeaseRelease(releaseHold: () => void): () => void {
+  private trackLeaseRelease(releaseHold: () => void, onFinalRelease: () => void): () => void {
     let released = false;
     const release = () => {
       if (released) return;
       released = true;
       this.activeReleases.delete(release);
       releaseHold();
+      onFinalRelease();
     };
     this.activeReleases.add(release);
     return release;

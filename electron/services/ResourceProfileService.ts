@@ -27,7 +27,7 @@ import {
 } from "../../shared/types/resourceProfile.js";
 import type { WhySlowResourceReason, WhySlowResourceSnapshot } from "../../shared/types/whySlow.js";
 import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
-import { getSystemMemoryThresholds, readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
+import { getSystemMemoryThresholds, readActionableSystemMemoryMb } from "../utils/systemMemory.js";
 import type { MemoryPressurePolicy } from "../utils/cachedProjectViews.js";
 import { resolveResourceProfileConfig } from "../utils/resourceProfileConfig.js";
 
@@ -787,7 +787,7 @@ export class ResourceProfileService {
    * null when the Chromium API is unavailable (e.g., under test mocks).
    */
   private getAvailableSystemMemoryMb(): number | null {
-    return readAvailableSystemMemoryMb();
+    return readActionableSystemMemoryMb();
   }
 
   stop(): void {

@@ -13,6 +13,7 @@ class FakePortalClient extends RemoteProtocolClient {
   final beforeResponse = <String, void Function()>{};
   final calls = <String>[];
   final payloads = <Map<String, Object?>>[];
+  final timeouts = <Duration>[];
   final eventController = StreamController<Map<String, dynamic>>.broadcast(
     sync: true,
   );
@@ -47,6 +48,7 @@ class FakePortalClient extends RemoteProtocolClient {
   }) async {
     calls.add(type);
     payloads.add(payload);
+    timeouts.add(timeout);
     final pending = deferred.remove(type);
     if (pending != null) return pending.future;
     final responses = queued[type];
@@ -68,6 +70,26 @@ class FakePortalClient extends RemoteProtocolClient {
 }
 
 void main() {
+  test('project-open failure leaves a retryable degraded state', () async {
+    final client = FakePortalClient();
+    _queueInitialJourney(client);
+    client.queued['project.open'] = [
+      const RemoteProtocolException(
+        'INTERNAL_ERROR',
+        'Project details are temporarily unavailable',
+      ),
+    ];
+    final controller = _controller(client);
+    await controller.connect();
+
+    await controller.openProject('project-01');
+
+    expect(controller.connectionState, PortalConnectionState.degraded);
+    expect(controller.selectedProject?.id, 'project-01');
+    expect(controller.statusMessage, contains('tap Retry'));
+    expect(client.timeouts.last, const Duration(seconds: 90));
+  });
+
   test(
     'projects, worktrees, agents, and continuity state remain host-derived',
     () async {
@@ -224,6 +246,59 @@ void main() {
       final statusPayload =
           client.payloads[client.calls.indexOf('request.status')];
       expect(statusPayload['idempotencyKey'], launchPayload['idempotencyKey']);
+    },
+  );
+
+  test(
+    'pane close binds the exact generation and suppresses a stale host projection',
+    () async {
+      final client = FakePortalClient();
+      _queueInitialJourney(client);
+      _queueInitialJourney(client);
+      client.queued['agent.close'] = [
+        _response('agent.closeResult', {
+          'idempotencyKey': 'close-key',
+          'panelId': 'panel-01',
+          'disposition': 'unknown',
+          'resultCode': 'commit-in-progress',
+        }),
+      ];
+      client.queued['request.status'] = [
+        _response('request.status', {
+          'idempotencyKey': 'close-key',
+          'disposition': 'committed',
+          'resultCode': 'closed',
+        }),
+      ];
+      final controller = _controller(client);
+      await controller.connect();
+      await controller.openProject('project-01');
+      final agent = controller.agents.single;
+
+      expect(await controller.closeAgentPane(agent), isTrue);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        client.calls,
+        containsAllInOrder(['agent.close', 'request.status', 'project.open']),
+      );
+      expect(client.calls.where((call) => call == 'agent.close'), hasLength(1));
+      final closePayload = client.payloads[client.calls.indexOf('agent.close')];
+      expect(closePayload['projectId'], 'project-01');
+      expect(closePayload['worktreeId'], 'worktree-01');
+      expect(closePayload['panelId'], 'panel-01');
+      expect(closePayload['launchGeneration'], 1);
+      expect(
+        client.payloads[client.calls.indexOf(
+          'request.status',
+        )]['idempotencyKey'],
+        closePayload['idempotencyKey'],
+      );
+      expect(controller.agents, isEmpty);
+
+      _queueInitialJourney(client, includeAgent: false);
+      await controller.refreshSelectedProject();
+      expect(controller.agents, isEmpty);
     },
   );
 
@@ -677,6 +752,7 @@ void _queueInitialJourney(
   FakePortalClient client, {
   bool degraded = false,
   String continuity = 'live',
+  bool includeAgent = true,
 }) {
   (client.queued['projects.list'] ??= []).add(
     _response('projects.list', {
@@ -713,23 +789,25 @@ void _queueInitialJourney(
           'availability': 'available',
         },
       ],
-      'agents': [
-        {
-          'panelId': 'panel-01',
-          'launchGeneration': 1,
-          'projectId': 'project-01',
-          'worktreeId': 'worktree-01',
-          'agentId': 'codex',
-          'displayName': 'Codex',
-          'title': 'Portal task',
-          'state': continuity == 'live' ? 'working' : 'restored',
-          'connectionState': continuity == 'live' ? 'live' : 'restored',
-          'continuityState': continuity,
-          'resumeState': 'resumable-by-cli',
-          'spawnedRemotely': true,
-          'resumable': true,
-        },
-      ],
+      'agents': includeAgent
+          ? [
+              {
+                'panelId': 'panel-01',
+                'launchGeneration': 1,
+                'projectId': 'project-01',
+                'worktreeId': 'worktree-01',
+                'agentId': 'codex',
+                'displayName': 'Codex',
+                'title': 'Portal task',
+                'state': continuity == 'live' ? 'working' : 'restored',
+                'connectionState': continuity == 'live' ? 'live' : 'restored',
+                'continuityState': continuity,
+                'resumeState': 'resumable-by-cli',
+                'spawnedRemotely': true,
+                'resumable': true,
+              },
+            ]
+          : <Object>[],
       'revision': 2,
       'projectionState': 'available',
       'degraded': degraded,

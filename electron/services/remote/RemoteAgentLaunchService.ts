@@ -5,6 +5,8 @@ import {
   type RemoteErrorCode,
   type RemoteLaunchAgentRequest,
   type RemoteLaunchAgentResult,
+  type RemoteCloseAgentRequest,
+  type RemoteCloseAgentResult,
   type RemoteLaunchableAgents,
   type RemoteLaunchableAgentsRequest,
 } from "../../../shared/types/remote/index.js";
@@ -70,7 +72,7 @@ export class RemoteAgentLaunchService {
     private readonly views: Pick<RemoteProjectViewBroker, "ensureBackgroundView">,
     private readonly renderer: Pick<
       RemoteRendererBridge,
-      "getPanelProjection" | "getLaunchableAgents" | "launchAgent"
+      "getPanelProjection" | "getLaunchableAgents" | "launchAgent" | "closeAgent"
     >,
     private readonly capabilities: RemoteCapabilityService,
     private readonly sessions: Pick<RemoteSessionRegistry, "get" | "isDeviceLaunchWithinRate">,
@@ -236,6 +238,141 @@ export class RemoteAgentLaunchService {
     }
     this.auditResult(session, request, "rejected");
     this.sendRejection(session, requestId, result);
+  }
+
+  async close(
+    session: RemoteSession,
+    requestId: string,
+    request: RemoteCloseAgentRequest
+  ): Promise<void> {
+    if (!this.authorized(session, requestId, "launch-agents")) {
+      this.auditClose(session, request, "denied");
+      return;
+    }
+    this.audit.record({
+      actorDeviceId: session.deviceId!,
+      sessionId: session.id,
+      operation: "agent.close.request",
+      result: "accepted",
+      targetProjectId: request.projectId,
+      targetWorktreeId: request.worktreeId,
+      targetPanelId: request.panelId,
+    });
+    const mutationRequest: RemoteMutationRequest = {
+      deviceId: session.deviceId!,
+      idempotencyKey: request.idempotencyKey,
+      operation: "agent.close",
+      arguments: request,
+    };
+    try {
+      const execution = await this.mutations.execute(mutationRequest, () =>
+        this.commitClose(session, request)
+      );
+      if (execution.result.outcome === "committed") {
+        this.auditClose(session, request, "committed");
+        const result: RemoteCloseAgentResult = {
+          idempotencyKey: request.idempotencyKey,
+          panelId: request.panelId,
+          disposition: "closed",
+        };
+        this.send(session, requestId, "agent.closeResult", result);
+        return;
+      }
+      if (execution.result.outcome === "unknown") {
+        this.auditClose(session, request, "unknown");
+        const result: RemoteCloseAgentResult = {
+          idempotencyKey: request.idempotencyKey,
+          panelId: request.panelId,
+          disposition: "unknown",
+          resultCode:
+            execution.result.resultCode === "commit-in-progress"
+              ? "commit-in-progress"
+              : "internal-error",
+        };
+        this.send(session, requestId, "agent.closeResult", result);
+        return;
+      }
+      this.auditClose(session, request, "rejected");
+      const code: RemoteErrorCode =
+        execution.result.resultCode === "stale-generation"
+          ? "STALE_GENERATION"
+          : execution.result.resultCode === "revoked"
+            ? "DEVICE_REVOKED"
+            : execution.result.resultCode === "unauthorized" ||
+                execution.result.resultCode === "capability-denied"
+              ? "FORBIDDEN"
+              : execution.result.resultCode === "invalid-target"
+                ? "NOT_FOUND"
+                : "HOST_UI_UNAVAILABLE";
+      this.error(session, requestId, code, "Agent panel could not be closed");
+    } catch (error) {
+      if (error instanceof RemoteIdempotencyConflictError) {
+        this.auditClose(session, request, "conflict");
+        this.error(
+          session,
+          requestId,
+          "CONFLICT",
+          "Idempotency key conflicts with another request"
+        );
+        return;
+      }
+      this.auditClose(session, request, "unknown");
+      this.error(session, requestId, "INTERNAL_ERROR", "Agent panel close could not be confirmed");
+    }
+  }
+
+  private async commitClose(
+    session: RemoteSession,
+    request: RemoteCloseAgentRequest
+  ): Promise<RemoteMutationResult> {
+    if (!this.isCurrentSession(session) || !session.deviceId) {
+      return { outcome: "rejected", resultCode: "unauthorized" };
+    }
+    const authorization = this.capabilities.authorize(session.deviceId, "launch-agents");
+    if (!authorization.allowed) return this.authorizationRejection(authorization.reason);
+    const sourceWorktreeId = await this.resolveWorktree(request.projectId, request.worktreeId);
+    if (!sourceWorktreeId) return { outcome: "rejected", resultCode: "invalid-target" };
+    let lease: RemoteProjectViewLease | null = null;
+    try {
+      lease = await this.views.ensureBackgroundView(request.projectId);
+      if (!this.isCurrentSession(session)) {
+        return { outcome: "rejected", resultCode: "unauthorized" };
+      }
+      const finalAuthorization = this.capabilities.authorize(session.deviceId, "launch-agents");
+      if (!finalAuthorization.allowed)
+        return this.authorizationRejection(finalAuthorization.reason);
+      const projection = await this.renderer.getPanelProjection(lease);
+      if (projection.status !== "available") {
+        return { outcome: "rejected", resultCode: "unavailable" };
+      }
+      const panel = projection.panels.find((candidate) => candidate.panelId === request.panelId);
+      if (!panel || panel.worktreeSourceId !== sourceWorktreeId) {
+        return { outcome: "rejected", resultCode: "invalid-target" };
+      }
+      if (
+        panel.launchGeneration !== request.launchGeneration ||
+        this.details.currentGeneration(request.panelId) !== request.launchGeneration
+      ) {
+        return { outcome: "rejected", resultCode: "stale-generation" };
+      }
+      if (!this.isCurrentSession(session)) {
+        return { outcome: "rejected", resultCode: "unauthorized" };
+      }
+      const immediateAuthorization = this.capabilities.authorize(session.deviceId, "launch-agents");
+      if (!immediateAuthorization.allowed) {
+        return this.authorizationRejection(immediateAuthorization.reason);
+      }
+      await this.renderer.closeAgent(lease, {
+        worktreeId: sourceWorktreeId,
+        panelId: request.panelId,
+        launchGeneration: request.launchGeneration,
+      });
+      return { outcome: "committed", resultCode: "closed" };
+    } catch {
+      return { outcome: "unknown", resultCode: "internal-error" };
+    } finally {
+      lease?.release();
+    }
   }
 
   status(session: RemoteSession, requestId: string, idempotencyKey: string): void {
@@ -657,10 +794,26 @@ export class RemoteAgentLaunchService {
     });
   }
 
+  private auditClose(
+    session: RemoteSession,
+    request: RemoteCloseAgentRequest,
+    result: "committed" | "rejected" | "unknown" | "conflict" | "denied"
+  ): void {
+    this.audit.record({
+      actorDeviceId: session.deviceId ?? undefined,
+      sessionId: session.id,
+      operation: "agent.close.result",
+      result,
+      targetProjectId: request.projectId,
+      targetWorktreeId: request.worktreeId,
+      targetPanelId: request.panelId,
+    });
+  }
+
   private send(
     session: RemoteSession,
     requestId: string,
-    type: "agents.launchable" | "agent.launchResult" | "request.status",
+    type: "agents.launchable" | "agent.launchResult" | "agent.closeResult" | "request.status",
     payload: unknown
   ): void {
     this.sender.sendApplicationEnvelope(session.connection.id, {

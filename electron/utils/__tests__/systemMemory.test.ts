@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getSystemMemoryThresholds,
+  readActionableSystemMemoryMb,
   readAvailableSystemMemoryMb,
   readSystemMemorySnapshot,
+  shouldBlockBackgroundViewCreation,
 } from "../systemMemory.js";
 
 describe("systemMemory thresholds", () => {
@@ -18,6 +20,29 @@ describe("systemMemory thresholds", () => {
       criticalMb: 1024,
       warningMb: 2048,
     });
+  });
+});
+
+describe("background view admission", () => {
+  it("does not mistake normal macOS cache usage for an allocation failure", () => {
+    expect(shouldBlockBackgroundViewCreation("darwin", 64, 1024)).toBe(false);
+  });
+
+  it("retains the hard low-memory gate where available memory is meaningful", () => {
+    expect(shouldBlockBackgroundViewCreation("win32", 64, 1024)).toBe(true);
+    expect(shouldBlockBackgroundViewCreation("linux", 64, 1024)).toBe(true);
+    expect(shouldBlockBackgroundViewCreation("linux", 2048, 1024)).toBe(false);
+  });
+
+  it("fails open when a reliable threshold or reading is unavailable", () => {
+    expect(shouldBlockBackgroundViewCreation("linux", null, 1024)).toBe(false);
+    expect(shouldBlockBackgroundViewCreation("linux", 64, null)).toBe(false);
+  });
+});
+
+describe("actionable system memory", () => {
+  it("ignores Chromium's incomplete Darwin availability scalar", () => {
+    expect(readActionableSystemMemoryMb("darwin")).toBeNull();
   });
 });
 

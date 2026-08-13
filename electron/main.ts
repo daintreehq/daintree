@@ -53,6 +53,7 @@ import {
 } from "./window/windowRef.js";
 import { WindowRegistry } from "./window/WindowRegistry.js";
 import { ProjectViewManager } from "./window/ProjectViewManager.js";
+import { SurfacePortBroker } from "./window/SurfacePortBroker.js";
 import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
@@ -360,6 +361,14 @@ if (!gotTheLock) {
     // reads the path from here.
     ctx.services.preloadDirname = __dirname;
 
+    const backgroundViewReleases = new Map<number, () => void>();
+    const releaseBackgroundViewResources = (webContentsId: number): void => {
+      const release = backgroundViewReleases.get(webContentsId);
+      if (!release) return;
+      backgroundViewReleases.delete(webContentsId);
+      release();
+    };
+
     const pvm = new ProjectViewManager(win, {
       dirname: __dirname,
       onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId).then(() => {}),
@@ -387,6 +396,7 @@ if (!gotTheLock) {
       // would read as "the assistant is gone" and unprotect a live one.
       isTerminalLive: (terminalId) => getPtyClient()?.hasTerminal(terminalId) === true,
       onViewEvicted: (wcId) => {
+        releaseBackgroundViewResources(wcId);
         // Each cleanup is isolated: if removeDirectPort throws, the worktree
         // port must still close. Partial cleanup leaves a live producer
         // posting into a soon-to-be-destroyed renderer.
@@ -410,6 +420,7 @@ if (!gotTheLock) {
           });
       },
       onViewCached: (wcId) => {
+        releaseBackgroundViewResources(wcId);
         // Same producer cleanup as eviction: a cached view becomes
         // freeze-eligible once CPU throttling lands. Live worktree/workspace
         // ports would otherwise queue messages into a frozen renderer
@@ -518,6 +529,41 @@ if (!gotTheLock) {
         // the lazy HelpPanel subscribes long after `did-finish-load` fires, so a
         // one-shot push was dropped on a true cold restore. No push needed here.
       },
+      onBackgroundViewReady: async (wc, projectId, projectPath) => {
+        releaseBackgroundViewResources(wc.id);
+        const workspaceClient = getWorkspaceClientRef();
+        const worktreeBroker = getWorktreePortBrokerRef();
+        if (!workspaceClient || !worktreeBroker) {
+          throw new Error("Background project services are unavailable");
+        }
+
+        const workspaceLease = await workspaceClient.acquireBackgroundProject(projectPath, wc);
+        const surfaceId = `remote-project:${wc.id}`;
+        try {
+          const surfaceBroker = (ctx.services.surfacePortBroker ??= new SurfacePortBroker(() =>
+            getPtyClient()
+          ));
+          surfaceBroker.brokerSurfacePort({ surfaceId, wc, projectId, projectPath });
+          if (!worktreeBroker.brokerPort(workspaceLease.host, wc)) {
+            throw new Error("Background worktree port is unavailable");
+          }
+          backgroundViewReleases.set(wc.id, () => {
+            workspaceClient.removeDirectPort(wc.id);
+            worktreeBroker.closePortsForView(wc.id);
+            surfaceBroker.releaseSurfacePort(surfaceId, { forgetContext: true });
+            workspaceLease.release();
+          });
+        } catch (error) {
+          workspaceClient.removeDirectPort(wc.id);
+          worktreeBroker.closePortsForView(wc.id);
+          ctx.services.surfacePortBroker?.releaseSurfacePort(surfaceId, {
+            forgetContext: true,
+          });
+          workspaceLease.release();
+          throw error;
+        }
+      },
+      onViewActivated: releaseBackgroundViewResources,
     });
     // Publish to this window's context immediately, not later in
     // setupWindowServices: the renderer starts loading inside that call, so

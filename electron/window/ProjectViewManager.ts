@@ -30,6 +30,7 @@ import * as BackgroundController from "./ProjectViewBackgroundController.js";
 import { hasActiveAgent, initAgentStateCache } from "./ProjectViewAgentStateCache.js";
 import type { PaintGate, PaintGateOutcome, ViewEntry } from "./ProjectViewManagerTypes.js";
 import type { MemoryPressurePolicy } from "../utils/cachedProjectViews.js";
+import { shouldBlockBackgroundViewCreation } from "../utils/systemMemory.js";
 import type { ProjectFocusOnActivateIntent } from "../../shared/types/ipc/project.js";
 
 // Trailing-edge debounce on freeze entry: the lag-pressure path can flip
@@ -135,6 +136,14 @@ export interface ProjectViewManagerOptions {
   onViewCached?: (webContentsId: number) => void;
   /** Called on every did-finish-load for any managed view (initial load and reloads) */
   onViewReady?: (webContents: Electron.WebContents) => void;
+  /** Prepares isolated producer ports for a remotely materialized background view. */
+  onBackgroundViewReady?: (
+    webContents: Electron.WebContents,
+    projectId: string,
+    projectPath: string
+  ) => Promise<void>;
+  /** Releases background-only resources before an ordinary desktop activation. */
+  onViewActivated?: (webContentsId: number) => void;
   /** Called synchronously when a view's renderer process is gone (non-clean), before reload */
   onViewCrashed?: (webContents: Electron.WebContents) => void;
   /** Number of project views to keep cached in memory (1–5, default: 1) */
@@ -216,6 +225,12 @@ export class ProjectViewManager {
   onViewEvicted?: (webContentsId: number) => void;
   onViewCached?: (webContentsId: number) => void;
   onViewReady?: (webContents: Electron.WebContents) => void;
+  onBackgroundViewReady?: (
+    webContents: Electron.WebContents,
+    projectId: string,
+    projectPath: string
+  ) => Promise<void>;
+  onViewActivated?: (webContentsId: number) => void;
   onViewCrashed?: (webContents: Electron.WebContents) => void;
   assistantBackendForProject?: (projectId: string) => {
     terminalId: string;
@@ -288,6 +303,8 @@ export class ProjectViewManager {
     this.onViewEvicted = opts.onViewEvicted;
     this.onViewCached = opts.onViewCached;
     this.onViewReady = opts.onViewReady;
+    this.onBackgroundViewReady = opts.onBackgroundViewReady;
+    this.onViewActivated = opts.onViewActivated;
     this.onViewCrashed = opts.onViewCrashed;
     this.assistantBackendForProject = opts.assistantBackendForProject;
     this.isTerminalLive = opts.isTerminalLive;
@@ -491,10 +508,10 @@ export class ProjectViewManager {
 
   canCreateBackgroundView(): boolean {
     const availableMb = EvictionController.getAvailableMemoryMb();
-    return !(
-      this.memoryPressurePolicy &&
-      availableMb !== null &&
-      availableMb <= this.memoryPressurePolicy.criticalMb
+    return !shouldBlockBackgroundViewCreation(
+      process.platform,
+      availableMb,
+      this.memoryPressurePolicy?.criticalMb ?? null
     );
   }
 

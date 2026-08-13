@@ -37,10 +37,19 @@ export const RemoteRendererLaunchAgentRequestSchema = z.strictObject({
   focusPolicy: z.literal("preserve"),
 });
 
+export const RemoteRendererCloseAgentRequestSchema = z.strictObject({
+  ...RemoteRendererBindingFields,
+  method: z.literal("remote:closeAgent"),
+  worktreeId: WorktreeSourceIdSchema,
+  panelId: RemoteOpaqueIdSchema,
+  launchGeneration: z.number().int().positive(),
+});
+
 export const RemoteRendererRequestSchema = z.discriminatedUnion("method", [
   RemoteRendererGetPanelProjectionRequestSchema,
   RemoteRendererGetLaunchableAgentsRequestSchema,
   RemoteRendererLaunchAgentRequestSchema,
+  RemoteRendererCloseAgentRequestSchema,
 ]);
 
 export const RemoteRendererLaunchResultSchema = z.strictObject({
@@ -88,10 +97,23 @@ export const RemoteRendererResponseSchema = z.union([
   }),
   z.strictObject({
     ...RemoteRendererResponseFields,
+    method: z.literal("remote:closeAgent"),
+    ok: z.literal(true),
+    result: z.strictObject({
+      projectId: RemoteOpaqueIdSchema,
+      worktreeId: WorktreeSourceIdSchema,
+      panelId: RemoteOpaqueIdSchema,
+      launchGeneration: z.number().int().positive(),
+      closed: z.literal(true),
+    }),
+  }),
+  z.strictObject({
+    ...RemoteRendererResponseFields,
     method: z.enum([
       "remote:getPanelProjection",
       "remote:getLaunchableAgents",
       "remote:launchAgent",
+      "remote:closeAgent",
     ]),
     ok: z.literal(false),
     error: z.strictObject({

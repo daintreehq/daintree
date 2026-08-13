@@ -86,7 +86,10 @@ function createRemoteRuntime(appVersion: string): RemoteRuntime {
   const projectViews = new RemoteProjectViewBroker(
     projectStore,
     () => getWindowRegistry()?.focusOrder() ?? [],
-    remoteRendererPanelRegistry
+    remoteRendererPanelRegistry,
+    undefined,
+    undefined,
+    getWorkspaceClient()
   );
   const rendererBridge = new RemoteRendererBridge(remoteRendererPanelRegistry);
   rendererBridge.start();
@@ -137,6 +140,7 @@ function createRemoteRuntime(appVersion: string): RemoteRuntime {
       projection,
       detailProjection,
       detailSubscriptions,
+      projectViews,
       consoleObservation,
       prompts,
       launches,

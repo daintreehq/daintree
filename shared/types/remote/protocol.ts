@@ -4,6 +4,8 @@ import {
   RemoteLaunchableAgentsSchema,
   RemoteLaunchAgentRequestSchema,
   RemoteLaunchAgentResultSchema,
+  RemoteCloseAgentRequestSchema,
+  RemoteCloseAgentResultSchema,
   RemoteProjectSnapshotSchema,
 } from "./agents.js";
 import {
@@ -111,6 +113,8 @@ const remoteEnvelopeSchemas = [
   responseEnvelope("agents.launchable", RemoteLaunchableAgentsSchema),
   requestEnvelope("agent.launch", RemoteLaunchAgentRequestSchema),
   responseEnvelope("agent.launchResult", RemoteLaunchAgentResultSchema),
+  requestEnvelope("agent.close", RemoteCloseAgentRequestSchema),
+  responseEnvelope("agent.closeResult", RemoteCloseAgentResultSchema),
   requestEnvelope("console.subscribe", RemoteConsoleSubscribeRequestSchema),
   responseEnvelope("console.snapshot", RemoteConsoleSnapshotSchema),
   eventEnvelope("console.output", RemoteConsoleOutputSchema, { stream: true }),

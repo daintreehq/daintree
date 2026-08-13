@@ -92,6 +92,7 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    appMock.isPackaged = false;
     processOnSpy = vi.spyOn(process, "on").mockImplementation(() => process);
     processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
   });
@@ -227,7 +228,7 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     expect(processExitSpy).not.toHaveBeenCalled();
   });
 
-  it("SIGTERM then SIGINT within window force-exits", async () => {
+  it("ignores a different supervisor-forwarded signal during development shutdown", async () => {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts());
 
@@ -241,6 +242,22 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
 
     expect(setSignalShutdownMock).toHaveBeenCalledOnce();
     expect(appMock.quit).toHaveBeenCalledOnce();
+    expect(processExitSpy).not.toHaveBeenCalled();
+  });
+
+  it("allows a different second signal to force-exit a packaged build", async () => {
+    appMock.isPackaged = true;
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
+    const sigIntCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGINT");
+    const termHandler = sigTermCall![1] as () => void;
+    const intHandler = sigIntCall![1] as () => void;
+
+    termHandler();
+    intHandler();
+
     expect(processExitSpy).toHaveBeenCalledWith(1);
   });
 });

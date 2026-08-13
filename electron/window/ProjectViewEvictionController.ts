@@ -11,7 +11,7 @@ import { cleanupEntry, sumGuestMemoryKb } from "./ProjectViewLifecycleController
 import { hasActiveAgent } from "./ProjectViewAgentStateCache.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { EvictionReason, ViewEntry } from "./ProjectViewManagerTypes.js";
-import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
+import { readActionableSystemMemoryMb } from "../utils/systemMemory.js";
 import { memoryPressureTarget } from "../utils/cachedProjectViews.js";
 
 /** `[projectId, entry, activeAgent, liveAssistantBackend]` — the last two are carried into the eviction log line. */
@@ -445,5 +445,5 @@ export function maybeEvictUnderPressure(host: ProjectViewManager): void {
  * when the Chromium API is unavailable (e.g., under test mocks).
  */
 export function getAvailableMemoryMb(): number | null {
-  return readAvailableSystemMemoryMb();
+  return readActionableSystemMemoryMb();
 }

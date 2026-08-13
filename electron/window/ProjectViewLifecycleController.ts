@@ -227,6 +227,10 @@ export function pruneOrphanedChildren(host: ProjectViewManager): void {
     // getActiveView() returned null (e.g. a destroyView race nulled
     // activeProjectId but left the entry mid-teardown).
     if (projectId !== null && projectId === host.activeProjectId) continue;
+    // A remote Portal lease intentionally keeps a prepared background view
+    // attached behind the desktop's active project. It is not an orphan and
+    // must survive unrelated desktop project switches until the lease ends.
+    if (projectId !== null && host.hasBackgroundViewHold(projectId)) continue;
     const entry = projectId ? host.views.get(projectId) : undefined;
     try {
       if (entry && entry.state !== "cached") {
@@ -246,6 +250,7 @@ export function activateView(
   entry: ViewEntry,
   insertBehind = false
 ): void {
+  host.onViewActivated?.(entry.view.webContents.id);
   // A view being activated must never take a scheduled cache purge.
   clearPurgeTimer(entry);
   registerAppView(host.win, entry.view);

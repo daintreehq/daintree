@@ -49,6 +49,7 @@ function fixture() {
       agents: [],
     })),
     getLaunchGeneration: vi.fn(() => 7),
+    closeAgent: vi.fn(async () => true),
     dispatchAgentLaunch,
   };
   return { deps, dispatchAgentLaunch, handle: createRemoteRendererRequestHandler(deps) };
@@ -106,6 +107,49 @@ describe("remote renderer request handler", () => {
     });
     expect(wrongProject.dispatchAgentLaunch).not.toHaveBeenCalled();
     expect(missingWorktree.dispatchAgentLaunch).not.toHaveBeenCalled();
+  });
+
+  it("closes only the requested current pane generation", async () => {
+    const f = fixture();
+    const close = {
+      ...base,
+      method: "remote:closeAgent" as const,
+      worktreeId: "worktree-1",
+      panelId: "panel-1",
+      launchGeneration: 7,
+    };
+
+    await expect(f.handle(close)).resolves.toMatchObject({
+      ok: true,
+      method: "remote:closeAgent",
+      result: { panelId: "panel-1", launchGeneration: 7, closed: true },
+    });
+    expect(f.deps.closeAgent).toHaveBeenCalledWith("panel-1", "project-1", "worktree-1");
+
+    f.deps.getLaunchGeneration.mockReturnValue(8);
+    await expect(f.handle(close)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ACTION_FAILED" },
+    });
+    expect(f.deps.closeAgent).toHaveBeenCalledOnce();
+  });
+
+  it("returns an immediate typed failure when pane close throws", async () => {
+    const f = fixture();
+    f.deps.closeAgent.mockRejectedValueOnce(new TypeError("invalid panel registry"));
+
+    await expect(
+      f.handle({
+        ...base,
+        method: "remote:closeAgent",
+        worktreeId: "worktree-1",
+        panelId: "panel-1",
+        launchGeneration: 7,
+      })
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ACTION_FAILED", message: "Agent panel close failed" },
+    });
   });
 
   it("rejects invalid payloads before any renderer operation", async () => {

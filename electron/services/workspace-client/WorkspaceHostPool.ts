@@ -382,6 +382,52 @@ export class WorkspaceHostPool {
     });
   }
 
+  async waitForProjectReady(rootPath: string): Promise<void> {
+    const normalizedPath = this.normalizeProjectPath(rootPath);
+    this.prewarmProject(normalizedPath);
+    const entry = this.entries.get(normalizedPath);
+    if (!entry) throw new Error("Workspace host is unavailable");
+    await entry.currentReadyPromise;
+    if (this.entries.get(normalizedPath) !== entry) {
+      throw new Error("Workspace host changed during preparation");
+    }
+  }
+
+  async acquireBackgroundProject(
+    rootPath: string,
+    webContents: WebContents
+  ): Promise<{ host: WorkspaceHostProcess; release: () => void }> {
+    const normalizedPath = this.normalizeProjectPath(rootPath);
+    await this.waitForProjectReady(normalizedPath);
+    const entry = this.entries.get(normalizedPath);
+    if (!entry) throw new Error("Workspace host is unavailable");
+    if (this.entries.get(normalizedPath) !== entry || webContents.isDestroyed()) {
+      throw new Error("Workspace host changed during background preparation");
+    }
+
+    if (entry.cleanupTimeout) {
+      clearTimeout(entry.cleanupTimeout);
+      entry.cleanupTimeout = null;
+    }
+    entry.refCount += 1;
+    entry.directPortViews.set(webContents.id, webContents);
+
+    let released = false;
+    return {
+      host: entry.host,
+      release: () => {
+        if (released) return;
+        released = true;
+        entry.directPortViews.delete(webContents.id);
+        entry.refCount -= 1;
+        if (entry.refCount <= 0 && this.entries.get(normalizedPath) === entry) {
+          entry.host.send({ type: "background" });
+          this.scheduleDormantCleanup(normalizedPath, entry);
+        }
+      },
+    };
+  }
+
   private releaseOldProject(windowId: number, oldProjectPath: string): void {
     const oldEntry = this.entries.get(oldProjectPath);
     if (!oldEntry) return;

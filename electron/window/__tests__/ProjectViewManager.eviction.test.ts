@@ -2453,6 +2453,7 @@ describe("ProjectViewManager — listener cleanup", () => {
 describe("ProjectViewManager — low-memory eviction", () => {
   let manager: ProjectViewManager;
   let win: ReturnType<typeof createMockWindow>;
+  const originalPlatform = process.platform;
 
   // The periodic sampler is the only path that contracts the cache on a memory
   // reading — switch/LRU/limit-change passes no longer inherit pressure
@@ -2490,6 +2491,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
     .getSystemMemoryInfo;
 
   beforeEach(() => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
     nextWebContentsId = 100;
     nextOsProcessId = 1000;
     vi.clearAllMocks();
@@ -2513,6 +2515,10 @@ describe("ProjectViewManager — low-memory eviction", () => {
   });
 
   afterEach(() => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: originalPlatform,
+    });
     Object.defineProperty(process, "getSystemMemoryInfo", {
       configurable: true,
       value: originalSystemMemoryInfo,
@@ -2962,6 +2968,7 @@ describe("ProjectViewManager — low-memory eviction", () => {
 describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
   let manager: ProjectViewManager;
   let win: ReturnType<typeof createMockWindow>;
+  const originalPlatform = process.platform;
 
   type MemInfo = { free: number; purgeable?: number; total: number };
   const originalSystemMemoryInfo = (process as unknown as { getSystemMemoryInfo?: () => MemInfo })
@@ -3012,6 +3019,7 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
   }
 
   beforeEach(() => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
     nextWebContentsId = 100;
     nextOsProcessId = 1000;
     vi.clearAllMocks();
@@ -3027,6 +3035,10 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
   });
 
   afterEach(() => {
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: originalPlatform,
+    });
     Object.defineProperty(process, "getSystemMemoryInfo", {
       configurable: true,
       value: originalSystemMemoryInfo,

@@ -72,7 +72,16 @@ class _PortalShellState extends State<PortalShell> with WidgetsBindingObserver {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
                 children: [
-                  Icon(_connectionIcon(controller.connectionState), size: 18),
+                  if (controller.connectionState ==
+                          PortalConnectionState.connecting ||
+                      controller.connectionState ==
+                          PortalConnectionState.loading)
+                    const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else
+                    Icon(_connectionIcon(controller.connectionState), size: 18),
                   const SizedBox(width: 7),
                   Text(_connectionLabel(controller.connectionState)),
                 ],
@@ -90,11 +99,18 @@ class _PortalShellState extends State<PortalShell> with WidgetsBindingObserver {
                 canRetry:
                     controller.connectionState ==
                         PortalConnectionState.offline ||
+                    (controller.connectionState ==
+                            PortalConnectionState.degraded &&
+                        controller.selectedProject != null) ||
                     (controller.consoleStale &&
                         controller.selectedAgent != null),
                 onRetry:
                     controller.consoleStale && controller.selectedAgent != null
                     ? controller.retryConsole
+                    : controller.connectionState ==
+                              PortalConnectionState.degraded &&
+                          controller.selectedProject != null
+                    ? () => unawaited(controller.refreshSelectedProject())
                     : controller.connect,
                 onPairAgain:
                     controller.connectionState == PortalConnectionState.revoked
@@ -136,7 +152,7 @@ class _PortalShellState extends State<PortalShell> with WidgetsBindingObserver {
                             controller: controller,
                             composer: composerController,
                             onBack: () {
-                              unawaited(controller.closeAgent());
+                              unawaited(controller.leaveAgentConsole());
                             },
                           );
                         }
@@ -310,6 +326,11 @@ class _AgentsPane extends StatelessWidget {
               icon: Icons.arrow_back_rounded,
               message: 'Choose a project to see its worktrees',
             )
+          : controller.connectionState == PortalConnectionState.loading
+          ? _LoadingProjectDetails(
+              projectName: project.name,
+              onRetry: controller.refreshSelectedProject,
+            )
           : controller.worktrees.isEmpty
           ? const _EmptyMessage(
               icon: Icons.account_tree_outlined,
@@ -402,7 +423,34 @@ class _AgentsPane extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                           ),
                           subtitle: Text(_agentDetails(agent)),
-                          trailing: const Icon(Icons.chevron_right_rounded),
+                          trailing: controller.isClosingAgent(agent)
+                              ? const SizedBox.square(
+                                  dimension: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : PopupMenuButton<_AgentMenuAction>(
+                                  enabled: controller.canCloseAgents,
+                                  tooltip: 'Agent actions',
+                                  onSelected: (action) {
+                                    if (action == _AgentMenuAction.close) {
+                                      unawaited(
+                                        _confirmCloseAgent(context, agent),
+                                      );
+                                    }
+                                  },
+                                  itemBuilder: (context) => const [
+                                    PopupMenuItem(
+                                      value: _AgentMenuAction.close,
+                                      child: ListTile(
+                                        contentPadding: EdgeInsets.zero,
+                                        leading: Icon(Icons.close_rounded),
+                                        title: Text('Close pane'),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                           onTap: () => controller.openAgent(agent),
                         ),
                       if (agents.isNotEmpty &&
@@ -459,6 +507,52 @@ class _AgentsPane extends StatelessWidget {
     if (age.inHours > 0) return '${age.inHours}h';
     if (age.inMinutes > 0) return '${age.inMinutes}m';
     return 'Now';
+  }
+
+  Future<void> _confirmCloseAgent(
+    BuildContext context,
+    PortalAgent agent,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("Close '${agent.title}'?"),
+        content: const Text(
+          "This moves the pane to Daintree's trash and removes it from Portal. Its process will stop when the trash grace period expires.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep pane'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Close pane'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    try {
+      final closed = await controller.closeAgentPane(agent);
+      if (!closed && context.mounted) _showCloseError(context, agent);
+    } on RemoteProtocolException {
+      if (context.mounted) _showCloseError(context, agent);
+    }
+  }
+
+  void _showCloseError(BuildContext context, PortalAgent agent) {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: const Text('The agent pane could not be closed'),
+        action: SnackBarAction(
+          label: 'Retry',
+          onPressed: () => unawaited(_confirmCloseAgent(context, agent)),
+        ),
+      ),
+    );
   }
 
   Future<void> _showLaunch(
@@ -526,6 +620,76 @@ class _AgentsPane extends StatelessWidget {
         action: SnackBarAction(
           label: 'Retry',
           onPressed: () => unawaited(_showLaunch(context, worktree)),
+        ),
+      ),
+    );
+  }
+}
+
+enum _AgentMenuAction { close }
+
+class _LoadingProjectDetails extends StatefulWidget {
+  const _LoadingProjectDetails({
+    required this.projectName,
+    required this.onRetry,
+  });
+
+  final String projectName;
+  final Future<void> Function() onRetry;
+
+  @override
+  State<_LoadingProjectDetails> createState() => _LoadingProjectDetailsState();
+}
+
+class _LoadingProjectDetailsState extends State<_LoadingProjectDetails> {
+  Timer? timer;
+  bool stalled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    timer = Timer(const Duration(seconds: 5), () {
+      if (mounted) setState(() => stalled = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 18),
+            Text(
+              'Preparing ${widget.projectName}',
+              style: Theme.of(context).textTheme.titleMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              stalled
+                  ? 'The desktop is taking longer than expected to prepare this project.'
+                  : 'Loading worktrees and agents from the desktop host.',
+              textAlign: TextAlign.center,
+            ),
+            if (stalled) ...[
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: () => unawaited(widget.onRetry()),
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Retry'),
+              ),
+            ],
+          ],
         ),
       ),
     );

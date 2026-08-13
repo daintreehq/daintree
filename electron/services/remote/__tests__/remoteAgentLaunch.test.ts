@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
+  RemoteCloseAgentRequest,
   RemoteEnvelope,
   RemoteLaunchAgentRequest,
 } from "../../../../shared/types/remote/index.js";
@@ -112,6 +113,14 @@ const launchRequest: RemoteLaunchAgentRequest = {
   name: "Remote review",
 };
 
+const closeRequest: RemoteCloseAgentRequest = {
+  projectId: "project-1",
+  worktreeId: "remote-worktree-1",
+  panelId: "remote-panel-1",
+  launchGeneration: 9,
+  idempotencyKey: "close-key-1",
+};
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => {
@@ -175,6 +184,13 @@ function harness() {
       focusPolicy: "preserve" as const,
     };
   });
+  const closeAgent = vi.fn(async (_lease, input) => ({
+    projectId: "project-1",
+    worktreeId: input.worktreeId,
+    panelId: input.panelId,
+    launchGeneration: input.launchGeneration,
+    closed: true as const,
+  }));
   const session = {
     id: "session-1",
     connection: { id: "connection-1" },
@@ -198,7 +214,7 @@ function harness() {
       currentGeneration: vi.fn(() => generation),
     },
     { ensureBackgroundView },
-    { getPanelProjection, getLaunchableAgents, launchAgent },
+    { getPanelProjection, getLaunchableAgents, launchAgent, closeAgent },
     {
       authorize: vi.fn(() =>
         revoked
@@ -232,6 +248,7 @@ function harness() {
     getLaunchableAgents,
     getPanelProjection,
     launchAgent,
+    closeAgent,
     resolveWorktreeSource,
     isDeviceLaunchWithinRate,
     addSession: (deviceId: string, index: number) => {
@@ -265,6 +282,63 @@ function result(h: ReturnType<typeof harness>, requestId: string) {
 }
 
 describe("RemoteAgentLaunchService", () => {
+  it("closes one exact generation-bound pane and deduplicates a retry", async () => {
+    const h = harness();
+    h.panels.push({
+      panelId: closeRequest.panelId,
+      worktreeSourceId: "source-worktree-1",
+      agentId: "codex",
+      launchGeneration: closeRequest.launchGeneration,
+      placement: "grid",
+      displayName: "Codex",
+      title: "Portal review",
+      spawnedRemotely: true,
+      resumable: true,
+      connectionState: "starting",
+    });
+
+    await h.service.close(h.session, "close-first", closeRequest);
+    await h.service.close(h.session, "close-retry", closeRequest);
+
+    expect(h.closeAgent).toHaveBeenCalledOnce();
+    expect(h.closeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: "project-1", generation: 4 }),
+      {
+        worktreeId: "source-worktree-1",
+        panelId: "remote-panel-1",
+        launchGeneration: 9,
+      }
+    );
+    expect(result(h, "close-first")).toEqual({
+      idempotencyKey: "close-key-1",
+      panelId: "remote-panel-1",
+      disposition: "closed",
+    });
+    expect(result(h, "close-retry")).toMatchObject({ disposition: "closed" });
+    expect(JSON.stringify(h.auditRows)).toContain("agent.close.result");
+  });
+
+  it("refuses a stale pane generation before renderer dispatch", async () => {
+    const h = harness();
+    h.panels.push({
+      panelId: closeRequest.panelId,
+      worktreeSourceId: "source-worktree-1",
+      agentId: "codex",
+      launchGeneration: closeRequest.launchGeneration + 1,
+      placement: "grid",
+      displayName: "Codex",
+      title: "Portal review",
+      spawnedRemotely: true,
+      resumable: true,
+      connectionState: "starting",
+    });
+
+    await h.service.close(h.session, "close-stale", closeRequest);
+
+    expect(h.closeAgent).not.toHaveBeenCalled();
+    expect(h.errors.at(-1)?.code).toBe("STALE_GENERATION");
+  });
+
   it("launches one persistent remote panel with stable identity and the prompt inside the boundary", async () => {
     const h = harness();
 

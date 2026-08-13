@@ -1,15 +1,16 @@
 import type { WebContentsView } from "electron";
 import {
-  registerCachedViewWebContents,
   registerProjectView,
   registerWebContents,
+  unregisterCachedViewWebContents,
 } from "./webContentsRegistry.js";
-import { createView, loadView } from "./ProjectViewFactory.js";
+import { createView, loadView, updateViewBounds } from "./ProjectViewFactory.js";
 import { cleanupEntry, deactivateEntry } from "./ProjectViewLifecycleController.js";
 import { setupViewHandlers } from "./ProjectViewHandlers.js";
 import { evictStaleViews } from "./ProjectViewEvictionController.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
+import { unfreezeWebContents, unthrottleCpuWebContents } from "../utils/webContentsLifecycle.js";
 
 export interface BackgroundViewResult {
   view: WebContentsView;
@@ -29,6 +30,21 @@ export async function ensureBackgroundView(
   const existing = host.views.get(projectId);
   if (existing && !existing.view.webContents.isDestroyed()) {
     existing.lastUsed = Date.now();
+    if (existing.state === "cached" && host.activeProjectId !== projectId) {
+      const wc = existing.view.webContents;
+      try {
+        existing.view.setVisible(true);
+        unregisterCachedViewWebContents(wc.id);
+        void unfreezeWebContents(wc);
+        void unthrottleCpuWebContents(wc);
+        host.win.contentView.addChildView(existing.view, 0);
+        updateViewBounds(host, existing.view);
+        await host.onBackgroundViewReady?.(wc, projectId, existing.projectPath);
+      } catch (error) {
+        deactivateEntry(host, existing);
+        throw error;
+      }
+    }
     return { view: existing.view, isNew: false };
   }
   if (existing) cleanupEntry(host, projectId);
@@ -50,6 +66,14 @@ export async function ensureBackgroundView(
   registerWebContents(view.webContents, host.win);
   host.windowRegistry?.registerAppViewWebContents(host.win.id, view.webContents.id);
 
+  // Keep the materializing renderer composited behind the visible project
+  // until its React hydration publishes an available binding. A detached,
+  // invisible WebContentsView is timer-throttled by Chromium before hydration
+  // completes, which strands the remote view at `loading`. Index 0 preserves
+  // the existing foreground surface and never transfers focus.
+  host.win.contentView.addChildView(view, 0);
+  updateViewBounds(host, view);
+
   const cancel = () => {
     if (host.views.get(projectId) === entry) cleanupEntry(host, projectId);
   };
@@ -67,10 +91,16 @@ export async function ensureBackgroundView(
     ) {
       throw new Error("Background view binding changed during materialization");
     }
-    view.setVisible(false);
+    await host.onBackgroundViewReady?.(view.webContents, projectId, projectPath);
+    if (signal?.aborted) throw new Error("Background view materialization cancelled");
+    if (host.views.get(projectId) !== entry || view.webContents.isDestroyed()) {
+      throw new Error("Background view binding changed during preparation");
+    }
+    // The document load is complete, so crash recovery must treat this as a
+    // cached renderer rather than an in-flight navigation. The broker's hold
+    // keeps it out of LRU eviction until readiness and final parking.
     entry.state = "cached";
     entry.lastUsed = Date.now();
-    registerCachedViewWebContents(view.webContents);
     return { view, isNew: true };
   } catch (error) {
     if (host.views.get(projectId) === entry) cleanupEntry(host, projectId);

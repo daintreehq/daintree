@@ -7,11 +7,12 @@ import { remoteMutationLedger } from "../persistence/schema.js";
 export const REMOTE_IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1_000;
 export const MAX_REMOTE_IDEMPOTENCY_RECORDS = 10_000;
 
-export type RemoteMutationOperation = "agent.launch" | "prompt.submit";
+export type RemoteMutationOperation = "agent.launch" | "agent.close" | "prompt.submit";
 export type RemoteMutationOutcome = "committed" | "rejected" | "unknown";
 export type RemoteMutationResultCode =
   | "queued"
   | "created"
+  | "closed"
   | "invalid-target"
   | "unauthorized"
   | "unavailable"
@@ -27,6 +28,7 @@ export type RemoteMutationResultCode =
 const REMOTE_MUTATION_RESULT_CODES = new Set<RemoteMutationResultCode>([
   "queued",
   "created",
+  "closed",
   "invalid-target",
   "unauthorized",
   "unavailable",

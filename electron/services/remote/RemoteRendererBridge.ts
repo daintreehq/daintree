@@ -18,6 +18,7 @@ type PanelResponse = Extract<
   { method: "remote:getPanelProjection"; ok: true }
 >;
 type LaunchResponse = Extract<RemoteRendererResponse, { method: "remote:launchAgent"; ok: true }>;
+type CloseResponse = Extract<RemoteRendererResponse, { method: "remote:closeAgent"; ok: true }>;
 
 interface PendingRequest {
   request: RemoteRendererRequest;
@@ -100,6 +101,21 @@ export class RemoteRendererBridge {
       focusPolicy: "preserve",
     });
     if (response.method !== "remote:launchAgent" || !response.ok) {
+      throw new RemoteRendererBridgeError("INVALID_RESPONSE", "Unexpected renderer response");
+    }
+    return response.result;
+  }
+
+  async closeAgent(
+    binding: RemoteProjectViewBinding,
+    input: { worktreeId: string; panelId: string; launchGeneration: number }
+  ): Promise<CloseResponse["result"]> {
+    const response = await this.request({
+      ...this.envelope(binding),
+      method: "remote:closeAgent",
+      ...input,
+    });
+    if (response.method !== "remote:closeAgent" || !response.ok) {
       throw new RemoteRendererBridgeError("INVALID_RESPONSE", "Unexpected renderer response");
     }
     return response.result;

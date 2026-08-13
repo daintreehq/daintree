@@ -1604,13 +1604,19 @@ describe("ResourceProfileService", () => {
     // process global, so we attach a stub directly and restore it after each
     // test. `vi.stubGlobal('process', ...)` would obliterate Node internals.
     let originalGetSystemMemoryInfo: unknown;
+    const originalPlatform = process.platform;
 
     beforeEach(() => {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
       originalGetSystemMemoryInfo = (process as { getSystemMemoryInfo?: unknown })
         .getSystemMemoryInfo;
     });
 
     afterEach(() => {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: originalPlatform,
+      });
       if (originalGetSystemMemoryInfo === undefined) {
         delete (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo;
       } else {

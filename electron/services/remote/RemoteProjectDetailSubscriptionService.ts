@@ -12,7 +12,10 @@ export interface RemoteReadySessionSource {
 }
 
 export class RemoteProjectDetailSubscriptionService {
-  private readonly selections = new Map<string, { projectId: string; revision: number }>();
+  private readonly selections = new Map<
+    string,
+    { projectId: string; revision: number; releaseView: () => void }
+  >();
   private timer: ReturnType<typeof setInterval> | null = null;
   private polling = false;
 
@@ -25,8 +28,14 @@ export class RemoteProjectDetailSubscriptionService {
     ) => void
   ) {}
 
-  select(sessionId: string, projectId: string, revision: number): void {
-    this.selections.set(sessionId, { projectId, revision });
+  select(
+    sessionId: string,
+    projectId: string,
+    revision: number,
+    releaseView: () => void = () => {}
+  ): void {
+    this.releaseSelection(sessionId);
+    this.selections.set(sessionId, { projectId, revision, releaseView });
   }
 
   start(): void {
@@ -38,7 +47,7 @@ export class RemoteProjectDetailSubscriptionService {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    this.selections.clear();
+    for (const sessionId of [...this.selections.keys()]) this.releaseSelection(sessionId);
   }
 
   async pollNow(): Promise<void> {
@@ -49,7 +58,7 @@ export class RemoteProjectDetailSubscriptionService {
       for (const [sessionId, selection] of this.selections) {
         const session = ready.get(sessionId);
         if (!session || !session.capabilities.includes("observe-projects")) {
-          this.selections.delete(sessionId);
+          this.releaseSelection(sessionId);
           continue;
         }
         try {
@@ -61,7 +70,7 @@ export class RemoteProjectDetailSubscriptionService {
             revision: snapshot.revision,
           });
           this.selections.set(sessionId, {
-            projectId: selection.projectId,
+            ...selection,
             revision: snapshot.revision,
           });
         } catch {
@@ -72,5 +81,12 @@ export class RemoteProjectDetailSubscriptionService {
     } finally {
       this.polling = false;
     }
+  }
+
+  private releaseSelection(sessionId: string): void {
+    const selection = this.selections.get(sessionId);
+    if (!selection) return;
+    this.selections.delete(sessionId);
+    selection.releaseView();
   }
 }

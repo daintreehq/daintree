@@ -11,7 +11,7 @@ import type { RemoteLaunchableAgents } from "@shared/types/remote";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { actionService } from "@/services/ActionService";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
-import { getCurrentViewStore } from "@/store";
+import { getCurrentViewStore, panelStoreApi } from "@/store";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -36,6 +36,7 @@ interface RemoteRendererHandlerDeps {
     request: Extract<RemoteRendererRequest, { method: "remote:launchAgent" }>
   ): Promise<{ ok: true; result: LaunchDispatchResult } | { ok: false; message: string }>;
   getLaunchGeneration(panelId: string): number | undefined;
+  closeAgent(panelId: string, projectId: string, worktreeId: string): Promise<boolean>;
 }
 
 function errorResponse(
@@ -85,6 +86,35 @@ export function createRemoteRendererRequestHandler(deps: RemoteRendererHandlerDe
         method: request.method,
         ok: true,
         result: deps.getLaunchableAgents(request.projectId, request.worktreeId),
+      };
+    }
+    if (request.method === "remote:closeAgent") {
+      if (deps.getLaunchGeneration(request.panelId) !== request.launchGeneration) {
+        return errorResponse(request, "ACTION_FAILED", "Agent launch identity changed");
+      }
+      let closed = false;
+      try {
+        closed = await deps.closeAgent(request.panelId, request.projectId, request.worktreeId);
+      } catch {
+        return errorResponse(request, "ACTION_FAILED", "Agent panel close failed");
+      }
+      if (!closed) {
+        return errorResponse(request, "ACTION_FAILED", "Agent panel could not be closed");
+      }
+      return {
+        requestId: request.requestId,
+        projectId: request.projectId,
+        webContentsId: request.webContentsId,
+        rendererGeneration: request.rendererGeneration,
+        method: request.method,
+        ok: true,
+        result: {
+          projectId: request.projectId,
+          worktreeId: request.worktreeId,
+          panelId: request.panelId,
+          launchGeneration: request.launchGeneration,
+          closed: true,
+        },
       };
     }
     const dispatched = await deps.dispatchAgentLaunch(request);
@@ -158,6 +188,23 @@ const handleRequest = createRemoteRendererRequestHandler({
   getPanelProjection: buildRemotePanelProjection,
   getLaunchableAgents,
   getLaunchGeneration: (panelId) => agentLifecycleLedger.currentGeneration(panelId),
+  closeAgent: async (panelId, projectId, worktreeId) => {
+    const panel = panelStoreApi.getState().panelsById[panelId];
+    if (!panel || panel.worktreeId !== worktreeId) return false;
+    const dispatched = await actionService.dispatch(
+      "terminal.close",
+      { terminalId: panelId },
+      {
+        source: "agent",
+        contextOverride: {
+          projectId,
+          activeWorktreeId: worktreeId,
+          focusedWorktreeId: worktreeId,
+        },
+      }
+    );
+    return dispatched.ok;
+  },
   dispatchAgentLaunch: async (request) => {
     const dispatch = buildRemoteAgentLaunchDispatch(request);
     const dispatched = await actionService.dispatch<LaunchDispatchResult>(

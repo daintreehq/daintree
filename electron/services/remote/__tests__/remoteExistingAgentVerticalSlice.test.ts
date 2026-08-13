@@ -22,6 +22,7 @@ import {
 } from "../RemoteMutationLedgerService.js";
 import { RemoteProjectDetailProjectionService } from "../RemoteProjectDetailProjectionService.js";
 import { RemoteProjectProjectionService } from "../RemoteProjectProjectionService.js";
+import { RemoteProjectViewError } from "../RemoteProjectViewBroker.js";
 import { RemotePromptSubmissionService } from "../RemotePromptSubmissionService.js";
 import { RemoteProtocolRouter } from "../RemoteProtocolRouter.js";
 import { RemoteSessionRegistry } from "../RemoteSessionRegistry.js";
@@ -304,8 +305,15 @@ function createHarness(options: HarnessOptions = {}) {
   const launches = {
     launchable: vi.fn(),
     launch: vi.fn(),
+    close: vi.fn(),
     status: vi.fn(),
   };
+  const ensureBackgroundView = vi.fn(async (projectId: string) => ({
+    projectId,
+    webContentsId: 41,
+    generation: 4,
+    release: vi.fn(),
+  }));
   const selected: Array<{ sessionId: string; projectId: string; revision: number }> = [];
   router.setApplicationHandler(
     createRemoteApplicationHandler({
@@ -315,6 +323,7 @@ function createHarness(options: HarnessOptions = {}) {
         select: (sessionId, projectId, revision) =>
           selected.push({ sessionId, projectId, revision }),
       },
+      projectViews: { ensureBackgroundView },
       consoleObservation,
       prompts,
       launches,
@@ -353,6 +362,7 @@ function createHarness(options: HarnessOptions = {}) {
     submit,
     auditRows,
     selected,
+    ensureBackgroundView,
     workspaceReads,
     foregroundProjectId,
     setGeneration: (value: number) => {
@@ -427,6 +437,8 @@ describe("existing-agent remote vertical slice", () => {
     expect(harness.selected).toEqual([
       expect.objectContaining({ projectId: "project-portal", revision: opened.payload.revision }),
     ]);
+    expect(harness.ensureBackgroundView).toHaveBeenCalledOnce();
+    expect(harness.ensureBackgroundView).toHaveBeenCalledWith("project-portal");
   });
 
   it("redacts trust-boundary canaries and never changes the foreground project", async () => {
@@ -451,6 +463,42 @@ describe("existing-agent remote vertical slice", () => {
     }
     expect(harness.workspaceReads).toEqual(["/private/secret/repositories/portal"]);
     expect(harness.foregroundProjectId).toBe("foreground-project");
+  });
+
+  it("returns actionable resource pressure when a background project cannot be prepared", async () => {
+    const harness = createHarness();
+    harness.ensureBackgroundView.mockRejectedValueOnce(
+      new RemoteProjectViewError("HOST_RESOURCE_PRESSURE", "Remote view capacity is busy")
+    );
+    const { connection, sessionId } = await harness.connect();
+
+    connection.receive(
+      request(sessionId!, "project.open", "open-pressure", { projectId: "project-portal" })
+    );
+    await vi.waitFor(() =>
+      expect(
+        frames(connection).find(
+          (item) =>
+            item.kind === "response" &&
+            item.type === "request.error" &&
+            item.requestId === "open-pressure"
+        )
+      ).toBeDefined()
+    );
+
+    expect(
+      frames(connection).find(
+        (item) =>
+          item.kind === "response" &&
+          item.type === "request.error" &&
+          item.requestId === "open-pressure"
+      )
+    ).toMatchObject({
+      payload: {
+        code: "HOST_RESOURCE_PRESSURE",
+        message: expect.stringContaining("Close an app on the host and retry"),
+      },
+    });
   });
 
   it("recovers console history atomically and drops only faulted streams", async () => {

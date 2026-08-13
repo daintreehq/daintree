@@ -174,6 +174,19 @@ export class WorkspaceClient extends EventEmitter {
     this.pool.prewarmProject(rootPath);
   }
 
+  async waitForProjectReady(rootPath: string): Promise<void> {
+    if (this.isDisposed) throw new Error("WorkspaceClient disposed");
+    await this.pool.waitForProjectReady(rootPath);
+  }
+
+  async acquireBackgroundProject(
+    rootPath: string,
+    webContents: Electron.WebContents
+  ): Promise<{ host: WorkspaceHostProcess; release: () => void }> {
+    if (this.isDisposed) throw new Error("WorkspaceClient disposed");
+    return this.pool.acquireBackgroundProject(rootPath, webContents);
+  }
+
   /**
    * Push updated forge settings to the live host for `projectPath` so its
    * PR provider re-resolves after the user changes the provider override or

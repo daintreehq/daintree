@@ -310,14 +310,20 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
   // bypasses all Node.js shutdown hooks; that case is handled by
   // CrashRecoveryService on next startup.
   let firstSignalTime: number | null = null;
-  const signalHandler = () => {
+  let firstSignal: NodeJS.Signals | null = null;
+  const signalHandler = (signal: NodeJS.Signals) => {
     if (firstSignalTime !== null) {
-      if (Date.now() - firstSignalTime < 2000) {
+      // concurrently forwards SIGTERM after the terminal has already sent
+      // SIGINT to the Electron child. In development that is one shutdown
+      // request, not the user's second force-quit gesture; treating it as a
+      // force exit skips markCleanExit() and trips safe mode after rebuilds.
+      if (Date.now() - firstSignalTime < 2000 && (app.isPackaged || signal === firstSignal)) {
         process.exit(1);
       }
       return;
     }
     firstSignalTime = Date.now();
+    firstSignal = signal;
     setSignalShutdown();
     const handle = setTimeout(() => {
       setSafetyBeltTimer(null);
@@ -327,11 +333,11 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
     setSafetyBeltTimer(handle);
     app.quit();
   };
-  process.on("SIGTERM", signalHandler);
-  process.on("SIGINT", signalHandler);
-  process.on("SIGUSR2", signalHandler);
+  process.on("SIGTERM", () => signalHandler("SIGTERM"));
+  process.on("SIGINT", () => signalHandler("SIGINT"));
+  process.on("SIGUSR2", () => signalHandler("SIGUSR2"));
   if (!app.isPackaged) {
-    process.on("SIGHUP", signalHandler);
+    process.on("SIGHUP", () => signalHandler("SIGHUP"));
   }
 
   app.on("second-instance", (_event, commandLine, workingDirectory) => {

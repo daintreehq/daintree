@@ -55,13 +55,13 @@ import {
   endWindowRecreating,
   isWindowRecreating,
 } from "../lifecycle/windowRecreationState.js";
-import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
+import { readActionableSystemMemoryMb } from "../utils/systemMemory.js";
 
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
 
 function getAvailableMemoryMb(): number | null {
-  return readAvailableSystemMemoryMb();
+  return readActionableSystemMemoryMb();
 }
 
 /**

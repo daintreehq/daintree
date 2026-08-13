@@ -10,7 +10,7 @@ import { refreshAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
 import { getIsE2EFaultMode } from "../setup/runtimeFlags.js";
-import { getSystemMemoryThresholds, readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
+import { getSystemMemoryThresholds, readActionableSystemMemoryMb } from "../utils/systemMemory.js";
 import type { TrimStateSummary } from "../../shared/types/pty-host.js";
 
 const POLL_INTERVAL_MS = 30_000;
@@ -537,7 +537,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       // avoids treating the large natural file-cache footprint of 64–128 GB
       // macOS machines as critical pressure while retaining proportional
       // thresholds on constrained machines.
-      const availableMb = readAvailableSystemMemoryMb();
+      const availableMb = readActionableSystemMemoryMb();
       const systemPressureActive = availableMb !== null && availableMb < systemLowMemoryThresholdMb;
       if (systemPressureActive) {
         hasPressure = true;
@@ -620,7 +620,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             if (totalMb > aggregateWarnThresholdMb) {
               remains = true;
             }
-            const availableMb = readAvailableSystemMemoryMb();
+            const availableMb = readActionableSystemMemoryMb();
             if (availableMb !== null && availableMb < systemLowMemoryThresholdMb) {
               remains = true;
               systemRemains = true;

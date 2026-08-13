@@ -88,9 +88,16 @@ class DiscoveredHost {
     final fingerprint = txt['fp'];
     final protocolMin = int.tryParse(txt['pmin'] ?? '');
     final protocolMax = int.tryParse(txt['pmax'] ?? '');
+    final advertisedAddress = txt['addr'];
     final txtPort = int.tryParse(txt['port'] ?? '');
     final resolvedPort = service.port ?? txtPort;
-    final resolvedHost = service.addresses.firstOrNull ?? service.host;
+    final parsedAddress = advertisedAddress == null
+        ? null
+        : InternetAddress.tryParse(advertisedAddress);
+    final resolvedHost =
+        parsedAddress != null && ManualEndpointParser._isPrivate(parsedAddress)
+        ? advertisedAddress
+        : service.addresses.firstOrNull ?? service.host;
     if (id == null ||
         id.isEmpty ||
         name == null ||
@@ -101,6 +108,9 @@ class DiscoveredHost {
         fingerprint.length < 8 ||
         protocolMin == null ||
         protocolMax == null ||
+        (advertisedAddress != null && parsedAddress == null) ||
+        (parsedAddress != null &&
+            !ManualEndpointParser._isPrivate(parsedAddress)) ||
         resolvedPort == null ||
         resolvedPort < 1 ||
         resolvedPort > 65535 ||
@@ -132,7 +142,17 @@ class DiscoveredHost {
 
 Map<String, String>? _decodeTxt(Map<String, Uint8List?>? source) {
   if (source == null) return null;
-  const allowed = {'name', 'id', 'pmin', 'pmax', 'ver', 'os', 'port', 'fp'};
+  const allowed = {
+    'name',
+    'id',
+    'pmin',
+    'pmax',
+    'ver',
+    'os',
+    'addr',
+    'port',
+    'fp',
+  };
   if (source.keys.any((key) => !allowed.contains(key))) return null;
   final result = <String, String>{};
   try {

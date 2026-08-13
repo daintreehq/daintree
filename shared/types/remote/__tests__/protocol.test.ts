@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   REMOTE_PROTOCOL_VERSION,
   RemoteAgentRunSchema,
+  RemoteCloseAgentRequestSchema,
   RemoteEnvelopeSchema,
   RemoteLaunchAgentRequestSchema,
   RemoteProjectSummarySchema,
@@ -207,6 +208,13 @@ describe("remote DTO redaction boundary", () => {
       idempotencyKey: "prompt-01",
       text: "Run the focused tests",
     };
+    const close = {
+      projectId: project.id,
+      worktreeId: worktree.id,
+      panelId: agent.panelId,
+      launchGeneration: agent.launchGeneration,
+      idempotencyKey: "close-01",
+    };
 
     expect(RemoteLaunchAgentRequestSchema.safeParse({ ...launch, cwd: "/tmp/repo" }).success).toBe(
       false
@@ -217,6 +225,8 @@ describe("remote DTO redaction boundary", () => {
     expect(
       RemoteSubmitPromptRequestSchema.safeParse({ ...prompt, env: { TOKEN: "secret" } }).success
     ).toBe(false);
+    expect(RemoteCloseAgentRequestSchema.parse(close)).toEqual(close);
+    expect(RemoteCloseAgentRequestSchema.safeParse({ ...close, force: true }).success).toBe(false);
   });
 
   it("accepts opaque stable identifiers and rejects path-like or whitespace-bearing identifiers", () => {

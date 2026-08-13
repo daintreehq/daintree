@@ -448,6 +448,36 @@ describe("ProjectViewManager adversarial", () => {
     expect(manager.getActiveProjectId()).toBe("proj-c");
   });
 
+  it("preserves a Portal-held background view across desktop project switches", async () => {
+    const win = createMockWindow();
+    const manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+    });
+
+    const aWc = createMockWebContents();
+    const aView = { webContents: aWc, setBounds: vi.fn(), setVisible: vi.fn() };
+    win.contentView.addChildView(aView);
+    manager.registerInitialView(aView as never, "proj-a", "/a");
+
+    wcQueue.push(createMockWebContents());
+    await manager.switchTo("proj-b", "/b");
+    win.contentView.addChildView(aView);
+    const release = manager.acquireBackgroundViewHold("proj-a");
+
+    wcQueue.push(createMockWebContents());
+    const result = await manager.switchTo("proj-c", "/c");
+
+    expect(win.contentView.children).toContain(aView);
+    expect(win.contentView.children).toContain(result.view);
+    expect(manager.getActiveProjectId()).toBe("proj-c");
+    release();
+  });
+
   it("parks a still-active orphaned view as cached rather than evicting it (#10806)", async () => {
     const win = createMockWindow();
     const manager = new ProjectViewManager(win as never, {

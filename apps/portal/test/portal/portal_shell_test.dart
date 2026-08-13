@@ -58,6 +58,7 @@ class WidgetPortalController extends PortalController {
     stateSince: 100,
     spawnedRemotely: true,
   );
+  int closeAgentPaneCount = 0;
 
   @override
   Future<void> connect() async {
@@ -90,6 +91,21 @@ class WidgetPortalController extends PortalController {
   Future<List<PortalLaunchableAgent>> launchableAgents(
     PortalWorktree worktree,
   ) async => const [];
+
+  @override
+  Future<bool> closeAgentPane(PortalAgent agent) async {
+    closeAgentPaneCount += 1;
+    agents = agents
+        .where((candidate) => candidate.panelId != agent.panelId)
+        .toList();
+    notifyListeners();
+    return true;
+  }
+}
+
+class PendingCloseWidgetPortalController extends WidgetPortalController {
+  @override
+  bool isClosingAgent(PortalAgent agent) => mutationPending;
 }
 
 class EmptyWidgetPortalController extends WidgetPortalController {
@@ -110,6 +126,42 @@ class LoadingWidgetPortalController extends WidgetPortalController {
     connectionState = PortalConnectionState.loading;
     projects = const [];
     notifyListeners();
+  }
+}
+
+class LoadingProjectWidgetPortalController extends WidgetPortalController {
+  int refreshCount = 0;
+
+  @override
+  Future<void> connect() async {
+    selectedProject = project;
+    worktrees = const [];
+    connectionState = PortalConnectionState.loading;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> refreshSelectedProject() async {
+    refreshCount += 1;
+  }
+}
+
+class DegradedProjectWidgetPortalController extends WidgetPortalController {
+  int refreshCount = 0;
+
+  @override
+  Future<void> connect() async {
+    selectedProject = project;
+    worktrees = const [];
+    connectionState = PortalConnectionState.degraded;
+    statusMessage =
+        'Not enough memory is available to prepare this project. Close an app on the host and retry. · tap Retry to try again';
+    notifyListeners();
+  }
+
+  @override
+  Future<void> refreshSelectedProject() async {
+    refreshCount += 1;
   }
 }
 
@@ -206,7 +258,41 @@ void main() {
     expect(find.text('Checking Studio Mac for projects'), findsOneWidget);
     expect(find.textContaining('Desktop project state'), findsOneWidget);
     expect(find.text('Loading from host…'), findsNothing);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsWidgets);
+  });
+
+  testWidgets('project detail loading animates and offers bounded retry', (
+    tester,
+  ) async {
+    final controller = LoadingProjectWidgetPortalController();
+    await tester.pumpWidget(
+      MaterialApp(home: PortalShell(controller: controller)),
+    );
+    await tester.pump();
+
+    expect(find.text('Preparing Daintree'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsWidgets);
+    expect(find.widgetWithText(OutlinedButton, 'Retry'), findsNothing);
+
+    await tester.pump(const Duration(seconds: 5));
+    expect(find.textContaining('taking longer than expected'), findsOneWidget);
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Retry'));
+    expect(controller.refreshCount, 1);
+  });
+
+  testWidgets('degraded project details expose the promised retry action', (
+    tester,
+  ) async {
+    final controller = DegradedProjectWidgetPortalController();
+    await tester.pumpWidget(
+      MaterialApp(home: PortalShell(controller: controller)),
+    );
+    await tester.pump();
+
+    expect(find.text('Degraded'), findsOneWidget);
+    expect(find.textContaining('Not enough memory'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Retry'));
+    expect(controller.refreshCount, 1);
   });
 
   testWidgets(
@@ -343,6 +429,49 @@ void main() {
       expect(controller.selectedAgent?.panelId, 'panel-01');
     },
   );
+
+  testWidgets('agent actions require confirmation before closing a pane', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final controller = WidgetPortalController();
+    await tester.pumpWidget(
+      MaterialApp(home: PortalShell(controller: controller)),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Daintree'));
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('Agent actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Close pane'));
+    await tester.pumpAndSettle();
+
+    expect(find.text("Close 'Portal implementation'?"), findsOneWidget);
+    expect(controller.closeAgentPaneCount, 0);
+    await tester.tap(find.widgetWithText(FilledButton, 'Close pane'));
+    await tester.pumpAndSettle();
+
+    expect(controller.closeAgentPaneCount, 1);
+  });
+
+  testWidgets('closing a pane replaces its action menu with progress', (
+    tester,
+  ) async {
+    final controller = PendingCloseWidgetPortalController();
+    await controller.connect();
+    await controller.openProject('project-01');
+    controller.mutationPending = true;
+    controller.notifyListeners();
+    await tester.pumpWidget(
+      MaterialApp(home: PortalShell(controller: controller)),
+    );
+    await tester.pump();
+
+    expect(find.byTooltip('Agent actions'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+  });
 
   testWidgets('stable tablet hierarchy matches its visual baseline', (
     tester,

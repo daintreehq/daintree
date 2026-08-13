@@ -9,14 +9,16 @@ Map<String, Uint8List?> txt({
   String id = 'host-1',
   String minimum = '1',
   String maximum = '1',
+  String? address,
   String port = '45123',
-}) => {
+}) => <String, Uint8List?>{
   'name': utf8.encode(name),
   'id': utf8.encode(id),
   'pmin': utf8.encode(minimum),
   'pmax': utf8.encode(maximum),
   'ver': utf8.encode('0.30.1'),
   'os': utf8.encode('macos'),
+  if (address != null) 'addr': utf8.encode(address),
   'port': utf8.encode(port),
   'fp': utf8.encode('abcdefghijklmnop'),
 };
@@ -27,6 +29,7 @@ RawDiscoveredService service({
   String minimum = '1',
   String maximum = '1',
   String port = '45123',
+  String? advertisedAddress,
   String? host = 'studio.local',
   List<String> addresses = const ['192.168.1.8'],
 }) => RawDiscoveredService(
@@ -34,7 +37,14 @@ RawDiscoveredService service({
   type: daintreePortalServiceType,
   host: host,
   port: int.tryParse(port),
-  txt: txt(name: name, id: id, minimum: minimum, maximum: maximum, port: port),
+  txt: txt(
+    name: name,
+    id: id,
+    minimum: minimum,
+    maximum: maximum,
+    address: advertisedAddress,
+    port: port,
+  ),
   addresses: addresses,
 );
 
@@ -65,6 +75,25 @@ void main() {
       expect(host?.id, 'host-1');
       expect(host?.reachability, HostReachability.available);
     });
+
+    test(
+      'prefers a validated private advertised address over loopback resolution',
+      () {
+        final host = DiscoveredHost.fromService(
+          service(
+            advertisedAddress: '192.168.1.8',
+            host: 'daintree-host.local',
+            addresses: const ['127.0.0.1'],
+          ),
+        );
+
+        expect(host?.host, '192.168.1.8');
+        expect(
+          DiscoveredHost.fromService(service(advertisedAddress: '8.8.8.8')),
+          isNull,
+        );
+      },
+    );
 
     test('marks incompatible protocol ranges without hiding the host', () {
       final host = DiscoveredHost.fromService(

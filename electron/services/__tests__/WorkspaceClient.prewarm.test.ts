@@ -222,6 +222,22 @@ describe("WorkspaceClient.prewarmProject", () => {
     expect(mockHosts).toHaveLength(1);
   });
 
+  it("holds a background project host and releases it back to dormant cleanup", async () => {
+    const webContents = { id: 91, isDestroyed: vi.fn(() => false) };
+    const acquiring = client.acquireBackgroundProject("/project-a", webContents as never);
+
+    await readyAndResolveLoadFake(0);
+    const lease = await acquiring;
+
+    expect(lease.host).toBe(h(0));
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(h(0).dispose).not.toHaveBeenCalled();
+
+    lease.release();
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(h(0).dispose).toHaveBeenCalledOnce();
+  });
+
   it("dormant cleanup evicts prewarm entry after grace period", async () => {
     client.prewarmProject("/project-a");
     await readyAndResolveLoadFake(0);

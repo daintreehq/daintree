@@ -112,13 +112,20 @@ export class RemoteDiscoveryService {
     }
     if (this.service) return;
 
-    const advertisement = this.advertisement(intent.port, intent.config.displayName);
+    const advertisement = this.advertisement(
+      intent.port,
+      intent.config.bindAddress,
+      intent.config.displayName
+    );
     const responder = this.responderFactory();
     const service = responder.createService({
       name: advertisement.displayName,
       type: "daintree-portal",
       port: advertisement.port,
-      restrictedAddresses: [intent.config.bindAddress],
+      restrictedAddresses: [
+        intent.config.bindAddress,
+        ...(this.platform === "darwin" ? ["lo0"] : []),
+      ],
       txt: {
         name: advertisement.displayName,
         id: advertisement.hostId,
@@ -126,6 +133,7 @@ export class RemoteDiscoveryService {
         pmax: String(advertisement.protocolMax),
         ver: advertisement.appVersion,
         os: advertisement.platform,
+        addr: advertisement.address,
         port: String(advertisement.port),
         fp: advertisement.fingerprintPrefix,
       },
@@ -146,7 +154,11 @@ export class RemoteDiscoveryService {
     }
   }
 
-  private advertisement(port: number, configuredName?: string): RemoteDiscoveryAdvertisement {
+  private advertisement(
+    port: number,
+    address: string,
+    configuredName?: string
+  ): RemoteDiscoveryAdvertisement {
     const publicIdentity = this.identity.publicIdentity();
     const fingerprint = this.tlsIdentity.certificateFingerprint().replace(/^sha256:/, "");
     return RemoteDiscoveryAdvertisementSchema.parse({
@@ -157,6 +169,7 @@ export class RemoteDiscoveryService {
       protocolMax: REMOTE_PROTOCOL_VERSION,
       appVersion: this.appVersion,
       platform: platformName(this.platform),
+      address,
       port,
       fingerprintPrefix: fingerprint.slice(0, 16),
     });

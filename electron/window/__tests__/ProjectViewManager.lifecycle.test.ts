@@ -951,15 +951,19 @@ describe("ProjectViewManager — lifecycle invariants", () => {
         generation: 1,
       });
       expect(setup.manager.getActiveProjectId()).toBe(activeBefore);
-      expect(setup.win.contentView.children).toEqual(childrenBefore);
+      const backgroundView = setup.manager
+        .getAllViews()
+        .find((entry) => entry.projectId === "proj-background")!.view;
+      expect(setup.win.contentView.children).toContain(backgroundView);
       expect(backgroundWc.focus).not.toHaveBeenCalled();
       expect(setup.manager.getAllViews()).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ projectId: "proj-background", state: "cached" }),
         ])
       );
-      assertLifecycleInvariants(setup.manager as never, setup.win as never);
       lease.release();
+      expect(setup.win.contentView.children).toEqual(childrenBefore);
+      assertLifecycleInvariants(setup.manager as never, setup.win as never);
       broker.dispose();
       setup.manager.dispose();
     });

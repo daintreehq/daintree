@@ -68,6 +68,9 @@ class NsdDiscoveryAdapter implements DiscoveryAdapter {
       }
 
       discovery.addServiceListener(listener);
+      for (final service in discovery.services) {
+        listener(service, nsd.ServiceStatus.found);
+      }
       return _NsdDiscoverySession(discovery, listener, _stopDiscovery);
     } on nsd.NsdError catch (error) {
       if (error.cause == nsd.ErrorCause.securityIssue) {

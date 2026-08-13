@@ -62,7 +62,7 @@ describe("RemoteDiscoveryService", () => {
       name: "Development Mac",
       type: "daintree-portal",
       port: 45_123,
-      restrictedAddresses: ["192.168.1.8"],
+      restrictedAddresses: ["192.168.1.8", "lo0"],
       txt: {
         name: "Development Mac",
         id: "host-stable-id",
@@ -70,6 +70,7 @@ describe("RemoteDiscoveryService", () => {
         pmax: "1",
         ver: "0.30.1",
         os: "macos",
+        addr: "192.168.1.8",
         port: "45123",
         fp: "abcdefghijklmnop",
       },

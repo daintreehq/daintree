@@ -18,6 +18,20 @@ export interface SystemMemoryThresholds {
   warningMb: number;
 }
 
+export function shouldBlockBackgroundViewCreation(
+  platform: NodeJS.Platform,
+  availableMb: number | null,
+  criticalMb: number | null
+): boolean {
+  // Darwin aggressively fills physical RAM with compressed and file-backed
+  // pages that Chromium does not consistently include in `purgeable`.
+  // A low instantaneous free+purgeable reading therefore is not an admission
+  // failure on macOS. The bounded project-view cache and ProcessMemoryMonitor
+  // still reclaim background views when sustained, measured pressure occurs.
+  if (platform === "darwin") return false;
+  return availableMb !== null && criticalMb !== null && availableMb <= criticalMb;
+}
+
 export function getSystemMemoryThresholds(totalMb: number): SystemMemoryThresholds {
   return {
     criticalMb: Math.min(totalMb * CRITICAL_FRACTION, CRITICAL_MAX_MB),
@@ -67,4 +81,15 @@ export function readSystemMemorySnapshot(): SystemMemorySnapshot | null {
 
 export function readAvailableSystemMemoryMb(): number | null {
   return readSystemMemorySnapshot()?.availableMb ?? null;
+}
+
+export function readActionableSystemMemoryMb(
+  platform: NodeJS.Platform = process.platform
+): number | null {
+  // Chromium's Darwin value omits enough compressed and file-backed memory
+  // that a healthy Mac commonly appears critical. macOS supplies its own
+  // reclamation/eviction behavior; Daintree's process-footprint limits remain
+  // active, but this unreliable system-wide scalar must not trigger policy.
+  if (platform === "darwin") return null;
+  return readAvailableSystemMemoryMb();
 }

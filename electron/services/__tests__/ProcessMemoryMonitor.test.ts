@@ -623,8 +623,10 @@ describe("ProcessMemoryMonitor", () => {
   describe("system-wide low-memory signal (issue #8633)", () => {
     let mockActions: MemoryPressureActions;
     let originalGetSystemMemoryInfo: unknown;
+    const originalPlatform = process.platform;
 
     beforeEach(() => {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
       mockActions = {
         destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
@@ -635,6 +637,10 @@ describe("ProcessMemoryMonitor", () => {
     });
 
     afterEach(() => {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: originalPlatform,
+      });
       if (originalGetSystemMemoryInfo === undefined) {
         delete (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo;
       } else {

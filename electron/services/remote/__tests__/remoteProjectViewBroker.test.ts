@@ -161,6 +161,8 @@ function brokerFixture(
     managers?: ReturnType<typeof managerFixture>[];
     timeoutMs?: number;
     maxConcurrent?: number;
+    prewarmProject?: (projectPath: string) => void;
+    waitForProjectReady?: (projectPath: string) => Promise<void>;
   } = {}
 ) {
   const managers = options.managers ?? [managerFixture()];
@@ -171,12 +173,70 @@ function brokerFixture(
     () => windows,
     registry,
     options.timeoutMs ?? 100,
-    options.maxConcurrent ?? 2
+    options.maxConcurrent ?? 2,
+    options.prewarmProject || options.waitForProjectReady
+      ? {
+          prewarmProject: options.prewarmProject ?? (() => {}),
+          waitForProjectReady: options.waitForProjectReady,
+        }
+      : undefined
   );
   return { broker, registry, managers, windows };
 }
 
 describe("RemoteProjectViewBroker", () => {
+  it("prewarms the project workspace before materializing its background renderer", async () => {
+    const calls: string[] = [];
+    const manager = managerFixture({
+      ensure: async () => {
+        calls.push("renderer");
+        const view = { webContents: { id: 42 } };
+        manager.views.set("project-target", { projectId: "project-target", view });
+        queueMicrotask(() => publishAvailable(f.registry, new Sender(42)));
+        return { view, isNew: true };
+      },
+    });
+    const prewarmProject = vi.fn(() => calls.push("workspace"));
+    const f = brokerFixture({ managers: [manager], prewarmProject });
+
+    const lease = await f.broker.ensureBackgroundView("project-target");
+
+    expect(prewarmProject).toHaveBeenCalledWith("/private/projects/target");
+    expect(calls).toEqual(["workspace", "renderer"]);
+    lease.release();
+  });
+
+  it("starts the renderer deadline only after the project workspace is ready", async () => {
+    vi.useFakeTimers();
+    try {
+      const workspaceReady = deferred<void>();
+      const manager = managerFixture({
+        ensure: async () => {
+          const view = { webContents: { id: 43 } };
+          manager.views.set("project-target", { projectId: "project-target", view });
+          queueMicrotask(() => publishAvailable(f.registry, new Sender(43)));
+          return { view, isNew: true };
+        },
+      });
+      const f = brokerFixture({
+        managers: [manager],
+        timeoutMs: 5,
+        waitForProjectReady: () => workspaceReady.promise,
+      });
+      const request = f.broker.ensureBackgroundView("project-target");
+
+      await vi.advanceTimersByTimeAsync(50);
+      expect(manager.ensure).not.toHaveBeenCalled();
+      workspaceReady.resolve();
+
+      const lease = await request;
+      expect(manager.ensure).toHaveBeenCalledOnce();
+      lease.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reuses the active target binding with an independently released lease", async () => {
     const manager = managerFixture({
       activeProjectId: "project-target",
@@ -197,11 +257,12 @@ describe("RemoteProjectViewBroker", () => {
       "/private/projects/target",
       expect.any(AbortSignal)
     );
-    expect(manager.finalize).toHaveBeenCalledWith("project-target", 21);
+    expect(manager.finalize).not.toHaveBeenCalled();
     expect(manager.active()).toBe("project-target");
     expect(manager.holds()).toBe(1);
     lease.release();
     lease.release();
+    expect(manager.finalize).toHaveBeenCalledWith("project-target", 21);
     expect(manager.holds()).toBe(0);
     expect(manager.releaseInvocations()).toBe(1);
   });
@@ -224,8 +285,9 @@ describe("RemoteProjectViewBroker", () => {
     expect(manager.active()).toBe("foreground-project");
     expect(window.focus).not.toHaveBeenCalled();
     expect(window.show).not.toHaveBeenCalled();
-    expect(manager.finalize).toHaveBeenCalledWith("project-target", 42);
+    expect(manager.finalize).not.toHaveBeenCalled();
     lease.release();
+    expect(manager.finalize).toHaveBeenCalledWith("project-target", 42);
   });
 
   it("selects the exact registered renderer owner when multiple windows show the project", async () => {
@@ -265,8 +327,10 @@ describe("RemoteProjectViewBroker", () => {
     expect(manager.holds()).toBe(2);
     firstLease.release();
     expect(manager.holds()).toBe(1);
+    expect(manager.finalize).not.toHaveBeenCalled();
     secondLease.release();
     expect(manager.holds()).toBe(0);
+    expect(manager.finalize).toHaveBeenCalledOnce();
   });
 
   it("rejects a third distinct materialization while two project slots are occupied", async () => {
@@ -416,11 +480,16 @@ describe("RemoteProjectViewBroker", () => {
     expect(cancelledManager.holds()).toBe(0);
 
     const pressured = managerFixture({ canMaterialize: false });
+    const prewarmUnderPressure = vi.fn();
     await expect(
-      brokerFixture({ managers: [pressured] }).broker.ensureBackgroundView("project-target")
+      brokerFixture({
+        managers: [pressured],
+        prewarmProject: prewarmUnderPressure,
+      }).broker.ensureBackgroundView("project-target")
     ).rejects.toMatchObject({
       code: "HOST_RESOURCE_PRESSURE",
     } satisfies Partial<RemoteProjectViewError>);
+    expect(prewarmUnderPressure).not.toHaveBeenCalled();
     await expect(
       new RemoteProjectViewBroker(
         { getProjectById: () => project() },

@@ -464,4 +464,23 @@ describe("RemoteProjectDetailProjectionService", () => {
       revision: 9,
     });
   });
+
+  it("holds the selected background view until the session changes project or disappears", async () => {
+    const readySessions: RemoteSession[] = [];
+    const releaseFirst = vi.fn();
+    const releaseSecond = vi.fn();
+    const subscriptions = new RemoteProjectDetailSubscriptionService(
+      { snapshot: vi.fn() },
+      { readySessions: () => readySessions },
+      vi.fn()
+    );
+
+    subscriptions.select("session-1", "project-1", 1, releaseFirst);
+    subscriptions.select("session-1", "project-2", 2, releaseSecond);
+    expect(releaseFirst).toHaveBeenCalledOnce();
+    expect(releaseSecond).not.toHaveBeenCalled();
+
+    await subscriptions.pollNow();
+    expect(releaseSecond).toHaveBeenCalledOnce();
+  });
 });

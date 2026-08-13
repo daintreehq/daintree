@@ -40,6 +40,7 @@ export const RemoteDiscoveryAdvertisementSchema = z.strictObject({
   protocolMax: z.number().int().positive(),
   appVersion: z.string().min(1).max(64),
   platform: z.enum(["macos", "windows", "linux"]),
+  address: z.string().min(1).max(255),
   port: z.number().int().positive().max(65_535),
   fingerprintPrefix: z.string().min(8).max(32),
 });

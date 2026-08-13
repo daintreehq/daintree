@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   RemoteRendererLaunchAgentRequestSchema,
+  RemoteRendererCloseAgentRequestSchema,
   RemoteRendererRequestSchema,
   RemoteRendererResponseSchema,
 } from "../remoteRendererBridge.js";
@@ -22,6 +23,27 @@ const launch = {
 describe("remote renderer bridge schemas", () => {
   it("accepts the complete generation-bound persistent remote launch contract", () => {
     expect(RemoteRendererLaunchAgentRequestSchema.parse(launch)).toEqual(launch);
+  });
+
+  it("accepts only an exact generation-bound close target", () => {
+    const close = {
+      requestId: launch.requestId,
+      projectId: launch.projectId,
+      webContentsId: launch.webContentsId,
+      rendererGeneration: launch.rendererGeneration,
+      method: "remote:closeAgent" as const,
+      worktreeId: launch.worktreeId,
+      panelId: "panel-1",
+      launchGeneration: 7,
+    };
+
+    expect(RemoteRendererCloseAgentRequestSchema.parse(close)).toEqual(close);
+    expect(RemoteRendererRequestSchema.safeParse({ ...close, launchGeneration: 0 }).success).toBe(
+      false
+    );
+    expect(
+      RemoteRendererRequestSchema.safeParse({ ...close, actionId: "terminal.kill" }).success
+    ).toBe(false);
   });
 
   it.each([

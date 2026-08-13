@@ -18,6 +18,8 @@ export type RemoteAuditOperation =
   | "project.select"
   | "agent.launch.request"
   | "agent.launch.result"
+  | "agent.close.request"
+  | "agent.close.result"
   | "prompt.submit.result"
   | "console.subscribe.start"
   | "console.subscribe.end"
