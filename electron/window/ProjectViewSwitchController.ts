@@ -357,9 +357,11 @@ export async function performSwitch(
   //
   // Clamped to the largest delay Node can hold: a sum past it wraps to a 1ms
   // timer, which would fire the provisional gate almost immediately and abandon
-  // every cold switch. The clamp cannot cost anything the load does not already
-  // cost — a `loadHardMs` big enough to reach it overflows loadView's own timer
-  // the same way, and that rejection clears this gate.
+  // every cold switch. The clamp only bites once `loadHardMs` comes within
+  // `paintHardMs` of that ceiling — a load budget of ~24 days — and there it
+  // narrows the margin over the load rather than keeping it. That is strictly
+  // better than the wrap it replaces, and far outside anything the resource
+  // profiles set.
   const hardMs =
     coldReleaseChannel === "painted"
       ? Math.max(paintHardMs, loadSoftMs)
