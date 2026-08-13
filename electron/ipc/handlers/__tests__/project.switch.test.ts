@@ -33,7 +33,7 @@ const probeGitMarkerMock = vi.hoisted(() =>
 vi.mock("../../../services/projectOpenPreflight.js", () => ({
   probeGitMarker: (root: string) => probeGitMarkerMock(root),
   assertProjectDirectory: vi.fn(),
-  isMissingExecutableError: vi.fn(() => false),
+  isMissingGitExecutableError: vi.fn(() => false),
   PROJECT_DIRECTORY_STAT_TIMEOUT_MS: 5_000,
   GIT_MARKER_STAT_TIMEOUT_MS: 1_000,
 }));

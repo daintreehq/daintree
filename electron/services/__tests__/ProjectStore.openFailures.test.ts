@@ -5,6 +5,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import * as schema from "../persistence/schema.js";
+import { simpleGitMissingBinaryError } from "../../../shared/testing/simpleGitErrorFixtures.js";
 
 /**
  * Producer-side coverage for #11409: these drive `addProject` against a REAL
@@ -108,17 +109,9 @@ import { ProjectStore } from "../ProjectStore.js";
 const REPORTED_RAW_TEXT =
   "Git operation failed: getRepositoryRoot\nCannot use simple-git on a directory that does not exist";
 
-/**
- * simple-git 3.36.0 stringifies a failed spawn into the message and rethrows a
- * bare error — no `code`, no `syscall`, no `cause`. Reproduced faithfully here
- * because a synthetic errno-bearing cause chain would pass against detection
- * that can never fire in production.
- */
-function simpleGitMissingBinaryError(): Error {
-  const error = new Error("Error: spawn git ENOENT");
-  Object.assign(error, { task: { commands: ["rev-parse", "--show-toplevel"] } });
-  return error;
-}
+// The captured shape lives in shared/testing: the single-line version this
+// file used to build passed against detection that could never fire in
+// production, which is how #11764 shipped green.
 
 async function codeOf(run: () => Promise<unknown>): Promise<string> {
   try {

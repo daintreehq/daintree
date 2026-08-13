@@ -240,40 +240,14 @@ function classifyStatFailure(directoryPath: string, error: unknown): AppError {
 }
 
 /**
- * Matches the spawn failure Node reports for a binary that isn't on PATH, as
- * simple-git stringifies it: `Error: spawn git ENOENT`. The binary name isn't
- * pinned (simple-git can be configured with another), but the shape is anchored
- * to the whole message — an unanchored search would also match git's own stderr
- * quoting a repository path that happens to contain those words.
- */
-const SPAWN_ENOENT_PATTERN = /^(?:Error: )?spawn [^\r\n]+ ENOENT$/;
-
-/**
- * True when `error` is a failed *spawn* of a missing executable.
+ * Re-exported so this module stays the single project-open guard surface its
+ * callers and tests import from. The detection itself lives in `shared/` because
+ * `classifyGitError` needs the same predicate and can't import from `electron/`
+ * — a missing Git binary should be recognized once, not guessed at separately
+ * by every site that sees the error (#11764).
  *
- * Callers reach this only after {@link assertProjectDirectory} has confirmed the
+ * Callers reach it only after {@link assertProjectDirectory} has confirmed the
  * directory exists and is enterable, so a spawn ENOENT can no longer mean the
  * working directory — it's the git binary.
- *
- * Both a structured check and a message check are needed. simple-git 3.36.0
- * does not preserve the spawn error: it stringifies it into the message and
- * rethrows a bare `GitError` whose only own property is `task` — no `code`, no
- * `syscall`, no `cause`. So the errno walk alone never fires for the real
- * failure, while the message match alone would miss a raw Node error arriving
- * from anywhere that doesn't launder it. Verified against the installed
- * simple-git; re-check on upgrade.
  */
-export function isMissingExecutableError(error: unknown): boolean {
-  const seen = new Set<unknown>();
-  let current: unknown = error;
-
-  while (current && typeof current === "object" && !seen.has(current)) {
-    seen.add(current);
-    const errno = current as NodeJS.ErrnoException;
-    if (errno.code === "ENOENT" && errno.syscall?.startsWith("spawn")) return true;
-    if (errno instanceof Error && SPAWN_ENOENT_PATTERN.test(errno.message)) return true;
-    current = (current as { cause?: unknown }).cause;
-  }
-
-  return false;
-}
+export { isMissingGitExecutableError } from "../../shared/utils/gitOperationErrors.js";

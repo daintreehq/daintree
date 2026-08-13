@@ -11,6 +11,7 @@ import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "../../shared/ty
 import { createHardenedGit } from "../utils/hardenedGit.js";
 import { validateBranchName } from "../../shared/utils/pathPattern.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { isMissingGitExecutableError } from "../../shared/utils/gitOperationErrors.js";
 import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import { parseNumstat } from "../utils/git.js";
 import type { DiffStat } from "../utils/git.js";
@@ -779,6 +780,18 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       return await operation();
     } catch (error) {
       const errorMessage = formatErrorMessage(error, `Git operation failed: ${context}`);
+
+      // Checked against the raw error, and ahead of the ENOENT branch below:
+      // a missing git binary reaches here as a spawn ENOENT, which that branch
+      // would otherwise read as "this worktree was deleted" and act on by
+      // tearing down a worktree that is perfectly fine (#11764).
+      if (isMissingGitExecutableError(error)) {
+        const gitError = toGitOperationError(error, { cwd: this.rootPath, op: context });
+        logWarn(`Git operation failed: git executable not found (${context})`, {
+          rootPath: this.rootPath,
+        });
+        throw gitError;
+      }
 
       if (
         errorMessage.includes("ENOENT") ||

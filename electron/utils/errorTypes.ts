@@ -180,6 +180,8 @@ export function getRetryability(error: unknown, gitReason?: GitOperationReason):
       case "auth-failed":
       case "config-missing":
       case "dubious-ownership":
+      // Retrying can't help until the user installs Git.
+      case "git-not-installed":
         return "user-gated";
       case "network-unavailable":
       case "system-io-error":

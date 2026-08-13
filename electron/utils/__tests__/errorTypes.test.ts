@@ -188,7 +188,13 @@ describe("getRetryability", () => {
   });
 
   it("maps git auth/config reasons to 'user-gated'", () => {
-    for (const reason of ["auth-failed", "config-missing", "dubious-ownership"] as const) {
+    for (const reason of [
+      "auth-failed",
+      "config-missing",
+      "dubious-ownership",
+      // Auto-retrying a machine with no Git installed just spins.
+      "git-not-installed",
+    ] as const) {
       const err = new GitOperationError(reason, "boom");
       expect(getRetryability(err)).toBe("user-gated");
     }

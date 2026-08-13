@@ -127,7 +127,72 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
   ],
 ];
 
+/**
+ * The spawn failure Node reports when the `git` binary isn't on PATH.
+ *
+ * simple-git 3.36.0 destroys the provenance: its child-process `error` handler
+ * pushes `String(err.stack)` into the stderr buffer and rethrows a bare
+ * `GitError` whose own properties are only `stack`, `message`, and `task` — no
+ * `code`, no `syscall`, no `cause`. So the message arrives as a whole Node
+ * stack trace (`Error: spawn git ENOENT\n    at ChildProcess...`), not the
+ * one-line `spawn git ENOENT` the raw `SystemError` carries.
+ *
+ * Both forms are accepted, and the pattern is anchored to the *entire* message
+ * so that neither can be forged by content quoted inside a larger one. That
+ * matters: git stderr legitimately quotes arbitrary text (a repository path
+ * like `/repos/spawn git ENOENT`), and a hook or filter that shells out can
+ * print its own child's spawn failure. Matching such a line anywhere in the
+ * message — which is all a bare `m` flag would buy — would report "Git isn't
+ * installed" for a repo that merely has an unlucky path.
+ *
+ * The binary is pinned to `git` on purpose. `createWslHardenedGit` spawns
+ * `wsl.exe git`, so a missing WSL launcher must not be reported as a missing
+ * Git. Re-check on simple-git upgrade.
+ */
+const GIT_SPAWN_ENOENT_PATTERN = /^(?:Error: )?spawn git ENOENT(?:\r?\n[ \t]+at [^\r\n]*)*\r?\n?$/;
+
+/**
+ * True when `error` is a failed *spawn* of the `git` binary — i.e. Git isn't
+ * installed, or isn't on PATH.
+ *
+ * Walks `.cause` chains because the error is routinely rewrapped before it
+ * reaches a classifier (`GitService.handleGitOperation` turns it into a
+ * `WorktreeRemovedError` whose `.cause` is the original).
+ *
+ * Both a structured check and a message check are needed. The structured one
+ * never fires for simple-git's laundered error, and the message one would miss
+ * a raw Node error arriving from somewhere that doesn't launder it.
+ *
+ * This is deliberately *not* a general "some executable is missing" predicate:
+ * callers act on it by telling the user to install Git.
+ */
+export function isMissingGitExecutableError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+
+  if (typeof current === "string") return GIT_SPAWN_ENOENT_PATTERN.test(current);
+
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as { code?: unknown; syscall?: unknown; message?: unknown };
+    if (candidate.code === "ENOENT" && candidate.syscall === "spawn git") return true;
+    if (typeof candidate.message === "string" && GIT_SPAWN_ENOENT_PATTERN.test(candidate.message)) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+
+  return false;
+}
+
 export function classifyGitError(error: unknown): GitOperationReason {
+  // Runs ahead of the PATTERNS pipeline, and against the *raw* value rather
+  // than the normalized message: a missing binary can only be recognized from
+  // structured errno fields or a cause chain, neither of which survives into
+  // the string the patterns match. Left to fall through, it would reach the
+  // generic `system-io-error` rule and be reported as a filesystem problem.
+  if (isMissingGitExecutableError(error)) return "git-not-installed";
+
   const raw = extractGitErrorMessage(error);
   if (!raw) return "unknown";
   const normalized = normalizeGitErrorMessage(raw);
@@ -161,6 +226,7 @@ const RECOVERY_HINTS: Record<GitOperationReason, string | undefined> = {
   "lfs-quota-exceeded":
     "This repository has exceeded its Git LFS storage or bandwidth quota. Contact the repo owner or upgrade the plan.",
   "hook-rejected": "A server-side hook rejected the push. See the server output for details.",
+  "git-not-installed": "Daintree couldn't run Git. Install Git and make sure it's on your PATH.",
   "system-io-error": "A filesystem or permissions problem prevented the git operation.",
   unknown: undefined,
 };

@@ -86,6 +86,7 @@ const GIT_REASON_TITLES = {
   "lfs-missing": "Git LFS object missing",
   "lfs-quota-exceeded": "Git LFS quota exceeded",
   "hook-rejected": "Push rejected by server hook",
+  "git-not-installed": "Couldn't find Git",
   "system-io-error": "Git filesystem error",
   unknown: ERROR_TYPE_FALLBACKS.git.title,
 } as const satisfies Record<GitOperationReason, string>;

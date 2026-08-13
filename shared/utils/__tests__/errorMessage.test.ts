@@ -180,6 +180,7 @@ describe("humanizeAppError", () => {
       "lfs-missing",
       "lfs-quota-exceeded",
       "hook-rejected",
+      "git-not-installed",
       "system-io-error",
     ];
 
