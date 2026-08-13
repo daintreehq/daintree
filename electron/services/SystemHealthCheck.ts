@@ -124,6 +124,33 @@ async function hasXcodeCommandLineTools(): Promise<boolean> {
   }
 }
 
+/**
+ * Runs a tool's version command. On Windows the entry point for a lot of tools
+ * is a `.cmd`/`.bat` shim (`npm.cmd`, and anything installed as an npm global
+ * bin), which current Node refuses to spawn without a shell — it rejects with
+ * EINVAL. That used to be invisible because a failed version command still
+ * reported the tool as available; now that a failure means unavailable, the
+ * shim has to be retried through a shell or every such tool reads as missing.
+ */
+async function runVersionCommand(command: string, versionArgs: string[]): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync(command, versionArgs, {
+      encoding: "utf8",
+      timeout: CHECK_TIMEOUT_MS,
+    });
+    return stdout;
+  } catch (err) {
+    if (process.platform !== "win32") throw err;
+    const { stdout } = await execFileAsync(command, versionArgs, {
+      encoding: "utf8",
+      timeout: CHECK_TIMEOUT_MS,
+      shell: true,
+      windowsHide: true,
+    });
+    return stdout;
+  }
+}
+
 export async function checkPrerequisite(spec: PrerequisiteSpec): Promise<PrerequisiteCheckResult> {
   const checkCmd = process.platform === "win32" ? "where" : "which";
   const command = spec.command ?? spec.tool;
@@ -151,20 +178,17 @@ export async function checkPrerequisite(spec: PrerequisiteSpec): Promise<Prerequ
     return unavailable(spec, "macos-command-line-tools-missing");
   }
 
-  let version: string | null = null;
+  let stdout: string;
   try {
-    const { stdout } = await execFileAsync(command, spec.versionArgs, {
-      encoding: "utf8",
-      timeout: CHECK_TIMEOUT_MS,
-    });
-    // Parsing is deliberately outside the try: a tool that ran fine but printed
-    // an unrecognisable version string is still usable, so an unparseable
-    // version leaves `available` true with `version: null`. Only a failure to
-    // *execute* means unavailable.
-    version = extractVersion(stdout);
+    stdout = await runVersionCommand(command, spec.versionArgs);
   } catch {
     return unavailable(spec, "version-command-failed");
   }
+  // Parsing is deliberately outside the try: a tool that ran fine but printed
+  // an unrecognisable version string is still usable, so an unparseable version
+  // leaves `available` true with `version: null`. Only a failure to *execute*
+  // means unavailable.
+  const version = extractVersion(stdout);
 
   let meetsMinVersion = true;
   if (spec.minVersion && version) {
@@ -202,11 +226,34 @@ export async function getHealthCheckSpecs(agentIds?: string[]): Promise<Prerequi
 // still hasn't installed comes back on the next launch.
 let fatalResultCache: SystemHealthCheckResult | null = null;
 let fatalInflight: Promise<SystemHealthCheckResult> | null = null;
+// A forced probe that has to start only once the running one finishes. Without
+// this, a re-check fired the instant an install completes could join a probe
+// that began *before* it and conclude the tool is still missing.
+let fatalQueuedRefresh: Promise<SystemHealthCheckResult> | null = null;
+// Bumped on reset so a probe still in flight from a previous test can't land
+// its result in the cache afterwards.
+let fatalGeneration = 0;
 
 /** Test seam — drops the cached fatal-only result and any in-flight probe. */
 export function resetSystemHealthCheckCache(): void {
+  fatalGeneration += 1;
   fatalResultCache = null;
   fatalInflight = null;
+  fatalQueuedRefresh = null;
+}
+
+function startFatalProbe(): Promise<SystemHealthCheckResult> {
+  const generation = fatalGeneration;
+  const probe = runHealthCheck(undefined, true)
+    .then((result) => {
+      if (generation === fatalGeneration) fatalResultCache = result;
+      return result;
+    })
+    .finally(() => {
+      if (fatalInflight === probe) fatalInflight = null;
+    });
+  fatalInflight = probe;
+  return probe;
 }
 
 async function runHealthCheck(agentIds?: string[], fatalOnly?: boolean) {
@@ -234,19 +281,24 @@ export async function runSystemHealthCheck(
   const cacheable = fatalOnly === true && agentIds === undefined;
   if (!cacheable) return runHealthCheck(agentIds, fatalOnly);
 
-  if (!force && fatalResultCache) return fatalResultCache;
-  // A forced run bypasses the settled cache but still joins an in-flight probe,
-  // so N views regaining focus together produce one spawn, not N.
-  if (fatalInflight) return fatalInflight;
+  if (force) {
+    // Nothing running — probe now.
+    if (!fatalInflight) return startFatalProbe();
+    // Something is running that may predate this request, so chain a fresh
+    // probe behind it. Concurrent forced callers (several views regaining focus
+    // together) all join that one queued probe rather than each spawning.
+    if (!fatalQueuedRefresh) {
+      const queued = fatalInflight
+        .catch(() => undefined)
+        .then(() => startFatalProbe())
+        .finally(() => {
+          if (fatalQueuedRefresh === queued) fatalQueuedRefresh = null;
+        });
+      fatalQueuedRefresh = queued;
+    }
+    return fatalQueuedRefresh;
+  }
 
-  const inflight = runHealthCheck(agentIds, fatalOnly)
-    .then((result) => {
-      fatalResultCache = result;
-      return result;
-    })
-    .finally(() => {
-      if (fatalInflight === inflight) fatalInflight = null;
-    });
-  fatalInflight = inflight;
-  return inflight;
+  if (fatalResultCache) return fatalResultCache;
+  return fatalInflight ?? startFatalProbe();
 }

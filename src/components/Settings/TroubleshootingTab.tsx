@@ -21,6 +21,7 @@ import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
 import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
+import { useSettingsStore } from "@/store/settingsStore";
 import { logError, logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
@@ -36,8 +37,16 @@ function SystemHealthSection() {
   const [checkError, setCheckError] = useState<string | null>(null);
 
   // While this section is on screen the user is already looking at the health
-  // check, so the global missing-prerequisite banner stands down.
-  useEffect(() => useMissingPrerequisiteStore.getState().claimInlineSurface(), []);
+  // check, so the global missing-prerequisite banner stands down. Gated on the
+  // active tab, not just the mount: SettingsDialog keeps visited tabs mounted
+  // behind `hidden`, so a mount-scoped claim would outlive the tab being
+  // visible. The dialog unmounts its children on close, so being mounted at all
+  // already implies Settings is open.
+  const isVisible = useSettingsStore((s) => s.activeTab === "troubleshooting");
+  useEffect(() => {
+    if (!isVisible) return;
+    return useMissingPrerequisiteStore.getState().claimInlineSurface();
+  }, [isVisible]);
 
   const runCheck = async () => {
     setIsChecking(true);

@@ -147,6 +147,19 @@ export async function runAgentInstall(
   const { blocks } = resolved;
 
   const methodIndex = payload.methodIndex ?? 0;
+  // A prerequisite's blocks are not interchangeable — on macOS index 0 is
+  // `brew install git` and index 1 hands off to Apple's installer — so an
+  // out-of-range index must fail rather than silently run a different install.
+  // The agent path keeps its long-standing fall back to index 0.
+  if (payload.prerequisiteTool !== undefined) {
+    if (!Number.isInteger(methodIndex) || methodIndex < 0 || methodIndex >= blocks.length) {
+      return {
+        success: false,
+        exitCode: null,
+        error: `No install method ${methodIndex} for ${payload.prerequisiteTool}`,
+      };
+    }
+  }
   const block = blocks[methodIndex] ?? blocks[0];
 
   // Re-checked here even though the renderer gates the button: renderer gating

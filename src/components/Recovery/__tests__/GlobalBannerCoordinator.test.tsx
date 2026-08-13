@@ -685,13 +685,16 @@ describe("GlobalBannerCoordinator — missing prerequisite slot (#11763)", () =>
     expect(screen.queryByText("Running under Rosetta")).toBeNull();
   });
 
-  it("yields the slot back once dismissed for the session", () => {
+  it("yields the slot to the next banner once dismissed for the session", () => {
     setForgeTokenUnhealthy(true);
     useMissingPrerequisiteStore.setState({ missing: [missingGit()], dismissed: true });
 
     render(<GlobalBannerCoordinator />);
 
     expect(screen.queryByText("Git is missing")).toBeNull();
+    // Asserting the promotion, not just the disappearance — the slot must go to
+    // forge-token rather than the coordinator rendering nothing.
+    expect(screen.getByText("GitHub token expired")).toBeTruthy();
   });
 
   it("stands down while a surface already showing prerequisites is mounted", () => {

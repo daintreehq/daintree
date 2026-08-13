@@ -3,6 +3,8 @@ import type { PrerequisiteCheckResult } from "@shared/types";
 
 /** Progress of a one-click install job for a single prerequisite. */
 export interface PrerequisiteInstallJob {
+  /** Correlates streamed progress; a superseded job's output is ignored. */
+  jobId: string;
   tool: string;
   status: "running" | "handed-off" | "error";
   /** Latest scrubbed output line, shown as the banner's live status. */

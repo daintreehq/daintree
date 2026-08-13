@@ -526,6 +526,26 @@ describe("AgentInstallService — elevation and prerequisite targets (#11763)", 
     });
   });
 
+  describe("install method validation", () => {
+    it.each([99, -1, 1.5, NaN])(
+      "rejects out-of-range prerequisite method %s without spawning",
+      async (methodIndex) => {
+        setPlatform("darwin");
+
+        const result = await runAgentInstall(
+          { prerequisiteTool: "git", methodIndex, jobId: "j-idx" },
+          vi.fn()
+        );
+
+        // Block 0 is `brew install git` and block 1 hands off to Apple's
+        // installer — silently substituting one for the other would run an
+        // install the caller never asked for.
+        expect(result.success).toBe(false);
+        expect(spawnMock).not.toHaveBeenCalled();
+      }
+    );
+  });
+
   describe("windows git command", () => {
     it("passes the agreement flags winget needs under piped stdio", async () => {
       setPlatform("win32");

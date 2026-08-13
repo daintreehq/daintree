@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { AgentInstallBlock } from "@shared/config/agentRegistry";
 import type { PrerequisiteCheckResult } from "@shared/types";
@@ -6,51 +6,77 @@ import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
 import { detectOS, isBlockExecutable } from "@/lib/agentInstall";
 import { systemClient } from "@/clients";
+import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
-/** Install runs well past the Doherty threshold, so the status line switches to
- *  a reassurance once it has been going this long. */
+/** The install runs well past the Doherty threshold, so the status line swaps
+ *  to a reassurance once it has been going this long. A wait threshold rather
+ *  than a motion duration, so it lives with the component. */
 const STILL_WORKING_MS = 5_000;
 
-interface InstallCandidate {
+/** What to show for the first missing prerequisite we can say something about.
+ *  `block` is the instructions to display; `autoInstall` is the strictly
+ *  narrower question of whether we may run them ourselves. */
+interface Guidance {
   result: PrerequisiteCheckResult;
-  block: AgentInstallBlock;
+  block: AgentInstallBlock | null;
   methodIndex: number;
   /** Binary the command drives (`brew`, `winget`) — probed before offering it. */
-  packageManager: string;
+  packageManager: string | null;
+  autoInstallable: boolean;
 }
 
 /**
- * Picks the block to offer for a missing prerequisite on this OS. macOS gets a
- * second block for the Command Line Tools case, which is a different shape:
+ * Picks the block to show for a missing prerequisite on this OS. macOS carries
+ * a second block for the Command Line Tools case, which is a different shape:
  * `xcode-select --install` hands off to Apple's GUI installer, so it's chosen
  * only when the probe says the tools are what's missing.
  */
-function pickInstallCandidate(result: PrerequisiteCheckResult): InstallCandidate | null {
+function pickGuidance(result: PrerequisiteCheckResult): Guidance | null {
   const blocks = result.installBlocks?.[detectOS()] ?? result.installBlocks?.generic;
-  if (!blocks || blocks.length === 0) return null;
+  if (!blocks || blocks.length === 0) {
+    return { result, block: null, methodIndex: 0, packageManager: null, autoInstallable: false };
+  }
 
   const wantsCommandLineTools = result.unavailableReason === "macos-command-line-tools-missing";
-  const methodIndex = blocks.findIndex((b) =>
+  const preferred = blocks.findIndex((b) =>
     wantsCommandLineTools ? b.opensExternalInstaller === true : b.opensExternalInstaller !== true
   );
-  if (methodIndex === -1) return null;
+  const methodIndex = preferred === -1 ? 0 : preferred;
+  const block = blocks[methodIndex] ?? null;
+  if (!block) {
+    return { result, block: null, methodIndex: 0, packageManager: null, autoInstallable: false };
+  }
 
-  const block = blocks[methodIndex];
-  if (!block || !isBlockExecutable(block)) return null;
-
-  const packageManager = block.commands?.[0]?.trim().split(/\s+/)[0];
-  if (!packageManager) return null;
-
-  return { result, block, methodIndex, packageManager };
+  // A block we can't safely run — a sudo or pipe-to-shell command — is still
+  // worth showing: the user can copy it. It just isn't a one-click candidate.
+  const packageManager = block.commands?.[0]?.trim().split(/\s+/)[0] ?? null;
+  return {
+    result,
+    block,
+    methodIndex,
+    packageManager,
+    autoInstallable: isBlockExecutable(block) && packageManager !== null,
+  };
 }
 
 function describe(missing: PrerequisiteCheckResult[]): string {
   const names = missing.map((m) => m.label).join(", ");
   const isOne = missing.length === 1;
-  return `${names} ${isOne ? "is" : "are"} not installed or not on PATH, so git operations and agent launches will fail until ${isOne ? "it's" : "they're"} available.`;
+  const subject = isOne ? "it's" : "they're";
+  const outdated = missing.every((m) => m.available);
+  const problem = outdated
+    ? `${names} ${isOne ? "is" : "are"} below the version Daintree needs`
+    : `${names} ${isOne ? "is" : "are"} not installed or not on PATH`;
+  return `${problem}, so git operations and agent launches will fail until ${subject} sorted.`;
+}
+
+function title(missing: PrerequisiteCheckResult[]): string {
+  const only = missing.length === 1 ? missing[0] : undefined;
+  if (!only) return "Required tools are missing";
+  return only.available ? `${only.label} is out of date` : `${only.label} is missing`;
 }
 
 export function MissingPrerequisiteBanner() {
@@ -61,18 +87,11 @@ export function MissingPrerequisiteBanner() {
 
   const [packageManagerReady, setPackageManagerReady] = useState(false);
   const [stillWorking, setStillWorking] = useState(false);
-  const mountedRef = useRef(true);
+  const [isRechecking, setIsRechecking] = useState(false);
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  const candidate = useMemo(() => {
+  const guidance = useMemo(() => {
     for (const result of missing) {
-      const found = pickInstallCandidate(result);
+      const found = pickGuidance(result);
       if (found) return found;
     }
     return null;
@@ -80,14 +99,13 @@ export function MissingPrerequisiteBanner() {
 
   // Don't offer a button that can only ENOENT — winget is absent on plenty of
   // Windows images and Homebrew is not a given on macOS.
+  const packageManager = guidance?.autoInstallable ? guidance.packageManager : null;
   useEffect(() => {
-    if (!candidate) {
-      setPackageManagerReady(false);
-      return;
-    }
+    setPackageManagerReady(false);
+    if (!packageManager) return;
     let active = true;
     void systemClient
-      .checkCommand(candidate.packageManager)
+      .checkCommand(packageManager)
       .then((present) => {
         if (active) setPackageManagerReady(present);
       })
@@ -97,7 +115,7 @@ export function MissingPrerequisiteBanner() {
     return () => {
       active = false;
     };
-  }, [candidate]);
+  }, [packageManager]);
 
   const isRunning = install?.status === "running";
 
@@ -111,12 +129,17 @@ export function MissingPrerequisiteBanner() {
   }, [isRunning]);
 
   const runInstall = useCallback(async () => {
-    if (!candidate) return;
-    const { result, block, methodIndex } = candidate;
+    if (!guidance?.block || !guidance.autoInstallable) return;
+    // The store is the source of truth for whether a job is live: this
+    // component unmounts whenever a higher-priority global banner takes the
+    // slot, so a remount must not be able to start a second install.
+    if (useMissingPrerequisiteStore.getState().install?.status === "running") return;
+
+    const { result, block, methodIndex } = guidance;
     const jobId = crypto.randomUUID();
     const errorLog: string[] = [];
 
-    setInstall({ tool: result.tool, status: "running", statusLine: "", error: null });
+    setInstall({ jobId, tool: result.tool, status: "running", statusLine: "", error: null });
 
     const cleanup = window.electron.system.onAgentInstallProgress((event) => {
       if (event.jobId !== jobId) return;
@@ -124,9 +147,16 @@ export function MissingPrerequisiteBanner() {
       const line = event.chunk.trim().split("\n").filter(Boolean).pop();
       if (!line) return;
       const current = useMissingPrerequisiteStore.getState().install;
-      if (current?.status !== "running") return;
+      // A superseded job's output must not overwrite the live one's status.
+      if (current?.jobId !== jobId || current.status !== "running") return;
       useMissingPrerequisiteStore.getState().setInstall({ ...current, statusLine: line });
     });
+
+    /** Writes only if this job still owns the slot. */
+    const settle = (job: Parameters<typeof setInstall>[0]) => {
+      if (useMissingPrerequisiteStore.getState().install?.jobId !== jobId) return;
+      setInstall(job);
+    };
 
     try {
       const outcome = await window.electron.system.installAgent({
@@ -136,7 +166,8 @@ export function MissingPrerequisiteBanner() {
       });
 
       if (!outcome.success) {
-        setInstall({
+        settle({
+          jobId,
           tool: result.tool,
           status: "error",
           statusLine: "",
@@ -149,7 +180,7 @@ export function MissingPrerequisiteBanner() {
       // installer has done anything, so a zero exit says nothing about whether
       // the tool is there. Ask the user to finish and re-check instead.
       if (block.opensExternalInstaller) {
-        setInstall({ tool: result.tool, status: "handed-off", statusLine: "", error: null });
+        settle({ jobId, tool: result.tool, status: "handed-off", statusLine: "", error: null });
         return;
       }
 
@@ -159,24 +190,32 @@ export function MissingPrerequisiteBanner() {
       useMissingPrerequisiteStore.getState().setMissing(stillMissing);
 
       if (stillMissing.some((p) => p.tool === result.tool)) {
-        setInstall({
+        settle({
+          jobId,
           tool: result.tool,
           status: "error",
           statusLine: "",
-          error: `${result.label} still isn't on PATH after the install finished`,
+          error: `${result.label} isn't usable yet — the install finished but the check still fails`,
         });
         return;
       }
 
-      setInstall(null);
+      settle(null);
+      // The banner is gone for this tool, so the toast is the only close-loop
+      // signal. It speaks for the tool it installed and nothing more — other
+      // prerequisites may still be outstanding.
       notify({
         type: "success",
         title: `${result.label} installed`,
-        message: `${result.label} is now available. Git operations and agent launches will work.`,
+        message:
+          stillMissing.length > 0
+            ? `Still missing: ${stillMissing.map((p) => p.label).join(", ")}.`
+            : `Daintree found ${result.label} on PATH.`,
       });
     } catch (err) {
       logError("Prerequisite install failed", err);
-      setInstall({
+      settle({
+        jobId,
         tool: result.tool,
         status: "error",
         statusLine: "",
@@ -185,9 +224,12 @@ export function MissingPrerequisiteBanner() {
     } finally {
       cleanup();
     }
-  }, [candidate, setInstall]);
+  }, [guidance, setInstall]);
 
   const recheck = useCallback(async () => {
+    // Never wipe a live job's state from under it.
+    if (useMissingPrerequisiteStore.getState().install?.status === "running") return;
+    setIsRechecking(true);
     try {
       const health = await systemClient.healthCheck({ fatalOnly: true, force: true });
       useMissingPrerequisiteStore
@@ -196,54 +238,101 @@ export function MissingPrerequisiteBanner() {
       setInstall(null);
     } catch (err) {
       logError("Prerequisite re-check failed", err);
+      setInstall({
+        jobId: "recheck",
+        tool: guidance?.result.tool ?? "",
+        status: "error",
+        statusLine: "",
+        error: formatErrorMessage(err, "Couldn't check for the tool"),
+      });
+    } finally {
+      setIsRechecking(false);
     }
-  }, [setInstall]);
+  }, [guidance, setInstall]);
+
+  const openInstallUrl = useCallback(() => {
+    if (!guidance?.result.installUrl) return;
+    void actionService.dispatch(
+      "system.openExternal",
+      { url: guidance.result.installUrl },
+      { source: "user" }
+    );
+  }, [guidance]);
 
   if (missing.length === 0) return null;
 
-  const canInstall = candidate !== null && packageManagerReady;
-  const command = candidate?.block.commands?.join(" && ");
+  const failed = install?.status === "error";
   const handedOff = install?.status === "handed-off";
+  const canInstall = guidance?.autoInstallable === true && packageManagerReady;
+  const command = guidance?.block?.commands?.join(" && ");
 
   const description = handedOff
-    ? "Finish the macOS installer, then re-check."
-    : install?.status === "error"
+    ? "Finish the macOS installer, then re-check"
+    : failed
       ? install.error
       : describe(missing);
 
   const contextLine = isRunning
-    ? stillWorking
-      ? install.statusLine || "Still working…"
-      : install.statusLine || "Installing…"
+    ? install.statusLine || (stillWorking ? "Still working…" : "Installing…")
     : command;
 
+  // `isRunning` is read from the store, not local state, so a remount mid-job
+  // still renders the disabled installing action rather than an enabled one.
   const action =
     canInstall && !handedOff
       ? {
           id: "install",
-          label: candidate.block.opensExternalInstaller
+          label: guidance?.block?.opensExternalInstaller
             ? "Open installer"
-            : `Install ${candidate.result.label}`,
+            : `Install ${guidance?.result.label}`,
           variant: "primary" as const,
           loading: isRunning,
           disabled: isRunning,
           onClick: () => void runInstall(),
         }
-      : {
-          id: "recheck",
-          label: "Re-check",
-          variant: "primary" as const,
-          onClick: () => void recheck(),
-        };
+      : guidance?.block || !guidance?.result.installUrl
+        ? {
+            id: "recheck",
+            label: "Re-check",
+            variant: "primary" as const,
+            loading: isRechecking,
+            disabled: isRunning || isRechecking,
+            onClick: () => void recheck(),
+          }
+        : {
+            id: "install-docs",
+            label: "View install guide",
+            variant: "primary" as const,
+            onClick: openInstallUrl,
+          };
+
+  // A failed install is an error the user has to act on; everything else here
+  // is an advisory about the environment.
+  if (failed) {
+    return (
+      <InlineStatusBanner
+        icon={AlertTriangle}
+        title={`Couldn't install ${install.tool || "the tool"}`}
+        description={description}
+        contextLine={command}
+        severity="error"
+        role="alert"
+        onClose={dismiss}
+        closeAriaLabel="Dismiss missing tool warning"
+        action={{
+          id: "retry",
+          label: "Retry",
+          variant: "primary",
+          onClick: () => void (canInstall ? runInstall() : recheck()),
+        }}
+      />
+    );
+  }
 
   return (
     <InlineStatusBanner
       icon={AlertTriangle}
-      title={
-        missing.length === 1 && missing[0]
-          ? `${missing[0].label} is missing`
-          : "Required tools are missing"
-      }
+      title={title(missing)}
       description={description}
       contextLine={contextLine}
       severity="warning"

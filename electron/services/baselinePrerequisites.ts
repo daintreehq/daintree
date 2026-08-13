@@ -58,7 +58,9 @@ export const BASELINE_PREREQUISITES: PrerequisiteSpec[] = [
       windows: [
         {
           label: "winget",
-          commands: ["winget install --id OpenJS.NodeJS.LTS -e --source winget"],
+          commands: [
+            "winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-source-agreements --accept-package-agreements",
+          ],
           notes: ["npm is included with Node.js", "Requires Node.js v18.0.0 or later"],
         },
       ],
@@ -102,7 +104,14 @@ export const BASELINE_PREREQUISITES: PrerequisiteSpec[] = [
     installUrl: "https://cli.github.com",
     installBlocks: {
       macos: [{ label: "Homebrew", commands: ["brew install gh"] }],
-      windows: [{ label: "winget", commands: ["winget install --id GitHub.cli"] }],
+      windows: [
+        {
+          label: "winget",
+          commands: [
+            "winget install --id GitHub.cli -e --source winget --accept-source-agreements --accept-package-agreements",
+          ],
+        },
+      ],
       linux: [
         {
           label: "Official APT repository",

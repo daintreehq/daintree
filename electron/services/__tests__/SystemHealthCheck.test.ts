@@ -174,12 +174,19 @@ describe("runSystemHealthCheck", () => {
     vi.restoreAllMocks();
   });
 
-  it("calls refreshPath before checking prerequisites", async () => {
+  it("refreshes PATH before spawning any probe", async () => {
+    // Ordering matters: a probe that runs first would miss a tool installed
+    // since launch, which is the whole point of the mid-session re-check.
+    let refreshedBeforeFirstProbe: boolean | null = null;
+    vi.mocked(refreshPath).mockImplementation(async () => {
+      refreshedBeforeFirstProbe ??= mockedExecFile.mock.calls.length === 0;
+    });
     mockLookup(ALL_TOOLS, ALL_VERSIONS);
 
     await runSystemHealthCheck();
 
-    expect(refreshPath).toHaveBeenCalled();
+    expect(refreshedBeforeFirstProbe).toBe(true);
+    expect(mockedExecFile.mock.calls.length).toBeGreaterThan(0);
   });
 
   it("returns a result for every resolved baseline spec", async () => {
@@ -326,9 +333,9 @@ describe("runSystemHealthCheck", () => {
   });
 
   it("uses 'which' on unix-like systems", async () => {
-    const originalPlatform = process.platform;
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
     try {
-      Object.defineProperty(process, "platform", { value: "linux", writable: true });
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
       mockLookup(ALL_TOOLS, ALL_VERSIONS);
 
       await runSystemHealthCheck();
@@ -336,14 +343,14 @@ describe("runSystemHealthCheck", () => {
       expect(mockedExecFile.mock.calls.some((c) => c[0] === "which")).toBe(true);
       expect(mockedExecFile.mock.calls.some((c) => c[0] === "where")).toBe(false);
     } finally {
-      Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+      Object.defineProperty(process, "platform", originalPlatform);
     }
   });
 
   it("uses 'where' on windows", async () => {
-    const originalPlatform = process.platform;
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
     try {
-      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       mockLookup(ALL_TOOLS, ALL_VERSIONS);
 
       await runSystemHealthCheck();
@@ -351,7 +358,7 @@ describe("runSystemHealthCheck", () => {
       expect(mockedExecFile.mock.calls.some((c) => c[0] === "where")).toBe(true);
       expect(mockedExecFile.mock.calls.some((c) => c[0] === "which")).toBe(false);
     } finally {
-      Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+      Object.defineProperty(process, "platform", originalPlatform);
     }
   });
 
@@ -412,6 +419,42 @@ describe("runSystemHealthCheck", () => {
       expect(full.prerequisites.some((p) => p.severity === "warn")).toBe(true);
     });
 
+    it("a forced check never joins a probe that started before it", async () => {
+      // The post-install re-check: a focus probe is already running with the
+      // tool absent when the install finishes. Joining it would report the tool
+      // still missing.
+      let releaseFirstProbe: () => void = () => {};
+      const firstProbeStarted = new Promise<void>((started) => {
+        mockedExecFile.mockImplementation(((
+          cmd: string,
+          args: string[],
+          _options: unknown,
+          callback: ExecCallback
+        ) => {
+          if (cmd === "which" && args[0] === "git") {
+            started();
+            void new Promise<void>((release) => {
+              releaseFirstProbe = () => release();
+            }).then(() => callback(new Error("git not found")));
+            return undefined;
+          }
+          callback(null, { stdout: "v20.11.0\n", stderr: "" });
+          return undefined;
+        }) as never);
+      });
+
+      const slowProbe = runSystemHealthCheck({ fatalOnly: true });
+      await firstProbeStarted;
+
+      // Git gets installed while that probe is still in flight.
+      mockLookup(ALL_TOOLS, ALL_VERSIONS);
+      const forced = runSystemHealthCheck({ fatalOnly: true, force: true });
+      releaseFirstProbe();
+
+      expect((await slowProbe).prerequisites.find((p) => p.tool === "git")?.available).toBe(false);
+      expect((await forced).prerequisites.find((p) => p.tool === "git")?.available).toBe(true);
+    });
+
     it("does not cache agent-scoped checks", async () => {
       mockLookup([...ALL_TOOLS, "claude"], { ...ALL_VERSIONS, claude: "1.0.0\n" });
 
@@ -424,14 +467,17 @@ describe("runSystemHealthCheck", () => {
   });
 
   describe("macOS Command Line Tools shim", () => {
-    const originalPlatform = process.platform;
+    // Preserve the whole descriptor: replacing it with a `writable: true` data
+    // property leaks a mutable `process.platform` into every later test sharing
+    // the worker.
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 
     beforeEach(() => {
-      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     });
 
     afterEach(() => {
-      Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+      Object.defineProperty(process, "platform", originalPlatform);
     });
 
     it("never executes the shim when the tools are absent", async () => {
