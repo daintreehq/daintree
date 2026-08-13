@@ -1,14 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { execFileSync } from "child_process";
+import { execFile } from "child_process";
 import {
   runSystemHealthCheck,
   resolvePrerequisites,
+  resetSystemHealthCheckCache,
   BASELINE_PREREQUISITES,
 } from "../SystemHealthCheck.js";
 import { refreshPath } from "../../setup/environment.js";
 import { setUserRegistry, type AgentConfig } from "../../../shared/config/agentRegistry.js";
 
 vi.mock("child_process", () => ({
+  execFile: vi.fn(),
   execFileSync: vi.fn(),
 }));
 
@@ -16,7 +18,44 @@ vi.mock("../../setup/environment.js", () => ({
   refreshPath: vi.fn().mockResolvedValue(undefined),
 }));
 
-const mockedExecFileSync = vi.mocked(execFileSync);
+const mockedExecFile = vi.mocked(execFile);
+
+type ExecCallback = (err: Error | null, result?: { stdout: string; stderr: string }) => void;
+
+/**
+ * Drives the promisified `execFile` from a plain (command, args) -> stdout
+ * function. Throwing from the handler stands in for a nonzero exit, which is
+ * the distinction the availability logic now turns on.
+ */
+function mockExec(handler: (cmd: string, args: string[]) => string) {
+  mockedExecFile.mockImplementation(((
+    cmd: string,
+    args: string[],
+    _options: unknown,
+    callback: ExecCallback
+  ) => {
+    try {
+      callback(null, { stdout: handler(cmd, args ?? []), stderr: "" });
+    } catch (err) {
+      callback(err as Error);
+    }
+    return undefined;
+  }) as never);
+}
+
+/** Commands the tool-presence probe should report as found. */
+function mockLookup(found: string[], versions: Record<string, string>) {
+  mockExec((cmd, args) => {
+    if (cmd === "which" || cmd === "where") {
+      const target = args[0] ?? "";
+      if (!found.includes(target)) throw new Error(`${target} not found`);
+      return `/usr/local/bin/${target}\n`;
+    }
+    const version = versions[cmd];
+    if (version === undefined) throw new Error(`${cmd} failed`);
+    return version;
+  });
+}
 
 describe("resolvePrerequisites", () => {
   it("returns baseline prerequisites when no agentIds provided", () => {
@@ -118,303 +157,184 @@ describe("resolvePrerequisites", () => {
 });
 
 describe("runSystemHealthCheck", () => {
+  const ALL_TOOLS = ["git", "node", "npm", "gh"];
+  const ALL_VERSIONS = {
+    git: "git version 2.43.0\n",
+    node: "v20.11.0\n",
+    npm: "10.2.4\n",
+    gh: "gh version 2.40.0 (2024-01-15)\nhttps://github.com/cli/cli\n",
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
+    resetSystemHealthCheckCache();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  function mockAllBaselineAvailable() {
-    mockedExecFileSync.mockImplementation((cmd, args) => {
-      const arg = Array.isArray(args) ? args[0] : "";
-      if (cmd === "git") return "git version 2.43.0\n";
-      if (cmd === "node") return "v20.11.0\n";
-      if (cmd === "npm") return "10.2.4\n";
-      if (cmd === "gh") return "gh version 2.40.0 (2024-01-15)\nhttps://github.com/cli/cli\n";
-      if (arg === "git" || arg === "node" || arg === "npm" || arg === "gh") return "";
-      return "";
-    });
-  }
-
   it("calls refreshPath before checking prerequisites", async () => {
-    mockAllBaselineAvailable();
+    mockLookup(ALL_TOOLS, ALL_VERSIONS);
 
     await runSystemHealthCheck();
 
     expect(refreshPath).toHaveBeenCalled();
   });
 
-  it("returns baseline tools when no agentIds provided", async () => {
-    mockAllBaselineAvailable();
+  it("returns a result for every resolved baseline spec", async () => {
+    mockLookup(ALL_TOOLS, ALL_VERSIONS);
 
     const result = await runSystemHealthCheck();
 
-    expect(result.allRequired).toBe(true);
-    expect(result.prerequisites.length).toBe(BASELINE_PREREQUISITES.length);
-
-    const tools = result.prerequisites.map((p) => p.tool);
-    expect(tools).toContain("git");
-    expect(tools).toContain("node");
-    expect(tools).toContain("npm");
-    expect(tools).toContain("gh");
+    expect(result.prerequisites.map((p) => p.tool).sort()).toEqual(
+      resolvePrerequisites()
+        .map((s) => s.tool)
+        .sort()
+    );
   });
 
   it("extracts versions using semver.coerce", async () => {
-    mockAllBaselineAvailable();
+    mockLookup(ALL_TOOLS, ALL_VERSIONS);
 
     const result = await runSystemHealthCheck();
 
     expect(result.prerequisites.find((p) => p.tool === "git")?.version).toBe("2.43.0");
     expect(result.prerequisites.find((p) => p.tool === "node")?.version).toBe("20.11.0");
-    expect(result.prerequisites.find((p) => p.tool === "npm")?.version).toBe("10.2.4");
-    expect(result.prerequisites.find((p) => p.tool === "gh")?.version).toBe("2.40.0");
   });
 
   it("includes agent prerequisites when agentIds provided", async () => {
-    mockedExecFileSync.mockImplementation((cmd, args) => {
-      const arg = Array.isArray(args) ? args[0] : "";
-      if (cmd === "git") return "git version 2.43.0\n";
-      if (cmd === "node") return "v20.11.0\n";
-      if (cmd === "npm") return "10.2.4\n";
-      if (cmd === "gh") return "gh version 2.40.0 (2024-01-15)\n";
-      if (cmd === "claude") return "1.2.3\n";
-      if (arg === "git" || arg === "node" || arg === "npm" || arg === "gh" || arg === "claude")
-        return "";
-      return "";
-    });
+    mockLookup([...ALL_TOOLS, "claude"], { ...ALL_VERSIONS, claude: "1.0.0\n" });
 
-    const result = await runSystemHealthCheck(["claude"]);
+    const result = await runSystemHealthCheck({ agentIds: ["claude"] });
 
-    const claude = result.prerequisites.find((p) => p.tool === "claude");
-    expect(claude).toBeDefined();
-    expect(claude?.available).toBe(true);
-    expect(claude?.severity).toBe("fatal");
-    expect(claude?.label).toBe("Claude CLI");
+    expect(result.prerequisites.some((p) => p.tool === "claude")).toBe(true);
   });
 
-  it("marks tool as unavailable when which/where fails", async () => {
-    mockedExecFileSync.mockImplementation((cmd, args) => {
-      const arg = Array.isArray(args) ? args[0] : "";
-      if (arg === "git") throw new Error("not found");
-      if (cmd === "node") return "v20.11.0\n";
-      if (cmd === "npm") return "10.2.4\n";
-      if (cmd === "gh") return "gh version 2.40.0\n";
-      return "";
-    });
+  it("marks a tool unavailable when the presence probe fails", async () => {
+    mockLookup(["node", "npm", "gh"], ALL_VERSIONS);
 
     const result = await runSystemHealthCheck();
 
     const git = result.prerequisites.find((p) => p.tool === "git");
     expect(git?.available).toBe(false);
+    expect(git?.unavailableReason).toBe("not-found");
+  });
+
+  it("marks a tool unavailable when the version command exits nonzero", async () => {
+    // The macOS Command Line Tools shim in miniature: the binary resolves, but
+    // running it fails. Before #11763 this reported healthy.
+    mockLookup(ALL_TOOLS, { node: ALL_VERSIONS.node, npm: ALL_VERSIONS.npm, gh: ALL_VERSIONS.gh });
+
+    const result = await runSystemHealthCheck();
+
+    const git = result.prerequisites.find((p) => p.tool === "git");
+    expect(git?.available).toBe(false);
+    expect(git?.unavailableReason).toBe("version-command-failed");
     expect(git?.version).toBeNull();
-    expect(result.allRequired).toBe(false);
   });
 
-  it("allRequired is false when fatal prerequisite is missing", async () => {
-    mockedExecFileSync.mockImplementation((cmd, args) => {
-      const arg = Array.isArray(args) ? args[0] : "";
-      if (arg === "node") throw new Error("not found");
-      if (cmd === "git") return "git version 2.43.0\n";
-      if (cmd === "npm") return "10.2.4\n";
-      if (cmd === "gh") return "gh version 2.40.0\n";
-      return "";
-    });
-
-    const result = await runSystemHealthCheck();
-    expect(result.allRequired).toBe(false);
-  });
-
-  it("allRequired is true when only warn-severity tool is missing", async () => {
-    mockedExecFileSync.mockImplementation((cmd, args) => {
-      const arg = Array.isArray(args) ? args[0] : "";
-      if (cmd === "git") return "git version 2.43.0\n";
-      if (cmd === "node") return "v20.11.0\n";
-      if (arg === "npm") throw new Error("not found");
-      if (arg === "gh") throw new Error("not found");
-      return "";
-    });
-
-    const result = await runSystemHealthCheck();
-    expect(result.allRequired).toBe(true);
-  });
-
-  it("returns available=true with null version if version command fails", async () => {
-    mockedExecFileSync.mockImplementation((cmd, args) => {
-      const arg = Array.isArray(args) ? args[0] : "";
-      if (arg === "git") return "";
-      if (cmd === "git") throw new Error("version check failed");
-      if (cmd === "node") return "v20.11.0\n";
-      if (cmd === "npm") return "10.2.4\n";
-      if (cmd === "gh") return "gh version 2.40.0\n";
-      return "";
-    });
+  it("keeps a tool available when it runs but prints an unparseable version", async () => {
+    mockLookup(ALL_TOOLS, { ...ALL_VERSIONS, git: "some custom build\n" });
 
     const result = await runSystemHealthCheck();
 
     const git = result.prerequisites.find((p) => p.tool === "git");
     expect(git?.available).toBe(true);
     expect(git?.version).toBeNull();
+    expect(git?.unavailableReason).toBeUndefined();
   });
 
-  it("allRequired is false when all tools are missing", async () => {
-    mockedExecFileSync.mockImplementation(() => {
-      throw new Error("not found");
-    });
-
-    const result = await runSystemHealthCheck();
-
-    expect(result.allRequired).toBe(false);
-    expect(result.prerequisites.every((p) => !p.available)).toBe(true);
-    expect(result.prerequisites.every((p) => p.version === null)).toBe(true);
-  });
-
-  it("meetsMinVersion is false when version is below minimum", async () => {
-    mockedExecFileSync.mockImplementation((cmd, args) => {
-      const arg = Array.isArray(args) ? args[0] : "";
-      if (cmd === "git") return "git version 2.43.0\n";
-      if (cmd === "node") return "v16.0.0\n"; // Below minVersion 18.0.0
-      if (cmd === "npm") return "10.2.4\n";
-      if (cmd === "gh") return "gh version 2.40.0\n";
-      if (arg === "git" || arg === "node" || arg === "npm" || arg === "gh") return "";
-      return "";
-    });
+  it("fails the minimum-version check when a versioned tool prints unparseable output", async () => {
+    mockLookup(ALL_TOOLS, { ...ALL_VERSIONS, node: "not-a-version\n" });
 
     const result = await runSystemHealthCheck();
 
     const node = result.prerequisites.find((p) => p.tool === "node");
     expect(node?.available).toBe(true);
-    expect(node?.version).toBe("16.0.0");
     expect(node?.meetsMinVersion).toBe(false);
+  });
+
+  it("meetsMinVersion is false when the version is below the minimum", async () => {
+    mockLookup(ALL_TOOLS, { ...ALL_VERSIONS, node: "v16.20.0\n" });
+
+    const result = await runSystemHealthCheck();
+
+    expect(result.prerequisites.find((p) => p.tool === "node")?.meetsMinVersion).toBe(false);
     expect(result.allRequired).toBe(false);
   });
 
-  it("meetsMinVersion is false when version command fails for a tool with minVersion", async () => {
-    mockedExecFileSync.mockImplementation((cmd, args) => {
-      const arg = Array.isArray(args) ? args[0] : "";
-      if (cmd === "git") return "git version 2.43.0\n";
-      if (arg === "node") return ""; // which succeeds
-      if (cmd === "node") throw new Error("version check failed"); // version extraction fails
-      if (cmd === "npm") return "10.2.4\n";
-      if (cmd === "gh") return "gh version 2.40.0\n";
-      return "";
-    });
+  it("allRequired is true when every fatal tool is healthy", async () => {
+    mockLookup(ALL_TOOLS, ALL_VERSIONS);
 
     const result = await runSystemHealthCheck();
 
-    const node = result.prerequisites.find((p) => p.tool === "node");
-    expect(node?.available).toBe(true);
-    expect(node?.version).toBeNull();
-    expect(node?.meetsMinVersion).toBe(false);
+    expect(result.allRequired).toBe(true);
+  });
+
+  it("allRequired ignores warn-severity tools", async () => {
+    const fatalTools = resolvePrerequisites()
+      .filter((s) => s.severity === "fatal")
+      .map((s) => s.tool);
+    mockLookup(fatalTools, ALL_VERSIONS);
+
+    const result = await runSystemHealthCheck();
+
+    expect(result.prerequisites.some((p) => p.severity === "warn" && !p.available)).toBe(true);
+    expect(result.allRequired).toBe(true);
+  });
+
+  it("allRequired is false when a fatal tool is missing", async () => {
+    mockLookup([], {});
+
+    const result = await runSystemHealthCheck();
+
     expect(result.allRequired).toBe(false);
   });
 
-  it("handles unparsable version output gracefully", async () => {
-    mockedExecFileSync.mockImplementation((cmd, args) => {
-      const arg = Array.isArray(args) ? args[0] : "";
-      if (cmd === "git") return "git version 2.43.0\n";
-      if (cmd === "node") return "not-a-version\n";
-      if (cmd === "npm") return "10.2.4\n";
-      if (cmd === "gh") return "gh version 2.40.0\n";
-      if (arg === "git" || arg === "node" || arg === "npm" || arg === "gh") return "";
-      return "";
-    });
+  it("carries label, severity, installUrl and installBlocks from the spec", async () => {
+    mockLookup(ALL_TOOLS, ALL_VERSIONS);
 
     const result = await runSystemHealthCheck();
 
-    const node = result.prerequisites.find((p) => p.tool === "node");
-    expect(node?.available).toBe(true);
-    expect(node?.version).toBeNull();
-    expect(node?.meetsMinVersion).toBe(false);
-  });
-
-  it("meetsMinVersion is true when version meets minimum", async () => {
-    mockAllBaselineAvailable();
-
-    const result = await runSystemHealthCheck();
-
-    const node = result.prerequisites.find((p) => p.tool === "node");
-    expect(node?.meetsMinVersion).toBe(true);
-  });
-
-  it("each result includes label, severity, and installUrl from spec", async () => {
-    mockAllBaselineAvailable();
-
-    const result = await runSystemHealthCheck();
-
+    const gitSpec = resolvePrerequisites().find((s) => s.tool === "git");
     const git = result.prerequisites.find((p) => p.tool === "git");
-    expect(git?.label).toBe("Git");
-    expect(git?.severity).toBe("fatal");
-    expect(git?.installUrl).toBe("https://git-scm.com/downloads");
-
-    const gh = result.prerequisites.find((p) => p.tool === "gh");
-    expect(gh?.label).toBe("GitHub CLI");
-    expect(gh?.severity).toBe("warn");
+    expect(git?.label).toBe(gitSpec?.label);
+    expect(git?.severity).toBe(gitSpec?.severity);
+    expect(git?.installUrl).toBe(gitSpec?.installUrl);
+    expect(git?.installBlocks).toEqual(gitSpec?.installBlocks);
   });
 
-  it("forwards installBlocks from spec to result for available tools", async () => {
-    mockAllBaselineAvailable();
-
-    const result = await runSystemHealthCheck();
-
-    const git = result.prerequisites.find((p) => p.tool === "git");
-    expect(git?.installBlocks).toBeDefined();
-    expect(git?.installBlocks?.macos).toBeDefined();
-    expect(git?.installBlocks?.macos?.[0]?.commands).toContain("brew install git");
-
-    const node = result.prerequisites.find((p) => p.tool === "node");
-    expect(node?.installBlocks?.linux?.[0]?.label).toBe("NodeSource");
-
-    const npm = result.prerequisites.find((p) => p.tool === "npm");
-    expect(npm?.installBlocks?.generic).toBeDefined();
-
-    const gh = result.prerequisites.find((p) => p.tool === "gh");
-    expect(gh?.installBlocks?.windows?.[0]?.commands).toContain("winget install --id GitHub.cli");
-  });
-
-  it("forwards installBlocks from spec to result for unavailable tools", async () => {
-    mockedExecFileSync.mockImplementation(() => {
-      throw new Error("not found");
-    });
+  it("carries installBlocks through for unavailable tools too", async () => {
+    mockLookup([], {});
 
     const result = await runSystemHealthCheck();
 
     const git = result.prerequisites.find((p) => p.tool === "git");
     expect(git?.available).toBe(false);
-    expect(git?.installBlocks?.macos).toBeDefined();
-    expect(git?.installBlocks?.windows).toBeDefined();
-    expect(git?.installBlocks?.linux).toBeDefined();
+    expect(git?.installBlocks).toEqual(
+      resolvePrerequisites().find((s) => s.tool === "git")?.installBlocks
+    );
   });
 
-  it("handles gh --version multi-line output correctly", async () => {
-    mockedExecFileSync.mockImplementation((cmd, args) => {
-      const arg = Array.isArray(args) ? args[0] : "";
-      if (cmd === "gh")
-        return "gh version 2.40.0 (2024-01-15)\nhttps://github.com/cli/cli/releases/tag/v2.40.0\n";
-      if (cmd === "git") return "git version 2.43.0\n";
-      if (cmd === "node") return "v20.11.0\n";
-      if (cmd === "npm") return "10.2.4\n";
-      if (arg === "git" || arg === "node" || arg === "npm" || arg === "gh") return "";
-      return "";
-    });
+  it("reads only the first line of multi-line version output", async () => {
+    mockLookup(ALL_TOOLS, ALL_VERSIONS);
 
     const result = await runSystemHealthCheck();
-    const gh = result.prerequisites.find((p) => p.tool === "gh");
-    expect(gh?.version).toBe("2.40.0");
+
+    expect(result.prerequisites.find((p) => p.tool === "gh")?.version).toBe("2.40.0");
   });
 
   it("uses 'which' on unix-like systems", async () => {
     const originalPlatform = process.platform;
     try {
-      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
-      mockedExecFileSync.mockReturnValue(Buffer.from(""));
+      Object.defineProperty(process, "platform", { value: "linux", writable: true });
+      mockLookup(ALL_TOOLS, ALL_VERSIONS);
 
       await runSystemHealthCheck();
 
-      const calls = mockedExecFileSync.mock.calls;
-      const whichCalls = calls.filter((c) => c[0] === "which");
-      expect(whichCalls.length).toBeGreaterThan(0);
+      expect(mockedExecFile.mock.calls.some((c) => c[0] === "which")).toBe(true);
+      expect(mockedExecFile.mock.calls.some((c) => c[0] === "where")).toBe(false);
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
     }
@@ -424,15 +344,152 @@ describe("runSystemHealthCheck", () => {
     const originalPlatform = process.platform;
     try {
       Object.defineProperty(process, "platform", { value: "win32", writable: true });
-      mockedExecFileSync.mockReturnValue(Buffer.from(""));
+      mockLookup(ALL_TOOLS, ALL_VERSIONS);
 
       await runSystemHealthCheck();
 
-      const calls = mockedExecFileSync.mock.calls;
-      const whereCalls = calls.filter((c) => c[0] === "where");
-      expect(whereCalls.length).toBeGreaterThan(0);
+      expect(mockedExecFile.mock.calls.some((c) => c[0] === "where")).toBe(true);
+      expect(mockedExecFile.mock.calls.some((c) => c[0] === "which")).toBe(false);
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
     }
+  });
+
+  describe("fatalOnly subset", () => {
+    it("probes only fatal specs", async () => {
+      mockLookup(ALL_TOOLS, ALL_VERSIONS);
+
+      const result = await runSystemHealthCheck({ fatalOnly: true });
+
+      expect(result.prerequisites.length).toBeGreaterThan(0);
+      expect(result.prerequisites.every((p) => p.severity === "fatal")).toBe(true);
+      expect(result.prerequisites.some((p) => p.tool === "gh")).toBe(false);
+    });
+  });
+
+  describe("fatal-only caching", () => {
+    it("probes once across repeated calls", async () => {
+      mockLookup(ALL_TOOLS, ALL_VERSIONS);
+
+      await runSystemHealthCheck({ fatalOnly: true });
+      const callsAfterFirst = mockedExecFile.mock.calls.length;
+      await runSystemHealthCheck({ fatalOnly: true });
+
+      expect(mockedExecFile.mock.calls.length).toBe(callsAfterFirst);
+    });
+
+    it("collapses concurrent callers into a single probe", async () => {
+      mockLookup(ALL_TOOLS, ALL_VERSIONS);
+
+      const [a, b] = await Promise.all([
+        runSystemHealthCheck({ fatalOnly: true }),
+        runSystemHealthCheck({ fatalOnly: true }),
+      ]);
+
+      expect(a).toBe(b);
+      expect(refreshPath).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-probes when forced, and reflects a tool that appeared since", async () => {
+      mockLookup(["node", "npm", "gh"], ALL_VERSIONS);
+      const before = await runSystemHealthCheck({ fatalOnly: true });
+      expect(before.prerequisites.find((p) => p.tool === "git")?.available).toBe(false);
+
+      mockLookup(ALL_TOOLS, ALL_VERSIONS);
+      const cached = await runSystemHealthCheck({ fatalOnly: true });
+      expect(cached.prerequisites.find((p) => p.tool === "git")?.available).toBe(false);
+
+      const forced = await runSystemHealthCheck({ fatalOnly: true, force: true });
+      expect(forced.prerequisites.find((p) => p.tool === "git")?.available).toBe(true);
+    });
+
+    it("does not serve the cache to a full check", async () => {
+      mockLookup(ALL_TOOLS, ALL_VERSIONS);
+      await runSystemHealthCheck({ fatalOnly: true });
+
+      const full = await runSystemHealthCheck();
+
+      expect(full.prerequisites.some((p) => p.severity === "warn")).toBe(true);
+    });
+
+    it("does not cache agent-scoped checks", async () => {
+      mockLookup([...ALL_TOOLS, "claude"], { ...ALL_VERSIONS, claude: "1.0.0\n" });
+
+      await runSystemHealthCheck({ fatalOnly: true, agentIds: ["claude"] });
+      const callsAfterFirst = mockedExecFile.mock.calls.length;
+      await runSystemHealthCheck({ fatalOnly: true, agentIds: ["claude"] });
+
+      expect(mockedExecFile.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+    });
+  });
+
+  describe("macOS Command Line Tools shim", () => {
+    const originalPlatform = process.platform;
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    });
+
+    it("never executes the shim when the tools are absent", async () => {
+      mockExec((cmd, args) => {
+        if (cmd === "which") return `/usr/bin/${args[0]}\n`;
+        if (cmd === "xcode-select") throw new Error("unable to get active developer directory");
+        if (cmd === "git") throw new Error("git should never be executed here");
+        return "1.0.0\n";
+      });
+
+      const result = await runSystemHealthCheck({ fatalOnly: true });
+
+      const git = result.prerequisites.find((p) => p.tool === "git");
+      expect(git?.available).toBe(false);
+      expect(git?.unavailableReason).toBe("macos-command-line-tools-missing");
+      expect(mockedExecFile.mock.calls.some((c) => c[0] === "git")).toBe(false);
+    });
+
+    it("runs the version command when the tools are present", async () => {
+      mockExec((cmd, args) => {
+        if (cmd === "which") return `/usr/bin/${args[0]}\n`;
+        if (cmd === "xcode-select") return "/Library/Developer/CommandLineTools\n";
+        if (cmd === "git") return "git version 2.43.0\n";
+        return "v20.11.0\n";
+      });
+
+      const result = await runSystemHealthCheck({ fatalOnly: true });
+
+      expect(result.prerequisites.find((p) => p.tool === "git")?.available).toBe(true);
+    });
+
+    it("skips the tools probe when git resolves outside /usr/bin", async () => {
+      // A Homebrew git is a real binary and works whether or not the Command
+      // Line Tools are installed, so it must not be gated behind them.
+      mockExec((cmd, args) => {
+        if (cmd === "which") return `/opt/homebrew/bin/${args[0]}\n`;
+        if (cmd === "xcode-select") throw new Error("unable to get active developer directory");
+        if (cmd === "git") return "git version 2.43.0\n";
+        return "v20.11.0\n";
+      });
+
+      const result = await runSystemHealthCheck({ fatalOnly: true });
+
+      expect(result.prerequisites.find((p) => p.tool === "git")?.available).toBe(true);
+      expect(mockedExecFile.mock.calls.some((c) => c[0] === "xcode-select")).toBe(false);
+    });
+
+    it("does not probe the tools for prerequisites that aren't CLT-provided", async () => {
+      mockExec((cmd, args) => {
+        if (cmd === "which") return args[0] === "node" ? "/usr/bin/node\n" : "/opt/bin/git\n";
+        if (cmd === "xcode-select") throw new Error("unable to get active developer directory");
+        if (cmd === "git") return "git version 2.43.0\n";
+        return "v20.11.0\n";
+      });
+
+      const result = await runSystemHealthCheck({ fatalOnly: true });
+
+      expect(result.prerequisites.find((p) => p.tool === "node")?.available).toBe(true);
+    });
   });
 });

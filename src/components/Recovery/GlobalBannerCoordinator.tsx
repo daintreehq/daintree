@@ -2,6 +2,7 @@ import { HostCrashBanner } from "./HostCrashBanner";
 import { WatchdogDisabledBanner } from "./WatchdogDisabledBanner";
 import { SafeModeBanner } from "./SafeModeBanner";
 import { RestoreConfirmationBanner } from "./RestoreConfirmationBanner";
+import { MissingPrerequisiteBanner } from "./MissingPrerequisiteBanner";
 import { ForgeTokenBanner } from "./ForgeTokenBanner";
 import { CloudSyncBanner } from "./CloudSyncBanner";
 import { RosettaBanner } from "./RosettaBanner";
@@ -26,6 +27,8 @@ function activeBanner(slot: ReturnType<typeof useGlobalBannerPriority>) {
       return <SafeModeBanner />;
     case "restore-confirmation":
       return <RestoreConfirmationBanner />;
+    case "missing-prerequisite":
+      return <MissingPrerequisiteBanner />;
     case "forge-token":
       return <ForgeTokenBanner />;
     case "cloud-sync":

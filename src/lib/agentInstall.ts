@@ -58,7 +58,19 @@ export function extractInspectUrl(command: string): string | undefined {
   return match[0].replace(/[)\]'">]+$/, "");
 }
 
+/**
+ * A leading `sudo` has no pipe for `isManualOnlyCommand` to catch, but running
+ * it with piped stdio hangs forever on a password prompt the user can never
+ * see. Kept separate from `isManualOnlyCommand` so `extractInspectUrl` keeps
+ * meaning "pipes a remote script into a shell". Mirrors the main-side gate in
+ * `AgentInstallService`; this copy only decides whether to render a button,
+ * main refuses independently.
+ */
+export function requiresElevation(command: string): boolean {
+  return /^\s*sudo\b/i.test(command);
+}
+
 export function isBlockExecutable(block: AgentInstallBlock): boolean {
   if (!block.commands || block.commands.length === 0) return false;
-  return block.commands.every((cmd) => !isManualOnlyCommand(cmd));
+  return block.commands.every((cmd) => !isManualOnlyCommand(cmd) && !requiresElevation(cmd));
 }

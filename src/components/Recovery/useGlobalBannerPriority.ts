@@ -4,12 +4,17 @@ import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
+import {
+  useMissingPrerequisiteStore,
+  selectMissingPrerequisiteVisible,
+} from "@/store/missingPrerequisiteStore";
 
 export type GlobalBannerSlot =
   | "host-crash"
   | "watchdog-disabled"
   | "safe-mode"
   | "restore-confirmation"
+  | "missing-prerequisite"
   | "forge-token"
   | "cloud-sync"
   | "rosetta"
@@ -20,6 +25,7 @@ export type GlobalBannerSlot =
 //   watchdog-disabled  — deadlock detector is gone; protection layer down (#8674)
 //   safe-mode          — panels weren't restored after a crash loop
 //   restore-confirmation — informational "session recovered" toast-banner
+//   missing-prerequisite — a fatal tool (Git, Node) isn't installed (#11763)
 //   forge-token        — a forge provider's credentials expired; auth failure, panel data broken
 //   cloud-sync         — project sits in a synced folder; environmental warning
 //   rosetta            — x64 build translated on Apple Silicon; permanent perf warning
@@ -33,10 +39,15 @@ export type GlobalBannerSlot =
 // lower-priority banner back in, matching the Doherty anti-flicker pattern
 // used elsewhere in the app.
 //
-// forge-token and cloud-sync sit below the recovery block. restore-confirmation
-// stays above forge-token because its auto-dismiss timer only runs while the
-// banner is mounted, so it must keep that window when both conditions coexist.
-// forge-token outranks cloud-sync because an expired token is an active
+// missing-prerequisite, forge-token and cloud-sync sit below the recovery
+// block. restore-confirmation stays above them all because its auto-dismiss
+// timer only runs while the banner is mounted, so it must keep that window when
+// the conditions coexist. missing-prerequisite outranks forge-token on blast
+// radius: an expired token breaks one panel's data, whereas a missing Git
+// breaks every git operation in the app. It sits below the recovery block
+// because the backend being down is the more urgent read, and it self-clears —
+// the banner re-checks on window focus, so installing the tool mid-session
+// retires it without a restart. forge-token outranks cloud-sync because an expired token is an active
 // failure (forge data is broken now) whereas cloud-sync is a persistent
 // environmental condition with no acute failure. rosetta sits last: like
 // cloud-sync it's environmental with no acute failure, but it's even more
@@ -53,11 +64,13 @@ export function useGlobalBannerPriority(): GlobalBannerSlot {
   );
   const cloudSyncService = useCloudSyncBannerStore((s) => s.service);
   const rosettaVisible = useRosettaBannerStore((s) => s.visible);
+  const prerequisiteVisible = useMissingPrerequisiteStore(selectMissingPrerequisiteVisible);
 
   if (backendStatus !== "connected") return "host-crash";
   if (watchdogStatus === "disabled") return "watchdog-disabled";
   if (safeMode && !safeModeDismissed) return "safe-mode";
   if (restoreVisible) return "restore-confirmation";
+  if (prerequisiteVisible) return "missing-prerequisite";
   if (tokenUnhealthy) return "forge-token";
   if (cloudSyncService !== null) return "cloud-sync";
   if (rosettaVisible) return "rosetta";

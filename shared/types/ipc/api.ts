@@ -434,7 +434,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getAgentUpdateSettings(): Promise<AgentUpdateSettings>;
     setAgentUpdateSettings(settings: AgentUpdateSettings): Promise<void>;
     startAgentUpdate(payload: StartAgentUpdatePayload): Promise<StartAgentUpdateResult>;
-    healthCheck(agentIds?: string[]): Promise<SystemHealthCheckResult>;
+    healthCheck(
+      options?: import("./system.js").SystemHealthCheckOptions
+    ): Promise<SystemHealthCheckResult>;
     getHealthCheckSpecs(agentIds?: string[]): Promise<PrerequisiteSpec[]>;
     checkTool(spec: PrerequisiteSpec): Promise<PrerequisiteCheckResult>;
     downloadDiagnostics(): Promise<boolean>;
@@ -450,11 +452,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getReportEnrichment(): Promise<import("./system.js").ReportIssueEnrichment>;
     startRendererCpuProfile(): Promise<import("./system.js").RendererCpuProfileStartResult>;
     stopRendererCpuProfile(): Promise<import("./system.js").RendererCpuProfileStopResult>;
-    installAgent(payload: {
-      agentId: string;
-      methodIndex?: number;
-      jobId: string;
-    }): Promise<import("./system.js").AgentInstallResult>;
+    installAgent(
+      payload: import("./system.js").AgentInstallPayload
+    ): Promise<import("./system.js").AgentInstallResult>;
     onAgentInstallProgress(
       callback: (event: import("./system.js").AgentInstallProgressEvent) => void
     ): () => void;

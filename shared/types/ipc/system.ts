@@ -167,7 +167,24 @@ export interface PrerequisiteSpec {
   installUrl?: string;
   /** OS-specific install instructions shown inline when the tool is missing */
   installBlocks?: Partial<Record<AgentInstallOS, AgentInstallBlock[]>>;
+  /**
+   * On macOS this tool is supplied by the Xcode Command Line Tools, so
+   * `/usr/bin/<tool>` exists as a shim even when the tools are absent.
+   * Executing that shim pops the system installer dialog, which is not
+   * something a background startup probe may do — the check runs
+   * `xcode-select -p` first and skips the exec when it fails. Only consulted
+   * when the PATH lookup actually resolved to the shim path.
+   */
+  macosCommandLineTool?: boolean;
 }
+
+/**
+ * Why a prerequisite came back unavailable. Lets the UI distinguish "not
+ * installed at all" from "the macOS Command Line Tools shim is present but
+ * non-functional", which need different recovery flows.
+ */
+export type PrerequisiteUnavailableReason =
+  "not-found" | "version-command-failed" | "macos-command-line-tools-missing";
 
 /** Result of checking a single system prerequisite */
 export interface PrerequisiteCheckResult {
@@ -175,8 +192,14 @@ export interface PrerequisiteCheckResult {
   tool: string;
   /** Human-readable display name */
   label: string;
-  /** Whether the tool was found in PATH */
+  /**
+   * Whether the tool was found in PATH *and* its version command exited
+   * successfully. A tool whose binary exists but cannot execute (the macOS
+   * Command Line Tools shim) is NOT available.
+   */
   available: boolean;
+  /** Why the tool is unavailable; undefined when `available` is true */
+  unavailableReason?: PrerequisiteUnavailableReason;
   /** Detected version string (e.g. "2.43.0"), null if not available */
   version: string | null;
   /** Severity level from the spec */
@@ -197,6 +220,24 @@ export interface SystemHealthCheckResult {
   prerequisites: PrerequisiteCheckResult[];
   /** True when all fatal prerequisites are available and meet minimum version */
   allRequired: boolean;
+}
+
+/** Options for a system health check run */
+export interface SystemHealthCheckOptions {
+  /** Include agent-declared prerequisites on top of the baseline set */
+  agentIds?: string[];
+  /**
+   * Check only `fatal` prerequisites. This is the startup path: it is the
+   * only variant that is cached in main, because every project view renders
+   * its own AppLayout and would otherwise spawn the probe once per view.
+   */
+  fatalOnly?: boolean;
+  /**
+   * Re-probe instead of returning the cached fatal-only result. Concurrent
+   * forced runs still share a single probe. Only meaningful with `fatalOnly`;
+   * every other variant is always fresh.
+   */
+  force?: boolean;
 }
 
 /** Hardware information for computing panel limit defaults */
@@ -308,14 +349,25 @@ export type RendererCpuProfileStopResult =
       message?: string;
     };
 
-/** Payload for starting an agent install via setup wizard */
-export interface AgentInstallPayload {
-  agentId: string;
+/**
+ * Payload for starting an install job. Either an agent CLI (resolved through
+ * the agent registry) or a baseline prerequisite (resolved through
+ * `BASELINE_PREREQUISITES`). The renderer names a target; it never supplies
+ * commands — main owns the mapping from name to command in both cases.
+ */
+export type AgentInstallPayload = {
   /** Index of the install method to use (defaults to 0) */
   methodIndex?: number;
   /** Unique job identifier for progress correlation */
   jobId: string;
-}
+} & (
+  | { agentId: string; prerequisiteTool?: never }
+  | {
+      /** Baseline prerequisite tool name, e.g. "git". Main-side allowlisted. */
+      prerequisiteTool: string;
+      agentId?: never;
+    }
+);
 
 /** Result of an agent install job */
 export interface AgentInstallResult {

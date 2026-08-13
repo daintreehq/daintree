@@ -13,6 +13,13 @@ export interface AgentInstallBlock {
   steps?: string[];
   commands?: string[];
   notes?: string[];
+  /**
+   * The command hands off to an external/GUI installer and returns before that
+   * installer finishes, so a zero exit code does NOT mean the tool is
+   * installed. `xcode-select --install` is the canonical case. Callers must
+   * surface a "finish it, then re-check" state rather than reporting success.
+   */
+  opensExternalInstaller?: boolean;
 }
 
 export interface AgentInstallHelp {

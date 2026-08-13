@@ -13,6 +13,7 @@ import { useClearSwitchBusyStateOnReveal } from "./useClearSwitchBusyStateOnReve
 import { usePluginDeepLink } from "./usePluginDeepLink";
 import { usePluginArchiveInstallIntent } from "./usePluginArchiveInstallIntent";
 import { useNotificationHistoryPruning } from "./useNotificationHistoryPruning";
+import { useMissingPrerequisiteWarning } from "./useMissingPrerequisiteWarning";
 import { useUpdateListener } from "@/hooks/useUpdateListener";
 import { removeStartupSkeleton } from "@/utils/removeStartupSkeleton";
 import { useNotificationSettingsStore, usePluginManagerStore } from "@/store";
@@ -136,6 +137,10 @@ export function useAppBootstrap() {
   useAgentWaitingNudge(isStateLoaded);
   useForgeEnableRecommendation(isStateLoaded && idleHousekeepingReady);
   useNotificationHistoryPruning();
+  // Gated on the idle flag so the prerequisite probe — which spawns
+  // subprocesses and awaits refreshPath()'s 10s budget — lands after first
+  // paint rather than on the boot path (#11763).
+  useMissingPrerequisiteWarning(isStateLoaded && idleHousekeepingReady);
 
   useEffect(() => {
     if (!isStateLoaded) return;

@@ -1550,8 +1550,8 @@ function buildElectronApi(): ElectronAPI {
       startAgentUpdate: (payload: { agentId: string; method?: string }) =>
         _unwrappingInvoke(CHANNELS.SYSTEM_START_AGENT_UPDATE, payload),
 
-      healthCheck: (agentIds?: string[]) =>
-        _unwrappingInvoke(CHANNELS.SYSTEM_HEALTH_CHECK, agentIds),
+      healthCheck: (options?: import("../shared/types/ipc/system.js").SystemHealthCheckOptions) =>
+        _unwrappingInvoke(CHANNELS.SYSTEM_HEALTH_CHECK, options),
 
       getHealthCheckSpecs: (agentIds?: string[]) =>
         _unwrappingInvoke(CHANNELS.SYSTEM_HEALTH_CHECK_SPECS, agentIds),
@@ -1596,7 +1596,7 @@ function buildElectronApi(): ElectronAPI {
         return _eventBusOn("system:wake", callback);
       },
 
-      installAgent: (payload: { agentId: string; methodIndex?: number; jobId: string }) =>
+      installAgent: (payload: import("../shared/types/ipc/system.js").AgentInstallPayload) =>
         _unwrappingInvoke(CHANNELS.SETUP_AGENT_INSTALL, payload),
 
       onAgentInstallProgress: (

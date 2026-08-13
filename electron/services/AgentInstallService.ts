@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import { getAgentConfig, type AgentInstallBlock } from "../../shared/config/agentRegistry.js";
+import { BASELINE_PREREQUISITES } from "./baselinePrerequisites.js";
 import type {
   AgentInstallPayload,
   AgentInstallResult,
@@ -9,7 +10,14 @@ import { buildInstallEnv } from "../utils/spawnEnv.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 
 function isManualOnlyCommand(command: string): boolean {
-  return /\|\s*(sudo\s+)?(bash|sh|zsh|pwsh)\b|\|\s*(iex|Invoke-Expression)\b/i.test(command);
+  if (/\|\s*(sudo\s+)?(bash|sh|zsh|pwsh)\b|\|\s*(iex|Invoke-Expression)\b/i.test(command)) {
+    return true;
+  }
+  // A leading `sudo` has no pipe to catch it, but spawning it with piped stdio
+  // hangs forever on a password prompt the user can never see. The baseline
+  // Linux blocks (`sudo apt-get install git`) are exactly this shape, so they
+  // stay copy-paste only.
+  return /^\s*sudo\b/i.test(command);
 }
 
 export function isBlockExecutable(block: AgentInstallBlock): boolean {
@@ -89,25 +97,60 @@ function runSingleCommand(
   });
 }
 
+function selectOsBlocks(
+  byOs: Partial<Record<"macos" | "windows" | "linux" | "generic", AgentInstallBlock[]>> | undefined
+): AgentInstallBlock[] | undefined {
+  const os = detectOS();
+  const osBlocks = byOs?.[os];
+  return osBlocks && osBlocks.length > 0 ? osBlocks : byOs?.generic;
+}
+
+/**
+ * Resolves the install blocks for a payload. The renderer names a target — an
+ * agent id or a baseline prerequisite tool — and main owns the mapping to
+ * commands; renderer-supplied command strings are never accepted.
+ */
+function resolveInstallBlocks(
+  payload: AgentInstallPayload
+): { blocks: AgentInstallBlock[]; error?: never } | { blocks?: never; error: string } {
+  if (payload.prerequisiteTool !== undefined) {
+    const spec = BASELINE_PREREQUISITES.find((s) => s.tool === payload.prerequisiteTool);
+    if (!spec) {
+      return { error: `Unknown prerequisite: ${payload.prerequisiteTool}` };
+    }
+    const blocks = selectOsBlocks(spec.installBlocks);
+    if (!blocks || blocks.length === 0) {
+      return { error: `No install blocks for ${payload.prerequisiteTool}` };
+    }
+    return { blocks };
+  }
+
+  const config = getAgentConfig(payload.agentId);
+  if (!config) {
+    return { error: `Unknown agent: ${payload.agentId}` };
+  }
+  const blocks = selectOsBlocks(config.install?.byOs);
+  if (!blocks || blocks.length === 0) {
+    return { error: `No install blocks for ${payload.agentId}` };
+  }
+  return { blocks };
+}
+
 export async function runAgentInstall(
   payload: AgentInstallPayload,
   onProgress: (event: AgentInstallProgressEvent) => void
 ): Promise<AgentInstallResult> {
-  const config = getAgentConfig(payload.agentId);
-  if (!config) {
-    return { success: false, exitCode: null, error: `Unknown agent: ${payload.agentId}` };
+  const resolved = resolveInstallBlocks(payload);
+  if (resolved.error !== undefined) {
+    return { success: false, exitCode: null, error: resolved.error };
   }
-
-  const os = detectOS();
-  const osBlocks = config.install?.byOs?.[os];
-  const blocks = osBlocks && osBlocks.length > 0 ? osBlocks : config.install?.byOs?.generic;
-  if (!blocks || blocks.length === 0) {
-    return { success: false, exitCode: null, error: `No install blocks for ${payload.agentId}` };
-  }
+  const { blocks } = resolved;
 
   const methodIndex = payload.methodIndex ?? 0;
   const block = blocks[methodIndex] ?? blocks[0];
 
+  // Re-checked here even though the renderer gates the button: renderer gating
+  // is presentation, main is the security boundary.
   if (!isBlockExecutable(block)) {
     return {
       success: false,

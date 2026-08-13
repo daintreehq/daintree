@@ -20,6 +20,7 @@ import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
+import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
 import { logError, logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
@@ -34,11 +35,17 @@ function SystemHealthSection() {
   const [isChecking, setIsChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
 
+  // While this section is on screen the user is already looking at the health
+  // check, so the global missing-prerequisite banner stands down.
+  useEffect(() => useMissingPrerequisiteStore.getState().claimInlineSurface(), []);
+
   const runCheck = async () => {
     setIsChecking(true);
     setCheckError(null);
     try {
-      const data = await systemClient.healthCheck();
+      // Forced: a manual re-check must re-probe, never replay main's cached
+      // startup result.
+      const data = await systemClient.healthCheck({ force: true });
       setResult(data);
     } catch (err) {
       setCheckError(formatErrorMessage(err, "Health check failed"));

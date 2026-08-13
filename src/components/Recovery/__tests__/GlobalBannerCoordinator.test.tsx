@@ -23,6 +23,21 @@ import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
 import { getCloudSyncWarningCopy } from "@/utils/cloudSyncWarningCopy";
+import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
+import type { PrerequisiteCheckResult } from "@shared/types";
+
+function missingGit(overrides: Partial<PrerequisiteCheckResult> = {}): PrerequisiteCheckResult {
+  return {
+    tool: "git",
+    label: "Git",
+    available: false,
+    unavailableReason: "not-found",
+    version: null,
+    severity: "fatal",
+    meetsMinVersion: false,
+    ...overrides,
+  };
+}
 
 const PROVIDER_ID = "daintree.github.github";
 
@@ -34,6 +49,26 @@ function setForgeTokenUnhealthy(value: boolean) {
   const store = useForgeProviderHealthStore.getState();
   store.setTokenUnhealthy(PROVIDER_ID, value);
   store.setProviderMeta(PROVIDER_ID, { providerName: "GitHub", pluginId: "daintree.github" });
+}
+
+// MissingPrerequisiteBanner probes for a package manager on mount whenever it
+// has an install block to offer. Installed per test rather than once for the
+// file: the caption-strip blocks below swap in their own window.electron and
+// delete it on teardown, which would otherwise strip this stub for every test
+// that runs after them.
+function installBaseElectronStub() {
+  Object.defineProperty(window, "electron", {
+    writable: true,
+    configurable: true,
+    value: {
+      system: {
+        checkCommand: vi.fn().mockResolvedValue(false),
+        onAgentInstallProgress: vi.fn().mockReturnValue(() => {}),
+        installAgent: vi.fn(),
+        healthCheck: vi.fn().mockResolvedValue({ prerequisites: [], allRequired: true }),
+      },
+    },
+  });
 }
 
 beforeAll(() => {
@@ -70,9 +105,16 @@ function resetStores() {
   useForgeProviderHealthStore.setState({ providers: {} });
   useCloudSyncBannerStore.setState({ service: null, projectId: null });
   useRosettaBannerStore.setState({ visible: false });
+  useMissingPrerequisiteStore.setState({
+    missing: [],
+    dismissed: false,
+    inlineSurfaceCount: 0,
+    install: null,
+  });
 }
 
 beforeEach(() => {
+  installBaseElectronStub();
   resetStores();
   cleanup();
 });
@@ -600,5 +642,85 @@ describe("GlobalBannerCoordinator cached-view reveal", () => {
 
     expect(revealListeners.size).toBe(0);
     expect(setBannerSeverity).not.toHaveBeenCalled();
+  });
+});
+
+describe("GlobalBannerCoordinator — missing prerequisite slot (#11763)", () => {
+  it("renders the banner when a fatal prerequisite is missing", () => {
+    useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Git is missing")).toBeTruthy();
+  });
+
+  it("loses the slot to restore confirmation", () => {
+    useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
+    useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.queryByText("Git is missing")).toBeNull();
+    expect(screen.getByText(/Session recovered after unexpected exit/)).toBeTruthy();
+  });
+
+  it("wins the slot over an expired forge token", () => {
+    // A stale token breaks one panel's data; a missing Git breaks every git
+    // operation in the app.
+    setForgeTokenUnhealthy(true);
+    useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Git is missing")).toBeTruthy();
+  });
+
+  it("wins the slot over the Rosetta warning", () => {
+    useRosettaBannerStore.setState({ visible: true });
+    useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Git is missing")).toBeTruthy();
+    expect(screen.queryByText("Running under Rosetta")).toBeNull();
+  });
+
+  it("yields the slot back once dismissed for the session", () => {
+    setForgeTokenUnhealthy(true);
+    useMissingPrerequisiteStore.setState({ missing: [missingGit()], dismissed: true });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.queryByText("Git is missing")).toBeNull();
+  });
+
+  it("stands down while a surface already showing prerequisites is mounted", () => {
+    useMissingPrerequisiteStore.setState({ missing: [missingGit()], inlineSurfaceCount: 1 });
+
+    const { container } = render(<GlobalBannerCoordinator />);
+
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("clears once a re-check reports the tool healthy", () => {
+    useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+    render(<GlobalBannerCoordinator />);
+    expect(screen.getByText("Git is missing")).toBeTruthy();
+
+    act(() => {
+      useMissingPrerequisiteStore.setState({ missing: [] });
+    });
+
+    expect(screen.queryByText("Git is missing")).toBeNull();
+  });
+
+  it("names the tools collectively when more than one is missing", () => {
+    useMissingPrerequisiteStore.setState({
+      missing: [missingGit(), missingGit({ tool: "node", label: "Node.js" })],
+    });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Required tools are missing")).toBeTruthy();
   });
 });
