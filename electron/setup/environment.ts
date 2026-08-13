@@ -17,7 +17,7 @@ for (const stream of [process.stdout, process.stderr]) {
 
 import nodeV8 from "node:v8";
 import vm from "node:vm";
-import { execFile, spawn } from "child_process";
+import { spawn } from "child_process";
 import { randomBytes } from "crypto";
 import { app } from "electron";
 import path from "path";
