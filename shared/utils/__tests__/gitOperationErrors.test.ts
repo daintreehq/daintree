@@ -337,6 +337,30 @@ describe("classifyGitError — missing git binary", () => {
 
     expect(classifyGitError(message)).toBe("dubious-ownership");
   });
+
+  it("lets a classified top-level failure outrank a missing-git ancestor", () => {
+    // A wrapper that says nothing specific should defer to its cause, but one
+    // that reports a real failure of its own must win — otherwise any error
+    // that happened to be wrapped around a spawn ENOENT would be reported as
+    // "Git isn't installed" and its actual cause never surfaced.
+    const wrapped = new Error("Authentication failed for 'https://github.com/org/repo.git/'", {
+      cause: simpleGitMissingBinaryError(),
+    });
+
+    expect(classifyGitError(wrapped)).toBe("auth-failed");
+  });
+
+  it("recognizes the message however the platform ended its lines", () => {
+    // Git for Windows is where this failure was reported, and it is also where
+    // CRLF turns up.
+    const crlf = SIMPLE_GIT_MISSING_BINARY_MESSAGE.replace(/\n/g, "\r\n");
+
+    expect(classifyGitError(new Error(crlf))).toBe("git-not-installed");
+    expect(classifyGitError(new Error(`${SIMPLE_GIT_MISSING_BINARY_MESSAGE}\n`))).toBe(
+      "git-not-installed"
+    );
+    expect(classifyGitError(new Error(`${crlf}\r\n`))).toBe("git-not-installed");
+  });
 });
 
 describe("isMissingGitExecutableError", () => {
@@ -426,8 +450,14 @@ describe("isMissingGitExecutableError", () => {
     expect(isMissingGitExecutableError(undefined)).toBe(false);
     expect(isMissingGitExecutableError(null)).toBe(false);
     expect(isMissingGitExecutableError("ENOENT")).toBe(false);
-    // classifyGitError accepts bare strings, so the predicate has to too.
+    // classifyGitError accepts bare strings, so the predicate has to too —
+    // including one reached partway down a cause chain.
     expect(isMissingGitExecutableError(SIMPLE_GIT_MISSING_BINARY_MESSAGE)).toBe(true);
+    expect(
+      isMissingGitExecutableError(
+        new Error("wrapped", { cause: SIMPLE_GIT_MISSING_BINARY_MESSAGE })
+      )
+    ).toBe(true);
   });
 });
 

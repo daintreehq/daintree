@@ -6,6 +6,7 @@ import os from "os";
 import path from "path";
 import * as schema from "../persistence/schema.js";
 import { simpleGitMissingBinaryError } from "../../../shared/testing/simpleGitErrorFixtures.js";
+import { GitOperationError } from "../../utils/errorTypes.js";
 
 /**
  * Producer-side coverage for #11409: these drive `addProject` against a REAL
@@ -167,6 +168,22 @@ describe("ProjectStore.addProject open failures", () => {
 
   it("reports a missing git binary from the shape simple-git actually throws", async () => {
     gitBehavior.getRepositoryRoot.mockRejectedValue(simpleGitMissingBinaryError());
+
+    expect(await codeOf(() => store.addProject(tmpRoot))).toBe("GIT_NOT_INSTALLED");
+  });
+
+  it("still reports it once GitService has wrapped the failure", async () => {
+    // GitService no longer rethrows the raw spawn error — it classifies it and
+    // throws a GitOperationError carrying the original as `cause`. Detection
+    // has to survive that hand-off, and this is the seam where #11764's two
+    // independently-green layers hid the break from each other.
+    gitBehavior.getRepositoryRoot.mockRejectedValue(
+      new GitOperationError("git-not-installed", "Git operation failed: getRepositoryRoot", {
+        cwd: tmpRoot,
+        op: "getRepositoryRoot",
+        cause: simpleGitMissingBinaryError(),
+      })
+    );
 
     expect(await codeOf(() => store.addProject(tmpRoot))).toBe("GIT_NOT_INSTALLED");
   });

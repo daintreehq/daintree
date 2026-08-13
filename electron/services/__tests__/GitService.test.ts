@@ -662,7 +662,8 @@ index 1a2b3c4..5d6e7f8 100644
     // Every method routes through the same handler, whose ENOENT text match
     // used to claim the worktree was gone — for a machine that just has no
     // Git installed, and a worktree that is perfectly fine (#11764).
-    gitClientMock.revparse.mockRejectedValue(simpleGitMissingBinaryError());
+    const spawnFailure = simpleGitMissingBinaryError();
+    gitClientMock.revparse.mockRejectedValue(spawnFailure);
 
     const service = new GitService(tempDir);
 
@@ -670,8 +671,9 @@ index 1a2b3c4..5d6e7f8 100644
     expect(error).toBeInstanceOf(GitOperationError);
     expect(error).not.toBeInstanceOf(WorktreeRemovedError);
     expect(error).toMatchObject({ reason: "git-not-installed" });
-    // The original stays reachable for diagnostics.
-    expect((error as GitOperationError).cause).toBeInstanceOf(Error);
+    // The original stays reachable, which is what lets ProjectStore classify
+    // this same failure after another layer has wrapped it.
+    expect((error as GitOperationError).cause).toBe(spawnFailure);
   });
 });
 

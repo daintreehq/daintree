@@ -166,19 +166,24 @@ const GIT_SPAWN_ENOENT_PATTERN = /^(?:Error: )?spawn git ENOENT(?:\r?\n[ \t]+at 
  * This is deliberately *not* a general "some executable is missing" predicate:
  * callers act on it by telling the user to install Git.
  */
+/** Missing-git evidence carried by one value, ignoring anything it wraps. */
+function showsMissingGitDirectly(value: unknown): boolean {
+  if (typeof value === "string") return GIT_SPAWN_ENOENT_PATTERN.test(value);
+  if (!value || typeof value !== "object") return false;
+
+  const candidate = value as { code?: unknown; syscall?: unknown; message?: unknown };
+  if (candidate.code === "ENOENT" && candidate.syscall === "spawn git") return true;
+  return typeof candidate.message === "string" && GIT_SPAWN_ENOENT_PATTERN.test(candidate.message);
+}
+
 export function isMissingGitExecutableError(error: unknown): boolean {
   const seen = new Set<unknown>();
   let current: unknown = error;
 
-  if (typeof current === "string") return GIT_SPAWN_ENOENT_PATTERN.test(current);
-
-  while (current && typeof current === "object" && !seen.has(current)) {
+  while (current !== null && current !== undefined && !seen.has(current)) {
+    if (showsMissingGitDirectly(current)) return true;
+    if (typeof current !== "object") return false;
     seen.add(current);
-    const candidate = current as { code?: unknown; syscall?: unknown; message?: unknown };
-    if (candidate.code === "ENOENT" && candidate.syscall === "spawn git") return true;
-    if (typeof candidate.message === "string" && GIT_SPAWN_ENOENT_PATTERN.test(candidate.message)) {
-      return true;
-    }
     current = (current as { cause?: unknown }).cause;
   }
 
@@ -186,19 +191,27 @@ export function isMissingGitExecutableError(error: unknown): boolean {
 }
 
 export function classifyGitError(error: unknown): GitOperationReason {
-  // Runs ahead of the PATTERNS pipeline, and against the *raw* value rather
-  // than the normalized message: a missing binary can only be recognized from
-  // structured errno fields or a cause chain, neither of which survives into
-  // the string the patterns match. Left to fall through, it would reach the
-  // generic `system-io-error` rule and be reported as a filesystem problem.
-  if (isMissingGitExecutableError(error)) return "git-not-installed";
+  // The error's own evidence outranks everything: structured errno fields and
+  // simple-git's laundered stack trace don't survive into the string PATTERNS
+  // matches, so without this the failure reaches the generic `system-io-error`
+  // rule and is reported as a filesystem problem.
+  if (showsMissingGitDirectly(error)) return "git-not-installed";
 
   const raw = extractGitErrorMessage(error);
-  if (!raw) return "unknown";
-  const normalized = normalizeGitErrorMessage(raw);
-  for (const [reason, pattern] of PATTERNS) {
-    if (pattern.test(normalized)) return reason;
+  const normalized = raw ? normalizeGitErrorMessage(raw) : "";
+  if (normalized) {
+    for (const [reason, pattern] of PATTERNS) {
+      if (pattern.test(normalized)) return reason;
+    }
   }
+
+  // Only once the error's own message has said nothing specific. A wrapper
+  // preserves the original as `cause` (`GitService.handleGitOperation`), and
+  // its own message — "Git operation failed: <context>" — matches nothing. But
+  // an ancestor must not outrank a top-level failure that did classify:
+  // "Authentication failed" wrapping a spawn ENOENT is an auth failure.
+  if (isMissingGitExecutableError(error)) return "git-not-installed";
+
   return "unknown";
 }
 
