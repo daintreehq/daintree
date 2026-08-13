@@ -143,6 +143,7 @@ export type GitOperationReason =
   | "lfs-missing"
   | "lfs-quota-exceeded"
   | "hook-rejected"
+  | "git-not-installed"
   | "system-io-error"
   | "unknown";
 

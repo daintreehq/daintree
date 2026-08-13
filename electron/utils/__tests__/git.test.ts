@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GitError, WorktreeRemovedError } from "../errorTypes.js";
+import { simpleGitMissingBinaryError } from "../../../shared/testing/simpleGitErrorFixtures.js";
 
 const mockGit = {
   raw: vi.fn(),
@@ -146,6 +147,19 @@ describe("getWorktreeChangesWithStats", () => {
     await expect(getWorktreeChangesWithStats("/valid/worktree", true)).rejects.not.toThrow(
       WorktreeRemovedError
     );
+  });
+
+  it("reports a missing git binary instead of retiring the worktree", async () => {
+    // The spawn failure lands as an ENOENT too, so polling used to conclude
+    // every worktree on the machine had been deleted (#11764).
+    mockGit.status.mockRejectedValue(simpleGitMissingBinaryError(["status", "--porcelain"]));
+
+    const error = await getWorktreeChangesWithStats("/valid/worktree", true).catch(
+      (e: unknown) => e
+    );
+
+    expect(error).not.toBeInstanceOf(WorktreeRemovedError);
+    expect(error).toMatchObject({ reason: "git-not-installed" });
   });
 });
 

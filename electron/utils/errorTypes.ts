@@ -177,9 +177,12 @@ export function getRetryability(error: unknown, gitReason?: GitOperationReason):
   const reason = gitReason ?? (error instanceof GitOperationError ? error.reason : undefined);
   if (reason) {
     switch (reason) {
+      // `git-not-installed` sits here because retrying can't help until the
+      // user installs Git.
       case "auth-failed":
       case "config-missing":
       case "dubious-ownership":
+      case "git-not-installed":
         return "user-gated";
       case "network-unavailable":
       case "system-io-error":

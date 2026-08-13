@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { constants as fsConstants, type Stats } from "fs";
 import path from "path";
+import { simpleGitMissingBinaryError } from "../../../shared/testing/simpleGitErrorFixtures.js";
 
 const statMock = vi.hoisted(() => vi.fn<(path: string) => Promise<Stats>>());
 const lstatMock = vi.hoisted(() => vi.fn<(path: string) => Promise<Stats>>());
@@ -15,7 +16,7 @@ vi.mock("fs/promises", () => ({
 
 const {
   assertProjectDirectory,
-  isMissingExecutableError,
+  isMissingGitExecutableError,
   probeGitMarker,
   PROJECT_DIRECTORY_STAT_TIMEOUT_MS,
   GIT_MARKER_STAT_TIMEOUT_MS,
@@ -365,52 +366,32 @@ describe("assertProjectDirectory under a hung filesystem", () => {
   });
 });
 
-describe("isMissingExecutableError", () => {
-  it("recognizes a failed spawn of a missing binary", () => {
-    expect(isMissingExecutableError(errnoError("ENOENT", { syscall: "spawn git" }))).toBe(true);
-  });
-
-  it("finds it through the wrapping GitService applies", () => {
-    // handleGitOperation rewraps a missing-binary spawn as WorktreeRemovedError
-    // (its ENOENT text match can't tell a missing binary from a missing
-    // worktree) but preserves the original as `cause`.
-    const spawnFailure = errnoError("ENOENT", { syscall: "spawn git" });
-    const wrapped = Object.assign(new Error("Worktree directory no longer exists"), {
-      cause: Object.assign(new Error("Git operation failed: getRepositoryRoot"), {
-        cause: spawnFailure,
+/**
+ * The predicate itself lives in `shared/utils/gitOperationErrors.ts` and is
+ * exercised in full there. What matters here is that this module keeps
+ * re-exporting it, since `ProjectStore` and the switch-handler mock both reach
+ * it through this façade.
+ */
+describe("isMissingGitExecutableError (re-exported)", () => {
+  it("recognizes what simple-git actually throws, through GitService's wrapping", () => {
+    // The real message is a whole Node stack trace, not the one-liner this
+    // suite used to assume — the gap that made #11764's detection dead code.
+    const wrapped = new Error("Worktree directory no longer exists", {
+      cause: new Error("Git operation failed: getRepositoryRoot", {
+        cause: simpleGitMissingBinaryError(),
       }),
     });
 
-    expect(isMissingExecutableError(wrapped)).toBe(true);
+    expect(isMissingGitExecutableError(wrapped)).toBe(true);
   });
 
-  it("does not match a git error that merely quotes those words", () => {
-    // An unanchored search would classify a repository living at a path like
-    // this as "git isn't installed", hijacking the real failure.
-    const gitStderr = new Error(
-      "fatal: detected dubious ownership in repository at '/repos/spawn git ENOENT'"
-    );
-
-    expect(isMissingExecutableError(gitStderr)).toBe(false);
+  it("recognizes a raw spawn errno that never went through simple-git", () => {
+    expect(isMissingGitExecutableError(errnoError("ENOENT", { syscall: "spawn git" }))).toBe(true);
   });
 
   it("does not mistake a missing directory for a missing binary", () => {
-    expect(isMissingExecutableError(errnoError("ENOENT", { syscall: "stat" }))).toBe(false);
-    expect(isMissingExecutableError(errnoError("ENOENT"))).toBe(false);
-    expect(isMissingExecutableError(errnoError("EACCES", { syscall: "spawn git" }))).toBe(false);
-  });
-
-  it("survives a cause chain that loops", () => {
-    const a = new Error("a") as Error & { cause?: unknown };
-    const b = new Error("b") as Error & { cause?: unknown };
-    a.cause = b;
-    b.cause = a;
-
-    expect(isMissingExecutableError(a)).toBe(false);
-  });
-
-  it("handles values that are not errors", () => {
-    expect(isMissingExecutableError(undefined)).toBe(false);
-    expect(isMissingExecutableError("ENOENT")).toBe(false);
+    expect(isMissingGitExecutableError(errnoError("ENOENT", { syscall: "stat" }))).toBe(false);
+    expect(isMissingGitExecutableError(errnoError("ENOENT"))).toBe(false);
+    expect(isMissingGitExecutableError(errnoError("EACCES", { syscall: "spawn git" }))).toBe(false);
   });
 });

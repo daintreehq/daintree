@@ -34,6 +34,7 @@ vi.mock("../../utils/logger.js", () => ({
 
 import { GitService } from "../GitService.js";
 import { GitError, GitOperationError, WorktreeRemovedError } from "../../utils/errorTypes.js";
+import { simpleGitMissingBinaryError } from "../../../shared/testing/simpleGitErrorFixtures.js";
 
 describe("GitService", () => {
   let tempDir: string;
@@ -655,6 +656,43 @@ index 1a2b3c4..5d6e7f8 100644
     expect(error).not.toBeInstanceOf(WorktreeRemovedError);
     expect(logWarnMock).toHaveBeenCalled();
     expect(logErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a missing git binary rather than a removed worktree", async () => {
+    // Every method routes through the same handler, whose ENOENT text match
+    // used to claim the worktree was gone — for a machine that just has no
+    // Git installed, and a worktree that is perfectly fine (#11764).
+    const spawnFailure = simpleGitMissingBinaryError();
+    gitClientMock.revparse.mockRejectedValue(spawnFailure);
+
+    const service = new GitService(tempDir);
+
+    const error = await service.getRepositoryRoot(tempDir).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(GitOperationError);
+    expect(error).not.toBeInstanceOf(WorktreeRemovedError);
+    expect(error).toMatchObject({ reason: "git-not-installed" });
+    // The original stays reachable, which is what lets ProjectStore classify
+    // this same failure after another layer has wrapped it.
+    expect((error as GitOperationError).cause).toBe(spawnFailure);
+  });
+
+  it("still reports a removed worktree when the spawn ENOENT is the missing cwd", async () => {
+    // Node raises the same `spawn git ENOENT` when the spawn's cwd is gone, and
+    // the cached SimpleGit instance means simple-git's construction-time folder
+    // check ran long before the deletion — so the error alone cannot tell the
+    // two apart. Without the root-path guard this reads as "install Git".
+    const removedPath = path.join(tempDir, "removed-worktree");
+    await fs.mkdir(removedPath);
+    gitClientMock.revparse.mockRejectedValue(simpleGitMissingBinaryError());
+
+    const service = new GitService(removedPath);
+    await fs.rm(removedPath, { recursive: true, force: true });
+
+    const error = await service.getRepositoryRoot(removedPath).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WorktreeRemovedError);
+    // The missing-binary branch throws a GitOperationError instead, so this
+    // rules out having taken it.
+    expect(error).not.toBeInstanceOf(GitOperationError);
   });
 });
 
