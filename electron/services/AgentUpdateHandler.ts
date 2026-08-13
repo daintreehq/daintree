@@ -9,6 +9,7 @@ import type {
 import type { PtyClient } from "./PtyClient.js";
 import { AgentVersionService } from "./AgentVersionService.js";
 import { CliAvailabilityService } from "./CliAvailabilityService.js";
+import { refreshWindowsPathForSpawn } from "../setup/windowsPath.js";
 
 export class AgentUpdateHandler {
   constructor(
@@ -53,6 +54,13 @@ export class AgentUpdateHandler {
     const terminalId = crypto.randomUUID();
     const cols = 120;
     const rows = 30;
+
+    // An update command is the case that most needs a current PATH: the user
+    // often installs the runtime (Node, a package manager) and immediately asks
+    // Daintree to update a CLI through it. `PtyClient` stamps whatever main
+    // holds onto the spawn, so refreshing here is what makes it the fresh one
+    // (#11773). Windows-only and throttled; failure just uses the current PATH.
+    await refreshWindowsPathForSpawn().catch(() => {});
 
     this.ptyClient.spawn(terminalId, {
       cwd: os.homedir(),

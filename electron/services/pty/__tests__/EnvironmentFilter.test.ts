@@ -379,6 +379,22 @@ describe("case-aware environment primitives", () => {
       expect(merged.Temp).toBe("u");
     });
 
+    it("collapses a base that already carries two spellings of one name", () => {
+      // Seeding with `{ ...base }` would normalize only the overrides and leave
+      // the stale `Path` in place beside the updated `PATH`.
+      const merged = mergeEnvVars({ Path: "old", PATH: "older" }, { PATH: "new" });
+
+      expect(Object.keys(merged)).toEqual(["Path"]);
+      expect(merged.Path).toBe("new");
+    });
+
+    it("collapses duplicates while filtering an inherited environment", () => {
+      const filtered = filterEnvironment({ Path: "first", PATH: "second" });
+
+      expect(Object.keys(filtered)).toEqual(["Path"]);
+      expect(filtered.Path).toBe("second");
+    });
+
     it("mutates neither input", () => {
       const base = { Path: "C:\\Windows" };
       const overrides = { PATH: "C:\\Python313" };

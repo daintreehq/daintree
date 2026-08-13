@@ -30,8 +30,13 @@ let registryReadPromise: Promise<string | null> | null = null;
 
 // When the last registry read *settled*, success or failure. Stamped on both
 // outcomes on purpose: this is a short cooldown so a failing `reg.exe` can't be
-// hammered once per pane, not a success cache. `0` means "never read".
-let lastRegistryReadAt = 0;
+// hammered once per pane, not a success cache. `null` means "never read".
+//
+// `performance.now()` rather than `Date.now()`: the wall clock can step
+// backwards (NTP correction, the user fixing their timezone), which would make
+// the elapsed comparison negative and suppress every refresh until real time
+// caught up — a stale PATH for as long as the jump.
+let lastRegistryReadAt: number | null = null;
 
 function deduplicatePath(pathStr: string, caseInsensitive: boolean): string {
   const entries = pathStr.split(path.delimiter).filter(Boolean);
@@ -101,7 +106,12 @@ function readWindowsRegistryPath(): Promise<string> {
     keys.map(
       (key) =>
         new Promise<string>((resolve) => {
-          execFile("reg", ["query", key, "/v", "Path"], { timeout: 3_000 }, (err, stdout) => {
+          // windowsHide, as everywhere else this repo shells out: `reg.exe` is a
+          // console-subsystem binary and a GUI Electron process has no console
+          // to inherit, so without it Windows opens a real window. Tolerable
+          // once at startup; this now runs per terminal-open.
+          const options = { timeout: 3_000, windowsHide: true };
+          execFile("reg", ["query", key, "/v", "Path"], options, (err, stdout) => {
             if (err || !stdout) return resolve("");
             const match = stdout.match(/Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/i);
             resolve(expandWindowsEnvVars(match?.[1]?.trim() ?? ""));
@@ -131,7 +141,7 @@ async function runResolveWindowsRegistryPath(): Promise<string | null> {
     // handler lands a microtask AFTER the awaiting caller resumes, which would
     // leave the settled read installed as "in flight" long enough for the very
     // next call to join it and get the previous answer.
-    lastRegistryReadAt = Date.now();
+    lastRegistryReadAt = performance.now();
     registryReadPromise = null;
   }
 }
@@ -182,8 +192,8 @@ export async function refreshWindowsPathForSpawn(): Promise<void> {
   // and skipping on the old stamp would hand this spawn the previous answer.
   if (
     !registryReadPromise &&
-    lastRegistryReadAt !== 0 &&
-    Date.now() - lastRegistryReadAt < SPAWN_PATH_REFRESH_TTL_MS
+    lastRegistryReadAt !== null &&
+    performance.now() - lastRegistryReadAt < SPAWN_PATH_REFRESH_TTL_MS
   ) {
     return;
   }
@@ -199,5 +209,5 @@ export async function refreshWindowsPathForSpawn(): Promise<void> {
 /** Test seam — module-level single-flight and TTL state outlive `vi.resetModules()` consumers. */
 export function __resetWindowsPathStateForTests(): void {
   registryReadPromise = null;
-  lastRegistryReadAt = 0;
+  lastRegistryReadAt = null;
 }

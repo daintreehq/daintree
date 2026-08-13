@@ -149,15 +149,16 @@ describe("PtyClient Windows PATH stamping", () => {
     });
   });
 
-  it("yields to a caller-supplied PATH under any casing", () => {
+  it.each(["Path", "PATH", "pAtH"])("yields to a caller-supplied %s", (key) => {
     const client = createReadyClient();
     process.env.PATH = "C:\\Windows";
     setPlatform("win32");
 
-    client.spawn("t1", { ...baseOptions, env: { Path: "C:\\Custom" } });
+    client.spawn("t1", { ...baseOptions, env: { [key]: "C:\\Custom" } });
 
-    const env = spawnMessages(mockChild)[0]?.options.env;
-    expect(env).toEqual({ Path: "C:\\Custom" });
+    // Windows resolves every spelling to the same variable, so the skip has to
+    // fold case rather than recognise a handful of known forms.
+    expect(spawnMessages(mockChild)[0]?.options.env).toEqual({ [key]: "C:\\Custom" });
   });
 
   it("treats a deliberately empty PATH as a choice, not an absence", () => {

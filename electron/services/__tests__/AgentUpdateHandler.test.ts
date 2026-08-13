@@ -2,6 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setUserRegistry } from "../../../shared/config/agentRegistry.js";
 import { AgentUpdateHandler } from "../AgentUpdateHandler.js";
 
+const refreshWindowsPathForSpawnMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+
+// Full export surface: a factory that omits one throws for every consumer of the
+// module at collection while vitest still exits 0.
+vi.mock("../../setup/windowsPath.js", () => ({
+  refreshWindowsPathForSpawn: refreshWindowsPathForSpawnMock,
+  resolveWindowsRegistryPath: vi.fn().mockResolvedValue(null),
+  applyWindowsExtraPaths: vi.fn((p: string) => p),
+  expandWindowsEnvVars: vi.fn((s: string) => s),
+  __resetWindowsPathStateForTests: vi.fn(),
+}));
+
 type Listener = (...args: unknown[]) => void;
 
 function createPtyClientMock() {
@@ -278,5 +290,67 @@ describe("AgentUpdateHandler", () => {
 
     // brew has higher priority than cargo, so it wins auto-selection.
     expect(result.command).toBe("brew upgrade cargo-agent");
+  });
+});
+
+describe("AgentUpdateHandler Windows PATH refresh", () => {
+  const realPlatform = process.platform;
+  const setPlatform = (platform: NodeJS.Platform) => {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    refreshWindowsPathForSpawnMock.mockClear();
+    refreshWindowsPathForSpawnMock.mockResolvedValue(undefined);
+    setUserRegistry({
+      "test-agent": {
+        id: "test-agent",
+        name: "Test Agent",
+        command: "test-agent",
+        color: "#000000",
+        iconId: "terminal",
+        supportsContextInjection: false,
+        update: { npm: "npm install -g test-agent@latest" },
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    setUserRegistry({});
+    setPlatform(realPlatform);
+  });
+
+  function createHandler() {
+    const { ptyClient } = createPtyClientMock();
+    const handler = new AgentUpdateHandler(
+      ptyClient as never,
+      { clearCache: vi.fn() } as never,
+      { refresh: vi.fn() } as never
+    );
+    return { handler, ptyClient };
+  }
+
+  it("refreshes the registry PATH before spawning the update terminal", async () => {
+    setPlatform("win32");
+    const { handler, ptyClient } = createHandler();
+
+    await handler.startUpdate({ agentId: "test-agent" as never });
+
+    // The user typically installs the runtime, then asks Daintree to update a
+    // CLI through it — the update command needs the PATH that install created.
+    expect(refreshWindowsPathForSpawnMock).toHaveBeenCalledTimes(1);
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("spawns anyway when the refresh fails", async () => {
+    setPlatform("win32");
+    refreshWindowsPathForSpawnMock.mockRejectedValue(new Error("reg query exploded"));
+    const { handler, ptyClient } = createHandler();
+
+    await expect(handler.startUpdate({ agentId: "test-agent" as never })).resolves.toBeTruthy();
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
   });
 });

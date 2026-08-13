@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { buildTerminalEnv } from "../terminalSpawn.js";
+import { buildTerminalEnv, computeSpawnContext } from "../terminalSpawn.js";
 import type { PtySpawnOptions } from "../types.js";
 
 const baseOptions: PtySpawnOptions = {
@@ -188,84 +188,97 @@ describe("buildTerminalEnv Windows PATH override", () => {
     Object.defineProperty(process, "platform", { value: platform, configurable: true });
   };
 
-  let originalPath: string | undefined;
-  let originalColorterm: string | undefined;
+  // Windows reports PATH as `Path`, so the env the pty-host inherited carries
+  // that spelling while our override uses `PATH`. On a POSIX test host those
+  // really are two variables, which is precisely what lets us reproduce the
+  // Windows collision here: seed `Path` alongside the runner's own `PATH` and
+  // `process.env` presents the same two-key shape a Windows process would.
+  const STALE = "C:\\Windows";
+  const FRESH = "C:\\Windows;C:\\Python313";
+  const AMBIENT = ["Path", "COLORTERM", "colorterm", "Lang", "daintree_pane_id"] as const;
+  const saved = new Map<string, string | undefined>();
 
   beforeEach(() => {
-    originalPath = process.env.PATH;
-    // buildTerminalEnv inherits process.env, and the shell running these tests
-    // almost certainly exports COLORTERM — which would decide the casing
-    // assertions below for us rather than the code under test.
-    originalColorterm = process.env.COLORTERM;
-    delete process.env.COLORTERM;
+    for (const key of AMBIENT) {
+      saved.set(key, process.env[key]);
+      delete process.env[key];
+    }
+    process.env.Path = STALE;
   });
 
   afterEach(() => {
     setPlatform(realPlatform);
-    if (originalPath === undefined) delete process.env.PATH;
-    else process.env.PATH = originalPath;
-    if (originalColorterm === undefined) delete process.env.COLORTERM;
-    else process.env.COLORTERM = originalColorterm;
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    saved.clear();
   });
 
   /**
    * node-pty emits `Object.keys(env)` verbatim into the child's environment
-   * block, so a stale `Path` sitting beside a fresh `PATH` is two entries for
-   * one variable and the first one wins. Counting keys by folded name is the
-   * assertion that the block a Windows shell actually receives is unambiguous.
+   * block — no dedup, no case folding — so a stale `Path` sitting beside a
+   * fresh `PATH` is two entries for one variable and the first one wins.
+   * Counting keys by folded name is the assertion that the block a Windows
+   * shell actually receives is unambiguous.
    */
-  const pathKeysOf = (env: Record<string, string>) =>
-    Object.keys(env).filter((key) => key.toUpperCase() === "PATH");
+  const foldedKeysNamed = (env: Record<string, string>, name: string) =>
+    Object.keys(env).filter((key) => key.toUpperCase() === name);
 
-  it("overwrites the inherited Path in place, leaving one PATH key", () => {
+  const foldedDuplicates = (env: Record<string, string>) => {
+    const seen = new Set<string>();
+    return Object.keys(env).filter((key) => {
+      const folded = key.toUpperCase();
+      if (seen.has(folded)) return true;
+      seen.add(folded);
+      return false;
+    });
+  };
+
+  it("collapses the inherited Path onto the fresh PATH instead of emitting both", () => {
     setPlatform("win32");
-    process.env.PATH = "C:\\Windows";
-    const env = buildTerminalEnv(
-      { ...baseOptions, env: { PATH: "C:\\Windows;C:\\Python313" } },
-      "pane-1",
-      "powershell.exe"
-    );
+    const env = buildTerminalEnv({ ...baseOptions, env: { PATH: FRESH } }, "p1", "powershell.exe");
 
-    expect(pathKeysOf(env)).toHaveLength(1);
-    expect(env[pathKeysOf(env)[0]]).toBe("C:\\Windows;C:\\Python313");
+    const keys = foldedKeysNamed(env, "PATH");
+    expect(keys).toHaveLength(1);
+    expect(env[keys[0]]).toBe(FRESH);
   });
 
-  it("leaves no case-insensitive duplicate key anywhere in the spawn env", () => {
+  it("collapses an override spelled in any casing", () => {
     setPlatform("win32");
-    const env = buildTerminalEnv(
-      {
-        ...baseOptions,
-        env: { PATH: "C:\\Python313", COLORTERM: "24bit", NODE_COMPILE_CACHE: "C:\\cache" },
-      },
-      "pane-1",
-      "powershell.exe"
-    );
+    const env = buildTerminalEnv({ ...baseOptions, env: { pAtH: FRESH } }, "p1", "powershell.exe");
 
-    const folded = Object.keys(env).map((key) => key.toUpperCase());
-    expect(folded).toHaveLength(new Set(folded).size);
+    const keys = foldedKeysNamed(env, "PATH");
+    expect(keys).toHaveLength(1);
+    expect(env[keys[0]]).toBe(FRESH);
   });
 
-  it("honours a lower-cased override against an upper-cased inherited value", () => {
+  it("hands pty.spawn an env with no case-insensitive duplicate key at all", () => {
     setPlatform("win32");
-    const env = buildTerminalEnv(
-      { ...baseOptions, env: { colorterm: "24bit" } },
-      "pane-1",
-      "powershell.exe"
-    );
+    process.env.colorterm = "16bit";
+    process.env.Lang = "C";
+    process.env.daintree_pane_id = "spoofed";
 
-    expect(pathKeysOf(env).length).toBeLessThanOrEqual(1);
-    expect(env.colorterm).toBe("24bit");
-    expect(env.COLORTERM).toBeUndefined();
+    // computeSpawnContext, not buildTerminalEnv: this is the object that
+    // reaches `pty.spawn`, after metadata, locale, colour and profiling have
+    // all had their turn at writing into it.
+    const { env } = computeSpawnContext("p1", {
+      ...baseOptions,
+      env: { PATH: FRESH, COLORTERM: "24bit", LANG: "en_US.UTF-8" },
+    });
+
+    expect(foldedDuplicates(env)).toEqual([]);
+    expect(env[foldedKeysNamed(env, "PATH")[0]]).toBe(FRESH);
+    expect(env[foldedKeysNamed(env, "DAINTREE_PANE_ID")[0]]).toBe("p1");
   });
 
   it("keeps Path and PATH distinct on POSIX, where they are different variables", () => {
     setPlatform("darwin");
-    const env = buildTerminalEnv(
-      { ...baseOptions, env: { PATH: "/opt/bin" } },
-      "pane-1",
-      "/bin/bash"
-    );
+    const env = buildTerminalEnv({ ...baseOptions, env: { PATH: "/opt/bin" } }, "p1", "/bin/bash");
 
+    // Both survive, unfolded: on POSIX these name two unrelated variables and
+    // collapsing them would silently drop one.
     expect(env.PATH).toBe("/opt/bin");
+    expect(env.Path).toBe(STALE);
   });
 });

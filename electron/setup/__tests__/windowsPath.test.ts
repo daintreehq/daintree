@@ -37,12 +37,37 @@ type ExecFileCallback = (err: Error | null, stdout: string) => void;
 function stubRegistry(values: { hklm: string | null; hkcu: string | null }): void {
   execFileMock.mockImplementation(
     (_cmd: string, args: string[], _opts: unknown, cb: ExecFileCallback) => {
-      const key = args[1];
-      const value = key.startsWith("HKLM") ? values.hklm : values.hkcu;
-      if (value === null) return cb(new Error("reg query failed"), "");
-      cb(null, `\r\n${key}\r\n    Path    REG_SZ    ${value}\r\n\r\n`);
+      respond(args[1], values, cb);
     }
   );
+}
+
+/**
+ * Like `stubRegistry`, but holds every `reg query` open until the returned
+ * `settle()` runs. `stubRegistry` answers synchronously, which leaves a read
+ * "in flight" for barely a microtask — too short to test what a caller does
+ * while one is genuinely outstanding.
+ */
+function stubRegistryDeferred(values: { hklm: string | null; hkcu: string | null }): () => void {
+  const pending: Array<() => void> = [];
+  execFileMock.mockImplementation(
+    (_cmd: string, args: string[], _opts: unknown, cb: ExecFileCallback) => {
+      pending.push(() => respond(args[1], values, cb));
+    }
+  );
+  return () => {
+    for (const respondNow of pending.splice(0)) respondNow();
+  };
+}
+
+function respond(
+  key: string,
+  values: { hklm: string | null; hkcu: string | null },
+  cb: ExecFileCallback
+): void {
+  const value = key.startsWith("HKLM") ? values.hklm : values.hkcu;
+  if (value === null) return cb(new Error("reg query failed"), "");
+  cb(null, `\r\n${key}\r\n    Path    REG_SZ    ${value}\r\n\r\n`);
 }
 
 /** Registry key reads issued so far, ignoring which key each targeted. */
@@ -57,6 +82,12 @@ async function importWindowsPath() {
 describe("windowsPath", () => {
   const originalPlatform = process.platform;
   const originalPath = process.env.PATH;
+
+  // Both derived from the module's throttle window rather than restated: what
+  // matters is which side of it a call lands on, not the number itself.
+  const WITHIN_THROTTLE_MS = 1_000;
+  const BEYOND_THROTTLE_MS = 30_000;
+
   let now = 1_000_000;
 
   beforeEach(() => {
@@ -64,16 +95,19 @@ describe("windowsPath", () => {
     execFileMock.mockReset();
     spawnMock.mockReset();
     now = 1_000_000;
-    // Date.now rather than fake timers: the module is loaded via a dynamic
-    // import inside each test, and installing fake timers before one of those
-    // hangs the hook.
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    Object.defineProperty(process, "platform", { value: "win32", writable: true });
+    // Stubbing the clock rather than installing fake timers: the module is
+    // loaded via a dynamic import inside each test, and fake timers installed
+    // before one of those hang the hook (#11661).
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    // configurable, NOT writable: Node ships `platform` as non-writable, and
+    // flipping that leaks the loosened descriptor into whichever file reuses
+    // this worker. Restoring the value alone would not put it back.
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
     if (originalPath === undefined) delete process.env.PATH;
     else process.env.PATH = originalPath;
   });
@@ -136,7 +170,7 @@ describe("windowsPath", () => {
 
   describe("refreshWindowsPathForSpawn", () => {
     it("does nothing off Windows", async () => {
-      Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
       process.env.PATH = "/usr/bin";
       stubRegistry({ hklm: "C:\\Windows", hkcu: "" });
       const { refreshWindowsPathForSpawn } = await importWindowsPath();
@@ -163,7 +197,7 @@ describe("windowsPath", () => {
 
       await refreshWindowsPathForSpawn();
       const afterFirst = registryReadCount();
-      now += 4_000;
+      now += WITHIN_THROTTLE_MS;
       await refreshWindowsPathForSpawn();
 
       expect(registryReadCount()).toBe(afterFirst);
@@ -177,7 +211,7 @@ describe("windowsPath", () => {
       expect(process.env.PATH).toBe("C:\\Windows");
 
       stubRegistry({ hklm: "C:\\Windows;C:\\Python313", hkcu: "" });
-      now += 6_000;
+      now += BEYOND_THROTTLE_MS;
       await refreshWindowsPathForSpawn();
 
       expect(process.env.PATH).toBe("C:\\Windows;C:\\Python313");
@@ -196,23 +230,39 @@ describe("windowsPath", () => {
       expect(registryReadCount()).toBe(afterStartup);
     });
 
-    it("joins an in-flight read rather than skipping on the previous stamp", async () => {
+    it("joins an in-flight read even though the previous stamp is still fresh", async () => {
       stubRegistry({ hklm: "C:\\Windows", hkcu: "" });
       const { resolveWindowsRegistryPath, refreshWindowsPathForSpawn } = await importWindowsPath();
-
       await resolveWindowsRegistryPath();
-      now += 6_000;
-      stubRegistry({ hklm: "C:\\Windows;C:\\Python313", hkcu: "" });
+      const afterStartup = registryReadCount();
 
-      // A refresh already in flight is strictly newer than the stamp it has not
-      // written yet, so the spawn must await it instead of reading the old one.
+      // Inside the throttle window, so the TTL alone would say "skip" — but a
+      // read is outstanding, and it is by definition newer than the stamp it
+      // has not written yet. Skipping here would hand this spawn the previous
+      // answer while a fresher one was moments away.
+      now += WITHIN_THROTTLE_MS;
+      const settle = stubRegistryDeferred({ hklm: "C:\\Windows;C:\\Python313", hkcu: "" });
       const inFlight = resolveWindowsRegistryPath();
-      await refreshWindowsPathForSpawn();
-      await inFlight;
+      const joined = refreshWindowsPathForSpawn();
 
-      // Two reads for the startup refresh, two for the in-flight one the spawn
-      // joined — not six, which is what a spawn issuing its own would cost.
-      expect(registryReadCount()).toBe(4);
+      settle();
+      await Promise.all([inFlight, joined]);
+
+      expect(registryReadCount()).toBe(afterStartup * 2);
+      expect(process.env.PATH).toBe("C:\\Windows;C:\\Python313");
+    });
+
+    it("collapses concurrent spawns onto a single registry read", async () => {
+      const settle = stubRegistryDeferred({ hklm: "C:\\Windows;C:\\Python313", hkcu: "" });
+      const { refreshWindowsPathForSpawn } = await importWindowsPath();
+
+      // Six panes opening at once — a recipe launch — must not mean six
+      // `reg.exe` pairs.
+      const spawns = Array.from({ length: 6 }, () => refreshWindowsPathForSpawn());
+      settle();
+      await Promise.all(spawns);
+
+      expect(registryReadCount()).toBe(2);
       expect(process.env.PATH).toBe("C:\\Windows;C:\\Python313");
     });
 
@@ -233,11 +283,11 @@ describe("windowsPath", () => {
       await refreshWindowsPathForSpawn();
       const afterFailure = registryReadCount();
 
-      now += 1_000;
+      now += WITHIN_THROTTLE_MS;
       await refreshWindowsPathForSpawn();
       expect(registryReadCount()).toBe(afterFailure);
 
-      now += 6_000;
+      now += BEYOND_THROTTLE_MS;
       await refreshWindowsPathForSpawn();
       expect(registryReadCount()).toBeGreaterThan(afterFailure);
     });
@@ -251,6 +301,41 @@ describe("windowsPath", () => {
 
       await expect(refreshWindowsPathForSpawn()).resolves.toBeUndefined();
       expect(process.env.PATH).toBe("C:\\Windows");
+    });
+
+    it("throttles a throwing registry read too, rather than retrying per pane", async () => {
+      execFileMock.mockImplementation(() => {
+        throw new Error("spawn ENOENT");
+      });
+      const { refreshWindowsPathForSpawn } = await importWindowsPath();
+
+      await refreshWindowsPathForSpawn();
+      const afterThrow = registryReadCount();
+
+      // A missing or broken `reg.exe` is a persistent condition; paying for it
+      // on every terminal open would be the worst version of this feature.
+      now += WITHIN_THROTTLE_MS;
+      await refreshWindowsPathForSpawn();
+
+      expect(registryReadCount()).toBe(afterThrow);
+    });
+
+    it("throttles on monotonic time, not the wall clock", async () => {
+      stubRegistry({ hklm: "C:\\Windows", hkcu: "" });
+      const { refreshWindowsPathForSpawn } = await importWindowsPath();
+
+      await refreshWindowsPathForSpawn();
+      const afterFirst = registryReadCount();
+
+      // The wall clock jumps backwards (NTP correction, a timezone fix) while
+      // monotonic time moves on past the throttle window. A `Date.now()` gate
+      // would compute negative elapsed, read it as "just refreshed", and
+      // suppress every registry read until real time caught up.
+      vi.spyOn(Date, "now").mockReturnValue(0);
+      now += BEYOND_THROTTLE_MS;
+      await refreshWindowsPathForSpawn();
+
+      expect(registryReadCount()).toBeGreaterThan(afterFirst);
     });
   });
 });

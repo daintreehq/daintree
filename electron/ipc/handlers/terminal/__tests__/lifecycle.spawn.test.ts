@@ -55,6 +55,7 @@ const refreshWindowsPathForSpawnMock = vi.hoisted(() => vi.fn().mockResolvedValu
 vi.mock("../../../../setup/windowsPath.js", () => ({
   refreshWindowsPathForSpawn: refreshWindowsPathForSpawnMock,
   resolveWindowsRegistryPath: vi.fn().mockResolvedValue(null),
+  applyWindowsExtraPaths: vi.fn((p: string) => p),
   expandWindowsEnvVars: vi.fn((s: string) => s),
   __resetWindowsPathStateForTests: vi.fn(),
 }));
@@ -2661,9 +2662,11 @@ describe("terminal spawn handler - Windows PATH refresh", () => {
     const handler = spawnHandlerForTest();
 
     await handler({} as Electron.IpcMainInvokeEvent, {
+      // Deliberately an odd spelling: Windows resolves it the same, so the skip
+      // has to fold case rather than recognise a few known variants.
       cols: 80,
       rows: 24,
-      env: { Path: "C:\\Custom" },
+      env: { pAtH: "C:\\Custom" },
     });
 
     // The caller's PATH wins downstream, so the registry read would be pure latency.

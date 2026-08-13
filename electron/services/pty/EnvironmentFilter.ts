@@ -144,7 +144,14 @@ export function mergeEnvVars(
   base: Readonly<Record<string, string>>,
   overrides: Readonly<Record<string, string>>
 ): Record<string, string> {
-  const result: Record<string, string> = { ...base };
+  // Both sides fold into an empty object. Seeding with `{ ...base }` would
+  // normalize only the overrides, so a base that already carried two spellings
+  // of one name would keep both — the guarantee has to be structural, not a
+  // bet on the inputs being clean.
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(base)) {
+    setEnvVar(result, key, value);
+  }
   for (const [key, value] of Object.entries(overrides)) {
     setEnvVar(result, key, value);
   }
@@ -171,7 +178,7 @@ export function filterEnvironment(env: Record<string, string | undefined>): Reco
     // same variable.
     if (foldEnvKey(key).startsWith(DAINTREE_PREFIX)) continue;
     if (isSensitiveVar(key)) continue;
-    result[key] = value;
+    setEnvVar(result, key, value);
   }
   return result;
 }
@@ -193,7 +200,7 @@ export function filterSensitiveOnly(
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) continue;
     if (isSensitiveVar(key)) continue;
-    result[key] = value;
+    setEnvVar(result, key, value);
   }
   return result;
 }
