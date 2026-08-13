@@ -562,6 +562,8 @@ export const CHANNELS = {
   APP_THEME_SET_ACCENT_COLOR_OVERRIDE: "app-theme:set-accent-color-override",
   APP_THEME_SYSTEM_APPEARANCE_CHANGED: "app-theme:system-appearance-changed",
 
+  WINDOW_CHROME_SET_BANNER_SEVERITY: "window-chrome:set-banner-severity",
+
   TELEMETRY_GET: "telemetry:get",
   TELEMETRY_SET_ENABLED: "telemetry:set-enabled",
   TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",

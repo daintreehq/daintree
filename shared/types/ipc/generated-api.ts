@@ -729,4 +729,9 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["webview:go-to-history-index"]["args"]
     ): Promise<IpcInvokeMap["webview:go-to-history-index"]["result"]>;
   };
+  windowChrome: {
+    setBannerSeverity(
+      ...args: IpcInvokeMap["window-chrome:set-banner-severity"]["args"]
+    ): Promise<IpcInvokeMap["window-chrome:set-banner-severity"]["result"]>;
+  };
 }

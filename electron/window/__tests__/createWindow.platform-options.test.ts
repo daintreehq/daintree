@@ -1,80 +1,88 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { getPlatformWindowOptions } from "../platformWindowOptions.js";
+import {
+  WINDOWS_CAPTION_SYMBOL_COLOR,
+  WINDOWS_TITLEBAR_HEIGHT_PX,
+} from "../../../shared/config/windowChrome.js";
 
 /**
- * Tests the platform-specific BrowserWindow constructor options from
- * createWindow.ts (#7939).
+ * Platform-specific BrowserWindow constructor options (#7939).
  *
- * The options object is inlined inside setupBrowserWindow, so we replicate
- * its exact platform branching here to verify that:
- *   - macOS gets titleBarStyle: "hiddenInset" + trafficLightPosition, no autoHideMenuBar
- *   - Windows gets titleBarStyle: "hidden" + titleBarOverlay + autoHideMenuBar
- *   - Linux gets autoHideMenuBar only (no titleBarStyle override)
- *
- * If createWindow.ts changes, update this replica to match.
+ * This exercises the production helper `createWindow.ts` actually calls. It
+ * used to replicate the options object by hand, which silently drifted — the
+ * replica still asserted a 36px overlay long after production moved to 48px
+ * (#11766).
  */
 
-type PlatformOptions = {
-  titleBarStyle?: "hidden" | "hiddenInset";
-  titleBarOverlay?: { color: string; symbolColor: string; height: number };
-  trafficLightPosition?: { x: number; y: number };
-  autoHideMenuBar?: boolean;
-};
+const originalPlatform = process.platform;
 
-function getPlatformBrowserWindowOptions(windowBg: string): PlatformOptions {
-  if (process.platform === "darwin") {
-    return {
-      titleBarStyle: "hiddenInset" as const,
-      trafficLightPosition: { x: 12, y: 18 },
-    };
-  }
-  if (process.platform === "win32") {
-    return {
-      titleBarStyle: "hidden" as const,
-      titleBarOverlay: {
-        color: windowBg,
-        symbolColor: "#a1a1aa",
-        height: 36,
-      },
-      autoHideMenuBar: true,
-    };
-  }
-  return { autoHideMenuBar: true };
+function setPlatform(value: NodeJS.Platform) {
+  Object.defineProperty(process, "platform", { value, configurable: true });
 }
 
+afterEach(() => {
+  Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+});
+
 describe("platform BrowserWindow options (#7939)", () => {
-  const originalPlatform = process.platform;
-
-  afterEach(() => {
-    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
-  });
-
   it("macOS gets hiddenInset titleBarStyle and trafficLightPosition, no autoHideMenuBar", () => {
-    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
-    const opts = getPlatformBrowserWindowOptions("#1a1a1a");
+    setPlatform("darwin");
+    const opts = getPlatformWindowOptions("#1a1a1a");
     expect(opts.titleBarStyle).toBe("hiddenInset");
     expect(opts.trafficLightPosition).toEqual({ x: 12, y: 18 });
+    expect(opts.acceptFirstMouse).toBe(true);
     expect(opts.autoHideMenuBar).toBeUndefined();
     expect(opts.titleBarOverlay).toBeUndefined();
   });
 
   it("Windows gets hidden titleBarStyle + titleBarOverlay + autoHideMenuBar: true", () => {
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    const opts = getPlatformBrowserWindowOptions("#1a1a1a");
+    setPlatform("win32");
+    const opts = getPlatformWindowOptions("#1a1a1a");
     expect(opts.titleBarStyle).toBe("hidden");
-    expect(opts.titleBarOverlay).toEqual({
-      color: "#1a1a1a",
-      symbolColor: "#a1a1aa",
-      height: 36,
-    });
     expect(opts.autoHideMenuBar).toBe(true);
+    expect(opts.trafficLightPosition).toBeUndefined();
+  });
+
+  it("paints the caption strip with the window background it was created for", () => {
+    setPlatform("win32");
+    // The overlay has to start life matching the window it sits on; drift here
+    // is the pale-rectangle bug from #11766 at first paint.
+    expect(getPlatformWindowOptions("#1a1a1a").titleBarOverlay?.color).toBe("#1a1a1a");
+    expect(getPlatformWindowOptions("#fbfbfb").titleBarOverlay?.color).toBe("#fbfbfb");
+  });
+
+  it("sizes and styles the overlay from the shared window-chrome constants", () => {
+    setPlatform("win32");
+    const overlay = getPlatformWindowOptions("#1a1a1a").titleBarOverlay;
+    // Bound to the same source the renderer's inset reads, so the native strip
+    // and the space reserved for it cannot disagree.
+    expect(overlay?.height).toBe(WINDOWS_TITLEBAR_HEIGHT_PX);
+    expect(overlay?.symbolColor).toBe(WINDOWS_CAPTION_SYMBOL_COLOR);
   });
 
   it("Linux gets autoHideMenuBar: true with no titleBarStyle override", () => {
-    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-    const opts = getPlatformBrowserWindowOptions("#1a1a1a");
+    setPlatform("linux");
+    const opts = getPlatformWindowOptions("#1a1a1a");
     expect(opts.autoHideMenuBar).toBe(true);
     expect(opts.titleBarStyle).toBeUndefined();
     expect(opts.titleBarOverlay).toBeUndefined();
     expect(opts.trafficLightPosition).toBeUndefined();
+  });
+});
+
+describe("createWindow wires the overlay owner — issue #11766", () => {
+  it("seeds the resolved scheme so the first banner report has tokens to blend", async () => {
+    // Without the seed, `setTitleBarOverlayBannerSeverity` silently no-ops
+    // until some later theme event happens to supply tokens — a failure mode
+    // no unit test of the overlay module itself can see, because those seed
+    // their own mock windows.
+    const source = await fs.readFile(path.resolve(__dirname, "../createWindow.ts"), "utf-8");
+    expect(source).toContain("seedTitleBarOverlay(win, scheme.tokens)");
+    expect(source).toContain("getPlatformWindowOptions(windowBg)");
+    // The seeded tokens must be the same object the constructor colour came
+    // from, or the recorded "already applied" colour would be a lie.
+    expect(source).toContain('const windowBg = scheme.tokens["surface-canvas"]');
   });
 });

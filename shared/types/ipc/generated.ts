@@ -1709,6 +1709,10 @@ export interface GeneratedIpcInvokeMap {
     args: [webContentsId: number, index: number];
     result: void;
   };
+  "window-chrome:set-banner-severity": {
+    args: [payload: { severity: "success" | "error" | "info" | "warning" | "neutral" | null }];
+    result: void;
+  };
   "worktree-config:dismiss-wsl-banner": {
     args: [payload: { worktreeId: string }];
     result: void;

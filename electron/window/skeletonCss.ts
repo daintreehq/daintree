@@ -16,6 +16,7 @@ import {
 } from "../../shared/theme/index.js";
 import type { AppColorScheme, AppThemeConfig } from "../../shared/theme/index.js";
 import type { Project } from "../../shared/types/project.js";
+import { WINDOWS_CAPTION_WIDTH_PX } from "../../shared/config/windowChrome.js";
 import {
   appCustomSchemesReadSchema,
   appCustomSchemesWriteSchema,
@@ -216,13 +217,13 @@ export function buildSkeletonCss(
   lines.push(`  --skeleton-focus-mode: ${focusMode ? "1" : "0"};`);
 
   // Reserve space for Windows native caption buttons in the pre-React skeleton
-  // (consumed by index.html's .skeleton-toolbar-right). The live Toolbar reads
-  // env(titlebar-area-width) directly via the Window Controls Overlay API, so
-  // this variable only covers the brief skeleton phase before WCO env vars are
-  // wired up in the renderer. 138px ≈ 3 × 46px backplates on Windows 11 @ 96 DPI.
-  // See issues #7951 and #8167.
+  // (consumed by index.html's .skeleton-toolbar-right). The live Toolbar reserves
+  // the same width from the same constant — Window Controls Overlay env vars
+  // never resolve in the child WebContentsView the app renders in, so both the
+  // skeleton and the app rely on this measurement. See shared/config/windowChrome.ts
+  // and issues #7951, #8167, #11766.
   if (process.platform === "win32") {
-    lines.push("  --win-caption-width: 138px;");
+    lines.push(`  --win-caption-width: ${WINDOWS_CAPTION_WIDTH_PX}px;`);
   }
 
   lines.push("}");

@@ -382,3 +382,223 @@ describe("GlobalBannerCoordinator", () => {
     expect(screen.queryByText("Running under Rosetta")).toBeNull();
   });
 });
+
+/**
+ * Issue #11766. The Windows caption strip is painted by the OS above every
+ * WebContentsView, so main has to be told which banner severity currently sits
+ * under it — otherwise the strip keeps the canvas colour and reads as a pale
+ * rectangle punched into a tinted banner.
+ */
+describe("GlobalBannerCoordinator caption-strip reporting", () => {
+  let setBannerSeverity: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    setBannerSeverity = vi.fn().mockResolvedValue(undefined);
+    (window as unknown as { electron?: unknown }).electron = {
+      windowChrome: { setBannerSeverity },
+    };
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { electron?: unknown }).electron;
+  });
+
+  it("reports the severity of the banner actually on screen", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("reports the winning banner's severity, not the suppressed one's", () => {
+    // Host crash (error) outranks cloud sync (warning); the strip must follow
+    // whichever banner actually renders.
+    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "error" });
+    expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("asserts an empty band rather than staying silent", () => {
+    // A project view that becomes visible with no banner has to clear whatever
+    // tint the previously presenting view left on the caption strip.
+    render(<GlobalBannerCoordinator />);
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: null });
+  });
+
+  it("goes straight from one severity to the next when banners swap", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    // Host crash outranks cloud sync, so the mounted banner is replaced.
+    act(() => {
+      usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    });
+
+    // Bouncing through null would repaint the native frame back to canvas
+    // mid-swap — a visible flash between two tinted banners.
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "error" });
+    expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: null });
+  });
+
+  it("does not tint for a slot whose banner is still gated and renders nothing", () => {
+    // HostCrashBanner claims the slot immediately but renders nothing for the
+    // first 400ms (Doherty gate). Tinting off the slot rather than the mounted
+    // banner would colour the strip for a banner that isn't on screen.
+    vi.useFakeTimers();
+    try {
+      usePanelStore.setState({ backendStatus: "recovering", lastCrashType: null });
+      render(<GlobalBannerCoordinator />);
+
+      expect(screen.queryByText("Terminal service crashed")).toBeNull();
+      expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: "error" });
+      expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: "warning" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-asserts its severity when a cached view becomes visible again", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    // Switching back to a cached project view produces no re-render, so
+    // without this the strip would keep the other view's tint.
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("does not re-assert while hidden", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(setBannerSeverity).not.toHaveBeenCalled();
+    } finally {
+      visibility.mockRestore();
+    }
+  });
+
+  it("clears the report when the banner goes away", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    const { unmount } = render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    unmount();
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: null });
+  });
+
+  it("survives a host without the windowChrome bridge", () => {
+    delete (window as unknown as { electron?: unknown }).electron;
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    expect(() => render(<GlobalBannerCoordinator />)).not.toThrow();
+  });
+});
+
+/**
+ * A cached project view is parked with `setVisible(false)`, which emits no DOM
+ * lifecycle event — so DOM `visibilitychange` never fires for a warm project
+ * switch and main's explicit `app:view-revealed` signal is the only thing that
+ * can drive the re-assert.
+ */
+describe("GlobalBannerCoordinator cached-view reveal", () => {
+  let setBannerSeverity: ReturnType<typeof vi.fn>;
+  let revealListeners: Set<() => void>;
+
+  function revealView() {
+    act(() => {
+      for (const listener of [...revealListeners]) listener();
+    });
+  }
+
+  beforeEach(() => {
+    setBannerSeverity = vi.fn().mockResolvedValue(undefined);
+    revealListeners = new Set();
+    (window as unknown as { electron?: unknown }).electron = {
+      windowChrome: { setBannerSeverity },
+      app: {
+        onViewRevealed: (callback: () => void) => {
+          revealListeners.add(callback);
+          return () => revealListeners.delete(callback);
+        },
+      },
+    };
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { electron?: unknown }).electron;
+  });
+
+  it("re-asserts its severity when main reveals the cached view", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    revealView();
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("re-asserts the severity on screen now, not the one captured at subscribe time", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+
+    act(() => {
+      usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    });
+    setBannerSeverity.mockClear();
+
+    revealView();
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "error" });
+    expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("re-asserts an empty band when the revealed view has no banner", () => {
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    revealView();
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: null });
+  });
+
+  it("keeps a single reveal subscription across banner swaps", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+
+    act(() => {
+      usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    });
+
+    expect(revealListeners.size).toBe(1);
+  });
+
+  it("stops listening once the view is torn down", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    const { unmount } = render(<GlobalBannerCoordinator />);
+
+    unmount();
+    setBannerSeverity.mockClear();
+    revealView();
+
+    expect(revealListeners.size).toBe(0);
+    expect(setBannerSeverity).not.toHaveBeenCalled();
+  });
+});

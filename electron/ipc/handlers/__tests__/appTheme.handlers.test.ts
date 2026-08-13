@@ -76,7 +76,15 @@ vi.mock("../../../utils/appThemeImporter.js", () => ({
 vi.mock("../../../../shared/theme/index.js", () => ({
   resolveAppTheme: vi.fn((id: string) => ({
     id,
-    tokens: { "surface-canvas": "#1a1a2e" },
+    // Status tokens are present so the banner-tint path (#11766) has something
+    // to blend; without them every severity would fall back to the canvas.
+    tokens: {
+      "surface-canvas": "#1a1a2e",
+      "status-warning": "#f0b429",
+      "status-danger": "#e5484d",
+      "status-info": "#0091ff",
+      "status-success": "#30a46c",
+    },
   })),
   normalizeAppColorScheme: vi.fn((s: unknown) => s),
   normalizeAccentHex: vi.fn((value: unknown): string | null => {
@@ -133,6 +141,14 @@ import { ipcMain, dialog, BrowserWindow } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerAppThemeHandlers } from "../appTheme.js";
 import { typedSend } from "../../utils.js";
+import {
+  seedTitleBarOverlay,
+  setTitleBarOverlayBannerSeverity,
+} from "../../../window/titleBarOverlay.js";
+import {
+  WINDOWS_CAPTION_SYMBOL_COLOR,
+  WINDOWS_TITLEBAR_HEIGHT_PX,
+} from "../../../../shared/config/windowChrome.js";
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
@@ -491,7 +507,7 @@ describe("appTheme handlers", () => {
     expect(mockWindow.setBackgroundColor).not.toHaveBeenCalled();
   });
 
-  it("nativeTheme updated re-applies Windows titleBarOverlay at 48px height — issue #7951", () => {
+  it("nativeTheme updated re-applies the Windows titleBarOverlay — issue #7951", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     try {
@@ -509,11 +525,51 @@ describe("appTheme handlers", () => {
       themeHandler();
       vi.advanceTimersByTime(300);
 
-      expect(mockWindow.setTitleBarOverlay).toHaveBeenCalledWith({
-        color: "#1a1a2e",
-        symbolColor: "#a1a1aa",
-        height: 48,
+      // The overlay must land on the same colour the window background just
+      // took, at the shared caption height.
+      const [applied] = mockWindow.setTitleBarOverlay.mock.calls.at(-1)!;
+      const [background] = mockWindow.setBackgroundColor.mock.calls.at(-1)!;
+      expect(applied.color).toBe(background);
+      expect(applied.height).toBe(WINDOWS_TITLEBAR_HEIGHT_PX);
+      expect(applied.symbolColor).toBe(WINDOWS_CAPTION_SYMBOL_COLOR);
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it("nativeTheme updated keeps a live banner's tint instead of reverting to canvas — issue #11766", () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const mockWindow = {
+        isDestroyed: () => false,
+        setBackgroundColor: vi.fn(),
+        setTitleBarOverlay: vi.fn(),
+      };
+      storeState.data.appTheme = { colorSchemeId: "daintree", followSystem: true };
+      nativeThemeMock.shouldUseDarkColors = true;
+
+      registerAppThemeHandlers(mockWindow as never);
+
+      // Match production: the window is seeded at creation, so the banner
+      // report below is a real repaint rather than the first paint.
+      seedTitleBarOverlay(mockWindow as never, {
+        "surface-canvas": "#0b0b16",
+        "status-warning": "#f0b429",
       });
+      // A global banner owns the caption band before the theme changes.
+      setTitleBarOverlayBannerSeverity(mockWindow as never, "warning");
+      expect(mockWindow.setTitleBarOverlay).toHaveBeenCalled();
+      mockWindow.setTitleBarOverlay.mockClear();
+
+      getNativeThemeHandler()();
+      vi.advanceTimersByTime(300);
+
+      const [applied] = mockWindow.setTitleBarOverlay.mock.calls.at(-1)!;
+      const [background] = mockWindow.setBackgroundColor.mock.calls.at(-1)!;
+      // Theme and banner are two writers over one native surface; the theme
+      // handler must re-tint rather than clobber the banner back to canvas.
+      expect(applied.color).not.toBe(background);
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
     }

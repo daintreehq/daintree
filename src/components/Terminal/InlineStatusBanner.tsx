@@ -3,9 +3,13 @@ import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useWindowControlsInset } from "@/components/ui/WindowControlsInset";
+import { useWindowControlsInset, useTitleBarSurface } from "@/components/ui/WindowControlsInset";
+import { isLinux } from "@/lib/platform";
+import { BANNER_TINT_ALPHA, type BannerSeverity } from "@shared/config/windowChrome";
 
 type ButtonVariant = "primary" | "accent" | "dismiss" | "danger" | "dangerFilled";
+
+const TINT_PERCENT = `${BANNER_TINT_ALPHA * 100}%`;
 
 export interface BannerAction {
   id: string;
@@ -20,7 +24,11 @@ export interface BannerAction {
   disabled?: boolean;
 }
 
-export type InlineStatusBannerSeverity = "error" | "warning" | "info" | "success" | "neutral";
+/**
+ * Aliased to the shared scale so the main process can map the same severities
+ * onto the native Windows caption strip (#11766).
+ */
+export type InlineStatusBannerSeverity = BannerSeverity;
 
 interface BaseInlineStatusBannerProps {
   icon: React.ComponentType<{ className?: string; style?: CSSProperties }>;
@@ -162,6 +170,21 @@ export function InlineStatusBanner({
   // Empty for the common inline usage — see WindowControlsInset.
   const windowControlsInset = useWindowControlsInset();
 
+  // Non-null only in the global banner host, where this banner owns the
+  // window's title-bar band: it has to supply the drag region and top-edge
+  // resize strip the toolbar normally provides (both get pushed below the
+  // caption buttons while a banner is up), and report its severity so the
+  // native caption strip can be tinted to match. Inline banners get none of
+  // this — a banner inside a terminal must never drag the window.
+  const reportSeverity = useTitleBarSurface();
+  const isTitleBarSurface = reportSeverity !== null;
+
+  useEffect(() => {
+    if (!reportSeverity) return;
+    reportSeverity(severity);
+    return () => reportSeverity(null);
+  }, [reportSeverity, severity]);
+
   const onCloseRef = useRef(onClose);
 
   useEffect(() => {
@@ -202,7 +225,10 @@ export function InlineStatusBanner({
         onClose();
       }}
       aria-label={closeAriaLabel}
-      className="p-1 rounded text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent shrink-0"
+      className={cn(
+        "p-1 rounded text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent shrink-0",
+        isTitleBarSurface && "app-no-drag"
+      )}
     >
       <X className="h-3.5 w-3.5" aria-hidden="true" />
     </button>
@@ -219,13 +245,17 @@ export function InlineStatusBanner({
         shouldAnimate && "transition duration-250",
         shouldAnimate && (isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2"),
         isNeutral && "bg-overlay-subtle",
+        // The native caption strip is a fixed 48px tall. A shorter banner would
+        // let the tint applied to that strip bleed over the toolbar beneath it,
+        // so a title-bar banner always fills the band it is colouring.
+        isTitleBarSurface && "relative min-h-12 app-drag-region",
         className
       )}
       style={{
         ...(isNeutral
           ? undefined
           : {
-              backgroundColor: `color-mix(in oklab, var(${colorVar}) 10%, transparent)`,
+              backgroundColor: `color-mix(in oklab, var(${colorVar}) ${TINT_PERCENT}, transparent)`,
               borderBottom: `1px solid color-mix(in oklab, var(${colorVar}) 20%, transparent)`,
             }),
         ...windowControlsInset,
@@ -234,6 +264,7 @@ export function InlineStatusBanner({
       aria-live={ariaLive}
       aria-atomic={ariaLive && ariaLive !== "off" ? "true" : undefined}
     >
+      {isTitleBarSurface && !isLinux() && <div className="window-resize-strip" />}
       <div className={cn("flex", hasDescription ? "items-start" : "items-center", "gap-2 min-w-0")}>
         <IconComponent
           className={cn(
@@ -283,7 +314,11 @@ export function InlineStatusBanner({
                 {contextLine}
               </p>
             )}
-            {descriptionExtras}
+            {isTitleBarSurface && descriptionExtras ? (
+              <div className="app-no-drag">{descriptionExtras}</div>
+            ) : (
+              descriptionExtras
+            )}
           </div>
         ) : (
           <span
@@ -296,7 +331,15 @@ export function InlineStatusBanner({
       </div>
 
       {showControlsRow && (
-        <div className={cn("flex items-center shrink-0", hasDescription ? "gap-2 ml-6" : "gap-1")}>
+        <div
+          className={cn(
+            "flex items-center shrink-0",
+            hasDescription ? "gap-2 ml-6" : "gap-1",
+            // `.app-no-drag *` carries the opt-out down to every control in the
+            // row, including nested popover triggers.
+            isTitleBarSurface && "app-no-drag"
+          )}
+        >
           {trailingSlot}
           {!hasDescription && closeButton}
           {actionList.map((action) => {

@@ -76,6 +76,7 @@ import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
+import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
 import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
 import { buildProjectHistoryPreloadBindings } from "./ipc/handlers/projectHistory.preload.js";
 import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRelocation.preload.js";
@@ -1479,6 +1480,10 @@ function buildElectronApi(): ElectronAPI {
 
     // Editor API
     editor: buildEditorConfigPreloadBindings(_unwrappingInvoke),
+
+    // Native window chrome — keeps the Windows caption strip in step with the
+    // global banner occupying the same band (#11766)
+    windowChrome: buildWindowChromePreloadBindings(_unwrappingInvoke),
 
     // Per-window back/forward over visited projects
     projectHistory: buildProjectHistoryPreloadBindings(_unwrappingInvoke),
