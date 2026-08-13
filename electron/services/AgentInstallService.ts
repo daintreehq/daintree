@@ -136,6 +136,17 @@ function resolveInstallBlocks(
   return { blocks };
 }
 
+// Installs in flight, keyed by target. The renderer guards against starting a
+// second install of the same thing, but each project view is its own
+// WebContentsView with its own store, so that guard is blind to the other
+// views. Main is the only place that can see them all.
+const inFlightTargets = new Set<string>();
+
+/** Test seam — clears the in-flight install registry. */
+export function resetInFlightInstalls(): void {
+  inFlightTargets.clear();
+}
+
 export async function runAgentInstall(
   payload: AgentInstallPayload,
   onProgress: (event: AgentInstallProgressEvent) => void
@@ -177,15 +188,28 @@ export async function runAgentInstall(
     return { success: false, exitCode: null, error: "No commands in install block" };
   }
 
-  for (const command of block.commands) {
-    const result = await runSingleCommand(command, payload.jobId, onProgress);
-    if (result.exitCode !== 0) {
-      return {
-        success: false,
-        exitCode: result.exitCode,
-        error: `Command failed with exit code ${result.exitCode}: ${command}`,
-      };
+  const target =
+    payload.prerequisiteTool !== undefined
+      ? `prerequisite:${payload.prerequisiteTool}`
+      : `agent:${payload.agentId}`;
+  if (inFlightTargets.has(target)) {
+    return { success: false, exitCode: null, error: "That install is already running" };
+  }
+  inFlightTargets.add(target);
+
+  try {
+    for (const command of block.commands) {
+      const result = await runSingleCommand(command, payload.jobId, onProgress);
+      if (result.exitCode !== 0) {
+        return {
+          success: false,
+          exitCode: result.exitCode,
+          error: `Command failed with exit code ${result.exitCode}: ${command}`,
+        };
+      }
     }
+  } finally {
+    inFlightTargets.delete(target);
   }
 
   return { success: true, exitCode: 0 };

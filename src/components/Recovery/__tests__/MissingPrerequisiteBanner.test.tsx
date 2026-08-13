@@ -159,23 +159,43 @@ describe("MissingPrerequisiteBanner", () => {
       expect(checkCommandMock).toHaveBeenCalledWith("brew");
     });
 
-    it("falls back to re-check when the package manager is absent", async () => {
+    it("never offers the install when the package manager is absent", async () => {
+      checkCommandMock.mockResolvedValue(false);
+      useMissingPrerequisiteStore.setState({ missing: [missingGit({ installUrl: undefined })] });
+
+      render(<MissingPrerequisiteBanner />);
+
+      // Re-check is also the *initial* render, so settle the probe first —
+      // otherwise this passes before the mocked answer has been seen at all.
+      await waitFor(() => expect(checkCommandMock).toHaveBeenCalledWith("brew"));
+      await act(async () => {});
+
+      expect(screen.getByRole("button", { name: "Re-check" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Install Git" })).toBeNull();
+    });
+
+    it("never offers the install when the package manager probe rejects", async () => {
+      checkCommandMock.mockRejectedValue(new Error("probe failed"));
+      useMissingPrerequisiteStore.setState({ missing: [missingGit({ installUrl: undefined })] });
+
+      render(<MissingPrerequisiteBanner />);
+
+      await waitFor(() => expect(checkCommandMock).toHaveBeenCalledWith("brew"));
+      await act(async () => {});
+
+      expect(screen.getByRole("button", { name: "Re-check" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Install Git" })).toBeNull();
+    });
+
+    it("points at the install guide when the package manager is absent", async () => {
       checkCommandMock.mockResolvedValue(false);
       useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
 
       render(<MissingPrerequisiteBanner />);
 
-      expect(await screen.findByRole("button", { name: "Re-check" })).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Install Git" })).toBeNull();
-    });
-
-    it("falls back to re-check when the package manager probe rejects", async () => {
-      checkCommandMock.mockRejectedValue(new Error("probe failed"));
-      useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
-
-      render(<MissingPrerequisiteBanner />);
-
-      expect(await screen.findByRole("button", { name: "Re-check" })).toBeTruthy();
+      // The command on screen needs a package manager they don't have, so
+      // Re-check on its own would be no help.
+      expect(await screen.findByRole("button", { name: "View install guide" })).toBeTruthy();
     });
 
     it("still shows the command when the block is not safe to run for us", async () => {
@@ -386,7 +406,7 @@ describe("MissingPrerequisiteBanner", () => {
   describe("re-check", () => {
     it("clears the banner when the tool is now present", async () => {
       checkCommandMock.mockResolvedValue(false);
-      useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+      useMissingPrerequisiteStore.setState({ missing: [missingGit({ installUrl: undefined })] });
       render(<MissingPrerequisiteBanner />);
 
       await click(await screen.findByRole("button", { name: "Re-check" }));
@@ -398,7 +418,7 @@ describe("MissingPrerequisiteBanner", () => {
     it("tells the user when the re-check itself fails", async () => {
       checkCommandMock.mockResolvedValue(false);
       healthCheckMock.mockRejectedValue(new Error("probe exploded"));
-      useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+      useMissingPrerequisiteStore.setState({ missing: [missingGit({ installUrl: undefined })] });
       render(<MissingPrerequisiteBanner />);
 
       await click(await screen.findByRole("button", { name: "Re-check" }));
@@ -406,17 +426,54 @@ describe("MissingPrerequisiteBanner", () => {
       expect(await screen.findByText(/probe exploded/)).toBeTruthy();
     });
 
-    it("refuses to clear a running install", async () => {
+    it("does not clear an install that started while it was in flight", async () => {
+      // The re-check begins with no job running, so its entry guard passes;
+      // an install starts before the probe resolves. Writing `null` on the way
+      // out would strand that job with no state and no progress.
+      let resolveHealth: (value: SystemHealthCheckResult) => void = () => {};
+      healthCheckMock.mockReturnValue(
+        new Promise<SystemHealthCheckResult>((resolve) => {
+          resolveHealth = resolve;
+        })
+      );
+      checkCommandMock.mockResolvedValue(false);
+      useMissingPrerequisiteStore.setState({ missing: [missingGit({ installUrl: undefined })] });
+      render(<MissingPrerequisiteBanner />);
+
+      await click(await screen.findByRole("button", { name: "Re-check" }));
+
+      act(() => {
+        useMissingPrerequisiteStore.getState().setInstall({
+          jobId: "live",
+          tool: "git",
+          status: "running",
+          statusLine: "",
+          error: null,
+        });
+      });
+      await act(async () => {
+        resolveHealth(health([HEALTHY_GIT]));
+        await Promise.resolve();
+      });
+
+      expect(useMissingPrerequisiteStore.getState().install?.jobId).toBe("live");
+      expect(useMissingPrerequisiteStore.getState().install?.status).toBe("running");
+    });
+
+    it("renders a live job as installing even straight after a remount", async () => {
+      // The remount restarts the package-manager probe, which must not flash a
+      // Re-check button over a running install.
+      checkCommandMock.mockReturnValue(new Promise(() => {}));
       useMissingPrerequisiteStore.setState({
         missing: [missingGit()],
         install: { jobId: "live", tool: "git", status: "running", statusLine: "", error: null },
       });
-      checkCommandMock.mockResolvedValue(false);
+
       render(<MissingPrerequisiteBanner />);
 
-      const button = await screen.findByRole("button", { name: "Re-check" });
+      const button = screen.getByRole("button", { name: "Install Git" });
       expect(button.hasAttribute("disabled")).toBe(true);
-      expect(useMissingPrerequisiteStore.getState().install?.status).toBe("running");
+      expect(screen.queryByRole("button", { name: "Re-check" })).toBeNull();
     });
   });
 
@@ -441,8 +498,13 @@ describe("MissingPrerequisiteBanner", () => {
       await click(await screen.findByRole("button", { name: "Install Git" }));
 
       await waitFor(() => expect(notifyMock).toHaveBeenCalled());
-      // It must not claim everything works while Node is still missing.
-      expect(notifyMock.mock.calls[0]?.[0].message).toContain("Node.js");
+      // It must not claim everything works while Node is still missing, and it
+      // must not list the tool it just installed as outstanding.
+      const message = notifyMock.mock.calls[0]?.[0].message as string;
+      const outstanding = useMissingPrerequisiteStore.getState().missing.map((p) => p.label);
+      expect(outstanding).toEqual(["Node.js"]);
+      for (const label of outstanding) expect(message).toContain(label);
+      expect(message).not.toContain("Git");
     });
   });
 });

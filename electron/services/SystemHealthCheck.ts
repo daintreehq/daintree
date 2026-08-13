@@ -124,31 +124,37 @@ async function hasXcodeCommandLineTools(): Promise<boolean> {
   }
 }
 
+/** Whether the PATH lookup landed on a Windows shell shim. */
+function isWindowsShellShim(resolvedPath: string): boolean {
+  return /\.(cmd|bat)$/i.test(resolvedPath.split("\n")[0]?.trim() ?? "");
+}
+
 /**
  * Runs a tool's version command. On Windows the entry point for a lot of tools
  * is a `.cmd`/`.bat` shim (`npm.cmd`, and anything installed as an npm global
  * bin), which current Node refuses to spawn without a shell — it rejects with
  * EINVAL. That used to be invisible because a failed version command still
  * reported the tool as available; now that a failure means unavailable, the
- * shim has to be retried through a shell or every such tool reads as missing.
+ * shim has to run through a shell or every such tool reads as missing.
+ *
+ * The shell is used only when the resolved path is genuinely a shim — a fact
+ * main established from `where`, not something a caller can assert. A tool that
+ * can be spawned directly is never re-run through a shell just because it
+ * exited nonzero, which would both double-execute it and start interpreting its
+ * arguments as shell syntax.
  */
-async function runVersionCommand(command: string, versionArgs: string[]): Promise<string> {
-  try {
-    const { stdout } = await execFileAsync(command, versionArgs, {
-      encoding: "utf8",
-      timeout: CHECK_TIMEOUT_MS,
-    });
-    return stdout;
-  } catch (err) {
-    if (process.platform !== "win32") throw err;
-    const { stdout } = await execFileAsync(command, versionArgs, {
-      encoding: "utf8",
-      timeout: CHECK_TIMEOUT_MS,
-      shell: true,
-      windowsHide: true,
-    });
-    return stdout;
-  }
+async function runVersionCommand(
+  command: string,
+  versionArgs: string[],
+  resolvedPath: string
+): Promise<string> {
+  const useShell = process.platform === "win32" && isWindowsShellShim(resolvedPath);
+  const { stdout } = await execFileAsync(command, versionArgs, {
+    encoding: "utf8",
+    timeout: CHECK_TIMEOUT_MS,
+    ...(useShell ? { shell: true, windowsHide: true } : {}),
+  });
+  return stdout;
 }
 
 export async function checkPrerequisite(spec: PrerequisiteSpec): Promise<PrerequisiteCheckResult> {
@@ -180,7 +186,7 @@ export async function checkPrerequisite(spec: PrerequisiteSpec): Promise<Prerequ
 
   let stdout: string;
   try {
-    stdout = await runVersionCommand(command, spec.versionArgs);
+    stdout = await runVersionCommand(command, spec.versionArgs, resolvedPath);
   } catch {
     return unavailable(spec, "version-command-failed");
   }
@@ -288,11 +294,18 @@ export async function runSystemHealthCheck(
     // probe behind it. Concurrent forced callers (several views regaining focus
     // together) all join that one queued probe rather than each spawning.
     if (!fatalQueuedRefresh) {
+      const generation = fatalGeneration;
       const queued = fatalInflight
         .catch(() => undefined)
-        .then(() => startFatalProbe())
-        .finally(() => {
+        .then(() => {
+          // Released the moment this probe starts, not when it finishes: from
+          // here on it is "already running", so a force arriving later must
+          // queue its own rather than join one that predates it.
           if (fatalQueuedRefresh === queued) fatalQueuedRefresh = null;
+          // A reset landed while this was waiting — run detached so it can't
+          // publish into the new generation's cache or displace its probe.
+          if (generation !== fatalGeneration) return runHealthCheck(undefined, true);
+          return startFatalProbe();
         });
       fatalQueuedRefresh = queued;
     }

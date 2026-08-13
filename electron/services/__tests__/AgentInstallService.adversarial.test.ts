@@ -13,7 +13,11 @@ vi.mock("../../../shared/config/agentRegistry.js", async (importOriginal) => {
   };
 });
 
-import { isBlockExecutable, runAgentInstall } from "../AgentInstallService.js";
+import {
+  isBlockExecutable,
+  runAgentInstall,
+  resetInFlightInstalls,
+} from "../AgentInstallService.js";
 
 interface FakeChild extends EventEmitter {
   stdout: EventEmitter;
@@ -544,6 +548,69 @@ describe("AgentInstallService — elevation and prerequisite targets (#11763)", 
         expect(spawnMock).not.toHaveBeenCalled();
       }
     );
+  });
+
+  describe("concurrent installs", () => {
+    beforeEach(() => {
+      resetInFlightInstalls();
+    });
+
+    it("refuses a second install of the same target while one is running", async () => {
+      // Each project view is its own WebContentsView with its own store, so the
+      // renderer-side guard cannot see an install started in another view.
+      setPlatform("darwin");
+      const child = makeFakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const first = runAgentInstall({ prerequisiteTool: "git", jobId: "job-a" }, vi.fn());
+      await Promise.resolve();
+      const second = await runAgentInstall({ prerequisiteTool: "git", jobId: "job-b" }, vi.fn());
+
+      expect(second.success).toBe(false);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+
+      child.emitClose(0);
+      expect((await first).success).toBe(true);
+    });
+
+    it("releases the target once the install settles", async () => {
+      setPlatform("darwin");
+      const first = makeFakeChild();
+      spawnMock.mockReturnValue(first);
+
+      const failed = runAgentInstall({ prerequisiteTool: "git", jobId: "job-a" }, vi.fn());
+      await Promise.resolve();
+      first.emitClose(1);
+      expect((await failed).success).toBe(false);
+
+      const second = makeFakeChild();
+      spawnMock.mockReturnValue(second);
+      const retry = runAgentInstall({ prerequisiteTool: "git", jobId: "job-b" }, vi.fn());
+      await Promise.resolve();
+      second.emitClose(0);
+
+      expect((await retry).success).toBe(true);
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not block a different target", async () => {
+      setPlatform("darwin");
+      const child = makeFakeChild();
+      spawnMock.mockReturnValue(child);
+      getAgentConfigMock.mockReturnValue({
+        install: { byOs: { macos: [{ commands: ["brew install foo"] }] } },
+      });
+
+      const gitInstall = runAgentInstall({ prerequisiteTool: "git", jobId: "job-a" }, vi.fn());
+      await Promise.resolve();
+      const agentInstall = runAgentInstall({ agentId: "foo", jobId: "job-b" }, vi.fn());
+      await Promise.resolve();
+
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      child.emitClose(0);
+      await gitInstall;
+      await agentInstall;
+    });
   });
 
   describe("windows git command", () => {

@@ -227,7 +227,9 @@ export function MissingPrerequisiteBanner() {
   }, [guidance, setInstall]);
 
   const recheck = useCallback(async () => {
-    // Never wipe a live job's state from under it.
+    // Never wipe a live job's state from under it — checked on the way in and
+    // again on the way out, because an install can start while this is in
+    // flight and its state must survive.
     if (useMissingPrerequisiteStore.getState().install?.status === "running") return;
     setIsRechecking(true);
     try {
@@ -235,9 +237,10 @@ export function MissingPrerequisiteBanner() {
       useMissingPrerequisiteStore
         .getState()
         .setMissing(health.prerequisites.filter((p) => !p.available || !p.meetsMinVersion));
-      setInstall(null);
+      if (useMissingPrerequisiteStore.getState().install?.status !== "running") setInstall(null);
     } catch (err) {
       logError("Prerequisite re-check failed", err);
+      if (useMissingPrerequisiteStore.getState().install?.status === "running") return;
       setInstall({
         jobId: "recheck",
         tool: guidance?.result.tool ?? "",
@@ -276,34 +279,48 @@ export function MissingPrerequisiteBanner() {
     ? install.statusLine || (stillWorking ? "Still working…" : "Installing…")
     : command;
 
-  // `isRunning` is read from the store, not local state, so a remount mid-job
-  // still renders the disabled installing action rather than an enabled one.
-  const action =
-    canInstall && !handedOff
+  const installLabel = guidance?.block?.opensExternalInstaller
+    ? "Open installer"
+    : `Install ${guidance?.result.label}`;
+
+  // A live job always renders as the installing action, whatever the
+  // package-manager probe currently says: this component remounts whenever a
+  // higher-priority banner releases the slot, and that remount restarts the
+  // probe, which would otherwise flash a Re-check button over a running install.
+  const action = isRunning
+    ? {
+        id: "install",
+        label: installLabel,
+        variant: "primary" as const,
+        loading: true,
+        disabled: true,
+        onClick: () => {},
+      }
+    : canInstall && !handedOff
       ? {
           id: "install",
-          label: guidance?.block?.opensExternalInstaller
-            ? "Open installer"
-            : `Install ${guidance?.result.label}`,
+          label: installLabel,
           variant: "primary" as const,
-          loading: isRunning,
-          disabled: isRunning,
+          disabled: isRechecking,
           onClick: () => void runInstall(),
         }
-      : guidance?.block || !guidance?.result.installUrl
+      : // Nothing we can run: send them to the docs when we have them, since
+        // Re-check alone is no help when the command on screen needs a package
+        // manager they don't have.
+        !canInstall && guidance?.result.installUrl && !handedOff
         ? {
-            id: "recheck",
-            label: "Re-check",
-            variant: "primary" as const,
-            loading: isRechecking,
-            disabled: isRunning || isRechecking,
-            onClick: () => void recheck(),
-          }
-        : {
             id: "install-docs",
             label: "View install guide",
             variant: "primary" as const,
             onClick: openInstallUrl,
+          }
+        : {
+            id: "recheck",
+            label: "Re-check",
+            variant: "primary" as const,
+            loading: isRechecking,
+            disabled: isRechecking,
+            onClick: () => void recheck(),
           };
 
   // A failed install is an error the user has to act on; everything else here

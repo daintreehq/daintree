@@ -455,6 +455,23 @@ describe("runSystemHealthCheck", () => {
       expect((await forced).prerequisites.find((p) => p.tool === "git")?.available).toBe(true);
     });
 
+    it("a forced check arriving after the queued probe started gets its own", async () => {
+      // Two forced checks may only share a probe while it has not started yet.
+      // Once it is running it predates the later caller, so that caller needs a
+      // fresh one — otherwise a re-check right after an install can still read
+      // the pre-install world.
+      mockLookup(ALL_TOOLS, ALL_VERSIONS);
+      const slow = runSystemHealthCheck({ fatalOnly: true });
+      const firstForce = runSystemHealthCheck({ fatalOnly: true, force: true });
+      await slow;
+      await firstForce;
+      const callsAfterQueuedProbe = mockedExecFile.mock.calls.length;
+
+      await runSystemHealthCheck({ fatalOnly: true, force: true });
+
+      expect(mockedExecFile.mock.calls.length).toBeGreaterThan(callsAfterQueuedProbe);
+    });
+
     it("does not cache agent-scoped checks", async () => {
       mockLookup([...ALL_TOOLS, "claude"], { ...ALL_VERSIONS, claude: "1.0.0\n" });
 
@@ -463,6 +480,65 @@ describe("runSystemHealthCheck", () => {
       await runSystemHealthCheck({ fatalOnly: true, agentIds: ["claude"] });
 
       expect(mockedExecFile.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+    });
+  });
+
+  describe("Windows shell shims", () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", originalPlatform);
+    });
+
+    /** Options the version command was invoked with, per binary. */
+    function versionCallOptions(bin: string): Record<string, unknown> | undefined {
+      const call = mockedExecFile.mock.calls.find((c) => c[0] === bin);
+      return call?.[2] as Record<string, unknown> | undefined;
+    }
+
+    it("runs a .cmd shim through a shell so it isn't reported missing", async () => {
+      // Node refuses to spawn .cmd directly; without the shell npm would read
+      // as unavailable now that a failed version command means unavailable.
+      mockExec((cmd, args) => {
+        if (cmd === "where") return `C:\\Program Files\\nodejs\\${args[0]}.cmd\r\n`;
+        if (cmd === "npm") return "10.2.4\n";
+        if (cmd === "node") return "v20.11.0\n";
+        return "1.0.0\n";
+      });
+
+      const result = await runSystemHealthCheck();
+
+      expect(result.prerequisites.find((p) => p.tool === "npm")?.available).toBe(true);
+      expect(versionCallOptions("npm")?.shell).toBe(true);
+    });
+
+    it("does not use a shell for a real executable", async () => {
+      mockExec((cmd, args) => {
+        if (cmd === "where") return `C:\\Program Files\\nodejs\\${args[0]}.exe\r\n`;
+        if (cmd === "node") return "v20.11.0\n";
+        return "1.0.0\n";
+      });
+
+      await runSystemHealthCheck();
+
+      expect(versionCallOptions("node")?.shell).toBeUndefined();
+    });
+
+    it("does not re-run a real executable that exited nonzero", async () => {
+      mockExec((cmd, args) => {
+        if (cmd === "where") return `C:\\bin\\${args[0]}.exe\r\n`;
+        if (cmd === "git") throw new Error("git is broken");
+        return "v20.11.0\n";
+      });
+
+      const result = await runSystemHealthCheck();
+
+      expect(result.prerequisites.find((p) => p.tool === "git")?.available).toBe(false);
+      expect(mockedExecFile.mock.calls.filter((c) => c[0] === "git")).toHaveLength(1);
     });
   });
 
