@@ -510,3 +510,95 @@ describe("GlobalBannerCoordinator caption-strip reporting", () => {
     expect(() => render(<GlobalBannerCoordinator />)).not.toThrow();
   });
 });
+
+/**
+ * A cached project view is parked with `setVisible(false)`, which emits no DOM
+ * lifecycle event — so DOM `visibilitychange` never fires for a warm project
+ * switch and main's explicit `app:view-revealed` signal is the only thing that
+ * can drive the re-assert.
+ */
+describe("GlobalBannerCoordinator cached-view reveal", () => {
+  let setBannerSeverity: ReturnType<typeof vi.fn>;
+  let revealListeners: Set<() => void>;
+
+  function revealView() {
+    act(() => {
+      for (const listener of [...revealListeners]) listener();
+    });
+  }
+
+  beforeEach(() => {
+    setBannerSeverity = vi.fn().mockResolvedValue(undefined);
+    revealListeners = new Set();
+    (window as unknown as { electron?: unknown }).electron = {
+      windowChrome: { setBannerSeverity },
+      app: {
+        onViewRevealed: (callback: () => void) => {
+          revealListeners.add(callback);
+          return () => revealListeners.delete(callback);
+        },
+      },
+    };
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { electron?: unknown }).electron;
+  });
+
+  it("re-asserts its severity when main reveals the cached view", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    revealView();
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("re-asserts the severity on screen now, not the one captured at subscribe time", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+
+    act(() => {
+      usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    });
+    setBannerSeverity.mockClear();
+
+    revealView();
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "error" });
+    expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("re-asserts an empty band when the revealed view has no banner", () => {
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    revealView();
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: null });
+  });
+
+  it("keeps a single reveal subscription across banner swaps", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+
+    act(() => {
+      usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    });
+
+    expect(revealListeners.size).toBe(1);
+  });
+
+  it("stops listening once the view is torn down", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    const { unmount } = render(<GlobalBannerCoordinator />);
+
+    unmount();
+    setBannerSeverity.mockClear();
+    revealView();
+
+    expect(revealListeners.size).toBe(0);
+    expect(setBannerSeverity).not.toHaveBeenCalled();
+  });
+});

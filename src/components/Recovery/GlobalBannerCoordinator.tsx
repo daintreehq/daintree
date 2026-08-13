@@ -67,7 +67,7 @@ export function GlobalBannerCoordinator() {
   useEffect(() => {
     // Also fires with `null` when no banner is up, which is what clears a tint
     // left behind by whichever view was presenting before this one.
-    void window.electron?.windowChrome?.setBannerSeverity({ severity });
+    reportBannerSeverity(severity);
   }, [severity]);
 
   // Tearing this view down leaves main holding its last severity, which would
@@ -83,7 +83,18 @@ export function GlobalBannerCoordinator() {
       reportBannerSeverity(severity);
     };
     document.addEventListener("visibilitychange", republish);
-    return () => document.removeEventListener("visibilitychange", republish);
+    // A cached view is parked with `setVisible(false)`, which emits no DOM
+    // lifecycle event at all — `visibilitychange` never fires for the warm
+    // project switch this guards. `app:view-revealed` is main's explicit signal
+    // for that reveal, and it lands after the cached-view drop, so it is the
+    // one that actually re-asserts the tint.
+    const offRevealed = window.electron?.app?.onViewRevealed?.(() => {
+      reportBannerSeverity(severity);
+    });
+    return () => {
+      document.removeEventListener("visibilitychange", republish);
+      offRevealed?.();
+    };
   }, [severity]);
 
   const banner = activeBanner(slot);
