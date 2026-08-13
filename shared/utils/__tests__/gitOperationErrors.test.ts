@@ -350,6 +350,17 @@ describe("classifyGitError — missing git binary", () => {
     expect(classifyGitError(wrapped)).toBe("auth-failed");
   });
 
+  it("outranks the generic filesystem rule when a wrapper quotes its cause", () => {
+    // Wrappers that interpolate the cause's message carry "ENOENT" in their
+    // own text, which the generic system-io-error rule matches. It must not
+    // win: the actionable answer is "install Git", not "check your disk".
+    const wrapped = new Error(`Git worktree changes failed: ${SIMPLE_GIT_MISSING_BINARY_MESSAGE}`, {
+      cause: simpleGitMissingBinaryError(["status", "--porcelain"]),
+    });
+
+    expect(classifyGitError(wrapped)).toBe("git-not-installed");
+  });
+
   it("recognizes the message however the platform ended its lines", () => {
     // Git for Windows is where this failure was reported, and it is also where
     // CRLF turns up.

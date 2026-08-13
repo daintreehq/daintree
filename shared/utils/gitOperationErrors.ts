@@ -121,11 +121,17 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     // upstream to rebase onto (#11746).
     /fatal: unable to read config file|fatal: bad config|fatal: The current branch .* has no upstream branch|fatal: no upstream configured for branch|fatal: no push destination configured for branch|fatal: could not resolve the (?:push destination|upstream) for branch|fatal: the remote configured for branch .* has an unusable name/i,
   ],
-  [
-    "system-io-error",
-    /ENOENT|EACCES|EPERM|EBUSY|Disk full|No space left on device|could not create work tree dir/i,
-  ],
 ];
+
+/**
+ * The generic filesystem/permissions catch-all, deliberately kept OUT of
+ * `PATTERNS`: it has to run after the missing-git cause walk, not with the
+ * specific rules. A spawn ENOENT matches it too, so any wrapper that quotes its
+ * cause's message would be bucketed as a disk problem before the walk ever got
+ * to identify it as a missing binary.
+ */
+const SYSTEM_IO_PATTERN =
+  /ENOENT|EACCES|EPERM|EBUSY|Disk full|No space left on device|could not create work tree dir/i;
 
 /**
  * The spawn failure Node reports when the `git` binary isn't on PATH.
@@ -210,7 +216,13 @@ export function classifyGitError(error: unknown): GitOperationReason {
   // its own message — "Git operation failed: <context>" — matches nothing. But
   // an ancestor must not outrank a top-level failure that did classify:
   // "Authentication failed" wrapping a spawn ENOENT is an auth failure.
+  //
+  // Still ahead of the generic rule below, which a spawn ENOENT also matches:
+  // a wrapper that quotes its cause's message would otherwise be reported as a
+  // disk problem.
   if (isMissingGitExecutableError(error)) return "git-not-installed";
+
+  if (normalized && SYSTEM_IO_PATTERN.test(normalized)) return "system-io-error";
 
   return "unknown";
 }
