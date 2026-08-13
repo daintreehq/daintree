@@ -24,6 +24,7 @@ import path from "path";
 import fs from "fs";
 import { existsSync } from "fs";
 import os from "os";
+import { applyWindowsExtraPaths, resolveWindowsRegistryPath } from "./windowsPath.js";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
 import { getMaxWebGLContextCeiling } from "../utils/webglContextBudget.js";
 // Deliberately the tiny pure-fs module, NOT GpuCrashMonitorService — importing
@@ -208,14 +209,10 @@ app.commandLine.appendSwitch("force-gpu-mem-available-mb", getGpuTileMemoryCapMb
 app.commandLine.appendSwitch("max-active-webgl-contexts", String(getMaxWebGLContextCeiling()));
 
 if (process.platform === "win32") {
-  const extraPaths = getWindowsExtraPaths();
   const current = process.env.PATH || "";
-  const existingEntries = current.split(path.delimiter).map((e) => e.toLowerCase());
-  const missing = extraPaths.filter(
-    (p) => !existingEntries.includes(p.toLowerCase()) && existsSync(p)
-  );
-  if (missing.length) {
-    process.env.PATH = [...missing, current].join(path.delimiter);
+  const augmented = applyWindowsExtraPaths(current);
+  if (augmented !== current) {
+    process.env.PATH = augmented;
   }
 }
 
@@ -246,10 +243,6 @@ function deduplicatePath(pathStr: string, caseInsensitive: boolean): string {
     }
   }
   return unique.join(path.delimiter);
-}
-
-export function expandWindowsEnvVars(str: string): string {
-  return str.replace(/%([^%]+)%/g, (match, name: string) => process.env[name] ?? match);
 }
 
 /**
@@ -319,76 +312,6 @@ function applyUnixFallbackPaths(currentPath: string): string {
   const extraPaths = getUnixFallbackPaths();
   const existingEntries = currentPath.split(path.delimiter);
   const missing = extraPaths.filter((p) => !existingEntries.includes(p));
-  return missing.length ? [...missing, currentPath].join(path.delimiter) : currentPath;
-}
-
-function getWindowsExtraPaths(): string[] {
-  const programFiles = process.env["ProgramFiles"] || "C:\\Program Files";
-  const programFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
-  const chocoInstall = process.env["ChocolateyInstall"] || "C:\\ProgramData\\chocolatey";
-  const home = os.homedir();
-
-  const paths = [
-    path.join(home, "AppData", "Roaming", "npm"),
-    path.join(home, "AppData", "Local", "Programs", "Git", "cmd"),
-    path.join(programFiles, "Git", "cmd"),
-    path.join(programFilesX86, "Git", "cmd"),
-    path.join(home, "scoop", "shims"),
-    path.join(chocoInstall, "bin"),
-  ];
-
-  // Volta: env var first, hardcoded fallback
-  if (process.env["VOLTA_HOME"]) {
-    paths.push(path.join(process.env["VOLTA_HOME"], "bin"));
-  } else {
-    paths.push(path.join(home, "AppData", "Local", "Volta", "bin"));
-  }
-
-  // pnpm: env var only
-  if (process.env["PNPM_HOME"]) {
-    paths.push(process.env["PNPM_HOME"]);
-  }
-
-  // fnm: env var only (dynamic per session)
-  if (process.env["FNM_MULTISHELL_PATH"]) {
-    paths.push(process.env["FNM_MULTISHELL_PATH"]);
-  }
-
-  // nvm-windows: env var only
-  if (process.env["NVM_SYMLINK"]) {
-    paths.push(process.env["NVM_SYMLINK"]);
-  }
-
-  return paths;
-}
-
-function readWindowsRegistryPath(): Promise<string> {
-  const keys = [
-    "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
-    "HKCU\\Environment",
-  ];
-
-  return Promise.all(
-    keys.map(
-      (key) =>
-        new Promise<string>((resolve) => {
-          execFile("reg", ["query", key, "/v", "Path"], { timeout: 3_000 }, (err, stdout) => {
-            if (err || !stdout) return resolve("");
-            const match = stdout.match(/Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/i);
-            resolve(expandWindowsEnvVars(match?.[1]?.trim() ?? ""));
-          });
-        })
-    )
-  ).then((paths) => paths.filter(Boolean).join(path.delimiter));
-}
-
-function applyWindowsExtraPaths(currentPath: string): string {
-  const extraPaths = getWindowsExtraPaths();
-  const existingEntries = currentPath.split(path.delimiter).map((e) => e.toLowerCase());
-  const missing = extraPaths.filter(
-    (p) => !existingEntries.includes(p.toLowerCase()) && existsSync(p)
-  );
-
   return missing.length ? [...missing, currentPath].join(path.delimiter) : currentPath;
 }
 
@@ -555,10 +478,14 @@ async function runRefreshPath(): Promise<void> {
     const result = await Promise.race([
       (async () => {
         if (process.platform === "win32") {
-          const registryPath = await readWindowsRegistryPath();
-          if (!registryPath || timedOut) return;
-          const withExtras = applyWindowsExtraPaths(registryPath);
-          process.env.PATH = deduplicatePath(withExtras, true);
+          // Registry read + shim-dir merge live in the dependency-free
+          // `windowsPath.ts` leaf so the terminal spawn path can re-run them
+          // per pane without importing this module's startup machinery
+          // (#11773). Its single-flight is shared, so a spawn refresh landing
+          // mid-startup joins this read instead of racing a second `reg.exe`.
+          const resolved = await resolveWindowsRegistryPath();
+          if (!resolved || timedOut) return;
+          process.env.PATH = resolved;
         } else if (process.env.DAINTREE_SHELL_PROBE === "1") {
           // Opt-in markered shell-probe path (#6063). Replaces shell-env
           // with a real `$SHELL -i -l -c` invocation so lazy-loaded version
@@ -658,6 +585,11 @@ export function getEarlyPathRefreshPromise(): Promise<void> | null {
 // as local bindings (not a bare `export ... from`) because environment.ts uses
 // isSmokeTest internally below.
 export { isDemoMode, isSmokeTest, smokeTestStart };
+
+// Same deal for the Windows PATH helpers, which moved to ./windowsPath.js so
+// the terminal spawn path can reach them without this module's `app.*` and
+// SQLite module-scope work. A bare re-export because nothing here uses it.
+export { expandWindowsEnvVars } from "./windowsPath.js";
 
 if (isSmokeTest) {
   console.error("[SMOKE] Smoke test mode enabled");

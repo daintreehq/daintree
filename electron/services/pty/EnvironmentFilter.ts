@@ -73,6 +73,85 @@ export function isSensitiveVar(name: string): boolean {
 }
 
 /**
+ * Windows environment variables are case-insensitive; POSIX ones are not.
+ *
+ * These filters and merges build plain JS objects, which are always
+ * case-sensitive, and node-pty emits every key verbatim into the child's
+ * environment block (`Terminal._parseEnv`). So on Windows a base env carrying
+ * `Path` merged with an override carrying `PATH` produces two entries for what
+ * the OS considers one variable, and the base one — being first — is the one
+ * `CreateProcess` resolves. That silently defeats any override we inject
+ * (#11773). The helpers below give the whole spawn-env pipeline one key per
+ * Windows equivalence class; on POSIX they degrade to plain object semantics,
+ * where `Path` and `PATH` really are different variables.
+ */
+function isCaseInsensitiveEnv(): boolean {
+  return process.platform === "win32";
+}
+
+/** Normalize an env key for comparison — identity on POSIX, upper-cased on Windows. */
+function foldEnvKey(key: string): string {
+  return isCaseInsensitiveEnv() ? key.toUpperCase() : key;
+}
+
+/** Find the key in `env` that names `name`, honouring Windows case-insensitivity. */
+function findEnvKey(env: Readonly<Record<string, unknown>>, name: string): string | undefined {
+  if (Object.prototype.hasOwnProperty.call(env, name)) return name;
+  if (!isCaseInsensitiveEnv()) return undefined;
+  const folded = name.toUpperCase();
+  return Object.keys(env).find((key) => key.toUpperCase() === folded);
+}
+
+/**
+ * Whether `env` defines `name`. Presence, not truthiness — an explicit
+ * `PATH=""` is a deliberate override and must not be treated as absent.
+ */
+export function hasEnvVar(
+  env: Readonly<Record<string, string | undefined>>,
+  name: string
+): boolean {
+  const key = findEnvKey(env, name);
+  return key !== undefined && env[key] !== undefined;
+}
+
+/** Read `name` from `env`, honouring Windows case-insensitivity. */
+export function getEnvVar(
+  env: Readonly<Record<string, string | undefined>>,
+  name: string
+): string | undefined {
+  const key = findEnvKey(env, name);
+  return key === undefined ? undefined : env[key];
+}
+
+/**
+ * Assign `name` in `env`, writing through an existing differently-cased key
+ * rather than adding a second one. Mutates `env`.
+ *
+ * The existing key's casing wins so the environment block a Windows child sees
+ * keeps the OS's own spelling (`Path`, `ComSpec`, `ProgramFiles`) instead of
+ * being rewritten to whatever casing our injection site happened to use.
+ */
+export function setEnvVar(env: Record<string, string>, name: string, value: string): void {
+  env[findEnvKey(env, name) ?? name] = value;
+}
+
+/**
+ * Merge `overrides` onto `base`, collapsing Windows case-variant keys.
+ *
+ * Later values win, first-seen casing is kept, and neither input is mutated.
+ */
+export function mergeEnvVars(
+  base: Readonly<Record<string, string>>,
+  overrides: Readonly<Record<string, string>>
+): Record<string, string> {
+  const result: Record<string, string> = { ...base };
+  for (const [key, value] of Object.entries(overrides)) {
+    setEnvVar(result, key, value);
+  }
+  return result;
+}
+
+/**
  * Filter an environment object, removing sensitive variables and DAINTREE_* vars.
  * Undefined values are also stripped (node-pty requires Record<string, string>).
  *
@@ -86,7 +165,11 @@ export function filterEnvironment(env: Record<string, string | undefined>): Reco
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) continue;
-    if (key.startsWith(DAINTREE_PREFIX)) continue;
+    // Case-folded on Windows: a `daintree_pane_id` exported from PowerShell
+    // would otherwise survive this anti-spoofing strip and then sit beside the
+    // `DAINTREE_PANE_ID` injected below as a second key the OS treats as the
+    // same variable.
+    if (foldEnvKey(key).startsWith(DAINTREE_PREFIX)) continue;
     if (isSensitiveVar(key)) continue;
     result[key] = value;
   }
@@ -145,10 +228,13 @@ const UTF8_PATTERN = /utf-?8/i;
  * Ensure the environment has a UTF-8 locale set in LANG.
  */
 export function ensureUtf8Locale(env: Record<string, string>): Record<string, string> {
-  if (env.LANG && UTF8_PATTERN.test(env.LANG)) {
-    return { ...env };
+  const result = { ...env };
+  const lang = getEnvVar(result, "LANG");
+  if (lang && UTF8_PATTERN.test(lang)) {
+    return result;
   }
-  return { ...env, LANG: "en_US.UTF-8" };
+  setEnvVar(result, "LANG", "en_US.UTF-8");
+  return result;
 }
 
 /**
@@ -160,9 +246,9 @@ export function injectDaintreeMetadata(
   metadata: DaintreeTerminalMetadata
 ): Record<string, string> {
   const result: Record<string, string> = { ...env };
-  result.DAINTREE_PANE_ID = metadata.paneId;
-  result.DAINTREE_CWD = metadata.cwd;
-  if (metadata.projectId) result.DAINTREE_PROJECT_ID = metadata.projectId;
-  if (metadata.worktreeId) result.DAINTREE_WORKTREE_ID = metadata.worktreeId;
+  setEnvVar(result, "DAINTREE_PANE_ID", metadata.paneId);
+  setEnvVar(result, "DAINTREE_CWD", metadata.cwd);
+  if (metadata.projectId) setEnvVar(result, "DAINTREE_PROJECT_ID", metadata.projectId);
+  if (metadata.worktreeId) setEnvVar(result, "DAINTREE_WORKTREE_ID", metadata.worktreeId);
   return result;
 }

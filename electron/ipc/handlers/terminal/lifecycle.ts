@@ -168,6 +168,8 @@ import {
 import { getLifecycleLedger } from "../../../services/pty/lifecycleLedger.js";
 import type { WorkspaceClient } from "../../../services/WorkspaceClient.js";
 import { getDefaultShell } from "../../../services/pty/terminalShell.js";
+import { hasEnvVar } from "../../../services/pty/EnvironmentFilter.js";
+import { refreshWindowsPathForSpawn } from "../../../setup/windowsPath.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { quoteCommandArg } from "../../../../shared/utils/shellEscape.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
@@ -438,6 +440,38 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error(
         "Daintree Assistant session token is invalid or already displaced; refusing to spawn"
       );
+    }
+
+    // Re-read the Windows registry PATH so a tool installed since app start is
+    // on this terminal's PATH (#11773). Main's PATH is what `PtyClient` stamps
+    // onto the spawn message, and that message is the only thing that crosses
+    // into the long-lived pty-host, which still holds the env it was forked
+    // with. Throttled to one `reg.exe` pair every few seconds, so a recipe
+    // opening six panes or a session restore replaying a grid pays it once.
+    //
+    // Awaited HERE for the same reason the worktree-ownership check above is:
+    // everything below binds resources to this terminal id (help-session token,
+    // MCP pane config), and an await between those bindings and the spawn lets
+    // a competing provision revoke them against a PTY that does not exist yet.
+    // Placed after the invalid-token rejection so that path doesn't pay for it.
+    //
+    // Skipped when the caller already supplies a PATH: it wins over anything we
+    // resolve (see `withCurrentWindowsPath`), so the registry read would be
+    // pure latency. Nothing below adds one — the later `spawnEnv` merges carry
+    // scratch dirs, MCP coordinates and assistant flags only.
+    //
+    // The platform guard is duplicated here even though the helper no-ops off
+    // Windows: it keeps macOS and Linux free of an extra microtask on the spawn
+    // path, where they already resolve PATH through the startup shell probe.
+    if (process.platform === "win32" && !hasEnvVar(spawnEnv ?? {}, "PATH")) {
+      // Enrichment, like the MCP env block below: a PATH that couldn't be
+      // refreshed means the terminal opens with the one it would have had
+      // anyway, never that it fails to open. The helper already degrades
+      // internally; this keeps that promise from being the spawn's problem if
+      // it ever stops holding.
+      await refreshWindowsPathForSpawn().catch((err) => {
+        console.warn("[TerminalSpawn] Windows PATH refresh failed; using the current PATH:", err);
+      });
     }
 
     if (isHelpLaunch && launchAgentId) {

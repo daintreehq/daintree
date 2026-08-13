@@ -181,3 +181,91 @@ describe("buildTerminalEnv colour hints", () => {
     expect(env.COLORTERM).toBe("24bit");
   });
 });
+
+describe("buildTerminalEnv Windows PATH override", () => {
+  const realPlatform = process.platform;
+  const setPlatform = (platform: NodeJS.Platform) => {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  };
+
+  let originalPath: string | undefined;
+  let originalColorterm: string | undefined;
+
+  beforeEach(() => {
+    originalPath = process.env.PATH;
+    // buildTerminalEnv inherits process.env, and the shell running these tests
+    // almost certainly exports COLORTERM — which would decide the casing
+    // assertions below for us rather than the code under test.
+    originalColorterm = process.env.COLORTERM;
+    delete process.env.COLORTERM;
+  });
+
+  afterEach(() => {
+    setPlatform(realPlatform);
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    if (originalColorterm === undefined) delete process.env.COLORTERM;
+    else process.env.COLORTERM = originalColorterm;
+  });
+
+  /**
+   * node-pty emits `Object.keys(env)` verbatim into the child's environment
+   * block, so a stale `Path` sitting beside a fresh `PATH` is two entries for
+   * one variable and the first one wins. Counting keys by folded name is the
+   * assertion that the block a Windows shell actually receives is unambiguous.
+   */
+  const pathKeysOf = (env: Record<string, string>) =>
+    Object.keys(env).filter((key) => key.toUpperCase() === "PATH");
+
+  it("overwrites the inherited Path in place, leaving one PATH key", () => {
+    setPlatform("win32");
+    process.env.PATH = "C:\\Windows";
+    const env = buildTerminalEnv(
+      { ...baseOptions, env: { PATH: "C:\\Windows;C:\\Python313" } },
+      "pane-1",
+      "powershell.exe"
+    );
+
+    expect(pathKeysOf(env)).toHaveLength(1);
+    expect(env[pathKeysOf(env)[0]]).toBe("C:\\Windows;C:\\Python313");
+  });
+
+  it("leaves no case-insensitive duplicate key anywhere in the spawn env", () => {
+    setPlatform("win32");
+    const env = buildTerminalEnv(
+      {
+        ...baseOptions,
+        env: { PATH: "C:\\Python313", COLORTERM: "24bit", NODE_COMPILE_CACHE: "C:\\cache" },
+      },
+      "pane-1",
+      "powershell.exe"
+    );
+
+    const folded = Object.keys(env).map((key) => key.toUpperCase());
+    expect(folded).toHaveLength(new Set(folded).size);
+  });
+
+  it("honours a lower-cased override against an upper-cased inherited value", () => {
+    setPlatform("win32");
+    const env = buildTerminalEnv(
+      { ...baseOptions, env: { colorterm: "24bit" } },
+      "pane-1",
+      "powershell.exe"
+    );
+
+    expect(pathKeysOf(env).length).toBeLessThanOrEqual(1);
+    expect(env.colorterm).toBe("24bit");
+    expect(env.COLORTERM).toBeUndefined();
+  });
+
+  it("keeps Path and PATH distinct on POSIX, where they are different variables", () => {
+    setPlatform("darwin");
+    const env = buildTerminalEnv(
+      { ...baseOptions, env: { PATH: "/opt/bin" } },
+      "pane-1",
+      "/bin/bash"
+    );
+
+    expect(env.PATH).toBe("/opt/bin");
+  });
+});
