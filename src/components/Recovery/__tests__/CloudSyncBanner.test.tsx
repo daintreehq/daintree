@@ -91,7 +91,7 @@ describe("CloudSyncBanner", () => {
     // Detection is a path-prefix match, so it establishes the location but
     // never that sync is running (#11767).
     expect(text).not.toMatch(/-synced folder/i);
-    expect(text).toMatch(/\bmay\b/i);
+    expect(text).toMatch(/\b(?:may|might|could) be syncing\b/i);
   });
 
   it("renders the same title and message the inbox entry receives", () => {
@@ -117,7 +117,7 @@ describe("CloudSyncBanner", () => {
     expect(message).toContain("OneDrive");
     // The inbox surface must hedge too, not just the banner (#11767).
     expect(message).not.toMatch(/-synced folder/i);
-    expect(message).toMatch(/\bmay\b/i);
+    expect(message).toMatch(/\b(?:may|might|could) be syncing\b/i);
 
     render(<CloudSyncBanner />);
     const region = screen.getByRole("status");
