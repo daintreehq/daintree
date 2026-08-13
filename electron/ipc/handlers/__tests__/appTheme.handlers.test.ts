@@ -141,7 +141,10 @@ import { ipcMain, dialog, BrowserWindow } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerAppThemeHandlers } from "../appTheme.js";
 import { typedSend } from "../../utils.js";
-import { setTitleBarOverlayBannerSeverity } from "../../../window/titleBarOverlay.js";
+import {
+  seedTitleBarOverlay,
+  setTitleBarOverlayBannerSeverity,
+} from "../../../window/titleBarOverlay.js";
 import {
   WINDOWS_CAPTION_SYMBOL_COLOR,
   WINDOWS_TITLEBAR_HEIGHT_PX,
@@ -548,8 +551,15 @@ describe("appTheme handlers", () => {
 
       registerAppThemeHandlers(mockWindow as never);
 
+      // Match production: the window is seeded at creation, so the banner
+      // report below is a real repaint rather than the first paint.
+      seedTitleBarOverlay(mockWindow as never, {
+        "surface-canvas": "#0b0b16",
+        "status-warning": "#f0b429",
+      });
       // A global banner owns the caption band before the theme changes.
       setTitleBarOverlayBannerSeverity(mockWindow as never, "warning");
+      expect(mockWindow.setTitleBarOverlay).toHaveBeenCalled();
       mockWindow.setTitleBarOverlay.mockClear();
 
       getNativeThemeHandler()();

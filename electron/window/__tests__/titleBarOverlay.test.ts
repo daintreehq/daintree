@@ -6,6 +6,10 @@ import {
   setTitleBarOverlayBannerSeverity,
   setTitleBarOverlayTheme,
 } from "../titleBarOverlay.js";
+import {
+  WINDOWS_CAPTION_SYMBOL_COLOR,
+  WINDOWS_TITLEBAR_HEIGHT_PX,
+} from "../../../shared/config/windowChrome.js";
 
 /**
  * Issue #11766. The native Windows caption strip paints above every
@@ -85,6 +89,27 @@ describe("resolveOverlayColor", () => {
     expect(resolveOverlayColor(TOKENS, "warning")).not.toBe(resolveOverlayColor(TOKENS, "error"));
   });
 
+  it("maps each severity to its own token, not a neighbour's", () => {
+    // With only one status token present, exactly the severity that maps to it
+    // may tint — a swapped mapping would tint the wrong one.
+    const onlyDanger = { "surface-canvas": CANVAS, "status-danger": DANGER };
+    expect(resolveOverlayColor(onlyDanger, "error")).not.toBe(CANVAS);
+    expect(resolveOverlayColor(onlyDanger, "warning")).toBe(CANVAS);
+
+    const onlyWarning = { "surface-canvas": CANVAS, "status-warning": WARNING };
+    expect(resolveOverlayColor(onlyWarning, "warning")).not.toBe(CANVAS);
+    expect(resolveOverlayColor(onlyWarning, "error")).toBe(CANVAS);
+  });
+
+  it("keeps the strip a subtle wash, much nearer the canvas than the status colour", () => {
+    // The banner paints a light tint over the canvas; a heavy blend (say 50%)
+    // would make the caption strip louder than the banner it is matching.
+    const [tr] = channels(resolveOverlayColor(TOKENS, "warning")!);
+    const [cr] = channels(CANVAS);
+    const [wr] = channels(WARNING);
+    expect(Math.abs(tr - cr)).toBeLessThan(Math.abs(tr - wr) / 2);
+  });
+
   it("tracks the theme: the same severity resolves differently per canvas", () => {
     expect(resolveOverlayColor(TOKENS, "warning")).not.toBe(
       resolveOverlayColor(LIGHT_TOKENS, "warning")
@@ -102,6 +127,37 @@ describe("resolveOverlayColor", () => {
 
   it("resolves to nothing when the theme has no canvas to blend against", () => {
     expect(resolveOverlayColor({}, "warning")).toBeNull();
+  });
+
+  // Custom and imported themes persist tokens as unvalidated strings, so a
+  // non-hex value must not reach Electron as "#NaNNaNNaN".
+  it.each(["oklch(0.7 0.15 80)", "var(--something)", "rgb(1,2,3)", "goldenrod", ""])(
+    "ignores the unparseable status token %j and keeps the canvas",
+    (tint) => {
+      expect(resolveOverlayColor({ ...TOKENS, "status-warning": tint }, "warning")).toBe(CANVAS);
+    }
+  );
+
+  it.each(["oklch(0.2 0 0)", "var(--bg)", "not a colour"])(
+    "declines to touch the strip when the canvas itself is unparseable (%j)",
+    (canvas) => {
+      expect(resolveOverlayColor({ ...TOKENS, "surface-canvas": canvas }, "warning")).toBeNull();
+      expect(resolveOverlayColor({ ...TOKENS, "surface-canvas": canvas }, null)).toBeNull();
+    }
+  );
+
+  it("accepts shorthand hex tokens", () => {
+    const shorthand = resolveOverlayColor(
+      { "surface-canvas": "#111", "status-warning": "#fc0" },
+      "warning"
+    );
+    expect(shorthand).toMatch(/^#[0-9a-f]{6}$/i);
+  });
+
+  it("always yields a colour Electron can parse", () => {
+    for (const severity of [null, "error", "warning", "info", "success", "neutral"] as const) {
+      expect(resolveOverlayColor(TOKENS, severity)).toMatch(/^#[0-9a-f]{6}$/i);
+    }
   });
 });
 
@@ -158,6 +214,23 @@ describe("native overlay writes", () => {
     expect(applied.color).not.toBe(LIGHT_TOKENS["surface-canvas"]);
   });
 
+  it("retries after a rejected native write instead of caching a colour that never landed", () => {
+    const win = makeWindow();
+    seedTitleBarOverlay(win, TOKENS);
+    win.setTitleBarOverlay.mockImplementationOnce(() => {
+      throw new Error("Invalid color");
+    });
+
+    setTitleBarOverlayBannerSeverity(win, "warning");
+    setTitleBarOverlayBannerSeverity(win, null);
+    setTitleBarOverlayBannerSeverity(win, "warning");
+
+    // The failed attempt must not be recorded as applied, or dedup would
+    // swallow the retry and strand the strip on the wrong colour.
+    const colors = win.setTitleBarOverlay.mock.calls.map((c) => (c[0] as { color: string }).color);
+    expect(colors.at(-1)).toBe(resolveOverlayColor(TOKENS, "warning"));
+  });
+
   it("keeps windows independent", () => {
     const a = makeWindow();
     const b = makeWindow();
@@ -195,8 +268,10 @@ describe("native overlay writes", () => {
       height: number;
       symbolColor: string;
     };
-    expect(applied.height).toBeGreaterThan(0);
-    expect(applied.symbolColor).toMatch(/^#[0-9a-f]{6}$/i);
+    // Bound to the same constants the constructor and the renderer's inset use,
+    // so a runtime repaint can't quietly resize or restyle the strip.
+    expect(applied.height).toBe(WINDOWS_TITLEBAR_HEIGHT_PX);
+    expect(applied.symbolColor).toBe(WINDOWS_CAPTION_SYMBOL_COLOR);
   });
 });
 

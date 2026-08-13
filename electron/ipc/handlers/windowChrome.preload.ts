@@ -1,5 +1,8 @@
 import type { IpcInvokeMap } from "../../types/index.js";
 
+// Literal channel names, matching every other namespace: the renderer-API
+// generator reads this object from source and cannot resolve an identifier.
+// `channelDrift.test.ts` holds these against the CHANNELS registry.
 export const WINDOW_CHROME_METHOD_CHANNELS = {
   setBannerSeverity: "window-chrome:set-banner-severity",
 } as const satisfies Record<string, keyof IpcInvokeMap>;

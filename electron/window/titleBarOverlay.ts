@@ -35,6 +35,20 @@ const bannerSeverity = new WeakMap<BrowserWindow, BannerSeverity | null>();
 const appliedColor = new WeakMap<BrowserWindow, string>();
 
 /**
+ * Custom and imported themes are persisted as `Record<string, string>` with no
+ * colour validation, so a token can hold anything — `oklch(…)`, `var(…)`, junk.
+ * `blendOverBackground` parses hex, and would turn those into `#NaNNaNNaN`;
+ * Electron rejects an unparseable colour, which would take out whichever
+ * handler triggered the write. Anything that isn't plain hex is treated as
+ * unusable and falls back rather than reaching the native call.
+ *
+ * Alpha-bearing hex is excluded too: `blendOverBackground` drops the alpha
+ * channel, which would tint the strip more strongly than the wash the renderer
+ * actually composites.
+ */
+const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+/**
  * Colour the caption strip should take for a given theme + banner pairing.
  *
  * Mirrors `InlineStatusBanner`'s `color-mix(... BANNER_TINT_ALPHA, transparent)`
@@ -46,16 +60,17 @@ export function resolveOverlayColor(
   severity: BannerSeverity | null
 ): string | null {
   const canvas = tokens["surface-canvas"];
-  if (!canvas) return null;
+  if (!canvas || !HEX_COLOR.test(canvas)) return null;
   if (!severity) return canvas;
 
   const token = BANNER_SEVERITY_TOKEN[severity];
   if (!token) return canvas;
 
   const tint = tokens[token];
-  if (!tint) return canvas;
+  if (!tint || !HEX_COLOR.test(tint)) return canvas;
 
-  return blendOverBackground(tint, canvas, BANNER_TINT_ALPHA);
+  const blended = blendOverBackground(tint, canvas, BANNER_TINT_ALPHA);
+  return HEX_COLOR.test(blended) ? blended : canvas;
 }
 
 function apply(win: BrowserWindow): void {
@@ -70,13 +85,20 @@ function apply(win: BrowserWindow): void {
 
   // Every accepted call repaints the native non-client frame, so skip no-ops.
   if (appliedColor.get(win) === color) return;
-  appliedColor.set(win, color);
 
-  win.setTitleBarOverlay({
-    color,
-    symbolColor: WINDOWS_CAPTION_SYMBOL_COLOR,
-    height: WINDOWS_TITLEBAR_HEIGHT_PX,
-  });
+  try {
+    win.setTitleBarOverlay({
+      color,
+      symbolColor: WINDOWS_CAPTION_SYMBOL_COLOR,
+      height: WINDOWS_TITLEBAR_HEIGHT_PX,
+    });
+  } catch {
+    // Caching a colour the native side rejected would dedup away the retry and
+    // strand the strip. Leave the cache untouched so the next attempt runs.
+    return;
+  }
+
+  appliedColor.set(win, color);
 }
 
 /**

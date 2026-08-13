@@ -75,6 +75,21 @@ function getAppThemeConfig(): AppThemeConfig {
 export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void {
   const handlers: Array<() => void> = [];
 
+  /**
+   * Push the freshly-persisted scheme at every window's caption strip.
+   * Picking a theme in settings only writes the store — without this the
+   * native strip keeps the previous theme's colours until an OS appearance
+   * change happens to reapply them (#11766).
+   */
+  const refreshTitleBarOverlayTheme = () => {
+    if (process.platform !== "win32") return;
+    const config = getAppThemeConfig();
+    const scheme = resolveAppTheme(config.colorSchemeId, config.customSchemes ?? []);
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) setTitleBarOverlayTheme(win, scheme.tokens);
+    }
+  };
+
   handlers.push(typedHandle(CHANNELS.APP_THEME_GET, async () => getAppThemeConfig()));
 
   handlers.push(
@@ -84,6 +99,7 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
         return;
       }
       store.set("appTheme.colorSchemeId", schemeId.trim());
+      refreshTitleBarOverlayTheme();
     })
   );
 
@@ -95,6 +111,7 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
         return;
       }
       store.set("appTheme.customSchemes", result.data as AppColorScheme[]);
+      refreshTitleBarOverlayTheme();
     })
   );
 

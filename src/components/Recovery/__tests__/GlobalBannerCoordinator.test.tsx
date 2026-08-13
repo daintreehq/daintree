@@ -423,9 +423,74 @@ describe("GlobalBannerCoordinator caption-strip reporting", () => {
     expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: "warning" });
   });
 
-  it("stays silent while no banner occupies the band", () => {
+  it("asserts an empty band rather than staying silent", () => {
+    // A project view that becomes visible with no banner has to clear whatever
+    // tint the previously presenting view left on the caption strip.
     render(<GlobalBannerCoordinator />);
-    expect(setBannerSeverity).not.toHaveBeenCalled();
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: null });
+  });
+
+  it("goes straight from one severity to the next when banners swap", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    // Host crash outranks cloud sync, so the mounted banner is replaced.
+    act(() => {
+      usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    });
+
+    // Bouncing through null would repaint the native frame back to canvas
+    // mid-swap — a visible flash between two tinted banners.
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "error" });
+    expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: null });
+  });
+
+  it("does not tint for a slot whose banner is still gated and renders nothing", () => {
+    // HostCrashBanner claims the slot immediately but renders nothing for the
+    // first 400ms (Doherty gate). Tinting off the slot rather than the mounted
+    // banner would colour the strip for a banner that isn't on screen.
+    vi.useFakeTimers();
+    try {
+      usePanelStore.setState({ backendStatus: "recovering", lastCrashType: null });
+      render(<GlobalBannerCoordinator />);
+
+      expect(screen.queryByText("Terminal service crashed")).toBeNull();
+      expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: "error" });
+      expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: "warning" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-asserts its severity when a cached view becomes visible again", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    // Switching back to a cached project view produces no re-render, so
+    // without this the strip would keep the other view's tint.
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("does not re-assert while hidden", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(setBannerSeverity).not.toHaveBeenCalled();
+    } finally {
+      visibility.mockRestore();
+    }
   });
 
   it("clears the report when the banner goes away", () => {

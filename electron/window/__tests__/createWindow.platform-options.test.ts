@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getPlatformWindowOptions } from "../platformWindowOptions.js";
 import {
@@ -67,5 +69,20 @@ describe("platform BrowserWindow options (#7939)", () => {
     expect(opts.titleBarStyle).toBeUndefined();
     expect(opts.titleBarOverlay).toBeUndefined();
     expect(opts.trafficLightPosition).toBeUndefined();
+  });
+});
+
+describe("createWindow wires the overlay owner — issue #11766", () => {
+  it("seeds the resolved scheme so the first banner report has tokens to blend", async () => {
+    // Without the seed, `setTitleBarOverlayBannerSeverity` silently no-ops
+    // until some later theme event happens to supply tokens — a failure mode
+    // no unit test of the overlay module itself can see, because those seed
+    // their own mock windows.
+    const source = await fs.readFile(path.resolve(__dirname, "../createWindow.ts"), "utf-8");
+    expect(source).toContain("seedTitleBarOverlay(win, scheme.tokens)");
+    expect(source).toContain("getPlatformWindowOptions(windowBg)");
+    // The seeded tokens must be the same object the constructor colour came
+    // from, or the recorded "already applied" colour would be a lie.
+    expect(source).toContain('const windowBg = scheme.tokens["surface-canvas"]');
   });
 });

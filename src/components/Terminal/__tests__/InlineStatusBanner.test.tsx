@@ -558,6 +558,25 @@ describe("InlineStatusBanner as the window title-bar surface", () => {
     return screen.getByRole("alert");
   }
 
+  function withNavigator(platform: string, userAgent: string, body: () => void) {
+    const original = {
+      platform: Object.getOwnPropertyDescriptor(window.navigator, "platform"),
+      userAgent: Object.getOwnPropertyDescriptor(window.navigator, "userAgent"),
+    };
+    Object.defineProperty(window.navigator, "platform", { value: platform, configurable: true });
+    Object.defineProperty(window.navigator, "userAgent", { value: userAgent, configurable: true });
+    try {
+      body();
+    } finally {
+      if (original.platform) {
+        Object.defineProperty(window.navigator, "platform", original.platform);
+      }
+      if (original.userAgent) {
+        Object.defineProperty(window.navigator, "userAgent", original.userAgent);
+      }
+    }
+  }
+
   it("becomes draggable and fills the caption band's height", () => {
     renderGlobal();
     // A banner shorter than the 48px native strip would let the tint applied to
@@ -575,9 +594,29 @@ describe("InlineStatusBanner as the window title-bar surface", () => {
     expect(root().querySelector(".window-resize-strip")).toBeNull();
   });
 
-  it("carries the top-edge resize strip the displaced toolbar can no longer provide", () => {
-    renderGlobal();
-    expect(root().querySelector(".window-resize-strip")).not.toBeNull();
+  it.each([
+    ["Win32", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"],
+    ["MacIntel", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"],
+  ])(
+    "carries the top-edge resize strip the displaced toolbar can no longer provide (%s)",
+    (platform, userAgent) => {
+      // isLinux() reads navigator.userAgent, so pin it rather than relying on
+      // whatever jsdom's default happens to be — Ubuntu CI would otherwise
+      // never establish which branch it is exercising.
+      withNavigator(platform, userAgent, () => {
+        renderGlobal();
+        expect(root().querySelector(".window-resize-strip")).not.toBeNull();
+      });
+    }
+  );
+
+  it("omits the resize strip on Linux, whose WM owns the window edges", () => {
+    withNavigator("Linux x86_64", "Mozilla/5.0 (X11; Linux x86_64)", () => {
+      renderGlobal();
+      expect(root().querySelector(".window-resize-strip")).toBeNull();
+      // The drag region is still wanted — only the resize strip is skipped.
+      expect(root().className).toContain("app-drag-region");
+    });
   });
 
   it("keeps every interactive control out of the drag region", () => {
@@ -639,11 +678,21 @@ describe("InlineStatusBanner as the window title-bar surface", () => {
     expect(onSeverityChange).toHaveBeenCalledWith(null);
   });
 
-  it("never reports from an inline banner", () => {
+  it("does not report through a provider that supplies no reporter", () => {
+    // The bare provider is used for its inset alone; only the global banner
+    // host opts a banner into reporting.
     const onSeverityChange = vi.fn();
     render(
-      <InlineStatusBanner icon={AlertTriangle} title="Inline" severity="warning" animated={false} />
+      <WindowControlsInsetProvider>
+        <InlineStatusBanner
+          icon={AlertTriangle}
+          title="Inset only"
+          severity="warning"
+          animated={false}
+        />
+      </WindowControlsInsetProvider>
     );
     expect(onSeverityChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").className).not.toContain("app-drag-region");
   });
 });

@@ -53,6 +53,7 @@ describe("windowChrome IPC", () => {
     ipcHandlers.clear();
     vi.clearAllMocks();
     registryMock.getWindowForWebContents.mockReturnValue(makeWindow());
+    registryMock.isCachedViewWebContents.mockReturnValue(false);
     cleanup = registerWindowChromeHandlers({} as HandlerDependencies);
   });
 
@@ -87,6 +88,17 @@ describe("windowChrome IPC", () => {
 
     expect(overlayMock.setTitleBarOverlayBannerSeverity).toHaveBeenNthCalledWith(1, first, "error");
     expect(overlayMock.setTitleBarOverlayBannerSeverity).toHaveBeenNthCalledWith(2, second, "info");
+  });
+
+  it("ignores a report from a cached, off-screen project view", async () => {
+    // A window holds several WebContentsViews at once and only one is on
+    // screen. The banner stores are project-scoped, so letting a hidden view
+    // report would recolour the chrome of the project the user is looking at.
+    registryMock.isCachedViewWebContents.mockReturnValue(true);
+
+    await getHandler()(eventFrom(), { severity: "warning" });
+
+    expect(overlayMock.setTitleBarOverlayBannerSeverity).not.toHaveBeenCalled();
   });
 
   it("ignores a report whose sender has no resolvable window", async () => {
