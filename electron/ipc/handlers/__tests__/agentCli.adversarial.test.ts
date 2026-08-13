@@ -17,6 +17,7 @@ const storeMock = vi.hoisted(() => ({
 const runSystemHealthCheckMock = vi.hoisted(() => vi.fn());
 const getHealthCheckSpecsMock = vi.hoisted(() => vi.fn());
 const checkPrerequisiteMock = vi.hoisted(() => vi.fn());
+const isShellInertInvocationMock = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
 
@@ -61,6 +62,7 @@ vi.mock("../../../services/SystemHealthCheck.js", () => ({
   runSystemHealthCheck: runSystemHealthCheckMock,
   getHealthCheckSpecs: getHealthCheckSpecsMock,
   checkPrerequisite: checkPrerequisiteMock,
+  isShellInertInvocation: isShellInertInvocationMock,
 }));
 
 import { registerAgentCliHandlers } from "../agentCli.js";
@@ -101,6 +103,7 @@ describe("agentCli IPC adversarial", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     storeMock.get.mockImplementation((_key, fallback) => fallback);
+    isShellInertInvocationMock.mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -317,11 +320,42 @@ describe("agentCli IPC adversarial", () => {
     checkPrerequisiteMock.mockReturnValue({ ok: true });
     register();
 
-    const spec = { id: "node" };
+    const spec = { tool: "node", label: "Node.js", versionArgs: ["--version"], severity: "fatal" };
     const result = await getHandler(CHANNELS.SYSTEM_CHECK_TOOL)(fakeEvent(), spec);
 
     expect(result).toEqual({ ok: true });
     expect(checkPrerequisiteMock).toHaveBeenCalledWith(spec);
+  });
+
+  it("SYSTEM_CHECK_TOOL never probes a spec whose invocation isn't shell-inert", async () => {
+    // The spec names the binary and the flags main executes, and a renderer can
+    // send any spec it likes — so a rejected invocation must not reach the probe.
+    isShellInertInvocationMock.mockReturnValue(false);
+    register();
+
+    await expect(
+      getHandler(CHANNELS.SYSTEM_CHECK_TOOL)(fakeEvent(), {
+        tool: "npm",
+        label: "npm",
+        versionArgs: ["--version", "&&", "calc"],
+        severity: "warn",
+      })
+    ).rejects.toThrow(/Invalid PrerequisiteSpec/);
+    expect(checkPrerequisiteMock).not.toHaveBeenCalled();
+  });
+
+  it("SYSTEM_CHECK_TOOL rejects malformed specs before consulting the invocation check", async () => {
+    register();
+    const handler = getHandler(CHANNELS.SYSTEM_CHECK_TOOL);
+
+    await expect(handler(fakeEvent(), null)).rejects.toThrow(/Invalid PrerequisiteSpec/);
+    await expect(handler(fakeEvent(), { tool: "", versionArgs: [] })).rejects.toThrow(
+      /Invalid PrerequisiteSpec/
+    );
+    await expect(handler(fakeEvent(), { tool: "npm", command: 7 })).rejects.toThrow(
+      /Invalid PrerequisiteSpec/
+    );
+    expect(checkPrerequisiteMock).not.toHaveBeenCalled();
   });
 
   it("cleanup removes all registered handlers", async () => {

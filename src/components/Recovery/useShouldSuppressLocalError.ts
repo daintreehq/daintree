@@ -42,6 +42,9 @@ const SLOT_IS_RECOVERY: Record<Exclude<GlobalBannerSlot, null>, boolean> = {
   "watchdog-disabled": true,
   "safe-mode": true,
   "restore-confirmation": true,
+  // Advisory: the backend is connected and a pane's own spawn/reconnect errors
+  // stay actionable — a missing Git doesn't make them un-fixable.
+  "missing-prerequisite": false,
   "forge-token": false,
   "cloud-sync": false,
   rosetta: false,

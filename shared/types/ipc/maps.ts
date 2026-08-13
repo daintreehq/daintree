@@ -56,6 +56,7 @@ import type {
   AgentUpdateSettings,
   StartAgentUpdatePayload,
   StartAgentUpdateResult,
+  SystemHealthCheckOptions,
   SystemHealthCheckResult,
   AppMetricsSummary,
   HardwareInfo,
@@ -347,7 +348,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
 
   "system:health-check": {
-    args: [agentIds?: string[]];
+    args: [options?: SystemHealthCheckOptions];
     result: SystemHealthCheckResult;
   };
   "system:download-diagnostics": {
