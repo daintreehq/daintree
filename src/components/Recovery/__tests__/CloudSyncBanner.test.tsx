@@ -23,9 +23,10 @@ vi.mock("@/hooks/useProjectSettings", () => ({
   }),
 }));
 
-const notifyMock = vi.fn();
+type NotifyPayload = { title?: string; message?: string; supersedeKey?: string };
+const notifyMock = vi.fn<(payload: NotifyPayload) => void>();
 vi.mock("@/lib/notify", () => ({
-  notify: (payload: unknown) => notifyMock(payload),
+  notify: (payload: NotifyPayload) => notifyMock(payload),
 }));
 
 import { CloudSyncBanner } from "../CloudSyncBanner";
@@ -34,9 +35,9 @@ import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectStore } from "@/store/projectStore";
 
-function setProject(id: string | null) {
+function setProject(id: string | null, path = "/x") {
   useProjectStore.setState({
-    currentProject: id ? ({ id, path: "/x" } as never) : null,
+    currentProject: id ? ({ id, path } as never) : null,
   });
 }
 
@@ -99,18 +100,11 @@ describe("CloudSyncBanner", () => {
     // #11767 requires the two agree. Drive the real hook, then assert the
     // banner renders exactly the strings the notification was given — no
     // literals here, so this survives future rewording but catches drift.
-    useProjectStore.setState({
-      currentProject: {
-        id: "p1",
-        path: "/Users/foo/Library/CloudStorage/OneDrive-Personal/work",
-      } as never,
-    });
+    setProject("p1", "/Users/foo/Library/CloudStorage/OneDrive-Personal/work");
 
     renderHook(() => useCloudSyncWarning("/Users/foo"));
 
-    const payload = notifyMock.mock.calls
-      .map(([p]) => p as { title?: string; message?: string; supersedeKey?: string })
-      .find((p) => p?.supersedeKey === "cloud-sync:p1");
+    const payload = notifyMock.mock.calls.find(([p]) => p?.supersedeKey === "cloud-sync:p1")?.[0];
     const title = payload?.title ?? "";
     const message = payload?.message ?? "";
     expect(title).not.toBe("");
