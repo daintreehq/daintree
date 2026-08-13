@@ -1,6 +1,20 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import {
+  render,
+  renderHook,
+  screen,
+  within,
+  fireEvent,
+  cleanup,
+  waitFor,
+} from "@testing-library/react";
+
+vi.mock("@/lib/platform", () => ({
+  isMac: () => true,
+  isLinux: () => false,
+  isWindows: () => false,
+}));
 
 const saveSettingsMock = vi.fn(() => Promise.resolve());
 vi.mock("@/hooks/useProjectSettings", () => ({
@@ -9,19 +23,21 @@ vi.mock("@/hooks/useProjectSettings", () => ({
   }),
 }));
 
-const notifyMock = vi.fn();
+type NotifyPayload = { title?: string; message?: string; supersedeKey?: string };
+const notifyMock = vi.fn<(payload: NotifyPayload) => void>();
 vi.mock("@/lib/notify", () => ({
-  notify: (payload: unknown) => notifyMock(payload),
+  notify: (payload: NotifyPayload) => notifyMock(payload),
 }));
 
 import { CloudSyncBanner } from "../CloudSyncBanner";
+import { useCloudSyncWarning } from "@/hooks/app/useCloudSyncWarning";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectStore } from "@/store/projectStore";
 
-function setProject(id: string | null) {
+function setProject(id: string | null, path = "/x") {
   useProjectStore.setState({
-    currentProject: id ? ({ id, path: "/x" } as never) : null,
+    currentProject: id ? ({ id, path } as never) : null,
   });
 }
 
@@ -64,9 +80,50 @@ describe("CloudSyncBanner", () => {
     render(<CloudSyncBanner />);
     const region = screen.getByRole("status");
     expect(region.hasAttribute("aria-live")).toBe(false);
-    expect(screen.getByText("Project in a synced folder")).toBeTruthy();
-    expect(screen.getByText(/Dropbox-synced folder/i)).toBeTruthy();
+    expect(region.textContent).toContain("Dropbox");
     expect(screen.getByRole("button", { name: /Don.*t warn for this project/i })).toBeTruthy();
+  });
+
+  it("hedges the sync claim instead of asserting the folder is syncing", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<CloudSyncBanner />);
+    const text = screen.getByRole("status").textContent ?? "";
+
+    // Detection is a path-prefix match, so it establishes the location but
+    // never that sync is running (#11767).
+    expect(text).not.toMatch(/-synced folder/i);
+    expect(text).toMatch(/\b(?:may|might|could) be syncing\b/i);
+  });
+
+  it("renders the same title and message the inbox entry receives", () => {
+    // The hook routes the inbox entry, the banner renders the live surface;
+    // #11767 requires the two agree. Drive the real hook, then assert the
+    // banner renders exactly the strings the notification was given — no
+    // literals here, so this survives future rewording but catches drift.
+    setProject("p1", "/Users/foo/Library/CloudStorage/OneDrive-Personal/work");
+
+    renderHook(() => useCloudSyncWarning("/Users/foo"));
+
+    const payload = notifyMock.mock.calls.find(([p]) => p?.supersedeKey === "cloud-sync:p1")?.[0];
+    const title = payload?.title ?? "";
+    const message = payload?.message ?? "";
+    expect(title).not.toBe("");
+    expect(message).toContain("OneDrive");
+    // The inbox surface must hedge too, not just the banner (#11767).
+    expect(message).not.toMatch(/-synced folder/i);
+    expect(message).toMatch(/\b(?:may|might|could) be syncing\b/i);
+
+    render(<CloudSyncBanner />);
+    const region = screen.getByRole("status");
+    const titleEl = within(region).getByText(title);
+    const descEl = within(region).getByText(message);
+
+    // Compare raw textContent in the matching slots: getByText normalises
+    // whitespace and would also pass if the two fields were swapped.
+    expect(titleEl.textContent).toBe(title);
+    expect(descEl.textContent).toBe(message);
+    expect(descEl).toBe(region.querySelector("p"));
+    expect(titleEl).not.toBe(descEl);
   });
 
   it("persists dismiss preference and clears the banner", async () => {
