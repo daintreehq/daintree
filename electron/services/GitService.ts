@@ -785,7 +785,17 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       // a missing git binary reaches here as a spawn ENOENT, which that branch
       // would otherwise read as "this worktree was deleted" and act on by
       // tearing down a worktree that is perfectly fine (#11764).
-      if (isMissingGitExecutableError(error)) {
+      //
+      // The root path still existing is part of the evidence, not a nicety:
+      // Node raises a byte-identical `spawn git ENOENT` (`code: "ENOENT"`,
+      // `syscall: "spawn git"`) when the spawn's *cwd* is gone. This service
+      // caches its SimpleGit instance for its lifetime and `gitServiceCache`
+      // keeps the service itself alive per path, so simple-git's
+      // construction-time folder check has long since passed by the time a
+      // worktree is deleted externally. Without the guard, a removed worktree
+      // would be reported as "install Git and put it on your PATH" — the same
+      // misdirection this branch exists to prevent, inverted.
+      if (isMissingGitExecutableError(error) && existsSync(this.rootPath)) {
         const gitError = toGitOperationError(error, { cwd: this.rootPath, op: context });
         logWarn(`Git operation failed: git executable not found (${context})`, {
           rootPath: this.rootPath,

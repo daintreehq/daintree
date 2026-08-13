@@ -675,6 +675,25 @@ index 1a2b3c4..5d6e7f8 100644
     // this same failure after another layer has wrapped it.
     expect((error as GitOperationError).cause).toBe(spawnFailure);
   });
+
+  it("still reports a removed worktree when the spawn ENOENT is the missing cwd", async () => {
+    // Node raises the same `spawn git ENOENT` when the spawn's cwd is gone, and
+    // the cached SimpleGit instance means simple-git's construction-time folder
+    // check ran long before the deletion — so the error alone cannot tell the
+    // two apart. Without the root-path guard this reads as "install Git".
+    const removedPath = path.join(tempDir, "removed-worktree");
+    await fs.mkdir(removedPath);
+    gitClientMock.revparse.mockRejectedValue(simpleGitMissingBinaryError());
+
+    const service = new GitService(removedPath);
+    await fs.rm(removedPath, { recursive: true, force: true });
+
+    const error = await service.getRepositoryRoot(removedPath).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WorktreeRemovedError);
+    // The missing-binary branch throws a GitOperationError instead, so this
+    // rules out having taken it.
+    expect(error).not.toBeInstanceOf(GitOperationError);
+  });
 });
 
 describe("GitService.readFileAtHead", () => {
