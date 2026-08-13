@@ -48,6 +48,19 @@ vi.mock("../../../../services/pty/agentSessionHistory.js", () => ({
 
 // Retention is read from the electron-store singleton, which isn't wired in
 // this unit test; stub the accessor so the journaling paths get a plain value.
+const refreshWindowsPathForSpawnMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+
+// Full surface, not just the one export lifecycle.ts uses: a factory that omits
+// an export throws for every consumer of the module at collection time.
+vi.mock("../../../../setup/windowsPath.js", () => ({
+  refreshWindowsPathForSpawn: refreshWindowsPathForSpawnMock,
+  resolveWindowsRegistryPath: vi.fn().mockResolvedValue(null),
+  applyWindowsExtraPaths: vi.fn((p: string) => p),
+  expandWindowsEnvVars: vi.fn((s: string) => s),
+  deduplicatePath: vi.fn((p: string) => p),
+  __resetWindowsPathStateForTests: vi.fn(),
+}));
+
 vi.mock("../../../../services/pty/agentSessionRetention.js", () => ({
   getAgentSessionRetentionDays: vi.fn(() => 30),
 }));
@@ -2579,5 +2592,116 @@ describe("terminal close handlers - resume journaling", () => {
     await getKillHandler()({}, "term-1");
 
     expect(persistAgentSessionMock.mock.calls[0][0].branch).toBeUndefined();
+  });
+});
+
+describe("terminal spawn handler - Windows PATH refresh", () => {
+  const realPlatform = process.platform;
+  const setPlatform = (platform: NodeJS.Platform) => {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  };
+
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    refreshWindowsPathForSpawnMock.mockResolvedValue(undefined);
+    ptyClient = {
+      spawn: vi.fn(),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    mockGetCurrentProject.mockReturnValue({ id: "p1", name: "P", path: "/projects/p" });
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+  });
+
+  afterEach(() => setPlatform(realPlatform));
+
+  function spawnHandlerForTest() {
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    return getSpawnHandler();
+  }
+
+  it("refreshes the registry PATH before spawning on Windows", async () => {
+    setPlatform("win32");
+    const handler = spawnHandlerForTest();
+
+    await handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24 });
+
+    expect(refreshWindowsPathForSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds the spawn until the refresh settles", async () => {
+    setPlatform("win32");
+    let release!: () => void;
+    refreshWindowsPathForSpawnMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = () => resolve();
+        })
+    );
+    const handler = spawnHandlerForTest();
+
+    const pending = handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24 });
+    await vi.waitFor(() => expect(refreshWindowsPathForSpawnMock).toHaveBeenCalled());
+
+    // A terminal spawned against the pre-refresh PATH is exactly the bug.
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+
+    release();
+    await pending;
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the refresh when the caller already supplies a PATH", async () => {
+    setPlatform("win32");
+    const handler = spawnHandlerForTest();
+
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      // Deliberately an odd spelling: Windows resolves it the same, so the skip
+      // has to fold case rather than recognise a few known variants.
+      cols: 80,
+      rows: 24,
+      env: { pAtH: "C:\\Custom" },
+    });
+
+    // The caller's PATH wins downstream, so the registry read would be pure latency.
+    expect(refreshWindowsPathForSpawnMock).not.toHaveBeenCalled();
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("still refreshes for restore spawns, leaving the throttle to suppress the burst", async () => {
+    setPlatform("win32");
+    const handler = spawnHandlerForTest();
+
+    await handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24, restore: true });
+
+    expect(refreshWindowsPathForSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not touch the spawn path on macOS or Linux", async () => {
+    setPlatform("darwin");
+    const handler = spawnHandlerForTest();
+
+    await handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24 });
+
+    expect(refreshWindowsPathForSpawnMock).not.toHaveBeenCalled();
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("spawns anyway when the refresh rejects", async () => {
+    setPlatform("win32");
+    refreshWindowsPathForSpawnMock.mockRejectedValue(new Error("reg query exploded"));
+    const handler = spawnHandlerForTest();
+
+    await expect(
+      handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24 })
+    ).resolves.toBeTruthy();
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
   });
 });
