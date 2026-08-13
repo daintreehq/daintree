@@ -88,6 +88,11 @@ describe("windowsPath", () => {
   const WITHIN_THROTTLE_MS = 1_000;
   const BEYOND_THROTTLE_MS = 30_000;
 
+  // Longer than any budget a terminal spawn could reasonably hold for. What is
+  // asserted is that the wait ends while the read is still outstanding, not
+  // where the module draws the line.
+  const WEDGED_REGISTRY_READ_MS = 30_000;
+
   let now = 1_000_000;
 
   beforeEach(() => {
@@ -106,6 +111,9 @@ describe("windowsPath", () => {
   });
 
   afterEach(() => {
+    // Before `restoreAllMocks`: uninstalling the fake clock puts back whatever
+    // `performance.now` it captured — the spy — so restoring has to come after.
+    vi.useRealTimers();
     vi.restoreAllMocks();
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
     if (originalPath === undefined) delete process.env.PATH;
@@ -263,6 +271,34 @@ describe("windowsPath", () => {
       await Promise.all(spawns);
 
       expect(registryReadCount()).toBe(2);
+      expect(process.env.PATH).toBe("C:\\Windows;C:\\Python313");
+    });
+
+    it("stops waiting on a wedged registry read, then adopts it for the next spawn", async () => {
+      process.env.PATH = "C:\\Windows";
+      const settle = stubRegistryDeferred({ hklm: "C:\\Windows;C:\\Python313", hkcu: "" });
+      const { refreshWindowsPathForSpawn } = await importWindowsPath();
+
+      // Fake timers go in here rather than in `beforeEach`: installed before the
+      // dynamic import above, they hang the hook (#11661).
+      vi.useFakeTimers();
+      let spawnProceeded = false;
+      void refreshWindowsPathForSpawn().then(() => {
+        spawnProceeded = true;
+      });
+
+      // `reg.exe` is still outstanding — nothing has answered it. An unbounded
+      // await would still be sitting here, holding the terminal open request.
+      await vi.advanceTimersByTimeAsync(WEDGED_REGISTRY_READ_MS);
+
+      expect(spawnProceeded).toBe(true);
+      expect(process.env.PATH).toBe("C:\\Windows");
+
+      // The read is not abandoned when the spawn walks away: it lands afterwards
+      // and the next terminal opens against the fresh value.
+      settle();
+      await vi.advanceTimersByTimeAsync(1);
+
       expect(process.env.PATH).toBe("C:\\Windows;C:\\Python313");
     });
 

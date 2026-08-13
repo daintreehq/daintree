@@ -23,6 +23,15 @@ import path from "path";
 // which is the whole point of #11773.
 const SPAWN_PATH_REFRESH_TTL_MS = 5_000;
 
+// How long a spawn is willing to wait on that read before opening the terminal
+// with the PATH it already has. The read is normally tens of milliseconds, but
+// a `reg.exe` wedged behind Defender or a stalled registry sits there for its
+// full 3s exec timeout — once per throttle window, on the path the user is
+// waiting on. The read is not cancelled: it keeps going and its value lands for
+// the next spawn, so a slow registry costs freshness on one terminal rather
+// than latency on every one.
+const SPAWN_PATH_REFRESH_BUDGET_MS = 700;
+
 // Single-flight for the registry read itself, shared by every caller (startup
 // refresh, CLI availability probes, terminal spawns). Cleared on settlement so
 // a later call re-queries rather than pinning a stale answer.
@@ -38,7 +47,7 @@ let registryReadPromise: Promise<string | null> | null = null;
 // caught up — a stale PATH for as long as the jump.
 let lastRegistryReadAt: number | null = null;
 
-function deduplicatePath(pathStr: string, caseInsensitive: boolean): string {
+export function deduplicatePath(pathStr: string, caseInsensitive: boolean): string {
   const entries = pathStr.split(path.delimiter).filter(Boolean);
   const seen = new Set<string>();
   const unique: string[] = [];
@@ -181,8 +190,10 @@ export function resolveWindowsRegistryPath(): Promise<string | null> {
  * No-op off Windows: macOS/Linux resolve their PATH through the shell probe at
  * startup and have no equivalent registry to drift against.
  *
- * Never throws and never rejects — a registry read that fails must degrade to
- * "spawn with the PATH we already have", not block terminal creation.
+ * Bounded by `SPAWN_PATH_REFRESH_BUDGET_MS`: resolves once the read lands or
+ * the budget expires, whichever comes first. Never throws and never rejects — a
+ * registry read that fails, or merely drags, must degrade to "spawn with the
+ * PATH we already have", not block terminal creation.
  */
 export async function refreshWindowsPathForSpawn(): Promise<void> {
   if (process.platform !== "win32") return;
@@ -198,11 +209,36 @@ export async function refreshWindowsPathForSpawn(): Promise<void> {
     return;
   }
 
+  let budgetTimer: NodeJS.Timeout | undefined;
   try {
-    const resolved = await resolveWindowsRegistryPath();
-    if (resolved) process.env.PATH = resolved;
+    // Adopting the value is the read's own continuation rather than something
+    // this caller does after awaiting it: once the budget wins the race nobody
+    // is awaiting any more, and the result still has to reach `process.env` for
+    // the next spawn. Both settlement branches are handled right here, so the
+    // continuation outliving its caller can't surface as an unhandled
+    // rejection. The single-flight and the settlement stamp are untouched — the
+    // budget only decides how long this caller waits, never what runs.
+    const adopted = resolveWindowsRegistryPath().then(
+      (resolved) => {
+        if (resolved) process.env.PATH = resolved;
+      },
+      (err: unknown) => {
+        console.warn("[windowsPath] Registry PATH read failed; keeping the current PATH:", err);
+      }
+    );
+
+    await Promise.race([
+      adopted,
+      new Promise<void>((resolve) => {
+        budgetTimer = setTimeout(resolve, SPAWN_PATH_REFRESH_BUDGET_MS);
+        // A PATH refresh must never be the reason the process stays alive.
+        budgetTimer.unref();
+      }),
+    ]);
   } catch {
     // Keep the existing PATH.
+  } finally {
+    if (budgetTimer) clearTimeout(budgetTimer);
   }
 }
 

@@ -57,6 +57,7 @@ vi.mock("../../../../setup/windowsPath.js", () => ({
   resolveWindowsRegistryPath: vi.fn().mockResolvedValue(null),
   applyWindowsExtraPaths: vi.fn((p: string) => p),
   expandWindowsEnvVars: vi.fn((s: string) => s),
+  deduplicatePath: vi.fn((p: string) => p),
   __resetWindowsPathStateForTests: vi.fn(),
 }));
 

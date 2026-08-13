@@ -24,7 +24,11 @@ import path from "path";
 import fs from "fs";
 import { existsSync } from "fs";
 import os from "os";
-import { applyWindowsExtraPaths, resolveWindowsRegistryPath } from "./windowsPath.js";
+import {
+  applyWindowsExtraPaths,
+  deduplicatePath,
+  resolveWindowsRegistryPath,
+} from "./windowsPath.js";
 import { isLinuxWaylandHybridGpu } from "../utils/gpuDetection.js";
 import { getMaxWebGLContextCeiling } from "../utils/webglContextBudget.js";
 // Deliberately the tiny pure-fs module, NOT GpuCrashMonitorService — importing
@@ -230,20 +234,6 @@ const SHELL_PROBE_KILL_GRACE_MS = 500;
 // transient failure for the entire session is worse than the bounded cost
 // of one extra probe.
 let shellProbePromise: Promise<string | null> | null = null;
-
-function deduplicatePath(pathStr: string, caseInsensitive: boolean): string {
-  const entries = pathStr.split(path.delimiter).filter(Boolean);
-  const seen = new Set<string>();
-  const unique: string[] = [];
-  for (const entry of entries) {
-    const key = caseInsensitive ? entry.toLowerCase() : entry;
-    if (!seen.has(key)) {
-      seen.add(key);
-      unique.push(entry);
-    }
-  }
-  return unique.join(path.delimiter);
-}
 
 /**
  * Fallback shim/bin directories to add to PATH on macOS/Linux when the

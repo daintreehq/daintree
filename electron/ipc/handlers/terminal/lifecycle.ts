@@ -455,6 +455,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // a competing provision revoke them against a PTY that does not exist yet.
     // Placed after the invalid-token rejection so that path doesn't pay for it.
     //
+    // The wait is bounded inside the helper — a wedged `reg.exe` hands this
+    // spawn the PATH it already had and finishes in the background — so the
+    // await costs a read that lands quickly, never a stalled terminal.
+    //
     // Skipped when the caller already supplies a PATH: it wins over anything we
     // resolve (see `withCurrentWindowsPath`), so the registry read would be
     // pure latency. Nothing below adds one — the later `spawnEnv` merges carry

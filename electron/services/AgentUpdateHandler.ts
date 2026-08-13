@@ -60,7 +60,12 @@ export class AgentUpdateHandler {
     // Daintree to update a CLI through it. `PtyClient` stamps whatever main
     // holds onto the spawn, so refreshing here is what makes it the fresh one
     // (#11773). Windows-only and throttled; failure just uses the current PATH.
-    await refreshWindowsPathForSpawn().catch(() => {});
+    await refreshWindowsPathForSpawn().catch((err) => {
+      console.warn(
+        "[AgentUpdateHandler] Windows PATH refresh failed; using the current PATH:",
+        err
+      );
+    });
 
     this.ptyClient.spawn(terminalId, {
       cwd: os.homedir(),
