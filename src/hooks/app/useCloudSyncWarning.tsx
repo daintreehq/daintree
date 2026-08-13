@@ -4,6 +4,7 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { notify } from "@/lib/notify";
 import { detectCloudSyncService, type Platform } from "@/utils/cloudSyncDetection";
+import { getCloudSyncWarningCopy } from "@/utils/cloudSyncWarningCopy";
 import { isMac, isLinux } from "@/lib/platform";
 
 function getPlatform(): Platform {
@@ -56,11 +57,12 @@ export function useCloudSyncWarning(homeDir?: string) {
     // the ref guards against re-firing on rerenders.
     if (lastInboxedProjectRef.current !== currentProject.id) {
       lastInboxedProjectRef.current = currentProject.id;
+      const copy = getCloudSyncWarningCopy(service);
       notify({
         type: "warning",
         priority: "low",
-        title: "Cloud sync folder detected",
-        message: `Project is in a ${service}-synced folder which can interfere with terminal operations and git.`,
+        title: copy.title,
+        message: copy.description,
         supersedeKey: `cloud-sync:${currentProject.id}`,
         countable: false,
         context: { eventKind: "host" },

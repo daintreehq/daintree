@@ -296,7 +296,7 @@ describe("GlobalBannerCoordinator", () => {
 
     expect(screen.getByText("Crash watchdog disabled")).toBeTruthy();
     expect(screen.queryByText("GitHub token expired")).toBeNull();
-    expect(screen.queryByText("Project in a synced folder")).toBeNull();
+    expect(screen.queryByText("Project in a cloud folder")).toBeNull();
   });
 
   it("renders the GitHub token banner when only the token is unhealthy", () => {
@@ -312,7 +312,7 @@ describe("GlobalBannerCoordinator", () => {
 
     render(<GlobalBannerCoordinator />);
 
-    expect(screen.getByText("Project in a synced folder")).toBeTruthy();
+    expect(screen.getByText("Project in a cloud folder")).toBeTruthy();
   });
 
   it("prefers the GitHub token banner over cloud sync when both are active", () => {
@@ -322,7 +322,7 @@ describe("GlobalBannerCoordinator", () => {
     render(<GlobalBannerCoordinator />);
 
     expect(screen.getByText("GitHub token expired")).toBeTruthy();
-    expect(screen.queryByText("Project in a synced folder")).toBeNull();
+    expect(screen.queryByText("Project in a cloud folder")).toBeNull();
   });
 
   it("suppresses forge-token and cloud-sync while restore is active", () => {
@@ -334,7 +334,7 @@ describe("GlobalBannerCoordinator", () => {
 
     expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
     expect(screen.queryByText("GitHub token expired")).toBeNull();
-    expect(screen.queryByText("Project in a synced folder")).toBeNull();
+    expect(screen.queryByText("Project in a cloud folder")).toBeNull();
   });
 
   it("suppresses every lower-priority banner when the host has crashed", () => {
@@ -346,7 +346,7 @@ describe("GlobalBannerCoordinator", () => {
 
     expect(screen.getByText("Terminal service crashed")).toBeTruthy();
     expect(screen.queryByText("GitHub token expired")).toBeNull();
-    expect(screen.queryByText("Project in a synced folder")).toBeNull();
+    expect(screen.queryByText("Project in a cloud folder")).toBeNull();
   });
 
   it("renders the Rosetta banner when only the translation warning is active", () => {
@@ -373,7 +373,7 @@ describe("GlobalBannerCoordinator", () => {
 
     render(<GlobalBannerCoordinator />);
 
-    expect(screen.getByText("Project in a synced folder")).toBeTruthy();
+    expect(screen.getByText("Project in a cloud folder")).toBeTruthy();
     expect(screen.queryByText("Running under Rosetta")).toBeNull();
   });
 });

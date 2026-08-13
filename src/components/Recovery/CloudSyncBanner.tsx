@@ -6,6 +6,7 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
+import { getCloudSyncWarningCopy } from "@/utils/cloudSyncWarningCopy";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export function CloudSyncBanner() {
@@ -14,6 +15,8 @@ export function CloudSyncBanner() {
   const { saveSettings } = useProjectSettings();
 
   if (!service) return null;
+
+  const copy = getCloudSyncWarningCopy(service);
 
   const handleDismiss = async () => {
     // Guard against project switch race: the store carries the projectId the
@@ -50,8 +53,8 @@ export function CloudSyncBanner() {
   return (
     <InlineStatusBanner
       icon={AlertTriangle}
-      title="Project in a synced folder"
-      description={`This project is in a ${service}-synced folder, which can interfere with terminal operations and git. Consider moving it to a local folder.`}
+      title={copy.title}
+      description={copy.description}
       severity="warning"
       role="status"
       actions={[
