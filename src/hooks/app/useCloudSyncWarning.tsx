@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useProjectStore } from "@/store";
+import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { notify } from "@/lib/notify";

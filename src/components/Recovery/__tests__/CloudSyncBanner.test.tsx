@@ -115,11 +115,21 @@ describe("CloudSyncBanner", () => {
     const message = payload?.message ?? "";
     expect(title).not.toBe("");
     expect(message).toContain("OneDrive");
+    // The inbox surface must hedge too, not just the banner (#11767).
+    expect(message).not.toMatch(/-synced folder/i);
+    expect(message).toMatch(/\bmay\b/i);
 
     render(<CloudSyncBanner />);
     const region = screen.getByRole("status");
-    expect(within(region).getByText(title)).toBeTruthy();
-    expect(within(region).getByText(message)).toBeTruthy();
+    const titleEl = within(region).getByText(title);
+    const descEl = within(region).getByText(message);
+
+    // Compare raw textContent in the matching slots: getByText normalises
+    // whitespace and would also pass if the two fields were swapped.
+    expect(titleEl.textContent).toBe(title);
+    expect(descEl.textContent).toBe(message);
+    expect(descEl).toBe(region.querySelector("p"));
+    expect(titleEl).not.toBe(descEl);
   });
 
   it("persists dismiss preference and clears the banner", async () => {

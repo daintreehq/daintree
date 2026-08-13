@@ -22,8 +22,13 @@ import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
+import { getCloudSyncWarningCopy } from "@/utils/cloudSyncWarningCopy";
 
 const PROVIDER_ID = "daintree.github.github";
+
+// These cases assert which banner wins the slot, not its wording — resolve the
+// title from the copy module so rewording can't churn the routing tests.
+const cloudSyncTitle = getCloudSyncWarningCopy("Dropbox").title;
 
 function setForgeTokenUnhealthy(value: boolean) {
   const store = useForgeProviderHealthStore.getState();
@@ -296,7 +301,7 @@ describe("GlobalBannerCoordinator", () => {
 
     expect(screen.getByText("Crash watchdog disabled")).toBeTruthy();
     expect(screen.queryByText("GitHub token expired")).toBeNull();
-    expect(screen.queryByText("Project in a cloud folder")).toBeNull();
+    expect(screen.queryByText(cloudSyncTitle)).toBeNull();
   });
 
   it("renders the GitHub token banner when only the token is unhealthy", () => {
@@ -312,7 +317,7 @@ describe("GlobalBannerCoordinator", () => {
 
     render(<GlobalBannerCoordinator />);
 
-    expect(screen.getByText("Project in a cloud folder")).toBeTruthy();
+    expect(screen.getByText(cloudSyncTitle)).toBeTruthy();
   });
 
   it("prefers the GitHub token banner over cloud sync when both are active", () => {
@@ -322,7 +327,7 @@ describe("GlobalBannerCoordinator", () => {
     render(<GlobalBannerCoordinator />);
 
     expect(screen.getByText("GitHub token expired")).toBeTruthy();
-    expect(screen.queryByText("Project in a cloud folder")).toBeNull();
+    expect(screen.queryByText(cloudSyncTitle)).toBeNull();
   });
 
   it("suppresses forge-token and cloud-sync while restore is active", () => {
@@ -334,7 +339,7 @@ describe("GlobalBannerCoordinator", () => {
 
     expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
     expect(screen.queryByText("GitHub token expired")).toBeNull();
-    expect(screen.queryByText("Project in a cloud folder")).toBeNull();
+    expect(screen.queryByText(cloudSyncTitle)).toBeNull();
   });
 
   it("suppresses every lower-priority banner when the host has crashed", () => {
@@ -346,7 +351,7 @@ describe("GlobalBannerCoordinator", () => {
 
     expect(screen.getByText("Terminal service crashed")).toBeTruthy();
     expect(screen.queryByText("GitHub token expired")).toBeNull();
-    expect(screen.queryByText("Project in a cloud folder")).toBeNull();
+    expect(screen.queryByText(cloudSyncTitle)).toBeNull();
   });
 
   it("renders the Rosetta banner when only the translation warning is active", () => {
@@ -373,7 +378,7 @@ describe("GlobalBannerCoordinator", () => {
 
     render(<GlobalBannerCoordinator />);
 
-    expect(screen.getByText("Project in a cloud folder")).toBeTruthy();
+    expect(screen.getByText(cloudSyncTitle)).toBeTruthy();
     expect(screen.queryByText("Running under Rosetta")).toBeNull();
   });
 });

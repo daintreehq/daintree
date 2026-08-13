@@ -15,10 +15,13 @@ export interface CloudSyncWarningCopy {
  * sync (which it doesn't): Windows redirects Documents into OneDrive by
  * default, so the match fires whether or not sync is paused, unlinked, or
  * switched off.
+ *
+ * "your ${service} folder" also keeps the sentence article-free — "a iCloud
+ * Drive folder" would be wrong, and the roots are all under the home dir.
  */
 export function getCloudSyncWarningCopy(service: CloudSyncService): CloudSyncWarningCopy {
   return {
     title: "Project in a cloud folder",
-    description: `This project is inside a ${service} folder that may be syncing, which can interfere with terminal operations and git. Consider moving it to a local folder.`,
+    description: `This project is inside your ${service} folder, which may be syncing. That can interfere with terminal operations and git, so consider moving it to a local folder.`,
   };
 }
