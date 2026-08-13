@@ -7,7 +7,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type RefObject,
 } from "react";
 import type { FileChangeDetail } from "../../types";
 import { cn } from "../../lib/utils";
@@ -76,11 +75,11 @@ interface FileChangeRowProps {
   decoration: Parameters<typeof FileDecorationBadge>[0]["decoration"];
   openFileAt: (index: number, triggerEl: HTMLElement | null) => void;
   renderItems: ReturnType<typeof useFileRowMenuItems>["renderItems"];
-  triggerElementRef: RefObject<HTMLElement | null>;
+  rememberMenuTrigger: (rowEl: HTMLElement) => void;
 }
 
 // Extracted as a genuine component (rather than a plain helper invoked via
-// `.map()`) so the React Compiler can correctly scope the `triggerElementRef`
+// `.map()`) so the React Compiler can correctly scope the trigger-element
 // writes to their owning event handlers. A helper function called directly
 // during render — even one whose ref access is nested inside further handler
 // closures — reads as a render-time ref access to the compiler's static
@@ -94,7 +93,7 @@ function FileChangeRow({
   decoration,
   openFileAt,
   renderItems,
-  triggerElementRef,
+  rememberMenuTrigger,
 }: FileChangeRowProps) {
   const presentation = getGitStatusPresentation(change.status);
   const { dir, base } = splitPath(change.relativePath);
@@ -102,8 +101,8 @@ function FileChangeRow({
 
   const absolutePath = isAbsolute(change.path) ? change.path : join(rootPath, change.relativePath);
 
-  // Passes `null` rather than reading `triggerElementRef.current` here: the
-  // ref access has to stay out of any value that flows into `renderItems(...)`
+  // Passes `null` rather than reading the stored trigger element here: the ref
+  // access has to stay out of any value that flows into `renderItems(...)`
   // below, since that call runs synchronously during render and the compiler
   // flags a ref-derived value reaching it regardless of a `useCallback`
   // wrapper. `openFileAt` (owned by the parent) already treats `null` as
@@ -127,10 +126,14 @@ function FileChangeRow({
           onContextMenu={(event) => {
             stopFileRowMenuPropagation(event);
             // The row that opened the menu is the element a diff opened
-            // from it should hand focus back to. Set here rather than in
-            // the item's onSelect, which fires after Radix has already
-            // begun closing the menu.
-            triggerElementRef.current = event.currentTarget;
+            // from it should hand focus back to. Recorded here rather than
+            // in the item's onSelect, which fires after Radix has already
+            // begun closing the menu. Routed through the parent's callback
+            // because the compiler only types a ref created by `useRef` in
+            // its own component — one arriving as a prop reads as an
+            // ordinary object, and writing it from a JSX handler is a
+            // "mutating a value used in JSX" bailout.
+            rememberMenuTrigger(event.currentTarget);
           }}
         >
           <TooltipTrigger asChild>
@@ -240,6 +243,12 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
     // close. Identity-stable across renders so AppDialog's restore logic doesn't
     // spuriously re-fire (the ref is the fallback for an unmounted trigger).
     const triggerElementRef = useRef<HTMLElement | null>(null);
+    // Rows hand their opening element back through this rather than receiving
+    // the ref itself, so the only `.current` writes live in the component that
+    // owns the ref.
+    const rememberMenuTrigger = useCallback((rowEl: HTMLElement) => {
+      triggerElementRef.current = rowEl;
+    }, []);
 
     // Shared with `worktree.openChanges` (src/lib/workingTreeDiff.ts) so a diff
     // opened from the context menu or a keybinding lands on the same first file,
@@ -434,7 +443,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
                         decoration={decorations[file.path]}
                         openFileAt={openFileAt}
                         renderItems={renderItems}
-                        triggerElementRef={triggerElementRef}
+                        rememberMenuTrigger={rememberMenuTrigger}
                       />
                     );
                   })}
@@ -482,7 +491,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
                 decoration={decorations[change.path]}
                 openFileAt={openFileAt}
                 renderItems={renderItems}
-                triggerElementRef={triggerElementRef}
+                rememberMenuTrigger={rememberMenuTrigger}
               />
             );
           })}
