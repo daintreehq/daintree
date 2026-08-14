@@ -15,6 +15,10 @@ import {
   resolveEffectiveInlineMode,
   reconcileInlineModeFlag,
   isAgentBypassSupported,
+  buildAssignedSessionIdArgs,
+  supportsSessionIdAssignment,
+  mintAssignedSessionId,
+  stripAssignedSessionIdArgs,
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
 } from "../agentSettings.js";
@@ -1373,6 +1377,193 @@ describe("global alt-screen threading through command generation (#10876)", () =
     expect(
       buildAgentLaunchFlags({ inlineMode: "off" }, "codex", { globalUseAltScreen: false })
     ).not.toContain("--no-alt-screen");
+  });
+});
+
+describe("launch-time session id assignment (#11782)", () => {
+  // Claude accepts `--session-id <uuid>`; Codex has no launch-time equivalent
+  // and keeps the teardown scrape. Using the pair keeps every assertion below
+  // about the capability's effect rather than about one agent's literal flags.
+  const ASSIGNING = "claude";
+  const SCRAPING = "codex";
+
+  it("reports the capability exactly when a launch actually carries an id", () => {
+    // Cross-check rather than a restatement of the registry: the predicate that
+    // teardown trusts to skip the scrape must agree, for every agent, with
+    // whether the launch command really got an id. A disagreement means either
+    // a scrape skipped with nothing captured, or an id assigned that nothing
+    // records.
+    const probe = "33333333-4444-5555-6666-777777777777";
+    for (const agentId of Object.keys(DEFAULT_AGENT_SETTINGS.agents)) {
+      const emitsId = generateAgentCommand(agentId, {}, agentId, {
+        sessionId: probe,
+      }).includes(probe);
+      expect(supportsSessionIdAssignment(agentId)).toBe(emitsId);
+    }
+  });
+
+  it("reports no capability for an absent or unknown agent", () => {
+    expect(supportsSessionIdAssignment(undefined)).toBe(false);
+    expect(supportsSessionIdAssignment("not-a-real-agent")).toBe(false);
+  });
+
+  it("mints an id only where one can actually be assigned", () => {
+    expect(mintAssignedSessionId(SCRAPING)).toBeUndefined();
+    expect(mintAssignedSessionId(undefined)).toBeUndefined();
+
+    const minted = mintAssignedSessionId(ASSIGNING);
+    expect(minted).toBeDefined();
+    // The CLI requires a real UUID and rejects anything else outright.
+    expect(minted).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  });
+
+  it("mints a distinct id per call so sibling panes never collide", () => {
+    // Two panes sharing an id is the failure this must structurally prevent:
+    // the second launch would be rejected as "already in use".
+    const ids = new Set(Array.from({ length: 25 }, () => mintAssignedSessionId(ASSIGNING)));
+    expect(ids.size).toBe(25);
+  });
+
+  it("puts the assigned id in the launch command ahead of the positional prompt", () => {
+    const sessionId = "11111111-2222-3333-4444-555555555555";
+    const command = generateAgentCommand("claude", {}, ASSIGNING, {
+      sessionId,
+      initialPrompt: "fix the bug",
+    });
+
+    const idIndex = command.indexOf(sessionId);
+    expect(idIndex).toBeGreaterThan(-1);
+    // Ordering is load-bearing: emitted after the prompt, the CLI would read
+    // the flag as part of the prompt rather than as a flag.
+    expect(idIndex).toBeLessThan(command.indexOf("fix the bug"));
+  });
+
+  it("leaves the command untouched for an agent that mints its own id", () => {
+    const withId = generateAgentCommand("codex", {}, SCRAPING, { sessionId: "abc-123" });
+    const withoutId = generateAgentCommand("codex", {}, SCRAPING, {});
+    expect(withId).toBe(withoutId);
+    expect(buildAssignedSessionIdArgs(SCRAPING, "abc-123")).toBeUndefined();
+  });
+
+  it("keeps a from-flags rebuild free of any assigned id", () => {
+    // That builder reproduces the CAPTURED launch configuration, which a
+    // one-shot per-launch id is not part of. Letting one leak in would also
+    // mean a pane could be handed an id its command never actually carried.
+    const command = buildLaunchCommandFromFlags("claude", ASSIGNING, ["--verbose"]);
+    expect(command).toBe("claude --verbose");
+  });
+
+  describe("one-shot flag handling", () => {
+    const sessionId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+    it("strips the assigning flag so a copied command launches fresh", () => {
+      const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId });
+      const stripped = stripAssignedSessionIdArgs(assigned, ASSIGNING);
+
+      expect(stripped).not.toContain(sessionId);
+      expect(stripped).not.toContain("--session-id");
+      // Still a runnable command, not a mangled one.
+      expect(stripped.startsWith("claude")).toBe(true);
+      expect(stripped).not.toMatch(/\s{2,}/);
+    });
+
+    it("is idempotent, so a repeated strip stays valid", () => {
+      const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId });
+      const once = stripAssignedSessionIdArgs(assigned, ASSIGNING);
+      expect(stripAssignedSessionIdArgs(once, ASSIGNING)).toBe(once);
+    });
+
+    it("preserves flags on both sides of the removed one", () => {
+      // A fixture with nothing around the flag would pass even if the strip
+      // threw the rest of the command away.
+      const assigned = generateAgentCommand("claude", { customFlags: "--verbose" }, ASSIGNING, {
+        sessionId,
+        initialPrompt: "hello",
+      });
+      const stripped = stripAssignedSessionIdArgs(assigned, ASSIGNING);
+
+      expect(stripped).not.toContain(sessionId);
+      expect(stripped).toContain("--verbose");
+      expect(stripped).toContain("hello");
+      expect(stripped.startsWith("claude ")).toBe(true);
+    });
+
+    it("strips without being told which id was used", () => {
+      // The worktree-move flow clears `agentSessionId` before restarting,
+      // precisely because it wants a fresh launch. A strip that needed the id
+      // to find the flag would no-op there and relaunch with a spent one.
+      const assigned = generateAgentCommand("claude", {}, ASSIGNING, {
+        sessionId: "99999999-8888-7777-6666-555555555555",
+      });
+      expect(stripAssignedSessionIdArgs(assigned, ASSIGNING)).toBe("claude");
+    });
+
+    it("keeps a quoted argument's internal spacing intact", () => {
+      // Removing the flag must not reflow the rest of the command — collapsing
+      // whitespace globally would rewrite a prompt that contains a run of them.
+      const assigned = generateAgentCommand("claude", {}, ASSIGNING, {
+        sessionId,
+        initialPrompt: "fix  the  bug",
+      });
+      expect(stripAssignedSessionIdArgs(assigned, ASSIGNING)).toContain("fix  the  bug");
+    });
+
+    it("reads a POSIX-escaped apostrophe as part of its quoted word", () => {
+      // `escapeShellArg` emits `'\''` for every apostrophe. Read without
+      // backslash escapes, that run leaves the quote state inverted, the flag
+      // scan reaches inside the prompt, and the command is cut at the next
+      // space with a stray quote left behind.
+      const command = `claude 'don'\\''t touch --session-id here'`;
+      expect(stripAssignedSessionIdArgs(command, ASSIGNING)).toBe(command);
+    });
+
+    it("strips the flag from a prompt containing an apostrophe without reflowing it", () => {
+      const initialPrompt = "don't  fix  it";
+      const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId, initialPrompt });
+      const stripped = stripAssignedSessionIdArgs(assigned, ASSIGNING);
+
+      expect(stripped).not.toContain(sessionId);
+      expect(stripped).not.toContain("--session-id");
+      // Byte-identical to the launch that never carried an id — so the strip
+      // neither collapsed the prompt's spacing nor unbalanced its quoting.
+      expect(stripped).toBe(generateAgentCommand("claude", {}, ASSIGNING, { initialPrompt }));
+    });
+
+    it("leaves commands that never carried the flag alone", () => {
+      const plain = generateAgentCommand("claude", {}, ASSIGNING, {});
+      expect(stripAssignedSessionIdArgs(plain, ASSIGNING)).toBe(plain);
+    });
+
+    it("ignores the flag when it is only text inside a prompt", () => {
+      // Scanning the raw string would cut the quoted prompt in half and leave
+      // an unbalanced quote — a command that no longer runs at all.
+      const command = generateAgentCommand("claude", {}, ASSIGNING, {
+        initialPrompt: "Explain --session-id foo to me",
+      });
+      expect(stripAssignedSessionIdArgs(command, ASSIGNING)).toBe(command);
+    });
+
+    it("removes the real flag while leaving a lookalike prompt intact", () => {
+      const command = generateAgentCommand("claude", {}, ASSIGNING, {
+        sessionId,
+        initialPrompt: "Explain --session-id foo to me",
+      });
+      const stripped = stripAssignedSessionIdArgs(command, ASSIGNING);
+
+      expect(stripped).not.toContain(sessionId);
+      expect(stripped).toContain("Explain --session-id foo to me");
+    });
+
+    it("leaves an agent that mints its own id alone", () => {
+      const codexCommand = `codex --session-id ${sessionId}`;
+      expect(stripAssignedSessionIdArgs(codexCommand, SCRAPING)).toBe(codexCommand);
+    });
+
+    it("does nothing without an agent to act on", () => {
+      const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId });
+      expect(stripAssignedSessionIdArgs(assigned, undefined)).toBe(assigned);
+      expect(stripAssignedSessionIdArgs("", ASSIGNING)).toBe("");
+    });
   });
 });
 

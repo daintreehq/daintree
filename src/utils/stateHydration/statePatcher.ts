@@ -20,6 +20,7 @@ import {
   buildResumeCommand,
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
+  mintAssignedSessionId,
   reconcileBypassFlags,
   reconcileInlineModeFlag,
   resolveEffectiveBypass,
@@ -539,6 +540,12 @@ export function buildArgsForRespawn(
   // was available — the user's prior conversation is unreachable and we must
   // surface it rather than silently respawning a clean session (issue #9802).
   let sessionLostOnRestore = false;
+  // Session id this respawn will run under (#11782): the saved one when the
+  // pane genuinely reattaches, a freshly minted one on every branch that gives
+  // up and starts over, and undefined for agents that don't take an id at
+  // launch. Recorded on the respawned panel so it reaches the terminal record
+  // at spawn instead of depending on a teardown to observe it.
+  let respawnSessionId: string | undefined;
   let presetEnv: Record<string, string> | undefined;
   let preset: AgentPreset | undefined;
   // Bypass-reconciled launch flags (#10432); falls back to the raw saved flags
@@ -603,6 +610,18 @@ export function buildArgsForRespawn(
     const resumeFlags =
       !hasPersistedFlags && injectedFromEmpty.length > 0 ? injectedFromEmpty : persistedFlags;
 
+    // A branch that abandons the saved conversation starts a new one, so it
+    // mints its own id rather than replaying the snapshot's (#11782) — the CLI
+    // rejects an id it has already issued. Only the settings-derived rebuilds
+    // do this: the from-persisted-flags branches reproduce a captured
+    // configuration, which an assigned id is deliberately not part of, so those
+    // panes keep the pre-existing capture behaviour rather than being handed an
+    // id the command never actually carried.
+    const mintFreshSessionId = (): string | undefined => {
+      respawnSessionId = mintAssignedSessionId(agentId);
+      return respawnSessionId;
+    };
+
     const buildFromPersistedFlags = () =>
       buildLaunchCommandFromFlags(baseCommand, agentId, persistedFlags as string[], {
         clipboardDirectory,
@@ -615,6 +634,10 @@ export function buildArgsForRespawn(
         : buildResumeCommand(agentId, saved.agentSessionId, resumeFlags);
       if (resumeCmd) {
         command = resumeCmd;
+        // The conversation this pane is reattaching to. Carried onto the
+        // respawn so it's on the terminal record from the moment the PTY
+        // exists, rather than only if a later teardown manages to observe it.
+        respawnSessionId = saved.agentSessionId;
       } else if (hasPersistedFlags) {
         command = buildFromPersistedFlags();
         sessionLostOnRestore = true;
@@ -625,6 +648,7 @@ export function buildArgsForRespawn(
           presetArgs: preset?.args?.join(" "),
           globalSkipPermissions,
           globalUseAltScreen,
+          sessionId: mintFreshSessionId(),
         });
         sessionLostOnRestore = true;
       }
@@ -658,6 +682,7 @@ export function buildArgsForRespawn(
           presetArgs: preset?.args?.join(" "),
           globalSkipPermissions,
           globalUseAltScreen,
+          sessionId: mintFreshSessionId(),
         });
         sessionLostOnRestore = true;
       } else if (
@@ -731,6 +756,7 @@ export function buildArgsForRespawn(
       ? undefined
       : (reconciledLaunchFlags ?? saved.agentLaunchFlags),
     agentModelId: saved.agentModelId,
+    agentSessionId: respawnSessionId,
     agentPresetId: respawnAgentPresetId,
     agentPresetColor: respawnAgentPresetColor,
     originalPresetId: respawnOriginalPresetId,

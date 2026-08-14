@@ -109,6 +109,23 @@ describe("buildPanelSnapshotOptions", () => {
     expect(result!.agentLaunchFlags).not.toBe((panel as PtyPanelData).agentLaunchFlags);
   });
 
+  it("drops a spent session-id flag so reopening a closed agent pane can launch", () => {
+    // Assignment is one-shot (#11782): reopening with the id the closed pane
+    // already used is rejected by the CLI, so the pane would come back dead.
+    const sessionId = "4c5d6e7f-8a9b-4c1d-8e2f-3a4b5c6d7e8f";
+    const panel = makePanel({
+      launchAgentId: "claude",
+      command: `claude --session-id '${sessionId}' --verbose`,
+    });
+
+    const result = buildPanelSnapshotOptions(panel);
+
+    expect(result!.command).not.toContain("--session-id");
+    expect(result!.command).not.toContain(sessionId);
+    // Everything else about the launch still reopens as it was.
+    expect(result!.command).toContain("--verbose");
+  });
+
   it("carries the title ownership rung verbatim (reopen-last is a restore, not a copy)", () => {
     const locked = makePanel({ command: "bash", title: "My debug shell", titleMode: "user" });
     expect(buildPanelSnapshotOptions(locked)).toMatchObject({

@@ -27,6 +27,7 @@ import type {
 } from "@shared/types";
 import {
   generateAgentCommand,
+  mintAssignedSessionId,
   buildAgentLaunchFlags,
   resolveEffectivePresetId,
 } from "@shared/types";
@@ -446,6 +447,10 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
         let command: string | undefined;
         let launchFlags: string[] | undefined;
+        // Session id chosen up front for CLIs that accept one (#11782). Minted
+        // per launch and never reused: re-offering an id the CLI already knows
+        // is rejected outright, so each fresh conversation needs its own.
+        let assignedSessionId: string | undefined;
         let presetEnv: Record<string, string> | undefined;
         let preset: import("../../shared/config/agentRegistry").AgentPreset | undefined;
         // Hoisted so the soft-launch gate below reuses the result of the
@@ -562,6 +567,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           );
           const globalSkipPermissions = launchSettings?.globalSkipPermissions ?? false;
           const globalUseAltScreen = launchSettings?.globalUseAltScreen ?? false;
+          assignedSessionId = isAgent ? mintAssignedSessionId(agentId) : undefined;
           command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
             initialPrompt: launchOptions?.prompt,
             interactive: launchOptions?.interactive ?? true,
@@ -570,6 +576,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
             presetArgs: preset?.args?.join(" "),
             globalSkipPermissions,
             globalUseAltScreen,
+            sessionId: assignedSessionId,
           });
 
           // Capture process-level flags for session resume persistence
@@ -657,6 +664,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               location: launchOptions?.location,
               agentLaunchFlags: launchFlags,
               agentModelId: launchOptions?.modelId,
+              agentSessionId: assignedSessionId,
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
               env: presetEnv,

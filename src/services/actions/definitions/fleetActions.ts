@@ -27,6 +27,7 @@ import { runManagedFleetBroadcast } from "@/components/Fleet/fleetEnterBroadcast
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { supportsSessionIdAssignment } from "@shared/types";
 import type { FleetSavedScope, ProjectSettings } from "@shared/types";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 
@@ -75,8 +76,17 @@ function parseConfirmed(args: unknown): boolean {
   return confirmed === true;
 }
 
+/**
+ * Panes whose conversation a restart really does throw away.
+ *
+ * Agents Daintree assigns an id to carry one from launch and are RESUMED by it
+ * across a restart, so counting them would warn about a loss that never happens
+ * — and would do it for panes opened seconds ago (#11782).
+ */
 function countSessionLoss(targets: PtyPanelData[]): number {
-  return targets.filter((t) => Boolean(t.agentSessionId)).length;
+  return targets.filter(
+    (t) => Boolean(t.agentSessionId) && !supportsSessionIdAssignment(t.launchAgentId)
+  ).length;
 }
 
 function requestConfirmation(kind: FleetPendingActionKind, targets: PtyPanelData[]): void {

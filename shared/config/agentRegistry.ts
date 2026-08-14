@@ -282,6 +282,34 @@ export type AgentResume =
        * Omit for agents that have no resume-latest flag.
        */
       resumeLatestArgs?: string[];
+      /**
+       * CLI args that ASSIGN a caller-supplied session id at launch, for CLIs
+       * that accept one (e.g. Claude's `--session-id <uuid>`). Declaring this
+       * inverts how the id is obtained (#11782): instead of scraping it out of
+       * the TUI during teardown, Daintree mints the id up front and hands it to
+       * the CLI, so the id is known before the session exists.
+       *
+       * That removes the scrape's whole failure surface for this agent. The
+       * teardown scrape only works when the agent is idle and unblocked at the
+       * exact moment we tear it down — a mid-turn agent swallows `quitCommand`
+       * as chat text, a modal (trust/approval prompt) eats the keystrokes, and
+       * an empty session exits without printing a hint at all. A pre-assigned
+       * id also survives the paths the scrape can never reach: force quit, a
+       * crash, a SIGKILL, or a pty-host death, none of which run a teardown.
+       *
+       * ONE-SHOT, NOT IDEMPOTENT. The id may only be assigned when creating a
+       * NEW conversation — re-sending an already-used id is an error, not a
+       * resume (`claude --session-id <used>` exits with "Session ID <id> is
+       * already in use"). Resuming that conversation later goes through
+       * {@link AgentResume.args} (`--resume <id>`), which reuses the original
+       * id rather than minting a new one. So: assign once at fresh launch,
+       * resume by id forever after, and mint a DISTINCT id for a duplicated
+       * pane (see `buildAssignedSessionIdArgs`).
+       *
+       * Omit for CLIs that only hand out their own ids — those keep the
+       * `sessionIdPattern` teardown scrape as their sole capture path.
+       */
+      assignSessionIdArgs?: (sessionId: string) => string[];
     }
   | {
       kind: "rolling-history";

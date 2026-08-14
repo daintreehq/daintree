@@ -201,3 +201,57 @@ describe("serializePtyPanel — sessionLostOnRestore is never persisted", () => 
     expect("sessionLostOnRestore" in snapshot).toBe(false);
   });
 });
+
+// A session-id-assigning flag is spent the moment the CLI accepts it (#11782).
+// Persisting it would hand a rejected launch to any restore that replays the
+// stored command, so the command is persisted without it while the id itself
+// still is — that pairing is what lets restore rebuild a working resume.
+describe("serializePtyPanel — an assigned session id never persists in the command", () => {
+  const sessionId = "12345678-1234-1234-1234-123456789abc";
+
+  it("drops the assigning flag but keeps the id and the rest of the command", () => {
+    const panel = makePanel({
+      launchAgentId: "claude",
+      agentSessionId: sessionId,
+      command: `claude --session-id ${sessionId} --verbose`,
+    });
+
+    const snapshot = serializePtyPanel(panel);
+
+    expect(snapshot.command).not.toContain("--session-id");
+    expect(snapshot.command).not.toContain(sessionId);
+    expect(snapshot.command).toContain("--verbose");
+    // The id survives on its own field — that is what restore resumes from.
+    expect(snapshot.agentSessionId).toBe(sessionId);
+  });
+
+  it("leaves a command that never carried the flag untouched", () => {
+    const panel = makePanel({
+      launchAgentId: "claude",
+      agentSessionId: sessionId,
+      command: "claude --verbose",
+    });
+    expect(serializePtyPanel(panel).command).toBe("claude --verbose");
+  });
+
+  it("leaves an agent that mints its own id untouched", () => {
+    const panel = makePanel({
+      launchAgentId: "codex",
+      agentSessionId: sessionId,
+      command: `codex --session-id ${sessionId}`,
+    });
+    // Codex declares no assigning args, so nothing here is a spent flag.
+    expect(serializePtyPanel(panel).command).toBe(`codex --session-id ${sessionId}`);
+  });
+
+  it("strips even when the panel no longer carries the id", () => {
+    // The id can be cleared before the panel is serialized; the flag still has
+    // to go, or the restore replays a launch the CLI will reject.
+    const panel = makePanel({
+      launchAgentId: "claude",
+      agentSessionId: undefined,
+      command: `claude --session-id '${sessionId}'`,
+    });
+    expect(serializePtyPanel(panel).command).toBe("claude");
+  });
+});

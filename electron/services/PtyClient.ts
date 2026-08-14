@@ -61,6 +61,8 @@ import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { createLogger, isValidLogOverrideLevel } from "../utils/logger.js";
 import { store } from "../store.js";
+import { stripAssignedSessionIdArgs } from "../../shared/types/agentSettings.js";
+import { buildCommandLaunchShell } from "../ipc/handlers/terminal/commandLaunch.js";
 import { getPluginAgentRegistry } from "../../shared/config/pluginAgentRegistry.js";
 import { getPluginProcessToolRegistry } from "../../shared/config/pluginProcessToolRegistry.js";
 
@@ -869,7 +871,58 @@ export class PtyClient extends EventEmitter {
     // This makes the "double-spawn-safe" invariant explicit rather than relying
     // on the pre-fork transport drop.
     if (!shard.isRunning()) return;
-    shard.send({ type: "spawn", id, options: withCurrentWindowsPath(options) });
+    shard.send({
+      type: "spawn",
+      id,
+      options: withCurrentWindowsPath(options),
+    });
+    this.disarmStoredSessionAssignment(id);
+  }
+
+  /**
+   * Strip a session-id assignment out of the STORED spawn entry once it has
+   * been delivered, so no replay can offer the CLI the same id twice (#11782).
+   *
+   * A `pendingSpawns` entry lives until the terminal is killed and is re-sent
+   * verbatim on every replay. Assignment is one-shot — the CLI rejects an id it
+   * has already issued — so replaying the assigning form brings the pane back
+   * dead rather than running. Disarming the stored copy, rather than tracking
+   * "already delivered" alongside it, means the entry is simply always safe to
+   * re-send and dropping the entry anywhere disposes of this state with it.
+   *
+   * The replayed launch is a new conversation, so the id is cleared from the
+   * options too: leaving it would stamp the terminal record with an id the
+   * replayed process doesn't own, and teardown would then hand that stale id to
+   * the next restore. Losing the conversation on a host crash matches the
+   * behaviour that was already there; recovering it would need proof the CLI
+   * got far enough to create the session, which "the spawn message was sent"
+   * is not.
+   *
+   * Runs AFTER the send and only past the `isRunning()` guard, so a dropped
+   * pre-ready send leaves the entry armed and the first-ready replay still
+   * counts as the first delivery.
+   */
+  private disarmStoredSessionAssignment(id: string): void {
+    const stored = this.pendingSpawns.get(id);
+    if (!stored?.command || !stored.launchAgentId) return;
+
+    const command = stripAssignedSessionIdArgs(stored.command, stored.launchAgentId);
+    if (command === stored.command) return;
+
+    const disarmed: PtyHostSpawnOptions = { ...stored, command, agentSessionId: undefined };
+    // The wrapper shells (zsh/bash/sh/pwsh/cmd) EXECUTE the command out of
+    // `args` — PowerShell base64-encodes it there — so disarming `command`
+    // alone would leave the spent flag running. Rebuild the carrier from the
+    // disarmed command using the same pure builder that produced it.
+    const relaunch = buildCommandLaunchShell(command, stored.shell);
+    if (relaunch) disarmed.args = relaunch.args;
+    if (stored.postSpawnInput) {
+      disarmed.postSpawnInput = stripAssignedSessionIdArgs(
+        stored.postSpawnInput,
+        stored.launchAgentId
+      );
+    }
+    this.pendingSpawns.set(id, disarmed);
   }
 
   private respawnPendingForShard(shard: PtyShard): void {

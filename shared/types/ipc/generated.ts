@@ -1671,6 +1671,7 @@ export interface GeneratedIpcInvokeMap {
         isEphemeral?: boolean | undefined;
         agentLaunchFlags?: string[] | undefined;
         agentModelId?: string | undefined;
+        agentSessionId?: string | undefined;
         worktreeId?: string | undefined;
         agentPresetId?: string | undefined;
         agentPresetColor?: string | undefined;

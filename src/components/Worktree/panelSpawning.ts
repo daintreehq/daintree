@@ -1,7 +1,7 @@
 import { usePanelStore } from "@/store/panelStore";
 import { agentSettingsClient, systemClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
-import { generateAgentCommand, buildAgentLaunchFlags } from "@shared/types";
+import { generateAgentCommand, buildAgentLaunchFlags, mintAssignedSessionId } from "@shared/types";
 import type { RecipeTerminal } from "@shared/types";
 import { preflightSpawnBatchLimit } from "@/store/panelLimitStore";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
@@ -106,12 +106,16 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
             const entry = agentSettings?.agents?.[agentId] ?? {};
             const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
             const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
+            // One id per spawned pane (#11782) — a recipe fans out several
+            // panes at once, and reusing an id across them would collide.
+            const assignedSessionId = mintAssignedSessionId(agentId);
             const command = generateAgentCommand(baseCommand, entry, agentId, {
               clipboardDirectory,
               modelId: t.agentModelId,
               recipeArgs: t.args?.trim() || undefined,
               globalSkipPermissions,
               globalUseAltScreen,
+              sessionId: assignedSessionId,
             });
             // Preserve flags the caller already captured (the clone-layout path
             // projects a live panel's `agentLaunchFlags` onto the recipe). For
@@ -139,6 +143,7 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
               exitBehavior: t.exitBehavior,
               agentModelId: t.agentModelId,
               agentLaunchFlags,
+              agentSessionId: assignedSessionId,
               location: t.location,
               bypassLimits: true,
             });

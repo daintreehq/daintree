@@ -366,6 +366,10 @@ export const TerminalSpawnOptionsSchema = z.object({
   isEphemeral: z.boolean().optional(),
   agentLaunchFlags: z.array(z.string()).optional(),
   agentModelId: z.string().optional(),
+  // Session id already known at launch (#11782), recorded on the terminal
+  // record at spawn. Must be listed here or zod strips it and the id never
+  // reaches the pty-host.
+  agentSessionId: z.string().optional(),
   worktreeId: z.string().optional(),
   agentPresetId: z.string().optional(),
   agentPresetColor: z.string().optional(),
