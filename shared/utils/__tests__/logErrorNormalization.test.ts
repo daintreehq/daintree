@@ -2,11 +2,20 @@ import { describe, it, expect } from "vitest";
 import { runInNewContext } from "vm";
 import { normalizeErrorsInLogContext } from "../logErrorNormalization.js";
 
-/** The record an Error is expected to have been replaced by. */
+/**
+ * The record an Error is expected to have been replaced by.
+ *
+ * Rejecting a live Error is the point: it would satisfy almost every field
+ * assertion in this file while still being the exact value that collapses to
+ * `{}` at the contextBridge, so a pass-through implementation must not slip
+ * through here. `JSON.parse(JSON.stringify(...))` is the check that matters —
+ * it sees only own-enumerable properties, the same ones the bridge copies.
+ */
 function asRecord(value: unknown): Record<string, unknown> {
   expect(value).toBeTypeOf("object");
   expect(value).not.toBeNull();
-  return value as Record<string, unknown>;
+  expect(value).not.toBeInstanceOf(Error);
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }
 
 describe("normalizeErrorsInLogContext", () => {
@@ -46,14 +55,21 @@ describe("normalizeErrorsInLogContext", () => {
     expect(asRecord(failures[0]).message).toBe(listed.message);
   });
 
-  it("leaves the caller's context and Error untouched", () => {
+  it("leaves the caller's graph untouched, even frozen", () => {
     const error = new Error("original");
-    const context = { error, nested: { error } };
-    normalizeErrorsInLogContext(context);
+    const list = Object.freeze([error]);
+    const nested = Object.freeze({ error });
+    const context = Object.freeze({ error, nested, list });
+
+    const normalized = normalizeErrorsInLogContext(context);
 
     expect(context.error).toBe(error);
+    expect(context.nested).toBe(nested);
     expect(context.nested.error).toBe(error);
+    expect(context.list[0]).toBe(error);
     expect(error.message).toBe("original");
+    // The clone is a genuinely separate graph, not the frozen original.
+    expect(normalized.nested).not.toBe(nested);
   });
 
   it("returns the same reference when the context holds no Error", () => {
@@ -69,13 +85,47 @@ describe("normalizeErrorsInLogContext", () => {
     expect(asRecord(asRecord(normalized.a).error).message).toBe("shared");
   });
 
-  it("breaks cycles so the result can be structured-cloned", () => {
+  it("breaks cycles so the result serializes", () => {
     const context: Record<string, unknown> = { error: new Error("cyclic") };
     context.self = context;
 
     const normalized = normalizeErrorsInLogContext(context);
     expect(asRecord(normalized.error).message).toBe("cyclic");
-    expect(() => structuredClone(normalized)).not.toThrow();
+    // JSON.stringify — not structuredClone — is the real proof: it throws on a
+    // cycle, so a graph that still contained one would fail here.
+    expect(() => JSON.stringify(normalized)).not.toThrow();
+    expect(normalized.self).toBe("[Circular]");
+  });
+
+  it("keeps looking past an alias that was first reached too deep to see", () => {
+    // `shared` is reached first via a path that exhausts the depth budget
+    // before its Error comes into view, and again directly. A visited-set that
+    // ignored depth would report the context as Error-free and ship the live
+    // Error to the bridge.
+    const shared = { inner: { error: new Error("hidden") } };
+    const context = { deep: { a: { b: { c: shared } } }, shallow: shared };
+
+    const normalized = normalizeErrorsInLogContext(context);
+    expect(normalized).not.toBe(context);
+    const reachable = normalized.shallow as { inner: { error: unknown } };
+    expect(asRecord(reachable.inner.error).message).toBe("hidden");
+  });
+
+  it("degrades to a clone-safe payload when scanning itself throws", () => {
+    const hostile = new Proxy(
+      { error: new Error("unreachable") },
+      {
+        ownKeys() {
+          throw new Error("ownKeys trap");
+        },
+      }
+    ) as unknown as Record<string, unknown>;
+
+    let normalized: Record<string, unknown> = {};
+    expect(() => {
+      normalized = normalizeErrorsInLogContext({ hostile });
+    }).not.toThrow();
+    expect(normalized).toBeTypeOf("object");
   });
 
   it("terminates on a chain far deeper than it walks, leaving the unreached Error alone", () => {
@@ -91,9 +141,13 @@ describe("normalizeErrorsInLogContext", () => {
   it("normalizes an Error from another realm, which instanceof cannot see", () => {
     const foreign = runInNewContext("new Error('cross realm')") as Error;
     expect(foreign instanceof Error).toBe(false);
+    // Own-key enumeration finds nothing on it, so passing it through unchanged
+    // would still lose everything at the bridge.
+    expect(Object.keys(foreign)).toHaveLength(0);
 
-    const record = asRecord(normalizeErrorsInLogContext({ error: foreign }).error);
-    expect(record.message).toBe("cross realm");
+    const normalized = normalizeErrorsInLogContext({ error: foreign });
+    expect(normalized.error).not.toBe(foreign);
+    expect(asRecord(normalized.error).message).toBe("cross realm");
   });
 
   it("does not let a throwing Error getter escape, and still reports something", () => {
@@ -110,9 +164,11 @@ describe("normalizeErrorsInLogContext", () => {
       normalized = normalizeErrorsInLogContext(context);
     }).not.toThrow();
 
+    // The unreadable field costs only itself: what the failure actually said
+    // still has to come through.
     const record = asRecord(normalized.error);
-    expect(record.message).toBeTypeOf("string");
-    expect((record.message as string).length).toBeGreaterThan(0);
+    expect(record.message).toBe("nope");
+    expect(record.stack).toBeUndefined();
   });
 
   it("does not rewrite Dates, Maps, Sets or class instances as records", () => {

@@ -28,10 +28,20 @@ const nativeIsError = (Error as unknown as { isError?: (value: unknown) => boole
 
 /**
  * True when `value` is an Error, including one constructed in another realm.
+ *
+ * Never throws. `instanceof` runs a Proxy's `getPrototypeOf` trap, so a hostile
+ * or merely unusual context value could otherwise turn a log call into the
+ * exception it was reporting. The native check is tried first because it reads
+ * an internal slot without invoking traps; `instanceof` still runs after it as
+ * the fallback, since it is the only one that sees a Proxy wrapping an Error.
  */
 export function isErrorLike(value: unknown): value is Error {
-  if (value instanceof Error) return true;
-  return typeof nativeIsError === "function" ? nativeIsError(value) : false;
+  if (typeof nativeIsError === "function" && nativeIsError(value)) return true;
+  try {
+    return value instanceof Error;
+  } catch {
+    return false;
+  }
 }
 
 function sanitizeCloneValue(value: unknown, seen: WeakSet<object>): unknown {
@@ -147,8 +157,12 @@ export function serializeError(error: unknown, seen = new WeakSet<object>()): Se
   // second visit to the same array would serialize as "[Circular]". Carried in
   // the `properties` bag rather than a new top-level field so `SerializedError`
   // and the packaged-build strip in `electron/setup/security.ts` are unchanged.
-  if (err.errors !== undefined) {
-    const aggregated = sanitizeCloneValue(err.errors, seen);
+  // Read once: a getter could answer differently on a second access, and
+  // `sanitizeCloneValue` shares `seen`, so a second visit to the same array
+  // would serialize as "[Circular]".
+  const aggregateMembers = err.errors;
+  if (aggregateMembers !== undefined) {
+    const aggregated = sanitizeCloneValue(aggregateMembers, seen);
     if (aggregated !== undefined) {
       properties.errors = aggregated;
       hasProperties = true;

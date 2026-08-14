@@ -282,4 +282,40 @@ describe("getErrorDetails", () => {
     expect(details.name).toBeUndefined();
     expect(details.stack).toBeUndefined();
   });
+
+  it("forwards the diagnostics a serialized error arrived with", () => {
+    const serialized = serializeError(
+      new GitOperationError("push-rejected-outdated", "push rejected", { command: "git push" })
+    );
+    // Simulate the IPC hop: only own-enumerable properties survive it.
+    const overWire = JSON.parse(JSON.stringify(serialized)) as Record<string, unknown>;
+
+    const details = getErrorDetails(overWire);
+    expect(details.gitReason).toBe(serialized.gitReason);
+    expect(details.context).toEqual(serialized.context);
+  });
+
+  it("does not let a throwing accessor escape", () => {
+    const hostile = {
+      message: "original failure",
+      get name(): string {
+        throw new Error("name trap");
+      },
+    };
+
+    let details: Record<string, unknown> = {};
+    expect(() => {
+      details = getErrorDetails(hostile);
+    }).not.toThrow();
+    expect(details.message).toBe("original failure");
+    expect(details.name).toBeUndefined();
+  });
+
+  it("carries the cause of a plain Error, which is non-enumerable", () => {
+    const err = new Error("outer", { cause: new Error("inner") });
+    expect(Object.keys(err)).not.toContain("cause");
+
+    const details = getErrorDetails(err);
+    expect((details.cause as Error).message).toBe("inner");
+  });
 });

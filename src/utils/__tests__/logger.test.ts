@@ -56,6 +56,19 @@ function sentEntry(callIndex = 0, entryIndex = 0): SentEntry {
   return entry;
 }
 
+/**
+ * The context as `writeBatch` will actually deliver it.
+ *
+ * The mock captures the live argument, but the real call crosses the
+ * contextBridge, which copies only own-enumerable properties — exactly what
+ * `JSON.stringify` sees. Asserting against the raw argument would let a live
+ * Error pass every field check while still arriving as `{}` in production, so
+ * every wire assertion goes through this.
+ */
+function wireContext(entry: SentEntry): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(entry.context ?? {})) as Record<string, unknown>;
+}
+
 /** Let the init's getLevelOverrides().then() microtask settle. */
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
@@ -224,9 +237,16 @@ describe("renderer logger warn/error bypass", () => {
     expect(logsApi.writeBatch).toHaveBeenCalledTimes(1);
     const entry = sentEntry();
     expect(entry.level).toBe("error");
-    expect(entry.context?.error).toMatchObject({ name: "Error", message: "kaboom" });
+    expect(wireContext(entry).error).toMatchObject({ name: "Error", message: "kaboom" });
     // The stack has to survive too — it is the part the contextBridge drops.
-    expect((entry.context?.error as { stack?: string }).stack).toBe(error.stack);
+    expect((wireContext(entry).error as { stack?: string }).stack).toBe(error.stack);
+  });
+
+  it("carries the cause chain of a wrapped Error across the wire", () => {
+    logError("boom", new Error("outer", { cause: new Error("root cause") }));
+
+    const error = wireContext(sentEntry()).error as { cause?: { message?: string } };
+    expect(error.cause?.message).toBe("root cause");
   });
 
   it("sends a non-Error error argument through unchanged", () => {
@@ -259,8 +279,12 @@ describe("renderer logger error normalization", () => {
     const error = new Error("wake failed");
     logWarn("[wakeActiveWorktreeTerminals] wake failed", { id: "terminal-1", error });
 
-    const context = sentEntry().context ?? {};
-    // Before the fix this crossed the bridge as `{}` — the reported bug.
+    const entry = sentEntry();
+    // The queued value must already be a record; a live Error here is what
+    // reached the log file as `{}` in the reported bug.
+    expect(entry.context?.error).not.toBeInstanceOf(Error);
+
+    const context = wireContext(entry);
     expect(context.error).toMatchObject({ name: error.name, message: error.message });
     expect((context.error as { stack?: string }).stack).toBe(error.stack);
     expect(context.id).toBe("terminal-1");
@@ -269,21 +293,20 @@ describe("renderer logger error normalization", () => {
   it("flattens Errors nested in objects and arrays at every level", () => {
     const nested = new Error("nested");
     const listed = new Error("listed");
-    logWarn("failures", { task: { error: nested }, failures: [listed] });
+    logWarn("failures", { task: { error: nested }, failures: [[listed]] });
 
-    const context = sentEntry().context ?? {};
+    const context = wireContext(sentEntry());
     const task = context.task as { error: { message?: string } };
     expect(task.error.message).toBe(nested.message);
-    const failures = context.failures as Array<{ message?: string }>;
-    expect(failures[0]?.message).toBe(listed.message);
+    const failures = context.failures as Array<Array<{ message?: string }>>;
+    expect(failures[0]?.[0]?.message).toBe(listed.message);
   });
 
   it("sends a payload that survives JSON serialization with the failure intact", () => {
     logInfo("attempt failed", { error: new Error("recoverable") });
     vi.advanceTimersByTime(LOG_BATCH_MS);
 
-    const roundTripped = JSON.parse(JSON.stringify(sentEntry())) as SentEntry;
-    expect((roundTripped.context?.error as { message?: string }).message).toBe("recoverable");
+    expect((wireContext(sentEntry()).error as { message?: string }).message).toBe("recoverable");
   });
 
   it("does not mutate the caller's context object", () => {

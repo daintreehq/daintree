@@ -741,6 +741,34 @@ describe("logger", () => {
       expect(content).not.toContain('"error": {}');
     });
 
+    it("degrades instead of throwing when an Error field is unreadable", () => {
+      const error = new Error("still-know-this");
+      Object.defineProperty(error, "stack", {
+        get: () => {
+          throw new Error("hostile getter");
+        },
+      });
+
+      expect(() => logWarn("hostile", { error })).not.toThrow();
+      const captured = lastContext()?.error as Record<string, unknown>;
+      expect(captured.message).toBe("still-know-this");
+    });
+
+    it("does not throw when a context value's prototype trap throws", () => {
+      // `instanceof` runs `getPrototypeOf`, so Error detection itself has to be
+      // safe against a hostile value.
+      const trapped = new Proxy(
+        {},
+        {
+          getPrototypeOf() {
+            throw new Error("getPrototypeOf trap");
+          },
+        }
+      );
+
+      expect(() => logWarn("trapped", { trapped })).not.toThrow();
+    });
+
     it("keeps name and stack when an already-flattened error arrives from the renderer", () => {
       // `dispatchRendererLog` forwards `context.error` — a plain object by the
       // time it crosses the contextBridge — as logError's dedicated argument.
@@ -755,6 +783,28 @@ describe("logger", () => {
       expect(captured.name).toBe(fromRenderer.name);
       expect(captured.message).toBe(fromRenderer.message);
       expect(captured.stack).toBe(fromRenderer.stack);
+    });
+
+    it("keeps the classification and cause of a rich error flattened by the renderer", () => {
+      // What `serializeError` produces for a GitOperationError in the renderer.
+      const fromRenderer = {
+        name: "GitOperationError",
+        message: "push rejected",
+        stack: "GitOperationError: push rejected\n    at push",
+        gitReason: "push-rejected-outdated",
+        branchName: "feature/x",
+        context: { command: "git push" },
+        cause: { name: "Error", message: "remote ref moved" },
+      };
+      logError("git said no", fromRenderer, { source: "Renderer" });
+
+      const captured = lastContext()?.error as Record<string, unknown>;
+      // Without forwarding these, a renderer git failure reached the log file
+      // as a bare message with no way to tell what kind of failure it was.
+      expect(captured.gitReason).toBe(fromRenderer.gitReason);
+      expect(captured.branchName).toBe(fromRenderer.branchName);
+      expect(captured.context).toEqual(fromRenderer.context);
+      expect((captured.cause as { message?: string }).message).toBe("remote ref moved");
     });
   });
 

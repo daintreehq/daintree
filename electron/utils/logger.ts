@@ -19,7 +19,8 @@ import { logBuffer, type LogEntry } from "../services/LogBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { resilientRenameSync } from "./fs.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
-import { isErrorLike, serializeError } from "../../shared/utils/ipcErrorSerialization.js";
+import { isErrorLike } from "../../shared/utils/ipcErrorSerialization.js";
+import { serializeErrorForLog } from "../../shared/utils/logErrorNormalization.js";
 import { getWritesSuppressed } from "../services/diskPressureState.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -882,14 +883,10 @@ function writeToLogFile(level: string, message: string, contextStr: string): voi
  * a hot path that runs hundreds of times a second) costs one type check.
  */
 function toRedactableRecord(value: object): Record<string, unknown> {
-  if (!isErrorLike(value)) return value as Record<string, unknown>;
-  try {
-    return serializeError(value) as unknown as Record<string, unknown>;
-  } catch {
-    // A hostile getter on an Error subclass must not turn a log call into the
-    // throw it was reporting.
-    return { name: "Error", message: "[unserializable error]" };
-  }
+  // Both helpers are shared with the renderer's pre-bridge pass, so an Error
+  // logged from either process flattens to the same shape and degrades the same
+  // way when a hostile accessor makes it unserializable. Neither throws.
+  return isErrorLike(value) ? serializeErrorForLog(value) : (value as Record<string, unknown>);
 }
 
 function redactSensitiveData(

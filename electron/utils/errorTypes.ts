@@ -216,6 +216,36 @@ export function getUserMessage(error: unknown): string {
   return formatErrorMessage(error, "An unknown error occurred");
 }
 
+/** String-valued fields worth reporting from any error-shaped object. */
+const DUCK_TYPED_ERROR_FIELDS = ["name", "stack"] as const;
+
+/**
+ * Fields `serializeError` promotes onto a flattened error record. Forwarded as
+ * they are so an error that crossed IPC keeps the diagnostics it arrived with.
+ * A live `Error` reaching this function is read the same way, which is why a
+ * plain `new Error(msg, { cause })` now reports its cause too — `cause` is
+ * non-enumerable, so it used to be dropped for everything but a `DaintreeError`.
+ * The `isDaintreeError` branch below still wins for the classes it knows.
+ */
+const FORWARDED_SERIALIZED_FIELDS = [
+  "userMessage",
+  "gitReason",
+  "leaseSha",
+  "branchName",
+  "context",
+  "cause",
+  "properties",
+] as const;
+
+/** Read one field without letting a throwing accessor escape into the log. */
+function readErrorField(error: object, key: string): unknown {
+  try {
+    return (error as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Handles circular references safely to prevent infinite recursion
  */
@@ -231,12 +261,22 @@ export function getErrorDetails(
   // have already crossed a process boundary arrive as plain objects: the
   // renderer flattens an Error before `logs.writeBatch` (the contextBridge
   // strips non-enumerable properties), so `dispatchRendererLog` hands this
-  // function `{ name, message, stack }` and an `instanceof` gate silently
-  // dropped the name and stack of every renderer-side error (#11777).
+  // function a serialized record and an `instanceof` gate silently dropped the
+  // name and stack of every renderer-side error (#11777). Every read is
+  // guarded — an accessor that throws must cost its own field, not the log.
   if (error !== null && typeof error === "object") {
-    const candidate = error as { name?: unknown; stack?: unknown };
-    if (typeof candidate.name === "string") details.name = candidate.name;
-    if (typeof candidate.stack === "string") details.stack = candidate.stack;
+    for (const key of DUCK_TYPED_ERROR_FIELDS) {
+      const value = readErrorField(error, key);
+      if (typeof value === "string") details[key] = value;
+    }
+    // A record that already carries the flattened chain keeps it: these are the
+    // fields `serializeError` promotes, and without them a renderer-side
+    // `GitOperationError` reached the log file having lost its classification,
+    // its context and its cause.
+    for (const key of FORWARDED_SERIALIZED_FIELDS) {
+      const value = readErrorField(error, key);
+      if (value !== undefined) details[key] = value;
+    }
   }
 
   if (isDaintreeError(error)) {
