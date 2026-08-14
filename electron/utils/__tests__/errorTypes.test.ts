@@ -285,7 +285,9 @@ describe("getErrorDetails", () => {
 
   it("forwards the diagnostics a serialized error arrived with", () => {
     const serialized = serializeError(
-      new GitOperationError("push-rejected-outdated", "push rejected", { command: "git push" })
+      new GitOperationError("push-rejected-outdated", "push rejected", {
+        context: { command: "git push" },
+      })
     );
     // Simulate the IPC hop: only own-enumerable properties survive it.
     const overWire = JSON.parse(JSON.stringify(serialized)) as Record<string, unknown>;
