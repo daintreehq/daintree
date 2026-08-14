@@ -135,6 +135,15 @@ describe("spawnPanelsFromRecipe", () => {
 
   it("spawns an agent panel with regenerated command", async () => {
     const cb = vi.fn();
+    // Typed capture of the id handed to the CLI, so the pairing assertion below
+    // needs no cast (#11782).
+    let generatedSessionId: string | undefined;
+    mockGenerateAgentCommand.mockImplementation(
+      (_base: string, _entry: unknown, _agentId: string, options?: { sessionId?: string }) => {
+        generatedSessionId = options?.sessionId;
+        return "claude --model sonnet";
+      }
+    );
     await spawnPanelsFromRecipe({
       terminals: [makeAgent()],
       worktreeId: "wt-1",
@@ -165,12 +174,10 @@ describe("spawnPanelsFromRecipe", () => {
     );
     // #11782: the id handed to the CLI and the id recorded on the panel have to
     // be the same one, or the record points at a conversation nothing is running.
-    const generatedWith = mockGenerateAgentCommand.mock.calls.at(-1)?.[3] as {
-      sessionId?: string;
-    };
-    const panelOptions = mockAddPanel.mock.calls.at(-1)?.[0] as { agentSessionId?: string };
-    expect(generatedWith?.sessionId).toBeTruthy();
-    expect(panelOptions?.agentSessionId).toBe(generatedWith?.sessionId);
+    expect(generatedSessionId).toBeTruthy();
+    expect(mockAddPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ agentSessionId: generatedSessionId })
+    );
     expect(cb).toHaveBeenCalledWith(0, "panel-id-123");
   });
 

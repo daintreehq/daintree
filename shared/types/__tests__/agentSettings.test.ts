@@ -1513,6 +1513,26 @@ describe("launch-time session id assignment (#11782)", () => {
       expect(stripAssignedSessionIdArgs(plain, ASSIGNING)).toBe(plain);
     });
 
+    it("ignores the flag when it is only text inside a prompt", () => {
+      // Scanning the raw string would cut the quoted prompt in half and leave
+      // an unbalanced quote — a command that no longer runs at all.
+      const command = generateAgentCommand("claude", {}, ASSIGNING, {
+        initialPrompt: "Explain --session-id foo to me",
+      });
+      expect(stripAssignedSessionIdArgs(command, ASSIGNING)).toBe(command);
+    });
+
+    it("removes the real flag while leaving a lookalike prompt intact", () => {
+      const command = generateAgentCommand("claude", {}, ASSIGNING, {
+        sessionId,
+        initialPrompt: "Explain --session-id foo to me",
+      });
+      const stripped = stripAssignedSessionIdArgs(command, ASSIGNING);
+
+      expect(stripped).not.toContain(sessionId);
+      expect(stripped).toContain("Explain --session-id foo to me");
+    });
+
     it("leaves an agent that mints its own id alone", () => {
       const codexCommand = `codex --session-id ${sessionId}`;
       expect(stripAssignedSessionIdArgs(codexCommand, SCRAPING)).toBe(codexCommand);

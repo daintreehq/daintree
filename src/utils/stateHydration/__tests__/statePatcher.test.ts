@@ -3306,8 +3306,12 @@ describe("buildArgsForRespawn — assigned session id", () => {
     expect(result.agentSessionId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
     );
-    const options = generateAgentCommandMock.mock.calls.at(-1)?.[3] as { sessionId?: string };
-    expect(options?.sessionId).toBe(result.agentSessionId);
+    expect(generateAgentCommandMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ sessionId: result.agentSessionId })
+    );
   });
 
   it("gives two restores of the same dead snapshot different ids", () => {

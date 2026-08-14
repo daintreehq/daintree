@@ -1054,18 +1054,65 @@ export function mintAssignedSessionId(agentId: string | undefined): string | und
 /** Sentinel used to locate the id slot among an agent's assigning args. */
 const SESSION_ID_SLOT = " daintree-session-id-slot ";
 
-function escapeRegExpLiteral(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/**
+ * Split a command into shell words, keeping quoted runs whole (quotes and all).
+ *
+ * Enough to tell a real argument from text that merely looks like one: a prompt
+ * such as `'Explain --session-id foo'` stays a SINGLE word, so the scan for the
+ * assigning flag below can't reach inside it. A regex over the raw string can,
+ * and would cut that prompt in half and leave an unbalanced quote behind.
+ */
+function splitShellWords(command: string): string[] {
+  const words: string[] = [];
+  let current = "";
+  let started = false;
+  let quote: '"' | "'" | null = null;
+
+  for (const char of command) {
+    if (quote) {
+      current += char;
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (started) {
+        words.push(current);
+        current = "";
+        started = false;
+      }
+      continue;
+    }
+    current += char;
+    started = true;
+  }
+  if (started) words.push(current);
+  return words;
+}
+
+/** Does one command word fill this slot of the agent's assigning-arg shape? */
+function shapeWordMatches(shapeToken: string, word: string): boolean {
+  if (!shapeToken.includes(SESSION_ID_SLOT)) return word === shapeToken;
+  // Covers a separate `--flag <id>` and a fused `--flag=<id>` alike.
+  const [prefix = "", suffix = ""] = shapeToken.split(SESSION_ID_SLOT);
+  return (
+    word.length > prefix.length + suffix.length && word.startsWith(prefix) && word.endsWith(suffix)
+  );
 }
 
 /**
- * Removes the session-id-assigning tokens from a launch command (#11782).
+ * Removes the session-id-assigning arguments from a launch command (#11782).
  *
  * For paths that COPY or REPLAY a pane's command instead of rebuilding it —
  * reopen-last, duplication's settings-failure fallback, a restart that abandons
- * the session — carrying the flag across re-offers an id the CLI has already
- * issued, and that launch is rejected outright. Stripping leaves the plain
- * fresh launch those paths actually mean.
+ * the session, a crash respawn — carrying the flag across re-offers an id the
+ * CLI has already issued, and that launch is rejected outright. Stripping
+ * leaves the plain fresh launch those paths actually mean.
  *
  * Matches on the flag's SHAPE rather than on a known id, which matters because
  * callers reach here with the id already cleared: the worktree-move flow drops
@@ -1074,9 +1121,8 @@ function escapeRegExpLiteral(value: string): string {
  * comes from the agent's own `assignSessionIdArgs`, so the id slot is located
  * rather than guessed.
  *
- * The match consumes its own leading whitespace, so no global whitespace
- * collapse is needed — one would corrupt a quoted argument that legitimately
- * contains a run of spaces (an initial prompt, say).
+ * Works on shell WORDS, not raw text, so a prompt that merely contains the flag
+ * is left alone and a quoted argument keeps its internal spacing.
  *
  * Returns `command` untouched when no assigning form is present.
  */
@@ -1087,20 +1133,14 @@ export function stripAssignedSessionIdArgs(command: string, agentId: string | un
   const shape = resume.assignSessionIdArgs?.(SESSION_ID_SLOT);
   if (!shape?.length) return command;
 
-  // One shell token: a quoted run (our builders quote the id, being a
-  // positional value) or a bare one.
-  const valuePattern = "(?:'[^']*'|\"[^\"]*\"|\\S+)";
-  const pattern = new RegExp(
-    `\\s*${shape
-      .map((token) =>
-        token.includes(SESSION_ID_SLOT)
-          ? // Covers a separate `--flag <id>` and a fused `--flag=<id>` alike.
-            token.split(SESSION_ID_SLOT).map(escapeRegExpLiteral).join(valuePattern)
-          : escapeRegExpLiteral(token)
-      )
-      .join("\\s+")}`
-  );
-  return pattern.test(command) ? command.replace(pattern, "").trim() : command;
+  const words = splitShellWords(command);
+  for (let i = 0; i + shape.length <= words.length; i++) {
+    if (shape.every((token, offset) => shapeWordMatches(token, words[i + offset] ?? ""))) {
+      words.splice(i, shape.length);
+      return words.join(" ");
+    }
+  }
+  return command;
 }
 
 export interface BuildLaunchCommandFromFlagsOptions {
