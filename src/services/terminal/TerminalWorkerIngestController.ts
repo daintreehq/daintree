@@ -145,14 +145,39 @@ export class TerminalWorkerIngestController {
       },
     });
 
-    // Geometry follows the mirror in every mode so demotion re-seeds at the
-    // right size (session forwards resizes only while in worker mode).
+    this.bindTerminalResize(managed, ingest);
+
+    return ingest;
+  }
+
+  /**
+   * Geometry follows the mirror in every mode so demotion re-seeds at the right
+   * size (the session forwards resizes only while in worker mode).
+   *
+   * Extracted so the #11776 rebuild can re-establish it: this is an
+   * xterm-bound listener, so a terminal swap disposes it along with the rest of
+   * the tail, but it is owned here rather than by
+   * `installTerminalBoundListeners` — nothing in the shared installer would put
+   * it back.
+   */
+  private bindTerminalResize(managed: ManagedTerminal, ingest: LiveWorkerIngest): void {
     const resizeDisposable = managed.terminal.onResize(({ cols, rows }) =>
       ingest.resize(cols, rows)
     );
     managed.listeners.push(() => resizeDisposable.dispose());
+  }
 
-    return ingest;
+  /**
+   * Re-attach this controller's terminal-bound listener after the xterm
+   * instance behind `id` was replaced (#11776). No-op when the terminal never
+   * had a worker ingest. Re-seeds the mirror geometry from the replacement,
+   * whose grid may differ from the one the old listener last reported.
+   */
+  rebindTerminal(id: string, managed: ManagedTerminal): void {
+    const ingest = this.workerIngest.get(id);
+    if (!ingest) return;
+    this.bindTerminalResize(managed, ingest);
+    ingest.resize(managed.terminal.cols, managed.terminal.rows);
   }
 
   // Worker ingest dies with the terminal: dispose terminates the Worker and

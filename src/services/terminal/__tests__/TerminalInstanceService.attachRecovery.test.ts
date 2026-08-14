@@ -170,6 +170,7 @@ describe("TerminalInstanceService attach failure recovery (#11776)", () => {
         refresh: vi.fn(),
         blur: vi.fn(),
         attachCustomKeyEventHandler: vi.fn(),
+        write: vi.fn((_data: string, callback?: () => void) => callback?.()),
         onRender: vi.fn(() => ({ dispose: vi.fn() })),
         element: document.createElement("div"),
         rows: 24,
@@ -416,25 +417,116 @@ describe("TerminalInstanceService attach failure recovery (#11776)", () => {
       expect(rebuiltTerminals).toHaveLength(1);
     });
 
-    it("stops automatic rebuilds once the budget is spent but still honours Retry", async () => {
-      control.opensCleanly = false; // every replacement stays unpaintable
+    it("rebuilds automatically when attach() hits an unpaintable terminal", async () => {
+      // The end-to-end path, and the one that actually fixes #11776: nothing
+      // in the app calls recovery directly. If handleFailedOpen stopped
+      // scheduling it, every other test here would still pass while a real
+      // pane stayed blank forever.
+      const managed = makeManaged("auto1", {
+        open: vi.fn(() => {
+          throw new TypeError("Cannot read properties of undefined (reading 'setRenderer')");
+        }),
+      });
+      makeHostRenderable(managed);
+      service.instances.set("auto1", managed);
+      const original = managed.terminal;
+
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      service.attach("auto1", container);
+
+      await vi.waitFor(() => {
+        expect(managed.terminal).not.toBe(original);
+        expect(managed.isOpened).toBe(true);
+      });
+      // The banner raised by the failure is retracted once the pane paints.
+      expect(clearAttachError).toHaveBeenCalledWith("auto1");
+      expect(managed.lastAttachError).toBeUndefined();
+    });
+
+    it("keeps retrying, then plateaus, and lets Retry resume", async () => {
+      // Every replacement stays unpaintable, so the loop exhausts its budget.
+      control.opensCleanly = false;
       const managed = makeManaged("r8");
       makeHostRenderable(managed);
       service.instances.set("r8", managed);
 
-      for (let i = 0; i < 6; i++) {
-        await service.recoverPoisonedTerminal("r8");
-      }
-      const automaticBuilds = rebuiltTerminals.length;
+      await service.recoverPoisonedTerminal("r8");
+      const afterAutomatic = rebuiltTerminals.length;
 
-      // The automatic budget is bounded — a pane that cannot be rebuilt must
-      // degrade to a banner rather than loop forever.
-      expect(automaticBuilds).toBeLessThanOrEqual(3);
+      // More than one: a failed replacement must schedule the NEXT attempt
+      // itself. Re-entering through the failure path cannot do that — it is
+      // handed the in-flight promise — so a single build here would mean the
+      // budget silently collapsed to one attempt.
+      expect(afterAutomatic).toBeGreaterThan(1);
 
-      // A manual Retry is the user asserting something changed, so it is not
-      // blocked by the exhausted automatic budget.
+      // Then it stops rather than looping forever.
+      await service.recoverPoisonedTerminal("r8");
+      await service.recoverPoisonedTerminal("r8");
+      expect(rebuiltTerminals).toHaveLength(afterAutomatic);
+
+      // The user asserting something changed refills the budget.
       await service.recoverPoisonedTerminal("r8", { manual: true });
-      expect(rebuiltTerminals.length).toBeGreaterThan(automaticBuilds);
+      expect(rebuiltTerminals.length).toBeGreaterThan(afterAutomatic);
+    });
+
+    it("settles queued writes before disposing the old terminal", async () => {
+      // xterm drops its pending write callbacks on dispose instead of running
+      // them, and those callbacks are what return flow-control credit to the
+      // pty-host. Disposing mid-write would leave the backend throttling a
+      // terminal that has already been replaced.
+      const managed = makeManaged("d1");
+      makeHostRenderable(managed);
+      managed.pendingWrites = 2;
+      let releaseDrain: (() => void) | undefined;
+      const original = managed.terminal as unknown as {
+        write: ReturnType<typeof vi.fn>;
+        dispose: ReturnType<typeof vi.fn>;
+      };
+      original.write = vi.fn((_data: string, callback?: () => void) => {
+        releaseDrain = callback;
+      });
+      service.instances.set("d1", managed);
+
+      const recovery = service.recoverPoisonedTerminal("d1", { manual: true });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(original.dispose).not.toHaveBeenCalled();
+
+      releaseDrain?.();
+      await recovery;
+
+      expect(original.dispose).toHaveBeenCalled();
+      expect(managed.isOpened).toBe(true);
+    });
+
+    it("abandons the rebuild rather than disposing a terminal whose writes never drain", async () => {
+      vi.useFakeTimers();
+      try {
+        const managed = makeManaged("d2");
+        makeHostRenderable(managed);
+        managed.pendingWrites = 1;
+        const original = managed.terminal as unknown as {
+          write: ReturnType<typeof vi.fn>;
+          dispose: ReturnType<typeof vi.fn>;
+        };
+        original.write = vi.fn(() => {
+          /* never invokes the drain callback */
+        });
+        service.instances.set("d2", managed);
+
+        const recovery = service.recoverPoisonedTerminal("d2", { manual: true });
+        await vi.advanceTimersByTimeAsync(5000);
+
+        await expect(recovery).resolves.toBe(false);
+        // Left intact: a stranded ledger is worse than a pane that is still
+        // blank but still correctly accounted for.
+        expect(original.dispose).not.toHaveBeenCalled();
+        expect(managed.terminal).toBe(original as unknown as typeof managed.terminal);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

@@ -974,15 +974,22 @@ function TerminalPaneComponent({
 
   // No dismiss counterpart on purpose (#11776): the banner is the only sign
   // the pane is dead, so it clears when the rebuild actually succeeds, not
-  // when the user waves it away. `isRebuildingDisplay` keeps the button
-  // spinning for the rebuild's duration — it awaits an addon load, an open and
-  // a scrollback replay, well past the Doherty threshold.
-  const [isRebuildingDisplay, setIsRebuildingDisplay] = useState(false);
+  // when the user waves it away. The busy state keeps the button spinning for
+  // the rebuild's duration — it awaits a write drain, an addon load, an open
+  // and a scrollback replay, well past the Doherty threshold.
+  //
+  // Stored as the id being rebuilt rather than a bare boolean: this component
+  // is reused across tab switches within a group, so a plain flag would let a
+  // retry on one terminal disable the Retry button of whichever terminal the
+  // pane shows next — and let the first terminal's late settlement clear the
+  // second one's busy state.
+  const [retryingAttachId, setRetryingAttachId] = useState<string | null>(null);
+  const isRebuildingDisplay = retryingAttachId === id;
   const handleRetryAttach = useCallback(() => {
-    setIsRebuildingDisplay(true);
+    setRetryingAttachId(id);
     void terminalInstanceService
       .recoverPoisonedTerminal(id, { manual: true })
-      .finally(() => setIsRebuildingDisplay(false));
+      .finally(() => setRetryingAttachId((current) => (current === id ? null : current)));
   }, [id]);
 
   useEffect(() => {

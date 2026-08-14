@@ -48,7 +48,7 @@ describe("TerminalAttachErrorBanner", () => {
   it("passes the terminal id to the retry handler", () => {
     const { onRetry } = renderBanner({ terminalId: "term-42" });
 
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry terminal display" }));
 
     expect(onRetry).toHaveBeenCalledWith("term-42");
   });
@@ -73,7 +73,7 @@ describe("TerminalAttachErrorBanner", () => {
     renderBanner({ error: "" });
 
     expect(screen.getByRole("alert").textContent).toMatch(/process is still running/i);
-    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry terminal display" })).toBeTruthy();
   });
 
   it("strips terminal escape sequences out of the error text", () => {
@@ -92,7 +92,7 @@ describe("TerminalAttachErrorBanner", () => {
     // second click mid-flight would queue a redundant teardown.
     const { onRetry } = renderBanner({ isRetrying: true });
 
-    const button = screen.getByRole("button", { name: "Retry" });
+    const button = screen.getByRole("button", { name: "Retry terminal display" });
     expect(button.hasAttribute("disabled")).toBe(true);
 
     fireEvent.click(button);

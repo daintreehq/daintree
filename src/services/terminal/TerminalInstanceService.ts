@@ -76,6 +76,14 @@ import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
  */
 const MAX_ATTACH_RECOVERY_ATTEMPTS = 3;
 
+/**
+ * How long a rebuild waits for xterm's write queue to settle before giving up
+ * on the attempt. Generous on purpose: exceeding it means abandoning the
+ * rebuild entirely (disposing with writes in flight would strand flow-control
+ * credit), so a slow drain should wait rather than skip.
+ */
+const ATTACH_RECOVERY_DRAIN_TIMEOUT_MS = 2000;
+
 export { isNonKeyboardInput } from "./inputUtils";
 // Re-exported so existing consumers (notably tests) that import
 // `forceXtermReflow` from this module don't need to update their imports.
@@ -1553,10 +1561,17 @@ class TerminalInstanceService {
     void this.recoverPoisonedTerminal(id);
   }
 
-  /** Drop a resolved attach failure from both the instance and the pane. */
+  /**
+   * Drop a resolved attach failure from both the instance and the pane.
+   *
+   * The store write is unconditional, NOT gated on this instance having
+   * recorded an error. A restart or any same-id recreation hands us a brand-new
+   * ManagedTerminal with a clean `lastAttachError` while the pane still carries
+   * the previous instance's banner — gating on the local flag would leave that
+   * banner up forever behind a terminal that is painting fine.
+   */
   private clearAttachError(id: string, managed: ManagedTerminal): void {
     managed.attachRecoveryAttempts = 0;
-    if (managed.lastAttachError === undefined) return;
     managed.lastAttachError = undefined;
     usePanelStore.getState().clearTerminalAttachError?.(id);
   }
@@ -1588,36 +1603,123 @@ class TerminalInstanceService {
     if (!managed) return false;
     if (managed.attachRecoveryInFlight) return managed.attachRecoveryInFlight;
 
-    const isManual = options?.manual === true;
-    const attempts = managed.attachRecoveryAttempts ?? 0;
-    if (!isManual && attempts >= MAX_ATTACH_RECOVERY_ATTEMPTS) {
-      logWarn("[TIS] Terminal rebuild attempts exhausted — leaving the banner up", {
-        id,
-        attempts,
-      });
-      return false;
-    }
-    // A manual Retry is the user telling us the conditions changed (they
-    // resized, un-occluded, or simply want another go), so it resets the
+    // A manual Retry is the user telling us conditions changed (they resized,
+    // un-occluded the pane, or simply want another go), so it refills the
     // automatic budget rather than being blocked by it.
-    managed.attachRecoveryAttempts = isManual ? 1 : attempts + 1;
+    if (options?.manual === true) managed.attachRecoveryAttempts = 0;
 
-    const run = this.rebuildTerminalInstance(id, managed).finally(() => {
-      managed.attachRecoveryInFlight = undefined;
-    });
+    const run = this.runRecoveryAttempts(id, managed)
+      // The loop is started with `void` from a synchronous open failure, so an
+      // escaping rejection would surface as an unhandled promise rejection with
+      // no owner. Contain it here and report the honest boolean.
+      .catch((error: unknown) => {
+        logError("[TIS] Terminal rebuild threw", error, { id });
+        return false;
+      })
+      .finally(() => {
+        managed.attachRecoveryInFlight = undefined;
+      });
     managed.attachRecoveryInFlight = run;
     return run;
   }
 
-  private async rebuildTerminalInstance(id: string, managed: ManagedTerminal): Promise<boolean> {
+  /**
+   * Drive rebuild attempts until one paints or the budget runs out.
+   *
+   * The loop lives here rather than relying on the failure path re-triggering
+   * itself: a replacement that also fails calls `handleFailedOpen`, which
+   * re-enters `recoverPoisonedTerminal` and gets handed the very promise this
+   * loop is running under. Without an explicit loop that re-entry is a no-op
+   * and the advertised budget silently collapses to a single attempt.
+   */
+  private async runRecoveryAttempts(id: string, managed: ManagedTerminal): Promise<boolean> {
+    for (;;) {
+      const attempts = managed.attachRecoveryAttempts ?? 0;
+      if (attempts >= MAX_ATTACH_RECOVERY_ATTEMPTS) {
+        logWarn("[TIS] Terminal rebuild attempts exhausted — leaving the banner up", {
+          id,
+          attempts,
+        });
+        return false;
+      }
+
+      const outcome = await this.rebuildTerminalInstance(id, managed);
+      if (outcome === "rebuilt") return true;
+      // Deferred is not a failed attempt — the host simply had no layout box
+      // yet, so it must not burn budget. A later attach/reveal/watchdog pass
+      // retries once the pane is measurable.
+      if (outcome === "deferred") return false;
+
+      managed.attachRecoveryAttempts = attempts + 1;
+      // Destroyed or replaced while we were awaiting — there is nothing left to
+      // rebuild, and looping would resurrect a dead id.
+      if (this.instances.get(id) !== managed) return false;
+    }
+  }
+
+  /**
+   * Settle xterm's write queue before the instance is disposed.
+   *
+   * Disposing with writes still queued is silently destructive: xterm's
+   * `WriteBuffer` drops its pending callbacks on dispose rather than invoking
+   * them, and those callbacks are what send the port ack, return flow-control
+   * credit to the pty-host, and decrement the ingest's in-flight byte count.
+   * Losing them leaves the backend believing this terminal is still chewing
+   * through a batch, so it throttles or stops streaming — the rebuilt pane
+   * would open cleanly and then sit there receiving nothing, which is a worse
+   * bug than the one being fixed.
+   *
+   * Parsing does not need a renderer, so a poisoned terminal still drains
+   * normally; the timeout only exists so a genuinely wedged parser degrades to
+   * "try again later" instead of taking the dispose path anyway.
+   */
+  private drainWritesBeforeDispose(id: string, managed: ManagedTerminal): Promise<boolean> {
+    if ((managed.pendingWrites ?? 0) === 0) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (drained: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(drained);
+      };
+      const timer = setTimeout(() => {
+        logWarn("[TIS] Timed out draining writes before rebuild", {
+          id,
+          pendingWrites: managed.pendingWrites ?? 0,
+        });
+        finish(false);
+      }, ATTACH_RECOVERY_DRAIN_TIMEOUT_MS);
+      try {
+        // An empty write parses to nothing but still queues behind everything
+        // already in the buffer, so its callback fires only once the backlog —
+        // and every ack riding those earlier callbacks — has landed.
+        managed.terminal.write("", () => finish(true));
+      } catch (error) {
+        logWarn("[TIS] Could not queue a drain write before rebuild", { id, error });
+        finish(false);
+      }
+    });
+  }
+
+  private async rebuildTerminalInstance(
+    id: string,
+    managed: ManagedTerminal
+  ): Promise<"rebuilt" | "deferred" | "failed"> {
     // Opening against a zero-box host is a plausible cause of the original
     // failure, so a rebuild that ignored it would just poison the fresh
     // instance too. Leave the banner up; the reveal pass retries once the pane
     // has real layout.
     if (!this.hostHasRenderableDims(managed)) {
       logDebug(`[TIS] Deferring rebuild of ${id} — host has no renderable box yet`);
-      return false;
+      return "deferred";
     }
+
+    // Before anything is torn down: an undrainable buffer means we must not
+    // dispose at all (see drainWritesBeforeDispose).
+    if (!(await this.drainWritesBeforeDispose(id, managed))) return "deferred";
+    // Destroyed while draining.
+    if (this.instances.get(id) !== managed) return "failed";
 
     logWarn("[TIS] Rebuilding unpaintable terminal", { id, error: managed.lastAttachError });
 
@@ -1625,10 +1727,10 @@ class TerminalInstanceService {
       this.teardownTerminalForRebuild(id, managed);
     } catch (error) {
       logError("[TIS] Failed to tear down terminal for rebuild", error, { id });
-      return false;
+      return "failed";
     }
 
-    let terminal: Terminal;
+    let terminal: Terminal | undefined;
     try {
       terminal = new Terminal(this.rebuildOptionsFor(managed));
       applyXtermReflowFastpath(terminal);
@@ -1637,13 +1739,21 @@ class TerminalInstanceService {
       // still async) addon setup. Bail before publishing the new terminal.
       if (this.instances.get(id) !== managed) {
         terminal.dispose();
-        return false;
+        return "failed";
       }
       Object.assign(managed, addons);
       managed.terminal = terminal;
     } catch (error) {
       logError("[TIS] Failed to construct replacement terminal", error, { id });
-      return false;
+      // The old instance is already disposed and `managed.terminal` may still
+      // point at it, so drop the half-built replacement rather than leaking a
+      // Terminal nothing will ever dispose.
+      try {
+        terminal?.dispose();
+      } catch {
+        /* the replacement never got far enough to need disposing */
+      }
+      return "failed";
     }
 
     // Same shared installer every other construction path uses — never a
@@ -1672,11 +1782,18 @@ class TerminalInstanceService {
     managed.writeChain = Promise.resolve();
     managed.isOpened = false;
 
+    // The worker-ingest resize bridge is an xterm-bound listener that the
+    // shared installer does not own, so the teardown dropped it and nothing
+    // else would put it back — leaving the background mirror parsing at a
+    // frozen geometry.
+    this.workerIngestController.rebindTerminal(id, managed);
+
     this.ensureOpened(id, managed);
     if (!managed.isOpened) {
-      // ensureOpened already recorded the failure and re-armed recovery.
+      // ensureOpened already recorded the failure; the recovery loop owns the
+      // next attempt.
       logWarn("[TIS] Replacement terminal failed to open", { id });
-      return false;
+      return "failed";
     }
 
     this.rendererPolicy.applyRendererPolicy(
@@ -1696,8 +1813,14 @@ class TerminalInstanceService {
       });
     }
 
+    // This rebuild IS an attach settling. `attach()`'s own failure path already
+    // released the waiters it knew about, but anything that registered between
+    // that failure and now is waiting on a terminal that has only just become
+    // paintable.
+    this.settleWaiters.notifyAttachSettledWaiters(id);
+
     logDebug(`[TIS] Rebuilt terminal ${id}`);
-    return true;
+    return "rebuilt";
   }
 
   /**
@@ -2998,6 +3121,11 @@ class TerminalInstanceService {
     if (!managed) return;
 
     this.settleWaiters.rejectAll(id);
+
+    // The attach banner describes an xterm instance that is about to stop
+    // existing (#11776). Its Retry would target a terminal this service no
+    // longer has, so drop the signal with the thing it described.
+    this.clearAttachError(id, managed);
 
     this.cancelAttachReveal(managed);
     this.agentStateController.destroy(id);

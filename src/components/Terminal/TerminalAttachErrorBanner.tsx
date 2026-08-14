@@ -48,7 +48,10 @@ export function TerminalAttachErrorBanner({
         variant: "primary",
         onClick: () => onRetry(terminalId),
         title: "Rebuild the terminal display and replay its output",
-        ariaLabel: "Retry",
+        // Visible label stays the bare recovery verb per CLAUDE.md; the
+        // accessible name carries the context a screen-reader user has no
+        // other way to recover from a button announced as just "Retry".
+        ariaLabel: "Retry terminal display",
         loading: isRetrying,
       }}
       className={className}
