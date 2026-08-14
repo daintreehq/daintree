@@ -56,6 +56,19 @@ function sentEntry(callIndex = 0, entryIndex = 0): SentEntry {
   return entry;
 }
 
+/** What survives a structured copy: no Errors, no functions, no prototypes. */
+type WireValue = string | number | boolean | null | WireValue[] | { [key: string]: WireValue };
+
+function isWireRecord(value: unknown): value is Record<string, WireValue> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Narrow a wire value to a record, failing the test with what it actually was. */
+function wireRecord(value: unknown): Record<string, WireValue> {
+  if (!isWireRecord(value)) throw new Error(`expected a record, received ${JSON.stringify(value)}`);
+  return value;
+}
+
 /**
  * The context as `writeBatch` will actually deliver it.
  *
@@ -65,8 +78,14 @@ function sentEntry(callIndex = 0, entryIndex = 0): SentEntry {
  * Error pass every field check while still arriving as `{}` in production, so
  * every wire assertion goes through this.
  */
-function wireContext(entry: SentEntry): Record<string, unknown> {
-  return JSON.parse(JSON.stringify(entry.context ?? {})) as Record<string, unknown>;
+function wireContext(entry: SentEntry): Record<string, WireValue> {
+  const parsed: unknown = JSON.parse(JSON.stringify(entry.context ?? {}));
+  return wireRecord(parsed);
+}
+
+/** The record at `key`, as it survived the wire. */
+function wireField(context: Record<string, WireValue>, key: string): Record<string, WireValue> {
+  return wireRecord(context[key]);
 }
 
 /** Let the init's getLevelOverrides().then() microtask settle. */
@@ -239,14 +258,14 @@ describe("renderer logger warn/error bypass", () => {
     expect(entry.level).toBe("error");
     expect(wireContext(entry).error).toMatchObject({ name: "Error", message: "kaboom" });
     // The stack has to survive too — it is the part the contextBridge drops.
-    expect((wireContext(entry).error as { stack?: string }).stack).toBe(error.stack);
+    expect(wireField(wireContext(entry), "error").stack).toBe(error.stack);
   });
 
   it("carries the cause chain of a wrapped Error across the wire", () => {
     logError("boom", new Error("outer", { cause: new Error("root cause") }));
 
-    const error = wireContext(sentEntry()).error as { cause?: { message?: string } };
-    expect(error.cause?.message).toBe("root cause");
+    const cause = wireField(wireField(wireContext(sentEntry()), "error"), "cause");
+    expect(cause.message).toBe("root cause");
   });
 
   it("sends a non-Error error argument through unchanged", () => {
@@ -286,7 +305,7 @@ describe("renderer logger error normalization", () => {
 
     const context = wireContext(entry);
     expect(context.error).toMatchObject({ name: error.name, message: error.message });
-    expect((context.error as { stack?: string }).stack).toBe(error.stack);
+    expect(wireField(context, "error").stack).toBe(error.stack);
     expect(context.id).toBe("terminal-1");
   });
 
@@ -296,17 +315,20 @@ describe("renderer logger error normalization", () => {
     logWarn("failures", { task: { error: nested }, failures: [[listed]] });
 
     const context = wireContext(sentEntry());
-    const task = context.task as { error: { message?: string } };
-    expect(task.error.message).toBe(nested.message);
-    const failures = context.failures as Array<Array<{ message?: string }>>;
-    expect(failures[0]?.[0]?.message).toBe(listed.message);
+    expect(wireField(wireField(context, "task"), "error").message).toBe(nested.message);
+
+    const failures = context.failures;
+    if (!Array.isArray(failures) || !Array.isArray(failures[0])) {
+      throw new Error(`expected a nested array, received ${JSON.stringify(failures)}`);
+    }
+    expect(wireRecord(failures[0][0]).message).toBe(listed.message);
   });
 
   it("sends a payload that survives JSON serialization with the failure intact", () => {
     logInfo("attempt failed", { error: new Error("recoverable") });
     vi.advanceTimersByTime(LOG_BATCH_MS);
 
-    expect((wireContext(sentEntry()).error as { message?: string }).message).toBe("recoverable");
+    expect(wireField(wireContext(sentEntry()), "error").message).toBe("recoverable");
   });
 
   it("does not mutate the caller's context object", () => {
@@ -371,7 +393,10 @@ describe("renderer logger fallback", () => {
 
     logError("boom", error);
 
-    const context = errorSpy.mock.calls[0]?.[1] as { error?: unknown };
+    const context: unknown = errorSpy.mock.calls[0]?.[1];
+    if (context === null || typeof context !== "object" || !("error" in context)) {
+      throw new Error("expected the console call to carry the error in its context");
+    }
     expect(context.error).toBe(error);
   });
 });
