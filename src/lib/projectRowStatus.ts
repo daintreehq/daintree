@@ -40,16 +40,16 @@ export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
   review: "bg-activity-completed",
   working: "bg-activity-active animate-activity-pulse",
   running: "bg-status-success",
-  // Hollow, because "finished" and "suspended" are settled states rather than
-  // live ones. It used to sit on every dormant row too, which made a ring the
-  // most common mark in the list and left it competing with the filled dots
-  // that mean something — dormant rows draw no dot at all now (#11692), so the
-  // ring is back to marking the two muted states that earned a line.
   // Dashed rather than solid, because "snoozed" and "settled" are different
   // facts and the switcher's greys already carry the settled ones. Colour alone
   // could not separate them — a dashed ring reads as temporarily suspended at a
   // glance, and survives both high-contrast modes and a colour-blind reader.
   snoozed: "border border-dashed border-daintree-text/40",
+  // Hollow, because "finished" and "suspended" are settled states rather than
+  // live ones. It used to sit on every dormant row too, which made a ring the
+  // most common mark in the list and left it competing with the filled dots
+  // that mean something — dormant rows draw no dot at all now (#11692), so the
+  // ring is back to marking the two muted states that earned a line.
   muted: "border border-daintree-text/20",
 };
 
