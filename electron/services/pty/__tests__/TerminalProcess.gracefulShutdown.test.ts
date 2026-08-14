@@ -113,6 +113,42 @@ function createAgentTerminal(handles: MockPtyHandles, agentId = "claude"): Termi
   );
 }
 
+/**
+ * A terminal whose session id was known at spawn (#11782) — the shape produced
+ * when the launch assigned the id via `resume.assignSessionIdArgs`, or when a
+ * restore relaunched into a conversation it already had the id for.
+ */
+function createAgentTerminalWithSession(
+  handles: MockPtyHandles,
+  agentId: string,
+  agentSessionId: string
+): TerminalProcess {
+  const opts: TerminalProcessOptions = {
+    cwd: process.cwd(),
+    cols: 80,
+    rows: 24,
+    kind: "terminal",
+    launchAgentId: agentId,
+    agentSessionId,
+  };
+  return new TerminalProcess(
+    "t1",
+    opts,
+    { emitData: () => {}, onExit: () => {} },
+    {
+      agentStateService: {
+        handleActivityState: () => {},
+        updateAgentState: () => {},
+        emitAgentKilled: () => {},
+      } as never,
+      ptyPool: null,
+      processTreeCache: null,
+    },
+    defaultSpawnContext(),
+    handles.pty
+  );
+}
+
 describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -903,5 +939,68 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
     const elapsed = contextOf(shutdownEntries()[0])?.elapsedMs ?? -1;
     expect(elapsed).toBeGreaterThanOrEqual(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
     expect(elapsed).toBeLessThan(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+  });
+
+  describe("session id assigned at launch (#11782)", () => {
+    it("returns the assigned id without writing anything into the PTY", async () => {
+      // The whole point of assigning the id up front: the quit signal that the
+      // scrape depends on is what a mid-turn agent swallows as chat text and a
+      // modal eats outright. Writing nothing means none of that can happen —
+      // and nothing is left in the user's transcript either.
+      const handles = createMockPty();
+      const terminal = createAgentTerminalWithSession(handles, "claude", "assigned-abc");
+
+      await expect(terminal.gracefulShutdown()).resolves.toBe("assigned-abc");
+
+      expect(handles.writeMock).not.toHaveBeenCalled();
+      expect(terminal.getInfo().agentSessionId).toBe("assigned-abc");
+    });
+
+    it("resolves without spending any of the shutdown budget", async () => {
+      // Resolution has to happen before a single timer fires. Asserting on an
+      // elapsed number would pass for an implementation that still waits out
+      // the clear delay; requiring the promise to settle with the clock frozen
+      // is what actually proves the teardown path costs no wall clock.
+      const handles = createMockPty();
+      const terminal = createAgentTerminalWithSession(handles, "claude", "assigned-fast");
+
+      let settled = false;
+      const promise = terminal.gracefulShutdown().then((id) => {
+        settled = true;
+        return id;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(settled).toBe(true);
+      await expect(promise).resolves.toBe("assigned-fast");
+    });
+
+    it("logs its own outcome rather than inflating the scrape's capture rate", async () => {
+      const handles = createMockPty();
+      const terminal = createAgentTerminalWithSession(handles, "claude", "assigned-log");
+
+      await terminal.gracefulShutdown();
+
+      const context = contextOf(shutdownEntries()[0]);
+      expect(context?.outcome).toBe("preassigned");
+      expect(context?.captured).toBe(true);
+    });
+
+    it("still scrapes for an agent that mints its own id, even when one is stored", async () => {
+      // Codex declares no `assignSessionIdArgs`, so a stored id is a PREVIOUS
+      // session's, not a promise about this one. Skipping the scrape for it
+      // would drop the id only teardown can observe.
+      const handles = createMockPty();
+      const terminal = createAgentTerminalWithSession(handles, "codex", "stale-codex-id");
+
+      const promise = terminal.gracefulShutdown();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS + SUBMIT_ENTER_DELAY_MS);
+
+      expect(handles.writeMock).toHaveBeenCalled();
+
+      handles.emitData("codex resume fresh-codex-id\n");
+      await expect(promise).resolves.toBe("fresh-codex-id");
+    });
   });
 });

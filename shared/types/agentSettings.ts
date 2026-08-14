@@ -558,6 +558,19 @@ export interface GenerateAgentCommandOptions {
    * registry default applies (see {@link resolveEffectiveInlineMode}).
    */
   globalUseAltScreen?: boolean;
+  /**
+   * Session id to ASSIGN to this launch, for agents declaring
+   * `resume.assignSessionIdArgs` (#11782). Mint it with
+   * {@link mintAssignedSessionId} and persist the same value on the panel, so
+   * the conversation is addressable even if the process is force-killed before
+   * any teardown runs.
+   *
+   * Only valid for a launch that starts a NEW conversation — the flag is
+   * rejected by the CLI when the id already exists. Resume paths pass the id
+   * through {@link buildResumeCommand} instead. Ignored for agents that don't
+   * declare the capability.
+   */
+  sessionId?: string;
 }
 
 /**
@@ -617,6 +630,15 @@ export function generateAgentCommand(
         resolveEffectiveInlineMode(entry, agentId, options?.globalUseAltScreen)
       );
       if (screenModeFlag) parts.push(screenModeFlag);
+    }
+
+    // Pre-assigned session id (#11782). Emitted here — ahead of user flags and
+    // well ahead of the positional prompt appended at the end — so the id can
+    // never be parsed as the prompt itself.
+    if (options?.sessionId) {
+      for (const arg of buildAssignedSessionIdArgs(agentId, options.sessionId) ?? []) {
+        parts.push(arg.startsWith("-") ? arg : escapeShellArg(arg));
+      }
     }
   }
 
@@ -988,6 +1010,132 @@ export function buildResumeLatestCommand(
   return parts.join(" ");
 }
 
+/**
+ * Args that assign `sessionId` to a NEW conversation at launch, or `undefined`
+ * when the agent doesn't accept a caller-supplied id (#11782).
+ *
+ * See {@link AgentResume} `assignSessionIdArgs`: assignment is one-shot, so
+ * this belongs only on a launch that starts a fresh conversation. Resuming an
+ * existing one goes through {@link buildResumeCommand}.
+ */
+export function buildAssignedSessionIdArgs(
+  agentId: string,
+  sessionId: string
+): string[] | undefined {
+  if (!sessionId) return undefined;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  if (!resume || resume.kind !== "session-id") return undefined;
+  return resume.assignSessionIdArgs?.(sessionId);
+}
+
+/**
+ * Whether `agentId` lets Daintree choose the session id at launch, making the
+ * teardown scrape unnecessary for it (#11782).
+ */
+export function supportsSessionIdAssignment(agentId: string | undefined): boolean {
+  if (!agentId) return false;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  return resume?.kind === "session-id" && typeof resume.assignSessionIdArgs === "function";
+}
+
+/**
+ * Mints a session id for a fresh launch of `agentId`, or `undefined` when the
+ * agent captures its id the old way (teardown scrape).
+ *
+ * Always mint per launch — never reuse a persisted id here. Re-assigning an
+ * existing id is rejected by the CLI ("Session ID <id> is already in use"),
+ * which would take down the launch, so a duplicated pane and a restore that
+ * falls through to a fresh start each need their own new id.
+ */
+export function mintAssignedSessionId(agentId: string | undefined): string | undefined {
+  return supportsSessionIdAssignment(agentId) ? crypto.randomUUID() : undefined;
+}
+
+/**
+ * Locates the assigning tokens inside `command`, returning the exact substring
+ * so callers can replace or remove it.
+ *
+ * Checks the shell-escaped spelling first (what our own builders emit — the id
+ * is a positional value, so it comes out quoted) and falls back to the bare
+ * one, which is how a hand-written or externally-built command would carry it.
+ * Returns null when the command doesn't assign an id at all.
+ */
+function matchAssignedSessionIdTokens(command: string, assignArgs: string[]): string | null {
+  const escaped = assignArgs
+    .map((arg) => (arg.startsWith("-") ? arg : escapeShellArg(arg)))
+    .join(" ");
+  if (command.includes(escaped)) return escaped;
+  const bare = assignArgs.join(" ");
+  return command.includes(bare) ? bare : null;
+}
+
+/**
+ * Removes the session-id-assigning tokens from a launch command (#11782).
+ *
+ * For paths that COPY an existing pane's command rather than rebuilding it —
+ * duplication's settings-failure fallback is the live case — carrying the
+ * source's id across would point two panes at one conversation, and the CLI
+ * rejects the second outright. Stripping leaves a plain fresh launch, which is
+ * what a copy without its own minted id should be.
+ *
+ * Returns `command` untouched when the assigning form isn't present.
+ */
+export function stripAssignedSessionIdArgs(
+  command: string,
+  agentId: string | undefined,
+  sessionId: string | undefined
+): string {
+  if (!command || !agentId || !sessionId) return command;
+  const assignArgs = buildAssignedSessionIdArgs(agentId, sessionId);
+  if (!assignArgs?.length) return command;
+
+  const assigning = matchAssignedSessionIdTokens(command, assignArgs);
+  if (!assigning) return command;
+  // Collapse the surrounding whitespace the removal would otherwise leave.
+  return command
+    .replace(assigning, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/**
+ * Rewrites a launch command that ASSIGNS `sessionId` into one that RESUMES it,
+ * for replaying a terminal whose conversation already exists (#11782).
+ *
+ * The pty-host replays a live terminal's original spawn options after a host
+ * crash, a crash-budget migration, or a pre-ready send. Replaying the assigning
+ * form would relaunch with an id the CLI has already seen and be rejected
+ * outright ("Session ID <id> is already in use"), so the pane would come back
+ * dead rather than reattached. Swapping to the resume form is both what the
+ * caller means on a replay and the only form the CLI accepts by then.
+ *
+ * Both token sequences are derived from the same `resume` config that built the
+ * command, so this is an exact substitution rather than a guess at the shell
+ * string. Returns `command` untouched when the assigning form isn't present,
+ * which also makes it idempotent across repeated replays.
+ */
+export function rewriteAssignedSessionIdToResume(
+  command: string,
+  agentId: string | undefined,
+  sessionId: string | undefined
+): string {
+  if (!command || !agentId || !sessionId) return command;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  if (!resume || resume.kind !== "session-id") return command;
+  const assignArgs = resume.assignSessionIdArgs?.(sessionId);
+  if (!assignArgs?.length) return command;
+
+  const assigning = matchAssignedSessionIdTokens(command, assignArgs);
+  if (!assigning) return command;
+
+  // Mirrors buildResumeCommand's escaping for the replacement tokens.
+  const resuming = resume
+    .args(sessionId)
+    .map((arg) => (arg.startsWith("-") ? arg : escapeShellArgOptional(arg)))
+    .join(" ");
+  return command.replace(assigning, resuming);
+}
+
 export interface BuildLaunchCommandFromFlagsOptions {
   /** Absolute path to the clipboard temp directory (re-injected for agents that support it) */
   clipboardDirectory?: string;
@@ -1033,6 +1181,10 @@ export function buildLaunchCommandFromFlags(
     }
   }
 
+  // Deliberately no session-id assignment here. This builder's contract is to
+  // reproduce the CAPTURED launch configuration, and an assigned id is a
+  // one-shot per-launch value rather than part of that configuration (#11782).
+  // Fresh launches that should carry one go through `generateAgentCommand`.
   const parts: string[] = [baseCommand];
   for (const flag of flags) {
     if (flag.startsWith("-")) {

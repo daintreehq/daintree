@@ -7,7 +7,11 @@ import {
   type PanelKind,
 } from "@shared/types/panel";
 import type { TabGroupLocation } from "@/types";
-import { generateAgentCommand } from "@shared/types";
+import {
+  generateAgentCommand,
+  mintAssignedSessionId,
+  stripAssignedSessionIdArgs,
+} from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { agentSettingsClient, systemClient } from "@/clients";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
@@ -39,6 +43,12 @@ export interface ResolvedCommand {
   preset: import("@/config/agents").AgentPreset | undefined;
   /** True when the caller requested a preset but it no longer resolves. */
   presetWasStale: boolean;
+  /**
+   * Session id minted for the duplicate (#11782), when its agent accepts one at
+   * launch. Always a NEW id — never the source pane's, which still belongs to
+   * the conversation being copied from.
+   */
+  agentSessionId: string | undefined;
 }
 
 /**
@@ -71,6 +81,10 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
         const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
         const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
         const clipboardDirectory = tmpDir ? `${tmpDir}/daintree-clipboard` : undefined;
+        // A duplicate is a NEW conversation, so it mints its own id (#11782).
+        // Inheriting the source pane's would aim both panes at one conversation
+        // and the CLI would reject the second launch outright.
+        const agentSessionId = mintAssignedSessionId(panel.launchAgentId);
         const command = generateAgentCommand(
           agentConfig.command,
           effectiveEntry,
@@ -82,6 +96,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
             presetArgs: preset?.args?.join(" "),
             globalSkipPermissions,
             globalUseAltScreen,
+            sessionId: agentSessionId,
           }
         );
         const agentLaunchFlags = buildAgentLaunchFlagsForRuntimeSettings(
@@ -90,18 +105,33 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
           preset,
           { modelId: panel.agentModelId, globalSkipPermissions, globalUseAltScreen }
         );
-        return { command, env: runtimeSettings.env, agentLaunchFlags, preset, presetWasStale };
+        return {
+          command,
+          env: runtimeSettings.env,
+          agentLaunchFlags,
+          preset,
+          presetWasStale,
+          agentSessionId,
+        };
       } catch (error) {
         console.warn(
           `Failed to get agent settings for ${panel.launchAgentId}, using existing command:`,
           error
         );
         return {
-          command: panel.command ?? agentConfig.command,
+          // Reusing the source's command verbatim would clone its assigned
+          // session id along with it, so strip that back off (#11782) and let
+          // this copy launch as the fresh conversation it is.
+          command: stripAssignedSessionIdArgs(
+            panel.command ?? agentConfig.command,
+            panel.launchAgentId,
+            panel.agentSessionId
+          ),
           env: undefined,
           agentLaunchFlags: panel.agentLaunchFlags,
           preset: undefined,
           presetWasStale: false,
+          agentSessionId: undefined,
         };
       }
     }
@@ -112,6 +142,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
     agentLaunchFlags: isPtyPanel(panel) ? panel.agentLaunchFlags : undefined,
     preset: undefined,
     presetWasStale: false,
+    agentSessionId: undefined,
   };
 }
 
@@ -248,7 +279,7 @@ export async function buildPanelDuplicateOptions(
   targetLocation: TabGroupLocation
 ): Promise<AddPanelOptions> {
   const kind = sourcePanel.kind;
-  const { command, env, agentLaunchFlags, preset, presetWasStale } =
+  const { command, env, agentLaunchFlags, preset, presetWasStale, agentSessionId } =
     await resolveCommandForPanel(sourcePanel);
 
   if (isPtyPanel(sourcePanel) && sourcePanel.launchAgentId && kind === "terminal") {
@@ -283,6 +314,7 @@ export async function buildPanelDuplicateOptions(
       agentPresetId,
       agentPresetColor,
       agentLaunchFlags,
+      agentSessionId,
       env,
     };
   }

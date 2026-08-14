@@ -67,6 +67,17 @@ export interface PtyHostSpawnOptions {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /**
+   * Session id already known at launch (#11782) — either minted by Daintree and
+   * assigned via `resume.assignSessionIdArgs`, or the id this launch resumes.
+   * Recorded on the terminal record as the PTY is created, so the conversation
+   * stays addressable through teardowns that never get to run a capture: a
+   * force quit, a crash, a SIGKILL, or a pty-host death.
+   *
+   * Absent for agents that still hand out their own id, whose only capture path
+   * remains the `sessionIdPattern` scrape in `gracefulShutdown()`.
+   */
+  agentSessionId?: string;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
   /** Preset ID the agent was launched with (needed for fallback chain lookup on exit). */

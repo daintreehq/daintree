@@ -13,6 +13,7 @@ import {
   buildResumeCommand,
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
+  stripAssignedSessionIdArgs,
   reconcileBypassFlags,
   reconcileInlineModeFlag,
   resolveEffectiveBypass,
@@ -701,7 +702,18 @@ export const createRestartActions = (
           }
         }
         if (!consumedSessionId && !usedResumeLatest) {
-          commandToRun = freshCommand;
+          // Genuinely starting over. `freshCommand` can still be the pane's
+          // original launch command, which for an assigning agent carries the
+          // id this pane already used — replaying it would be rejected by the
+          // CLI and the restart would fail outright (#11782). Strip it and let
+          // this launch be what it is: a new conversation with no id yet.
+          commandToRun = freshCommand
+            ? stripAssignedSessionIdArgs(
+                freshCommand,
+                effectiveAgentId,
+                currentTerminal.agentSessionId
+              )
+            : freshCommand;
           nextAgentLaunchFlags = freshLaunchFlags;
         }
       }

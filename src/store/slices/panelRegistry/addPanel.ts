@@ -965,6 +965,11 @@ export const createAddPanelActions = (
             spawnBatchSize: options.spawnBatchSize,
             agentLaunchFlags: options.agentLaunchFlags,
             agentModelId: options.agentModelId,
+            // Known-at-launch session id (#11782) — either freshly minted and
+            // assigned to the CLI, or the one this launch resumes. Recorded on
+            // the terminal record at spawn so a kill path that never runs a
+            // capture (force quit, crash, SIGKILL) can't lose the conversation.
+            agentSessionId: options.agentSessionId,
             worktreeId: options.worktreeId,
             agentPresetId: options.agentPresetId,
             agentPresetColor: options.agentPresetColor,

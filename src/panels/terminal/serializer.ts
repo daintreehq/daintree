@@ -1,4 +1,5 @@
 import { sanitizeAgentEnv } from "@/config/agents";
+import { stripAssignedSessionIdArgs } from "@shared/types";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { PanelSnapshot } from "@shared/types/project";
 
@@ -9,10 +10,20 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
   // snapshot can't smuggle PATH/LD_PRELOAD or shell-injection values back in on
   // the next restore (#10922). Omitted entirely when nothing safe remains.
   const env = sanitizeAgentEnv(t.env);
+  // A session-id-assigning flag is one-shot: the CLI rejects an id it has
+  // already issued (#11782). Persisting it would hand that spent flag to any
+  // restore path that replays the stored command instead of rebuilding one, and
+  // the pane would come back failing to launch at all. The id itself is
+  // persisted separately below, which is what restore actually resumes from.
+  const command = stripAssignedSessionIdArgs(
+    t.command?.trim() || "",
+    t.launchAgentId,
+    t.agentSessionId
+  );
   return {
     launchAgentId: t.launchAgentId,
     cwd: t.cwd,
-    command: t.command?.trim() || undefined,
+    command: command || undefined,
     ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
     ...(t.agentSessionId && { agentSessionId: t.agentSessionId }),
     ...(t.agentLaunchFlags?.length && { agentLaunchFlags: t.agentLaunchFlags }),

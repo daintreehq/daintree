@@ -15,6 +15,11 @@ import {
   resolveEffectiveInlineMode,
   reconcileInlineModeFlag,
   isAgentBypassSupported,
+  buildAssignedSessionIdArgs,
+  supportsSessionIdAssignment,
+  mintAssignedSessionId,
+  rewriteAssignedSessionIdToResume,
+  stripAssignedSessionIdArgs,
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
 } from "../agentSettings.js";
@@ -1373,6 +1378,112 @@ describe("global alt-screen threading through command generation (#10876)", () =
     expect(
       buildAgentLaunchFlags({ inlineMode: "off" }, "codex", { globalUseAltScreen: false })
     ).not.toContain("--no-alt-screen");
+  });
+});
+
+describe("launch-time session id assignment (#11782)", () => {
+  // Claude accepts `--session-id <uuid>`; Codex has no launch-time equivalent
+  // and keeps the teardown scrape. Using the pair keeps every assertion below
+  // about the capability's effect rather than about one agent's literal flags.
+  const ASSIGNING = "claude";
+  const SCRAPING = "codex";
+
+  it("only reports the capability for agents that declare it", () => {
+    expect(supportsSessionIdAssignment(ASSIGNING)).toBe(true);
+    expect(supportsSessionIdAssignment(SCRAPING)).toBe(false);
+    expect(supportsSessionIdAssignment(undefined)).toBe(false);
+    expect(supportsSessionIdAssignment("not-a-real-agent")).toBe(false);
+  });
+
+  it("mints an id only where one can actually be assigned", () => {
+    expect(mintAssignedSessionId(SCRAPING)).toBeUndefined();
+    expect(mintAssignedSessionId(undefined)).toBeUndefined();
+
+    const minted = mintAssignedSessionId(ASSIGNING);
+    expect(minted).toBeDefined();
+    // The CLI requires a real UUID and rejects anything else outright.
+    expect(minted).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  });
+
+  it("mints a distinct id per call so sibling panes never collide", () => {
+    // Two panes sharing an id is the failure this must structurally prevent:
+    // the second launch would be rejected as "already in use".
+    const ids = new Set(Array.from({ length: 25 }, () => mintAssignedSessionId(ASSIGNING)));
+    expect(ids.size).toBe(25);
+  });
+
+  it("puts the assigned id in the launch command ahead of the positional prompt", () => {
+    const sessionId = "11111111-2222-3333-4444-555555555555";
+    const command = generateAgentCommand("claude", {}, ASSIGNING, {
+      sessionId,
+      initialPrompt: "fix the bug",
+    });
+
+    const idIndex = command.indexOf(sessionId);
+    expect(idIndex).toBeGreaterThan(-1);
+    // Ordering is load-bearing: emitted after the prompt, the CLI would read
+    // the flag as part of the prompt rather than as a flag.
+    expect(idIndex).toBeLessThan(command.indexOf("fix the bug"));
+  });
+
+  it("leaves the command untouched for an agent that mints its own id", () => {
+    const withId = generateAgentCommand("codex", {}, SCRAPING, { sessionId: "abc-123" });
+    const withoutId = generateAgentCommand("codex", {}, SCRAPING, {});
+    expect(withId).toBe(withoutId);
+    expect(buildAssignedSessionIdArgs(SCRAPING, "abc-123")).toBeUndefined();
+  });
+
+  it("keeps a from-flags rebuild free of any assigned id", () => {
+    // That builder reproduces the CAPTURED launch configuration, which a
+    // one-shot per-launch id is not part of. Letting one leak in would also
+    // mean a pane could be handed an id its command never actually carried.
+    const command = buildLaunchCommandFromFlags("claude", ASSIGNING, ["--verbose"]);
+    expect(command).toBe("claude --verbose");
+  });
+
+  describe("one-shot flag handling", () => {
+    const sessionId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+    it("rewrites an assigning launch into a resuming one for replay", () => {
+      const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId });
+      const replayed = rewriteAssignedSessionIdToResume(assigned, ASSIGNING, sessionId);
+
+      // Same conversation, but asked for in the only form the CLI still accepts.
+      expect(replayed).toContain(sessionId);
+      expect(replayed).toContain("--resume");
+      expect(replayed).not.toContain("--session-id");
+    });
+
+    it("is idempotent, so repeated replays stay valid", () => {
+      const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId });
+      const once = rewriteAssignedSessionIdToResume(assigned, ASSIGNING, sessionId);
+      expect(rewriteAssignedSessionIdToResume(once, ASSIGNING, sessionId)).toBe(once);
+    });
+
+    it("strips the assigning flag so a copied command launches fresh", () => {
+      const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId });
+      const stripped = stripAssignedSessionIdArgs(assigned, ASSIGNING, sessionId);
+
+      expect(stripped).not.toContain(sessionId);
+      expect(stripped).not.toContain("--session-id");
+      // Still a runnable command, not a mangled one.
+      expect(stripped.startsWith("claude")).toBe(true);
+      expect(stripped).not.toMatch(/\s{2,}/);
+    });
+
+    it("leaves commands that never carried the flag alone", () => {
+      const plain = generateAgentCommand("claude", {}, ASSIGNING, {});
+      expect(stripAssignedSessionIdArgs(plain, ASSIGNING, sessionId)).toBe(plain);
+      expect(rewriteAssignedSessionIdToResume(plain, ASSIGNING, sessionId)).toBe(plain);
+    });
+
+    it("does nothing without an agent or an id to act on", () => {
+      const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId });
+      expect(stripAssignedSessionIdArgs(assigned, undefined, sessionId)).toBe(assigned);
+      expect(stripAssignedSessionIdArgs(assigned, ASSIGNING, undefined)).toBe(assigned);
+      expect(rewriteAssignedSessionIdToResume(assigned, undefined, sessionId)).toBe(assigned);
+      expect(rewriteAssignedSessionIdToResume(assigned, ASSIGNING, undefined)).toBe(assigned);
+    });
   });
 });
 

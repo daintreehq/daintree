@@ -391,6 +391,11 @@ export class TerminalProcess {
       analysisEnabled: hasLaunchHint,
       agentLaunchFlags: options.agentLaunchFlags,
       agentModelId: options.agentModelId,
+      // Recorded as the record is built, before the PTY can emit a byte
+      // (#11782). The id is knowable up front for agents that accept one at
+      // launch, and writing it here — rather than at teardown — is what lets it
+      // survive a kill path that never runs `gracefulShutdown()` at all.
+      agentSessionId: options.agentSessionId,
       worktreeId: options.worktreeId,
       agentPresetId: options.agentPresetId,
       agentPresetColor: options.agentPresetColor,

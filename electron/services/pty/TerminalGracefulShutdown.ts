@@ -1,4 +1,5 @@
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { supportsSessionIdAssignment } from "../../../shared/types/agentSettings.js";
 import { stripAnsiCodes } from "../../../shared/utils/artifactParser.js";
 import {
   GRACEFUL_SHUTDOWN_TIMEOUT_MS,
@@ -29,6 +30,12 @@ export interface TerminalGracefulShutdownHost {
  * mid-stream or on the last-chance match at exit doesn't explain anything,
  * because nothing went wrong. Failure stays granular for the opposite reason:
  * each bucket points at a different suspect.
+ *
+ * `preassigned` is a third thing: not a capture that succeeded but a capture
+ * that was never needed, because the id was chosen at launch (#11782). It stays
+ * its own bucket so the outcome counts still say how the scrape itself is
+ * doing — folding it into `captured` would inflate that rate with terminals the
+ * scrape never ran for.
  */
 export type GracefulShutdownOutcome =
   | "already-exited"
@@ -37,6 +44,7 @@ export type GracefulShutdownOutcome =
   | "no-resume-config"
   | "no-quit-signal"
   | "captured"
+  | "preassigned"
   | "timeout"
   | "exited-no-pattern"
   | "exited-no-match"
@@ -116,6 +124,27 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
   if (!resume) {
     logOutcome("no-resume-config", false);
     return null;
+  }
+
+  // The id was chosen at launch, so there is nothing to scrape (#11782). Kill
+  // without writing a single byte into the PTY, which is what makes the whole
+  // class of scrape failures unreachable for these agents: the quit signal
+  // can't be swallowed by a modal, can't be steered into a running turn as
+  // chat text (burning tokens and polluting the transcript), and can't be
+  // over-sent to the point of killing the process before it prints anything.
+  // It also gives back the timeout budget — this path costs no wall clock at
+  // all, where the scrape spends up to GRACEFUL_SHUTDOWN_TIMEOUT_MS per
+  // terminal, most expensively on app quit when they all run at once.
+  //
+  // Deliberately gated on the agent declaring `assignSessionIdArgs` rather than
+  // on the id merely being present: agents that still mint their own id keep
+  // the scrape as their only capture path, so skipping it for them would drop
+  // an id that only teardown can observe.
+  if (terminal.agentSessionId && supportsSessionIdAssignment(liveAgentId)) {
+    const preassignedId = terminal.agentSessionId;
+    logOutcome("preassigned", true);
+    host.kill("graceful-shutdown");
+    return preassignedId;
   }
   const quitCommand = resume.quitCommand;
   const shutdownKeySequence = resume.shutdownKeySequence;

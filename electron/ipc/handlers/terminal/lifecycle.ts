@@ -777,6 +777,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         isEphemeral: validatedOptions.isEphemeral,
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
+        agentSessionId: validatedOptions.agentSessionId,
         worktreeId: spawnWorktreeId,
         agentPresetId: validatedOptions.agentPresetId,
         agentPresetColor: validatedOptions.agentPresetColor,

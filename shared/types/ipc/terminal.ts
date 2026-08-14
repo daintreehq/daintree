@@ -48,6 +48,13 @@ export interface TerminalSpawnOptions {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time */
   agentModelId?: string;
+  /**
+   * Session id already known at launch (#11782) — minted by Daintree and passed
+   * to the CLI via `resume.assignSessionIdArgs`, or the id this launch resumes.
+   * Recorded on the terminal record at spawn so a force quit, crash or SIGKILL
+   * can't lose it.
+   */
+  agentSessionId?: string;
   /** Worktree the terminal is spawned in; persisted in agent session history */
   worktreeId?: string;
   /** Preset ID the agent is being launched with (needed for fallback chain lookup on exit). */
