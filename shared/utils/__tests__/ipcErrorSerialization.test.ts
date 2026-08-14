@@ -1,11 +1,59 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   serializeError,
   deserializeError,
   wrapSuccess,
   wrapError,
 } from "../ipcErrorSerialization.js";
+import { isErrorLike } from "../ipcErrorSerialization.js";
 import { isIpcEnvelope } from "../../types/ipc/errors.js";
+import { runInNewContext } from "vm";
+
+describe("isErrorLike", () => {
+  it("recognizes an Error from another realm, which instanceof cannot", () => {
+    const foreign = runInNewContext("new TypeError('cross realm')") as Error;
+    expect(foreign instanceof Error).toBe(false);
+    expect(isErrorLike(foreign)).toBe(true);
+  });
+
+  it("recognizes a same-realm Error and rejects an ordinary object", () => {
+    expect(isErrorLike(new Error("local"))).toBe(true);
+    expect(isErrorLike({ name: "Error", message: "impostor" })).toBe(false);
+    expect(isErrorLike("a string")).toBe(false);
+    expect(isErrorLike(null)).toBe(false);
+  });
+
+  it("still detects a cross-realm Error on a runtime without Error.isError", async () => {
+    // The CI runtime does not have `Error.isError`, so a version-gated
+    // implementation would pass here and silently do nothing there. Remove it
+    // and re-import to exercise the fallback that has to carry those runtimes.
+    const original = Object.getOwnPropertyDescriptor(Error, "isError");
+    Reflect.deleteProperty(Error, "isError");
+    vi.resetModules();
+    try {
+      const fresh = await import("../ipcErrorSerialization.js");
+      const foreign = runInNewContext("new Error('no isError here')") as Error;
+      expect(fresh.isErrorLike(foreign)).toBe(true);
+      expect(fresh.serializeError(foreign).message).toBe("no isError here");
+    } finally {
+      if (original) Object.defineProperty(Error, "isError", original);
+      vi.resetModules();
+    }
+  });
+
+  it("does not throw on a Proxy whose prototype trap throws", () => {
+    const trapped = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error("getPrototypeOf trap");
+        },
+      }
+    );
+    expect(() => isErrorLike(trapped)).not.toThrow();
+    expect(isErrorLike(trapped)).toBe(false);
+  });
+});
 
 describe("serializeError", () => {
   it("serializes a plain Error", () => {

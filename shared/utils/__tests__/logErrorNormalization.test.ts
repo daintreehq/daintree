@@ -155,6 +155,8 @@ describe("normalizeErrorsInLogContext", () => {
     expect(normalized).toBe(node);
   });
 
+  // Detection must not depend on `Error.isError`, which not every runtime we
+  // build on has yet — see `isErrorLike`.
   it("normalizes an Error from another realm, which instanceof cannot see", () => {
     const foreign = runInNewContext("new Error('cross realm')") as Error;
     expect(foreign instanceof Error).toBe(false);

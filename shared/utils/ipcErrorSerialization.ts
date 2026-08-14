@@ -18,27 +18,30 @@ const KNOWN_ERROR_KEYS = new Set([
   "errors",
 ]);
 
-// `Error.isError` recognizes an Error across realm boundaries, where
-// `instanceof` fails because each realm has its own `Error.prototype`. Values
-// reaching a logger or an IPC boundary have often already crossed one (a
-// utility process, the preload's isolated world), so `instanceof` alone
-// under-detects. Captured once and feature-checked — the project targets
-// runtimes where it exists, but a stale one must not break serialization.
+// `Error.isError` reads the [[ErrorData]] internal slot, so it recognizes an
+// Error from any realm. Feature-checked rather than assumed: it is recent
+// enough that the CI runtime does not have it, and this must not quietly become
+// a no-op there — hence the `Object.prototype.toString` fallback below.
 const nativeIsError = (Error as unknown as { isError?: (value: unknown) => boolean }).isError;
 
 /**
  * True when `value` is an Error, including one constructed in another realm.
  *
- * Never throws. `instanceof` runs a Proxy's `getPrototypeOf` trap, so a hostile
- * or merely unusual context value could otherwise turn a log call into the
- * exception it was reporting. The native check is tried first because it reads
- * an internal slot without invoking traps; `instanceof` still runs after it as
- * the fallback, since it is the only one that sees a Proxy wrapping an Error.
+ * Realms matter here: each has its own `Error.prototype`, so `instanceof` says
+ * no to an error that arrived from a utility process or the preload's isolated
+ * world — precisely the errors most worth reporting. `Object.prototype.toString`
+ * consults the same internal slot `Error.isError` does and is available
+ * everywhere, so detection does not depend on the runtime being new enough.
+ *
+ * Never throws. `instanceof` runs a Proxy's `getPrototypeOf` trap and the
+ * `toString` path can trip a `get` trap, so a hostile — or merely unusual —
+ * context value must not turn a log call into the exception it was reporting.
  */
 export function isErrorLike(value: unknown): value is Error {
   if (typeof nativeIsError === "function" && nativeIsError(value)) return true;
   try {
-    return value instanceof Error;
+    if (value instanceof Error) return true;
+    return Object.prototype.toString.call(value) === "[object Error]";
   } catch {
     return false;
   }
