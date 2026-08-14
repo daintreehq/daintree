@@ -15,7 +15,24 @@ const KNOWN_ERROR_KEYS = new Set([
   "path",
   "context",
   "cause",
+  "errors",
 ]);
+
+// `Error.isError` recognizes an Error across realm boundaries, where
+// `instanceof` fails because each realm has its own `Error.prototype`. Values
+// reaching a logger or an IPC boundary have often already crossed one (a
+// utility process, the preload's isolated world), so `instanceof` alone
+// under-detects. Captured once and feature-checked — the project targets
+// runtimes where it exists, but a stale one must not break serialization.
+const nativeIsError = (Error as unknown as { isError?: (value: unknown) => boolean }).isError;
+
+/**
+ * True when `value` is an Error, including one constructed in another realm.
+ */
+export function isErrorLike(value: unknown): value is Error {
+  if (value instanceof Error) return true;
+  return typeof nativeIsError === "function" ? nativeIsError(value) : false;
+}
 
 function sanitizeCloneValue(value: unknown, seen: WeakSet<object>): unknown {
   if (value === null) return null;
@@ -34,7 +51,7 @@ function sanitizeCloneValue(value: unknown, seen: WeakSet<object>): unknown {
     return undefined;
   }
 
-  if (value instanceof Error) {
+  if (isErrorLike(value)) {
     return serializeError(value, seen);
   }
 
@@ -122,6 +139,22 @@ export function serializeError(error: unknown, seen = new WeakSet<object>()): Se
 
   const properties: Record<string, unknown> = {};
   let hasProperties = false;
+
+  // `AggregateError.prototype.errors` is an own but NON-enumerable property, so
+  // the `Object.keys` walk below never reaches it and every aggregated failure
+  // would be dropped. Handled here (and listed in `KNOWN_ERROR_KEYS` so the
+  // walk skips it) because `sanitizeCloneValue` shares the `seen` set — a
+  // second visit to the same array would serialize as "[Circular]". Carried in
+  // the `properties` bag rather than a new top-level field so `SerializedError`
+  // and the packaged-build strip in `electron/setup/security.ts` are unchanged.
+  if (err.errors !== undefined) {
+    const aggregated = sanitizeCloneValue(err.errors, seen);
+    if (aggregated !== undefined) {
+      properties.errors = aggregated;
+      hasProperties = true;
+    }
+  }
+
   for (const key of Object.keys(err)) {
     if (KNOWN_ERROR_KEYS.has(key)) continue;
     const val = err[key];

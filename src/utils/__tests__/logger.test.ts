@@ -219,11 +219,19 @@ describe("renderer logger warn/error bypass", () => {
   });
 
   it("flushes error synchronously and serializes the Error", () => {
-    logError("boom", new Error("kaboom"));
+    const error = new Error("kaboom");
+    logError("boom", error);
     expect(logsApi.writeBatch).toHaveBeenCalledTimes(1);
     const entry = sentEntry();
     expect(entry.level).toBe("error");
     expect(entry.context?.error).toMatchObject({ name: "Error", message: "kaboom" });
+    // The stack has to survive too — it is the part the contextBridge drops.
+    expect((entry.context?.error as { stack?: string }).stack).toBe(error.stack);
+  });
+
+  it("sends a non-Error error argument through unchanged", () => {
+    logError("boom", "just a string");
+    expect(sentEntry().context?.error).toBe("just a string");
   });
 
   it("flushes pending info ahead of an error, preserving order, in one batch", () => {
@@ -246,6 +254,65 @@ describe("renderer logger warn/error bypass", () => {
   });
 });
 
+describe("renderer logger error normalization", () => {
+  it("flattens an Error passed inside a warn context, not just logError's argument", () => {
+    const error = new Error("wake failed");
+    logWarn("[wakeActiveWorktreeTerminals] wake failed", { id: "terminal-1", error });
+
+    const context = sentEntry().context ?? {};
+    // Before the fix this crossed the bridge as `{}` — the reported bug.
+    expect(context.error).toMatchObject({ name: error.name, message: error.message });
+    expect((context.error as { stack?: string }).stack).toBe(error.stack);
+    expect(context.id).toBe("terminal-1");
+  });
+
+  it("flattens Errors nested in objects and arrays at every level", () => {
+    const nested = new Error("nested");
+    const listed = new Error("listed");
+    logWarn("failures", { task: { error: nested }, failures: [listed] });
+
+    const context = sentEntry().context ?? {};
+    const task = context.task as { error: { message?: string } };
+    expect(task.error.message).toBe(nested.message);
+    const failures = context.failures as Array<{ message?: string }>;
+    expect(failures[0]?.message).toBe(listed.message);
+  });
+
+  it("sends a payload that survives JSON serialization with the failure intact", () => {
+    logInfo("attempt failed", { error: new Error("recoverable") });
+    vi.advanceTimersByTime(LOG_BATCH_MS);
+
+    const roundTripped = JSON.parse(JSON.stringify(sentEntry())) as SentEntry;
+    expect((roundTripped.context?.error as { message?: string }).message).toBe("recoverable");
+  });
+
+  it("does not mutate the caller's context object", () => {
+    const error = new Error("untouched");
+    const context = { error };
+    logWarn("keep the caller's object intact", context);
+
+    expect(context.error).toBe(error);
+  });
+
+  it("normalizes after the level gate, so a suppressed call does no work", () => {
+    let stackReads = 0;
+    const error = new Error("gated");
+    Object.defineProperty(error, "stack", {
+      get: () => {
+        stackReads++;
+        return "counted";
+      },
+    });
+
+    // debug sits below the default info floor.
+    logDebug("gated", { error });
+    vi.advanceTimersByTime(LOG_BATCH_MS);
+
+    expect(logsApi.writeBatch).not.toHaveBeenCalled();
+    expect(stackReads).toBe(0);
+  });
+});
+
 describe("renderer logger fallback", () => {
   it("logs to console (without gating) when electron is unavailable", () => {
     removeElectron();
@@ -258,5 +325,17 @@ describe("renderer logger fallback", () => {
 
     expect(debugSpy).toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it("hands the console the live Error, which DevTools can expand", () => {
+    removeElectron();
+    _resetRendererLoggerForTesting();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = new Error("live");
+
+    logError("boom", error);
+
+    const context = errorSpy.mock.calls[0]?.[1] as { error?: unknown };
+    expect(context.error).toBe(error);
   });
 });

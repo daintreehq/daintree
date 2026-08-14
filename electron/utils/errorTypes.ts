@@ -227,9 +227,16 @@ export function getErrorDetails(
     message: getUserMessage(error),
   };
 
-  if (error instanceof Error) {
-    details.name = error.name;
-    details.stack = error.stack;
+  // Duck-typed rather than gated on `instanceof Error`, because errors that
+  // have already crossed a process boundary arrive as plain objects: the
+  // renderer flattens an Error before `logs.writeBatch` (the contextBridge
+  // strips non-enumerable properties), so `dispatchRendererLog` hands this
+  // function `{ name, message, stack }` and an `instanceof` gate silently
+  // dropped the name and stack of every renderer-side error (#11777).
+  if (error !== null && typeof error === "object") {
+    const candidate = error as { name?: unknown; stack?: unknown };
+    if (typeof candidate.name === "string") details.name = candidate.name;
+    if (typeof candidate.stack === "string") details.stack = candidate.stack;
   }
 
   if (isDaintreeError(error)) {

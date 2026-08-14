@@ -19,6 +19,7 @@ import { logBuffer, type LogEntry } from "../services/LogBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { resilientRenameSync } from "./fs.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
+import { isErrorLike, serializeError } from "../../shared/utils/ipcErrorSerialization.js";
 import { getWritesSuppressed } from "../services/diskPressureState.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -869,6 +870,28 @@ function writeToLogFile(level: string, message: string, contextStr: string): voi
   }
 }
 
+/**
+ * Flatten an Error into a plain record before redaction walks it.
+ *
+ * `redactSensitiveData` enumerates own properties, and an Error's `name`,
+ * `message` and `stack` are all non-enumerable — so every Error passed inside a
+ * context object was written to the log as `{}`, erasing the only record of the
+ * failure (#11777). Converting here rather than in a separate pre-pass means the
+ * flattened fields keep flowing through the existing scrubbing, string clamping,
+ * array caps and depth limits below, and the no-Error case (effectively all of
+ * a hot path that runs hundreds of times a second) costs one type check.
+ */
+function toRedactableRecord(value: object): Record<string, unknown> {
+  if (!isErrorLike(value)) return value as Record<string, unknown>;
+  try {
+    return serializeError(value) as unknown as Record<string, unknown>;
+  } catch {
+    // A hostile getter on an Error subclass must not turn a log call into the
+    // throw it was reporting.
+    return { name: "Error", message: "[unserializable error]" };
+  }
+}
+
 function redactSensitiveData(
   obj: Record<string, unknown>,
   visited = new WeakSet<object>(),
@@ -895,7 +918,7 @@ function redactSensitiveData(
     } else if (Array.isArray(value)) {
       result[key] = redactArrayWithCycleDetection(value, visited, depth + 1);
     } else if (value !== null && typeof value === "object") {
-      result[key] = redactSensitiveData(value as Record<string, unknown>, visited, depth + 1);
+      result[key] = redactSensitiveData(toRedactableRecord(value), visited, depth + 1);
     } else {
       result[key] = value;
     }
@@ -929,7 +952,7 @@ function redactArrayWithCycleDetection(
       return redactArrayWithCycleDetection(item, visited, depth + 1);
     }
     if (typeof item === "object") {
-      return redactSensitiveData(item as Record<string, unknown>, visited, depth + 1);
+      return redactSensitiveData(toRedactableRecord(item), visited, depth + 1);
     }
     return item;
   });

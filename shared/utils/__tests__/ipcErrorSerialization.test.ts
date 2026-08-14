@@ -144,6 +144,29 @@ describe("serializeError", () => {
     expect(serializeError(null).message).toBe("null");
     expect(serializeError(undefined).message).toBe("undefined");
   });
+
+  it("preserves the members of an AggregateError, which own-key enumeration misses", () => {
+    const aggregate = new AggregateError(
+      [new Error("first failure"), new TypeError("second failure")],
+      "all attempts failed"
+    );
+
+    // Why an explicit branch is needed: `errors` is an own but non-enumerable
+    // property, so the generic own-key walk never reaches it.
+    expect(Object.keys(aggregate)).not.toContain("errors");
+
+    const serialized = serializeError(aggregate);
+    expect(serialized.message).toBe(aggregate.message);
+    const members = serialized.properties?.errors as Array<{ name: string; message: string }>;
+    expect(members.map((member) => member.message)).toEqual(["first failure", "second failure"]);
+    expect(members.map((member) => member.name)).toEqual(["Error", "TypeError"]);
+    expect(() => structuredClone(serialized)).not.toThrow();
+  });
+
+  it("keeps a custom enumerable `errors` value that is not an aggregate list", () => {
+    const err = Object.assign(new Error("partial"), { errors: { count: 2 } });
+    expect(serializeError(err).properties?.errors).toEqual({ count: 2 });
+  });
 });
 
 describe("deserializeError", () => {

@@ -9,6 +9,7 @@ import {
   toGitOperationError,
   getUserMessage,
   getRetryability,
+  getErrorDetails,
 } from "../errorTypes.js";
 import { serializeError, deserializeError } from "../../../shared/utils/ipcErrorSerialization.js";
 
@@ -240,5 +241,45 @@ describe("getRetryability", () => {
     expect(getRetryability(null)).toBe("none");
     expect(getRetryability(undefined)).toBe("none");
     expect(getRetryability(new Error("plain"))).toBe("none");
+  });
+});
+
+describe("getErrorDetails", () => {
+  it("captures name, message and stack from a real Error", () => {
+    const err = new TypeError("boom");
+    const details = getErrorDetails(err);
+    expect(details.name).toBe(err.name);
+    expect(details.message).toBe(err.message);
+    expect(details.stack).toBe(err.stack);
+  });
+
+  it("keeps name and stack from an error already flattened for IPC", () => {
+    // What `dispatchRendererLog` hands us: the contextBridge strips the Error
+    // prototype, so the value fails `instanceof Error` but still carries the
+    // fields worth logging.
+    const flattened = {
+      name: "TypeError",
+      message: "renderer failure",
+      stack: "TypeError: renderer failure\n    at Component",
+    };
+    expect(flattened).not.toBeInstanceOf(Error);
+
+    const details = getErrorDetails(flattened);
+    expect(details.name).toBe(flattened.name);
+    expect(details.message).toBe(flattened.message);
+    expect(details.stack).toBe(flattened.stack);
+  });
+
+  it("ignores non-string name and stack values", () => {
+    const details = getErrorDetails({ message: "m", name: 42, stack: { frames: [] } });
+    expect(details.name).toBeUndefined();
+    expect(details.stack).toBeUndefined();
+  });
+
+  it("does not treat a primitive as carrying error fields", () => {
+    const details = getErrorDetails("just a string");
+    expect(details.message).toBe("just a string");
+    expect(details.name).toBeUndefined();
+    expect(details.stack).toBeUndefined();
   });
 });
