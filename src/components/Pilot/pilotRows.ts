@@ -133,8 +133,8 @@ function rank(band: FleetBand): number {
  */
 function narrowGroup(group: PilotProjectGroup, rows: PilotRow[]): PilotProjectGroup {
   let topBand: FleetBand = "idle";
-  // Annotated: `FLEET_BANDS` is a const tuple, so its `length` narrows to the
-  // literal 6 and the accumulator would refuse every rank assigned below it.
+  // Annotated: `FLEET_BANDS` is a const tuple, so its `length` narrows to a
+  // literal and the accumulator would refuse every rank assigned below it.
   let best: number = FLEET_BANDS.length;
   let demandCount = 0;
   for (const row of rows) {
@@ -207,8 +207,17 @@ export function buildPilotGroups(
     const acknowledgedAt = meta?.lastCompletionSeenAt;
 
     const sorted = [...workspaceRuns].sort((a, b) => {
-      const byBand = rank(bandForRun(a, acknowledgedAt)) - rank(bandForRun(b, acknowledgedAt));
-      return byBand !== 0 ? byBand : compareWithinBand(a, b);
+      const bandA = bandForRun(a, acknowledgedAt);
+      const byBand = rank(bandA) - rank(bandForRun(b, acknowledgedAt));
+      if (byBand !== 0) return byBand;
+      // Parked rows order on the park, not the underlying state: `since` is
+      // whenever the agent last transitioned, which predates the decision the
+      // band is actually about. Oldest park first, same anti-starvation rule.
+      if (bandA === "parked" && a.park !== undefined && b.park !== undefined) {
+        if (a.park.parkedAt !== b.park.parkedAt) return a.park.parkedAt - b.park.parkedAt;
+        return a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0;
+      }
+      return compareWithinBand(a, b);
     });
 
     const rows: PilotRow[] = sorted.map((run) => {
@@ -252,7 +261,16 @@ export function buildPilotGroups(
         presetColor: run.agentPresetColor,
         statusLabel: bandLabel(band, run),
         worktreeLabel: disambiguatingLabel(directoryLabel(run.cwd), name),
-        age: run.since !== undefined ? formatWaitAge(run.since, ctx.nowMs) : null,
+        // A parked row's age is the age of the PARK. Dating it from `since`
+        // read "Parked · 3h" the moment a three-hour-old waiting run was
+        // parked, which answers "how long has it waited" when the row is now
+        // about "how long ago did I shelve this".
+        age:
+          band === "parked" && run.park !== undefined
+            ? formatWaitAge(run.park.parkedAt, ctx.nowMs)
+            : run.since !== undefined
+              ? formatWaitAge(run.since, ctx.nowMs)
+              : null,
       };
     });
 

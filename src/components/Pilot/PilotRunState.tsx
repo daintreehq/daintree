@@ -5,6 +5,7 @@ import {
   InteractingCircle,
   ExitedCircle,
   CircleCheck,
+  CirclePause,
   CircleSlash,
 } from "@/components/icons";
 import type { FleetBand } from "@/lib/fleetAttention";
@@ -49,6 +50,7 @@ export const BAND_GLYPH: Record<FleetBand, ComponentType<{ className?: string }>
   review: CircleCheck,
   running: SpinnerCircle,
   done: CircleCheck,
+  parked: CirclePause,
   idle: HollowCircle,
 };
 
@@ -81,6 +83,9 @@ const BAND_GLYPH_TONE: Record<FleetBand, string> = {
   review: "text-category-blue",
   running: "text-state-working",
   done: NEUTRAL_TONE,
+  // Parked is the user's own quiet, so it takes the quiet tone: hued parked
+  // rows would re-demand the attention parking just released.
+  parked: NEUTRAL_TONE,
   idle: NEUTRAL_TONE,
 };
 
@@ -96,10 +101,10 @@ const BAND_GLYPH_TONE: Record<FleetBand, string> = {
  * ordering beside it: an acknowledged completion has to stop looking like a
  * hand-back at the same moment it stops being counted as one.
  *
- * The three demand bands and `running` are hued; the two quiet ones are not.
- * Shape still carries the state as a second channel for all six — spinner,
- * hollow circle, prohibition, check and exited stay distinct — and the row
- * keeps the state in text in its accessible name either way. Never colour
+ * The three demand bands and `running` are hued; the quiet ones are not.
+ * Shape still carries the state as a second channel for every band — spinner,
+ * hollow circle, prohibition, check, pause and exited stay distinct — and the
+ * row keeps the state in text in its accessible name either way. Never colour
  * alone, and never colour where there is nothing happening.
  */
 export function PilotRunState({ band, agentState }: PilotRunStateProps) {

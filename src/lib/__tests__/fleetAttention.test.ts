@@ -47,6 +47,40 @@ describe("bandForRun", () => {
   });
 });
 
+describe("parked runs", () => {
+  it("puts a parked run in the parked band regardless of agent state", () => {
+    // Parking is the user's promise to themselves; an attention model that
+    // overrides it the moment something looks urgent has to be re-checked
+    // constantly, which is the exact cost parking removes.
+    for (const agentState of [
+      "waiting",
+      "working",
+      "directing",
+      "completed",
+      "idle",
+      "exited",
+    ] as const) {
+      expect(bandForRun(run({ agentState, park: { parkedAt: NOW } }))).toBe("parked");
+    }
+    expect(
+      bandForRun(run({ agentState: "waiting", waitingReason: "error", park: { parkedAt: NOW } }))
+    ).toBe("parked");
+  });
+
+  it("never counts a parked run as a demand", () => {
+    const band = bandForRun(run({ agentState: "waiting", park: { parkedAt: NOW } }));
+    expect(isDemandBand(band)).toBe(false);
+  });
+
+  it("ranks parked below every live band but above idle", () => {
+    const rank = (band: (typeof FLEET_BANDS)[number]) => FLEET_BANDS.indexOf(band);
+    for (const live of ["blocked", "needs-you", "review", "running", "done"] as const) {
+      expect(rank("parked")).toBeGreaterThan(rank(live));
+    }
+    expect(rank("parked")).toBeLessThan(rank("idle"));
+  });
+});
+
 describe("acknowledged completions", () => {
   it("demotes a completion the user has already seen out of the demand bands", () => {
     // Without the watermark every finished run demands attention forever, and a
@@ -85,6 +119,12 @@ describe("bandLabel", () => {
     for (const band of FLEET_BANDS) {
       expect(bandLabel(band, run()).length).toBeGreaterThan(0);
     }
+  });
+
+  it("gives parked its own words — a shelved run must never read as idle", () => {
+    expect(bandLabel("parked", run({ agentState: "waiting", park: { parkedAt: NOW } }))).not.toBe(
+      bandLabel("idle", run({ agentState: "idle" }))
+    );
   });
 
   it("splits the bands that cover two situations a user can tell apart", () => {

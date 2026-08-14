@@ -42,8 +42,8 @@ function shapeOf(band: FleetBand, agentState?: AgentState): string {
 }
 
 const DEMAND_BANDS = FLEET_BANDS.filter(isDemandBand);
-/** Nothing in flight and nothing being asked — the two states that stay grey. */
-const QUIET_BANDS: FleetBand[] = ["done", "idle"];
+/** Nothing in flight and nothing being asked — the states that stay grey. */
+const QUIET_BANDS: FleetBand[] = ["done", "parked", "idle"];
 
 describe("PilotRunState", () => {
   it("paints one shared neutral tone across the states that are not news", () => {
@@ -98,6 +98,7 @@ describe("PilotRunState", () => {
       shapeOf("running"),
       shapeOf("running", "directing"),
       shapeOf("done"),
+      shapeOf("parked"),
       shapeOf("idle"),
       shapeOf("idle", "exited"),
     ];

@@ -3,6 +3,28 @@ import type { BuiltInAgentId } from "../../config/agentIds.js";
 import type { PanelTitleMode } from "../panel.js";
 
 /**
+ * A user's decision that a run does not need them right now.
+ *
+ * Parking is intent, not state: the agent underneath keeps doing whatever it
+ * was doing, and every attention surface (bands, demand counts, filters) treats
+ * the run as shelved until the record is removed — by hand, or automatically
+ * when the gate terminal next comes free. Owned by Main
+ * (`RunAttentionService`) for the same reason the snapshot is: intent must
+ * survive view eviction and app restart, and terminal ids do.
+ */
+export interface RunParkRecord {
+  /** When the user parked the run (epoch ms). */
+  parkedAt: number;
+  /** Why it's parked — the user's own words, shown wherever the run is listed. */
+  note?: string;
+  /**
+   * Terminal id whose next busy→ready transition releases this park. Absent
+   * means the park holds until the user lifts it.
+   */
+  gateRunId?: string;
+}
+
+/**
  * One agent run: a single agent terminal living in a single worktree.
  *
  * The run — not the project — is the unit here, and that is the whole point of
@@ -73,6 +95,12 @@ export interface FleetRunRow {
   everDetectedAgent?: boolean;
   /** User-chosen preset colour, which outranks the agent's default brand hue. */
   agentPresetColor?: string;
+  /**
+   * Present iff the user parked this run. Rides the row so every surface reads
+   * one source of truth; the band logic demotes a parked run below the fold and
+   * the note travels with it.
+   */
+  park?: RunParkRecord;
 }
 
 /**

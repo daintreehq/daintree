@@ -574,6 +574,65 @@ describe("FleetSnapshotService", () => {
     expect(wc.send).not.toHaveBeenCalled();
   });
 
+  it("decorates a run with its park record", async () => {
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    const park = { parkedAt: NOW - 5_000, note: "after the migration", gateRunId: "t9" };
+    const attention = { getAll: () => new Map([["t1", park]]) };
+    const service = new FleetSnapshotService(client as never, attention as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(lastSnapshot().runs[0].park).toEqual(park);
+    service.stop();
+  });
+
+  it("treats a park change as a fleet change even though no agent state moved", async () => {
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    let parks = new Map();
+    const attention = { getAll: () => parks };
+    const service = new FleetSnapshotService(client as never, attention as never);
+    service.start();
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+    expect(lastSnapshot().runs[0].park).toBeUndefined();
+
+    parks = new Map([["t1", { parkedAt: NOW }]]);
+    eventEmitter.emit("terminal:park-changed", { id: "t1", parked: true, timestamp: NOW });
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(broadcastMock).toHaveBeenCalledTimes(2);
+    expect(lastSnapshot().runs[0].park).toEqual({ parkedAt: NOW });
+    service.stop();
+  });
+
+  it("re-broadcasts on a note-only park change, advancing changedAt", async () => {
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    let parks = new Map([["t1", { parkedAt: NOW - 10_000, note: "before" }]]);
+    const attention = { getAll: () => parks };
+    const service = new FleetSnapshotService(client as never, attention as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    const firstChangedAt = lastSnapshot().changedAt;
+
+    // An unchanged park is not a fleet change — suppression must hold.
+    vi.setSystemTime(NOW + 5_000);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+
+    // The note is the row's user-facing intent, so editing it alone is news.
+    parks = new Map([["t1", { parkedAt: NOW - 10_000, note: "after" }]]);
+    vi.setSystemTime(NOW + 10_000);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(broadcastMock).toHaveBeenCalledTimes(2);
+    expect(lastSnapshot().runs[0].park?.note).toBe("after");
+    expect(lastSnapshot().changedAt).toBeGreaterThan(firstChangedAt);
+    service.stop();
+  });
+
   it("broadcasts a genuinely empty fleet so a cleared queue reaches every view", async () => {
     const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
     const service = new FleetSnapshotService(client as never);

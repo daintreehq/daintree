@@ -276,6 +276,18 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: false,
     description: "Terminal restored from trash",
   },
+  "terminal:park-changed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A run was parked or unparked (user intent, not agent state)",
+  },
+  "terminal:park-released": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A parked run was released because its gate terminal came free or closed",
+  },
   "agent-session:captured": {
     category: "agent",
     requiresContext: false,
@@ -768,6 +780,33 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * Emitted whenever a run's park record is created, replaced or removed —
+   * by the user or by an automatic release. Attention projections
+   * (`FleetSnapshotService`) subscribe to recompute; the payload deliberately
+   * carries only the id so no consumer is tempted to bypass the service as the
+   * single reader of park state.
+   */
+  "terminal:park-changed": {
+    id: string;
+    parked: boolean;
+    timestamp: number;
+  };
+
+  /**
+   * Emitted when a park is lifted automatically rather than by hand: the gate
+   * terminal finished its stint (busy → ready) or was closed. Carries the note
+   * so the "this run is ready for you again" surface can say why the run was
+   * waiting without a second read.
+   */
+  "terminal:park-released": {
+    id: string;
+    gateRunId: string;
+    note?: string;
+    reason: "gate-ready" | "gate-closed";
+    timestamp: number;
+  };
+
+  /**
    * Emitted in the pty-host when trash expiry captures a resumable session,
    * and re-emitted on the Main bus by PtyEventsBridge. Main persists the
    * record (single journal writer — the pty-host writing the file itself
@@ -931,6 +970,8 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "action:dispatched",
   "terminal:trashed",
   "terminal:restored",
+  "terminal:park-changed",
+  "terminal:park-released",
   "agent-session:captured",
   "agent-session:recorded",
   "terminal:activity",

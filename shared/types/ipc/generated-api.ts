@@ -176,6 +176,12 @@ export interface GeneratedElectronAPI {
     getSnapshot(
       ...args: IpcInvokeMap["fleet:get-snapshot"]["args"]
     ): Promise<IpcInvokeMap["fleet:get-snapshot"]["result"]>;
+    parkRun(
+      ...args: IpcInvokeMap["fleet:park-run"]["args"]
+    ): Promise<IpcInvokeMap["fleet:park-run"]["result"]>;
+    unparkRun(
+      ...args: IpcInvokeMap["fleet:unpark-run"]["args"]
+    ): Promise<IpcInvokeMap["fleet:unpark-run"]["result"]>;
   };
   forgeAudit: {
     clearLog(

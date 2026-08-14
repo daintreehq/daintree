@@ -4,6 +4,7 @@ import { events } from "./events.js";
 import { classifyRun } from "./projectAgentCounts.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 import type { PtyClient } from "./PtyClient.js";
+import type { RunAttentionService } from "./RunAttentionService.js";
 import type { FleetRunRow, FleetSnapshot } from "../../shared/types/ipc/fleet.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
@@ -48,7 +49,10 @@ export class FleetSnapshotService {
    */
   private lastSuccessfulReadAt: number | null = null;
 
-  constructor(private ptyClient: PtyClient | undefined | null) {}
+  constructor(
+    private ptyClient: PtyClient | undefined | null,
+    private runAttention?: RunAttentionService | null
+  ) {}
 
   get isStarted(): boolean {
     return this.started;
@@ -70,6 +74,9 @@ export class FleetSnapshotService {
     subscribe("agent:state-changed");
     subscribe("terminal:trashed");
     subscribe("terminal:restored");
+    // Park records ride the rows, so a park set or lifted is a fleet change
+    // even though no agent state moved.
+    subscribe("terminal:park-changed");
   }
 
   updatePollInterval(ms: number): void {
@@ -198,7 +205,10 @@ export class FleetSnapshotService {
         x.cwd !== y.cwd ||
         x.launchAgentId !== y.launchAgentId ||
         x.everDetectedAgent !== y.everDetectedAgent ||
-        x.agentPresetColor !== y.agentPresetColor
+        x.agentPresetColor !== y.agentPresetColor ||
+        x.park?.parkedAt !== y.park?.parkedAt ||
+        x.park?.note !== y.park?.note ||
+        x.park?.gateRunId !== y.park?.gateRunId
       ) {
         return false;
       }
@@ -231,6 +241,7 @@ export class FleetSnapshotService {
       }
 
       const availability = getAgentAvailabilityStore();
+      const parkRecords = this.runAttention?.getAll();
       const runs: FleetRunRow[] = [];
 
       for (const terminal of allTerminals) {
@@ -239,6 +250,7 @@ export class FleetSnapshotService {
         if (!terminal.projectId) continue;
         if (classifyRun(terminal, (id) => availability.isHelpTerminal(id)) !== null) continue;
 
+        const park = parkRecords?.get(terminal.id);
         runs.push({
           runId: terminal.id,
           workspaceId: terminal.projectId,
@@ -271,6 +283,9 @@ export class FleetSnapshotService {
           ...(terminal.agentPresetColor !== undefined
             ? { agentPresetColor: terminal.agentPresetColor }
             : {}),
+          // User intent decorates the row here so every surface reads park
+          // state and agent state in one payload, never joining two feeds.
+          ...(park !== undefined ? { park } : {}),
         });
       }
 
