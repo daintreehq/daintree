@@ -137,7 +137,7 @@ export function DownloadDiagnosticsSection() {
         disabled={isCollecting}
         className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text mb-3"
       >
-        {isCollecting ? <Spinner size="md" /> : <Download className="w-4 h-4" />}
+        {isCollecting ? <Spinner size="sm" /> : <Download className="w-4 h-4" />}
         {isCollecting ? "Collecting…" : "Download diagnostics"}
       </Button>
       {downloadError && <p className="text-xs text-status-error mb-3">{downloadError}</p>}

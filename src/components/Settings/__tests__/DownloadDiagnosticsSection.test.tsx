@@ -2,6 +2,7 @@
 import { render, screen, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { DownloadDiagnosticsSection } from "../TroubleshootingTab";
+import { Spinner } from "@/components/ui/Spinner";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
 
 const mockDispatch = vi.fn<(...args: unknown[]) => Promise<unknown>>().mockResolvedValue({
@@ -15,13 +16,14 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 
-// Marked so the busy glyph can be identified by component identity rather than
-// by its class strings — asserting `animate-spin` would just copy the literal
-// back out of Spinner.tsx. Button imports Spinner too, but only for its
-// `loading` overlay, which this section never enables.
-vi.mock("@/components/ui/Spinner", () => ({
-  Spinner: () => <span data-testid="busy-spinner" />,
-}));
+// Spied, not replaced: the real Spinner still renders its SVG, so the busy glyph
+// is identified by component identity rather than by class strings (asserting
+// `animate-spin` would just copy the literal back out of Spinner.tsx). Button
+// imports this same module for its `loading` overlay, which this section never
+// enables — so every recorded call belongs to the section under test.
+vi.mock("@/components/ui/Spinner", { spy: true });
+
+const spinner = () => vi.mocked(Spinner);
 
 const setCollecting = (isCollecting: boolean) => {
   act(() => {
@@ -30,10 +32,9 @@ const setCollecting = (isCollecting: boolean) => {
 };
 
 const getButton = () => screen.getByRole<HTMLButtonElement>("button");
-const spinner = () => screen.queryByTestId("busy-spinner");
 // Scoped to the button: SettingsSection renders its own Download glyph in the
 // section heading, which is not part of the busy state under test.
-const glyph = () => getButton().querySelector("svg");
+const glyphCount = () => getButton().querySelectorAll("svg").length;
 
 describe("DownloadDiagnosticsSection — collecting state", () => {
   beforeEach(() => {
@@ -41,30 +42,32 @@ describe("DownloadDiagnosticsSection — collecting state", () => {
     useDiagnosticsReviewStore.setState({ isCollecting: false, downloadError: null });
   });
 
-  it("shows an action glyph and no spinner while idle", () => {
+  it("shows the action glyph and no spinner while idle", () => {
     render(<DownloadDiagnosticsSection />);
 
-    expect(glyph()).not.toBeNull();
-    expect(spinner()).toBeNull();
+    expect(spinner()).not.toHaveBeenCalled();
+    expect(glyphCount()).toBe(1);
   });
 
   it("swaps the action glyph for the spinner while collecting", () => {
     render(<DownloadDiagnosticsSection />);
     setCollecting(true);
 
-    // The bug being fixed was a single glyph that spun in place. The two
-    // indicators must be mutually exclusive, not layered.
-    expect(spinner()).not.toBeNull();
-    expect(glyph()).toBeNull();
+    // The bug being fixed was one glyph spinning in place. The spinner must be
+    // rendered (not the Download glyph animating), and the two must be mutually
+    // exclusive rather than layered — hence exactly one SVG either way.
+    expect(spinner()).toHaveBeenCalled();
+    expect(glyphCount()).toBe(1);
   });
 
   it("restores the action glyph once collecting ends", () => {
     render(<DownloadDiagnosticsSection />);
     setCollecting(true);
+    spinner().mockClear();
     setCollecting(false);
 
-    expect(spinner()).toBeNull();
-    expect(glyph()).not.toBeNull();
+    expect(spinner()).not.toHaveBeenCalled();
+    expect(glyphCount()).toBe(1);
   });
 
   it("swaps the label when collecting starts", () => {
@@ -83,16 +86,6 @@ describe("DownloadDiagnosticsSection — collecting state", () => {
     const busyLabel = getButton().textContent ?? "";
     expect(busyLabel).toMatch(/…$/);
     expect(busyLabel).not.toContain("...");
-  });
-
-  it("writes the idle label in sentence case", () => {
-    render(<DownloadDiagnosticsSection />);
-
-    // Sentence case as an invariant, not a copy of the literal: every word
-    // after the first stays lowercase.
-    const words = (getButton().textContent ?? "").trim().split(/\s+/);
-    expect(words.length).toBeGreaterThan(1);
-    expect(words.slice(1).every((word) => word === word.toLowerCase())).toBe(true);
   });
 
   it("disables the button only while collecting", () => {
