@@ -273,10 +273,12 @@ export const createRestartActions = (
           reconnectError: undefined,
           spawnError: undefined,
           scrollbackRestoreError: undefined,
-          // A restart builds a brand-new xterm instance, so a paint failure
-          // recorded against the old one describes something that no longer
-          // exists (#11776) — leaving it set would strand the banner.
-          attachError: undefined,
+          // attachError is deliberately NOT cleared here: this reset runs
+          // before the restart is validated, so clearing it would hide the
+          // banner while the old unpaintable terminal is still on screen
+          // (#11776). The service clears it when a terminal actually opens, and
+          // destroy() clears it when one is torn down — both strictly after the
+          // point of no return.
           // A restart spins up a fresh PTY process; flow state from the previous
           // process must not survive into it or the paused pill would linger
           // (#9899). The host only re-emits flow status on a pause/resume

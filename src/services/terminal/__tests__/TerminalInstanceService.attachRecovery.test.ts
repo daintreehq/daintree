@@ -54,6 +54,9 @@ const xtermHarness = vi.hoisted(() => {
     refresh = vi.fn();
     blur = vi.fn();
     attachCustomKeyEventHandler = vi.fn();
+    // Settles the rebuild's drain barrier immediately — a fresh terminal has
+    // nothing queued.
+    write = vi.fn((_data: string, callback?: () => void) => callback?.());
     loadAddon = vi.fn();
     onRender = vi.fn(() => ({ dispose: vi.fn() }));
     element = document.createElement("div");
@@ -484,7 +487,11 @@ describe("TerminalInstanceService attach failure recovery (#11776)", () => {
         dispose: ReturnType<typeof vi.fn>;
       };
       original.write = vi.fn((_data: string, callback?: () => void) => {
-        releaseDrain = callback;
+        releaseDrain = () => {
+          // Settling the barrier is what drains the ack-bearing batches.
+          managed.pendingWrites = 0;
+          callback?.();
+        };
       });
       service.instances.set("d1", managed);
 
@@ -499,6 +506,35 @@ describe("TerminalInstanceService attach failure recovery (#11776)", () => {
 
       expect(original.dispose).toHaveBeenCalled();
       expect(managed.isOpened).toBe(true);
+    });
+
+    it("re-arms the drain when output lands behind the sentinel", async () => {
+      // A poisoned terminal is usually still streaming at full rate, so a batch
+      // can be queued BEHIND the drain sentinel while it waits — and its
+      // callback is exactly the ack that disposing would drop. One barrier is
+      // not enough; the drain has to keep going until the queue is really idle.
+      const managed = makeManaged("d3");
+      makeHostRenderable(managed);
+      managed.pendingWrites = 1;
+      const original = managed.terminal as unknown as {
+        write: ReturnType<typeof vi.fn>;
+        dispose: ReturnType<typeof vi.fn>;
+      };
+      let sentinels = 0;
+      original.write = vi.fn((_data: string, callback?: () => void) => {
+        sentinels++;
+        // The first barrier completes with a newly-arrived batch still pending;
+        // only by the second has the terminal actually gone quiet.
+        if (sentinels >= 2) managed.pendingWrites = 0;
+        callback?.();
+      });
+      service.instances.set("d3", managed);
+
+      await service.recoverPoisonedTerminal("d3", { manual: true });
+
+      expect(sentinels).toBeGreaterThan(1);
+      expect(original.dispose).toHaveBeenCalled();
+      expect(managed.pendingWrites).toBe(0);
     });
 
     it("abandons the rebuild rather than disposing a terminal whose writes never drain", async () => {

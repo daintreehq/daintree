@@ -1601,12 +1601,15 @@ class TerminalInstanceService {
   async recoverPoisonedTerminal(id: string, options?: { manual?: boolean }): Promise<boolean> {
     const managed = this.instances.get(id);
     if (!managed) return false;
-    if (managed.attachRecoveryInFlight) return managed.attachRecoveryInFlight;
-
     // A manual Retry is the user telling us conditions changed (they resized,
     // un-occluded the pane, or simply want another go), so it refills the
-    // automatic budget rather than being blocked by it.
+    // automatic budget rather than being blocked by it. Applied BEFORE the
+    // in-flight check: the loop re-reads the budget each iteration, so a click
+    // landing during the final automatic attempt still buys more attempts
+    // instead of being swallowed by the shared promise.
     if (options?.manual === true) managed.attachRecoveryAttempts = 0;
+
+    if (managed.attachRecoveryInFlight) return managed.attachRecoveryInFlight;
 
     const run = this.runRecoveryAttempts(id, managed)
       // The loop is started with `void` from a synchronous open failure, so an
@@ -1669,12 +1672,39 @@ class TerminalInstanceService {
    * would open cleanly and then sit there receiving nothing, which is a worse
    * bug than the one being fixed.
    *
-   * Parsing does not need a renderer, so a poisoned terminal still drains
-   * normally; the timeout only exists so a genuinely wedged parser degrades to
-   * "try again later" instead of taking the dispose path anyway.
+   * One sentinel is not enough. A poisoned terminal is usually still receiving
+   * output at full rate, so fresh batches land BEHIND the sentinel while it
+   * waits — their callbacks would be exactly the ones dropped. Re-arm until the
+   * ack-bearing queue is actually empty, bounded by one shared deadline.
+   *
+   * Parsing does not need a renderer, so a poisoned terminal does drain; the
+   * deadline only exists so a terminal streaming without pause degrades to "try
+   * again later" rather than taking the dispose path anyway.
    */
-  private drainWritesBeforeDispose(id: string, managed: ManagedTerminal): Promise<boolean> {
-    if ((managed.pendingWrites ?? 0) === 0) return Promise.resolve(true);
+  private async drainWritesBeforeDispose(id: string, managed: ManagedTerminal): Promise<boolean> {
+    const deadline = Date.now() + ATTACH_RECOVERY_DRAIN_TIMEOUT_MS;
+    // At least one pass runs unconditionally: `pendingWrites` counts only
+    // ack-bearing batches, and untracked writes (scrollback replay, the
+    // data-loss marker) can still be sitting in the buffer ahead of us.
+    for (;;) {
+      if (!(await this.queueDrainSentinel(id, managed, deadline))) return false;
+      if ((managed.pendingWrites ?? 0) === 0) return true;
+      if (Date.now() >= deadline) {
+        logWarn("[TIS] Writes kept arriving during the pre-rebuild drain", {
+          id,
+          pendingWrites: managed.pendingWrites ?? 0,
+        });
+        return false;
+      }
+    }
+  }
+
+  /** One FIFO barrier through xterm's write queue. */
+  private queueDrainSentinel(
+    id: string,
+    managed: ManagedTerminal,
+    deadline: number
+  ): Promise<boolean> {
     return new Promise<boolean>((resolve) => {
       let settled = false;
       const finish = (drained: boolean) => {
@@ -1683,19 +1713,24 @@ class TerminalInstanceService {
         clearTimeout(timer);
         resolve(drained);
       };
-      const timer = setTimeout(() => {
-        logWarn("[TIS] Timed out draining writes before rebuild", {
-          id,
-          pendingWrites: managed.pendingWrites ?? 0,
-        });
-        finish(false);
-      }, ATTACH_RECOVERY_DRAIN_TIMEOUT_MS);
+      const timer = setTimeout(
+        () => {
+          logWarn("[TIS] Timed out draining writes before rebuild", {
+            id,
+            pendingWrites: managed.pendingWrites ?? 0,
+          });
+          finish(false);
+        },
+        Math.max(0, deadline - Date.now())
+      );
       try {
         // An empty write parses to nothing but still queues behind everything
         // already in the buffer, so its callback fires only once the backlog —
         // and every ack riding those earlier callbacks — has landed.
         managed.terminal.write("", () => finish(true));
       } catch (error) {
+        // Over the discard watermark, or already disposed. Either way we cannot
+        // establish the barrier, so we must not dispose.
         logWarn("[TIS] Could not queue a drain write before rebuild", { id, error });
         finish(false);
       }
