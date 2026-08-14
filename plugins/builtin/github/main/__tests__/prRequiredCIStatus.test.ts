@@ -228,6 +228,74 @@ describe("deriveRequiredCIStatus", () => {
     expect(r.ciSummary).toBeUndefined();
   });
 
+  it.each([
+    ["a CheckRun NEUTRAL conclusion", { __typename: "CheckRun", conclusion: "NEUTRAL" }],
+    ["a CheckRun SKIPPED conclusion", { __typename: "CheckRun", conclusion: "SKIPPED" }],
+    ["a StatusContext SUCCESS state", { __typename: "StatusContext", state: "SUCCESS" }],
+  ])("still counts %s as a pass rather than tripping the bail-out", (_label, ctx) => {
+    // The unclassified bail-out must not swallow legitimate non-SUCCESS passes,
+    // or every PR with a skipped required check would lose its summary.
+    const r = deriveRequiredCIStatus([{ ...ctx, isRequired: true }], false, "SUCCESS");
+    expect(r.ciStatus).toBe("SUCCESS");
+    expect(r.ciSummary).toEqual({ requiredTotal: 1, requiredFailing: 0, requiredPending: 0 });
+  });
+
+  it.each(["QUEUED", "IN_PROGRESS", "WAITING", "PENDING", "REQUESTED"])(
+    "still counts a required CheckRun in %s as pending, not unclassified",
+    (status) => {
+      const r = deriveRequiredCIStatus(
+        [{ __typename: "CheckRun", status, conclusion: null, isRequired: true }],
+        false,
+        "PENDING"
+      );
+      expect(r.ciStatus).toBe("PENDING");
+      expect(r.ciSummary?.requiredPending).toBe(1);
+    }
+  );
+
+  it("does not let an unknown union member pass as not-required", () => {
+    // The query has no inline fragment for a new union member, so it arrives
+    // with only __typename — no state AND no isRequired. Skipping it for the
+    // missing isRequired would let the sibling check derive a green verdict.
+    const r = deriveRequiredCIStatus(
+      [
+        { __typename: "CheckRun", conclusion: "SUCCESS", status: "COMPLETED", isRequired: true },
+        { __typename: "SomeFutureCheckKind" },
+      ],
+      false,
+      "FAILURE"
+    );
+    expect(r.ciStatus).toBe("FAILURE");
+    expect(r.ciSummary).toBeUndefined();
+  });
+
+  it("does not accept the lifecycle value COMPLETED as a passing conclusion", () => {
+    // COMPLETED is a status, never a conclusion. It sits in the aggregate bucket
+    // set `deriveGlobalCIStatus` reads, so reusing that set here would read a
+    // malformed `conclusion: "COMPLETED"` as a pass.
+    const r = deriveRequiredCIStatus(
+      [{ __typename: "CheckRun", conclusion: "COMPLETED", isRequired: true }],
+      false,
+      "FAILURE"
+    );
+    expect(r.ciStatus).toBe("FAILURE");
+    expect(r.ciSummary).toBeUndefined();
+  });
+
+  it("passes the raw rollup state through unchanged when it bails out", () => {
+    // The bail-out returns whatever CI actually reported — it must not collapse
+    // every unclassified case to FAILURE.
+    for (const raw of ["SUCCESS", "PENDING", "ERROR"]) {
+      const r = deriveRequiredCIStatus(
+        [{ __typename: "CheckRun", conclusion: "SOME_NEW_STATE", isRequired: true }],
+        false,
+        raw
+      );
+      expect(r.ciStatus).toBe(raw);
+      expect(r.ciSummary).toBeUndefined();
+    }
+  });
+
   it("still derives a summary when every required check is classifiable", () => {
     // Guards the bail-out above from swallowing the normal path: an unknown
     // NON-required check must not suppress the derivation.

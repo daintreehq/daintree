@@ -844,13 +844,17 @@ async function fetchCIRollupPage(
     | undefined;
 
   const pageInfo = rollup?.contexts?.pageInfo;
+  const nodes = rollup?.contexts?.nodes;
   return {
     rollup,
-    headOid: typeof commit?.oid === "string" ? commit.oid : null,
-    nodes: rollup?.contexts?.nodes ?? null,
+    headOid: typeof commit?.oid === "string" && commit.oid ? commit.oid : null,
+    nodes: Array.isArray(nodes) ? nodes : null,
     hasNextPage: pageInfo?.hasNextPage === true,
     endCursor: pageInfo?.endCursor ?? null,
-    hasPageInfo: pageInfo != null,
+    // Only a real boolean proves anything. A `pageInfo` that omits the flag says
+    // nothing about whether more pages exist, and reading its absence as "no"
+    // is how a list silently stops at 100.
+    hasPageInfo: typeof pageInfo?.hasNextPage === "boolean",
   };
 }
 
@@ -901,7 +905,7 @@ export async function getChecksImpl(
       // head's failures while presenting the result as complete.
       if (page === 0) {
         headOid = result.headOid;
-      } else if (result.headOid !== headOid) {
+      } else if (result.headOid === null || result.headOid !== headOid) {
         throw incomplete("the pull request was updated mid-read");
       }
 
@@ -912,7 +916,11 @@ export async function getChecksImpl(
         throw incomplete("its checks went away mid-read");
       }
 
-      for (const node of result.nodes ?? []) {
+      // A rollup that reports no node list at all isn't an empty page — it is a
+      // page we can't read, and treating it as empty drops whatever it held.
+      if (!result.nodes) throw incomplete("the provider returned no check list");
+
+      for (const node of result.nodes) {
         const check = mapRollupContextToCheckRun(node);
         // A node we cannot even name is a check we would be omitting silently —
         // "no such check" instead of "a check I can't describe". Fail loudly.
@@ -924,6 +932,9 @@ export async function getChecksImpl(
       // assuming it is truncates at 100 without saying so.
       if (!result.hasPageInfo) throw incomplete("the provider reported no pagination info");
       if (!result.hasNextPage) return { checks };
+
+      // Another page is coming, so from here on the head has to be verifiable.
+      if (headOid === null) throw incomplete("the provider reported no head commit to pin");
 
       // A next page we can't address, or a cursor that repeats, would loop or
       // silently drop the remainder. Fail instead of returning a partial list.

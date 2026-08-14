@@ -3596,6 +3596,65 @@ describe("checks.getChecks", () => {
     await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(/went away/i);
   });
 
+  it("rejects a rollup that reports no node list rather than reading it as empty", async () => {
+    mockGraphQLClient.mockResolvedValue({
+      repository: {
+        pullRequest: {
+          commits: {
+            nodes: [
+              {
+                commit: {
+                  oid: "head-sha",
+                  statusCheckRollup: {
+                    state: "FAILURE",
+                    contexts: { nodes: null, pageInfo: { hasNextPage: false } },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+    await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(/no check list/i);
+  });
+
+  it("rejects a pageInfo that omits hasNextPage instead of assuming the page is last", async () => {
+    mockGraphQLClient.mockResolvedValue(
+      checksResponse([{ __typename: "CheckRun", name: "a", status: "COMPLETED" }], {} as never)
+    );
+    await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(
+      /no pagination info/i
+    );
+  });
+
+  it("rejects paging on when the head commit cannot be pinned", async () => {
+    // Without an oid there is nothing to compare later pages against, so a push
+    // mid-read would go undetected.
+    mockGraphQLClient.mockResolvedValue(
+      checksResponse(
+        [{ __typename: "CheckRun", name: "a", status: "COMPLETED" }],
+        { hasNextPage: true, endCursor: "CURSOR_1" },
+        "" as never
+      )
+    );
+    await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(/no head commit/i);
+  });
+
+  it("does not write its pages into the cache getCIStatus reads", async () => {
+    // getChecks bypasses the shared response cache in both directions: a page it
+    // fetched must not later be served to the roll-up read as a cache hit.
+    mockGraphQLClient.mockResolvedValueOnce(checksResponse([]));
+    await githubForgeProvider.checks!.getChecks(repo, 31);
+    const afterChecks = mockGraphQLClient.mock.calls.length;
+
+    mockGraphQLClient.mockResolvedValueOnce(ciResponse());
+    await githubForgeProvider.getCIStatus(repo, 31);
+
+    expect(mockGraphQLClient.mock.calls.length).toBe(afterChecks + 1);
+  });
+
   it("does not serve a stale cached first page", async () => {
     // getCIStatus shares this query and caches its response for 60s. Reusing
     // that entry would let a check added since then vanish from a list that

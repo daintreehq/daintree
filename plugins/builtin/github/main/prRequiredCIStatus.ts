@@ -41,6 +41,13 @@ const PENDING_STATUS_STATES = new Set(["PENDING", "EXPECTED"]);
 const NON_FAILING_CHECK_STATES = new Set(["SUCCESS", "NEUTRAL", "SKIPPED", "COMPLETED"]);
 const NON_FAILING_STATUS_STATES = new Set(["SUCCESS"]);
 
+// The passing CheckRun *conclusions*, as distinct from the mixed bucket above —
+// `deriveGlobalCIStatus` reads aggregate buckets keyed by either lifecycle or
+// conclusion, so its set includes COMPLETED, which is a status and never a
+// conclusion. Per-context classification must not accept it as one, or a
+// `conclusion: "COMPLETED"` would read as a pass.
+const NON_FAILING_CHECK_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+
 export interface RollupContextNode {
   __typename?: string;
   // CheckRun fields
@@ -113,10 +120,22 @@ export function deriveRequiredCIStatus(
   let requiredUnclassified = 0;
 
   for (const ctx of contexts) {
-    if (!ctx?.isRequired) continue;
-    requiredTotal++;
+    if (!ctx) continue;
 
     const typename = ctx.__typename;
+    // A union member the query has no inline fragment for arrives carrying only
+    // `__typename` — not its state, and not its `isRequired`. It must be counted
+    // as unclassifiable BEFORE the requiredness guard below, since skipping it
+    // for a missing `isRequired` would read an unknown member as "not required"
+    // and let the remaining checks derive a green verdict over the top of it.
+    if (typename !== undefined && typename !== "CheckRun" && typename !== "StatusContext") {
+      requiredUnclassified++;
+      continue;
+    }
+
+    if (!ctx.isRequired) continue;
+    requiredTotal++;
+
     if (typename === "CheckRun") {
       const conclusion = ctx.conclusion?.toUpperCase();
       const status = ctx.status?.toUpperCase();
@@ -128,7 +147,7 @@ export function deriveRequiredCIStatus(
         // counts as passing. A conclusion this vocabulary doesn't know, or a run
         // that reports no conclusion and no recognized in-flight status, is
         // unclassifiable rather than green.
-      } else if (!(conclusion && NON_FAILING_CHECK_STATES.has(conclusion))) {
+      } else if (!(conclusion && NON_FAILING_CHECK_CONCLUSIONS.has(conclusion))) {
         requiredUnclassified++;
       }
     } else if (typename === "StatusContext") {
@@ -141,7 +160,8 @@ export function deriveRequiredCIStatus(
         requiredUnclassified++;
       }
     } else {
-      // Unknown union member — treat a non-success conclusion/state as failure conservatively
+      // No `__typename` at all — classify by whichever fields are present, and
+      // treat "neither recognizably passing" as unclassifiable.
       const conclusion = ctx.conclusion?.toUpperCase();
       const state = ctx.state?.toUpperCase();
       if (conclusion && FAILING_CHECK_CONCLUSIONS.has(conclusion)) {
@@ -149,7 +169,7 @@ export function deriveRequiredCIStatus(
       } else if (state && FAILING_STATUS_STATES.has(state)) {
         requiredFailing++;
       } else if (
-        !(conclusion && NON_FAILING_CHECK_STATES.has(conclusion)) &&
+        !(conclusion && NON_FAILING_CHECK_CONCLUSIONS.has(conclusion)) &&
         !(state && NON_FAILING_STATUS_STATES.has(state))
       ) {
         requiredUnclassified++;
