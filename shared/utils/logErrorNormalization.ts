@@ -2,16 +2,27 @@ import { isErrorLike, serializeError } from "./ipcErrorSerialization.js";
 
 /**
  * Depth bound for the Error scan over a log context. Mirrors the main-process
- * logger's `MAX_REDACT_DEPTH` — anything deeper is replaced with a
- * `"[MaxDepth]"` sentinel by `redactSensitiveData` before it is retained, so
- * normalizing past this point produces nothing a reader ever sees. The two
- * constants are deliberately independent (each carries its own rationale); if
- * they ever drift, the only effect is an Error at the exact boundary being
- * flattened but then depth-clamped, or vice versa.
+ * logger's `MAX_REDACT_DEPTH`, which discards anything deeper before it is
+ * retained — so normalizing past this point produces nothing a reader would
+ * ever see. Both walks index depth the same way, which is what lets a subtree
+ * truncated here read identically to one truncated there. The two constants are
+ * deliberately independent (each carries its own rationale); if they ever
+ * drift, the only effect is an Error at the exact boundary being flattened but
+ * then depth-clamped, or vice versa.
  */
 const MAX_ERROR_SCAN_DEPTH = 5;
 
 const CIRCULAR = "[Circular]";
+
+/**
+ * Stands in for a subtree past {@link MAX_ERROR_SCAN_DEPTH}. Spelled the same
+ * as the main logger's own depth sentinel, which replaces that subtree anyway —
+ * so the log reads identically whether the renderer truncated it first or main
+ * did. Handing back the caller's original node instead would be lossless in
+ * principle but splices their graph, cycles and live Errors included, into a
+ * payload that has to survive `JSON.stringify` and the contextBridge.
+ */
+const MAX_DEPTH = "[MaxDepth]";
 
 /**
  * Flatten an Error for a log context, never throwing.
@@ -124,10 +135,14 @@ interface CloneEntry {
 function cloneWithErrors(value: unknown, depth: number, memo: Map<object, CloneEntry>): unknown {
   if (value === null || typeof value !== "object") return value;
   if (isErrorLike(value)) return serializeErrorForLog(value);
-  if (depth >= MAX_ERROR_SCAN_DEPTH) return value;
 
+  // Ahead of the depth cutoff: a back-edge that only closes past the bound is
+  // still a back-edge, and resolving it to the sentinel keeps an alias readable
+  // where truncation would blank it.
   const existing = memo.get(value);
   if (existing !== undefined && existing.depth <= depth) return existing.result;
+
+  if (depth >= MAX_ERROR_SCAN_DEPTH) return MAX_DEPTH;
 
   if (Array.isArray(value)) {
     memo.set(value, { depth, result: CIRCULAR });

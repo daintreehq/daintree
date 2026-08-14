@@ -237,13 +237,21 @@ const FORWARDED_SERIALIZED_FIELDS = [
   "properties",
 ] as const;
 
-/** Read one field without letting a throwing accessor escape into the log. */
-function readErrorField(error: object, key: string): unknown {
+/** Node's `ErrnoException` fields, reported whenever the error carries them. */
+const NODE_ERROR_FIELDS = ["code", "errno", "syscall", "path"] as const;
+
+/** Run a read that touches caller-supplied accessors, swallowing a throw. */
+function guardedRead<T>(read: () => T): T | undefined {
   try {
-    return (error as Record<string, unknown>)[key];
+    return read();
   } catch {
     return undefined;
   }
+}
+
+/** Read one field without letting a throwing accessor escape into the log. */
+function readErrorField(error: object, key: string): unknown {
+  return guardedRead(() => (error as Record<string, unknown>)[key]);
 }
 
 /**
@@ -253,8 +261,12 @@ export function getErrorDetails(
   error: unknown,
   seen = new WeakSet<Error>()
 ): Record<string, unknown> {
+  // Every field below is read under its own guard, because this feeds the
+  // logger: an error object with a throwing accessor must cost that one field,
+  // not turn the log call into a second failure. `getUserMessage` reads
+  // `error.message` unguarded for a real `Error`, so even it needs the net.
   const details: Record<string, unknown> = {
-    message: getUserMessage(error),
+    message: guardedRead(() => getUserMessage(error)) ?? "[unreadable error message]",
   };
 
   // Duck-typed rather than gated on `instanceof Error`, because errors that
@@ -262,8 +274,7 @@ export function getErrorDetails(
   // renderer flattens an Error before `logs.writeBatch` (the contextBridge
   // strips non-enumerable properties), so `dispatchRendererLog` hands this
   // function a serialized record and an `instanceof` gate silently dropped the
-  // name and stack of every renderer-side error (#11777). Every read is
-  // guarded — an accessor that throws must cost its own field, not the log.
+  // name and stack of every renderer-side error (#11777).
   if (error !== null && typeof error === "object") {
     for (const key of DUCK_TYPED_ERROR_FIELDS) {
       const value = readErrorField(error, key);
@@ -279,7 +290,10 @@ export function getErrorDetails(
     }
   }
 
-  if (isDaintreeError(error)) {
+  // `isDaintreeError` is an `instanceof` check, which runs a Proxy's
+  // `getPrototypeOf` trap, and the branch then reads `.context`/`.cause`.
+  guardedRead(() => {
+    if (!isDaintreeError(error)) return;
     details.context = error.context;
     if (error.cause) {
       if (error.cause instanceof Error && !seen.has(error.cause)) {
@@ -289,14 +303,13 @@ export function getErrorDetails(
         details.cause = getErrorDetails(error.cause, seen);
       }
     }
-  }
+  });
 
   if (error && typeof error === "object") {
-    const nodeError = error as NodeJS.ErrnoException;
-    if (nodeError.code) details.code = nodeError.code;
-    if (nodeError.errno) details.errno = nodeError.errno;
-    if (nodeError.syscall) details.syscall = nodeError.syscall;
-    if (nodeError.path) details.path = nodeError.path;
+    for (const key of NODE_ERROR_FIELDS) {
+      const value = readErrorField(error, key);
+      if (value) details[key] = value;
+    }
   }
 
   return details;

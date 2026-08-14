@@ -311,6 +311,42 @@ describe("getErrorDetails", () => {
     expect(details.name).toBeUndefined();
   });
 
+  it("survives a real Error whose message accessor throws", () => {
+    // `getUserMessage` reads `.message` directly for an `instanceof Error`, so
+    // this is the one field that escapes without its own guard.
+    const err = new Error("replaced below");
+    Object.defineProperty(err, "message", {
+      get: () => {
+        throw new Error("message trap");
+      },
+    });
+
+    let details: Record<string, unknown> = {};
+    expect(() => {
+      details = getErrorDetails(err);
+    }).not.toThrow();
+    expect(details.message).toBeTypeOf("string");
+    expect(details.name).toBe("Error");
+  });
+
+  it("survives a throwing Node errno accessor", () => {
+    const err = Object.assign(new Error("io failed"), { syscall: "open" });
+    Object.defineProperty(err, "code", {
+      get: () => {
+        throw new Error("code trap");
+      },
+    });
+
+    let details: Record<string, unknown> = {};
+    expect(() => {
+      details = getErrorDetails(err);
+    }).not.toThrow();
+    // The unreadable field costs only itself; its siblings still report.
+    expect(details.code).toBeUndefined();
+    expect(details.syscall).toBe("open");
+    expect(details.message).toBe("io failed");
+  });
+
   it("carries the cause of a plain Error, which is non-enumerable", () => {
     const err = new Error("outer", { cause: new Error("inner") });
     expect(Object.keys(err)).not.toContain("cause");

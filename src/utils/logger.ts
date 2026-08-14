@@ -134,9 +134,18 @@ function flushBatch(): void {
 
   for (let i = 0; i < snapshot.length; i += MAX_BATCH_ENTRIES) {
     const chunk = snapshot.slice(i, i + MAX_BATCH_ENTRIES);
-    window.electron.logs.writeBatch(chunk).catch(() => {
-      for (const entry of chunk) consoleFallback(entry.level, entry.message, entry.context);
-    });
+    try {
+      window.electron.logs.writeBatch(chunk).catch(() => {
+        for (const entry of chunk) consoleFallback(entry.level, entry.message, entry.context);
+      });
+    } catch {
+      // The contextBridge clones synchronously as the call is made, so an
+      // un-cloneable value — or a context whose getter throws — raises here
+      // rather than rejecting, and `.catch` would never be reached. A log call
+      // must not become the failure it was reporting. The context is dropped
+      // on this path precisely because reading it is what failed.
+      for (const entry of chunk) consoleFallback(entry.level, entry.message);
+    }
   }
 }
 

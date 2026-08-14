@@ -317,6 +317,19 @@ describe("renderer logger error normalization", () => {
     expect(context.error).toBe(error);
   });
 
+  it("does not let a context the bridge rejects escape into the caller", () => {
+    // The real contextBridge clones synchronously as the call is made, so an
+    // un-cloneable context throws out of writeBatch rather than rejecting.
+    logsApi.writeBatch.mockImplementation(() => {
+      throw new Error("could not be cloned");
+    });
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(() => logWarn("unclonable", { error: new Error("still reported") })).not.toThrow();
+    // The entry is not silently dropped — it falls back to the console.
+    expect(consoleSpy).toHaveBeenCalled();
+  });
+
   it("normalizes after the level gate, so a suppressed call does no work", () => {
     let stackReads = 0;
     const error = new Error("gated");

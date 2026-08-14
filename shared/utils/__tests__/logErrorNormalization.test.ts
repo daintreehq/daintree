@@ -111,7 +111,7 @@ describe("normalizeErrorsInLogContext", () => {
     expect(asRecord(reachable.inner.error).message).toBe("hidden");
   });
 
-  it("degrades to a clone-safe payload when scanning itself throws", () => {
+  it("returns the context unchanged rather than throwing when the walk itself fails", () => {
     const hostile = new Proxy(
       { error: new Error("unreachable") },
       {
@@ -120,12 +120,29 @@ describe("normalizeErrorsInLogContext", () => {
         },
       }
     ) as unknown as Record<string, unknown>;
+    const context = { hostile };
 
-    let normalized: Record<string, unknown> = {};
-    expect(() => {
-      normalized = normalizeErrorsInLogContext({ hostile });
-    }).not.toThrow();
-    expect(normalized).toBeTypeOf("object");
+    // The documented trade-off: a context this pass cannot read is handed back
+    // as it came. It loses the Error flattening — the caller (`flushBatch`)
+    // is what keeps the failure from escaping.
+    expect(normalizeErrorsInLogContext(context)).toBe(context);
+  });
+
+  it("breaks a cycle that only closes past the depth bound", () => {
+    // The back-edge lands deeper than the walk descends. Truncating before
+    // consulting the memo would splice the caller's cycle into the result.
+    const root: Record<string, unknown> = { error: new Error("cyclic") };
+    let node = root;
+    for (let i = 0; i < 6; i++) {
+      const next: Record<string, unknown> = {};
+      node.child = next;
+      node = next;
+    }
+    node.back = root;
+
+    const normalized = normalizeErrorsInLogContext(root);
+    expect(normalized).not.toBe(root);
+    expect(() => JSON.stringify(normalized)).not.toThrow();
   });
 
   it("terminates on a chain far deeper than it walks, leaving the unreached Error alone", () => {
