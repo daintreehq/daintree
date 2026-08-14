@@ -179,9 +179,15 @@ export interface GeneratedElectronAPI {
     parkRun(
       ...args: IpcInvokeMap["fleet:park-run"]["args"]
     ): Promise<IpcInvokeMap["fleet:park-run"]["result"]>;
+    snoozeRun(
+      ...args: IpcInvokeMap["fleet:snooze-run"]["args"]
+    ): Promise<IpcInvokeMap["fleet:snooze-run"]["result"]>;
     unparkRun(
       ...args: IpcInvokeMap["fleet:unpark-run"]["args"]
     ): Promise<IpcInvokeMap["fleet:unpark-run"]["result"]>;
+    unsnoozeRun(
+      ...args: IpcInvokeMap["fleet:unsnooze-run"]["args"]
+    ): Promise<IpcInvokeMap["fleet:unsnooze-run"]["result"]>;
   };
   forgeAudit: {
     clearLog(

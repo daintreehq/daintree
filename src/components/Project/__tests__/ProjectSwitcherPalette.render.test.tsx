@@ -167,6 +167,7 @@ function makeProject(overrides: Partial<SearchableProject> = {}): ProjectSwitche
     blockedAgentCount: 0,
     completedAgentCount: 0,
     unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
     section: "other",
     displayPath:
       (overrides.path ?? "/tmp/test").replace(/\\/g, "/").split("/").filter(Boolean).pop() ??
@@ -825,6 +826,7 @@ describe("ProjectSwitcherPalette scratch search rows", () => {
       blockedAgentCount: 0,
       completedAgentCount: 0,
       unacknowledgedCompletedAgentCount: 0,
+      snoozedAgentCount: 0,
       processCount: 0,
       ...overrides,
     };
@@ -1019,6 +1021,7 @@ describe("ProjectSwitcherPalette scratch section across search", () => {
     blockedAgentCount: 0,
     completedAgentCount: 0,
     unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
     processCount: 0,
   };
 
@@ -1101,6 +1104,7 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     blockedAgentCount: 0,
     completedAgentCount: 0,
     unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
     processCount: 0,
   };
 

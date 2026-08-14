@@ -246,6 +246,8 @@ export const CHANNELS = {
   FLEET_GET_SNAPSHOT: "fleet:get-snapshot",
   FLEET_PARK_RUN: "fleet:park-run",
   FLEET_UNPARK_RUN: "fleet:unpark-run",
+  FLEET_SNOOZE_RUN: "fleet:snooze-run",
+  FLEET_UNSNOOZE_RUN: "fleet:unsnooze-run",
   PROJECT_HISTORY_PEEK: "project-history:peek",
   PROJECT_CREATE_FOLDER: "project:create-folder",
   PROJECT_INIT_GIT: "project:init-git",

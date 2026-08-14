@@ -91,6 +91,7 @@ export class FleetSnapshotService {
     // Park records ride the rows, so a park set or lifted is a fleet change
     // even though no agent state moved.
     subscribe("terminal:park-changed");
+    subscribe("terminal:snooze-changed");
   }
 
   updatePollInterval(ms: number): void {
@@ -223,6 +224,10 @@ export class FleetSnapshotService {
         x.park?.parkedAt !== y.park?.parkedAt ||
         x.park?.note !== y.park?.note ||
         x.park?.gateRunId !== y.park?.gateRunId ||
+        // Presence flips when a snooze lapses, so this is also what makes an
+        // expiry reach the renderer without an expiry event existing.
+        x.snooze?.snoozedAt !== y.snooze?.snoozedAt ||
+        x.snooze?.snoozedUntil !== y.snooze?.snoozedUntil ||
         x.quietSince !== y.quietSince
       ) {
         return false;
@@ -257,6 +262,10 @@ export class FleetSnapshotService {
 
       const availability = getAgentAvailabilityStore();
       const parkRecords = this.runAttention?.getAll();
+      // Expiry is resolved here, so only LIVE snoozes ever reach a row. That is
+      // what lets `bandForRun` decide on presence alone and keeps every
+      // renderer surface clock-free.
+      const snoozeRecords = this.runAttention?.getActiveSnoozes();
       const stallCutoff = Date.now() - STALL_QUIET_MS;
       const runs: FleetRunRow[] = [];
 
@@ -267,6 +276,7 @@ export class FleetSnapshotService {
         if (classifyRun(terminal, (id) => availability.isHelpTerminal(id)) !== null) continue;
 
         const park = parkRecords?.get(terminal.id);
+        const snooze = snoozeRecords?.get(terminal.id);
         runs.push({
           runId: terminal.id,
           workspaceId: terminal.projectId,
@@ -302,6 +312,7 @@ export class FleetSnapshotService {
           // User intent decorates the row here so every surface reads park
           // state and agent state in one payload, never joining two feeds.
           ...(park !== undefined ? { park } : {}),
+          ...(snooze !== undefined ? { snooze } : {}),
           // Stall cue: only for a working run, and only once the CURRENT
           // working stint has been silent past the threshold. Anchored on the
           // later of last output, the transition into this state and the

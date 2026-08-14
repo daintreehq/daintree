@@ -1,4 +1,12 @@
-import type { FleetSnapshot, RunParkRecord } from "../../../shared/types/ipc/fleet.js";
+import type {
+  FleetSnapshot,
+  RunParkRecord,
+  RunSnoozeRecord,
+} from "../../../shared/types/ipc/fleet.js";
+import {
+  isAgentSnoozeDurationOption,
+  type AgentSnoozeDurationOption,
+} from "../../../shared/utils/agentSnoozeDurations.js";
 import { getFleetSnapshotService, getRunAttentionService } from "./projectCrud/index.js";
 import { MAX_PARK_NOTE_LENGTH } from "../../services/RunAttentionService.js";
 import { checkRateLimit } from "../utils.js";
@@ -122,6 +130,49 @@ export const fleetNamespace = defineIpcNamespace({
       const service = getRunAttentionService();
       if (!service) throw new Error("Run attention service unavailable");
       return service.unpark(runId);
+    }),
+
+    /**
+     * Snooze a run — drop it out of the project's attention roll-up until the
+     * chosen ceiling passes or the user types at it. Reversible in one
+     * keystroke and local to attention surfaces (D0), so no confirmation tier
+     * applies.
+     *
+     * The duration is validated as a member of the ladder rather than accepted
+     * as a raw number of milliseconds: an arbitrary expiry from the renderer
+     * would be a wake time no menu could ever show, and the four options are
+     * the whole product surface.
+     */
+    snoozeRun: op(
+      FLEET_METHOD_CHANNELS.snoozeRun,
+      async (runId: string, option: AgentSnoozeDurationOption): Promise<RunSnoozeRecord> => {
+        checkRateLimit(CHANNELS.FLEET_SNOOZE_RUN, 20, 10_000);
+        assertRunId(runId, "run id");
+        if (!isAgentSnoozeDurationOption(option)) {
+          throw new Error("Invalid snooze duration");
+        }
+        // Same liveness requirement parking has: a run the snapshot cannot see
+        // is hostile, mistyped or already gone, and snoozing it would persist
+        // intent against an id nothing will ever clear.
+        assertKnownRuns(runId, undefined);
+
+        const service = getRunAttentionService();
+        if (!service) throw new Error("Run attention service unavailable");
+        return service.snooze(runId, option);
+      }
+    ),
+
+    /**
+     * Lift a snooze by hand. Resolves false when the run wasn't snoozed. No
+     * snapshot check, for the same reason unpark has none: the way OUT of a
+     * suppression must not depend on the fleet being readable.
+     */
+    unsnoozeRun: op(FLEET_METHOD_CHANNELS.unsnoozeRun, async (runId: string): Promise<boolean> => {
+      checkRateLimit(CHANNELS.FLEET_UNSNOOZE_RUN, 20, 10_000);
+      assertRunId(runId, "run id");
+      const service = getRunAttentionService();
+      if (!service) throw new Error("Run attention service unavailable");
+      return service.unsnooze(runId);
     }),
   },
 });

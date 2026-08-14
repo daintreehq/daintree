@@ -17,6 +17,7 @@ function scratch(overrides: Partial<SearchableScratch> = {}): SearchableScratch 
     blockedAgentCount: 0,
     completedAgentCount: 0,
     unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
     processCount: 0,
     ...overrides,
   };
@@ -40,6 +41,7 @@ function project(overrides: Partial<SearchableProject> = {}): SearchableProject 
     blockedAgentCount: 0,
     completedAgentCount: 0,
     unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
     processCount: 0,
     displayPath: "test",
     section: "other",
@@ -276,6 +278,7 @@ describe("getProjectRowStatus", () => {
       project({
         completedAgentCount: 1,
         unacknowledgedCompletedAgentCount: 0,
+        snoozedAgentCount: 0,
         latestCompletionAt: NOW - 2 * 3600_000,
       }),
       NOW
@@ -290,6 +293,7 @@ describe("getProjectRowStatus", () => {
       project({
         completedAgentCount: 3,
         unacknowledgedCompletedAgentCount: 0,
+        snoozedAgentCount: 0,
         latestCompletionAt: NOW - 2 * 3600_000,
       }),
       NOW
@@ -304,6 +308,7 @@ describe("getProjectRowStatus", () => {
         activeAgentCount: 1,
         completedAgentCount: 2,
         unacknowledgedCompletedAgentCount: 0,
+        snoozedAgentCount: 0,
         latestCompletionAt: NOW - 3600_000,
       }),
       NOW
@@ -492,5 +497,133 @@ describe("getScratchRowStatus", () => {
 
     expect(status.text).toContain("needs input");
     expect(status.tone).toBe("waiting");
+  });
+});
+
+describe("snoozed rows", () => {
+  const WAKE_AT = NOW + 15 * 60_000;
+
+  it("names the snoozed agents and their wake time", () => {
+    const status = getProjectRowStatus(
+      project({ snoozedAgentCount: 1, nextSnoozeWakeAt: WAKE_AT }),
+      NOW
+    );
+
+    expect(status.tone).toBe("snoozed");
+    expect(status.text).toContain("snoozed");
+    expect(status.text).toContain("until");
+  });
+
+  it("pluralises the count", () => {
+    const one = getProjectRowStatus(project({ snoozedAgentCount: 1 }), NOW).text;
+    const many = getProjectRowStatus(project({ snoozedAgentCount: 3 }), NOW).text;
+
+    expect(one).not.toContain("3");
+    expect(many).toContain("3");
+  });
+
+  it("states no wake time when every snooze is unlimited", () => {
+    const status = getProjectRowStatus(project({ snoozedAgentCount: 2 }), NOW);
+
+    expect(status.tone).toBe("snoozed");
+    expect(status.text).not.toContain("until");
+  });
+
+  it("renders the same wake time regardless of how much later it is read", () => {
+    // The anti-countdown contract: a static clock time stays true without being
+    // redrawn, so no timer is needed to keep the row honest.
+    const row = project({ snoozedAgentCount: 1, nextSnoozeWakeAt: WAKE_AT });
+    const early = getProjectRowStatus(row, NOW).text;
+    const later = getProjectRowStatus(row, NOW + 10 * 60_000).text;
+
+    expect(later).toBe(early);
+  });
+
+  it("actually derives the line from the wake time, not a fixed string", () => {
+    // Paired with the stability test above: without this, a hard-coded or
+    // omitted time would satisfy "unchanged when read later" perfectly.
+    const early = getProjectRowStatus(
+      project({ snoozedAgentCount: 1, nextSnoozeWakeAt: WAKE_AT }),
+      NOW
+    ).text;
+    const late = getProjectRowStatus(
+      project({ snoozedAgentCount: 1, nextSnoozeWakeAt: WAKE_AT + 3 * 60 * 60_000 }),
+      NOW
+    ).text;
+
+    expect(late).not.toBe(early);
+  });
+
+  it("drops only the wake clause when the wake time is absent, keeping the count", () => {
+    const timed = getProjectRowStatus(
+      project({ snoozedAgentCount: 2, nextSnoozeWakeAt: WAKE_AT }),
+      NOW
+    ).text;
+    const unlimited = getProjectRowStatus(project({ snoozedAgentCount: 2 }), NOW).text;
+
+    expect(timed.startsWith(unlimited)).toBe(true);
+    expect(timed.length).toBeGreaterThan(unlimited.length);
+  });
+
+  it("yields to a genuinely waiting agent", () => {
+    // Snooze demotes only the runs it covers; an unsnoozed wait still wins.
+    const status = getProjectRowStatus(
+      project({ snoozedAgentCount: 1, waitingAgentCount: 1 }),
+      NOW
+    );
+
+    expect(status.tone).toBe("waiting");
+  });
+
+  it("yields to a running agent, so a project with work in flight reads as Running", () => {
+    const status = getProjectRowStatus(project({ snoozedAgentCount: 1, activeAgentCount: 1 }), NOW);
+
+    expect(status.tone).toBe("working");
+  });
+
+  it("yields to work awaiting review", () => {
+    const status = getProjectRowStatus(
+      project({ snoozedAgentCount: 1, unacknowledgedCompletedAgentCount: 1 }),
+      NOW
+    );
+
+    expect(status.tone).toBe("review");
+  });
+
+  it("outranks the seen-completion line", () => {
+    // A snoozed agent is live and coming back; "Agent finished" would deny that.
+    const status = getProjectRowStatus(
+      project({ snoozedAgentCount: 1, completedAgentCount: 1 }),
+      NOW
+    );
+
+    expect(status.tone).toBe("snoozed");
+  });
+
+  it("outranks the dormant opened-time fallback", () => {
+    const status = getProjectRowStatus(project({ snoozedAgentCount: 1, lastOpened: 1 }), NOW);
+
+    expect(status.isDormantFallback).toBeUndefined();
+    expect(status.tone).toBe("snoozed");
+  });
+
+  it("gives a scratch the same snoozed line a project gets", () => {
+    const status = getScratchRowStatus(scratch({ snoozedAgentCount: 1 }), NOW);
+
+    expect(status.tone).toBe("snoozed");
+    expect(status.text).toContain("snoozed");
+  });
+
+  it("is distinguishable from the muted settled states by more than colour", () => {
+    // Tone alone cannot separate snoozed from finished-and-seen, so the row's
+    // words have to — otherwise the two greys are the same row.
+    const snoozed = getProjectRowStatus(project({ snoozedAgentCount: 1 }), NOW);
+    const settled = getProjectRowStatus(
+      project({ completedAgentCount: 1, latestCompletionAt: NOW - 60_000 }),
+      NOW
+    );
+
+    expect(snoozed.text).not.toBe(settled.text);
+    expect(snoozed.tone).not.toBe(settled.tone);
   });
 });

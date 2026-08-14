@@ -33,6 +33,34 @@ export interface RunParkRecord {
 }
 
 /**
+ * A user's decision that a run does not need them *yet*.
+ *
+ * The sibling of {@link RunParkRecord}, and deliberately a separate record
+ * rather than a field on it: the two intents differ in what ends them. A park
+ * is "I've triaged this" and ends on a gate or by hand; a snooze is "remind me
+ * later, and definitely when I type" and ends on a clock or on the user's own
+ * keystrokes. Collapsing them would force one release mechanism to pretend to
+ * be the other.
+ *
+ * Snooze suppresses ATTENTION, not presence: a snoozed working agent still
+ * counts as running, and a snoozed completed agent is still completed. Only the
+ * demand it makes on the user is withdrawn.
+ */
+export interface RunSnoozeRecord {
+  /** When the user snoozed the run (epoch ms). */
+  snoozedAt: number;
+  /**
+   * Wake time (epoch ms). Absent means the "Unlimited (until I interact)"
+   * option — the snooze holds until typed input clears it, mirroring how an
+   * absent `gateRunId` already means a park holds until lifted by hand.
+   *
+   * Absolute rather than a duration so the snooze is wall-clock: a machine that
+   * sleeps through the window wakes up with the snooze already over.
+   */
+  snoozedUntil?: number;
+}
+
+/**
  * One agent run: a single agent terminal living in a single worktree.
  *
  * The run — not the project — is the unit here, and that is the whole point of
@@ -110,6 +138,15 @@ export interface FleetRunRow {
    * the note travels with it.
    */
   park?: RunParkRecord;
+  /**
+   * Present iff the user snoozed this run AND the snooze is still live.
+   *
+   * Main filters expired snoozes out before decorating the row, so a consumer
+   * never has to know what time it is to read this field — presence alone means
+   * "currently snoozed". That keeps every renderer surface clock-free and is
+   * what lets the whole feature ship without a countdown timer anywhere.
+   */
+  snooze?: RunSnoozeRecord;
   /**
    * When a WORKING run last showed signs of life — the later of its last
    * output and its entry into the current working stint — present only once

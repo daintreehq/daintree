@@ -279,3 +279,214 @@ describe("computeProjectAgentCounts", () => {
     expect(counts.get("p1")!.latestWorkingSince).toBe(700);
   });
 });
+
+describe("computeProjectAgentCounts — snooze", () => {
+  const snoozes = (...ids: string[]) => new Map(ids.map((id) => [id, {}]));
+
+  it("withholds a snoozed waiting agent from the attention tallies", () => {
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "t1", agentState: "waiting" })],
+      undefined,
+      snoozes("t1")
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.waiting).toBe(0);
+    expect(p1.snoozed).toBe(1);
+  });
+
+  it("withholds a snoozed blocked agent from both waiting and blocked", () => {
+    // `blocked` is a subset of `waiting`; suppressing one without the other
+    // would leave a project reading as blocked with nothing waiting.
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "t1", agentState: "waiting", waitingReason: "error" })],
+      undefined,
+      snoozes("t1")
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.waiting).toBe(0);
+    expect(p1.blocked).toBe(0);
+  });
+
+  it("does not let a snoozed wait contribute an age", () => {
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "t1", agentState: "waiting", lastStateChange: 1_000 })],
+      undefined,
+      snoozes("t1")
+    );
+
+    expect(counts.get("p1")!.oldestWaitingSince).toBeNull();
+  });
+
+  it("keeps an unsnoozed sibling's wait fully counted", () => {
+    // The headline behaviour: one snoozed agent must not silence another.
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [
+        agent({ id: "t1", agentState: "waiting", lastStateChange: 1_000 }),
+        agent({ id: "t2", agentState: "waiting", lastStateChange: 2_000 }),
+      ],
+      undefined,
+      snoozes("t1")
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.waiting).toBe(1);
+    expect(p1.oldestWaitingSince).toBe(2_000);
+    expect(p1.snoozed).toBe(1);
+  });
+
+  it("still counts a snoozed WORKING agent as active — snooze hides demand, not presence", () => {
+    // The snooze is on the WORKING run itself. Snoozing a waiting sibling and
+    // asserting the unsnoozed worker counts would prove nothing: it passes just
+    // as well if snoozed workers are wrongly dropped from `active`.
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "t1", agentState: "working", lastStateChange: 3_000 })],
+      undefined,
+      snoozes("t1")
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.active).toBe(1);
+    expect(p1.latestWorkingSince).toBe(3_000);
+    expect(p1.snoozed).toBe(1);
+  });
+
+  it("reads as Running when one agent is snoozed-waiting and another is working", () => {
+    // The issue's headline scenario, straight through the counts.
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "t1", agentState: "waiting" }), agent({ id: "t2", agentState: "working" })],
+      undefined,
+      snoozes("t1")
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.waiting).toBe(0);
+    expect(p1.active).toBe(1);
+  });
+
+  it("keeps the subset invariants intact across a mixed snoozed/unsnoozed project", () => {
+    // blocked <= waiting and unacknowledgedCompleted <= completed have to hold
+    // whatever snooze suppresses, or a row renders a count it cannot explain.
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [
+        agent({ id: "t1", agentState: "waiting", waitingReason: "error" }),
+        agent({ id: "t2", agentState: "waiting", waitingReason: "error" }),
+        agent({ id: "t3", agentState: "waiting" }),
+        agent({ id: "t4", agentState: "completed", lastStateChange: 5_000 }),
+        agent({ id: "t5", agentState: "completed", lastStateChange: 6_000 }),
+      ],
+      new Map([["p1", 1_000]]),
+      snoozes("t1", "t4")
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.blocked).toBeLessThanOrEqual(p1.waiting);
+    expect(p1.unacknowledgedCompleted).toBeLessThanOrEqual(p1.completed);
+    // And the suppression bit on exactly the snoozed runs, not more.
+    expect(p1.waiting).toBe(2);
+    expect(p1.blocked).toBe(1);
+    expect(p1.completed).toBe(2);
+    expect(p1.unacknowledgedCompleted).toBe(1);
+    expect(p1.snoozed).toBe(2);
+  });
+
+  it("counts a snoozed completed agent as completed but not as unacknowledged", () => {
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "t1", agentState: "completed", lastStateChange: 5_000 })],
+      new Map([["p1", 1_000]]),
+      snoozes("t1")
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.completed).toBe(1);
+    expect(p1.unacknowledgedCompleted).toBe(0);
+    expect(p1.oldestUnacknowledgedCompletionAt).toBeNull();
+  });
+
+  it("reports the earliest wake time across snoozed runs", () => {
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "t1", agentState: "waiting" }), agent({ id: "t2", agentState: "waiting" })],
+      undefined,
+      new Map([
+        ["t1", { snoozedUntil: 9_000 }],
+        ["t2", { snoozedUntil: 4_000 }],
+      ])
+    );
+
+    expect(counts.get("p1")!.nextSnoozeWakeAt).toBe(4_000);
+  });
+
+  it("reports no wake time when every snooze is unlimited", () => {
+    // Substituting one would promise a return no clock will deliver.
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "t1", agentState: "waiting" })],
+      undefined,
+      new Map([["t1", {}]])
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.snoozed).toBe(1);
+    expect(p1.nextSnoozeWakeAt).toBeNull();
+  });
+
+  it("ignores an unlimited snooze when picking the earliest wake time", () => {
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "t1", agentState: "waiting" }), agent({ id: "t2", agentState: "waiting" })],
+      undefined,
+      new Map([
+        ["t1", {}],
+        ["t2", { snoozedUntil: 7_000 }],
+      ])
+    );
+
+    expect(counts.get("p1")!.nextSnoozeWakeAt).toBe(7_000);
+  });
+
+  it("counts nothing as snoozed when no snooze map is supplied", () => {
+    // Callers that don't consume snooze must see the pre-existing behaviour
+    // exactly, or the feature would change tallies it was never wired into.
+    const counts = computeProjectAgentCounts(["p1"], [agent({ id: "t1", agentState: "waiting" })]);
+
+    const p1 = counts.get("p1")!;
+    expect(p1.waiting).toBe(1);
+    expect(p1.snoozed).toBe(0);
+    expect(p1.nextSnoozeWakeAt).toBeNull();
+  });
+
+  it("does not snooze a run whose id merely resembles another project's", () => {
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "t1", agentState: "waiting" })],
+      undefined,
+      snoozes("t2")
+    );
+
+    expect(counts.get("p1")!.waiting).toBe(1);
+    expect(counts.get("p1")!.snoozed).toBe(0);
+  });
+
+  it("never counts an excluded terminal as snoozed", () => {
+    // A trashed run is not an agent run at all; a snooze record left against
+    // its id must not resurrect it as a tally.
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "t1", agentState: "waiting", isTrashed: true })],
+      undefined,
+      snoozes("t1")
+    );
+
+    expect(counts.get("p1")!.snoozed).toBe(0);
+  });
+});

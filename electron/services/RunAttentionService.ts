@@ -1,6 +1,16 @@
 import { events } from "./events.js";
 import type { AgentState } from "../../shared/types/agent.js";
-import { MAX_PARK_NOTE_LENGTH, type RunParkRecord } from "../../shared/types/ipc/fleet.js";
+import {
+  MAX_PARK_NOTE_LENGTH,
+  type RunParkRecord,
+  type RunSnoozeRecord,
+} from "../../shared/types/ipc/fleet.js";
+import {
+  isAgentSnoozeDurationOption,
+  resolveAgentSnoozeDuration,
+  MAX_AGENT_SNOOZE_MS,
+  type AgentSnoozeDurationOption,
+} from "../../shared/utils/agentSnoozeDurations.js";
 
 export { MAX_PARK_NOTE_LENGTH };
 
@@ -24,12 +34,37 @@ const STALE_PARK_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 /** A loaded `parkedAt` this far past "now" is corrupt, not early. */
 const FUTURE_SKEW_MS = 60_000;
 
+/**
+ * Cardinality bound on the snooze set, for the same reason parks have one: a
+ * hostile renderer looping `snoozeRun` with fresh ids must not grow the
+ * persisted store without bound. Expired records are pruned before the check,
+ * so ordinary use can never hit it.
+ */
+export const MAX_SNOOZED_RUNS = 200;
+
+/**
+ * An unlimited snooze is cleared by input, not by a clock — but a run that
+ * never comes back would otherwise hold its record forever. Fourteen days
+ * matches the park TTL: intent nobody has revisited in two weeks is stale, and
+ * silently honouring it hides a run behind a decision the user no longer
+ * remembers making. Enforced at load, against `snoozedAt`.
+ */
+const STALE_SNOOZE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
 const BUSY_STATES: ReadonlySet<AgentState> = new Set(["working", "directing"]);
 const READY_STATES: ReadonlySet<AgentState> = new Set(["idle", "waiting", "completed", "exited"]);
 
 export interface RunAttentionPersistence {
   load(): Record<string, RunParkRecord>;
   save(records: Record<string, RunParkRecord>): void;
+  /**
+   * Snooze records live under their own store key rather than beside parks in
+   * one blob. They are written on a different cadence (a snooze is cleared by
+   * every stray keystroke), and a single blob would rewrite the whole park set
+   * on each of those.
+   */
+  loadSnoozes?(): Record<string, RunSnoozeRecord>;
+  saveSnoozes?(records: Record<string, RunSnoozeRecord>): void;
 }
 
 export interface ParkRunOptions {
@@ -60,6 +95,14 @@ function normalizeNote(value: unknown): string | undefined {
   const last = note.charCodeAt(note.length - 1);
   if (last >= 0xd800 && last <= 0xdbff) note = note.slice(0, -1);
   return note.length > 0 ? note : undefined;
+}
+
+/**
+ * Whether a snooze has lapsed. An absent `snoozedUntil` is the unlimited
+ * option, which no clock can expire — only typed input ends it.
+ */
+function isSnoozeExpired(record: RunSnoozeRecord, now: number): boolean {
+  return record.snoozedUntil !== undefined && record.snoozedUntil <= now;
 }
 
 /**
@@ -99,6 +142,7 @@ function normalizeNote(value: unknown): string | undefined {
  */
 export class RunAttentionService {
   private records = new Map<string, RunParkRecord>();
+  private snoozeRecords = new Map<string, RunSnoozeRecord>();
   private unsubscribers: Array<() => void> = [];
   private now: () => number;
   private isQuitting: () => boolean;
@@ -110,14 +154,35 @@ export class RunAttentionService {
     this.now = deps.now ?? Date.now;
     this.isQuitting = deps.isQuitting ?? (() => false);
     this.loadAndPrune();
+    this.loadAndPruneSnoozes();
 
     this.unsubscribers.push(
       events.on("agent:state-changed", (payload) => {
         const terminalId = payload.terminalId;
         if (!terminalId) return;
+        // Typed input is the primary way a snooze ends. On a snoozed run that
+        // is waiting/idle/completed, the input event transitions it to
+        // `working`, so the clear rides this event.
+        if (payload.trigger === "input") this.clearSnoozeOnInput(terminalId);
         if (!READY_STATES.has(payload.state)) return;
         if (!BUSY_STATES.has(payload.previousState)) return;
         this.releaseGatedOn(terminalId, "gate-ready", payload.timestamp);
+      })
+    );
+
+    // The other half of the input contract. Typing into a run that is ALREADY
+    // `working` produces no transition, and `AgentStateService` drops same-state
+    // updates without emitting `agent:state-changed` — so without this
+    // subscription, snoozing a working agent and then typing at it would leave
+    // the snooze in place. The dropped-transition event crosses the pty-host
+    // bridge carrying the same normalized trigger, which is exactly the signal
+    // needed and costs no new wire plumbing.
+    this.unsubscribers.push(
+      events.on("agent:state-transition-dropped", (payload) => {
+        if (payload.trigger !== "input") return;
+        const terminalId = payload.terminalId;
+        if (!terminalId) return;
+        this.clearSnoozeOnInput(terminalId);
       })
     );
 
@@ -201,6 +266,143 @@ export class RunAttentionService {
     }
     events.emit("terminal:park-changed", { id: runId, parked: false, timestamp: this.now() });
     return true;
+  }
+
+  /** The snooze record for a run, live or expired. */
+  getSnoozeRecord(runId: string): RunSnoozeRecord | undefined {
+    return this.snoozeRecords.get(runId);
+  }
+
+  /**
+   * Every snooze that is still live, expiry resolved against the caller's clock.
+   *
+   * This is the read every attention surface uses, and it is deliberately pure:
+   * expiry is decided here rather than by a timer, so a lapsed snooze needs no
+   * event to stop applying — the next read simply stops returning it. That is
+   * what makes the feature survive a restart and a machine sleeping through the
+   * window without owning a single `setTimeout`.
+   *
+   * Expired records are left in place rather than swept: this runs on the stats
+   * poll, and persisting from a hot read path would turn a query into a disk
+   * write every few seconds. They are dropped at load and whenever `snooze()`
+   * next writes.
+   */
+  getActiveSnoozes(now: number = this.now()): ReadonlyMap<string, RunSnoozeRecord> {
+    const active = new Map<string, RunSnoozeRecord>();
+    for (const [runId, record] of this.snoozeRecords) {
+      if (!isSnoozeExpired(record, now)) active.set(runId, record);
+    }
+    return active;
+  }
+
+  /** Whether a run is currently snoozed, expiry resolved against `now`. */
+  isSnoozed(runId: string, now: number = this.now()): boolean {
+    const record = this.snoozeRecords.get(runId);
+    return record !== undefined && !isSnoozeExpired(record, now);
+  }
+
+  /**
+   * Snooze a run for one of the ladder's durations.
+   *
+   * Re-snoozing replaces the record wholesale — a new duration is a new
+   * decision, so `snoozedAt` restarts too. Snoozing does NOT touch a park: the
+   * two intents are independent records, and clearing a park here would destroy
+   * the note that park exists to carry.
+   */
+  snooze(runId: string, option: AgentSnoozeDurationOption): RunSnoozeRecord {
+    if (this.isQuitting()) {
+      throw new Error("Cannot snooze a run while the app is shutting down");
+    }
+    if (typeof runId !== "string" || runId.length === 0) {
+      throw new Error("Cannot snooze a run without a terminal id");
+    }
+    if (!isAgentSnoozeDurationOption(option)) {
+      throw new Error("Invalid snooze duration");
+    }
+
+    const now = this.now();
+    // Sweep lapsed records before the bound so ordinary use can never be locked
+    // out by snoozes that stopped applying hours ago.
+    for (const [id, record] of this.snoozeRecords) {
+      if (isSnoozeExpired(record, now)) this.snoozeRecords.delete(id);
+    }
+    if (!this.snoozeRecords.has(runId) && this.snoozeRecords.size >= MAX_SNOOZED_RUNS) {
+      throw new Error(`Cannot snooze more than ${MAX_SNOOZED_RUNS} runs`);
+    }
+
+    const snoozedUntil = resolveAgentSnoozeDuration(option, now);
+    const record: RunSnoozeRecord = {
+      snoozedAt: now,
+      ...(snoozedUntil !== undefined ? { snoozedUntil } : {}),
+    };
+
+    const previous = this.snoozeRecords.get(runId);
+    this.snoozeRecords.set(runId, record);
+    try {
+      this.persistSnoozes();
+    } catch (error) {
+      // Same contract as park: a snooze that would not survive a restart must
+      // not be reported as taken. Only this run is restored — the sweep above
+      // dropped records that had already stopped applying, so leaving them out
+      // costs nothing and they are gone from disk at the next successful write.
+      if (previous !== undefined) this.snoozeRecords.set(runId, previous);
+      else this.snoozeRecords.delete(runId);
+      throw error;
+    }
+    events.emit("terminal:snooze-changed", { id: runId, snoozed: true, timestamp: now });
+    return record;
+  }
+
+  /** Lift a snooze by hand. Returns false when the run wasn't snoozed. */
+  unsnooze(runId: string): boolean {
+    if (this.isQuitting()) {
+      throw new Error("Cannot unsnooze a run while the app is shutting down");
+    }
+    const previous = this.snoozeRecords.get(runId);
+    if (previous === undefined) return false;
+    this.snoozeRecords.delete(runId);
+    try {
+      this.persistSnoozes();
+    } catch (error) {
+      this.snoozeRecords.set(runId, previous);
+      throw error;
+    }
+    events.emit("terminal:snooze-changed", { id: runId, snoozed: false, timestamp: this.now() });
+    return true;
+  }
+
+  /**
+   * Clear a snooze because the user typed at the run.
+   *
+   * The headline promise of the feature: whichever duration was picked, coming
+   * back and answering the agent ends the snooze. Deliberately silent when the
+   * run isn't snoozed — this fires on every input-triggered transition in the
+   * app, so the common case must cost one map lookup and nothing else.
+   *
+   * Unlike `unsnooze`, this never throws: it is driven by an event, not a user
+   * request, and there is nobody to report a failure to. A persistence failure
+   * keeps the snooze rather than announcing a clear that would come back after
+   * a restart.
+   */
+  private clearSnoozeOnInput(runId: string): void {
+    // The shutdown chain's terminal kills do not carry an `input` trigger, but
+    // the guard matches park's: nothing may quietly rewrite intent while
+    // persistence is trying to carry it across the restart.
+    if (this.isQuitting()) return;
+    const previous = this.snoozeRecords.get(runId);
+    if (previous === undefined) return;
+    this.snoozeRecords.delete(runId);
+    try {
+      this.persistSnoozes();
+    } catch (error) {
+      this.snoozeRecords.set(runId, previous);
+      console.error(
+        "[RunAttentionService] Failed to persist an input clear, keeping snooze:",
+        error
+      );
+      return;
+    }
+    events.emit("terminal:snooze-changed", { id: runId, snoozed: false, timestamp: this.now() });
   }
 
   /**
@@ -327,13 +529,108 @@ export class RunAttentionService {
     };
   }
 
+  /**
+   * Hydrate snoozes from disk, treating the blob as untrusted exactly as parks
+   * are. Records that already expired are dropped here rather than loaded and
+   * filtered forever after — load is the one moment the whole set is re-read,
+   * so it is the cheapest place to forget them.
+   */
+  private loadAndPruneSnoozes(): void {
+    if (!this.persistence.loadSnoozes) return;
+    let stored: unknown;
+    try {
+      stored = this.persistence.loadSnoozes() ?? {};
+    } catch (error) {
+      console.error("[RunAttentionService] Failed to load snooze records:", error);
+      stored = {};
+    }
+    if (typeof stored !== "object" || stored === null || Array.isArray(stored)) stored = {};
+
+    const now = this.now();
+    const cutoff = now - STALE_SNOOZE_TTL_MS;
+    let pruned = false;
+    for (const [runId, raw] of Object.entries(stored as Record<string, unknown>)) {
+      const record = this.rebuildSnoozeRecord(runId, raw, cutoff, now);
+      if (record === null) {
+        pruned = true;
+        continue;
+      }
+      this.snoozeRecords.set(runId, record);
+    }
+    if (pruned) {
+      try {
+        this.persistSnoozes();
+      } catch (error) {
+        console.error("[RunAttentionService] Failed to persist pruned snooze records:", error);
+      }
+    }
+  }
+
+  private rebuildSnoozeRecord(
+    runId: string,
+    raw: unknown,
+    cutoff: number,
+    now: number
+  ): RunSnoozeRecord | null {
+    if (typeof runId !== "string" || runId.length === 0) return null;
+    if (typeof raw !== "object" || raw === null) return null;
+    const candidate = raw as Record<string, unknown>;
+
+    const snoozedAt = candidate.snoozedAt;
+    if (typeof snoozedAt !== "number" || !Number.isFinite(snoozedAt)) return null;
+    if (snoozedAt < cutoff || snoozedAt > now + FUTURE_SKEW_MS) return null;
+
+    const rawUntil = candidate.snoozedUntil;
+    let snoozedUntil: number | undefined;
+    if (rawUntil !== undefined) {
+      // Present but unusable means the record is corrupt, and the whole thing
+      // is dropped rather than the field. Keeping the record without its wake
+      // time would silently PROMOTE a timed snooze to the unlimited option —
+      // turning damaged data into a stronger suppression than anything the user
+      // could have chosen, which is the wrong direction to fail in.
+      if (typeof rawUntil !== "number" || !Number.isFinite(rawUntil)) return null;
+      // A wake time past the longest ladder entry is corrupt, not generous:
+      // `snooze()` only ever resolves an option, so nothing legitimate can
+      // write one.
+      if (rawUntil > snoozedAt + MAX_AGENT_SNOOZE_MS) return null;
+      snoozedUntil = rawUntil;
+    }
+    // A snooze whose wake time has already passed is not intent any more, it is
+    // history. Dropping it at load keeps the set from accumulating records that
+    // every later read would filter out anyway.
+    if (snoozedUntil !== undefined && snoozedUntil <= now) return null;
+
+    return {
+      snoozedAt,
+      ...(snoozedUntil !== undefined ? { snoozedUntil } : {}),
+    };
+  }
+
   private persist(): void {
     this.persistence.save(Object.fromEntries(this.records));
+  }
+
+  /**
+   * Throws rather than no-opping when the host supplied no saver.
+   *
+   * The optional callbacks exist so a caller that only cares about parks need
+   * not know snooze exists. But silently skipping the write would report a
+   * snooze as taken and then lose it at restart — the exact lie the rollback
+   * paths are built to prevent. Failing loudly turns a wiring mistake into an
+   * error at the first snooze instead of a bug report about snoozes that
+   * "randomly" come back.
+   */
+  private persistSnoozes(): void {
+    if (!this.persistence.saveSnoozes) {
+      throw new Error("Run attention persistence cannot save snoozes");
+    }
+    this.persistence.saveSnoozes(Object.fromEntries(this.snoozeRecords));
   }
 
   dispose(): void {
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.unsubscribers = [];
     this.records.clear();
+    this.snoozeRecords.clear();
   }
 }

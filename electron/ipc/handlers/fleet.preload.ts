@@ -4,6 +4,8 @@ export const FLEET_METHOD_CHANNELS = {
   getSnapshot: "fleet:get-snapshot",
   parkRun: "fleet:park-run",
   unparkRun: "fleet:unpark-run",
+  snoozeRun: "fleet:snooze-run",
+  unsnoozeRun: "fleet:unsnooze-run",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof FLEET_METHOD_CHANNELS;

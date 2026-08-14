@@ -49,6 +49,8 @@ const {
         latestUnacknowledgedCompletionAt?: number;
         latestCompletionAt?: number;
         latestWorkingSince?: number;
+        snoozedAgentCount?: number;
+        nextSnoozeWakeAt?: number;
         processCount: number;
       }
     >,
@@ -1996,6 +1998,68 @@ describe("useProjectSwitcherPalette", () => {
         if (bands.at(-1) !== project.section) bands.push(project.section);
       }
       expect(bands).toEqual(["current", "attention", "pinned", "running", "other", "unavailable"]);
+    });
+
+    it("gives an all-snoozed project its own band instead of the dormant catch-all", async () => {
+      // The bug this feature exists to fix: a project holding three snoozed
+      // agents used to fall through to Other and read as if nothing were in it.
+      const projects = [
+        base("snoozedProj"),
+        base("emptyProj"),
+        base("runningWithSnooze"),
+        base("waitingWithSnooze"),
+        base("pinnedSnoozed", { pinned: true }),
+      ];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {
+        snoozedProj: {
+          activeAgentCount: 0,
+          waitingAgentCount: 0,
+          processCount: 0,
+          snoozedAgentCount: 3,
+        },
+        // A snoozed agent alongside a genuinely working one: still Running,
+        // because something really is in flight.
+        runningWithSnooze: {
+          activeAgentCount: 1,
+          waitingAgentCount: 0,
+          processCount: 0,
+          snoozedAgentCount: 1,
+        },
+        // An unsnoozed wait still outranks everything — snooze demotes only the
+        // runs it actually covers.
+        waitingWithSnooze: {
+          activeAgentCount: 0,
+          waitingAgentCount: 1,
+          processCount: 0,
+          snoozedAgentCount: 1,
+        },
+        // An explicit pin is the stronger signal, exactly as it is for running.
+        pinnedSnoozed: {
+          activeAgentCount: 0,
+          waitingAgentCount: 0,
+          processCount: 0,
+          snoozedAgentCount: 2,
+        },
+      };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(projects.length);
+      });
+
+      const sectionOf = (id: string) =>
+        result.current.results.map(asProject).find((p) => p.id === id)?.section;
+      expect(sectionOf("snoozedProj")).toBe("snoozed");
+      expect(sectionOf("emptyProj")).toBe("other");
+      expect(sectionOf("runningWithSnooze")).toBe("running");
+      expect(sectionOf("waitingWithSnooze")).toBe("attention");
+      expect(sectionOf("pinnedSnoozed")).toBe("pinned");
     });
 
     it("holds a project with unseen completed work in the attention band", async () => {

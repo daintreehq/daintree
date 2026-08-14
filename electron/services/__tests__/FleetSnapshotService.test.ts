@@ -577,7 +577,7 @@ describe("FleetSnapshotService", () => {
   it("decorates a run with its park record", async () => {
     const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
     const park = { parkedAt: NOW - 5_000, note: "after the migration", gateRunId: "t9" };
-    const attention = { getAll: () => new Map([["t1", park]]) };
+    const attention = { getAll: () => new Map([["t1", park]]), getActiveSnoozes: () => new Map() };
     const service = new FleetSnapshotService(client as never, attention as never);
     service.refresh();
     await vi.runOnlyPendingTimersAsync();
@@ -589,7 +589,7 @@ describe("FleetSnapshotService", () => {
   it("treats a park change as a fleet change even though no agent state moved", async () => {
     const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
     let parks = new Map();
-    const attention = { getAll: () => parks };
+    const attention = { getAll: () => parks, getActiveSnoozes: () => new Map() };
     const service = new FleetSnapshotService(client as never, attention as never);
     service.start();
     service.refresh();
@@ -609,7 +609,7 @@ describe("FleetSnapshotService", () => {
   it("re-broadcasts on a note-only park change, advancing changedAt", async () => {
     const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
     let parks = new Map([["t1", { parkedAt: NOW - 10_000, note: "before" }]]);
-    const attention = { getAll: () => parks };
+    const attention = { getAll: () => parks, getActiveSnoozes: () => new Map() };
     const service = new FleetSnapshotService(client as never, attention as never);
     service.refresh();
     await vi.runOnlyPendingTimersAsync();
@@ -630,6 +630,64 @@ describe("FleetSnapshotService", () => {
     expect(broadcastMock).toHaveBeenCalledTimes(2);
     expect(lastSnapshot().runs[0].park?.note).toBe("after");
     expect(lastSnapshot().changedAt).toBeGreaterThan(firstChangedAt);
+    service.stop();
+  });
+
+  it("decorates a run with its snooze record", async () => {
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    const snooze = { snoozedAt: NOW - 5_000, snoozedUntil: NOW + 900_000 };
+    const attention = {
+      getAll: () => new Map(),
+      getActiveSnoozes: () => new Map([["t1", snooze]]),
+    };
+    const service = new FleetSnapshotService(client as never, attention as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(lastSnapshot().runs[0].snooze).toEqual(snooze);
+    service.stop();
+  });
+
+  it("treats a snooze change as a fleet change even though no agent state moved", async () => {
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    let snoozes = new Map();
+    const attention = { getAll: () => new Map(), getActiveSnoozes: () => snoozes };
+    const service = new FleetSnapshotService(client as never, attention as never);
+    service.start();
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+    expect(lastSnapshot().runs[0].snooze).toBeUndefined();
+
+    snoozes = new Map([["t1", { snoozedAt: NOW }]]);
+    eventEmitter.emit("terminal:snooze-changed", { id: "t1", snoozed: true, timestamp: NOW });
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(broadcastMock).toHaveBeenCalledTimes(2);
+    expect(lastSnapshot().runs[0].snooze).toEqual({ snoozedAt: NOW });
+    service.stop();
+  });
+
+  it("drops the snooze off the row when it lapses, with no event to announce it", async () => {
+    // Expiry owns no timer and emits nothing: the service simply stops being
+    // handed the record, and the next poll ships a row without it. This is the
+    // whole mechanism by which a lapsed snooze reaches the renderer.
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    let snoozes = new Map([["t1", { snoozedAt: NOW - 1_000, snoozedUntil: NOW + 1_000 }]]);
+    const attention = { getAll: () => new Map(), getActiveSnoozes: () => snoozes };
+    const service = new FleetSnapshotService(client as never, attention as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(lastSnapshot().runs[0].snooze).toBeDefined();
+
+    // What `getActiveSnoozes` does once the wake time passes.
+    snoozes = new Map();
+    vi.setSystemTime(NOW + 5_000);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(broadcastMock).toHaveBeenCalledTimes(2);
+    expect(lastSnapshot().runs[0].snooze).toBeUndefined();
     service.stop();
   });
 
