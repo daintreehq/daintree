@@ -4,6 +4,7 @@ import { markRendererPerformance } from "../utils/performance";
 import { useHibernationNotifications } from "../hooks/useHibernationNotifications";
 import { useIdleTerminalNotifications } from "../hooks/useIdleTerminalNotifications";
 import { useIdleBackgroundCloseNotifications } from "../hooks/useIdleBackgroundCloseNotifications";
+import { useParkReleaseNotifications } from "../hooks/useParkReleaseNotifications";
 import { useDiskSpaceWarnings } from "../hooks/useDiskSpaceWarnings";
 import { useForgeTokenHealth } from "../hooks/useForgeTokenHealth";
 import { useForgeRateLimit } from "../hooks/useForgeRateLimit";
@@ -29,6 +30,7 @@ export function PostHydrationListeners() {
   useHibernationNotifications();
   useIdleTerminalNotifications();
   useIdleBackgroundCloseNotifications();
+  useParkReleaseNotifications();
   useDiskSpaceWarnings();
   useForgeTokenHealth();
   useForgeRateLimit();

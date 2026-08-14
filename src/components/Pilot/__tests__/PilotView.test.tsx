@@ -1526,4 +1526,214 @@ describe("PilotView", () => {
       expect(order()).toEqual(["first s", "second s"]);
     });
   });
+
+  describe("parking", () => {
+    const parkRunMock = vi.fn();
+    const unparkRunMock = vi.fn();
+
+    beforeEach(() => {
+      parkRunMock.mockReset().mockResolvedValue({ parkedAt: NOW });
+      unparkRunMock.mockReset().mockResolvedValue(true);
+      window.electron = {
+        fleet: { parkRun: parkRunMock, unparkRun: unparkRunMock },
+      } as unknown as typeof window.electron;
+    });
+
+    afterEach(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (window as any).electron;
+    });
+
+    function altEnter() {
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Enter", altKey: true });
+    }
+
+    it("advertises the park verb for the highlighted row", () => {
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+
+      expect(screen.getByTestId("pilot-park-hint").textContent).toContain("Park");
+    });
+
+    it("renames the verb when the highlighted row is already parked", () => {
+      seed([
+        run({
+          agentState: "waiting",
+          title: "auth spike",
+          since: NOW - 60_000,
+          park: { parkedAt: NOW - 30_000 },
+        }),
+      ]);
+      render(<PilotView />);
+
+      expect(screen.getByTestId("pilot-park-hint").textContent).toContain("Edit park");
+    });
+
+    it("shows the park note on the row itself", () => {
+      seed([
+        run({
+          agentState: "waiting",
+          title: "auth spike",
+          since: NOW - 60_000,
+          park: { parkedAt: NOW - 30_000, note: "after the migration lands" },
+        }),
+      ]);
+      render(<PilotView />);
+
+      expect(screen.getByText("after the migration lands")).toBeTruthy();
+    });
+
+    it("opens the editor with Alt+Enter, replacing the list and its controls", () => {
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+
+      altEnter();
+
+      expect(screen.getByTestId("pilot-park-editor")).toBeTruthy();
+      // A query box filtering an invisible list would be a control acting
+      // somewhere the user cannot see.
+      expect(screen.queryByTestId("pilot-search")).toBeNull();
+      expect(screen.queryByTestId("pilot-filter-bar")).toBeNull();
+    });
+
+    it("parks the highlighted run with the typed note", async () => {
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+      altEnter();
+
+      const note = screen.getByTestId("pilot-park-note");
+      fireEvent.change(note, { target: { value: "  waiting on studio-02  " } });
+      await act(async () => {
+        fireEvent.keyDown(note, { key: "Enter" });
+      });
+
+      // Trimmed before it crosses the wire — the service would re-trim, but
+      // the renderer should not knowingly send padding.
+      expect(parkRunMock).toHaveBeenCalledWith("t1", { note: "waiting on studio-02" });
+      expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
+      // Back on the list, with focus at the palette's home position.
+      expect(document.activeElement).toBe(screen.getByTestId("pilot-search"));
+    });
+
+    it("parks until a chosen gate", async () => {
+      seed([
+        run({ runId: "t1", agentState: "waiting", title: "downstream", since: NOW - 60_000 }),
+        run({ runId: "t2", agentState: "working", title: "upstream", since: NOW - 30_000 }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+
+      // The waiting run ranks first, so the editor targets t1 and offers t2.
+      fireEvent.click(screen.getByRole("radio", { name: /upstream/ }));
+      await act(async () => {
+        fireEvent.keyDown(screen.getByTestId("pilot-park-note"), { key: "Enter" });
+      });
+
+      expect(parkRunMock).toHaveBeenCalledWith("t1", { gateRunId: "t2" });
+    });
+
+    it("unparks from the editor of an already-parked run", async () => {
+      seed([
+        run({
+          agentState: "waiting",
+          title: "auth spike",
+          since: NOW - 60_000,
+          park: { parkedAt: NOW - 30_000, note: "old note" },
+        }),
+      ]);
+      render(<PilotView />);
+      altEnter();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("pilot-park-unpark"));
+      });
+
+      expect(unparkRunMock).toHaveBeenCalledWith("t1");
+      expect(parkRunMock).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
+    });
+
+    it("cancel returns to the list without touching the park", async () => {
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+      altEnter();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("pilot-park-cancel"));
+      });
+
+      expect(parkRunMock).not.toHaveBeenCalled();
+      expect(unparkRunMock).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
+      expect(screen.getByTestId("pilot-search")).toBeTruthy();
+    });
+
+    it("surfaces a rejected park inline and stays open", async () => {
+      parkRunMock.mockRejectedValue(new Error("Fleet state is unavailable right now"));
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+      altEnter();
+
+      await act(async () => {
+        fireEvent.keyDown(screen.getByTestId("pilot-park-note"), { key: "Enter" });
+      });
+
+      expect(screen.getByRole("alert").textContent).toContain("Fleet state is unavailable");
+      expect(screen.getByTestId("pilot-park-editor")).toBeTruthy();
+    });
+
+    it("closes only the editor on Escape, leaving the palette open", () => {
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+      altEnter();
+      expect(screen.getByTestId("pilot-park-editor")).toBeTruthy();
+
+      // A real bubbled Escape, which the palette's document-level backstop
+      // sees first — the dialog's onClose is delegated to the editor while it
+      // is open, so the key must pop the mode and not the surface.
+      fireEvent.keyDown(screen.getByTestId("pilot-park-note"), { key: "Escape" });
+
+      expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
+      expect(screen.getByTestId("pilot-search")).toBeTruthy();
+    });
+
+    it("ignores the opening chord's key-repeat — a modified Enter never submits", () => {
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+      altEnter();
+
+      const note = screen.getByTestId("pilot-park-note");
+      fireEvent.keyDown(note, { key: "Enter", altKey: true });
+      fireEvent.keyDown(note, { key: "Enter", repeat: true });
+
+      expect(parkRunMock).not.toHaveBeenCalled();
+      expect(screen.getByTestId("pilot-park-editor")).toBeTruthy();
+    });
+
+    it("offers no parking over retained data — Main would reject it anyway", () => {
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })], {
+        degraded: true,
+        lastSuccessfulAt: NOW - 60_000,
+      });
+      render(<PilotView />);
+
+      expect(screen.queryByTestId("pilot-park-hint")).toBeNull();
+      altEnter();
+      expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
+    });
+
+    it("falls back to the list when the run being parked disappears", async () => {
+      seed([run({ agentState: "waiting", title: "auth spike", since: NOW - 60_000 })]);
+      render(<PilotView />);
+      altEnter();
+      expect(screen.getByTestId("pilot-park-editor")).toBeTruthy();
+
+      act(() => {
+        seed([]);
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
+    });
+  });
 });

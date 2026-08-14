@@ -26,6 +26,8 @@ import {
 } from "./pilotRows";
 import { PilotRunState } from "./PilotRunState";
 import { PilotFilterBar } from "./PilotFilterBar";
+import { PilotParkEditor, type PilotGateCandidate, type PilotParkTarget } from "./PilotParkEditor";
+import { isMac } from "@/lib/platform";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
@@ -281,6 +283,7 @@ function RunRow({
     row.title,
     agentLabel,
     row.statusLabel,
+    row.parkNote,
     row.age !== null ? agoPhrase(row.age) : null,
   ]
     .filter((part): part is string => part !== null)
@@ -333,6 +336,20 @@ function RunRow({
       </span>
 
       {/*
+        The park's note — the one line of intent that justifies the row still
+        being listed. Capped so it shares the row with the title instead of
+        starving it; the row's accessible name above carries it in full.
+      */}
+      {row.parkNote !== null && (
+        <span
+          aria-hidden="true"
+          className="max-w-[45%] min-w-0 shrink truncate text-xs leading-tight text-daintree-text/45"
+        >
+          {row.parkNote}
+        </span>
+      )}
+
+      {/*
         The scan column, now a single fact wide.
 
         `aria-hidden` — the row's own label above says this in order and with
@@ -376,11 +393,14 @@ function RunRow({
  */
 function PilotFooter({
   actionLabel,
+  parkLabel,
   summary,
   demandCount,
   onShowDemand,
 }: {
   actionLabel: string | null;
+  /** The park verb for the highlighted row, or null while no row is selected. */
+  parkLabel: string | null;
   summary: string;
   demandCount: number;
   onShowDemand: () => void;
@@ -392,6 +412,12 @@ function PilotFooter({
           <span>
             <kbd className={KBD_CLASS}>↵</kbd>
             <span className="ml-1.5">{actionLabel}</span>
+          </span>
+        )}
+        {parkLabel !== null && (
+          <span data-testid="pilot-park-hint">
+            <kbd className={KBD_CLASS}>{isMac() ? "⌥↵" : "Alt+↵"}</kbd>
+            <span className="ml-1.5">{parkLabel}</span>
           </span>
         )}
       </div>
@@ -614,10 +640,62 @@ export function PilotView() {
     [visibleGroups]
   );
 
+  /**
+   * The run whose park is being edited, held by id so the pane always renders
+   * live data: titles, bands and the candidate list keep updating underneath
+   * the editor exactly as they do under the list.
+   */
+  const [parkTargetId, setParkTargetId] = useState<string | null>(null);
+
+  const parkTarget = useMemo<PilotParkTarget | null>(() => {
+    if (parkTargetId === null) return null;
+    for (const group of liveGroups) {
+      const row = group.rows.find((r) => r.run.runId === parkTargetId);
+      if (row) return { row, group, existingPark: row.run.park };
+    }
+    return null;
+  }, [parkTargetId, liveGroups]);
+
+  const gateCandidates = useMemo<PilotGateCandidate[]>(() => {
+    if (parkTargetId === null) return [];
+    const out: PilotGateCandidate[] = [];
+    for (const group of liveGroups) {
+      for (const row of group.rows) {
+        if (row.run.runId === parkTargetId) continue;
+        out.push({ row, group });
+      }
+    }
+    return out;
+  }, [parkTargetId, liveGroups]);
+
+  // The run closed (or the fleet became unreadable) while its editor was open
+  // — there is nothing left to park, so fall back to the list.
+  useEffect(() => {
+    if (parkTargetId !== null && parkTarget === null) setParkTargetId(null);
+  }, [parkTargetId, parkTarget]);
+
+  const parkEditing = parkTarget !== null;
+
+  const closeParkEditor = useCallback((_changed: boolean) => {
+    setParkTargetId(null);
+  }, []);
+
+  // The editor unmounts with focus inside it, and the search box only
+  // REMOUNTS on the same commit — so the hand-back has to happen after that
+  // commit, not inside the close handler, where the ref is still null.
+  const wasParkEditingRef = useRef(false);
+  useEffect(() => {
+    if (wasParkEditingRef.current && !parkEditing && isOpen) {
+      searchRef.current?.focus();
+    }
+    wasParkEditingRef.current = parkEditing;
+  }, [parkEditing, isOpen]);
+
   useEffect(() => {
     if (!isOpen) {
       setQuery("");
       setBandFilter("all");
+      setParkTargetId(null);
       // Closing takes focus with it without a blur ever reaching the bar.
       setIsFilterFocused(false);
     }
@@ -717,20 +795,46 @@ export function PilotView() {
     if (event.defaultPrevented) setPointerOrder(null);
   }, []);
 
+  /**
+   * Alt+Enter on the highlighted row opens the park editor — a second verb on
+   * the same selection, so it lives beside Enter in both key paths rather
+   * than in the navigation model, which owns structure and not actions.
+   */
+  const interceptParkKey = useCallback(
+    (event: KeyboardEvent<HTMLElement>): boolean => {
+      if (event.key !== "Enter" || !event.altKey || event.defaultPrevented) return false;
+      if (selectedRow === null || selectedRow.kind !== "item") return false;
+      // No parking from retained data: Main rejects a park it cannot validate
+      // against a healthy snapshot, so offering the editor over a stale fleet
+      // would collect a note and then bounce it.
+      if (snapshot === null || snapshot.degraded) return false;
+      event.preventDefault();
+      setParkTargetId(selectedRow.item.run.runId);
+      return true;
+    },
+    [selectedRow, snapshot]
+  );
+
   const handleInputKeyDown = useCallback<KeyboardEventHandler<HTMLInputElement>>(
     (event) => {
+      if (interceptParkKey(event)) return;
       navigation.handleInputKeyDown(event);
       releaseOnConsumedKey(event);
     },
-    [navigation, releaseOnConsumedKey]
+    [interceptParkKey, navigation, releaseOnConsumedKey]
   );
 
   const handleBodyKeyDown = useCallback<KeyboardEventHandler<HTMLElement>>(
     (event) => {
+      // While the editor owns the body, the list's navigation must stand down
+      // entirely: its selection is live underneath, and an Enter bubbling out
+      // of the note input would otherwise OPEN the highlighted run.
+      if (parkEditing) return;
+      if (interceptParkKey(event)) return;
       navigation.handleBodyKeyDown(event);
       releaseOnConsumedKey(event);
     },
-    [navigation, releaseOnConsumedKey]
+    [parkEditing, interceptParkKey, navigation, releaseOnConsumedKey]
   );
 
   /**
@@ -849,56 +953,98 @@ export function PilotView() {
   // never gets its blur, and the flag alone would suppress the hints for good.
   const actionLabel = selectedRow === null || (isFilterFocused && showFilterBar) ? null : "Open";
 
-  return (
-    <AppPaletteDialog isOpen={isOpen} onClose={close} ariaLabel="All agents" tier="command">
-      <AppPaletteDialog.Header label="All agents" shortcut={pilotShortcut}>
-        <AppPaletteDialog.Input
-          inputRef={searchRef}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={handleInputKeyDown}
-          placeholder="Search agents…"
-          aria-label="Search agents"
-          // The role is constant, not conditional on there being results. A
-          // control that changes role underneath a screen reader as rows come
-          // and go is not re-announced, so it silently stops being what the
-          // user was told it was. The tree container below is always mounted,
-          // which is what keeps `aria-controls` resolving.
-          role="combobox"
-          aria-expanded={hasTree}
-          aria-haspopup="listbox"
-          aria-controls={LIST_ID}
-          aria-activedescendant={activeDescendantId}
-          data-testid="pilot-search"
-        />
+  // The second verb rides the same gating as the first — no selection or a
+  // focused filter segment drops both hints — plus one of its own: parking
+  // needs a healthy snapshot (Main validates the ids against it), so the hint
+  // disappears with the data that would back it.
+  const parkLabel =
+    actionLabel === null ||
+    selectedRow === null ||
+    selectedRow.kind !== "item" ||
+    status.kind !== "live"
+      ? null
+      : selectedRow.item.band === "parked"
+        ? "Edit park"
+        : "Park";
 
+  return (
+    // While the park editor is open, "close" means "back to the list": the
+    // palette's Escape runs through a document-level backstop that fires
+    // before any inner listener can, so the only reliable way to layer the
+    // editor under Escape is to redirect what closing does — not to race the
+    // key. Backdrop clicks follow the same rule, which is also the right
+    // gesture reading: dismissing the editor, not the surface under it.
+    <AppPaletteDialog
+      isOpen={isOpen}
+      onClose={parkEditing ? () => closeParkEditor(false) : close}
+      ariaLabel="All agents"
+      tier="command"
+    >
+      <AppPaletteDialog.Header label="All agents" shortcut={pilotShortcut}>
         {/*
-          Inside the header, under the input, so the two narrowing controls read
-          as one unit and the header's own rule closes the block. Full-bleed
-          against the header's padding, matching the sidebar's bar exactly.
-          After the input in DOM order, which is also the tab order: input →
-          active segment → results.
+          The search-and-narrow controls belong to the list. While the park
+          editor owns the body they unmount — a query box filtering an
+          invisible list is a control acting somewhere the user cannot see.
         */}
-        {showFilterBar && (
-          <div className="-mx-3 -mb-2 mt-2 border-t border-border-default">
-            <PilotFilterBar
-              value={bandFilter}
-              counts={filterCounts}
-              bands={fleet.bands}
-              onChange={setBandFilter}
-              onFocusChange={setIsFilterFocused}
+        {!parkEditing && (
+          <>
+            <AppPaletteDialog.Input
+              inputRef={searchRef}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={handleInputKeyDown}
+              placeholder="Search agents…"
+              aria-label="Search agents"
+              // The role is constant, not conditional on there being results. A
+              // control that changes role underneath a screen reader as rows come
+              // and go is not re-announced, so it silently stops being what the
+              // user was told it was. The tree container below is always mounted,
+              // which is what keeps `aria-controls` resolving.
+              role="combobox"
+              aria-expanded={hasTree}
+              aria-haspopup="listbox"
+              aria-controls={LIST_ID}
+              aria-activedescendant={activeDescendantId}
+              data-testid="pilot-search"
             />
-          </div>
+
+            {/*
+              Inside the header, under the input, so the two narrowing controls read
+              as one unit and the header's own rule closes the block. Full-bleed
+              against the header's padding, matching the sidebar's bar exactly.
+              After the input in DOM order, which is also the tab order: input →
+              active segment → results.
+            */}
+            {showFilterBar && (
+              <div className="-mx-3 -mb-2 mt-2 border-t border-border-default">
+                <PilotFilterBar
+                  value={bandFilter}
+                  counts={filterCounts}
+                  bands={fleet.bands}
+                  onChange={setBandFilter}
+                  onFocusChange={setIsFilterFocused}
+                />
+              </div>
+            )}
+          </>
         )}
       </AppPaletteDialog.Header>
 
       <AppPaletteDialog.Body
         className="p-0"
         ariaLabel="Agents"
-        activeDescendant={activeDescendantId}
+        activeDescendant={parkEditing ? undefined : activeDescendantId}
         onNavigationKeyDown={handleBodyKeyDown}
       >
-        {showSkeleton && (
+        {parkEditing && parkTarget !== null && (
+          <PilotParkEditor
+            target={parkTarget}
+            candidates={gateCandidates}
+            onClose={closeParkEditor}
+          />
+        )}
+
+        {!parkEditing && showSkeleton && (
           /*
            * Gated at the Doherty threshold — a fleet read that resolves in
            * 80ms must not flash a skeleton on the way. The hint is a SIBLING of
@@ -917,7 +1063,7 @@ export function PilotView() {
           </>
         )}
 
-        {status.kind === "unavailable" && (
+        {!parkEditing && status.kind === "unavailable" && (
           <div className="px-3 py-8 text-center" role="status" data-testid="pilot-unavailable">
             <p className="text-sm text-daintree-text/70">Can&apos;t reach the agent host</p>
             {/*
@@ -931,7 +1077,7 @@ export function PilotView() {
           </div>
         )}
 
-        {status.kind === "stale" && (
+        {!parkEditing && status.kind === "stale" && (
           <div data-testid="pilot-stale" className="px-3 py-1.5 text-[11px] text-activity-waiting">
             {/*
               The announced copy is fixed and the ticking age is hidden from it.
@@ -947,7 +1093,7 @@ export function PilotView() {
           </div>
         )}
 
-        {showEmpty && (
+        {!parkEditing && showEmpty && (
           /*
            * Names the next action rather than the absence. This is not the
            * completed-work state it first looks like: a finished agent stays in
@@ -996,11 +1142,13 @@ export function PilotView() {
 
         {/*
           Always mounted so `aria-controls` on the combobox above always
-          resolves, even while loading or empty. No padding of its own: the
-          palette body's scroller already carries `p-2`.
+          resolves, even while loading or empty — except while the park editor
+          owns the body, when the combobox itself is unmounted too. No padding
+          of its own: the palette body's scroller already carries `p-2`.
         */}
         <div
           id={LIST_ID}
+          hidden={parkEditing}
           {...(hasTree ? { role: "listbox", "aria-label": "Agents by project" } : {})}
           // The pointer stops working the list the moment it leaves it, so the
           // ranking goes back to being true. On the container rather than the
@@ -1053,10 +1201,11 @@ export function PilotView() {
         strip under the empty state. Drop the whole footer instead of shipping a
         divider with nothing beneath it.
       */}
-      {(actionLabel !== null || summary !== "") && (
+      {!parkEditing && (actionLabel !== null || summary !== "") && (
         <AppPaletteDialog.Footer>
           <PilotFooter
             actionLabel={actionLabel}
+            parkLabel={parkLabel}
             summary={summary}
             demandCount={needsYou}
             onShowDemand={() => {

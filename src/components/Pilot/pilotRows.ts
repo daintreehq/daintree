@@ -42,6 +42,13 @@ export interface PilotRow {
   worktreeLabel: string | null;
   /** Compact age of the current state, or null when the run never recorded one. */
   age: string | null;
+  /**
+   * The park's note, drawn on the row: a parked run's one line of intent is
+   * the whole reason to look at it. Null for everything unparked, and also on
+   * the row's search surface — "after the migration" is a plausible thing to
+   * type when hunting for the run you shelved behind it.
+   */
+  parkNote: string | null;
 }
 
 export type PilotWorkspaceKind = "project" | "scratch" | "unknown";
@@ -119,6 +126,47 @@ const BAND_RANK = new Map<FleetBand, number>(FLEET_BANDS.map((band, i) => [band,
 
 function rank(band: FleetBand): number {
   return BAND_RANK.get(band) ?? FLEET_BANDS.length;
+}
+
+/** The chrome the panel header and dock would derive for this run. */
+export function derivePilotRunChrome(run: FleetRunRow): TerminalChromeDescriptor {
+  return deriveTerminalChrome({
+    kind: "terminal",
+    ...(run.agentId !== undefined ? { detectedAgentId: run.agentId } : {}),
+    ...(run.launchAgentId !== undefined ? { launchAgentId: run.launchAgentId } : {}),
+    ...(run.everDetectedAgent !== undefined ? { everDetectedAgent: run.everDetectedAgent } : {}),
+    ...(run.agentState !== undefined ? { agentState: run.agentState } : {}),
+    ...(run.agentPresetColor !== undefined ? { agentPresetColor: run.agentPresetColor } : {}),
+  });
+}
+
+/**
+ * A run's display title, composed through the app's one title pipeline rather
+ * than assembled ad hoc. Reading `lastObservedTitle` directly is what made
+ * rows read "Claude Code" — the agent naming itself, which the pipeline
+ * recognises as an identity echo and suppresses. `compact` because every
+ * caller here pairs the string with the brand icon, so a prefix would only
+ * push the task out of the truncation window. Shared by the row build and the
+ * park surfaces (editor, release notification), which must all name a run the
+ * same way.
+ */
+export function composePilotRunTitle(run: FleetRunRow, chrome?: TerminalChromeDescriptor): string {
+  const resolved = chrome ?? derivePilotRunChrome(run);
+  return (
+    composeTitledPanel(
+      {
+        title: run.title ?? resolved.label,
+        ...(run.titleMode !== undefined ? { titleMode: run.titleMode } : {}),
+        ...(run.lastObservedTitle !== undefined
+          ? { lastObservedTitle: run.lastObservedTitle }
+          : {}),
+        ...(run.agentId !== undefined ? { detectedAgentId: run.agentId } : {}),
+        ...(run.agentState !== undefined ? { agentState: run.agentState } : {}),
+        cwd: run.cwd,
+      },
+      "compact"
+    ).trim() || resolved.label
+  );
 }
 
 /**
@@ -222,36 +270,8 @@ export function buildPilotGroups(
 
     const rows: PilotRow[] = sorted.map((run) => {
       const band = bandForRun(run, acknowledgedAt);
-      const chrome = deriveTerminalChrome({
-        kind: "terminal",
-        ...(run.agentId !== undefined ? { detectedAgentId: run.agentId } : {}),
-        ...(run.launchAgentId !== undefined ? { launchAgentId: run.launchAgentId } : {}),
-        ...(run.everDetectedAgent !== undefined
-          ? { everDetectedAgent: run.everDetectedAgent }
-          : {}),
-        ...(run.agentState !== undefined ? { agentState: run.agentState } : {}),
-        ...(run.agentPresetColor !== undefined ? { agentPresetColor: run.agentPresetColor } : {}),
-      });
-      // Composed through the app's one title pipeline, not assembled here.
-      // Reading `lastObservedTitle` directly is what made rows read "Claude
-      // Code" — the agent naming itself, which the pipeline recognises as an
-      // identity echo and suppresses. `compact` because the brand icon beside
-      // the title already carries identity, so a prefix would only push the
-      // task out of the truncation window.
-      const title =
-        composeTitledPanel(
-          {
-            title: run.title ?? chrome.label,
-            ...(run.titleMode !== undefined ? { titleMode: run.titleMode } : {}),
-            ...(run.lastObservedTitle !== undefined
-              ? { lastObservedTitle: run.lastObservedTitle }
-              : {}),
-            ...(run.agentId !== undefined ? { detectedAgentId: run.agentId } : {}),
-            ...(run.agentState !== undefined ? { agentState: run.agentState } : {}),
-            cwd: run.cwd,
-          },
-          "compact"
-        ).trim() || chrome.label;
+      const chrome = derivePilotRunChrome(run);
+      const title = composePilotRunTitle(run, chrome);
 
       return {
         run,
@@ -271,6 +291,7 @@ export function buildPilotGroups(
             : run.since !== undefined
               ? formatWaitAge(run.since, ctx.nowMs)
               : null,
+        parkNote: run.park?.note ?? null,
       };
     });
 
@@ -346,7 +367,10 @@ export function filterPilotGroups(
         (row.worktreeLabel !== null && isFilterMatch(needle, row.worktreeLabel)) ||
         // The agent's name is on the row as an icon rather than as text, but
         // "codex" is still a plausible thing to type when looking for one.
-        isFilterMatch(needle, row.chrome.label)
+        isFilterMatch(needle, row.chrome.label) ||
+        // A park note is the user's own words about the run — the string they
+        // are most likely to remember it by.
+        (row.parkNote !== null && isFilterMatch(needle, row.parkNote))
     );
     if (rows.length === 0) continue;
     // Recomputed, never inherited: a query that filters the blocked run out of
@@ -361,7 +385,7 @@ export function filterPilotGroups(
  * The state filter's vocabulary, declared beside the bands so a segment and the
  * count under it can never drift apart.
  */
-export type PilotBandFilter = "all" | "needs-you" | "working" | "finished";
+export type PilotBandFilter = "all" | "needs-you" | "working" | "finished" | "parked";
 
 /**
  * Which bands each segment admits.
@@ -374,11 +398,17 @@ export type PilotBandFilter = "all" | "needs-you" | "working" | "finished";
  * `isDemandBand` counts review as a demand. Review is a hand-back, not a
  * block — folding it in would make the footer's demand count promise more
  * agents than applying the filter actually reveals.
+ *
+ * "Parked" gets a segment of its own because it is the one band the user
+ * authored: "show me everything I shelved, with my notes" is a real question,
+ * and a run parked while waiting must be findable somewhere other than the
+ * bottom of All.
  */
 const BAND_FILTER_SETS: Record<Exclude<PilotBandFilter, "all">, ReadonlySet<FleetBand>> = {
   "needs-you": new Set<FleetBand>(["blocked", "needs-you"]),
   working: new Set<FleetBand>(["running"]),
   finished: new Set<FleetBand>(["review", "done"]),
+  parked: new Set<FleetBand>(["parked"]),
 };
 
 /** The narrowing segments, in the order the bar renders them after All. */
@@ -386,6 +416,7 @@ export const PILOT_BAND_FILTERS: readonly Exclude<PilotBandFilter, "all">[] = [
   "needs-you",
   "working",
   "finished",
+  "parked",
 ];
 
 /**
@@ -402,6 +433,7 @@ export const PILOT_BAND_FILTER_LABEL: Record<PilotBandFilter, string> = {
   "needs-you": "Waiting",
   working: "Working",
   finished: "Finished",
+  parked: "Parked",
 };
 
 export type PilotBandFilterCounts = Record<PilotBandFilter, number>;
@@ -416,7 +448,13 @@ export type PilotBandFilterCounts = Record<PilotBandFilter, number>;
  * nothing they can't see.
  */
 export function countPilotBands(groups: readonly PilotProjectGroup[]): PilotBandFilterCounts {
-  const counts: PilotBandFilterCounts = { all: 0, "needs-you": 0, working: 0, finished: 0 };
+  const counts: PilotBandFilterCounts = {
+    all: 0,
+    "needs-you": 0,
+    working: 0,
+    finished: 0,
+    parked: 0,
+  };
   for (const group of groups) {
     for (const row of group.rows) {
       counts.all++;

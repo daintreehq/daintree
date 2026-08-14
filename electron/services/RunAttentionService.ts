@@ -1,9 +1,8 @@
 import { events } from "./events.js";
 import type { AgentState } from "../../shared/types/agent.js";
-import type { RunParkRecord } from "../../shared/types/ipc/fleet.js";
+import { MAX_PARK_NOTE_LENGTH, type RunParkRecord } from "../../shared/types/ipc/fleet.js";
 
-/** Longest note a park may carry, in UTF-16 code units (the cap the slice enforces). */
-export const MAX_PARK_NOTE_LENGTH = 500;
+export { MAX_PARK_NOTE_LENGTH };
 
 /**
  * Cardinality bound on the whole park set. Far beyond any real workflow — this

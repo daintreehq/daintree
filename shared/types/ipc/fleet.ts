@@ -3,6 +3,14 @@ import type { BuiltInAgentId } from "../../config/agentIds.js";
 import type { PanelTitleMode } from "../panel.js";
 
 /**
+ * Longest note a park may carry, in UTF-16 code units. Lives on the shared
+ * wire type because both ends enforce it: the service caps what it stores,
+ * and the editor caps what can be typed — two limits that drift apart would
+ * let a user write a note the store then silently shortens.
+ */
+export const MAX_PARK_NOTE_LENGTH = 500;
+
+/**
  * A user's decision that a run does not need them right now.
  *
  * Parking is intent, not state: the agent underneath keeps doing whatever it

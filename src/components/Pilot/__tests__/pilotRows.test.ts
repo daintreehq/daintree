@@ -864,7 +864,7 @@ describe("parked rows", () => {
     expect(group!.rows.map((r) => r.run.runId)).toEqual(["b", "a"]);
   });
 
-  it("is admitted by no narrowing segment", () => {
+  it("is admitted by no state segment — hiding from Waiting is the point of parking", () => {
     const groups = buildPilotGroups(
       [run({ agentState: "waiting", since: NOW, park: { parkedAt: NOW } })],
       ctx()
@@ -874,6 +874,39 @@ describe("parked rows", () => {
       expect(filterPilotBands(groups, segment)).toEqual([]);
     }
     expect(filterPilotBands(groups, "all")[0]!.rows).toHaveLength(1);
+  });
+
+  it("gets a segment of its own that admits nothing else", () => {
+    const groups = buildPilotGroups(
+      [
+        run({ runId: "shelved", agentState: "waiting", since: NOW, park: { parkedAt: NOW } }),
+        run({ runId: "live", agentState: "waiting", since: NOW }),
+      ],
+      ctx()
+    );
+
+    const [parkedOnly] = filterPilotBands(groups, "parked");
+    expect(parkedOnly!.rows.map((r) => r.run.runId)).toEqual(["shelved"]);
+    expect(countPilotBands(groups).parked).toBe(1);
+  });
+
+  it("is findable by its note — the user's own words for the run", () => {
+    const groups = buildPilotGroups(
+      [
+        run({
+          runId: "shelved",
+          agentState: "waiting",
+          since: NOW,
+          title: "auth refactor",
+          park: { parkedAt: NOW, note: "resume after the migration lands" },
+        }),
+        run({ runId: "other", agentState: "waiting", since: NOW, title: "docs pass" }),
+      ],
+      ctx()
+    );
+
+    const [matched] = filterPilotGroups(groups, "migration");
+    expect(matched!.rows.map((r) => r.run.runId)).toEqual(["shelved"]);
   });
 });
 

@@ -8,6 +8,7 @@ import { PERF_MARKS } from "@shared/perf/marks";
 
 const hibernation = vi.fn();
 const idleTerminal = vi.fn();
+const parkRelease = vi.fn();
 const diskSpace = vi.fn();
 const tokenHealth = vi.fn();
 const rateLimit = vi.fn();
@@ -23,6 +24,9 @@ vi.mock("@/hooks/useHibernationNotifications", () => ({
 }));
 vi.mock("@/hooks/useIdleTerminalNotifications", () => ({
   useIdleTerminalNotifications: () => idleTerminal(),
+}));
+vi.mock("@/hooks/useParkReleaseNotifications", () => ({
+  useParkReleaseNotifications: () => parkRelease(),
 }));
 vi.mock("@/hooks/useDiskSpaceWarnings", () => ({
   useDiskSpaceWarnings: () => diskSpace(),
@@ -53,6 +57,7 @@ vi.mock("@/utils/performance", () => ({
 const allHooks = [
   hibernation,
   idleTerminal,
+  parkRelease,
   diskSpace,
   tokenHealth,
   rateLimit,
