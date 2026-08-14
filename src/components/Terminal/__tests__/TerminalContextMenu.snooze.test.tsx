@@ -2,10 +2,12 @@
 /**
  * The Snooze submenu on an agent terminal (#11783).
  *
- * Covers the two things the component decides that nothing else can: which
- * durations it offers, and whether "Wake now" is present — the latter reads
- * live snooze state off the fleet snapshot, so it is the one place the
- * "presence means snoozed" contract is consumed rather than produced.
+ * Covers the three things the component decides that nothing else can: whether
+ * the submenu is offered at all, which durations it lists, and whether "Wake
+ * now" is present. The first and last both read the fleet snapshot, so this is
+ * the one place the "presence on the snapshot" contract is consumed rather than
+ * produced — for membership (main rejects an id it can't see) and for snooze
+ * state (main strips expired records before they ship).
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
@@ -57,8 +59,9 @@ vi.mock("@/store/voiceRecordingStore", () => ({
     selector({ lockedTarget: null, recentTargets: [] }),
 }));
 
-// Agent terminals only — the snooze submenu rides the same eligibility gate the
-// fleet items do, so this must be true for the branch to render at all.
+// Fleet eligibility only means "live PTY in a grid location" — it says nothing
+// about the terminal being an agent. It gets the fleet items rendered; the
+// snooze submenu needs the run on the snapshot as well.
 vi.mock("@/store/fleetArmingStore", () => ({
   useFleetArmingStore: (selector: (s: { armedIds: Set<string> }) => unknown) =>
     selector({ armedIds: new Set<string>() }),
@@ -117,7 +120,8 @@ function renderMenu() {
 }
 
 beforeEach(() => {
-  snapshotState.current = null;
+  // The fleet can see this run, which is what makes it snoozable at all.
+  snapshotState.current = { runs: [{ runId: "panel-1" }] };
   Object.defineProperty(window, "electron", {
     value: { fleet: { snoozeRun, unsnoozeRun } },
     writable: true,
@@ -133,6 +137,28 @@ afterEach(() => {
 });
 
 describe("TerminalContextMenu — Snooze submenu", () => {
+  it("withholds the submenu when the fleet has no row for this panel", () => {
+    // Fleet eligibility is satisfied (a plain shell terminal clears it), but
+    // main rejects a snooze for an id the snapshot cannot see and the rejection
+    // never reaches the user — so the offer must not be made in the first place.
+    snapshotState.current = { runs: [{ runId: "panel-2" }] };
+    renderMenu();
+
+    expect(screen.queryByText("Snooze")).toBeNull();
+    for (const label of Object.values(AGENT_SNOOZE_LABEL)) {
+      expect(screen.queryByText(label)).toBeNull();
+    }
+  });
+
+  it("withholds the submenu before any snapshot has landed", () => {
+    // Null is "nothing reported yet", not "fleet is empty" — either way there
+    // is no row to validate against, so the menu waits.
+    snapshotState.current = null;
+    renderMenu();
+
+    expect(screen.queryByText("Snooze")).toBeNull();
+  });
+
   it("offers every duration on the ladder", () => {
     renderMenu();
 
@@ -180,7 +206,9 @@ describe("TerminalContextMenu — Snooze submenu", () => {
   });
 
   it("does not offer Wake now for a snooze belonging to a different run", () => {
-    snapshotState.current = { runs: [{ runId: "panel-2", snooze: { snoozedAt: 1 } }] };
+    snapshotState.current = {
+      runs: [{ runId: "panel-1" }, { runId: "panel-2", snooze: { snoozedAt: 1 } }],
+    };
     renderMenu();
 
     expect(screen.queryByText("Wake now")).toBeNull();

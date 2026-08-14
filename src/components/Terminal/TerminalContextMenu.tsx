@@ -128,6 +128,15 @@ export function TerminalContextMenu({
   // don't get the option, matching the gesture-level rules in
   // `multiSelectGestures`.
   const fleetEligible = isFleetArmEligible(terminal);
+  // Snooze needs more than fleet eligibility: that only means "live PTY in a
+  // grid location", while `snoozeRun` rejects any id the fleet snapshot can't
+  // see. A plain shell terminal is eligible and never on the snapshot, so
+  // without this the menu would offer a Snooze that always failed — and the
+  // rejection is fire-and-forget, so the user would see nothing at all. Gate on
+  // the same set the handler validates against.
+  const isKnownRun = useFleetSnapshotStore(
+    (s) => s.snapshot?.runs.some((run) => run.runId === terminalId) ?? false
+  );
   // Main strips expired snoozes before a row ships, so presence on the snapshot
   // IS "currently snoozed" — the menu needs no clock and never has to decide
   // whether a wake time has passed.
@@ -975,32 +984,34 @@ export function TerminalContextMenu({
                   Clear fleet
                 </ContextMenuItem>
               )}
-              <ContextMenuSub>
-                <ContextMenuSubTrigger>
-                  <BellOff className={ICON_CLASS} aria-hidden="true" />
-                  Snooze
-                </ContextMenuSubTrigger>
-                <ContextMenuSubContent>
-                  {AGENT_SNOOZE_DURATION_OPTIONS.map((option) => (
-                    <ContextMenuItem key={option} onSelect={() => handleSnooze(option)}>
-                      <BellOff className={ICON_CLASS} aria-hidden="true" />
-                      {AGENT_SNOOZE_LABEL[option]}
-                    </ContextMenuItem>
-                  ))}
-                  {/* Only once there is something to lift. An always-present
-                      "Wake now" would be a no-op the user has to read past on
-                      every run that was never snoozed. */}
-                  {isSnoozed && (
-                    <>
-                      <ContextMenuSeparator />
-                      <ContextMenuItem onSelect={handleUnsnooze}>
-                        <Bell className={ICON_CLASS} aria-hidden="true" />
-                        Wake now
+              {isKnownRun && (
+                <ContextMenuSub>
+                  <ContextMenuSubTrigger>
+                    <BellOff className={ICON_CLASS} aria-hidden="true" />
+                    Snooze
+                  </ContextMenuSubTrigger>
+                  <ContextMenuSubContent>
+                    {AGENT_SNOOZE_DURATION_OPTIONS.map((option) => (
+                      <ContextMenuItem key={option} onSelect={() => handleSnooze(option)}>
+                        <BellOff className={ICON_CLASS} aria-hidden="true" />
+                        {AGENT_SNOOZE_LABEL[option]}
                       </ContextMenuItem>
-                    </>
-                  )}
-                </ContextMenuSubContent>
-              </ContextMenuSub>
+                    ))}
+                    {/* Only once there is something to lift. An always-present
+                        "Wake now" would be a no-op the user has to read past on
+                        every run that was never snoozed. */}
+                    {isSnoozed && (
+                      <>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem onSelect={handleUnsnooze}>
+                          <Bell className={ICON_CLASS} aria-hidden="true" />
+                          Wake now
+                        </ContextMenuItem>
+                      </>
+                    )}
+                  </ContextMenuSubContent>
+                </ContextMenuSub>
+              )}
               <ContextMenuSeparator />
             </>
           )}

@@ -77,7 +77,7 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
   });
   handlers.push(() => {
     projectStatsService.stop();
-    // Identity-guarded like the attention service below: a late cleanup from a
+    // Identity-guarded like the attention service above: a late cleanup from a
     // superseded registration must not null out a newer instance's global,
     // which would leave the getters reporting "unavailable" while a live
     // service is still polling.
