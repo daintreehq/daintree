@@ -4,6 +4,7 @@ import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { logWarn } from "@/utils/logger";
+import { getErrorMessage } from "@/utils/errorContext";
 import { notifyWarmReactivationComplete } from "@/utils/warmReactivationGate";
 
 const WAKE_CONCURRENCY = 2;
@@ -141,7 +142,13 @@ async function wakeActiveWorktreeTerminalsInner(): Promise<void> {
     } catch (error) {
       // One broken terminal must not abort the fan-out — the next visible
       // terminal still needs its missed range pulled from the headless mirror.
-      logWarn("[wakeActiveWorktreeTerminals] wake failed", { id, error });
+      // getErrorMessage, not the Error itself: `message` is non-enumerable, so
+      // a nested Error serialises to `{}` in the log context and the one line
+      // that could explain a wedged terminal says nothing at all (#11776).
+      logWarn("[wakeActiveWorktreeTerminals] wake failed", {
+        id,
+        error: getErrorMessage(error),
+      });
     }
   };
 

@@ -94,6 +94,10 @@ const PTY_FIELD_CLASSIFICATION = {
   restartError: false,
   reconnectError: false,
   scrollbackRestoreError: false,
+  // Renderer attach failure (#11776) — a live signal about the CURRENT xterm
+  // instance. A restart builds a fresh one, so persisting it would resurrect a
+  // banner for a failure that no longer exists.
+  attachError: false,
   flowStatus: false,
   runtimeStatus: false,
   flowStatusTimestamp: false,

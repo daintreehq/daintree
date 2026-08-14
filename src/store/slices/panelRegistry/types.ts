@@ -269,6 +269,9 @@ export interface PanelRegistrySlice {
   clearReconnectError: (id: string) => void;
   setScrollbackRestoreError: (id: string, error: TerminalScrollbackRestoreError) => void;
   clearScrollbackRestoreError: (id: string) => void;
+  /** Renderer attach failure (#11776) — the pane cannot paint at all. */
+  setTerminalAttachError: (id: string, error: string) => void;
+  clearTerminalAttachError: (id: string) => void;
   /**
    * Acknowledge the "Session no longer reachable" signal for one panel by
    * clearing `sessionLostOnRestore` (issue #11589). Lives in the store rather

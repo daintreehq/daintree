@@ -1,4 +1,5 @@
 import { logWarn } from "@/utils/logger";
+import { getErrorMessage } from "@/utils/errorContext";
 
 // Upper bound on frames a single terminal will keep retrying its reveal before
 // the caller gives up on it. A warm project-view return that's settling its
@@ -95,7 +96,10 @@ export async function revealUntilStable(
     } catch (error) {
       // One broken terminal must not abort the caller's wider sweep — the next
       // visible terminal still needs its post-reveal repaint.
-      logWarn(`${logContext} reveal failed`, { id, error });
+      // getErrorMessage, not the Error itself: `message` is non-enumerable, so
+      // a nested Error serialises to `{}` in the log context and the one line
+      // that could explain a wedged terminal says nothing at all (#11776).
+      logWarn(`${logContext} reveal failed`, { id, error: getErrorMessage(error) });
       return false;
     }
     if (paintable) painted++;

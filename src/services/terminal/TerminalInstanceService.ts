@@ -44,6 +44,7 @@ import {
   type TerminalListenerInstallDeps,
 } from "./TerminalListenerInstaller";
 import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
+import { hasUsableRenderer } from "./xtermRendererProbe";
 import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { isPtyPanel } from "@shared/types/panel";
 import { isValidTerminalGeometry, type TerminalGeometry } from "@shared/types/terminal";
@@ -52,6 +53,7 @@ import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { logDebug, logWarn, logError } from "@/utils/logger";
+import { getErrorMessage } from "@/utils/errorContext";
 import { PaintFabricCompositor } from "./paintFabric/PaintFabricCompositor";
 import type { PaintSurface } from "./paintFabric/PaintSurfaceRegistry";
 import { createRoundRobinPlacement } from "./paintFabric/placementPolicies";
@@ -65,6 +67,14 @@ import { TerminalWorkerIngestController } from "./TerminalWorkerIngestController
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { stripAnsiAndOscCodes } from "@shared/utils/urlUtils";
+
+/**
+ * Automatic rebuild budget for a terminal that cannot be opened (#11776).
+ * Three is enough to ride out a transient cause (a view mid-teardown, a host
+ * that was momentarily unmeasurable) without turning a genuinely unrenderable
+ * pane into a rebuild loop. The user's Retry resets it.
+ */
+const MAX_ATTACH_RECOVERY_ATTEMPTS = 3;
 
 export { isNonKeyboardInput } from "./inputUtils";
 // Re-exported so existing consumers (notably tests) that import
@@ -953,26 +963,10 @@ class TerminalInstanceService {
     onInput: ((data: string) => void) | undefined,
     getCwd: (() => string) | undefined
   ): Promise<ManagedTerminal> {
-    const openLink = (url: string, event?: MouseEvent) => {
-      this.linkHandler.openLink(url, id, event);
-    };
-
-    const setHoveredLink = (link: TerminalLink | null) => {
-      const current = this.instances.get(id);
-      if (!current) return;
-      current.hoveredLink = link;
-    };
-
     const terminalOptions = {
       ...options,
       rescaleOverlappingGlyphs: true,
-      linkHandler: {
-        activate: (event: MouseEvent, text: string) => openLink(text, event),
-        hover: (_event: MouseEvent, text: string, range: IBufferRange) => {
-          setHoveredLink(this.makeSyntheticLink(text, range, id));
-        },
-        leave: () => setHoveredLink(null),
-      },
+      linkHandler: this.makeTerminalLinkHandler(id),
     };
 
     if (launchAgentId !== undefined) {
@@ -1376,14 +1370,34 @@ class TerminalInstanceService {
     // concurrently (the cold-open path in ensureOpened() and the BACKGROUND→
     // active tier-upgrade path), so re-check the slot after the await and dispose
     // the loser to avoid loading two addons onto one terminal.
-    if (!managed.imageAddon) {
+    // ImageAddon is the one deferred addon that must NOT be built against a
+    // terminal without a live renderer (#11776). Its ImageRenderer constructor
+    // monkey-patches `_core.open` with a wrapper that unconditionally reads
+    // `_core._renderService.setRenderer`, and that wrapper runs even on xterm's
+    // silent early-return path. Installed on a never-opened terminal — which
+    // `onTierApplied` does on any non-BACKGROUND tier — it converts a single
+    // failed open into a permanent, self-re-throwing wedge: every subsequent
+    // open() attempt dies in the patch instead of rebuilding the renderer.
+    // Deferring it until the terminal actually paints keeps the thrower out of
+    // open() entirely; the tier-upgrade path rebuilds it once the pane opens.
+    if (!managed.imageAddon && managed.isOpened && hasUsableRenderer(managed.terminal)) {
+      // Captured before the await: a rebuild swaps `managed.terminal` while
+      // keeping the same ManagedTerminal, so the instances-map check below
+      // cannot see it. Without this, an import that resolves after a rebuild
+      // would load the old terminal's addon onto the new one.
+      const builtFor = managed.terminal;
       try {
         const imageAddon = await createImageAddon(managed.terminal);
         // Dispose the loser rather than leak it if, during the async import, a
         // concurrent caller already populated the slot OR the terminal was
         // destroyed/replaced (its instance is no longer the one in the map, so
-        // its own teardown will never dispose this addon).
-        if (managed.imageAddon || this.instances.get(id) !== managed) {
+        // its own teardown will never dispose this addon), OR this terminal was
+        // rebuilt out from under us.
+        if (
+          managed.imageAddon ||
+          this.instances.get(id) !== managed ||
+          managed.terminal !== builtFor
+        ) {
           imageAddon.dispose();
         } else {
           managed.imageAddon = imageAddon;
@@ -1424,12 +1438,39 @@ class TerminalInstanceService {
       typeof performance !== "undefined" ? performance.now() : Date.now();
     managed.hasEmittedFirstWriteMark = false;
     markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_START, { terminalId: id });
+    // Was try/finally (#11776). A throw out of open() propagated all the way to
+    // XtermAdapter's IIFE catch, which aborted the REST of attach — the exit
+    // listener and the scrollback restore never registered — and surfaced
+    // nowhere but a console line. Classify the failure here instead: the caller
+    // gets a terminal that is honestly "not opened", and the recovery path
+    // below owns getting it painting again.
+    let openError: unknown;
     try {
       managed.terminal.open(managed.hostElement);
+    } catch (err) {
+      openError = err;
     } finally {
       markRendererPerformance(PERF_MARKS.TERMINAL_OPEN_END, { terminalId: id });
     }
+
+    // A clean return is not proof of success. On an already-poisoned instance
+    // xterm's re-entry guard early-returns *silently* (no throw) while
+    // `_renderService` stays undefined, so trusting the absence of an
+    // exception is exactly how `isOpened` ends up true on a pane that can
+    // never paint. Verify the renderer actually exists before claiming it.
+    if (openError === undefined && !hasUsableRenderer(managed.terminal)) {
+      openError = new Error(
+        "xterm.open() returned without building a renderer (terminal is unpaintable)"
+      );
+    }
+
+    if (openError !== undefined) {
+      this.handleFailedOpen(id, managed, openError);
+      return;
+    }
+
     managed.isOpened = true;
+    this.clearAttachError(id, managed);
     logDebug(`[TIS] Opened terminal ${id}`);
     // Build the deferred Image/link addons now that the terminal is live.
     // EXPERIMENT (hibernation removal, Codex review fix — Finding 3): build them
@@ -1441,6 +1482,298 @@ class TerminalInstanceService {
     if (this.webGLPolicy.wantsWebGLAtTier(managed, managed.lastAppliedTier)) {
       this.webGLManager.ensureContext(id, managed);
     }
+  }
+
+  /**
+   * The xterm `linkHandler` option, keyed by terminal id. Shared by the
+   * creation path and the #11776 rebuild so a replacement terminal links
+   * exactly like the one it replaces — the handlers close over `id` and read
+   * the live instance, never a captured `ManagedTerminal`, so they stay correct
+   * across a swap.
+   */
+  private makeTerminalLinkHandler(id: string) {
+    const setHoveredLink = (link: TerminalLink | null) => {
+      const current = this.instances.get(id);
+      if (!current) return;
+      current.hoveredLink = link;
+    };
+
+    return {
+      activate: (event: MouseEvent, text: string) => this.linkHandler.openLink(text, id, event),
+      hover: (_event: MouseEvent, text: string, range: IBufferRange) => {
+        setHoveredLink(this.makeSyntheticLink(text, range, id));
+      },
+      leave: () => setHoveredLink(null),
+    };
+  }
+
+  /**
+   * Options for a replacement terminal (#11776). Sourced from the live
+   * instance's own `options` rather than a remembered creation snapshot, so
+   * everything applied since — font changes, agent promotion's cursorBlink
+   * clamp, theme updates — carries across the rebuild. The link handler is
+   * rebuilt rather than copied: the old one is fine, but re-deriving keeps the
+   * two construction paths on one definition.
+   */
+  private rebuildOptionsFor(managed: ManagedTerminal): ConstructorParameters<typeof Terminal>[0] {
+    let inherited: Partial<Terminal["options"]> = {};
+    try {
+      inherited = { ...managed.terminal.options };
+    } catch (error) {
+      logWarn("[TIS] Could not read options off the terminal being rebuilt", {
+        id: managed.id,
+        error,
+      });
+    }
+    return {
+      ...inherited,
+      rescaleOverlappingGlyphs: true,
+      linkHandler: this.makeTerminalLinkHandler(managed.id),
+    };
+  }
+
+  /**
+   * Record a failed open and schedule recovery (#11776).
+   *
+   * Deliberately does NOT rethrow. The previous behaviour let the error escape
+   * `attach()` into XtermAdapter's catch, which skipped every remaining attach
+   * step and left the user with a blank pane and no signal. Failing quietly
+   * here, publishing the error to the panel store, and rebuilding in the
+   * background is strictly more recoverable.
+   */
+  private handleFailedOpen(id: string, managed: ManagedTerminal, error: unknown): void {
+    const message = getErrorMessage(error);
+    managed.isOpened = false;
+    managed.lastAttachError = message;
+    logError("[TIS] Terminal open failed", error, { id });
+    // Optional-called: many suites stub usePanelStore with a partial action
+    // surface, and a missing banner setter must not turn a recoverable open
+    // failure into a thrown one.
+    usePanelStore.getState().setTerminalAttachError?.(id, message);
+    void this.recoverPoisonedTerminal(id);
+  }
+
+  /** Drop a resolved attach failure from both the instance and the pane. */
+  private clearAttachError(id: string, managed: ManagedTerminal): void {
+    managed.attachRecoveryAttempts = 0;
+    if (managed.lastAttachError === undefined) return;
+    managed.lastAttachError = undefined;
+    usePanelStore.getState().clearTerminalAttachError?.(id);
+  }
+
+  /**
+   * Rebuild a terminal whose xterm instance can no longer be opened (#11776).
+   *
+   * Retrying `open()` is structurally incapable of working: xterm's re-entry
+   * guard is satisfied by fields assigned before `_renderService`, so a
+   * half-opened instance early-returns forever. The only way back is a fresh
+   * `Terminal`. The `ManagedTerminal` itself survives — same id, same host
+   * element, same PTY, same subscribers — so the panel store, the agent state
+   * machine and the backend never see a lifecycle event; only the renderer-side
+   * object is swapped underneath.
+   *
+   * Scoped strictly to the terminal. Anything keyed on the PTY or the pane's
+   * identity (the leading `listeners` entries, exit/agent-state/alt-buffer
+   * subscribers, the restore controller's deferred-output ledger, the port-ack
+   * FIFO) is left alone — tearing those down is what `destroy()` is for, and
+   * doing it here would drop output the rebuild is meant to preserve.
+   *
+   * Bounded and deduplicated: concurrent triggers (attach, reveal, the
+   * watchdog, the banner's Retry) share one in-flight rebuild, and automatic
+   * attempts stop after {@link MAX_ATTACH_RECOVERY_ATTEMPTS} so a host that is
+   * genuinely never renderable degrades to a banner instead of looping.
+   */
+  async recoverPoisonedTerminal(id: string, options?: { manual?: boolean }): Promise<boolean> {
+    const managed = this.instances.get(id);
+    if (!managed) return false;
+    if (managed.attachRecoveryInFlight) return managed.attachRecoveryInFlight;
+
+    const isManual = options?.manual === true;
+    const attempts = managed.attachRecoveryAttempts ?? 0;
+    if (!isManual && attempts >= MAX_ATTACH_RECOVERY_ATTEMPTS) {
+      logWarn("[TIS] Terminal rebuild attempts exhausted — leaving the banner up", {
+        id,
+        attempts,
+      });
+      return false;
+    }
+    // A manual Retry is the user telling us the conditions changed (they
+    // resized, un-occluded, or simply want another go), so it resets the
+    // automatic budget rather than being blocked by it.
+    managed.attachRecoveryAttempts = isManual ? 1 : attempts + 1;
+
+    const run = this.rebuildTerminalInstance(id, managed).finally(() => {
+      managed.attachRecoveryInFlight = undefined;
+    });
+    managed.attachRecoveryInFlight = run;
+    return run;
+  }
+
+  private async rebuildTerminalInstance(id: string, managed: ManagedTerminal): Promise<boolean> {
+    // Opening against a zero-box host is a plausible cause of the original
+    // failure, so a rebuild that ignored it would just poison the fresh
+    // instance too. Leave the banner up; the reveal pass retries once the pane
+    // has real layout.
+    if (!this.hostHasRenderableDims(managed)) {
+      logDebug(`[TIS] Deferring rebuild of ${id} — host has no renderable box yet`);
+      return false;
+    }
+
+    logWarn("[TIS] Rebuilding unpaintable terminal", { id, error: managed.lastAttachError });
+
+    try {
+      this.teardownTerminalForRebuild(id, managed);
+    } catch (error) {
+      logError("[TIS] Failed to tear down terminal for rebuild", error, { id });
+      return false;
+    }
+
+    let terminal: Terminal;
+    try {
+      terminal = new Terminal(this.rebuildOptionsFor(managed));
+      applyXtermReflowFastpath(terminal);
+      const addons = await setupTerminalAddons(terminal);
+      // The instance can be destroyed while we await the (module-cached, but
+      // still async) addon setup. Bail before publishing the new terminal.
+      if (this.instances.get(id) !== managed) {
+        terminal.dispose();
+        return false;
+      }
+      Object.assign(managed, addons);
+      managed.terminal = terminal;
+    } catch (error) {
+      logError("[TIS] Failed to construct replacement terminal", error, { id });
+      return false;
+    }
+
+    // Same shared installer every other construction path uses — never a
+    // hand-rolled subset, or the rebuilt pane silently loses copy-on-select,
+    // title forwarding and the agent-state hooks.
+    managed.parserHandler = new TerminalParserHandler(
+      managed,
+      () => this.resizeController.applyDeferredResize(id),
+      (droppedBytes) => this.drawDataLossMarker(id, droppedBytes)
+    );
+    installTerminalBoundListeners(terminal, managed, id, this.makeListenerInstallDeps());
+
+    // XtermAdapter installs this once per mount and will not re-run for a
+    // rebuild, so re-attach it here; `keyHandlerInstalled` staying true against
+    // a handler-less Terminal would leave the pane unable to take input.
+    if (managed.customKeyEventHandler) {
+      terminal.attachCustomKeyEventHandler(managed.customKeyEventHandler);
+    } else {
+      managed.keyHandlerInstalled = false;
+    }
+
+    // Geometry dedup caches describe the disposed instance's grid.
+    managed.lastWidth = 0;
+    managed.lastHeight = 0;
+    managed.pendingWrites = 0;
+    managed.writeChain = Promise.resolve();
+    managed.isOpened = false;
+
+    this.ensureOpened(id, managed);
+    if (!managed.isOpened) {
+      // ensureOpened already recorded the failure and re-armed recovery.
+      logWarn("[TIS] Replacement terminal failed to open", { id });
+      return false;
+    }
+
+    this.rendererPolicy.applyRendererPolicy(
+      id,
+      managed.getRefreshTier?.() ?? managed.lastAppliedTier ?? TerminalRefreshTier.FOCUSED
+    );
+
+    // Repopulate from the headless mirror. The disposed instance's buffer went
+    // with it, and it never painted anything the user saw anyway, so this is
+    // the scrollback — not a nicety.
+    try {
+      await this.restoreController.fetchAndRestore(id);
+    } catch (error) {
+      logWarn("[TIS] Rebuilt terminal could not restore scrollback", {
+        id,
+        error: getErrorMessage(error),
+      });
+    }
+
+    logDebug(`[TIS] Rebuilt terminal ${id}`);
+    return true;
+  }
+
+  /**
+   * Terminal-scoped teardown for {@link rebuildTerminalInstance} — the subset
+   * of `destroy()` that belongs to the xterm instance rather than to the pane.
+   */
+  private teardownTerminalForRebuild(id: string, managed: ManagedTerminal): void {
+    this.cancelAttachReveal(managed);
+    this.resizeController.clearResizeJob(managed);
+    this.resizeController.clearSettledTimer(id);
+    this.writeController.forget(id);
+    this.cancelWebGLHideTimer(managed);
+    if (managed.webGLRestoreTimer !== undefined) {
+      clearTimeout(managed.webGLRestoreTimer);
+      managed.webGLRestoreTimer = undefined;
+    }
+    if (managed.tierChangeTimer !== undefined) {
+      clearTimeout(managed.tierChangeTimer);
+      managed.tierChangeTimer = undefined;
+    }
+
+    // Only the xterm-bound tail. The leading entries unsubscribe the PTY data
+    // and exit streams, which must keep running across the swap — dropping them
+    // would silently detach the pane from its process.
+    const boundStart = managed.ipcListenerCount;
+    for (const unsub of managed.listeners.slice(boundStart)) {
+      try {
+        unsub();
+      } catch (error) {
+        logWarn("Error unsubscribing terminal-bound listener during rebuild", { id, error });
+      }
+    }
+    managed.listeners.length = boundStart;
+
+    managed.parserHandler?.dispose();
+    managed.parserHandler = undefined;
+
+    managed.lastActivityMarker?.dispose();
+    managed.lastActivityMarker = undefined;
+    managed.postCompleteMarker?.dispose();
+    managed.postCompleteMarker = undefined;
+
+    // ImageAddon first and by name: its dispose() is what restores the
+    // `_core.open` it monkey-patched. Disposing the terminal with the patch
+    // still installed is how the wedge survives a rebuild.
+    for (const [label, disposable] of [
+      ["image addon", managed.imageAddon],
+      ["file links", managed.fileLinksDisposable],
+      ["image links", managed.imageLinksDisposable],
+      ["web links", managed.webLinksAddon],
+    ] as const) {
+      try {
+        disposable?.dispose();
+      } catch (error) {
+        logWarn(`Error disposing ${label} during rebuild`, { id, error });
+      }
+    }
+    managed.imageAddon = null;
+    managed.fileLinksDisposable = null;
+    managed.imageLinksDisposable = null;
+    managed.webLinksAddon = null;
+
+    // Before dispose: the manager holds pool/lease references to this exact
+    // Terminal, and releasing them afterwards would touch a dead object.
+    this.webGLManager.onTerminalDestroyed(id);
+
+    try {
+      managed.terminal.dispose();
+    } catch (error) {
+      logWarn("Error disposing terminal during rebuild", { id, error });
+    }
+
+    // xterm removes its own `.xterm` element on dispose, but a terminal that
+    // threw partway through open() may have left one behind — the host is
+    // reused as-is for the new open(), so clear any orphan.
+    managed.hostElement.replaceChildren();
   }
 
   /**

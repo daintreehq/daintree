@@ -1138,6 +1138,17 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     return this.plane(id).fetchAndRestore(id);
   }
 
+  /**
+   * Per-terminal, never fanned out (#11776). The rebuild disposes and replaces
+   * one xterm instance, and only the surface that owns it holds the
+   * ManagedTerminal to swap — broadcasting would have every other surface look
+   * up an id it does not have and no-op, which reads like recovery ran
+   * everywhere when it ran nowhere.
+   */
+  recoverPoisonedTerminal(id: string, options?: { manual?: boolean }): Promise<boolean> {
+    return this.plane(id).recoverPoisonedTerminal(id, options);
+  }
+
   restoreFromSerialized(
     id: string,
     serializedState: string,

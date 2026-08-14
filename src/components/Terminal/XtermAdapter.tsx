@@ -349,7 +349,7 @@ export function XtermAdapter({
           return false;
         };
 
-        managed.terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+        const customKeyEventHandler = (event: KeyboardEvent): boolean => {
           // Only process keydown events to avoid double-firing
           if (event.type !== "keydown") {
             return true;
@@ -583,7 +583,16 @@ export function XtermAdapter({
             return false;
           }
           return true;
-        });
+        };
+
+        // Recorded on the instance as well as attached: this effect runs once
+        // per mount and does NOT re-run when a poisoned terminal is rebuilt
+        // underneath it (#11776), so the service re-attaches this exact handler
+        // to the replacement. Without it `keyHandlerInstalled` would stay true
+        // against a fresh Terminal that has no handler, and the rebuilt pane
+        // would silently stop accepting keyboard input.
+        managed.customKeyEventHandler = customKeyEventHandler;
+        managed.terminal.attachCustomKeyEventHandler(customKeyEventHandler);
         managed.keyHandlerInstalled = true;
       }
 
