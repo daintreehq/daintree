@@ -48,11 +48,10 @@ describe("resolveAgentSnoozeDuration", () => {
 });
 
 describe("isAgentSnoozeDurationOption", () => {
-  it("accepts every option the menu can offer", () => {
-    for (const option of AGENT_SNOOZE_DURATION_OPTIONS) {
-      expect(isAgentSnoozeDurationOption(option)).toBe(true);
-    }
-  });
+  // Deliberately no "accepts every listed option" case: the predicate searches
+  // the same array such a test would iterate, so it passes no matter what the
+  // array contains — including after an option is deleted. The rejection cases
+  // below are the half that can actually fail.
 
   it("rejects non-members, including the notification inbox's own ladder", () => {
     // The two ladders are deliberately separate; an inbox option reaching the

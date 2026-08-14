@@ -39,6 +39,19 @@ export const AGENT_SNOOZE_LABEL: Record<AgentSnoozeDurationOption, string> = {
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 
+/**
+ * The longest wake time any option can produce, as an offset from when the
+ * snooze was taken.
+ *
+ * Derived from the ladder rather than written down, so re-tuning an option
+ * cannot leave a validator behind honouring a window nothing can produce. Used
+ * to reject stored records whose wake time is beyond anything the user could
+ * have chosen.
+ */
+export const MAX_AGENT_SNOOZE_MS = Math.max(
+  ...AGENT_SNOOZE_DURATION_OPTIONS.map((option) => resolveAgentSnoozeDuration(option, 0) ?? 0)
+);
+
 export function isAgentSnoozeDurationOption(value: unknown): value is AgentSnoozeDurationOption {
   return (
     typeof value === "string" &&

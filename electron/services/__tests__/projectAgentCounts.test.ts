@@ -341,8 +341,24 @@ describe("computeProjectAgentCounts — snooze", () => {
   });
 
   it("still counts a snoozed WORKING agent as active — snooze hides demand, not presence", () => {
-    // A project with a snoozed waiting agent and a working one must read as
-    // Running, which only holds if the working one still counts.
+    // The snooze is on the WORKING run itself. Snoozing a waiting sibling and
+    // asserting the unsnoozed worker counts would prove nothing: it passes just
+    // as well if snoozed workers are wrongly dropped from `active`.
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "t1", agentState: "working", lastStateChange: 3_000 })],
+      undefined,
+      snoozes("t1")
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.active).toBe(1);
+    expect(p1.latestWorkingSince).toBe(3_000);
+    expect(p1.snoozed).toBe(1);
+  });
+
+  it("reads as Running when one agent is snoozed-waiting and another is working", () => {
+    // The issue's headline scenario, straight through the counts.
     const counts = computeProjectAgentCounts(
       ["p1"],
       [agent({ id: "t1", agentState: "waiting" }), agent({ id: "t2", agentState: "working" })],
@@ -353,6 +369,33 @@ describe("computeProjectAgentCounts — snooze", () => {
     const p1 = counts.get("p1")!;
     expect(p1.waiting).toBe(0);
     expect(p1.active).toBe(1);
+  });
+
+  it("keeps the subset invariants intact across a mixed snoozed/unsnoozed project", () => {
+    // blocked <= waiting and unacknowledgedCompleted <= completed have to hold
+    // whatever snooze suppresses, or a row renders a count it cannot explain.
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [
+        agent({ id: "t1", agentState: "waiting", waitingReason: "error" }),
+        agent({ id: "t2", agentState: "waiting", waitingReason: "error" }),
+        agent({ id: "t3", agentState: "waiting" }),
+        agent({ id: "t4", agentState: "completed", lastStateChange: 5_000 }),
+        agent({ id: "t5", agentState: "completed", lastStateChange: 6_000 }),
+      ],
+      new Map([["p1", 1_000]]),
+      snoozes("t1", "t4")
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.blocked).toBeLessThanOrEqual(p1.waiting);
+    expect(p1.unacknowledgedCompleted).toBeLessThanOrEqual(p1.completed);
+    // And the suppression bit on exactly the snoozed runs, not more.
+    expect(p1.waiting).toBe(2);
+    expect(p1.blocked).toBe(1);
+    expect(p1.completed).toBe(2);
+    expect(p1.unacknowledgedCompleted).toBe(1);
+    expect(p1.snoozed).toBe(2);
   });
 
   it("counts a snoozed completed agent as completed but not as unacknowledged", () => {

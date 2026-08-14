@@ -602,6 +602,28 @@ describe("snooze", () => {
     expect(service.getSnoozeRecord("run-1")).toBeUndefined();
   });
 
+  it("drops a stored wake time beyond anything the ladder could produce", () => {
+    // Nothing legitimate can write one, so it is corrupt rather than generous.
+    const forged: Record<string, RunSnoozeRecord> = {
+      "run-1": { snoozedAt: NOW, snoozedUntil: NOW + 365 * DAY_MS },
+    };
+    const service = makeService(makeSnoozePersistence({}, forged));
+
+    expect(service.getSnoozeRecord("run-1")).toBeUndefined();
+  });
+
+  it("drops the whole record rather than promoting a corrupt wake time to unlimited", () => {
+    // Keeping the record without its wake time would turn damaged data into a
+    // STRONGER suppression than any option the user could have picked — the
+    // wrong direction to fail in.
+    const corruptUntil = {
+      "run-1": { snoozedAt: NOW, snoozedUntil: "soon" },
+    } as unknown as Record<string, RunSnoozeRecord>;
+    const service = makeService(makeSnoozePersistence({}, corruptUntil));
+
+    expect(service.isSnoozed("run-1", NOW)).toBe(false);
+  });
+
   it("rejects a malformed stored record rather than repairing it", () => {
     const corrupt = {
       "run-1": { snoozedAt: "soon" },
@@ -681,6 +703,39 @@ describe("snooze", () => {
 
     service.unsnooze("run-1");
     expect(service.getParkRecord("run-1")).toBeDefined();
+  });
+
+  it("keeps a snooze through a park and unpark of the same run", () => {
+    // The two intents are independent records; neither release path may take
+    // the other's decision with it.
+    const service = makeService(makeSnoozePersistence());
+    service.snooze("run-1", "6h");
+    service.park("run-1");
+    service.unpark("run-1");
+
+    expect(service.isSnoozed("run-1", NOW)).toBe(true);
+  });
+
+  it("keeps a park when typed input clears the run's snooze", () => {
+    const service = makeService(makeSnoozePersistence());
+    service.park("run-1", { note: "waiting on review" });
+    service.snooze("run-1", "6h");
+
+    typedInput("run-1");
+
+    expect(service.isSnoozed("run-1", NOW)).toBe(false);
+    expect(service.getParkRecord("run-1")?.note).toBe("waiting on review");
+  });
+
+  it("leaves a snooze alone when a gated park releases", () => {
+    const service = makeService(makeSnoozePersistence());
+    service.park("run-1", { gateRunId: "gate-1" });
+    service.snooze("run-1", "6h");
+
+    gateBecomesReady("gate-1");
+
+    expect(service.getParkRecord("run-1")).toBeUndefined();
+    expect(service.isSnoozed("run-1", NOW)).toBe(true);
   });
 
   it("bounds the snooze set, but never counts lapsed records against the cap", () => {

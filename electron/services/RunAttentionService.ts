@@ -8,6 +8,7 @@ import {
 import {
   isAgentSnoozeDurationOption,
   resolveAgentSnoozeDuration,
+  MAX_AGENT_SNOOZE_MS,
   type AgentSnoozeDurationOption,
 } from "../../shared/utils/agentSnoozeDurations.js";
 
@@ -580,8 +581,20 @@ export class RunAttentionService {
     if (snoozedAt < cutoff || snoozedAt > now + FUTURE_SKEW_MS) return null;
 
     const rawUntil = candidate.snoozedUntil;
-    const snoozedUntil =
-      typeof rawUntil === "number" && Number.isFinite(rawUntil) ? rawUntil : undefined;
+    let snoozedUntil: number | undefined;
+    if (rawUntil !== undefined) {
+      // Present but unusable means the record is corrupt, and the whole thing
+      // is dropped rather than the field. Keeping the record without its wake
+      // time would silently PROMOTE a timed snooze to the unlimited option —
+      // turning damaged data into a stronger suppression than anything the user
+      // could have chosen, which is the wrong direction to fail in.
+      if (typeof rawUntil !== "number" || !Number.isFinite(rawUntil)) return null;
+      // A wake time past the longest ladder entry is corrupt, not generous:
+      // `snooze()` only ever resolves an option, so nothing legitimate can
+      // write one.
+      if (rawUntil > snoozedAt + MAX_AGENT_SNOOZE_MS) return null;
+      snoozedUntil = rawUntil;
+    }
     // A snooze whose wake time has already passed is not intent any more, it is
     // history. Dropping it at load keeps the set from accumulating records that
     // every later read would filter out anyway.
@@ -597,8 +610,21 @@ export class RunAttentionService {
     this.persistence.save(Object.fromEntries(this.records));
   }
 
+  /**
+   * Throws rather than no-opping when the host supplied no saver.
+   *
+   * The optional callbacks exist so a caller that only cares about parks need
+   * not know snooze exists. But silently skipping the write would report a
+   * snooze as taken and then lose it at restart — the exact lie the rollback
+   * paths are built to prevent. Failing loudly turns a wiring mistake into an
+   * error at the first snooze instead of a bug report about snoozes that
+   * "randomly" come back.
+   */
   private persistSnoozes(): void {
-    this.persistence.saveSnoozes?.(Object.fromEntries(this.snoozeRecords));
+    if (!this.persistence.saveSnoozes) {
+      throw new Error("Run attention persistence cannot save snoozes");
+    }
+    this.persistence.saveSnoozes(Object.fromEntries(this.snoozeRecords));
   }
 
   dispose(): void {

@@ -539,6 +539,32 @@ describe("snoozed rows", () => {
     expect(later).toBe(early);
   });
 
+  it("actually derives the line from the wake time, not a fixed string", () => {
+    // Paired with the stability test above: without this, a hard-coded or
+    // omitted time would satisfy "unchanged when read later" perfectly.
+    const early = getProjectRowStatus(
+      project({ snoozedAgentCount: 1, nextSnoozeWakeAt: WAKE_AT }),
+      NOW
+    ).text;
+    const late = getProjectRowStatus(
+      project({ snoozedAgentCount: 1, nextSnoozeWakeAt: WAKE_AT + 3 * 60 * 60_000 }),
+      NOW
+    ).text;
+
+    expect(late).not.toBe(early);
+  });
+
+  it("drops only the wake clause when the wake time is absent, keeping the count", () => {
+    const timed = getProjectRowStatus(
+      project({ snoozedAgentCount: 2, nextSnoozeWakeAt: WAKE_AT }),
+      NOW
+    ).text;
+    const unlimited = getProjectRowStatus(project({ snoozedAgentCount: 2 }), NOW).text;
+
+    expect(timed.startsWith(unlimited)).toBe(true);
+    expect(timed.length).toBeGreaterThan(unlimited.length);
+  });
+
   it("yields to a genuinely waiting agent", () => {
     // Snooze demotes only the runs it covers; an unsnoozed wait still wins.
     const status = getProjectRowStatus(

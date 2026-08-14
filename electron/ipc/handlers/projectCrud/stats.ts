@@ -77,7 +77,13 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
   });
   handlers.push(() => {
     projectStatsService.stop();
-    projectStatsServiceInstance = null;
+    // Identity-guarded like the attention service below: a late cleanup from a
+    // superseded registration must not null out a newer instance's global,
+    // which would leave the getters reporting "unavailable" while a live
+    // service is still polling.
+    if (projectStatsServiceInstance === projectStatsService) {
+      projectStatsServiceInstance = null;
+    }
   });
 
   // The run-grained sibling of the counts above, on the same source and the
@@ -95,7 +101,9 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
   });
   handlers.push(() => {
     fleetSnapshotService.stop();
-    fleetSnapshotServiceInstance = null;
+    if (fleetSnapshotServiceInstance === fleetSnapshotService) {
+      fleetSnapshotServiceInstance = null;
+    }
   });
 
   // Acknowledgement watermark for completed agents: the project the user has
