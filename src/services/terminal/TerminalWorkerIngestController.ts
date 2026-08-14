@@ -170,13 +170,30 @@ export class TerminalWorkerIngestController {
   /**
    * Re-attach this controller's terminal-bound listener after the xterm
    * instance behind `id` was replaced (#11776). No-op when the terminal never
-   * had a worker ingest. Re-seeds the mirror geometry from the replacement,
-   * whose grid may differ from the one the old listener last reported.
+   * had a worker ingest.
+   *
+   * Binding only. The geometry re-seed is a separate call because the
+   * replacement terminal is still on its construction grid at this point —
+   * seeding here would park the headless mirror at xterm's 80x24 default and
+   * every subsequent snapshot would come back at that width. See
+   * {@link reseedMirrorGeometry}.
    */
   rebindTerminal(id: string, managed: ManagedTerminal): void {
     const ingest = this.workerIngest.get(id);
     if (!ingest) return;
     this.bindTerminalResize(managed, ingest);
+  }
+
+  /**
+   * Point the mirror at the replacement terminal's real grid (#11776). Called
+   * once the rebuilt terminal has actually opened and been sized, since only
+   * then does `terminal.cols/rows` describe the grid the pane is on — the
+   * `onResize` listener {@link rebindTerminal} installed reports later changes,
+   * but never the one the open itself applied.
+   */
+  reseedMirrorGeometry(id: string, managed: ManagedTerminal): void {
+    const ingest = this.workerIngest.get(id);
+    if (!ingest) return;
     ingest.resize(managed.terminal.cols, managed.terminal.rows);
   }
 

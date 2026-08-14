@@ -50,7 +50,12 @@ const xtermHarness = vi.hoisted(() => {
     dispose = vi.fn(() => {
       this.disposeOrder = ++control.disposeCounter;
     });
-    resize = vi.fn();
+    // Tracks the grid like the real thing: the rebuild's geometry seed is only
+    // observable through cols/rows, and a no-op resize would hide it.
+    resize = vi.fn((cols: number, rows: number) => {
+      this.cols = cols;
+      this.rows = rows;
+    });
     refresh = vi.fn();
     blur = vi.fn();
     attachCustomKeyEventHandler = vi.fn();
@@ -147,6 +152,9 @@ interface RecoveryTestService {
   rendererPolicy: { applyRendererPolicy: (id: string, tier: number) => void };
   webGLManager: { onTerminalDestroyed: (id: string) => void };
   resizeController: { fit: (id: string) => void };
+  workerIngestController: {
+    reseedMirrorGeometry: (id: string, managed: ManagedTerminal) => void;
+  };
 }
 
 describe("TerminalInstanceService attach failure recovery (#11776)", () => {
@@ -280,11 +288,15 @@ describe("TerminalInstanceService attach failure recovery (#11776)", () => {
       expect(managed.lastAttachError).toBeUndefined();
     });
 
-    it("publishes the failure to the pane and clears it once an open succeeds", () => {
+    it("publishes the failure to the pane and clears it once an open succeeds", async () => {
       const failing = makeManaged("t4");
       service.instances.set("t4", failing);
       service.attach("t4", document.createElement("div"));
-      expect(setAttachError).toHaveBeenCalledWith("t4", expect.any(String));
+      // Not on the failed open itself — a failure is auto-recovering, so the
+      // banner waits for the rebuild to give up. This host is never measurable,
+      // so recovery defers immediately and the escalation lands a microtask on.
+      expect(setAttachError).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(setAttachError).toHaveBeenCalledWith("t4", expect.any(String)));
 
       const healthy = makeManaged("t5", {
         get dimensions() {
@@ -389,6 +401,87 @@ describe("TerminalInstanceService attach failure recovery (#11776)", () => {
       expect(service.restoreController.fetchAndRestore).toHaveBeenCalledWith("r5");
     });
 
+    it("opens the replacement on the pre-failure grid, not xterm's default", async () => {
+      // The replacement is CONSTRUCTED from the dead instance's `options`, and
+      // xterm copies the live grid into options only in reset() — never in
+      // resize() — so the fresh Terminal starts at the size the old one was
+      // built at. Left uncorrected, the pane parses live output at 80x24 and the
+      // replay below reflows the restored scrollback down to it: #11718 and
+      // #11552 reproduced together on one terminal.
+      const managed = makeManaged("g1");
+      makeHostRenderable(managed);
+      // Only ever resized while backgrounded, so the measured grid lives in
+      // latestCols/latestRows with no attach target recorded.
+      managed.latestCols = 203;
+      managed.latestRows = 51;
+      managed.targetCols = undefined;
+      managed.targetRows = undefined;
+      service.instances.set("g1", managed);
+
+      let gridAtReplay: { cols: number; rows: number } | undefined;
+      vi.spyOn(service.restoreController, "fetchAndRestore").mockImplementation(async () => {
+        gridAtReplay = { cols: managed.terminal.cols, rows: managed.terminal.rows };
+        return true;
+      });
+
+      await service.recoverPoisonedTerminal("g1", { manual: true });
+
+      const replacement = rebuiltTerminals.at(-1);
+      expect(replacement).toBeDefined();
+      // Sized BEFORE the open: xterm measures its cell grid inside open(), and
+      // anything parsed against the interim grid is already corrupted.
+      const resizeOrder = replacement?.resize.mock.invocationCallOrder[0] ?? Infinity;
+      const openOrder = replacement?.open.mock.invocationCallOrder[0] ?? 0;
+      expect(resizeOrder).toBeLessThan(openOrder);
+      expect(gridAtReplay).toEqual({ cols: 203, rows: 51 });
+      // The invented target is consumed, not left behind for the next attach to
+      // apply in place of a fresh fit.
+      expect(managed.targetCols).toBeUndefined();
+      expect(managed.targetRows).toBeUndefined();
+    });
+
+    it("re-measures the rebuilt pane against its host before replaying", async () => {
+      // attach()'s nested-rAF fit is gated on isOpened, which the failed open
+      // had already set false, and the host box never changed so the
+      // ResizeObserver stays quiet — nothing else would ever size a pane
+      // rebuilt from a cold attach with no measured grid to seed from.
+      const managed = makeManaged("g2");
+      makeHostRenderable(managed);
+      service.instances.set("g2", managed);
+
+      await service.recoverPoisonedTerminal("g2", { manual: true });
+
+      const fitSpy = vi.mocked(service.resizeController.fit);
+      expect(fitSpy).toHaveBeenCalledWith("g2");
+      const replacement = rebuiltTerminals.at(-1);
+      // After the open (a fit against an unopened terminal measures nothing) and
+      // before the replay (the restore seeds its target from the live grid).
+      expect(fitSpy.mock.invocationCallOrder[0]).toBeGreaterThan(
+        replacement?.open.mock.invocationCallOrder[0] ?? Infinity
+      );
+      expect(fitSpy.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(service.restoreController.fetchAndRestore).mock.invocationCallOrder[0] ?? 0
+      );
+    });
+
+    it("re-seeds the headless worker mirror only after the real grid is applied", async () => {
+      // The mirror's geometry comes from `terminal.cols/rows`, so seeding it
+      // during the rebind — before the open — would park the background parse at
+      // the construction grid and every snapshot would come back at that width.
+      const managed = makeManaged("g3");
+      makeHostRenderable(managed);
+      service.instances.set("g3", managed);
+      const reseed = vi.spyOn(service.workerIngestController, "reseedMirrorGeometry");
+
+      await service.recoverPoisonedTerminal("g3", { manual: true });
+
+      expect(reseed).toHaveBeenCalledWith("g3", managed);
+      const replacement = rebuiltTerminals.at(-1);
+      expect(reseed.mock.invocationCallOrder[0]).toBeGreaterThan(
+        replacement?.open.mock.invocationCallOrder[0] ?? Infinity
+      );
+    });
+
     it("defers while the host has no measurable box", async () => {
       // Opening against a zero-box host is a plausible cause of the original
       // failure, so rebuilding into one would just poison the fresh instance.
@@ -442,9 +535,39 @@ describe("TerminalInstanceService attach failure recovery (#11776)", () => {
         expect(managed.terminal).not.toBe(original);
         expect(managed.isOpened).toBe(true);
       });
-      // The banner raised by the failure is retracted once the pane paints.
+      // The pane never saw a banner: the rebuild always crosses a drain
+      // sentinel, an addon await and an open() reflow, so a T3 published on the
+      // first failed open is a red flash the user gets to see for nothing.
+      expect(setAttachError).not.toHaveBeenCalled();
       expect(clearAttachError).toHaveBeenCalledWith("auto1");
       expect(managed.lastAttachError).toBeUndefined();
+    });
+
+    it("raises the banner only once the rebuild budget is exhausted", async () => {
+      // The other half of the tiering rule: recovery that genuinely cannot fix
+      // the pane must escalate rather than stay silent forever.
+      control.opensCleanly = false;
+      const managed = makeManaged("auto2", {
+        open: vi.fn(() => {
+          throw new TypeError("Cannot read properties of undefined (reading 'setRenderer')");
+        }),
+      });
+      makeHostRenderable(managed);
+      service.instances.set("auto2", managed);
+
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      service.attach("auto2", container);
+
+      expect(setAttachError).not.toHaveBeenCalled();
+
+      await vi.waitFor(() =>
+        expect(setAttachError).toHaveBeenCalledWith("auto2", expect.any(String))
+      );
+      // Every replacement failed too, so the escalation came from the plateau —
+      // not from a single attempt that never got a second chance.
+      expect(rebuiltTerminals.length).toBeGreaterThan(1);
+      expect(managed.isOpened).toBe(false);
     });
 
     it("keeps retrying, then plateaus, and lets Retry resume", async () => {

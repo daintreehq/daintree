@@ -1546,19 +1546,42 @@ class TerminalInstanceService {
    * Deliberately does NOT rethrow. The previous behaviour let the error escape
    * `attach()` into XtermAdapter's catch, which skipped every remaining attach
    * step and left the user with a blank pane and no signal. Failing quietly
-   * here, publishing the error to the panel store, and rebuilding in the
-   * background is strictly more recoverable.
+   * here and rebuilding in the background is strictly more recoverable.
+   *
+   * The diagnostic (`lastAttachError`) is recorded immediately; the T3 pane
+   * banner is NOT. A failed open is an auto-recovering state, and publishing it
+   * here made every self-healing attach flash a red "Terminal display failed"
+   * that `clearAttachError` retracted a few frames later — the rebuild always
+   * crosses a drain sentinel, an addon await and an `open()` reflow, so React
+   * gets to paint it. {@link publishUnrecoveredAttachError} raises the banner
+   * once recovery has actually failed to restore the pane, per the runtime-signal
+   * tiering rule (auto-recovering stays quiet until recovery is exhausted).
    */
   private handleFailedOpen(id: string, managed: ManagedTerminal, error: unknown): void {
-    const message = getErrorMessage(error);
     managed.isOpened = false;
-    managed.lastAttachError = message;
+    managed.lastAttachError = getErrorMessage(error);
     logError("[TIS] Terminal open failed", error, { id });
+    void this.recoverPoisonedTerminal(id);
+  }
+
+  /**
+   * Escalate an attach failure to the pane once rebuilding has given up.
+   *
+   * Called from every path where recovery resolves false — a failed attempt, a
+   * deferred one (no measurable host yet), or the exhausted budget. Guarded on
+   * the pane still being broken and still being the instance we started with, so
+   * a rebuild that succeeded on a later attempt, or a terminal destroyed/replaced
+   * mid-recovery, never raises a banner for a pane that is painting fine.
+   */
+  private publishUnrecoveredAttachError(id: string, managed: ManagedTerminal): void {
+    if (this.instances.get(id) !== managed) return;
+    if (managed.isOpened) return;
+    const message = managed.lastAttachError;
+    if (message === undefined) return;
     // Optional-called: many suites stub usePanelStore with a partial action
     // surface, and a missing banner setter must not turn a recoverable open
     // failure into a thrown one.
     usePanelStore.getState().setTerminalAttachError?.(id, message);
-    void this.recoverPoisonedTerminal(id);
   }
 
   /**
@@ -1621,6 +1644,14 @@ class TerminalInstanceService {
       })
       .finally(() => {
         managed.attachRecoveryInFlight = undefined;
+      })
+      // The single escalation point: recovery is over and, on false, the pane is
+      // still unpaintable — a failed attempt, one deferred for want of a
+      // measurable host, or the exhausted budget. Raising the banner here rather
+      // than on the first failed open is what keeps a self-healing attach silent.
+      .then((recovered) => {
+        if (!recovered) this.publishUnrecoveredAttachError(id, managed);
+        return recovered;
       });
     managed.attachRecoveryInFlight = run;
     return run;
@@ -1820,8 +1851,26 @@ class TerminalInstanceService {
     // The worker-ingest resize bridge is an xterm-bound listener that the
     // shared installer does not own, so the teardown dropped it and nothing
     // else would put it back — leaving the background mirror parsing at a
-    // frozen geometry.
+    // frozen geometry. Bind only here; the mirror's geometry seed waits for the
+    // open below, or it would park at the construction grid.
     this.workerIngestController.rebindTerminal(id, managed);
+
+    // The replacement was CONSTRUCTED at whatever cols/rows the dead instance's
+    // options carried, which is NOT its live grid: xterm copies the grid into
+    // `options.cols/rows` only in `reset()`, never in `resize()`, so anything
+    // resized since construction hands over a stale size — 80x24 for the common
+    // case. Seed the open-time target so `ensureOpened` sizes the grid before
+    // `open()`, and before the replay below reads it as the grid to reflow back
+    // to (a wrong seed there is the #11718/#11552 corruption family: a pane
+    // parsing a ~200-column agent at 80 columns, and a snapshot replayed then
+    // snapped to a width it was never captured at). Same idiom as
+    // `detachForProjectSwitch`: background-tier resizes only ever write
+    // latestCols/latestRows, so those are the only record of the real grid.
+    const seededTargetGeometry = !managed.targetCols && managed.latestCols > 0;
+    if (seededTargetGeometry) {
+      managed.targetCols = managed.latestCols;
+      managed.targetRows = managed.latestRows;
+    }
 
     this.ensureOpened(id, managed);
     if (!managed.isOpened) {
@@ -1831,10 +1880,31 @@ class TerminalInstanceService {
       return "failed";
     }
 
+    // Consumed by the open above. Leaving a target we invented behind would make
+    // the next reparent-attach apply it instead of fitting, pinning the pane to
+    // this grid after its container had changed size.
+    if (seededTargetGeometry) {
+      managed.targetCols = undefined;
+      managed.targetRows = undefined;
+    }
+
+    this.workerIngestController.reseedMirrorGeometry(id, managed);
+
     this.rendererPolicy.applyRendererPolicy(
       id,
       managed.getRefreshTier?.() ?? managed.lastAppliedTier ?? TerminalRefreshTier.FOCUSED
     );
+
+    // Measure against the host now that the pane can paint. Nothing else will:
+    // `attach()`'s nested-rAF fit is gated on `isOpened`, which the failed open
+    // had already set false, and the ResizeObserver stays quiet because the host
+    // box never changed. Without this a rebuild triggered from a cold attach —
+    // no measured grid to seed from above — would sit on xterm's 80x24 default
+    // until the user happened to resize the window. Runs BEFORE the replay so
+    // the restore's geometry seed reads the settled grid; a no-op while resizes
+    // are locked or the host is unmeasurable, and idempotent when the seed
+    // already landed the right size.
+    this.resizeController.fit(id);
 
     // Repopulate from the headless mirror. The disposed instance's buffer went
     // with it, and it never painted anything the user saw anyway, so this is
