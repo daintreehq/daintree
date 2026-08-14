@@ -212,6 +212,36 @@ describe("deriveRequiredCIStatus", () => {
     expect(r.ciStatus).toBe("FAILURE");
     expect(r.ciSummary).toEqual({ requiredTotal: 2, requiredFailing: 1, requiredPending: 1 });
   });
+
+  it.each([
+    ["an unknown CheckRun conclusion", { __typename: "CheckRun", conclusion: "SOME_NEW_STATE" }],
+    ["an unknown CheckRun status with no conclusion", { __typename: "CheckRun", status: "WEIRD" }],
+    ["a completed CheckRun with no conclusion", { __typename: "CheckRun", status: "COMPLETED" }],
+    ["an unknown StatusContext state", { __typename: "StatusContext", state: "SOME_NEW_STATE" }],
+  ])("refuses to derive a verdict from %s", (_label, ctx) => {
+    // An unclassifiable required check used to land in neither the failing nor
+    // the pending bucket, so the summary reported SUCCESS — turning a check the
+    // raw rollup called failing into a false green. Fall back to the raw state
+    // instead, exactly as the truncated-page path does.
+    const r = deriveRequiredCIStatus([{ ...ctx, isRequired: true }], false, "FAILURE");
+    expect(r.ciStatus).toBe("FAILURE");
+    expect(r.ciSummary).toBeUndefined();
+  });
+
+  it("still derives a summary when every required check is classifiable", () => {
+    // Guards the bail-out above from swallowing the normal path: an unknown
+    // NON-required check must not suppress the derivation.
+    const r = deriveRequiredCIStatus(
+      [
+        { __typename: "CheckRun", conclusion: "SUCCESS", status: "COMPLETED", isRequired: true },
+        { __typename: "CheckRun", conclusion: "SOME_NEW_STATE", isRequired: false },
+      ],
+      false,
+      "FAILURE"
+    );
+    expect(r.ciStatus).toBe("SUCCESS");
+    expect(r.ciSummary).toEqual({ requiredTotal: 1, requiredFailing: 0, requiredPending: 0 });
+  });
 });
 
 describe("normalizeRawState", () => {
@@ -470,13 +500,62 @@ describe("mapRollupContextToCheckRun", () => {
         conclusion: "STALE",
         isRequired: true,
       },
-      { __typename: "StatusContext", context: "c", state: "ERROR", isRequired: true },
+      {
+        __typename: "CheckRun",
+        name: "c",
+        status: "COMPLETED",
+        conclusion: "TIMED_OUT",
+        isRequired: true,
+      },
+      {
+        __typename: "CheckRun",
+        name: "d",
+        status: "COMPLETED",
+        conclusion: "CANCELLED",
+        isRequired: true,
+      },
+      {
+        __typename: "CheckRun",
+        name: "e",
+        status: "COMPLETED",
+        conclusion: "ACTION_REQUIRED",
+        isRequired: true,
+      },
+      { __typename: "StatusContext", context: "f", state: "ERROR", isRequired: true },
+      // Non-required failures must be excluded by both sides.
+      {
+        __typename: "CheckRun",
+        name: "g",
+        status: "COMPLETED",
+        conclusion: "FAILURE",
+        isRequired: false,
+      },
     ];
+    // The two derivations classify independently (FAILING_CHECK_CONCLUSIONS vs
+    // CHECK_CONCLUSION_MAP), so this pins that they partition the same contexts
+    // identically. The normalized side spans every non-passing terminal
+    // conclusion, not just "failure": CANCELLED/TIMED_OUT/ACTION_REQUIRED keep
+    // their own words here while the roll-up buckets them as failing.
+    const NON_PASSING = new Set(["failure", "cancelled", "timed_out", "action_required"]);
     const derived = deriveRequiredCIStatus(contexts, false, "FAILURE");
     const mappedFailing = contexts
       .map((c) => mapRollupContextToCheckRun(c))
-      .filter((c) => c?.required && c.conclusion === "failure").length;
+      .filter((c) => c?.required && c.conclusion && NON_PASSING.has(c.conclusion)).length;
+    expect(derived.ciSummary?.requiredFailing).toBeGreaterThan(0);
     expect(mappedFailing).toBe(derived.ciSummary?.requiredFailing);
+  });
+
+  it("carries the provider's own node through as rawData", () => {
+    // The escape hatch must be the real node, not a reconstruction — a caller
+    // reaching past the normalized fields needs what the provider actually sent.
+    const node = {
+      __typename: "CheckRun",
+      name: "a",
+      status: "COMPLETED",
+      conclusion: "SUCCESS",
+      someProviderOnlyField: 1,
+    };
+    expect(mapRollupContextToCheckRun(node)?.rawData).toBe(node);
   });
 
   it("distinguishes queued from in-progress check statuses", () => {
@@ -552,6 +631,19 @@ describe("mapRollupContextToCheckRun", () => {
     ).toBe("completed");
   });
 
+  it("reports a completed run with an unreadable conclusion as finished but unverdicted", () => {
+    // The pair "completed, no conclusion" is the honest encoding of an enum we
+    // cannot spell — never a silent success.
+    const check = mapRollupContextToCheckRun({
+      __typename: "CheckRun",
+      name: "n",
+      status: "COMPLETED",
+      conclusion: "SOME_NEW_CONCLUSION",
+    });
+    expect(check?.status).toBe("completed");
+    expect(check?.conclusion).toBeUndefined();
+  });
+
   it("maps an unknown union member by field shape", () => {
     const check = mapRollupContextToCheckRun({
       __typename: "SomeFutureCheckKind",
@@ -559,6 +651,33 @@ describe("mapRollupContextToCheckRun", () => {
       state: "FAILURE",
     });
     expect(check).toMatchObject({ name: "future/thing", conclusion: "failure" });
+  });
+
+  it("does not claim an unrecognized legacy state has finished", () => {
+    // "completed" would assert a verdict exists for a state we cannot read.
+    const check = mapRollupContextToCheckRun({
+      __typename: "StatusContext",
+      context: "c",
+      state: "SOME_NEW_STATE",
+    });
+    expect(check?.status).toBe("queued");
+    expect(check?.conclusion).toBeUndefined();
+  });
+
+  it("never reports a conclusion on a check it also calls unfinished", () => {
+    // The contract says a conclusion exists only once a run completed, and the
+    // host validator rejects any check that says otherwise — so a contradictory
+    // provider lifecycle value must not survive the mapper.
+    const nodes = [
+      { __typename: "CheckRun", name: "a", status: "IN_PROGRESS", conclusion: "SUCCESS" },
+      { __typename: "CheckRun", name: "b", status: "QUEUED", conclusion: "FAILURE" },
+      { __typename: "CheckRun", name: "c", status: "SOME_NEW_STATE", conclusion: "SUCCESS" },
+    ];
+    for (const node of nodes) {
+      const check = mapRollupContextToCheckRun(node);
+      expect(check?.conclusion).toBeDefined();
+      expect(check?.status).toBe("completed");
+    }
   });
 
   it("returns null for a node with no usable name", () => {

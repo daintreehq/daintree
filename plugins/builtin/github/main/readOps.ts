@@ -793,25 +793,37 @@ export async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<
 
 interface CIRollupPage {
   rollup: { state?: string } | undefined;
+  /** Head commit the page was read from; `null` when the response omitted it. */
+  headOid: string | null;
   nodes: RollupContextNode[] | null;
   hasNextPage: boolean;
   endCursor: string | null;
+  /** `false` when the rollup exists but reported no `pageInfo` to prove completeness. */
+  hasPageInfo: boolean;
 }
 
 /**
  * One page of the head commit's status-check rollup, or `null` when the PR
  * doesn't exist. Shared by the roll-up and per-check reads so both see the same
  * response shape from the same query.
+ *
+ * `bypassCache` is what separates the two callers. `getCIStatus` wants the 60s
+ * response cache — it is the hottest forge path and a minute-stale verdict is
+ * documented. `getChecks` must not: a cached first page reporting
+ * `hasNextPage: false` would let a since-added 101st check vanish from a list
+ * that promises to be complete.
  */
 async function fetchCIRollupPage(
   repo: RepoRef,
   prNumber: number,
-  cursor: string | null
+  cursor: string | null,
+  bypassCache = false
 ): Promise<CIRollupPage | null> {
   const response = await runQuery(
     PR_CI_STATUS_QUERY,
     { owner: repo.owner, repo: repo.repo, number: prNumber, cursor },
-    "PR_CI_STATUS_QUERY"
+    "PR_CI_STATUS_QUERY",
+    bypassCache
   );
 
   const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
@@ -819,8 +831,9 @@ async function fetchCIRollupPage(
   if (!pr) return null;
 
   const commits = pr.commits as
-    { nodes?: Array<{ commit?: { statusCheckRollup?: unknown } }> } | undefined;
-  const rollup = commits?.nodes?.[0]?.commit?.statusCheckRollup as
+    { nodes?: Array<{ commit?: { oid?: string; statusCheckRollup?: unknown } }> } | undefined;
+  const commit = commits?.nodes?.[0]?.commit;
+  const rollup = commit?.statusCheckRollup as
     | {
         state?: string;
         contexts?: {
@@ -830,11 +843,14 @@ async function fetchCIRollupPage(
       }
     | undefined;
 
+  const pageInfo = rollup?.contexts?.pageInfo;
   return {
     rollup,
+    headOid: typeof commit?.oid === "string" ? commit.oid : null,
     nodes: rollup?.contexts?.nodes ?? null,
-    hasNextPage: rollup?.contexts?.pageInfo?.hasNextPage === true,
-    endCursor: rollup?.contexts?.pageInfo?.endCursor ?? null,
+    hasNextPage: pageInfo?.hasNextPage === true,
+    endCursor: pageInfo?.endCursor ?? null,
+    hasPageInfo: pageInfo != null,
   };
 }
 
@@ -863,39 +879,61 @@ export async function getChecksImpl(
 ): Promise<{ checks: CheckRun[] } | null> {
   const inflightKey = `${repo.owner}/${repo.repo}:${prNumber}`;
   return dedupe(getChecksInflight, inflightKey, false, async () => {
+    const incomplete = (why: string): Error =>
+      new Error(`Could not read all checks for PR #${prNumber}: ${why}`);
+
     const checks: CheckRun[] = [];
     const seenCursors = new Set<string>();
     let cursor: string | null = null;
+    let headOid: string | null = null;
 
     for (let page = 0; page < MAX_CHECK_PAGES; page++) {
-      const result: CIRollupPage | null = await fetchCIRollupPage(repo, prNumber, cursor);
+      const result: CIRollupPage | null = await fetchCIRollupPage(repo, prNumber, cursor, true);
       // Only the first page distinguishes "no such PR"; a later page losing the
       // PR means it moved under us, which is a failed traversal, not absence.
       if (!result) {
         if (page === 0) return null;
-        throw new Error(`Pull request #${prNumber} disappeared while reading its checks`);
+        throw incomplete("the pull request disappeared mid-read");
+      }
+
+      // Every page re-resolves `commits(last: 1)`, so a push between pages would
+      // otherwise splice two commits' checks into one list — dropping the new
+      // head's failures while presenting the result as complete.
+      if (page === 0) {
+        headOid = result.headOid;
+      } else if (result.headOid !== headOid) {
+        throw incomplete("the pull request was updated mid-read");
+      }
+
+      if (!result.rollup) {
+        // No rollup at all: on the first page that is a PR with no checks; later
+        // it means the data moved under us, which is not an empty result.
+        if (page === 0) return { checks: [] };
+        throw incomplete("its checks went away mid-read");
       }
 
       for (const node of result.nodes ?? []) {
         const check = mapRollupContextToCheckRun(node);
-        if (check) checks.push(check);
+        // A node we cannot even name is a check we would be omitting silently —
+        // "no such check" instead of "a check I can't describe". Fail loudly.
+        if (!check) throw incomplete("the provider returned an unreadable check");
+        checks.push(check);
       }
 
+      // Without pageInfo there is no evidence this page is the last one, and
+      // assuming it is truncates at 100 without saying so.
+      if (!result.hasPageInfo) throw incomplete("the provider reported no pagination info");
       if (!result.hasNextPage) return { checks };
 
       // A next page we can't address, or a cursor that repeats, would loop or
       // silently drop the remainder. Fail instead of returning a partial list.
-      const next = result.endCursor;
-      if (!next || seenCursors.has(next)) {
-        throw new Error(`Could not read all checks for PR #${prNumber}: pagination stalled`);
-      }
+      const next = result.endCursor?.trim();
+      if (!next || seenCursors.has(next)) throw incomplete("pagination stalled");
       seenCursors.add(next);
       cursor = next;
     }
 
-    throw new Error(
-      `Could not read all checks for PR #${prNumber}: more than ${MAX_CHECK_PAGES * 100} checks`
-    );
+    throw incomplete(`more than ${MAX_CHECK_PAGES * 100} checks`);
   });
 }
 

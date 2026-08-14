@@ -574,6 +574,18 @@ describe("registerForgeDataHandlers", () => {
         "a non-boolean required",
         { checks: [{ name: "a", status: "completed", required: "yes", rawData: null }] },
       ],
+      [
+        "a blank name",
+        { checks: [{ name: "   ", status: "completed", conclusion: "failure", rawData: null }] },
+      ],
+      [
+        // "running, and it passed" is two contradictory claims under a schema
+        // that advertises neither as possible.
+        "a conclusion on a check that has not completed",
+        {
+          checks: [{ name: "a", status: "in_progress", conclusion: "success", rawData: null }],
+        },
+      ],
     ])("rejects %s from the provider as an error, not a missing PR", async (label, bad) => {
       useImpl({ ...fakeImpl, checks: { getChecks: vi.fn().mockResolvedValue(bad) } });
       registerForgeDataHandlers();

@@ -107,6 +107,10 @@ export function deriveRequiredCIStatus(
   let requiredTotal = 0;
   let requiredFailing = 0;
   let requiredPending = 0;
+  // Required contexts whose conclusion/state matched none of the known buckets.
+  // Counted so an unrecognized value can't be silently absorbed into "passing"
+  // — see the bail-out below.
+  let requiredUnclassified = 0;
 
   for (const ctx of contexts) {
     if (!ctx?.isRequired) continue;
@@ -120,6 +124,12 @@ export function deriveRequiredCIStatus(
         requiredFailing++;
       } else if (!conclusion && status && PENDING_CHECK_STATUSES.has(status)) {
         requiredPending++;
+        // Neither failing nor pending: only an explicitly non-failing conclusion
+        // counts as passing. A conclusion this vocabulary doesn't know, or a run
+        // that reports no conclusion and no recognized in-flight status, is
+        // unclassifiable rather than green.
+      } else if (!(conclusion && NON_FAILING_CHECK_STATES.has(conclusion))) {
+        requiredUnclassified++;
       }
     } else if (typename === "StatusContext") {
       const state = ctx.state?.toUpperCase();
@@ -127,6 +137,8 @@ export function deriveRequiredCIStatus(
         requiredFailing++;
       } else if (state && PENDING_STATUS_STATES.has(state)) {
         requiredPending++;
+      } else if (!(state && NON_FAILING_STATUS_STATES.has(state))) {
+        requiredUnclassified++;
       }
     } else {
       // Unknown union member — treat a non-success conclusion/state as failure conservatively
@@ -136,8 +148,23 @@ export function deriveRequiredCIStatus(
         requiredFailing++;
       } else if (state && FAILING_STATUS_STATES.has(state)) {
         requiredFailing++;
+      } else if (
+        !(conclusion && NON_FAILING_CHECK_STATES.has(conclusion)) &&
+        !(state && NON_FAILING_STATUS_STATES.has(state))
+      ) {
+        requiredUnclassified++;
       }
     }
+  }
+
+  if (requiredUnclassified > 0) {
+    // A required check reported something this vocabulary can't bucket — a
+    // GitHub enum addition, or a malformed node. Deriving a summary from the
+    // rest would count it as neither failing nor pending and land on SUCCESS,
+    // turning an unrecognized failure into a false green. Keep the raw rollup,
+    // matching both the truncated-page bail-out above and `deriveGlobalCIStatus`,
+    // which likewise refuses to declare SUCCESS with unclassified buckets.
+    return { ciStatus: rawCiStatus, ciSummary: undefined };
   }
 
   if (requiredTotal === 0) {
@@ -195,15 +222,21 @@ const QUEUED_CHECK_STATUSES = new Set(["QUEUED", "WAITING", "PENDING", "REQUESTE
 
 /**
  * Normalize one rollup context node onto the cross-provider {@link CheckRun}
- * shape, or `null` when the node carries no usable name (nothing to report).
+ * shape, or `null` when the node carries no usable name.
  *
- * Unrecognized values degrade rather than throw, matching how
- * {@link deriveGlobalCIStatus} treats unknown buckets: a conclusion this
- * vocabulary can't spell is omitted — never guessed as success or failure — and
- * an unknown lifecycle value reads as finished only when a conclusion proves it
- * is. A future GitHub enum addition therefore costs one field on one check
- * rather than the whole read, and the omission can't manufacture a false green
- * because {@link deriveRequiredCIStatus} still owns the merge verdict.
+ * The two failure modes are deliberately separated. An unrecognized *value* —
+ * a conclusion or state from a future GitHub enum — degrades: the conclusion is
+ * omitted (never guessed as success or failure) and the run reads as unfinished
+ * unless a known conclusion proves otherwise, so one enum addition costs one
+ * field on one check. An unrecognized *structure* — a node with no name at all,
+ * which is what a genuinely new union member returns since the query's inline
+ * fragments don't apply to it — returns `null`, and the caller must treat that
+ * as an incomplete read rather than drop it: silently omitting a check would
+ * turn "there is a check I can't describe" into "there is no such check".
+ *
+ * A conclusion always implies `status: "completed"`; a run that reported an
+ * outcome has finished, whatever its lifecycle field says. That keeps the
+ * emitted shape non-contradictory for consumers validating the contract.
  */
 export function mapRollupContextToCheckRun(node: RollupContextNode): CheckRun | null {
   const name = node.name?.trim() || node.context?.trim();
@@ -219,7 +252,9 @@ export function mapRollupContextToCheckRun(node: RollupContextNode): CheckRun | 
     const mapped = STATUS_STATE_MAP[rawState];
     return {
       name,
-      status: mapped?.status ?? "completed",
+      // An unrecognized state is not evidence the status finished, so it reads
+      // as not-yet-started rather than claiming a completion we can't verify.
+      status: mapped?.status ?? "queued",
       ...(mapped?.conclusion ? { conclusion: mapped.conclusion } : {}),
       ...(required !== undefined ? { required } : {}),
       ...(detailsUrl ? { detailsUrl } : {}),
@@ -232,17 +267,22 @@ export function mapRollupContextToCheckRun(node: RollupContextNode): CheckRun | 
   const rawStatus = node.status?.toUpperCase();
 
   let status: CheckRunStatus;
-  if (rawStatus === "COMPLETED") {
+  if (rawConclusion) {
+    // A reported outcome settles the lifecycle, whatever `status` says. Trusting
+    // it here is what keeps `conclusion` from ever appearing on a run this shape
+    // also calls unfinished.
+    status = "completed";
+  } else if (rawStatus === "COMPLETED") {
     status = "completed";
   } else if (rawStatus === "IN_PROGRESS") {
     status = "in_progress";
   } else if (rawStatus && QUEUED_CHECK_STATUSES.has(rawStatus)) {
     status = "queued";
   } else {
-    // Missing or unrecognized lifecycle value: a reported conclusion is proof
-    // the run finished; without one, "queued" understates progress but never
-    // claims a run is done when it may still be going.
-    status = rawConclusion ? "completed" : "queued";
+    // Missing or unrecognized lifecycle value with no conclusion to settle it:
+    // "queued" understates progress but never claims a run is done when it may
+    // still be going.
+    status = "queued";
   }
 
   return {

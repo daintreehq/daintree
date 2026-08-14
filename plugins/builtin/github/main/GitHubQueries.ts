@@ -1123,6 +1123,7 @@ export const PR_CI_STATUS_QUERY = `
         commits(last: 1) {
           nodes {
             commit {
+              oid
               statusCheckRollup {
                 state
                 contexts(first: 100, after: $cursor) {

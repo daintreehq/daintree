@@ -800,12 +800,18 @@ function requireValidChecks(value: unknown, prNumber: number): ForgeCheckRun[] {
     if (
       !c ||
       typeof c !== "object" ||
+      // A blank name can't answer "which check failed", so it is malformed
+      // rather than merely unhelpful.
       typeof c.name !== "string" ||
-      !c.name ||
+      !c.name.trim() ||
       typeof c.status !== "string" ||
       !CHECK_RUN_STATUSES.has(c.status) ||
       (c.conclusion !== undefined &&
         (typeof c.conclusion !== "string" || !CHECK_RUN_CONCLUSIONS.has(c.conclusion))) ||
+      // The contract states a conclusion exists only once a check completed.
+      // Forwarding "running, and it passed" would tell an agent two contradictory
+      // things under a schema that advertises neither as possible.
+      (c.conclusion !== undefined && c.status !== "completed") ||
       (c.required !== undefined && typeof c.required !== "boolean") ||
       (c.detailsUrl !== undefined && typeof c.detailsUrl !== "string")
     ) {

@@ -797,4 +797,12 @@ describe("PR_CI_STATUS_QUERY", () => {
     expect(PR_CI_STATUS_QUERY).toContain("$cursor: String");
     expect(PR_CI_STATUS_QUERY).not.toContain("$cursor: String!");
   });
+
+  it("selects the head commit oid so a paged read can detect a push mid-traversal", () => {
+    // Every page re-resolves commits(last:1); without an identity to compare,
+    // pages from two different heads would merge silently.
+    const commitSelection =
+      /commit\s*\{([^]*?)statusCheckRollup/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
+    expect(commitSelection).toContain("oid");
+  });
 });

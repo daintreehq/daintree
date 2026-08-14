@@ -924,7 +924,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getChecks",
       title: "Get CI Checks",
       description:
-        "List every CI check on one pull request — each check's name, whether it is still running, how it finished, and a link to its log. Reach for it once the roll-up verdict reports trouble and the question becomes which check broke and where to read the output. A check with no conclusion reported has not passed; the roll-up stays the authority on whether the pull request is green. An empty list means the pull request has no checks: a provider that cannot read them fails instead.",
+        "List every CI check on one pull request — each check's name, whether it is still running, how it finished, and a link to its log where the forge reports one. Reach for it once the roll-up shows trouble and the question becomes which check broke and where to read its output. A check with no conclusion reported has not passed; the roll-up stays the authority on whether a PR is green. An empty list means no checks, a null one no such PR, and a provider that cannot read checks fails instead.",
       category: "forge",
       kind: "query",
       danger: "safe",

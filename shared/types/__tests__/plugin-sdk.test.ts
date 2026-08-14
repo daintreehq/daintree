@@ -61,6 +61,10 @@ import type {
   NormalizedIssueState,
   RateLimitInfo,
   FileDecoration,
+  ChecksCapability,
+  CheckRun,
+  CheckRunStatus,
+  CheckRunConclusion,
   PluginProcessStreamEvent,
   ActionDispatchResult,
   ActionDispatchSuccess,
@@ -178,6 +182,16 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<NormalizedIssueState>().toMatchTypeOf<string>();
       expectTypeOf<RateLimitInfo>().toMatchTypeOf<object>();
       expectTypeOf<FileDecoration>().toMatchTypeOf<object>();
+    });
+
+    it("exports the optional checks capability and its check vocabulary", () => {
+      // A third-party forge provider implementing `checks` must be able to name
+      // the capability and the union members it returns without reaching into
+      // internal app paths — otherwise only the builtin can implement it.
+      expectTypeOf<ChecksCapability>().toMatchTypeOf<object>();
+      expectTypeOf<CheckRun>().toMatchTypeOf<object>();
+      expectTypeOf<CheckRunStatus>().toMatchTypeOf<string>();
+      expectTypeOf<CheckRunConclusion>().toMatchTypeOf<string>();
     });
 
     it("exports the process-stream event type and channel constant", () => {
