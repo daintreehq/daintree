@@ -14,6 +14,7 @@ export {
   BellDot, // watch alert / notify on completion
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
   CircleCheck, // finished run awaiting review (Pilot's review band)
+  CircleDashed, // run the user snoozed — quiet until it wakes (Pilot's snoozed band)
   CircleHelp, // workspace whose metadata is missing (removed while its agents ran)
   CirclePause, // run the user parked — shelved on purpose (Pilot's parked band)
   CircleSlash, // agent stopped on an error, distinct in shape from a waiting one (Pilot's blocked band)

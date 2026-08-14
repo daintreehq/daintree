@@ -5,6 +5,7 @@ import {
   InteractingCircle,
   ExitedCircle,
   CircleCheck,
+  CircleDashed,
   CirclePause,
   CircleSlash,
 } from "@/components/icons";
@@ -51,6 +52,11 @@ export const BAND_GLYPH: Record<FleetBand, ComponentType<{ className?: string }>
   running: SpinnerCircle,
   done: CircleCheck,
   parked: CirclePause,
+  // Dashed rather than paused: a park is held, a snooze is merely quiet for
+  // now, and the two must not share a shape when the row's only other
+  // difference between them is a word. The dash is the same signal the project
+  // switcher's snoozed dot uses, so one vocabulary covers both surfaces.
+  snoozed: CircleDashed,
   idle: HollowCircle,
 };
 
@@ -87,6 +93,9 @@ export const BAND_GLYPH_TONE: Record<FleetBand, string> = {
   // Parked is the user's own quiet, so it takes the quiet tone: hued parked
   // rows would re-demand the attention parking just released.
   parked: NEUTRAL_TONE,
+  // Snoozed is quiet for the same reason parked is: hueing a run the user just
+  // silenced would re-demand the attention the snooze exists to withdraw.
+  snoozed: NEUTRAL_TONE,
   idle: NEUTRAL_TONE,
 };
 

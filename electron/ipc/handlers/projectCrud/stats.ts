@@ -36,7 +36,34 @@ export function getRunAttentionService(): RunAttentionService | null {
 export function registerProjectStatsHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const projectStatsService = new ProjectStatsService(deps.ptyClient);
+  // Park and snooze intent lives beside the projections that read it: the
+  // attention service owns the records, the stats counts and the fleet snapshot
+  // both consult it, and a park- or snooze-changed event drives the same
+  // refresh path as an agent transition. Constructed FIRST because both
+  // projections take it as a dependency.
+  // `isCleaningUp` freezes releases during graceful shutdown — the chain kills
+  // every terminal, and those kills would otherwise read as busy→ready edges
+  // and wipe the very parks persistence is carrying across the restart.
+  const runAttentionService = new RunAttentionService(
+    {
+      load: () => store.get("parkedRuns"),
+      save: (records) => store.set("parkedRuns", records),
+      loadSnoozes: () => store.get("snoozedRuns"),
+      saveSnoozes: (records) => store.set("snoozedRuns", records),
+    },
+    { isQuitting: isCleaningUp }
+  );
+  runAttentionServiceInstance = runAttentionService;
+  handlers.push(() => {
+    runAttentionService.dispose();
+    // Identity-guarded: a stale cleanup from a superseded registration must
+    // not null out a newer instance's global.
+    if (runAttentionServiceInstance === runAttentionService) {
+      runAttentionServiceInstance = null;
+    }
+  });
+
+  const projectStatsService = new ProjectStatsService(deps.ptyClient, runAttentionService);
   projectStatsServiceInstance = projectStatsService;
   projectStatsService.start();
   // Defer the initial compute off the first-interactive critical path. The
@@ -51,29 +78,6 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
   handlers.push(() => {
     projectStatsService.stop();
     projectStatsServiceInstance = null;
-  });
-
-  // Park intent lives beside the snapshot that projects it: the attention
-  // service owns the records, the snapshot decorates rows with them, and a
-  // park-changed event drives the same refresh path as an agent transition.
-  // `isCleaningUp` freezes releases during graceful shutdown — the chain kills
-  // every terminal, and those kills would otherwise read as busy→ready edges
-  // and wipe the very parks persistence is carrying across the restart.
-  const runAttentionService = new RunAttentionService(
-    {
-      load: () => store.get("parkedRuns"),
-      save: (records) => store.set("parkedRuns", records),
-    },
-    { isQuitting: isCleaningUp }
-  );
-  runAttentionServiceInstance = runAttentionService;
-  handlers.push(() => {
-    runAttentionService.dispose();
-    // Identity-guarded: a stale cleanup from a superseded registration must
-    // not null out a newer instance's global.
-    if (runAttentionServiceInstance === runAttentionService) {
-      runAttentionServiceInstance = null;
-    }
   });
 
   // The run-grained sibling of the counts above, on the same source and the
@@ -198,7 +202,17 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       ...projectStore.getLastCompletionSeenMap(),
       ...scratchStore.getLastCompletionSeenMap(),
     ]);
-    const agentCounts = computeProjectAgentCounts(uniqueIds, allTerminals, seenMap);
+    // Same snooze view the pushed status map uses. Omitting it here would
+    // recreate exactly the drift this shared helper exists to prevent: opening
+    // the palette would hydrate rows that still counted snoozed agents as
+    // waiting, and the push path suppresses unchanged payloads, so nothing
+    // would correct them until agent state next moved.
+    const agentCounts = computeProjectAgentCounts(
+      uniqueIds,
+      allTerminals,
+      seenMap,
+      runAttentionServiceInstance?.getActiveSnoozes()
+    );
 
     const result: BulkProjectStats = {};
     for (const entry of statsResults) {
@@ -240,6 +254,10 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
             : {}),
           ...(counts.latestWorkingSince !== null
             ? { latestWorkingSince: counts.latestWorkingSince }
+            : {}),
+          snoozedAgentCount: counts.snoozed,
+          ...(counts.nextSnoozeWakeAt !== null
+            ? { nextSnoozeWakeAt: counts.nextSnoozeWakeAt }
             : {}),
           terminalMemoryMB: hasMeasured ? Math.round(measured!.memoryKb / 1024) : undefined,
           topProcess: top

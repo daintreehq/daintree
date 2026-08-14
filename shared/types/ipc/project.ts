@@ -142,6 +142,15 @@ export interface BulkProjectStatsEntry extends ProjectStats {
   /** Latest transition into `working`, absent when nothing is working. */
   latestWorkingSince?: number;
   /**
+   * Agents the user snoozed. Carried for the same reason the blocked count is:
+   * a renderer seeded from bulk must reach the same reading the push would have
+   * given it, and without this a cold palette would band an all-snoozed project
+   * as dormant until agent state next moved.
+   */
+  snoozedAgentCount: number;
+  /** Earliest wake time among snoozed agents, absent when none has one. */
+  nextSnoozeWakeAt?: number;
+  /**
    * Measured resident memory (MB) of this project's terminal process trees —
    * each shell plus every descendant (dev servers, agents, language servers),
    * deduplicated by PID. Undefined when the OS process table couldn't be read;
@@ -206,6 +215,26 @@ export interface ProjectStatusEntry {
    * carried a `lastStateChange`.
    */
   latestWorkingSince?: number;
+  /**
+   * Agents the user snoozed, whatever they are doing underneath. NOT a subset
+   * of any single count above: a snoozed run still counts toward
+   * {@link ProjectStatusEntry.activeAgentCount} and
+   * {@link ProjectStatusEntry.completedAgentCount}, but is withheld from
+   * `waitingAgentCount`, `blockedAgentCount` and
+   * `unacknowledgedCompletedAgentCount` — snooze suppresses attention, not
+   * presence.
+   *
+   * The field the switcher needs to tell "every agent here is snoozed" apart
+   * from "nothing is here", which are the same zero on every other count.
+   */
+  snoozedAgentCount: number;
+  /**
+   * Earliest wake time among this project's snoozed agents (epoch ms). Absent
+   * when nothing is snoozed, and also when every snooze is the unlimited
+   * option — that one has no wake time, and reporting a substitute would date
+   * a snooze that no clock will ever end.
+   */
+  nextSnoozeWakeAt?: number;
 }
 
 /**

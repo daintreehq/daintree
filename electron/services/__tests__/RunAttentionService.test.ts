@@ -26,9 +26,10 @@ vi.mock("../events.js", () => ({ events: eventEmitter }));
 import {
   MAX_PARK_NOTE_LENGTH,
   MAX_PARKED_RUNS,
+  MAX_SNOOZED_RUNS,
   RunAttentionService,
 } from "../RunAttentionService.js";
-import type { RunParkRecord } from "../../../shared/types/ipc/fleet.js";
+import type { RunParkRecord, RunSnoozeRecord } from "../../../shared/types/ipc/fleet.js";
 
 const NOW = 1_900_000_000_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -432,5 +433,273 @@ describe("RunAttentionService", () => {
     // Dispose cleared the map; the point is no release event fired afterwards.
     expect(before).toBeDefined();
     expect(emittedOf("terminal:park-released")).toEqual([]);
+  });
+});
+
+describe("snooze", () => {
+  function makeSnoozePersistence(
+    parks: Record<string, RunParkRecord> = {},
+    snoozes: Record<string, RunSnoozeRecord> = {}
+  ) {
+    return {
+      load: vi.fn(() => parks),
+      save: vi.fn<(records: Record<string, RunParkRecord>) => void>(),
+      loadSnoozes: vi.fn(() => snoozes),
+      saveSnoozes: vi.fn<(records: Record<string, RunSnoozeRecord>) => void>(),
+    };
+  }
+
+  function typedInput(terminalId: string, state = "working", previousState = "waiting") {
+    eventEmitter.emit("agent:state-changed", {
+      terminalId,
+      state,
+      previousState,
+      trigger: "input",
+      timestamp: NOW + 1_000,
+    });
+  }
+
+  /**
+   * What the pty-host emits when input lands on a run that is ALREADY working:
+   * the FSM produces no transition, so the change event never fires and only
+   * the dropped-transition event carries the signal.
+   */
+  function typedInputWhileWorking(terminalId: string) {
+    eventEmitter.emit("agent:state-transition-dropped", {
+      terminalId,
+      outcome: "no-op",
+      currentState: "working",
+      attemptedState: "working",
+      trigger: "input",
+      timestamp: NOW + 1_000,
+    });
+  }
+
+  it("resolves a timed option to a wake time in the future", () => {
+    const service = makeService(makeSnoozePersistence());
+    const record = service.snooze("run-1", "15m");
+
+    expect(record.snoozedAt).toBe(NOW);
+    expect(record.snoozedUntil).toBeGreaterThan(NOW);
+    expect(service.isSnoozed("run-1", NOW)).toBe(true);
+  });
+
+  it("gives the unlimited option no wake time, so no clock can end it", () => {
+    const service = makeService(makeSnoozePersistence());
+    const record = service.snooze("run-1", "unlimited");
+
+    expect(record.snoozedUntil).toBeUndefined();
+    // Far beyond any ladder entry: still snoozed, because only input ends it.
+    expect(service.isSnoozed("run-1", NOW + 400 * DAY_MS)).toBe(true);
+  });
+
+  it("stops reporting a timed snooze once its wake time passes", () => {
+    const service = makeService(makeSnoozePersistence());
+    const record = service.snooze("run-1", "15m");
+
+    expect(service.isSnoozed("run-1", record.snoozedUntil! - 1)).toBe(true);
+    expect(service.isSnoozed("run-1", record.snoozedUntil!)).toBe(false);
+    expect(service.getActiveSnoozes(record.snoozedUntil!).has("run-1")).toBe(false);
+  });
+
+  it("expires without emitting anything — expiry is resolved at read, not announced", () => {
+    const service = makeService(makeSnoozePersistence());
+    const record = service.snooze("run-1", "15m");
+    const before = emittedOf("terminal:snooze-changed").length;
+
+    service.getActiveSnoozes(record.snoozedUntil! + 1);
+
+    expect(emittedOf("terminal:snooze-changed").length).toBe(before);
+  });
+
+  it("clears the snooze when the user types at a waiting run", () => {
+    const service = makeService(makeSnoozePersistence());
+    service.snooze("run-1", "6h");
+
+    typedInput("run-1");
+
+    expect(service.isSnoozed("run-1", NOW)).toBe(false);
+  });
+
+  it("clears the snooze when the user types at a run that is already working", () => {
+    // The gap the dropped-transition subscription exists to close: no state
+    // change means no `agent:state-changed`, so this is the only signal.
+    const service = makeService(makeSnoozePersistence());
+    service.snooze("run-1", "6h");
+
+    typedInputWhileWorking("run-1");
+
+    expect(service.isSnoozed("run-1", NOW)).toBe(false);
+  });
+
+  it("clears an unlimited snooze on input, like every other duration", () => {
+    const service = makeService(makeSnoozePersistence());
+    service.snooze("run-1", "unlimited");
+
+    typedInput("run-1");
+
+    expect(service.isSnoozed("run-1", NOW)).toBe(false);
+  });
+
+  it("does NOT clear the snooze on a non-input transition", () => {
+    // Output, heuristics and activity all move agent state without the user
+    // being present. Only deliberate typing ends a snooze.
+    const service = makeService(makeSnoozePersistence());
+    service.snooze("run-1", "6h");
+
+    for (const trigger of ["output", "heuristic", "activity", "timeout", "title"]) {
+      eventEmitter.emit("agent:state-changed", {
+        terminalId: "run-1",
+        state: "waiting",
+        previousState: "working",
+        trigger,
+        timestamp: NOW + 1_000,
+      });
+    }
+
+    expect(service.isSnoozed("run-1", NOW)).toBe(true);
+  });
+
+  it("only clears the run that was typed at", () => {
+    const service = makeService(makeSnoozePersistence());
+    service.snooze("run-1", "6h");
+    service.snooze("run-2", "6h");
+
+    typedInput("run-1");
+
+    expect(service.isSnoozed("run-1", NOW)).toBe(false);
+    expect(service.isSnoozed("run-2", NOW)).toBe(true);
+  });
+
+  it("persists a snooze so it survives a restart", () => {
+    const persistence = makeSnoozePersistence();
+    const service = makeService(persistence);
+    service.snooze("run-1", "6h");
+
+    const saved = persistence.saveSnoozes.mock.calls.at(-1)![0];
+    const revived = makeService(makeSnoozePersistence({}, saved));
+
+    expect(revived.isSnoozed("run-1", NOW)).toBe(true);
+  });
+
+  it("drops an already-lapsed snooze at load rather than carrying it forward", () => {
+    const stale: Record<string, RunSnoozeRecord> = {
+      "run-1": { snoozedAt: NOW - 60_000, snoozedUntil: NOW - 1 },
+    };
+    const service = makeService(makeSnoozePersistence({}, stale));
+
+    expect(service.getSnoozeRecord("run-1")).toBeUndefined();
+  });
+
+  it("drops a snooze older than the stale TTL even when it never expires", () => {
+    // An unlimited snooze on a run that never came back would otherwise be held
+    // forever, honouring a decision the user no longer remembers making.
+    const ancient: Record<string, RunSnoozeRecord> = {
+      "run-1": { snoozedAt: NOW - 20 * DAY_MS },
+    };
+    const service = makeService(makeSnoozePersistence({}, ancient));
+
+    expect(service.getSnoozeRecord("run-1")).toBeUndefined();
+  });
+
+  it("rejects a malformed stored record rather than repairing it", () => {
+    const corrupt = {
+      "run-1": { snoozedAt: "soon" },
+      "run-2": { snoozedAt: NOW + 10 * 60_000 },
+      "run-3": null,
+    } as unknown as Record<string, RunSnoozeRecord>;
+    const service = makeService(makeSnoozePersistence({}, corrupt));
+
+    // run-2's timestamp is far enough in the future to be corrupt, not early.
+    expect(service.getSnoozeRecord("run-1")).toBeUndefined();
+    expect(service.getSnoozeRecord("run-2")).toBeUndefined();
+    expect(service.getSnoozeRecord("run-3")).toBeUndefined();
+  });
+
+  it("rolls back and reports when the snooze cannot be persisted", () => {
+    const persistence = makeSnoozePersistence();
+    persistence.saveSnoozes.mockImplementation(() => {
+      throw new Error("disk full");
+    });
+    const service = makeService(persistence);
+
+    expect(() => service.snooze("run-1", "6h")).toThrow("disk full");
+    // A snooze that would not survive a restart must not exist now either.
+    expect(service.isSnoozed("run-1", NOW)).toBe(false);
+    expect(emittedOf("terminal:snooze-changed")).toEqual([]);
+  });
+
+  it("keeps the snooze when an input-driven clear cannot be persisted", () => {
+    const persistence = makeSnoozePersistence();
+    const service = makeService(persistence);
+    service.snooze("run-1", "6h");
+    persistence.saveSnoozes.mockImplementation(() => {
+      throw new Error("disk full");
+    });
+
+    // Driven by an event, so it must not throw at the listener.
+    expect(() => typedInput("run-1")).not.toThrow();
+    expect(service.isSnoozed("run-1", NOW)).toBe(true);
+  });
+
+  it("re-snoozing replaces the record wholesale", () => {
+    const service = makeService(makeSnoozePersistence());
+    const first = service.snooze("run-1", "15m");
+    const second = service.snooze("run-1", "6h");
+
+    expect(second.snoozedUntil).toBeGreaterThan(first.snoozedUntil!);
+  });
+
+  it("unsnooze reports whether there was anything to lift", () => {
+    const service = makeService(makeSnoozePersistence());
+    expect(service.unsnooze("run-1")).toBe(false);
+
+    service.snooze("run-1", "6h");
+    expect(service.unsnooze("run-1")).toBe(true);
+    expect(service.isSnoozed("run-1", NOW)).toBe(false);
+  });
+
+  it("rejects a duration outside the ladder", () => {
+    const service = makeService(makeSnoozePersistence());
+    expect(() => service.snooze("run-1", "1h" as never)).toThrow(/Invalid snooze duration/);
+  });
+
+  it("refuses to mutate snoozes while the app is shutting down", () => {
+    const service = makeService(makeSnoozePersistence(), { isQuitting: () => true });
+    expect(() => service.snooze("run-1", "6h")).toThrow(/shutting down/);
+    expect(() => service.unsnooze("run-1")).toThrow(/shutting down/);
+  });
+
+  it("leaves a park untouched when the run is snoozed, and vice versa", () => {
+    // Independent intents: snoozing must not destroy the note a park carries.
+    const service = makeService(makeSnoozePersistence());
+    service.park("run-1", { note: "waiting on review" });
+    service.snooze("run-1", "6h");
+
+    expect(service.getParkRecord("run-1")?.note).toBe("waiting on review");
+    expect(service.isSnoozed("run-1", NOW)).toBe(true);
+
+    service.unsnooze("run-1");
+    expect(service.getParkRecord("run-1")).toBeDefined();
+  });
+
+  it("bounds the snooze set, but never counts lapsed records against the cap", () => {
+    let clock = NOW;
+    const service = makeService(makeSnoozePersistence(), { now: () => clock });
+    for (let i = 0; i < MAX_SNOOZED_RUNS; i++) service.snooze(`run-${i}`, "15m");
+
+    expect(() => service.snooze("overflow", "15m")).toThrow(/more than/);
+
+    // Once the first batch lapses, the slots come back.
+    clock = NOW + 60 * 60_000;
+    expect(() => service.snooze("overflow", "15m")).not.toThrow();
+  });
+
+  it("clears its snoozes on dispose", () => {
+    const service = makeService(makeSnoozePersistence());
+    service.snooze("run-1", "6h");
+    service.dispose();
+
+    expect(service.isSnoozed("run-1", NOW)).toBe(false);
   });
 });

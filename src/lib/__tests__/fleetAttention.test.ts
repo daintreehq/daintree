@@ -210,3 +210,69 @@ describe("compareWithinBand", () => {
     expect([first, second].sort(compareWithinBand).map((r) => r.runId)).toEqual(["a", "b"]);
   });
 });
+
+describe("bandForRun — snooze", () => {
+  const snooze = { snoozedAt: NOW - 60_000, snoozedUntil: NOW + 900_000 };
+
+  it("bands a snoozed run as snoozed rather than by what it is doing", () => {
+    expect(bandForRun(run({ agentState: "waiting", snooze }))).toBe("snoozed");
+  });
+
+  it("keeps a snoozed run out of every demand band", () => {
+    // The whole point: a snoozed run must stop counting as a demand no matter
+    // how urgent its underlying state looks.
+    for (const state of ["waiting", "completed", "working"] as const) {
+      const band = bandForRun(run({ agentState: state, snooze }));
+      expect(isDemandBand(band)).toBe(false);
+    }
+  });
+
+  it("still bands an error-blocked run as snoozed when the user snoozed it", () => {
+    expect(bandForRun(run({ agentState: "waiting", waitingReason: "error", snooze }))).toBe(
+      "snoozed"
+    );
+  });
+
+  it("lets a park outrank a snooze when a run somehow carries both", () => {
+    const band = bandForRun(
+      run({ agentState: "waiting", snooze, park: { parkedAt: NOW - 60_000 } })
+    );
+    expect(band).toBe("parked");
+  });
+
+  it("ranks snoozed below parked, agreeing with the precedence check", () => {
+    // An ordering that disagreed with bandForRun's field-check order would be
+    // invisible from either site alone.
+    expect(FLEET_BANDS.indexOf("parked")).toBeLessThan(FLEET_BANDS.indexOf("snoozed"));
+  });
+
+  it("ranks snoozed above idle, so a shelved run outranks a dead one", () => {
+    expect(FLEET_BANDS.indexOf("snoozed")).toBeLessThan(FLEET_BANDS.indexOf("idle"));
+  });
+
+  it("ranks snoozed below every demand band", () => {
+    const snoozedIndex = FLEET_BANDS.indexOf("snoozed");
+    for (const band of FLEET_BANDS.filter(isDemandBand)) {
+      expect(FLEET_BANDS.indexOf(band)).toBeLessThan(snoozedIndex);
+    }
+  });
+
+  it("bands an unsnoozed run exactly as before", () => {
+    // Snooze is the only new demotion lever; nothing else may shift.
+    expect(bandForRun(run({ agentState: "waiting" }))).toBe("needs-you");
+    expect(bandForRun(run({ agentState: "working" }))).toBe("running");
+  });
+
+  it("gives the snoozed band its own label", () => {
+    const label = bandLabel("snoozed", run());
+    expect(label.length).toBeGreaterThan(0);
+    expect(label).not.toBe(bandLabel("parked", run()));
+    expect(label).not.toBe(bandLabel("idle", run()));
+  });
+
+  it("counts the snoozed band in an empty tally", () => {
+    const counts = emptyBandCounts();
+    // Every band must have a slot, or a snoozed run would increment undefined.
+    for (const band of FLEET_BANDS) expect(counts[band]).toBe(0);
+  });
+});

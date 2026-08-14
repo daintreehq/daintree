@@ -45,6 +45,7 @@ describe("projectStatsStore", () => {
         blockedAgentCount: 0,
         completedAgentCount: 0,
         unacknowledgedCompletedAgentCount: 0,
+        snoozedAgentCount: 0,
         processCount: 3,
       },
       "proj-2": {
@@ -53,6 +54,7 @@ describe("projectStatsStore", () => {
         blockedAgentCount: 0,
         completedAgentCount: 0,
         unacknowledgedCompletedAgentCount: 0,
+        snoozedAgentCount: 0,
         processCount: 0,
       },
     };
@@ -85,6 +87,7 @@ describe("projectStatsStore", () => {
         blockedAgentCount: 0,
         completedAgentCount: 0,
         unacknowledgedCompletedAgentCount: 0,
+        snoozedAgentCount: 0,
         processCount: 1,
       },
     };
@@ -95,6 +98,7 @@ describe("projectStatsStore", () => {
         blockedAgentCount: 0,
         completedAgentCount: 0,
         unacknowledgedCompletedAgentCount: 0,
+        snoozedAgentCount: 0,
         processCount: 4,
       },
     };

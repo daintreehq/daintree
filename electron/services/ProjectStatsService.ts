@@ -5,6 +5,7 @@ import { projectStore } from "./ProjectStore.js";
 import { scratchStore } from "./ScratchStore.js";
 import { computeProjectAgentCounts } from "./projectAgentCounts.js";
 import type { PtyClient } from "./PtyClient.js";
+import type { RunAttentionService } from "./RunAttentionService.js";
 import type { ProjectStatusMap } from "../../shared/types/ipc/project.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
@@ -21,7 +22,15 @@ export class ProjectStatsService {
   private pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
   private generation = 0;
 
-  constructor(private ptyClient: PtyClient | undefined | null) {}
+  /**
+   * `runAttention` is optional so the harness and any caller that only wants
+   * raw tallies can omit it — without it, snooze simply never suppresses
+   * anything, which is the correct reading of "no attention service".
+   */
+  constructor(
+    private ptyClient: PtyClient | undefined | null,
+    private runAttention?: RunAttentionService | null
+  ) {}
 
   get isStarted(): boolean {
     return this.started;
@@ -46,6 +55,11 @@ export class ProjectStatsService {
     subscribe("agent:state-changed");
     subscribe("terminal:trashed");
     subscribe("terminal:restored");
+    // Snoozing changes what a project's counts SAY without changing what any
+    // agent is doing, so no other event covers it. Only the taking and lifting
+    // of a snooze needs this — expiry rides the poll, since a lapsed snooze
+    // simply stops being returned by `getActiveSnoozes()`.
+    subscribe("terminal:snooze-changed");
   }
 
   updatePollInterval(ms: number): void {
@@ -155,7 +169,9 @@ export class ProjectStatsService {
         ea.oldestUnacknowledgedCompletionAt !== eb.oldestUnacknowledgedCompletionAt ||
         ea.latestUnacknowledgedCompletionAt !== eb.latestUnacknowledgedCompletionAt ||
         ea.latestCompletionAt !== eb.latestCompletionAt ||
-        ea.latestWorkingSince !== eb.latestWorkingSince
+        ea.latestWorkingSince !== eb.latestWorkingSince ||
+        ea.snoozedAgentCount !== eb.snoozedAgentCount ||
+        ea.nextSnoozeWakeAt !== eb.nextSnoozeWakeAt
       ) {
         return false;
       }
@@ -205,7 +221,17 @@ export class ProjectStatsService {
           seenMap.set(workspace.id, workspace.lastCompletionSeenAt);
         }
       }
-      const agentCounts = computeProjectAgentCounts(projectIds, allTerminals, seenMap);
+      // Snooze expiry is resolved here, once, against a single clock reading —
+      // the counting helper stays pure and never asks what time it is. This is
+      // also the whole of the feature's "timer": a lapsed snooze stops being
+      // returned, and the next poll (5s) recomputes without it.
+      const activeSnoozes = this.runAttention?.getActiveSnoozes();
+      const agentCounts = computeProjectAgentCounts(
+        projectIds,
+        allTerminals,
+        seenMap,
+        activeSnoozes
+      );
 
       const statusMap: ProjectStatusMap = {};
       for (const entry of statsResults) {
@@ -236,6 +262,10 @@ export class ProjectStatsService {
               : {}),
             ...(counts.latestWorkingSince !== null
               ? { latestWorkingSince: counts.latestWorkingSince }
+              : {}),
+            snoozedAgentCount: counts.snoozed,
+            ...(counts.nextSnoozeWakeAt !== null
+              ? { nextSnoozeWakeAt: counts.nextSnoozeWakeAt }
               : {}),
           };
         }

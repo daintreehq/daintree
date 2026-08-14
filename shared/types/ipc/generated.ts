@@ -380,7 +380,18 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("./fleet.js").RunParkRecord;
   };
+  "fleet:snooze-run": {
+    args: [
+      runId: string,
+      option: import("../../utils/agentSnoozeDurations.js").AgentSnoozeDurationOption,
+    ];
+    result: import("./fleet.js").RunSnoozeRecord;
+  };
   "fleet:unpark-run": {
+    args: [runId: string];
+    result: boolean;
+  };
+  "fleet:unsnooze-run": {
     args: [runId: string];
     result: boolean;
   };

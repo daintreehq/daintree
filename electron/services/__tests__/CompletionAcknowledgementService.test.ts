@@ -17,6 +17,7 @@ function entry(overrides: Partial<ProjectStatusMap[string]>): ProjectStatusMap[s
     blockedAgentCount: 0,
     completedAgentCount: 0,
     unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
     ...overrides,
   };
 }
