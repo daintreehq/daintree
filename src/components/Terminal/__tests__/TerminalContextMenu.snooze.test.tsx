@@ -118,7 +118,11 @@ function renderMenu() {
 
 beforeEach(() => {
   snapshotState.current = null;
-  (window as unknown as { electron: unknown }).electron = { fleet: { snoozeRun, unsnoozeRun } };
+  Object.defineProperty(window, "electron", {
+    value: { fleet: { snoozeRun, unsnoozeRun } },
+    writable: true,
+    configurable: true,
+  });
 });
 
 afterEach(() => {
