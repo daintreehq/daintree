@@ -721,10 +721,13 @@ export const createRestartActions = (
       // session id or re-run resume-latest instead of launching fresh. The
       // assigning flag is transient for the same reason and is dropped here
       // too, so no copy of it survives in panel state (#11782).
-      const durableCommand = stripAssignedSessionIdArgs(
-        (consumedSessionId || usedResumeLatest ? currentTerminal.command : spawnCommand) ?? "",
-        effectiveAgentId
-      );
+      // An absent command stays absent: coercing it to "" would flip the
+      // strict `command !== undefined` gate on `failedAgentLaunch` above.
+      const durableSource =
+        consumedSessionId || usedResumeLatest ? currentTerminal.command : spawnCommand;
+      const durableCommand = durableSource
+        ? stripAssignedSessionIdArgs(durableSource, effectiveAgentId)
+        : durableSource;
       // An assigned id stays valid across a resume — the CLI reuses it rather
       // than minting a new one — so carrying it through the restart keeps the
       // pane's conversation addressable without waiting on a teardown scrape.

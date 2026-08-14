@@ -1508,6 +1508,27 @@ describe("launch-time session id assignment (#11782)", () => {
       expect(stripAssignedSessionIdArgs(assigned, ASSIGNING)).toContain("fix  the  bug");
     });
 
+    it("reads a POSIX-escaped apostrophe as part of its quoted word", () => {
+      // `escapeShellArg` emits `'\''` for every apostrophe. Read without
+      // backslash escapes, that run leaves the quote state inverted, the flag
+      // scan reaches inside the prompt, and the command is cut at the next
+      // space with a stray quote left behind.
+      const command = `claude 'don'\\''t touch --session-id here'`;
+      expect(stripAssignedSessionIdArgs(command, ASSIGNING)).toBe(command);
+    });
+
+    it("strips the flag from a prompt containing an apostrophe without reflowing it", () => {
+      const initialPrompt = "don't  fix  it";
+      const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId, initialPrompt });
+      const stripped = stripAssignedSessionIdArgs(assigned, ASSIGNING);
+
+      expect(stripped).not.toContain(sessionId);
+      expect(stripped).not.toContain("--session-id");
+      // Byte-identical to the launch that never carried an id — so the strip
+      // neither collapsed the prompt's spacing nor unbalanced its quoting.
+      expect(stripped).toBe(generateAgentCommand("claude", {}, ASSIGNING, { initialPrompt }));
+    });
+
     it("leaves commands that never carried the flag alone", () => {
       const plain = generateAgentCommand("claude", {}, ASSIGNING, {});
       expect(stripAssignedSessionIdArgs(plain, ASSIGNING)).toBe(plain);

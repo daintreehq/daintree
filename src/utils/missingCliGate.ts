@@ -1,4 +1,4 @@
-import type { AddPanelOptions } from "@shared/types";
+import { stripAssignedSessionIdArgs, type AddPanelOptions } from "@shared/types";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 
 /**
@@ -39,7 +39,11 @@ export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOpt
   return {
     kind: "terminal",
     launchAgentId: agentId,
-    command: panel.command,
+    // A per-launch session id would make every gate for the same launch a
+    // different one, so repeated clicks would each append another panel
+    // instead of reusing the gate. "Run anyway" forwards no id either, so
+    // replaying a spent one would only get the relaunch rejected (#11782).
+    command: panel.command ? stripAssignedSessionIdArgs(panel.command, agentId) : panel.command,
     title: panel.title,
     // Without this a custom-titled relaunch reverts to detection-driven
     // titling, so the name the user chose is silently overwritten.

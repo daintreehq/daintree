@@ -1,6 +1,6 @@
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
-import { buildResumeCommand } from "@shared/types";
+import { buildResumeCommand, stripAssignedSessionIdArgs } from "@shared/types";
 import { logWarn } from "@/utils/logger";
 
 const WORKTREE_DELETE_TERMINAL_CLOSE_TIMEOUT_MS = 10_000;
@@ -198,7 +198,14 @@ export async function restoreClosedTerminals(
         worktreeIdSource: "explicit",
         cwd: snap.cwd,
         location: snap.location,
-        command: resumeCommand ?? snap.command,
+        // The snapshot's command can still carry the id this pane was launched
+        // with, and re-offering a spent one gets the relaunch rejected outright
+        // — so the fallback has to be the plain fresh launch it means (#11782).
+        command:
+          resumeCommand ??
+          (snap.command
+            ? stripAssignedSessionIdArgs(snap.command, snap.launchAgentId)
+            : snap.command),
         launchAgentId: snap.launchAgentId,
         agentModelId: snap.agentModelId,
         agentLaunchFlags: snap.agentLaunchFlags,

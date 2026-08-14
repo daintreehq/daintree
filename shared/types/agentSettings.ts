@@ -1061,17 +1061,34 @@ const SESSION_ID_SLOT = " daintree-session-id-slot ";
  * such as `'Explain --session-id foo'` stays a SINGLE word, so the scan for the
  * assigning flag below can't reach inside it. A regex over the raw string can,
  * and would cut that prompt in half and leave an unbalanced quote behind.
+ *
+ * Unquoted backslash escapes are honoured because `escapeShellArg` emits
+ * `'\''` for every apostrophe: read without them, that sequence leaves the
+ * quote state inverted and splits an ordinary prompt like `don't` mid-word.
  */
 function splitShellWords(command: string): string[] {
   const words: string[] = [];
   let current = "";
   let started = false;
+  let escaped = false;
   let quote: '"' | "'" | null = null;
 
   for (const char of command) {
     if (quote) {
       current += char;
       if (char === quote) quote = null;
+      continue;
+    }
+    if (escaped) {
+      current += char;
+      escaped = false;
+      started = true;
+      continue;
+    }
+    if (char === "\\") {
+      current += char;
+      escaped = true;
+      started = true;
       continue;
     }
     if (char === '"' || char === "'") {
