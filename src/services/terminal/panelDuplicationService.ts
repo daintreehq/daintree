@@ -124,8 +124,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
           // this copy launch as the fresh conversation it is.
           command: stripAssignedSessionIdArgs(
             panel.command ?? agentConfig.command,
-            panel.launchAgentId,
-            panel.agentSessionId
+            panel.launchAgentId
           ),
           env: undefined,
           agentLaunchFlags: panel.agentLaunchFlags,
@@ -183,7 +182,10 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
     return {
       kind: "terminal",
       launchAgentId: panel.launchAgentId,
-      command: panel.command,
+      // Reopening starts a new conversation, so the assigning flag must not
+      // ride along — it is one-shot and the relaunch would be rejected
+      // outright (#11782).
+      command: stripAssignedSessionIdArgs(panel.command, panel.launchAgentId),
       title: panel.title,
       // Reopen-last restores the same terminal — the ownership rung carries
       // verbatim so a renamed title stays pinned across close/reopen.
@@ -242,7 +244,10 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       agentPresetId: panel.agentPresetId,
       agentPresetColor: panel.agentPresetColor,
       agentLaunchFlags: panel.agentLaunchFlags ? [...panel.agentLaunchFlags] : undefined,
-      command: panel.command,
+      // Same one-shot rule as the agent branch above (#11782).
+      command: panel.command
+        ? stripAssignedSessionIdArgs(panel.command, panel.launchAgentId)
+        : panel.command,
     };
   }
 

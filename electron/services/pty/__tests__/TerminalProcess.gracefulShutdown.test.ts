@@ -987,6 +987,24 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
       expect(context?.captured).toBe(true);
     });
 
+    it("does not hand one agent's stored id to a different live agent", async () => {
+      // A pane that launched codex and now hosts a hand-started claude still
+      // carries codex's id. Claude declares the capability, so a gate that
+      // checked only the capability would file codex's conversation as
+      // claude's and restore would resume the wrong one.
+      const handles = createMockPty();
+      const terminal = createAgentTerminalWithSession(handles, "codex", "codex-owned-id");
+      terminal.getInfo().detectedAgentId = "claude";
+
+      const promise = terminal.gracefulShutdown();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS + SUBMIT_ENTER_DELAY_MS);
+
+      // Falls through to the scrape rather than returning the borrowed id.
+      expect(handles.writeMock).toHaveBeenCalled();
+      handles.emitData("claude --resume claude-owned-id\n");
+      await expect(promise).resolves.toBe("claude-owned-id");
+    });
+
     it("still scrapes for an agent that mints its own id, even when one is stored", async () => {
       // Codex declares no `assignSessionIdArgs`, so a stored id is a PREVIOUS
       // session's, not a promise about this one. Skipping the scrape for it

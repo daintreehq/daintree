@@ -15,11 +15,7 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
   // restore path that replays the stored command instead of rebuilding one, and
   // the pane would come back failing to launch at all. The id itself is
   // persisted separately below, which is what restore actually resumes from.
-  const command = stripAssignedSessionIdArgs(
-    t.command?.trim() || "",
-    t.launchAgentId,
-    t.agentSessionId
-  );
+  const command = stripAssignedSessionIdArgs(t.command?.trim() || "", t.launchAgentId);
   return {
     launchAgentId: t.launchAgentId,
     cwd: t.cwd,

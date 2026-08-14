@@ -18,7 +18,6 @@ import {
   buildAssignedSessionIdArgs,
   supportsSessionIdAssignment,
   mintAssignedSessionId,
-  rewriteAssignedSessionIdToResume,
   stripAssignedSessionIdArgs,
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
@@ -1388,9 +1387,22 @@ describe("launch-time session id assignment (#11782)", () => {
   const ASSIGNING = "claude";
   const SCRAPING = "codex";
 
-  it("only reports the capability for agents that declare it", () => {
-    expect(supportsSessionIdAssignment(ASSIGNING)).toBe(true);
-    expect(supportsSessionIdAssignment(SCRAPING)).toBe(false);
+  it("reports the capability exactly when a launch actually carries an id", () => {
+    // Cross-check rather than a restatement of the registry: the predicate that
+    // teardown trusts to skip the scrape must agree, for every agent, with
+    // whether the launch command really got an id. A disagreement means either
+    // a scrape skipped with nothing captured, or an id assigned that nothing
+    // records.
+    const probe = "33333333-4444-5555-6666-777777777777";
+    for (const agentId of Object.keys(DEFAULT_AGENT_SETTINGS.agents)) {
+      const emitsId = generateAgentCommand(agentId, {}, agentId, {
+        sessionId: probe,
+      }).includes(probe);
+      expect(supportsSessionIdAssignment(agentId)).toBe(emitsId);
+    }
+  });
+
+  it("reports no capability for an absent or unknown agent", () => {
     expect(supportsSessionIdAssignment(undefined)).toBe(false);
     expect(supportsSessionIdAssignment("not-a-real-agent")).toBe(false);
   });
@@ -1444,25 +1456,9 @@ describe("launch-time session id assignment (#11782)", () => {
   describe("one-shot flag handling", () => {
     const sessionId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 
-    it("rewrites an assigning launch into a resuming one for replay", () => {
-      const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId });
-      const replayed = rewriteAssignedSessionIdToResume(assigned, ASSIGNING, sessionId);
-
-      // Same conversation, but asked for in the only form the CLI still accepts.
-      expect(replayed).toContain(sessionId);
-      expect(replayed).toContain("--resume");
-      expect(replayed).not.toContain("--session-id");
-    });
-
-    it("is idempotent, so repeated replays stay valid", () => {
-      const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId });
-      const once = rewriteAssignedSessionIdToResume(assigned, ASSIGNING, sessionId);
-      expect(rewriteAssignedSessionIdToResume(once, ASSIGNING, sessionId)).toBe(once);
-    });
-
     it("strips the assigning flag so a copied command launches fresh", () => {
       const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId });
-      const stripped = stripAssignedSessionIdArgs(assigned, ASSIGNING, sessionId);
+      const stripped = stripAssignedSessionIdArgs(assigned, ASSIGNING);
 
       expect(stripped).not.toContain(sessionId);
       expect(stripped).not.toContain("--session-id");
@@ -1471,18 +1467,61 @@ describe("launch-time session id assignment (#11782)", () => {
       expect(stripped).not.toMatch(/\s{2,}/);
     });
 
-    it("leaves commands that never carried the flag alone", () => {
-      const plain = generateAgentCommand("claude", {}, ASSIGNING, {});
-      expect(stripAssignedSessionIdArgs(plain, ASSIGNING, sessionId)).toBe(plain);
-      expect(rewriteAssignedSessionIdToResume(plain, ASSIGNING, sessionId)).toBe(plain);
+    it("is idempotent, so a repeated strip stays valid", () => {
+      const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId });
+      const once = stripAssignedSessionIdArgs(assigned, ASSIGNING);
+      expect(stripAssignedSessionIdArgs(once, ASSIGNING)).toBe(once);
     });
 
-    it("does nothing without an agent or an id to act on", () => {
+    it("preserves flags on both sides of the removed one", () => {
+      // A fixture with nothing around the flag would pass even if the strip
+      // threw the rest of the command away.
+      const assigned = generateAgentCommand("claude", { customFlags: "--verbose" }, ASSIGNING, {
+        sessionId,
+        initialPrompt: "hello",
+      });
+      const stripped = stripAssignedSessionIdArgs(assigned, ASSIGNING);
+
+      expect(stripped).not.toContain(sessionId);
+      expect(stripped).toContain("--verbose");
+      expect(stripped).toContain("hello");
+      expect(stripped.startsWith("claude ")).toBe(true);
+    });
+
+    it("strips without being told which id was used", () => {
+      // The worktree-move flow clears `agentSessionId` before restarting,
+      // precisely because it wants a fresh launch. A strip that needed the id
+      // to find the flag would no-op there and relaunch with a spent one.
+      const assigned = generateAgentCommand("claude", {}, ASSIGNING, {
+        sessionId: "99999999-8888-7777-6666-555555555555",
+      });
+      expect(stripAssignedSessionIdArgs(assigned, ASSIGNING)).toBe("claude");
+    });
+
+    it("keeps a quoted argument's internal spacing intact", () => {
+      // Removing the flag must not reflow the rest of the command — collapsing
+      // whitespace globally would rewrite a prompt that contains a run of them.
+      const assigned = generateAgentCommand("claude", {}, ASSIGNING, {
+        sessionId,
+        initialPrompt: "fix  the  bug",
+      });
+      expect(stripAssignedSessionIdArgs(assigned, ASSIGNING)).toContain("fix  the  bug");
+    });
+
+    it("leaves commands that never carried the flag alone", () => {
+      const plain = generateAgentCommand("claude", {}, ASSIGNING, {});
+      expect(stripAssignedSessionIdArgs(plain, ASSIGNING)).toBe(plain);
+    });
+
+    it("leaves an agent that mints its own id alone", () => {
+      const codexCommand = `codex --session-id ${sessionId}`;
+      expect(stripAssignedSessionIdArgs(codexCommand, SCRAPING)).toBe(codexCommand);
+    });
+
+    it("does nothing without an agent to act on", () => {
       const assigned = generateAgentCommand("claude", {}, ASSIGNING, { sessionId });
-      expect(stripAssignedSessionIdArgs(assigned, undefined, sessionId)).toBe(assigned);
-      expect(stripAssignedSessionIdArgs(assigned, ASSIGNING, undefined)).toBe(assigned);
-      expect(rewriteAssignedSessionIdToResume(assigned, undefined, sessionId)).toBe(assigned);
-      expect(rewriteAssignedSessionIdToResume(assigned, ASSIGNING, undefined)).toBe(assigned);
+      expect(stripAssignedSessionIdArgs(assigned, undefined)).toBe(assigned);
+      expect(stripAssignedSessionIdArgs("", ASSIGNING)).toBe("");
     });
   });
 });

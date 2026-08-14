@@ -61,7 +61,8 @@ import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { createLogger, isValidLogOverrideLevel } from "../utils/logger.js";
 import { store } from "../store.js";
-import { rewriteAssignedSessionIdToResume } from "../../shared/types/agentSettings.js";
+import { stripAssignedSessionIdArgs } from "../../shared/types/agentSettings.js";
+import { buildCommandLaunchShell } from "../ipc/handlers/terminal/commandLaunch.js";
 import { getPluginAgentRegistry } from "../../shared/config/pluginAgentRegistry.js";
 import { getPluginProcessToolRegistry } from "../../shared/config/pluginProcessToolRegistry.js";
 
@@ -334,15 +335,6 @@ export class PtyClient extends EventEmitter {
 
   private pendingSpawns: Map<string, PtyHostSpawnOptions> = new Map();
   private ipcDataMirrorIds = new Set<string>();
-  /**
-   * Terminal ids whose spawn has already been delivered to a host once. Drives
-   * the assign→resume swap in {@link sendSpawnWithPostInput} (#11782): the
-   * second and later deliveries of the same `pendingSpawns` entry are replays of
-   * a conversation that already exists, so they must resume it rather than try
-   * to create it again. Cleared with the `pendingSpawns` entry itself, so a
-   * genuinely new terminal reusing the id starts from the assigning form again.
-   */
-  private deliveredSpawnIds = new Set<string>();
   private pendingKillCount: Map<string, number> = new Map();
   private activeProjectId: string | null = null;
   private windowProjectContexts = new Map<
@@ -882,46 +874,55 @@ export class PtyClient extends EventEmitter {
     shard.send({
       type: "spawn",
       id,
-      options: withCurrentWindowsPath(this.withReplaySafeSessionId(id, options)),
+      options: withCurrentWindowsPath(options),
     });
-    this.deliveredSpawnIds.add(id);
+    this.disarmStoredSessionAssignment(id);
   }
 
   /**
-   * First delivery goes out as-is; every later one has its assigned session id
-   * rewritten to a resume (#11782).
+   * Strip a session-id assignment out of the STORED spawn entry once it has
+   * been delivered, so no replay can offer the CLI the same id twice (#11782).
    *
-   * A `pendingSpawns` entry lives until the terminal is killed, so a host crash
-   * replays the launch of a conversation the CLI has already created. The
-   * assigning flag is one-shot and rejected the second time, which would bring
-   * the pane back dead instead of reattached, so the replay has to ask to resume
-   * rather than to create. Applied at send time (like `withCurrentWindowsPath`)
-   * so the stored entry keeps its original form and the swap can't be baked in
-   * before the first delivery ever happens.
+   * A `pendingSpawns` entry lives until the terminal is killed and is re-sent
+   * verbatim on every replay. Assignment is one-shot — the CLI rejects an id it
+   * has already issued — so replaying the assigning form brings the pane back
+   * dead rather than running. Disarming the stored copy, rather than tracking
+   * "already delivered" alongside it, means the entry is simply always safe to
+   * re-send and dropping the entry anywhere disposes of this state with it.
+   *
+   * The replayed launch is a new conversation, so the id is cleared from the
+   * options too: leaving it would stamp the terminal record with an id the
+   * replayed process doesn't own, and teardown would then hand that stale id to
+   * the next restore. Losing the conversation on a host crash matches the
+   * behaviour that was already there; recovering it would need proof the CLI
+   * got far enough to create the session, which "the spawn message was sent"
+   * is not.
+   *
+   * Runs AFTER the send and only past the `isRunning()` guard, so a dropped
+   * pre-ready send leaves the entry armed and the first-ready replay still
+   * counts as the first delivery.
    */
-  private withReplaySafeSessionId(id: string, options: PtyHostSpawnOptions): PtyHostSpawnOptions {
-    if (!this.deliveredSpawnIds.has(id)) return options;
-    const { launchAgentId, agentSessionId } = options;
-    if (!launchAgentId || !agentSessionId) return options;
+  private disarmStoredSessionAssignment(id: string): void {
+    const stored = this.pendingSpawns.get(id);
+    if (!stored?.command || !stored.launchAgentId) return;
 
-    const command = rewriteAssignedSessionIdToResume(
-      options.command ?? "",
-      launchAgentId,
-      agentSessionId
-    );
-    const postSpawnInput = rewriteAssignedSessionIdToResume(
-      options.postSpawnInput ?? "",
-      launchAgentId,
-      agentSessionId
-    );
-    if (command === (options.command ?? "") && postSpawnInput === (options.postSpawnInput ?? "")) {
-      return options;
+    const command = stripAssignedSessionIdArgs(stored.command, stored.launchAgentId);
+    if (command === stored.command) return;
+
+    const disarmed: PtyHostSpawnOptions = { ...stored, command, agentSessionId: undefined };
+    // The wrapper shells (zsh/bash/sh/pwsh/cmd) EXECUTE the command out of
+    // `args` — PowerShell base64-encodes it there — so disarming `command`
+    // alone would leave the spent flag running. Rebuild the carrier from the
+    // disarmed command using the same pure builder that produced it.
+    const relaunch = buildCommandLaunchShell(command, stored.shell);
+    if (relaunch) disarmed.args = relaunch.args;
+    if (stored.postSpawnInput) {
+      disarmed.postSpawnInput = stripAssignedSessionIdArgs(
+        stored.postSpawnInput,
+        stored.launchAgentId
+      );
     }
-    return {
-      ...options,
-      ...(options.command !== undefined && { command }),
-      ...(options.postSpawnInput !== undefined && { postSpawnInput }),
-    };
+    this.pendingSpawns.set(id, disarmed);
   }
 
   private respawnPendingForShard(shard: PtyShard): void {
@@ -1653,7 +1654,6 @@ export class PtyClient extends EventEmitter {
     getTrashedPidTracker().removeTrashed(id);
     const wasKnown = this.pendingSpawns.has(id);
     this.pendingSpawns.delete(id);
-    this.deliveredSpawnIds.delete(id);
     this.ipcDataMirrorIds.delete(id);
 
     // Only track pendingKillCount for ids we've seen locally. An "exit"
@@ -2518,7 +2518,6 @@ export class PtyClient extends EventEmitter {
     this.shards.clear();
 
     this.pendingSpawns.clear();
-    this.deliveredSpawnIds.clear();
     this.pendingKillCount.clear();
     this.windowProjectContexts.clear();
     this.windowFocusedTerminals.clear();

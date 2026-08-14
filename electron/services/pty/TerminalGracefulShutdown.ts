@@ -140,7 +140,17 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
   // on the id merely being present: agents that still mint their own id keep
   // the scrape as their only capture path, so skipping it for them would drop
   // an id that only teardown can observe.
-  if (terminal.agentSessionId && supportsSessionIdAssignment(liveAgentId)) {
+  //
+  // The id belongs to whatever this terminal LAUNCHED, so the live agent has to
+  // still be that agent. A pane that launched one agent and now hosts another
+  // (the user quit it and started a different CLI by hand) carries an id from
+  // the previous conversation — returning it would file one agent's session
+  // under another's and restore would resume the wrong thing.
+  if (
+    terminal.agentSessionId &&
+    liveAgentId === terminal.launchAgentId &&
+    supportsSessionIdAssignment(liveAgentId)
+  ) {
     const preassignedId = terminal.agentSessionId;
     logOutcome("preassigned", true);
     host.kill("graceful-shutdown");

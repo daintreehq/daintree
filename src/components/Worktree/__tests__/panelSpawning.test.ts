@@ -149,12 +149,12 @@ describe("spawnPanelsFromRecipe", () => {
       "claude",
       { modelId: "sonnet" },
       "claude",
-      {
+      expect.objectContaining({
         clipboardDirectory: "/tmp/daintree/daintree-clipboard",
         modelId: "sonnet",
         globalSkipPermissions: false,
         globalUseAltScreen: false,
-      }
+      })
     );
     expect(mockAddPanel).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -163,6 +163,14 @@ describe("spawnPanelsFromRecipe", () => {
         command: "claude --model sonnet",
       })
     );
+    // #11782: the id handed to the CLI and the id recorded on the panel have to
+    // be the same one, or the record points at a conversation nothing is running.
+    const generatedWith = mockGenerateAgentCommand.mock.calls.at(-1)?.[3] as {
+      sessionId?: string;
+    };
+    const panelOptions = mockAddPanel.mock.calls.at(-1)?.[0] as { agentSessionId?: string };
+    expect(generatedWith?.sessionId).toBeTruthy();
+    expect(panelOptions?.agentSessionId).toBe(generatedWith?.sessionId);
     expect(cb).toHaveBeenCalledWith(0, "panel-id-123");
   });
 

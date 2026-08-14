@@ -1051,89 +1051,56 @@ export function mintAssignedSessionId(agentId: string | undefined): string | und
   return supportsSessionIdAssignment(agentId) ? crypto.randomUUID() : undefined;
 }
 
-/**
- * Locates the assigning tokens inside `command`, returning the exact substring
- * so callers can replace or remove it.
- *
- * Checks the shell-escaped spelling first (what our own builders emit — the id
- * is a positional value, so it comes out quoted) and falls back to the bare
- * one, which is how a hand-written or externally-built command would carry it.
- * Returns null when the command doesn't assign an id at all.
- */
-function matchAssignedSessionIdTokens(command: string, assignArgs: string[]): string | null {
-  const escaped = assignArgs
-    .map((arg) => (arg.startsWith("-") ? arg : escapeShellArg(arg)))
-    .join(" ");
-  if (command.includes(escaped)) return escaped;
-  const bare = assignArgs.join(" ");
-  return command.includes(bare) ? bare : null;
+/** Sentinel used to locate the id slot among an agent's assigning args. */
+const SESSION_ID_SLOT = " daintree-session-id-slot ";
+
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
  * Removes the session-id-assigning tokens from a launch command (#11782).
  *
- * For paths that COPY an existing pane's command rather than rebuilding it —
- * duplication's settings-failure fallback is the live case — carrying the
- * source's id across would point two panes at one conversation, and the CLI
- * rejects the second outright. Stripping leaves a plain fresh launch, which is
- * what a copy without its own minted id should be.
+ * For paths that COPY or REPLAY a pane's command instead of rebuilding it —
+ * reopen-last, duplication's settings-failure fallback, a restart that abandons
+ * the session — carrying the flag across re-offers an id the CLI has already
+ * issued, and that launch is rejected outright. Stripping leaves the plain
+ * fresh launch those paths actually mean.
  *
- * Returns `command` untouched when the assigning form isn't present.
+ * Matches on the flag's SHAPE rather than on a known id, which matters because
+ * callers reach here with the id already cleared: the worktree-move flow drops
+ * `agentSessionId` before restarting precisely because it wants a fresh launch,
+ * and a strip that needed the id would silently no-op exactly there. The shape
+ * comes from the agent's own `assignSessionIdArgs`, so the id slot is located
+ * rather than guessed.
+ *
+ * The match consumes its own leading whitespace, so no global whitespace
+ * collapse is needed — one would corrupt a quoted argument that legitimately
+ * contains a run of spaces (an initial prompt, say).
+ *
+ * Returns `command` untouched when no assigning form is present.
  */
-export function stripAssignedSessionIdArgs(
-  command: string,
-  agentId: string | undefined,
-  sessionId: string | undefined
-): string {
-  if (!command || !agentId || !sessionId) return command;
-  const assignArgs = buildAssignedSessionIdArgs(agentId, sessionId);
-  if (!assignArgs?.length) return command;
-
-  const assigning = matchAssignedSessionIdTokens(command, assignArgs);
-  if (!assigning) return command;
-  // Collapse the surrounding whitespace the removal would otherwise leave.
-  return command
-    .replace(assigning, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
-}
-
-/**
- * Rewrites a launch command that ASSIGNS `sessionId` into one that RESUMES it,
- * for replaying a terminal whose conversation already exists (#11782).
- *
- * The pty-host replays a live terminal's original spawn options after a host
- * crash, a crash-budget migration, or a pre-ready send. Replaying the assigning
- * form would relaunch with an id the CLI has already seen and be rejected
- * outright ("Session ID <id> is already in use"), so the pane would come back
- * dead rather than reattached. Swapping to the resume form is both what the
- * caller means on a replay and the only form the CLI accepts by then.
- *
- * Both token sequences are derived from the same `resume` config that built the
- * command, so this is an exact substitution rather than a guess at the shell
- * string. Returns `command` untouched when the assigning form isn't present,
- * which also makes it idempotent across repeated replays.
- */
-export function rewriteAssignedSessionIdToResume(
-  command: string,
-  agentId: string | undefined,
-  sessionId: string | undefined
-): string {
-  if (!command || !agentId || !sessionId) return command;
+export function stripAssignedSessionIdArgs(command: string, agentId: string | undefined): string {
+  if (!command || !agentId) return command;
   const resume = getEffectiveAgentConfig(agentId)?.resume;
   if (!resume || resume.kind !== "session-id") return command;
-  const assignArgs = resume.assignSessionIdArgs?.(sessionId);
-  if (!assignArgs?.length) return command;
+  const shape = resume.assignSessionIdArgs?.(SESSION_ID_SLOT);
+  if (!shape?.length) return command;
 
-  const assigning = matchAssignedSessionIdTokens(command, assignArgs);
-  if (!assigning) return command;
-
-  // Mirrors buildResumeCommand's escaping for the replacement tokens.
-  const resuming = resume
-    .args(sessionId)
-    .map((arg) => (arg.startsWith("-") ? arg : escapeShellArgOptional(arg)))
-    .join(" ");
-  return command.replace(assigning, resuming);
+  // One shell token: a quoted run (our builders quote the id, being a
+  // positional value) or a bare one.
+  const valuePattern = "(?:'[^']*'|\"[^\"]*\"|\\S+)";
+  const pattern = new RegExp(
+    `\\s*${shape
+      .map((token) =>
+        token.includes(SESSION_ID_SLOT)
+          ? // Covers a separate `--flag <id>` and a fused `--flag=<id>` alike.
+            token.split(SESSION_ID_SLOT).map(escapeRegExpLiteral).join(valuePattern)
+          : escapeRegExpLiteral(token)
+      )
+      .join("\\s+")}`
+  );
+  return pattern.test(command) ? command.replace(pattern, "").trim() : command;
 }
 
 export interface BuildLaunchCommandFromFlagsOptions {

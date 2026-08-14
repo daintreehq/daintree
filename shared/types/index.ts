@@ -341,7 +341,6 @@ export {
   buildAssignedSessionIdArgs,
   supportsSessionIdAssignment,
   mintAssignedSessionId,
-  rewriteAssignedSessionIdToResume,
   stripAssignedSessionIdArgs,
   buildLaunchCommandFromFlags,
   isAgentBypassSupported,

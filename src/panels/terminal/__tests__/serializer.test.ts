@@ -243,4 +243,15 @@ describe("serializePtyPanel — an assigned session id never persists in the com
     // Codex declares no assigning args, so nothing here is a spent flag.
     expect(serializePtyPanel(panel).command).toBe(`codex --session-id ${sessionId}`);
   });
+
+  it("strips even when the panel no longer carries the id", () => {
+    // The id can be cleared before the panel is serialized; the flag still has
+    // to go, or the restore replays a launch the CLI will reject.
+    const panel = makePanel({
+      launchAgentId: "claude",
+      agentSessionId: undefined,
+      command: `claude --session-id '${sessionId}'`,
+    });
+    expect(serializePtyPanel(panel).command).toBe("claude");
+  });
 });

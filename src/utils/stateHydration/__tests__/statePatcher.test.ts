@@ -3299,8 +3299,15 @@ describe("buildArgsForRespawn — assigned session id", () => {
     );
 
     expect(result.sessionLostOnRestore).toBe(true);
-    expect(result.agentSessionId).toBeDefined();
     expect(result.agentSessionId).not.toBe("sess-expired");
+    // Must be a real UUID — the CLI rejects anything else — and, crucially, the
+    // SAME id the rebuilt command was given. A record holding an id the command
+    // never carried would resume a conversation this pane isn't running.
+    expect(result.agentSessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    );
+    const options = generateAgentCommandMock.mock.calls.at(-1)?.[3] as { sessionId?: string };
+    expect(options?.sessionId).toBe(result.agentSessionId);
   });
 
   it("gives two restores of the same dead snapshot different ids", () => {
