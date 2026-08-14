@@ -904,6 +904,7 @@ export const CHANNELS = {
   FORGE_GET_ISSUE: "forge:get-issue",
   FORGE_GET_PR: "forge:get-pr",
   FORGE_GET_CI_STATUS: "forge:get-ci-status",
+  FORGE_GET_CHECKS: "forge:get-checks",
   FORGE_GET_REPO_METADATA: "forge:get-repo-metadata",
   FORGE_GET_CURRENT_USER: "forge:get-current-user",
   FORGE_CLASSIFY_PUSH_ERROR: "forge:classify-push-error",

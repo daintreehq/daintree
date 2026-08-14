@@ -3,6 +3,11 @@ import type {
   GitHubPRCISummary,
   GitHubPRGlobalCISummary,
 } from "../shared/types.js";
+import type {
+  CheckRun,
+  CheckRunConclusion,
+  CheckRunStatus,
+} from "../../../../shared/types/forge.js";
 
 // Failing CheckRun conclusions per GitHub schema. STALE is included because a stale required
 // run has not resolved to a passing state and must not be silently treated as success.
@@ -39,10 +44,14 @@ const NON_FAILING_STATUS_STATES = new Set(["SUCCESS"]);
 export interface RollupContextNode {
   __typename?: string;
   // CheckRun fields
+  name?: string | null;
   status?: string | null;
   conclusion?: string | null;
+  detailsUrl?: string | null;
   // StatusContext fields
+  context?: string | null;
   state?: string | null;
+  targetUrl?: string | null;
   // Shared
   isRequired?: boolean | null;
 }
@@ -150,6 +159,100 @@ export function deriveRequiredCIStatus(
   }
 
   return { ciStatus, ciSummary: summary };
+}
+
+// GitHub CheckRun conclusions that map onto a normalized conclusion. The two
+// failing spellings the normalized vocabulary has no word for — STARTUP_FAILURE
+// and STALE — fold into "failure", matching how FAILING_CHECK_CONCLUSIONS above
+// already buckets them for the roll-up. Both derivations therefore agree on
+// which checks are failing; only the wording differs.
+const CHECK_CONCLUSION_MAP: Readonly<Record<string, CheckRunConclusion>> = {
+  SUCCESS: "success",
+  FAILURE: "failure",
+  NEUTRAL: "neutral",
+  CANCELLED: "cancelled",
+  TIMED_OUT: "timed_out",
+  ACTION_REQUIRED: "action_required",
+  SKIPPED: "skipped",
+  STARTUP_FAILURE: "failure",
+  STALE: "failure",
+};
+
+// GitHub StatusContext states. Legacy commit statuses carry no separate
+// lifecycle field, so the state alone decides both halves: EXPECTED is a status
+// GitHub knows is coming but has not received, PENDING is one being reported.
+const STATUS_STATE_MAP: Readonly<
+  Record<string, { status: CheckRunStatus; conclusion?: CheckRunConclusion }>
+> = {
+  SUCCESS: { status: "completed", conclusion: "success" },
+  FAILURE: { status: "completed", conclusion: "failure" },
+  ERROR: { status: "completed", conclusion: "failure" },
+  PENDING: { status: "in_progress" },
+  EXPECTED: { status: "queued" },
+};
+
+const QUEUED_CHECK_STATUSES = new Set(["QUEUED", "WAITING", "PENDING", "REQUESTED"]);
+
+/**
+ * Normalize one rollup context node onto the cross-provider {@link CheckRun}
+ * shape, or `null` when the node carries no usable name (nothing to report).
+ *
+ * Unrecognized values degrade rather than throw, matching how
+ * {@link deriveGlobalCIStatus} treats unknown buckets: a conclusion this
+ * vocabulary can't spell is omitted — never guessed as success or failure — and
+ * an unknown lifecycle value reads as finished only when a conclusion proves it
+ * is. A future GitHub enum addition therefore costs one field on one check
+ * rather than the whole read, and the omission can't manufacture a false green
+ * because {@link deriveRequiredCIStatus} still owns the merge verdict.
+ */
+export function mapRollupContextToCheckRun(node: RollupContextNode): CheckRun | null {
+  const name = node.name?.trim() || node.context?.trim();
+  if (!name) return null;
+
+  const required = typeof node.isRequired === "boolean" ? node.isRequired : undefined;
+  const detailsUrl = node.detailsUrl?.trim() || node.targetUrl?.trim() || undefined;
+
+  // A node exposing `state` is a legacy StatusContext regardless of whether the
+  // union member was named — an unknown __typename still maps by field shape.
+  const rawState = node.state?.toUpperCase();
+  if (rawState) {
+    const mapped = STATUS_STATE_MAP[rawState];
+    return {
+      name,
+      status: mapped?.status ?? "completed",
+      ...(mapped?.conclusion ? { conclusion: mapped.conclusion } : {}),
+      ...(required !== undefined ? { required } : {}),
+      ...(detailsUrl ? { detailsUrl } : {}),
+      rawData: node,
+    };
+  }
+
+  const rawConclusion = node.conclusion?.toUpperCase();
+  const conclusion = rawConclusion ? CHECK_CONCLUSION_MAP[rawConclusion] : undefined;
+  const rawStatus = node.status?.toUpperCase();
+
+  let status: CheckRunStatus;
+  if (rawStatus === "COMPLETED") {
+    status = "completed";
+  } else if (rawStatus === "IN_PROGRESS") {
+    status = "in_progress";
+  } else if (rawStatus && QUEUED_CHECK_STATUSES.has(rawStatus)) {
+    status = "queued";
+  } else {
+    // Missing or unrecognized lifecycle value: a reported conclusion is proof
+    // the run finished; without one, "queued" understates progress but never
+    // claims a run is done when it may still be going.
+    status = rawConclusion ? "completed" : "queued";
+  }
+
+  return {
+    name,
+    status,
+    ...(conclusion ? { conclusion } : {}),
+    ...(required !== undefined ? { required } : {}),
+    ...(detailsUrl ? { detailsUrl } : {}),
+    rawData: node,
+  };
 }
 
 export interface GlobalCIDeriveInput {

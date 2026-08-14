@@ -45,6 +45,7 @@ const fakeImpl = vi.hoisted(() => ({
   getRepoMetadata: vi.fn(),
   repoStats: { getRepoStats: vi.fn() },
   issueComments: { listIssueComments: vi.fn() },
+  checks: { getChecks: vi.fn() },
   reviews: {
     getReviewThreads: vi.fn(),
     approvePR: vi.fn(),
@@ -152,6 +153,7 @@ describe("forge handlers — rate limiting", () => {
     // rejects an undefined provider result as malformed, so this stub must be
     // explicit rather than relying on the bare mock's undefined.
     fakeImpl.getCIStatus.mockResolvedValue(null);
+    fakeImpl.checks.getChecks.mockResolvedValue(null);
     fakeImpl.assignIssue.mockResolvedValue(undefined);
     fakeImpl.unassignIssue.mockResolvedValue(undefined);
     const fakePR = {
@@ -662,6 +664,13 @@ describe("forge handlers — rate limiting", () => {
         maxCalls: 10,
         invoke: (h) => h({}, { cwd, issueNumber: 1 }),
       },
+      // Paging capability read: 10/10s, tighter than the single-request
+      // get-ci-status roll-up because one call can cost several requests.
+      {
+        channel: CHANNELS.FORGE_GET_CHECKS,
+        maxCalls: 10,
+        invoke: (h) => h({}, { cwd, prNumber: 1 }),
+      },
       // tooltip + batch lookups: 20/10s (matches github:get-*-tooltip / by-numbers)
       {
         channel: CHANNELS.FORGE_GET_ISSUE_TOOLTIP,
@@ -698,12 +707,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (46 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(46);
+    it("registers all forge channels (47 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(47);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(48);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(49);
     });
 
     it.each(specs)(

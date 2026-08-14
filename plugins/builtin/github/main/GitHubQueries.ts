@@ -1110,8 +1110,14 @@ export const REPO_METADATA_QUERY = `
   }
 `;
 
+// Serves both the roll-up read (`getCIStatus`, first page only) and the
+// per-check read (`getChecks`, #11786), which pages to the end via `$cursor`.
+// One query for one set of facts, so the two derivations can never disagree
+// about what CI reported. `pageInfo` is load-bearing for both: the roll-up
+// needs `hasNextPage` to know its required-check derivation saw every context,
+// and the per-check read needs `endCursor` to advance.
 export const PR_CI_STATUS_QUERY = `
-  query GetPRCIStatus($owner: String!, $repo: String!, $number: Int!) {
+  query GetPRCIStatus($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
     repository(owner: $owner, name: $repo) {
       pullRequest(number: $number) {
         commits(last: 1) {
@@ -1119,18 +1125,24 @@ export const PR_CI_STATUS_QUERY = `
             commit {
               statusCheckRollup {
                 state
-                contexts(first: 100) {
+                contexts(first: 100, after: $cursor) {
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
                   nodes {
                     __typename
                     ... on CheckRun {
                       name
                       conclusion
                       status
+                      detailsUrl
                       isRequired(pullRequestNumber: $number)
                     }
                     ... on StatusContext {
                       context
                       state
+                      targetUrl
                       isRequired(pullRequestNumber: $number)
                     }
                   }

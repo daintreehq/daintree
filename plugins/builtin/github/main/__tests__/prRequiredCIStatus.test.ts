@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveRequiredCIStatus,
   deriveGlobalCIStatus,
+  mapRollupContextToCheckRun,
   normalizeRawState,
 } from "../prRequiredCIStatus.js";
 
@@ -415,5 +416,175 @@ describe("deriveGlobalCIStatus", () => {
     });
     expect(r.ciStatus).toBeUndefined();
     expect(r.ciSummary).toBeUndefined();
+  });
+});
+
+describe("mapRollupContextToCheckRun", () => {
+  it("maps a completed CheckRun onto the normalized vocabulary", () => {
+    const check = mapRollupContextToCheckRun({
+      __typename: "CheckRun",
+      name: "unit (ubuntu)",
+      status: "COMPLETED",
+      conclusion: "FAILURE",
+      detailsUrl: "https://ci.example/run/1",
+      isRequired: true,
+    });
+    expect(check).toEqual({
+      name: "unit (ubuntu)",
+      status: "completed",
+      conclusion: "failure",
+      required: true,
+      detailsUrl: "https://ci.example/run/1",
+      rawData: expect.anything(),
+    });
+  });
+
+  it("folds the failing conclusions the normalized vocabulary cannot spell into failure", () => {
+    // STARTUP_FAILURE and STALE are in FAILING_CHECK_CONCLUSIONS, so the
+    // per-check read must agree with the roll-up that they are failures rather
+    // than dropping them for want of an exact word.
+    for (const raw of ["STARTUP_FAILURE", "STALE"]) {
+      const check = mapRollupContextToCheckRun({
+        __typename: "CheckRun",
+        name: `check-${raw}`,
+        status: "COMPLETED",
+        conclusion: raw,
+      });
+      expect(check?.conclusion).toBe("failure");
+    }
+  });
+
+  it("agrees with deriveRequiredCIStatus on which required checks are failing", () => {
+    const contexts = [
+      {
+        __typename: "CheckRun",
+        name: "a",
+        status: "COMPLETED",
+        conclusion: "SUCCESS",
+        isRequired: true,
+      },
+      {
+        __typename: "CheckRun",
+        name: "b",
+        status: "COMPLETED",
+        conclusion: "STALE",
+        isRequired: true,
+      },
+      { __typename: "StatusContext", context: "c", state: "ERROR", isRequired: true },
+    ];
+    const derived = deriveRequiredCIStatus(contexts, false, "FAILURE");
+    const mappedFailing = contexts
+      .map((c) => mapRollupContextToCheckRun(c))
+      .filter((c) => c?.required && c.conclusion === "failure").length;
+    expect(mappedFailing).toBe(derived.ciSummary?.requiredFailing);
+  });
+
+  it("distinguishes queued from in-progress check statuses", () => {
+    const queued = ["QUEUED", "WAITING", "PENDING", "REQUESTED"].map(
+      (status) => mapRollupContextToCheckRun({ __typename: "CheckRun", name: "n", status })?.status
+    );
+    expect(new Set(queued)).toEqual(new Set(["queued"]));
+    expect(
+      mapRollupContextToCheckRun({ __typename: "CheckRun", name: "n", status: "IN_PROGRESS" })
+        ?.status
+    ).toBe("in_progress");
+  });
+
+  it("does not report a pending legacy status as completed", () => {
+    // PENDING/EXPECTED are in PENDING_STATUS_STATES — treating every
+    // StatusContext as finished would contradict the roll-up.
+    expect(
+      mapRollupContextToCheckRun({ __typename: "StatusContext", context: "c", state: "PENDING" })
+    ).toMatchObject({ status: "in_progress" });
+    expect(
+      mapRollupContextToCheckRun({ __typename: "StatusContext", context: "c", state: "EXPECTED" })
+    ).toMatchObject({ status: "queued" });
+    for (const state of ["PENDING", "EXPECTED"]) {
+      const check = mapRollupContextToCheckRun({
+        __typename: "StatusContext",
+        context: "c",
+        state,
+      });
+      expect(check?.conclusion).toBeUndefined();
+    }
+  });
+
+  it("reads a legacy status's link from targetUrl", () => {
+    const check = mapRollupContextToCheckRun({
+      __typename: "StatusContext",
+      context: "legacy/build",
+      state: "SUCCESS",
+      targetUrl: "https://legacy.example/build",
+    });
+    expect(check).toMatchObject({
+      name: "legacy/build",
+      status: "completed",
+      conclusion: "success",
+      detailsUrl: "https://legacy.example/build",
+    });
+  });
+
+  it("omits an unrecognized conclusion rather than guessing at it", () => {
+    // A future GitHub enum value must cost one field on one check, never a
+    // false success and never the whole read.
+    const check = mapRollupContextToCheckRun({
+      __typename: "CheckRun",
+      name: "future",
+      status: "COMPLETED",
+      conclusion: "SOME_NEW_GITHUB_CONCLUSION",
+    });
+    expect(check?.name).toBe("future");
+    expect(check?.conclusion).toBeUndefined();
+  });
+
+  it("treats an unknown lifecycle value as finished only when a conclusion proves it", () => {
+    expect(
+      mapRollupContextToCheckRun({ __typename: "CheckRun", name: "n", status: "SOME_NEW_STATE" })
+        ?.status
+    ).toBe("queued");
+    expect(
+      mapRollupContextToCheckRun({
+        __typename: "CheckRun",
+        name: "n",
+        status: "SOME_NEW_STATE",
+        conclusion: "SUCCESS",
+      })?.status
+    ).toBe("completed");
+  });
+
+  it("maps an unknown union member by field shape", () => {
+    const check = mapRollupContextToCheckRun({
+      __typename: "SomeFutureCheckKind",
+      context: "future/thing",
+      state: "FAILURE",
+    });
+    expect(check).toMatchObject({ name: "future/thing", conclusion: "failure" });
+  });
+
+  it("returns null for a node with no usable name", () => {
+    expect(mapRollupContextToCheckRun({ __typename: "CheckRun", status: "COMPLETED" })).toBeNull();
+    expect(mapRollupContextToCheckRun({ __typename: "CheckRun", name: "   " })).toBeNull();
+  });
+
+  it("omits required and detailsUrl when the provider reports neither", () => {
+    const check = mapRollupContextToCheckRun({
+      __typename: "CheckRun",
+      name: "bare",
+      status: "COMPLETED",
+      conclusion: "SUCCESS",
+    });
+    expect(check).not.toHaveProperty("required");
+    expect(check).not.toHaveProperty("detailsUrl");
+  });
+
+  it("preserves isRequired false rather than dropping it", () => {
+    const check = mapRollupContextToCheckRun({
+      __typename: "CheckRun",
+      name: "optional-check",
+      status: "COMPLETED",
+      conclusion: "SUCCESS",
+      isRequired: false,
+    });
+    expect(check?.required).toBe(false);
   });
 });

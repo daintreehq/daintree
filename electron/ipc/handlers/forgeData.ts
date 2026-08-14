@@ -12,6 +12,7 @@ import { logWarn } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import type {
+  CheckRun,
   CIStatus,
   ForgeRepoCounts,
   ForgeTokenHealthState,
@@ -26,6 +27,7 @@ import type {
   ReviewThread,
 } from "../../../shared/types/forge.js";
 import type {
+  ForgeCheckRun,
   ForgeCIStatusSummary,
   ForgeFirstPageCachePayload,
   ForgeProjectHealthPayload,
@@ -768,6 +770,108 @@ async function handleForgeGetCIStatus(payload: {
   });
 }
 
+const CHECK_RUN_STATUSES: ReadonlySet<string> = new Set(["queued", "in_progress", "completed"]);
+
+const CHECK_RUN_CONCLUSIONS: ReadonlySet<string> = new Set([
+  "success",
+  "failure",
+  "neutral",
+  "cancelled",
+  "timed_out",
+  "action_required",
+  "skipped",
+]);
+
+/**
+ * Narrow a provider's check list to well-formed {@link CheckRun}s, throwing
+ * otherwise — the same contract `requireValidCIStatus` enforces above, and for
+ * the same reason: providers are plugin-supplied, the action advertises a closed
+ * MCP output schema with `status`/`conclusion` enums, and a strict client would
+ * reject anything off-contract. Also strips `rawData` and any unnamed field, so
+ * an over-sharing provider can't widen what reaches an agent.
+ */
+function requireValidChecks(value: unknown, prNumber: number): ForgeCheckRun[] {
+  const raw = (value as { checks?: unknown } | null | undefined)?.checks;
+  if (!Array.isArray(raw)) {
+    throw new Error(`Forge provider returned a malformed check list for PR #${prNumber}`);
+  }
+  return raw.map((entry) => {
+    const c = entry as Partial<CheckRun> | null | undefined;
+    if (
+      !c ||
+      typeof c !== "object" ||
+      typeof c.name !== "string" ||
+      !c.name ||
+      typeof c.status !== "string" ||
+      !CHECK_RUN_STATUSES.has(c.status) ||
+      (c.conclusion !== undefined &&
+        (typeof c.conclusion !== "string" || !CHECK_RUN_CONCLUSIONS.has(c.conclusion))) ||
+      (c.required !== undefined && typeof c.required !== "boolean") ||
+      (c.detailsUrl !== undefined && typeof c.detailsUrl !== "string")
+    ) {
+      throw new Error(`Forge provider returned a malformed check for PR #${prNumber}`);
+    }
+    return {
+      name: c.name,
+      status: c.status,
+      ...(c.conclusion !== undefined ? { conclusion: c.conclusion } : {}),
+      ...(c.required !== undefined ? { required: c.required } : {}),
+      ...(c.detailsUrl ? { detailsUrl: c.detailsUrl } : {}),
+    };
+  });
+}
+
+/**
+ * Single-flight for the per-check CI read, mirroring {@link ciStatusSingleFlight}
+ * — module-scoped for the same reason, and keyed on `cwd` so worktrees never
+ * share a slot. Worth more here than on the roll-up: this read pages, so a
+ * duplicate costs several requests rather than one.
+ */
+const checksSingleFlight = createSingleFlight();
+
+/**
+ * Per-check CI detail for one PR (#11786) — the diagnostic read behind
+ * "which check failed?", where {@link handleForgeGetCIStatus} answers only
+ * "is it green?".
+ *
+ * Throws when the provider can't serve checks, matching `listIssueComments` and
+ * `repoStats`: this answers an agent's explicit question, and an empty list
+ * would read as "everything passed" rather than "couldn't look". `null` stays
+ * reserved for a PR that doesn't exist.
+ */
+async function handleForgeGetChecks(payload: {
+  cwd: string;
+  prNumber: number;
+}): Promise<{ checks: ForgeCheckRun[] } | null> {
+  checkRateLimit(CHANNELS.FORGE_GET_CHECKS, 10, 10_000);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  const cwd = requireCwd(payload.cwd);
+  const prNumber = requirePositiveInt(payload.prNumber, "PR number");
+  return checksSingleFlight(`${cwd}::getChecks::${prNumber}`, async () => {
+    const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+    const capability = impl.checks;
+    if (!capability) {
+      throw new Error("The active forge provider does not support reading individual CI checks");
+    }
+    return auditForgeCall(
+      {
+        providerId: namespaceId,
+        methodName: "getChecks",
+        repoOwner: repoRef.owner,
+        repoName: repoRef.repo,
+        argsSummary: summarizeForgeArgs("getChecks", prNumber),
+      },
+      async () => {
+        const raw = await capability.getChecks(repoRef, prNumber);
+        return raw === null ? null : { checks: requireValidChecks(raw, prNumber) };
+      },
+      (value) => (value === null ? "not-found" : "success")
+    );
+  });
+}
+
 async function handleForgeGetPRReviewThreads(payload: {
   cwd: string;
   prNumber: number;
@@ -891,6 +995,7 @@ export const forgeCapabilityDataNamespace = defineIpcNamespace({
     getIssueTooltip: op(CHANNELS.FORGE_GET_ISSUE_TOOLTIP, handleForgeGetIssueTooltip),
     getPRTooltip: op(CHANNELS.FORGE_GET_PR_TOOLTIP, handleForgeGetPRTooltip),
     getCIStatus: op(CHANNELS.FORGE_GET_CI_STATUS, handleForgeGetCIStatus),
+    getChecks: op(CHANNELS.FORGE_GET_CHECKS, handleForgeGetChecks),
     getIssuesByNumbers: op(CHANNELS.FORGE_GET_ISSUES_BY_NUMBERS, handleForgeGetIssuesByNumbers),
     getPRsByNumbers: op(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, handleForgeGetPRsByNumbers),
     getPRReviewThreads: op(CHANNELS.FORGE_GET_PR_REVIEW_THREADS, handleForgeGetPRReviewThreads),

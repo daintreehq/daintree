@@ -595,6 +595,7 @@ describe("McpServerService", () => {
         "git.push",
         "worktree.delete",
         "forge.getCIStatus",
+        "forge.getChecks",
         "worktree.reviewReadiness",
         "project.runCheck",
       ];
@@ -1329,6 +1330,12 @@ describe("McpServerService", () => {
         kind: "query",
       }),
       createManifestEntry({
+        id: "forge.getChecks" as ActionId,
+        title: "Get CI Checks",
+        description: "List every CI check on a pull request",
+        kind: "query",
+      }),
+      createManifestEntry({
         id: "worktree.reviewReadiness" as ActionId,
         title: "Review Readiness",
         description: "Summarize whether a worktree is ready to commit, push, and merge",
@@ -1633,7 +1640,7 @@ describe("McpServerService", () => {
       transports.push(transport);
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
-      const CI_ROUTES = ["forge.getCIStatus", "worktree.reviewReadiness"];
+      const CI_ROUTES = ["forge.getCIStatus", "forge.getChecks", "worktree.reviewReadiness"];
 
       // `tierManifest` offers both, so absence here is the server filtering
       // rather than a fixture that never carried them.
@@ -1657,7 +1664,7 @@ describe("McpServerService", () => {
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
-    it.each(["forge.getCIStatus", "worktree.reviewReadiness"])(
+    it.each(["forge.getCIStatus", "forge.getChecks", "worktree.reviewReadiness"])(
       "workbench tier can actually CALL %s, so #11544's fix survives where it matters",
       async (actionId) => {
         // listTools and callTool authorize through different functions

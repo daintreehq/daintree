@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   AuthValidation,
   AvatarCapability,
+  ChecksCapability,
   Credentials,
   FirstPageSnapshot,
   ForgeProviderImpl,
@@ -53,6 +54,7 @@ import {
   findPRByBranchImpl,
   findPRsByBranchesImpl,
   getCIStatusImpl,
+  getChecksImpl,
   findPRsByNumbersImpl,
   findIssuesByNumbersImpl,
   getCIStatusesImpl,
@@ -99,6 +101,10 @@ const reviewCapability: ReviewCapability = {
 
 const issueCommentCapability: IssueCommentCapability = {
   listIssueComments: listIssueCommentsImpl,
+};
+
+const checksCapability: ChecksCapability = {
+  getChecks: getChecksImpl,
 };
 
 // Thin pass-through over `GitHubAuth.getConfigAsync()` — reuses the same
@@ -459,6 +465,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
 
   reviews: reviewCapability,
   issueComments: issueCommentCapability,
+  checks: checksCapability,
   identity: identityCapability,
   tooltips: tooltipCapability,
   repoStats: repoStatsCapability,

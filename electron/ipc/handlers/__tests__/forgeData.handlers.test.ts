@@ -118,13 +118,14 @@ describe("registerForgeDataHandlers", () => {
 
   it("registers the core and capability IPC handlers", () => {
     const cleanup = registerForgeDataHandlers();
-    // 6 core data handlers + the 13-op forgeCapabilityData namespace.
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(19);
+    // 6 core data handlers + the 14-op forgeCapabilityData namespace.
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(20);
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-issues", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:list-prs", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-issue", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-pr", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-ci-status", expect.any(Function));
+    expect(ipcMainMock.handle).toHaveBeenCalledWith("forge:get-checks", expect.any(Function));
     expect(ipcMainMock.handle).toHaveBeenCalledWith(
       "forge:get-repo-metadata",
       expect.any(Function)
@@ -446,6 +447,171 @@ describe("registerForgeDataHandlers", () => {
         findHandler("forge:get-ci-status")(null, { cwd: "/repo", prNumber: 0 })
       ).rejects.toThrow();
       expect(fakeImpl.getCIStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  // Distinct PR numbers per test for the same reason as getCIStatus above: the
+  // checks single-flight is module-scoped and outlives an individual test.
+  describe("getChecks", () => {
+    let appendSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      appendSpy = vi.spyOn(forgeAuditService, "appendRecord").mockImplementation(() => {});
+    });
+
+    const fullCheck = {
+      name: "build",
+      status: "completed" as const,
+      conclusion: "failure" as const,
+      required: true,
+      detailsUrl: "https://ci.test/build/7",
+      rawData: { id: 1, extra: "provider-internal" },
+    };
+
+    function withChecks(checks: unknown[]) {
+      return { ...fakeImpl, checks: { getChecks: vi.fn().mockResolvedValue({ checks }) } };
+    }
+
+    function useImpl(impl: unknown) {
+      resolveForCwdMock.mockResolvedValue({
+        namespaceId: "fake.provider",
+        repoRef,
+        impl: impl as unknown as ForgeProviderImpl,
+      });
+    }
+
+    it("delegates to the capability and strips rawData on the way out", async () => {
+      const impl = withChecks([fullCheck]);
+      useImpl(impl);
+      registerForgeDataHandlers();
+
+      const result = await findHandler("forge:get-checks")(null, {
+        cwd: "/repo",
+        prNumber: 700,
+      });
+
+      expect(impl.checks.getChecks).toHaveBeenCalledWith(repoRef, 700);
+      // Exact object: pins that no provider-internal field rides along.
+      expect(result).toStrictEqual({
+        checks: [
+          {
+            name: "build",
+            status: "completed",
+            conclusion: "failure",
+            required: true,
+            detailsUrl: "https://ci.test/build/7",
+          },
+        ],
+      });
+    });
+
+    it("preserves required:false rather than dropping it as falsy", async () => {
+      useImpl(withChecks([{ ...fullCheck, required: false }]));
+      registerForgeDataHandlers();
+
+      const result = (await findHandler("forge:get-checks")(null, {
+        cwd: "/repo",
+        prNumber: 701,
+      })) as { checks: Array<Record<string, unknown>> };
+
+      expect(result.checks[0].required).toBe(false);
+    });
+
+    it("omits optional fields the provider did not report", async () => {
+      useImpl(withChecks([{ name: "pending-check", status: "queued", rawData: null }]));
+      registerForgeDataHandlers();
+
+      const result = (await findHandler("forge:get-checks")(null, {
+        cwd: "/repo",
+        prNumber: 702,
+      })) as { checks: Array<Record<string, unknown>> };
+
+      expect(result.checks[0]).toStrictEqual({ name: "pending-check", status: "queued" });
+    });
+
+    it("distinguishes a missing PR from a PR with no checks", async () => {
+      // null and [] lead a caller to opposite conclusions, so the handler must
+      // never collapse one into the other.
+      useImpl({ ...fakeImpl, checks: { getChecks: vi.fn().mockResolvedValue(null) } });
+      registerForgeDataHandlers();
+      expect(
+        await findHandler("forge:get-checks")(null, { cwd: "/repo", prNumber: 703 })
+      ).toBeNull();
+      expect(appendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ methodName: "getChecks", result: "not-found" })
+      );
+
+      vi.clearAllMocks();
+      _resetRateLimitQueuesForTest();
+      useImpl(withChecks([]));
+      registerForgeDataHandlers();
+      expect(await findHandler("forge:get-checks")(null, { cwd: "/repo", prNumber: 704 })).toEqual({
+        checks: [],
+      });
+    });
+
+    it("rejects when the provider has no checks capability", async () => {
+      // An empty list would read as "everything passed" rather than
+      // "this provider cannot look" — the repoStats/listIssueComments rule.
+      useImpl(fakeImpl);
+      registerForgeDataHandlers();
+
+      await expect(
+        findHandler("forge:get-checks")(null, { cwd: "/repo", prNumber: 705 })
+      ).rejects.toThrow(/does not support/i);
+    });
+
+    it.each([
+      ["a non-array result", { checks: "green" }],
+      ["a nameless check", { checks: [{ status: "completed", rawData: null }] }],
+      ["an empty name", { checks: [{ name: "", status: "completed", rawData: null }] }],
+      ["an unknown status", { checks: [{ name: "a", status: "running", rawData: null }] }],
+      [
+        "an unknown conclusion",
+        { checks: [{ name: "a", status: "completed", conclusion: "exploded", rawData: null }] },
+      ],
+      [
+        "a non-boolean required",
+        { checks: [{ name: "a", status: "completed", required: "yes", rawData: null }] },
+      ],
+    ])("rejects %s from the provider as an error, not a missing PR", async (label, bad) => {
+      useImpl({ ...fakeImpl, checks: { getChecks: vi.fn().mockResolvedValue(bad) } });
+      registerForgeDataHandlers();
+
+      await expect(
+        findHandler("forge:get-checks")(null, { cwd: `/repo-${label}`, prNumber: 706 })
+      ).rejects.toThrow(/malformed check/);
+      expect(appendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ methodName: "getChecks", result: "error" })
+      );
+    });
+
+    it("coalesces concurrent identical reads but not different PRs or worktrees", async () => {
+      const impl = withChecks([fullCheck]);
+      useImpl(impl);
+      registerForgeDataHandlers();
+      const handler = findHandler("forge:get-checks");
+
+      await Promise.all([
+        handler(null, { cwd: "/repo", prNumber: 707 }),
+        handler(null, { cwd: "/repo", prNumber: 707 }),
+      ]);
+      expect(impl.checks.getChecks).toHaveBeenCalledTimes(1);
+
+      await Promise.all([
+        handler(null, { cwd: "/repo", prNumber: 708 }),
+        handler(null, { cwd: "/other-worktree", prNumber: 708 }),
+      ]);
+      expect(impl.checks.getChecks).toHaveBeenCalledTimes(3);
+    });
+
+    it("rejects a non-positive PR number before resolving a provider", async () => {
+      registerForgeDataHandlers();
+
+      await expect(
+        findHandler("forge:get-checks")(null, { cwd: "/repo", prNumber: 0 })
+      ).rejects.toThrow();
+      expect(resolveForCwdMock).not.toHaveBeenCalled();
     });
   });
 

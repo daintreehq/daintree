@@ -102,7 +102,11 @@ export interface RateLimitInfo {
   throttleMultiplier?: number;
 }
 
-/** Boolean-ish CI roll-up. The host renders a summary; it does not graph checks. */
+/**
+ * Boolean-ish CI roll-up. The host renders a summary; it does not graph checks.
+ * Callers needing the individual checks behind this verdict read
+ * {@link ChecksCapability.getChecks} instead.
+ */
 export type CIStatusState = "success" | "failure" | "pending" | "neutral" | "unknown";
 
 export interface CIStatus {
@@ -118,6 +122,63 @@ export interface CIStatus {
   /** `true` when unchanged since `ifNotChangedSince`; see {@link FetchOptions}. */
   notModified?: boolean;
   rawData: unknown;
+}
+
+/**
+ * Normalized lifecycle state of one CI check. Deliberately narrower than any
+ * one forge's vocabulary: a check is either not started, running, or finished.
+ */
+export type CheckRunStatus = "queued" | "in_progress" | "completed";
+
+/**
+ * Normalized terminal outcome of one CI check, absent while `status` is not
+ * `completed` — and also when the provider reported an outcome this vocabulary
+ * doesn't model. Absence therefore means "no verdict to report", never "passed":
+ * the roll-up from {@link ForgeProviderImpl.getCIStatus} stays the authority on
+ * whether a PR is green.
+ */
+export type CheckRunConclusion =
+  "success" | "failure" | "neutral" | "cancelled" | "timed_out" | "action_required" | "skipped";
+
+/**
+ * One CI check on a pull request, as returned by
+ * {@link ChecksCapability.getChecks}. Providers normalize their own check and
+ * legacy-status vocabularies onto this shape; anything that doesn't map is
+ * preserved verbatim in `rawData` rather than forced into a wrong bucket.
+ */
+export interface CheckRun {
+  /** Display name of the check, as the forge reports it. Not unique — matrix jobs repeat. */
+  name: string;
+  status: CheckRunStatus;
+  conclusion?: CheckRunConclusion;
+  /** Whether this check gates merging, when the provider reports required-check data. */
+  required?: boolean;
+  /** Provider URL for this check's output or job log — the link that turns a diagnosis into a next step. */
+  detailsUrl?: string;
+  rawData: unknown;
+}
+
+/**
+ * Optional per-check CI read, the diagnostic counterpart to the
+ * {@link ForgeProviderImpl.getCIStatus} roll-up (#11786). The roll-up answers
+ * "is it green?"; this answers "which check failed, and where do I read its
+ * log?" — the question that actually starts the work. Kept separate rather than
+ * widened onto `getCIStatus` because it costs an extra request per PR, and the
+ * host's own CI indicator only ever renders the summary.
+ *
+ * Returns `null` only when the pull request doesn't exist. A PR that simply has
+ * no checks returns `{ checks: [] }`, and a provider that can't serve checks at
+ * all is absent from `ForgeProviderImpl.checks` and rejects at the host — the
+ * three cases lead a caller to opposite conclusions, so none may present as
+ * another. For the same reason implementations return the complete check list
+ * or reject: a silently truncated list is a wrong answer, not a partial one.
+ */
+export interface ChecksCapability {
+  getChecks(
+    repo: RepoRef,
+    prNumber: number,
+    options?: FetchOptions
+  ): Promise<{ checks: CheckRun[] } | null>;
 }
 
 /** Result of validating stored credentials against the provider. */
@@ -1183,6 +1244,7 @@ export interface ForgeProviderImpl {
   // Optional capabilities — host checks presence via a truthiness guard (see above).
   reviews?: ReviewCapability;
   issueComments?: IssueCommentCapability;
+  checks?: ChecksCapability;
   approvals?: ApprovalCapability;
   releases?: ReleaseCapability;
   projectBoards?: ProjectBoardCapability;

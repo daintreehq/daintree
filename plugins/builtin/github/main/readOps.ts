@@ -1,5 +1,6 @@
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import type {
+  CheckRun,
   CIStatus,
   Issue,
   IssueComment,
@@ -47,7 +48,7 @@ import {
   type PRRequiredStatusEntry,
 } from "./GitHubCaches.js";
 import { probeOpenPRList } from "./GitHubPRDiscovery.js";
-import { deriveRequiredCIStatus } from "./prRequiredCIStatus.js";
+import { deriveRequiredCIStatus, mapRollupContextToCheckRun } from "./prRequiredCIStatus.js";
 import type { RollupContextNode } from "./prRequiredCIStatus.js";
 import { getIssuesByNumbersForContext } from "./GitHubIssues.js";
 import {
@@ -75,6 +76,7 @@ import {
   getIssueInflight,
   getPRInflight,
   getCIStatusInflight,
+  getChecksInflight,
   findPRsByBranchesInflight,
   findPRsByNumbersInflight,
   getCIStatusesInflight,
@@ -774,32 +776,11 @@ export async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<
   if (cached) return buildCIStatus(cached, null);
 
   return dedupe(getCIStatusInflight, cacheKey, false, async () => {
-    const response = await runQuery(
-      PR_CI_STATUS_QUERY,
-      {
-        owner: repo.owner,
-        repo: repo.repo,
-        number: prNumber,
-      },
-      "PR_CI_STATUS_QUERY"
-    );
+    const page = await fetchCIRollupPage(repo, prNumber, null);
+    if (!page) return null;
 
-    const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
-      Record<string, unknown> | null | undefined;
-    if (!pr) return null;
-
-    const commits = pr.commits as
-      { nodes?: Array<{ commit?: { statusCheckRollup?: unknown } }> } | undefined;
-    const rollup = commits?.nodes?.[0]?.commit?.statusCheckRollup as
-      | {
-          state?: string;
-          contexts?: { nodes?: RollupContextNode[]; pageInfo?: { hasNextPage?: boolean } };
-        }
-      | undefined;
-
-    const contextNodes = rollup?.contexts?.nodes ?? null;
-    const hasNextPage = rollup?.contexts?.pageInfo?.hasNextPage === true;
-    const derived = deriveRequiredCIStatus(contextNodes, hasNextPage, rollup?.state ?? null);
+    const { rollup } = page;
+    const derived = deriveRequiredCIStatus(page.nodes, page.hasNextPage, rollup?.state ?? null);
 
     const entry: PRRequiredStatusEntry = {
       ciStatus: derived.ciStatus,
@@ -807,6 +788,114 @@ export async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<
     };
     prRequiredStatusCache.set(cacheKey, entry);
     return buildCIStatus(entry, rollup ?? null);
+  });
+}
+
+interface CIRollupPage {
+  rollup: { state?: string } | undefined;
+  nodes: RollupContextNode[] | null;
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+/**
+ * One page of the head commit's status-check rollup, or `null` when the PR
+ * doesn't exist. Shared by the roll-up and per-check reads so both see the same
+ * response shape from the same query.
+ */
+async function fetchCIRollupPage(
+  repo: RepoRef,
+  prNumber: number,
+  cursor: string | null
+): Promise<CIRollupPage | null> {
+  const response = await runQuery(
+    PR_CI_STATUS_QUERY,
+    { owner: repo.owner, repo: repo.repo, number: prNumber, cursor },
+    "PR_CI_STATUS_QUERY"
+  );
+
+  const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
+    Record<string, unknown> | null | undefined;
+  if (!pr) return null;
+
+  const commits = pr.commits as
+    { nodes?: Array<{ commit?: { statusCheckRollup?: unknown } }> } | undefined;
+  const rollup = commits?.nodes?.[0]?.commit?.statusCheckRollup as
+    | {
+        state?: string;
+        contexts?: {
+          nodes?: RollupContextNode[];
+          pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+        };
+      }
+    | undefined;
+
+  return {
+    rollup,
+    nodes: rollup?.contexts?.nodes ?? null,
+    hasNextPage: rollup?.contexts?.pageInfo?.hasNextPage === true,
+    endCursor: rollup?.contexts?.pageInfo?.endCursor ?? null,
+  };
+}
+
+/**
+ * Ceiling on rollup pages walked by one {@link getChecksImpl} call. At 100
+ * contexts per page this is 1000 checks — far past any real PR, so it never
+ * truncates legitimate data. It exists so a provider bug or a cursor that keeps
+ * reporting `hasNextPage` cannot spin an unbounded request loop against a
+ * rate-limited API.
+ */
+const MAX_CHECK_PAGES = 10;
+
+/**
+ * Per-check CI detail for one PR (#11786). Pages the rollup to the end and
+ * returns every check, so a caller diagnosing a red PR sees which check failed
+ * and where to read its log.
+ *
+ * Rejects rather than returning a short list whenever the traversal can't be
+ * completed — a truncated answer to "which check failed?" is wrong, not partial.
+ * `null` is reserved for a PR that doesn't exist; a PR with no checks yields an
+ * empty array.
+ */
+export async function getChecksImpl(
+  repo: RepoRef,
+  prNumber: number
+): Promise<{ checks: CheckRun[] } | null> {
+  const inflightKey = `${repo.owner}/${repo.repo}:${prNumber}`;
+  return dedupe(getChecksInflight, inflightKey, false, async () => {
+    const checks: CheckRun[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+
+    for (let page = 0; page < MAX_CHECK_PAGES; page++) {
+      const result: CIRollupPage | null = await fetchCIRollupPage(repo, prNumber, cursor);
+      // Only the first page distinguishes "no such PR"; a later page losing the
+      // PR means it moved under us, which is a failed traversal, not absence.
+      if (!result) {
+        if (page === 0) return null;
+        throw new Error(`Pull request #${prNumber} disappeared while reading its checks`);
+      }
+
+      for (const node of result.nodes ?? []) {
+        const check = mapRollupContextToCheckRun(node);
+        if (check) checks.push(check);
+      }
+
+      if (!result.hasNextPage) return { checks };
+
+      // A next page we can't address, or a cursor that repeats, would loop or
+      // silently drop the remainder. Fail instead of returning a partial list.
+      const next = result.endCursor;
+      if (!next || seenCursors.has(next)) {
+        throw new Error(`Could not read all checks for PR #${prNumber}: pagination stalled`);
+      }
+      seenCursors.add(next);
+      cursor = next;
+    }
+
+    throw new Error(
+      `Could not read all checks for PR #${prNumber}: more than ${MAX_CHECK_PAGES * 100} checks`
+    );
   });
 }
 

@@ -229,6 +229,31 @@ const ForgeCIStatusActionResultSchema = z.object({
   ciStatus: ForgeCIStatusSchema.nullable(),
 });
 
+// One CI check, mirroring `CheckRun` minus `rawData` — which dispatch strips,
+// and which the IPC layer already dropped. `conclusion` is absent while a check
+// is unfinished AND when the provider reported an outcome this vocabulary
+// doesn't model, so its absence never means "passed".
+const ForgeCheckRunSchema = z.object({
+  name: z.string().describe("Check name as the forge reports it; matrix jobs repeat names"),
+  status: z.enum(["queued", "in_progress", "completed"]),
+  conclusion: z
+    .enum(["success", "failure", "neutral", "cancelled", "timed_out", "action_required", "skipped"])
+    .optional()
+    .describe("Outcome once completed; absent while running or when the forge reported no verdict"),
+  required: z
+    .boolean()
+    .optional()
+    .describe("Whether this check gates merging, when the provider reports required checks"),
+  detailsUrl: z.string().optional().describe("Link to this check's output or job log"),
+});
+
+// Wrapped for the same reason as `ForgeCIStatusActionResultSchema` — a bare
+// nullable array would emit a top-level `anyOf` that `buildToolOutputSchema`
+// drops, advertising no schema at all.
+const ForgeChecksActionResultSchema = z.object({
+  checks: z.array(ForgeCheckRunSchema).nullable(),
+});
+
 // Normalized issue returned by `forge.getIssue` and by the
 // create/close/reopen/edit write actions. Same reasoning as
 // `ForgePRResultSchema`: every cross-provider field of `Issue` bar `rawData` is
@@ -890,6 +915,36 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       run: async ({ prNumber, ...location }, ctx: ActionContext) => {
         const resolvedCwd = requireWorktreePath(location, ctx);
         return { ciStatus: await forgeClient.getCIStatus(resolvedCwd, prNumber) };
+      },
+    })
+  );
+
+  actions.set("forge.getChecks", () =>
+    defineAction({
+      id: "forge.getChecks",
+      title: "Get CI Checks",
+      description:
+        "List every CI check on one pull request — each check's name, whether it is still running, how it finished, and a link to its log. Reach for it once the roll-up verdict reports trouble and the question becomes which check broke and where to read the output. A check with no conclusion reported has not passed; the roll-up stays the authority on whether the pull request is green. An empty list means the pull request has no checks: a provider that cannot read them fails instead.",
+      category: "forge",
+      kind: "query",
+      danger: "safe",
+      scope: "renderer",
+      argsSchema: z.object({
+        ...worktreeLocationShape({ legacy: ["cwd"] }),
+        prNumber: z.number().int().positive().describe("Pull request number whose checks to list"),
+      }),
+      examples: [
+        {
+          args: { prNumber: 42 },
+          description: "List the checks on PR #42 to find which one failed",
+        },
+      ],
+      resultSchema: ForgeChecksActionResultSchema,
+      mcpOutputSchema: true,
+      run: async ({ prNumber, ...location }, ctx: ActionContext) => {
+        const resolvedCwd = requireWorktreePath(location, ctx);
+        const result = await forgeClient.getChecks(resolvedCwd, prNumber);
+        return { checks: result === null ? null : result.checks };
       },
     })
   );

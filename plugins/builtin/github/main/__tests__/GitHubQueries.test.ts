@@ -14,6 +14,7 @@ import {
   GET_PR_QUERY,
   PROJECT_HEALTH_QUERY,
   MERGE_VELOCITY_QUERY,
+  PR_CI_STATUS_QUERY,
 } from "../GitHubQueries.js";
 
 describe("PROJECT_HEALTH_QUERY", () => {
@@ -743,5 +744,57 @@ describe("buildBatchPRsQuery", () => {
   it("does not declare $query variable", () => {
     const query = buildBatchPRsQuery("owner", "repo", [1, 2]);
     expect(query).not.toContain("$query");
+  });
+});
+
+describe("PR_CI_STATUS_QUERY", () => {
+  const contextsArgs = /contexts\(([^)]*)\)/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
+  const checkRunSelection = /\.\.\. on CheckRun\s*\{([^}]*)\}/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
+  const statusContextSelection =
+    /\.\.\. on StatusContext\s*\{([^}]*)\}/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
+
+  it("pages the contexts connection forward with a cursor", () => {
+    expect(contextsArgs).toContain("first: 100");
+    expect(contextsArgs).toContain("after: $cursor");
+  });
+
+  it("selects the pageInfo both readers depend on", () => {
+    // hasNextPage guards the roll-up's required-check derivation against a
+    // truncated page; endCursor is how the per-check read advances. Without
+    // this selection hasNextPage silently reads as false.
+    const pageInfoSelection = /pageInfo\s*\{([^}]*)\}/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
+    expect(pageInfoSelection).toContain("hasNextPage");
+    expect(pageInfoSelection).toContain("endCursor");
+  });
+
+  it("selects each union member's own link field on its own fragment", () => {
+    // detailsUrl belongs to CheckRun and targetUrl to StatusContext — swapping
+    // them is a GraphQL validation error the mapper could not detect.
+    expect(checkRunSelection).toContain("detailsUrl");
+    expect(checkRunSelection).not.toContain("targetUrl");
+    expect(statusContextSelection).toContain("targetUrl");
+    expect(statusContextSelection).not.toContain("detailsUrl");
+  });
+
+  it("selects every field the check mapper reads from each union member", () => {
+    for (const field of ["name", "conclusion", "status", "isRequired"]) {
+      expect(checkRunSelection).toContain(field);
+    }
+    for (const field of ["context", "state", "isRequired"]) {
+      expect(statusContextSelection).toContain(field);
+    }
+  });
+
+  it("declares every variable it interpolates", () => {
+    const declared = /query GetPRCIStatus\(([^)]*)\)/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
+    const used = new Set(PR_CI_STATUS_QUERY.match(/\$\w+/g) ?? []);
+    for (const variable of used) {
+      expect(declared).toContain(variable);
+    }
+  });
+
+  it("keeps the cursor optional so the first page needs no argument value", () => {
+    expect(PR_CI_STATUS_QUERY).toContain("$cursor: String");
+    expect(PR_CI_STATUS_QUERY).not.toContain("$cursor: String!");
   });
 });

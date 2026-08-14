@@ -100,7 +100,7 @@ Return the disposer `registerForgeProvider` hands back. `descriptor.id` must mat
 | `getIssue(repo, n)` | `Promise<Issue \| null>` | `null` when the issue doesn't exist. |
 | `getPR(repo, n)` | `Promise<PR \| null>` | `null` when the PR doesn't exist. |
 | `findPRByBranch(repo, branch)` | `Promise<PR \| null>` | Resolve the open PR for a head branch. Escape branch names before interpolating into a search query. |
-| `getCIStatus(repo, prN)` | `Promise<CIStatus \| null>` | Roll checks up to one `CIStatusState`. The host renders a summary; it does not graph individual checks. |
+| `getCIStatus(repo, prN)` | `Promise<CIStatus \| null>` | Roll checks up to one `CIStatusState`. The host renders a summary; it does not graph individual checks. Implement the optional `checks` capability if you can also serve the checks behind the verdict. |
 | `getRepoMetadata(repo)` | `Promise<RepoMetadata>` | Default branch, visibility, fork/archive flags, license, topics. |
 | `buildIssueUrl(repo, n)` | `string` | You own your URL shape. |
 | `buildPRUrl(repo, n)` | `string` | — |
@@ -169,7 +169,9 @@ export const giteaForgeProvider: ForgeProviderImpl = {
 };
 ```
 
-The capability sub-interfaces are `ReviewCapability`, `ApprovalCapability`, `ReleaseCapability`, `ProjectBoardCapability`, `MilestoneCapability`, and `BatchLookupCapability`. Omitting the field is how you declare non-support — the base interface never changes when a capability is added.
+The capability sub-interfaces are `ReviewCapability`, `IssueCommentCapability`, `ChecksCapability`, `ApprovalCapability`, `ReleaseCapability`, `ProjectBoardCapability`, `MilestoneCapability`, and `BatchLookupCapability`. Omitting the field is how you declare non-support — the base interface never changes when a capability is added.
+
+`ChecksCapability.getChecks(repo, prN)` is the per-check counterpart to `getCIStatus`: it returns every check on a PR as a `CheckRun` (`name`, `status`, `conclusion?`, `required?`, `detailsUrl?`), so an agent diagnosing a red PR can name the failing check and follow `detailsUrl` to its log. Return the complete list or reject — a silently truncated list is a wrong answer, not a partial one — and page your forge's API to the end rather than serving only its first page. `null` means the PR doesn't exist; a PR with no checks is `{ checks: [] }`.
 
 **Probe with truthiness, not `in`.** The host checks capability presence with `if (provider.reviews)`, not `"reviews" in provider`. An optional property explicitly set to `undefined` still satisfies the `in` operator, so `in` would falsely report the capability as available. Do the same in any code that consumes a provider.
 
