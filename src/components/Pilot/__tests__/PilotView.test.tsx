@@ -1527,6 +1527,91 @@ describe("PilotView", () => {
     });
   });
 
+  describe("group demand chips", () => {
+    it("summarises each project's demand on its header, worst band first", () => {
+      seed([
+        run({ runId: "a", workspaceId: "p1", agentState: "waiting", since: NOW - 60_000 }),
+        run({ runId: "b", workspaceId: "p1", agentState: "working", since: NOW - 60_000 }),
+        run({ runId: "c", workspaceId: "s1", agentState: "working", since: NOW - 60_000 }),
+      ]);
+      render(<PilotView />);
+
+      // One chip, on the one project with a demand — a busy-but-quiet project
+      // earns nothing, or the chip stops meaning "needs you".
+      const chips = screen.getAllByTestId("pilot-group-demand");
+      expect(chips).toHaveLength(1);
+      expect(chips[0]!.textContent).toContain("1");
+
+      // The group's accessible name says the same thing in words.
+      expect(screen.getByRole("group", { name: /daintree, Agent needs you/ })).toBeTruthy();
+    });
+
+    it("drops the chip when the query filters the demand away", () => {
+      // The chip summarises the rows actually beneath the header — a header
+      // still announcing a demand its own list no longer shows would be the
+      // false signal this surface exists to remove.
+      seed([
+        run({
+          runId: "a",
+          workspaceId: "p1",
+          agentState: "waiting",
+          title: "auth spike",
+          since: NOW,
+        }),
+        run({
+          runId: "b",
+          workspaceId: "p1",
+          agentState: "working",
+          title: "docs pass",
+          since: NOW,
+        }),
+      ]);
+      render(<PilotView />);
+      expect(screen.getByTestId("pilot-group-demand")).toBeTruthy();
+
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "docs" } });
+
+      expect(screen.queryByTestId("pilot-group-demand")).toBeNull();
+      expect(screen.queryByRole("group", { name: /needs you/ })).toBeNull();
+    });
+
+    it("counts every demand band, not just waiting", () => {
+      seed([
+        run({
+          runId: "a",
+          workspaceId: "p1",
+          agentState: "waiting",
+          waitingReason: "error",
+          since: NOW,
+        }),
+        run({ runId: "b", workspaceId: "p1", agentState: "waiting", since: NOW }),
+        run({ runId: "c", workspaceId: "p1", agentState: "completed", since: NOW }),
+      ]);
+      render(<PilotView />);
+
+      expect(screen.getByTestId("pilot-group-demand").textContent).toContain("3");
+    });
+  });
+
+  describe("stall cue", () => {
+    it("marks a working run that main flagged as quiet", () => {
+      seed([
+        run({
+          agentState: "working",
+          title: "long migration",
+          since: NOW - 3_600_000,
+          quietSince: NOW - 12 * 60_000,
+        }),
+      ]);
+      render(<PilotView />);
+
+      expect(screen.getByText("quiet 12m")).toBeTruthy();
+      // And the fact reaches the accessible name, since the cue itself is
+      // decoration.
+      expect(screen.getByRole("option", { name: /quiet for 12m/ })).toBeTruthy();
+    });
+  });
+
   describe("parking", () => {
     const parkRunMock = vi.fn();
     const unparkRunMock = vi.fn();

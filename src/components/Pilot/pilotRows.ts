@@ -49,6 +49,12 @@ export interface PilotRow {
    * type when hunting for the run you shelved behind it.
    */
   parkNote: string | null;
+  /**
+   * How long a working run has been silent, once main judged the silence
+   * worth reporting. Null for a healthy busy agent — so the row only ever
+   * says "quiet 12m" when there is genuinely something to look at.
+   */
+  quietFor: string | null;
 }
 
 export type PilotWorkspaceKind = "project" | "scratch" | "unknown";
@@ -292,6 +298,10 @@ export function buildPilotGroups(
               ? formatWaitAge(run.since, ctx.nowMs)
               : null,
         parkNote: run.park?.note ?? null,
+        quietFor:
+          band === "running" && run.quietSince !== undefined
+            ? formatWaitAge(run.quietSince, ctx.nowMs)
+            : null,
       };
     });
 

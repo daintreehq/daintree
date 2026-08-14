@@ -13,6 +13,20 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEBOUNCE_MS = 200;
 
 /**
+ * How long a working run must be silent before the row says so.
+ *
+ * Ten minutes is deliberately far past any agent's thinking pauses — the cue
+ * exists for the wedge, not the lull, and a threshold that fires during
+ * ordinary long tool calls would train the user to ignore it. Detection runs
+ * on the poll, so the crossing lands within one poll interval of the
+ * threshold; the value put on the wire is the silence's ANCHOR (last output
+ * or entry into the working stint, whichever is later — a constant while the
+ * silence lasts), which is what keeps a stalled run from defeating
+ * unchanged-payload suppression.
+ */
+export const STALL_QUIET_MS = 10 * 60_000;
+
+/**
  * The fleet's live run list, pushed to every view.
  *
  * A deliberate structural sibling of {@link ProjectStatsService}: same aligned
@@ -208,7 +222,8 @@ export class FleetSnapshotService {
         x.agentPresetColor !== y.agentPresetColor ||
         x.park?.parkedAt !== y.park?.parkedAt ||
         x.park?.note !== y.park?.note ||
-        x.park?.gateRunId !== y.park?.gateRunId
+        x.park?.gateRunId !== y.park?.gateRunId ||
+        x.quietSince !== y.quietSince
       ) {
         return false;
       }
@@ -242,6 +257,7 @@ export class FleetSnapshotService {
 
       const availability = getAgentAvailabilityStore();
       const parkRecords = this.runAttention?.getAll();
+      const stallCutoff = Date.now() - STALL_QUIET_MS;
       const runs: FleetRunRow[] = [];
 
       for (const terminal of allTerminals) {
@@ -286,6 +302,23 @@ export class FleetSnapshotService {
           // User intent decorates the row here so every surface reads park
           // state and agent state in one payload, never joining two feeds.
           ...(park !== undefined ? { park } : {}),
+          // Stall cue: only for a working run, and only once the CURRENT
+          // working stint has been silent past the threshold. Anchored on the
+          // later of last output, the transition into this state and the
+          // spawn — a run resumed after waiting quietly for twenty minutes
+          // enters `working` with an ancient lastOutputTime, and anchoring on
+          // output alone stamped it "quiet 20m" before it had a chance to
+          // make a sound. The raw lastOutputTime must never ride the row —
+          // see the wire type's own doc for the churn argument.
+          ...(() => {
+            if (terminal.agentState !== "working") return {};
+            const quietAnchor = Math.max(
+              typeof terminal.lastOutputTime === "number" ? terminal.lastOutputTime : 0,
+              typeof terminal.lastStateChange === "number" ? terminal.lastStateChange : 0,
+              terminal.spawnedAt
+            );
+            return quietAnchor > 0 && quietAnchor <= stallCutoff ? { quietSince: quietAnchor } : {};
+          })(),
         });
       }
 

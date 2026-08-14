@@ -44,13 +44,14 @@ export interface RunParkRecord {
  * Every field here is already on the pty-host's terminal record, so the whole
  * row is free: main fetches exactly this data today and discards it.
  *
- * Deliberately excludes the terminal's `lastOutputTime`. It is rewritten on
- * every PTY data chunk (`PtyDataPipeline`), so carrying it would change the
+ * Deliberately excludes the terminal's raw `lastOutputTime`. It is rewritten
+ * on every PTY data chunk (`PtyDataPipeline`), so carrying it would change the
  * payload many times a second for any working agent and defeat the snapshot's
- * unchanged-payload suppression exactly when the fleet is busiest. Stall
- * detection wants that signal, but it needs per-run calibration against the
- * run's own output rhythm and belongs beside the agent FSM, not on a list
- * projection whose whole cost model depends on changing rarely.
+ * unchanged-payload suppression exactly when the fleet is busiest. What rides
+ * instead is {@link quietSince}: the same signal, but only once a working run
+ * has been silent long enough to be worth saying — a value that is absent for
+ * a healthy busy agent and CONSTANT for a stalled one, so it costs one
+ * broadcast at the threshold crossing and nothing after.
  */
 export interface FleetRunRow {
   /** Terminal id. The run's identity, and the handle any action takes. */
@@ -109,6 +110,17 @@ export interface FleetRunRow {
    * the note travels with it.
    */
   park?: RunParkRecord;
+  /**
+   * When a WORKING run last showed signs of life — the later of its last
+   * output and its entry into the current working stint — present only once
+   * that silence has crossed main's stall threshold. "Working · 47m" and
+   * "working but wedged for 12 minutes" are different facts, and without this
+   * field they render identically. Anchoring on the stint and not output
+   * alone keeps a freshly resumed run from inheriting its old waiting silence
+   * as a stall. Absent means healthy (or not working at all), never merely
+   * unknown.
+   */
+  quietSince?: number;
 }
 
 /**

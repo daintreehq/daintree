@@ -12,6 +12,7 @@ import { actionService } from "@/services/ActionService";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { agoPhrase, formatWaitAge } from "@/lib/projectRowStatus";
+import { isDemandBand } from "@/lib/fleetAttention";
 import {
   buildPilotGroups,
   countPilotBands,
@@ -24,7 +25,7 @@ import {
   type PilotRow,
   type PilotWorkspaceMeta,
 } from "./pilotRows";
-import { PilotRunState } from "./PilotRunState";
+import { BAND_GLYPH, BAND_GLYPH_TONE, PilotRunState } from "./PilotRunState";
 import { PilotFilterBar } from "./PilotFilterBar";
 import { PilotParkEditor, type PilotGateCandidate, type PilotParkTarget } from "./PilotParkEditor";
 import { isMac } from "@/lib/platform";
@@ -229,6 +230,32 @@ function GroupHeader({ group, className }: { group: PilotProjectGroup; className
           <span className="shrink-0 text-[10px] leading-none text-daintree-text/30">Current</span>
         )}
       </div>
+
+      {/*
+        The group's demand, at a glance: glyph and hue come from the worst row
+        beneath (which is always a demand band whenever the count is non-zero,
+        since demands outrank everything else), so five headers answer "which
+        project is on fire" without reading a single row. Hidden with the rest
+        of the header — the group's aria-label carries the same fact in words.
+      */}
+      {group.demandCount > 0 &&
+        (() => {
+          const chipBand = isDemandBand(group.topBand) ? group.topBand : "needs-you";
+          const ChipGlyph = BAND_GLYPH[chipBand];
+          return (
+            <span
+              aria-hidden="true"
+              data-testid="pilot-group-demand"
+              className={cn(
+                "flex shrink-0 items-center gap-1 text-[10px] leading-none tabular-nums",
+                BAND_GLYPH_TONE[chipBand]
+              )}
+            >
+              <ChipGlyph className="h-2.5 w-2.5" />
+              {group.demandCount}
+            </span>
+          );
+        })()}
     </div>
   );
 }
@@ -284,6 +311,7 @@ function RunRow({
     agentLabel,
     row.statusLabel,
     row.parkNote,
+    row.quietFor !== null ? `quiet for ${row.quietFor}` : null,
     row.age !== null ? agoPhrase(row.age) : null,
   ]
     .filter((part): part is string => part !== null)
@@ -346,6 +374,22 @@ function RunRow({
           className="max-w-[45%] min-w-0 shrink truncate text-xs leading-tight text-daintree-text/45"
         >
           {row.parkNote}
+        </span>
+      )}
+
+      {/*
+        The stall cue: a working glyph beside ten minutes of silence is the
+        one combination the age column cannot express — "Working · 47m" and
+        "working but wedged" render identically without it. Amber because it
+        is a live fact that may need a hand, worded because the hue alone
+        must never carry it (the accessible name says "quiet for 12m").
+      */}
+      {row.quietFor !== null && (
+        <span
+          aria-hidden="true"
+          className="shrink-0 text-[11px] leading-none text-state-waiting/80"
+        >
+          quiet {row.quietFor}
         </span>
       )}
 
@@ -1172,7 +1216,7 @@ export function PilotView() {
               key={header.domId}
               id={header.domId}
               role="group"
-              aria-label={`${header.group.name}${header.group.isCurrent ? ", current workspace" : ""}`}
+              aria-label={`${header.group.name}${header.group.isCurrent ? ", current workspace" : ""}${header.group.demandCount > 0 ? `, ${demandPhrase(header.group.demandCount)}` : ""}`}
               // The scroller spaces siblings equally, so after a long run list
               // the next project arrives with no more separation than one more
               // agent. Only between groups — a leading gap would push the list

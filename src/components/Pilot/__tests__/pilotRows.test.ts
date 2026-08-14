@@ -910,6 +910,45 @@ describe("parked rows", () => {
   });
 });
 
+describe("stalled runs", () => {
+  it("carries the quiet duration only for a working run main flagged", () => {
+    const [group] = buildPilotGroups(
+      [
+        run({
+          runId: "stalled",
+          agentState: "working",
+          since: NOW - 3_600_000,
+          quietSince: NOW - 12 * 60_000,
+        }),
+        run({ runId: "busy", agentState: "working", since: NOW - 3_600_000 }),
+      ],
+      ctx()
+    );
+
+    const byId = new Map(group!.rows.map((r) => [r.run.runId, r]));
+    expect(byId.get("stalled")?.quietFor).toBe("12m");
+    expect(byId.get("busy")?.quietFor).toBeNull();
+  });
+
+  it("drops the cue when the run is no longer in the running band", () => {
+    // A stale quietSince arriving alongside a state change (one poll of skew)
+    // must not paint a waiting or parked row as a stalled worker.
+    const [group] = buildPilotGroups(
+      [
+        run({
+          agentState: "working",
+          since: NOW,
+          quietSince: NOW - 12 * 60_000,
+          park: { parkedAt: NOW },
+        }),
+      ],
+      ctx()
+    );
+
+    expect(group!.rows[0]!.quietFor).toBeNull();
+  });
+});
+
 describe("bandFilterHasDemand", () => {
   const bands = (overrides: Partial<Record<FleetBand, number>> = {}) => ({
     ...emptyBandCounts(),
