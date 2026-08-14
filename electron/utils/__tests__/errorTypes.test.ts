@@ -9,6 +9,7 @@ import {
   toGitOperationError,
   getUserMessage,
   getRetryability,
+  getErrorDetails,
 } from "../errorTypes.js";
 import { serializeError, deserializeError } from "../../../shared/utils/ipcErrorSerialization.js";
 
@@ -240,5 +241,119 @@ describe("getRetryability", () => {
     expect(getRetryability(null)).toBe("none");
     expect(getRetryability(undefined)).toBe("none");
     expect(getRetryability(new Error("plain"))).toBe("none");
+  });
+});
+
+describe("getErrorDetails", () => {
+  it("captures name, message and stack from a real Error", () => {
+    const err = new TypeError("boom");
+    const details = getErrorDetails(err);
+    expect(details.name).toBe(err.name);
+    expect(details.message).toBe(err.message);
+    expect(details.stack).toBe(err.stack);
+  });
+
+  it("keeps name and stack from an error already flattened for IPC", () => {
+    // What `dispatchRendererLog` hands us: the contextBridge strips the Error
+    // prototype, so the value fails `instanceof Error` but still carries the
+    // fields worth logging.
+    const flattened = {
+      name: "TypeError",
+      message: "renderer failure",
+      stack: "TypeError: renderer failure\n    at Component",
+    };
+    expect(flattened).not.toBeInstanceOf(Error);
+
+    const details = getErrorDetails(flattened);
+    expect(details.name).toBe(flattened.name);
+    expect(details.message).toBe(flattened.message);
+    expect(details.stack).toBe(flattened.stack);
+  });
+
+  it("ignores non-string name and stack values", () => {
+    const details = getErrorDetails({ message: "m", name: 42, stack: { frames: [] } });
+    expect(details.name).toBeUndefined();
+    expect(details.stack).toBeUndefined();
+  });
+
+  it("does not treat a primitive as carrying error fields", () => {
+    const details = getErrorDetails("just a string");
+    expect(details.message).toBe("just a string");
+    expect(details.name).toBeUndefined();
+    expect(details.stack).toBeUndefined();
+  });
+
+  it("forwards the diagnostics a serialized error arrived with", () => {
+    const serialized = serializeError(
+      new GitOperationError("push-rejected-outdated", "push rejected", {
+        context: { command: "git push" },
+      })
+    );
+    // Simulate the IPC hop: only own-enumerable properties survive it.
+    const overWire = JSON.parse(JSON.stringify(serialized)) as Record<string, unknown>;
+
+    const details = getErrorDetails(overWire);
+    expect(details.gitReason).toBe(serialized.gitReason);
+    expect(details.context).toEqual(serialized.context);
+  });
+
+  it("does not let a throwing accessor escape", () => {
+    const hostile = {
+      message: "original failure",
+      get name(): string {
+        throw new Error("name trap");
+      },
+    };
+
+    let details: Record<string, unknown> = {};
+    expect(() => {
+      details = getErrorDetails(hostile);
+    }).not.toThrow();
+    expect(details.message).toBe("original failure");
+    expect(details.name).toBeUndefined();
+  });
+
+  it("survives a real Error whose message accessor throws", () => {
+    // `getUserMessage` reads `.message` directly for an `instanceof Error`, so
+    // this is the one field that escapes without its own guard.
+    const err = new Error("replaced below");
+    Object.defineProperty(err, "message", {
+      get: () => {
+        throw new Error("message trap");
+      },
+    });
+
+    let details: Record<string, unknown> = {};
+    expect(() => {
+      details = getErrorDetails(err);
+    }).not.toThrow();
+    expect(details.message).toBeTypeOf("string");
+    expect(details.name).toBe("Error");
+  });
+
+  it("survives a throwing Node errno accessor", () => {
+    const err = Object.assign(new Error("io failed"), { syscall: "open" });
+    Object.defineProperty(err, "code", {
+      get: () => {
+        throw new Error("code trap");
+      },
+    });
+
+    let details: Record<string, unknown> = {};
+    expect(() => {
+      details = getErrorDetails(err);
+    }).not.toThrow();
+    // The unreadable field costs only itself; its siblings still report.
+    expect(details.code).toBeUndefined();
+    expect(details.syscall).toBe("open");
+    expect(details.message).toBe("io failed");
+  });
+
+  it("carries the cause of a plain Error, which is non-enumerable", () => {
+    const err = new Error("outer", { cause: new Error("inner") });
+    expect(Object.keys(err)).not.toContain("cause");
+
+    const details = getErrorDetails(err);
+    expect((details.cause as Error).message).toBe("inner");
   });
 });

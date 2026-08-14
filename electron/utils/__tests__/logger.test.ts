@@ -648,6 +648,166 @@ describe("logger", () => {
     });
   });
 
+  describe("Errors inside a log context (#11777)", () => {
+    beforeEach(() => {
+      logBuffer.clear();
+    });
+
+    function lastContext(): Record<string, unknown> | undefined {
+      const entries = logBuffer.getAll();
+      return entries[entries.length - 1]?.context as Record<string, unknown> | undefined;
+    }
+
+    it("keeps the identity of an Error passed at a non-error level", () => {
+      const error = new TypeError("wake failed");
+      logWarn("wake failed", { id: "terminal-1", error });
+
+      const captured = lastContext()?.error as Record<string, unknown>;
+      // Own-property enumeration alone yields `{}` — that was the bug.
+      expect(Object.keys(error)).toHaveLength(0);
+      expect(captured.name).toBe(error.name);
+      expect(captured.message).toBe(error.message);
+      expect(captured.stack).toBeTypeOf("string");
+    });
+
+    it("reaches Errors nested in objects and inside arrays", () => {
+      logWarn("batch failed", {
+        task: { error: new Error("nested failure") },
+        failures: [new Error("listed failure")],
+      });
+
+      const context = lastContext() ?? {};
+      const task = context.task as { error: Record<string, unknown> };
+      expect(task.error.message).toBe("nested failure");
+      const failures = context.failures as Array<Record<string, unknown>>;
+      expect(failures[0]?.message).toBe("listed failure");
+    });
+
+    it("preserves the cause chain of a wrapped Error", () => {
+      const error = new Error("outer", { cause: new Error("root cause") });
+      logWarn("wrapped", { error });
+
+      const captured = lastContext()?.error as { cause?: { message?: string } };
+      expect(captured.cause?.message).toBe("root cause");
+    });
+
+    it("still redacts an Error stored under a sensitive key", () => {
+      logWarn("auth", { apiKey: new Error("s3cret-in-the-message") });
+      expect(lastContext()?.apiKey).toBe("[redacted]");
+    });
+
+    it("clamps a long stack instead of retaining it whole", () => {
+      const error = new Error("long trace");
+      error.stack = `Error: long trace\n${"    at frame\n".repeat(1000)}`;
+      logWarn("long", { error });
+
+      const captured = lastContext()?.error as { stack: string };
+      expect(captured.stack.length).toBeLessThan(error.stack.length);
+      const match = captured.stack.match(/\[…\+(\d+)\]$/);
+      expect(match).not.toBeNull();
+      // Invariant: the kept prefix plus the reported dropped count is the whole
+      // stack, so nothing is silently unaccounted for.
+      const dropped = Number(match![1]);
+      const kept = captured.stack.length - match![0].length;
+      expect(kept + dropped).toBe(error.stack.length);
+    });
+
+    it("scrubs a secret out of a stack before it is clamped", () => {
+      const secret = `ghp_${"b".repeat(36)}`;
+      const error = new Error("token leak");
+      error.stack = `Error: token leak\n    at auth (${secret})\n${"    at frame\n".repeat(500)}`;
+      logWarn("leaky", { error });
+
+      const captured = lastContext()?.error as { stack: string };
+      expect(captured.stack).not.toContain(secret);
+    });
+
+    it("does not throw on an Error whose cause chain is circular", () => {
+      const first = new Error("first");
+      const second = new Error("second", { cause: first });
+      (first as Error & { cause?: unknown }).cause = second;
+
+      expect(() => logWarn("cyclic", { error: first })).not.toThrow();
+      expect((lastContext()?.error as { message?: string }).message).toBe("first");
+    });
+
+    it("writes the flattened Error to the log file, not an empty object", async () => {
+      initializeLogger(TEST_LOG_DIR);
+      logWarn("disk trace", { error: new Error("landed-on-disk") });
+      await flushLogFileWritesForTesting();
+
+      const content = readFileSync(getLogFilePath(), "utf8");
+      expect(content).toContain("landed-on-disk");
+      expect(content).not.toContain('"error": {}');
+    });
+
+    it("degrades instead of throwing when an Error field is unreadable", () => {
+      const error = new Error("still-know-this");
+      Object.defineProperty(error, "stack", {
+        get: () => {
+          throw new Error("hostile getter");
+        },
+      });
+
+      expect(() => logWarn("hostile", { error })).not.toThrow();
+      const captured = lastContext()?.error as Record<string, unknown>;
+      expect(captured.message).toBe("still-know-this");
+    });
+
+    it("does not throw when a context value's prototype trap throws", () => {
+      // `instanceof` runs `getPrototypeOf`, so Error detection itself has to be
+      // safe against a hostile value.
+      const trapped = new Proxy(
+        {},
+        {
+          getPrototypeOf() {
+            throw new Error("getPrototypeOf trap");
+          },
+        }
+      );
+
+      expect(() => logWarn("trapped", { trapped })).not.toThrow();
+    });
+
+    it("keeps name and stack when an already-flattened error arrives from the renderer", () => {
+      // `dispatchRendererLog` forwards `context.error` — a plain object by the
+      // time it crosses the contextBridge — as logError's dedicated argument.
+      const fromRenderer = {
+        name: "TypeError",
+        message: "renderer failure",
+        stack: "TypeError: renderer failure\n    at Component",
+      };
+      logError("renderer said", fromRenderer, { source: "Renderer" });
+
+      const captured = lastContext()?.error as Record<string, unknown>;
+      expect(captured.name).toBe(fromRenderer.name);
+      expect(captured.message).toBe(fromRenderer.message);
+      expect(captured.stack).toBe(fromRenderer.stack);
+    });
+
+    it("keeps the classification and cause of a rich error flattened by the renderer", () => {
+      // What `serializeError` produces for a GitOperationError in the renderer.
+      const fromRenderer = {
+        name: "GitOperationError",
+        message: "push rejected",
+        stack: "GitOperationError: push rejected\n    at push",
+        gitReason: "push-rejected-outdated",
+        branchName: "feature/x",
+        context: { command: "git push" },
+        cause: { name: "Error", message: "remote ref moved" },
+      };
+      logError("git said no", fromRenderer, { source: "Renderer" });
+
+      const captured = lastContext()?.error as Record<string, unknown>;
+      // Without forwarding these, a renderer git failure reached the log file
+      // as a bare message with no way to tell what kind of failure it was.
+      expect(captured.gitReason).toBe(fromRenderer.gitReason);
+      expect(captured.branchName).toBe(fromRenderer.branchName);
+      expect(captured.context).toEqual(fromRenderer.context);
+      expect((captured.cause as { message?: string }).message).toBe("remote ref moved");
+    });
+  });
+
   describe("pruneOldLogsAsync", () => {
     const logsDir = join(TEST_LOG_DIR, "logs");
     const debugDir = join(TEST_LOG_DIR, "debug");

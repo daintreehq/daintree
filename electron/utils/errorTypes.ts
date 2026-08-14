@@ -216,6 +216,44 @@ export function getUserMessage(error: unknown): string {
   return formatErrorMessage(error, "An unknown error occurred");
 }
 
+/** String-valued fields worth reporting from any error-shaped object. */
+const DUCK_TYPED_ERROR_FIELDS = ["name", "stack"] as const;
+
+/**
+ * Fields `serializeError` promotes onto a flattened error record. Forwarded as
+ * they are so an error that crossed IPC keeps the diagnostics it arrived with.
+ * A live `Error` reaching this function is read the same way, which is why a
+ * plain `new Error(msg, { cause })` now reports its cause too — `cause` is
+ * non-enumerable, so it used to be dropped for everything but a `DaintreeError`.
+ * The `isDaintreeError` branch below still wins for the classes it knows.
+ */
+const FORWARDED_SERIALIZED_FIELDS = [
+  "userMessage",
+  "gitReason",
+  "leaseSha",
+  "branchName",
+  "context",
+  "cause",
+  "properties",
+] as const;
+
+/** Node's `ErrnoException` fields, reported whenever the error carries them. */
+const NODE_ERROR_FIELDS = ["code", "errno", "syscall", "path"] as const;
+
+/** Run a read that touches caller-supplied accessors, swallowing a throw. */
+function guardedRead<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Read one field without letting a throwing accessor escape into the log. */
+function readErrorField(error: object, key: string): unknown {
+  return guardedRead(() => (error as Record<string, unknown>)[key]);
+}
+
 /**
  * Handles circular references safely to prevent infinite recursion
  */
@@ -223,16 +261,39 @@ export function getErrorDetails(
   error: unknown,
   seen = new WeakSet<Error>()
 ): Record<string, unknown> {
+  // Every field below is read under its own guard, because this feeds the
+  // logger: an error object with a throwing accessor must cost that one field,
+  // not turn the log call into a second failure. `getUserMessage` reads
+  // `error.message` unguarded for a real `Error`, so even it needs the net.
   const details: Record<string, unknown> = {
-    message: getUserMessage(error),
+    message: guardedRead(() => getUserMessage(error)) ?? "[unreadable error message]",
   };
 
-  if (error instanceof Error) {
-    details.name = error.name;
-    details.stack = error.stack;
+  // Duck-typed rather than gated on `instanceof Error`, because errors that
+  // have already crossed a process boundary arrive as plain objects: the
+  // renderer flattens an Error before `logs.writeBatch` (the contextBridge
+  // strips non-enumerable properties), so `dispatchRendererLog` hands this
+  // function a serialized record and an `instanceof` gate silently dropped the
+  // name and stack of every renderer-side error (#11777).
+  if (error !== null && typeof error === "object") {
+    for (const key of DUCK_TYPED_ERROR_FIELDS) {
+      const value = readErrorField(error, key);
+      if (typeof value === "string") details[key] = value;
+    }
+    // A record that already carries the flattened chain keeps it: these are the
+    // fields `serializeError` promotes, and without them a renderer-side
+    // `GitOperationError` reached the log file having lost its classification,
+    // its context and its cause.
+    for (const key of FORWARDED_SERIALIZED_FIELDS) {
+      const value = readErrorField(error, key);
+      if (value !== undefined) details[key] = value;
+    }
   }
 
-  if (isDaintreeError(error)) {
+  // `isDaintreeError` is an `instanceof` check, which runs a Proxy's
+  // `getPrototypeOf` trap, and the branch then reads `.context`/`.cause`.
+  guardedRead(() => {
+    if (!isDaintreeError(error)) return;
     details.context = error.context;
     if (error.cause) {
       if (error.cause instanceof Error && !seen.has(error.cause)) {
@@ -242,14 +303,13 @@ export function getErrorDetails(
         details.cause = getErrorDetails(error.cause, seen);
       }
     }
-  }
+  });
 
   if (error && typeof error === "object") {
-    const nodeError = error as NodeJS.ErrnoException;
-    if (nodeError.code) details.code = nodeError.code;
-    if (nodeError.errno) details.errno = nodeError.errno;
-    if (nodeError.syscall) details.syscall = nodeError.syscall;
-    if (nodeError.path) details.path = nodeError.path;
+    for (const key of NODE_ERROR_FIELDS) {
+      const value = readErrorField(error, key);
+      if (value) details[key] = value;
+    }
   }
 
   return details;
