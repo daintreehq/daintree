@@ -5,6 +5,9 @@ import type { BulkProjectStats } from "../../../../shared/types/ipc/project.js";
 import type { MemoryRollup, MemoryRollupProject } from "../../../../shared/types/pty-host.js";
 import { ProjectStatsService } from "../../../services/ProjectStatsService.js";
 import { FleetSnapshotService } from "../../../services/FleetSnapshotService.js";
+import { RunAttentionService } from "../../../services/RunAttentionService.js";
+import { isCleaningUp } from "../../../lifecycle/shutdownCoordinator.js";
+import { store } from "../../../store.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
 import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
 import { projectStore } from "../../../services/ProjectStore.js";
@@ -16,6 +19,7 @@ import { BrowserWindow } from "electron";
 
 let projectStatsServiceInstance: ProjectStatsService | null = null;
 let fleetSnapshotServiceInstance: FleetSnapshotService | null = null;
+let runAttentionServiceInstance: RunAttentionService | null = null;
 
 export function getProjectStatsService(): ProjectStatsService | null {
   return projectStatsServiceInstance;
@@ -23,6 +27,10 @@ export function getProjectStatsService(): ProjectStatsService | null {
 
 export function getFleetSnapshotService(): FleetSnapshotService | null {
   return fleetSnapshotServiceInstance;
+}
+
+export function getRunAttentionService(): RunAttentionService | null {
+  return runAttentionServiceInstance;
 }
 
 export function registerProjectStatsHandlers(deps: HandlerDependencies): () => void {
@@ -45,11 +53,34 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     projectStatsServiceInstance = null;
   });
 
+  // Park intent lives beside the snapshot that projects it: the attention
+  // service owns the records, the snapshot decorates rows with them, and a
+  // park-changed event drives the same refresh path as an agent transition.
+  // `isCleaningUp` freezes releases during graceful shutdown — the chain kills
+  // every terminal, and those kills would otherwise read as busy→ready edges
+  // and wipe the very parks persistence is carrying across the restart.
+  const runAttentionService = new RunAttentionService(
+    {
+      load: () => store.get("parkedRuns"),
+      save: (records) => store.set("parkedRuns", records),
+    },
+    { isQuitting: isCleaningUp }
+  );
+  runAttentionServiceInstance = runAttentionService;
+  handlers.push(() => {
+    runAttentionService.dispose();
+    // Identity-guarded: a stale cleanup from a superseded registration must
+    // not null out a newer instance's global.
+    if (runAttentionServiceInstance === runAttentionService) {
+      runAttentionServiceInstance = null;
+    }
+  });
+
   // The run-grained sibling of the counts above, on the same source and the
   // same cadence. Registered here so the two can never be started apart, and so
   // one lifecycle owns both. They sample independently, so a surface reading
   // runs and one reading counts can differ across a single transition.
-  const fleetSnapshotService = new FleetSnapshotService(deps.ptyClient);
+  const fleetSnapshotService = new FleetSnapshotService(deps.ptyClient, runAttentionService);
   fleetSnapshotServiceInstance = fleetSnapshotService;
   fleetSnapshotService.start();
   registerDeferredTask({

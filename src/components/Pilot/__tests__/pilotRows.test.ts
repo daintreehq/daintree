@@ -722,7 +722,7 @@ describe("filterPilotGroups", () => {
 });
 
 describe("countPilotBands", () => {
-  /** One run in each of the six bands, spread over two projects. */
+  /** One run in each band, spread over two projects. */
   const wholeFleet = () =>
     buildPilotGroups(
       [
@@ -742,6 +742,13 @@ describe("countPilotBands", () => {
           agentState: "completed",
           since: NOW - 120_000,
         }),
+        run({
+          runId: "parked",
+          workspaceId: "p2",
+          agentState: "waiting",
+          since: NOW,
+          park: { parkedAt: NOW - 60_000 },
+        }),
         run({ runId: "idle", workspaceId: "p2", agentState: "exited", since: NOW }),
       ],
       ctx({
@@ -754,14 +761,18 @@ describe("countPilotBands", () => {
       })
     );
 
-  it("maps all six bands onto the four segments", () => {
+  it("maps every band onto the segments", () => {
     const counts = countPilotBands(wholeFleet());
 
-    expect(counts.all).toBe(6);
+    expect(counts.all).toBe(7);
     // Blocked and needs-you are one demand; review is a hand-back, not a block.
     expect(counts["needs-you"]).toBe(2);
     expect(counts.working).toBe(1);
     expect(counts.finished).toBe(2);
+    // Parked and exited live only under All: the run parked while waiting must
+    // NOT surface through the Waiting segment — hiding from that segment is
+    // the entire point of parking it.
+    expect(counts["needs-you"] + counts.working + counts.finished).toBe(counts.all - 2);
   });
 
   it("leaves an exited run out of every segment but All", () => {
@@ -786,6 +797,155 @@ describe("countPilotBands", () => {
 
     expect(countPilotBands(built)["needs-you"]).toBe(2);
     expect(countPilotBands(filterPilotGroups(built, "auth"))["needs-you"]).toBe(1);
+  });
+});
+
+describe("parked rows", () => {
+  it("ages a parked row from the park, not the underlying agent state", () => {
+    // A three-hour-old waiting run parked two minutes ago must read
+    // "Parked · 2m" — the row is now about the decision, not the wait.
+    const [group] = buildPilotGroups(
+      [
+        run({
+          agentState: "waiting",
+          since: NOW - 3 * 3_600_000,
+          park: { parkedAt: NOW - 120_000, note: "after the migration" },
+        }),
+      ],
+      ctx()
+    );
+    const row = group!.rows[0]!;
+
+    expect(row.statusLabel).toBe("Parked");
+    expect(row.age).toBe("2m");
+  });
+
+  it("orders parked rows by park age, oldest shelf first", () => {
+    // Within-band anti-starvation, on the timestamp the band is about: the
+    // agent-state `since` here would sort them the other way round.
+    const [group] = buildPilotGroups(
+      [
+        run({
+          runId: "recent",
+          agentState: "waiting",
+          since: NOW - 3_600_000,
+          park: { parkedAt: NOW - 60_000 },
+        }),
+        run({
+          runId: "ancient",
+          agentState: "waiting",
+          since: NOW - 60_000,
+          park: { parkedAt: NOW - 3_600_000 },
+        }),
+      ],
+      ctx()
+    );
+
+    expect(group!.rows.map((r) => r.run.runId)).toEqual(["ancient", "recent"]);
+  });
+
+  it("contributes nothing to a group's demand count, whatever the state under it", () => {
+    const [group] = buildPilotGroups(
+      [
+        run({
+          runId: "a",
+          agentState: "waiting",
+          waitingReason: "error",
+          since: NOW,
+          park: { parkedAt: NOW },
+        }),
+        run({ runId: "b", agentState: "waiting", since: NOW }),
+      ],
+      ctx()
+    );
+
+    expect(group!.demandCount).toBe(1);
+    // And it sorts below the live demand it would otherwise have been.
+    expect(group!.rows.map((r) => r.run.runId)).toEqual(["b", "a"]);
+  });
+
+  it("is admitted by no state segment — hiding from Waiting is the point of parking", () => {
+    const groups = buildPilotGroups(
+      [run({ agentState: "waiting", since: NOW, park: { parkedAt: NOW } })],
+      ctx()
+    );
+
+    for (const segment of ["needs-you", "working", "finished"] as const) {
+      expect(filterPilotBands(groups, segment)).toEqual([]);
+    }
+    expect(filterPilotBands(groups, "all")[0]!.rows).toHaveLength(1);
+  });
+
+  it("gets a segment of its own that admits nothing else", () => {
+    const groups = buildPilotGroups(
+      [
+        run({ runId: "shelved", agentState: "waiting", since: NOW, park: { parkedAt: NOW } }),
+        run({ runId: "live", agentState: "waiting", since: NOW }),
+      ],
+      ctx()
+    );
+
+    const [parkedOnly] = filterPilotBands(groups, "parked");
+    expect(parkedOnly!.rows.map((r) => r.run.runId)).toEqual(["shelved"]);
+    expect(countPilotBands(groups).parked).toBe(1);
+  });
+
+  it("is findable by its note — the user's own words for the run", () => {
+    const groups = buildPilotGroups(
+      [
+        run({
+          runId: "shelved",
+          agentState: "waiting",
+          since: NOW,
+          title: "auth refactor",
+          park: { parkedAt: NOW, note: "resume after the migration lands" },
+        }),
+        run({ runId: "other", agentState: "waiting", since: NOW, title: "docs pass" }),
+      ],
+      ctx()
+    );
+
+    const [matched] = filterPilotGroups(groups, "migration");
+    expect(matched!.rows.map((r) => r.run.runId)).toEqual(["shelved"]);
+  });
+});
+
+describe("stalled runs", () => {
+  it("carries the quiet duration only for a working run main flagged", () => {
+    const [group] = buildPilotGroups(
+      [
+        run({
+          runId: "stalled",
+          agentState: "working",
+          since: NOW - 3_600_000,
+          quietSince: NOW - 12 * 60_000,
+        }),
+        run({ runId: "busy", agentState: "working", since: NOW - 3_600_000 }),
+      ],
+      ctx()
+    );
+
+    const byId = new Map(group!.rows.map((r) => [r.run.runId, r]));
+    expect(byId.get("stalled")?.quietFor).toBe("12m");
+    expect(byId.get("busy")?.quietFor).toBeNull();
+  });
+
+  it("drops the cue when the run is no longer in the running band", () => {
+    // A stale quietSince arriving alongside a state change (one poll of skew)
+    // must not paint a waiting or parked row as a stalled worker.
+    const [group] = buildPilotGroups(
+      [
+        run({
+          agentState: "working",
+          since: NOW,
+          quietSince: NOW - 12 * 60_000,
+          park: { parkedAt: NOW },
+        }),
+      ],
+      ctx()
+    );
+
+    expect(group!.rows[0]!.quietFor).toBeNull();
   });
 });
 

@@ -27,7 +27,7 @@ vi.mock("../AgentAvailabilityStore.js", () => ({
   getAgentAvailabilityStore: () => availabilityMock,
 }));
 
-import { FleetSnapshotService } from "../FleetSnapshotService.js";
+import { FleetSnapshotService, STALL_QUIET_MS } from "../FleetSnapshotService.js";
 import type { FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
 
 const NOW = 1_830_001;
@@ -572,6 +572,156 @@ describe("FleetSnapshotService", () => {
     service.pushSnapshotTo(wc as never);
 
     expect(wc.send).not.toHaveBeenCalled();
+  });
+
+  it("decorates a run with its park record", async () => {
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    const park = { parkedAt: NOW - 5_000, note: "after the migration", gateRunId: "t9" };
+    const attention = { getAll: () => new Map([["t1", park]]) };
+    const service = new FleetSnapshotService(client as never, attention as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(lastSnapshot().runs[0].park).toEqual(park);
+    service.stop();
+  });
+
+  it("treats a park change as a fleet change even though no agent state moved", async () => {
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    let parks = new Map();
+    const attention = { getAll: () => parks };
+    const service = new FleetSnapshotService(client as never, attention as never);
+    service.start();
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+    expect(lastSnapshot().runs[0].park).toBeUndefined();
+
+    parks = new Map([["t1", { parkedAt: NOW }]]);
+    eventEmitter.emit("terminal:park-changed", { id: "t1", parked: true, timestamp: NOW });
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(broadcastMock).toHaveBeenCalledTimes(2);
+    expect(lastSnapshot().runs[0].park).toEqual({ parkedAt: NOW });
+    service.stop();
+  });
+
+  it("re-broadcasts on a note-only park change, advancing changedAt", async () => {
+    const client = makePtyClient([terminal({ agentState: "waiting", lastStateChange: NOW })]);
+    let parks = new Map([["t1", { parkedAt: NOW - 10_000, note: "before" }]]);
+    const attention = { getAll: () => parks };
+    const service = new FleetSnapshotService(client as never, attention as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    const firstChangedAt = lastSnapshot().changedAt;
+
+    // An unchanged park is not a fleet change — suppression must hold.
+    vi.setSystemTime(NOW + 5_000);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+
+    // The note is the row's user-facing intent, so editing it alone is news.
+    parks = new Map([["t1", { parkedAt: NOW - 10_000, note: "after" }]]);
+    vi.setSystemTime(NOW + 10_000);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(broadcastMock).toHaveBeenCalledTimes(2);
+    expect(lastSnapshot().runs[0].park?.note).toBe("after");
+    expect(lastSnapshot().changedAt).toBeGreaterThan(firstChangedAt);
+    service.stop();
+  });
+
+  it("reports a working run as quiet only past the stall threshold", async () => {
+    const longAgo = NOW - 2 * STALL_QUIET_MS;
+    const stalledAt = NOW - STALL_QUIET_MS - 60_000;
+    const client = makePtyClient([
+      terminal({
+        id: "stalled",
+        agentState: "working",
+        spawnedAt: longAgo,
+        lastStateChange: stalledAt,
+        lastOutputTime: stalledAt,
+      }),
+      terminal({
+        id: "busy",
+        agentState: "working",
+        spawnedAt: longAgo,
+        lastStateChange: longAgo,
+        lastOutputTime: NOW - 1_000,
+      }),
+      // Silence is only a symptom while the agent claims to be WORKING — a
+      // waiting run is supposed to be quiet.
+      terminal({
+        id: "waiting",
+        agentState: "waiting",
+        spawnedAt: longAgo,
+        lastStateChange: stalledAt,
+        lastOutputTime: stalledAt,
+      }),
+    ]);
+    const service = new FleetSnapshotService(client as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    const byId = new Map(lastSnapshot().runs.map((r) => [r.runId, r]));
+    expect(byId.get("stalled")?.quietSince).toBe(stalledAt);
+    expect(byId.get("busy")?.quietSince).toBeUndefined();
+    expect(byId.get("waiting")?.quietSince).toBeUndefined();
+    service.stop();
+  });
+
+  it("anchors the stall on the working stint, not on output alone", async () => {
+    // A run resumed after waiting quietly for twenty minutes enters `working`
+    // with an ancient lastOutputTime. Judging by output alone would stamp it
+    // "quiet 20m" before it had a chance to make a sound.
+    const ancientOutput = NOW - 2 * STALL_QUIET_MS;
+    const client = makePtyClient([
+      terminal({
+        agentState: "working",
+        spawnedAt: ancientOutput,
+        lastStateChange: NOW - 5_000,
+        lastOutputTime: ancientOutput,
+      }),
+    ]);
+    const service = new FleetSnapshotService(client as never);
+    service.start();
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(lastSnapshot().runs[0].quietSince).toBeUndefined();
+
+    // The stint itself going silent past the threshold IS the stall, and the
+    // armed poll notices the crossing without any event.
+    await vi.advanceTimersByTimeAsync(STALL_QUIET_MS + 30_000);
+    expect(lastSnapshot().runs[0].quietSince).toBe(NOW - 5_000);
+    service.stop();
+  });
+
+  it("stays suppressed while a stall persists — the cue costs one broadcast, not one per poll", async () => {
+    const longAgo = NOW - 2 * STALL_QUIET_MS;
+    const stalledAt = NOW - STALL_QUIET_MS - 60_000;
+    const client = makePtyClient([
+      terminal({
+        agentState: "working",
+        spawnedAt: longAgo,
+        lastStateChange: stalledAt,
+        lastOutputTime: stalledAt,
+      }),
+    ]);
+    const service = new FleetSnapshotService(client as never);
+
+    for (let i = 0; i < 4; i++) {
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      vi.setSystemTime(NOW + (i + 1) * 5_000);
+    }
+
+    // The wire value is a constant anchor while the silence lasts — a
+    // "quiet for Nms" duration would re-broadcast every poll.
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+    expect(lastSnapshot().runs[0].quietSince).toBe(stalledAt);
+    service.stop();
   });
 
   it("broadcasts a genuinely empty fleet so a cleared queue reaches every view", async () => {

@@ -373,6 +373,17 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./fleet.js").FleetSnapshot | null;
   };
+  "fleet:park-run": {
+    args: [
+      runId: string,
+      options?: { note?: string | undefined; gateRunId?: string | undefined } | undefined,
+    ];
+    result: import("./fleet.js").RunParkRecord;
+  };
+  "fleet:unpark-run": {
+    args: [runId: string];
+    result: boolean;
+  };
   "forge-audit:clear-log": {
     args: [];
     result: void;

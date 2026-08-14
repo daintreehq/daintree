@@ -66,6 +66,10 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   // close paths and bridged from the pty-host's trash-expiry capture)
   "agent-session:recorded": "bus",
 
+  // A gated park auto-released (emitted by RunAttentionService; the renderer's
+  // release notification rides this)
+  "terminal:park-released": "bus",
+
   // Global broadcasts emitted externally (no TypedEventBus counterpart).
   "resource:profile-changed": "external",
   "sound:cancel": "external",

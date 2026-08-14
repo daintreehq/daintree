@@ -4,12 +4,27 @@ import { events } from "./events.js";
 import { classifyRun } from "./projectAgentCounts.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 import type { PtyClient } from "./PtyClient.js";
+import type { RunAttentionService } from "./RunAttentionService.js";
 import type { FleetRunRow, FleetSnapshot } from "../../shared/types/ipc/fleet.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEBOUNCE_MS = 200;
+
+/**
+ * How long a working run must be silent before the row says so.
+ *
+ * Ten minutes is deliberately far past any agent's thinking pauses — the cue
+ * exists for the wedge, not the lull, and a threshold that fires during
+ * ordinary long tool calls would train the user to ignore it. Detection runs
+ * on the poll, so the crossing lands within one poll interval of the
+ * threshold; the value put on the wire is the silence's ANCHOR (last output
+ * or entry into the working stint, whichever is later — a constant while the
+ * silence lasts), which is what keeps a stalled run from defeating
+ * unchanged-payload suppression.
+ */
+export const STALL_QUIET_MS = 10 * 60_000;
 
 /**
  * The fleet's live run list, pushed to every view.
@@ -48,7 +63,10 @@ export class FleetSnapshotService {
    */
   private lastSuccessfulReadAt: number | null = null;
 
-  constructor(private ptyClient: PtyClient | undefined | null) {}
+  constructor(
+    private ptyClient: PtyClient | undefined | null,
+    private runAttention?: RunAttentionService | null
+  ) {}
 
   get isStarted(): boolean {
     return this.started;
@@ -70,6 +88,9 @@ export class FleetSnapshotService {
     subscribe("agent:state-changed");
     subscribe("terminal:trashed");
     subscribe("terminal:restored");
+    // Park records ride the rows, so a park set or lifted is a fleet change
+    // even though no agent state moved.
+    subscribe("terminal:park-changed");
   }
 
   updatePollInterval(ms: number): void {
@@ -198,7 +219,11 @@ export class FleetSnapshotService {
         x.cwd !== y.cwd ||
         x.launchAgentId !== y.launchAgentId ||
         x.everDetectedAgent !== y.everDetectedAgent ||
-        x.agentPresetColor !== y.agentPresetColor
+        x.agentPresetColor !== y.agentPresetColor ||
+        x.park?.parkedAt !== y.park?.parkedAt ||
+        x.park?.note !== y.park?.note ||
+        x.park?.gateRunId !== y.park?.gateRunId ||
+        x.quietSince !== y.quietSince
       ) {
         return false;
       }
@@ -231,6 +256,8 @@ export class FleetSnapshotService {
       }
 
       const availability = getAgentAvailabilityStore();
+      const parkRecords = this.runAttention?.getAll();
+      const stallCutoff = Date.now() - STALL_QUIET_MS;
       const runs: FleetRunRow[] = [];
 
       for (const terminal of allTerminals) {
@@ -239,6 +266,7 @@ export class FleetSnapshotService {
         if (!terminal.projectId) continue;
         if (classifyRun(terminal, (id) => availability.isHelpTerminal(id)) !== null) continue;
 
+        const park = parkRecords?.get(terminal.id);
         runs.push({
           runId: terminal.id,
           workspaceId: terminal.projectId,
@@ -271,6 +299,26 @@ export class FleetSnapshotService {
           ...(terminal.agentPresetColor !== undefined
             ? { agentPresetColor: terminal.agentPresetColor }
             : {}),
+          // User intent decorates the row here so every surface reads park
+          // state and agent state in one payload, never joining two feeds.
+          ...(park !== undefined ? { park } : {}),
+          // Stall cue: only for a working run, and only once the CURRENT
+          // working stint has been silent past the threshold. Anchored on the
+          // later of last output, the transition into this state and the
+          // spawn — a run resumed after waiting quietly for twenty minutes
+          // enters `working` with an ancient lastOutputTime, and anchoring on
+          // output alone stamped it "quiet 20m" before it had a chance to
+          // make a sound. The raw lastOutputTime must never ride the row —
+          // see the wire type's own doc for the churn argument.
+          ...(() => {
+            if (terminal.agentState !== "working") return {};
+            const quietAnchor = Math.max(
+              typeof terminal.lastOutputTime === "number" ? terminal.lastOutputTime : 0,
+              typeof terminal.lastStateChange === "number" ? terminal.lastStateChange : 0,
+              terminal.spawnedAt
+            );
+            return quietAnchor > 0 && quietAnchor <= stallCutoff ? { quietSince: quietAnchor } : {};
+          })(),
         });
       }
 

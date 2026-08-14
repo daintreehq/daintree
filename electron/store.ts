@@ -28,6 +28,7 @@ import type { PluginMcpConsentRecord } from "../shared/types/pluginMcpConsent.js
 import type { PluginCapabilityConsentRecord } from "../shared/types/pluginCapabilityConsent.js";
 import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pluginMcp.js";
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
+import type { RunParkRecord } from "../shared/types/ipc/fleet.js";
 import type { RunHistoryRecord } from "../shared/types/ipc/runHistory.js";
 import type { SuggestedDictionaryEntry } from "../shared/types/ipc/api.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/forge.js";
@@ -95,6 +96,13 @@ export interface StoreSchema {
   };
   idleTerminalDismissals: Record<string, number>;
   idleTerminalNotifiedAt: Record<string, number>;
+  /**
+   * Park records keyed by terminal id (`RunAttentionService` is the sole
+   * reader/writer). Terminal ids survive app restart — panels rehydrate and
+   * respawn under the same ids — so a park set before quitting still holds
+   * after relaunch. Records for ids that never come back are pruned by age.
+   */
+  parkedRuns: Record<string, RunParkRecord>;
   idleBackgroundAutoClose: {
     enabled: boolean;
     thresholdMinutes: number;
@@ -555,6 +563,7 @@ const storeOptions = {
     },
     idleTerminalDismissals: {},
     idleTerminalNotifiedAt: {},
+    parkedRuns: {},
     // Auto-close defaults OFF: it's a structural change to project lifecycle
     // (frees the renderer + workspace host), so users opt in. 15-min default
     // threshold matches the issue spec.

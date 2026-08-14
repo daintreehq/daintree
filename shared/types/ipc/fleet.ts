@@ -3,6 +3,36 @@ import type { BuiltInAgentId } from "../../config/agentIds.js";
 import type { PanelTitleMode } from "../panel.js";
 
 /**
+ * Longest note a park may carry, in UTF-16 code units. Lives on the shared
+ * wire type because both ends enforce it: the service caps what it stores,
+ * and the editor caps what can be typed — two limits that drift apart would
+ * let a user write a note the store then silently shortens.
+ */
+export const MAX_PARK_NOTE_LENGTH = 500;
+
+/**
+ * A user's decision that a run does not need them right now.
+ *
+ * Parking is intent, not state: the agent underneath keeps doing whatever it
+ * was doing, and every attention surface (bands, demand counts, filters) treats
+ * the run as shelved until the record is removed — by hand, or automatically
+ * when the gate terminal next comes free. Owned by Main
+ * (`RunAttentionService`) for the same reason the snapshot is: intent must
+ * survive view eviction and app restart, and terminal ids do.
+ */
+export interface RunParkRecord {
+  /** When the user parked the run (epoch ms). */
+  parkedAt: number;
+  /** Why it's parked — the user's own words, shown wherever the run is listed. */
+  note?: string;
+  /**
+   * Terminal id whose next busy→ready transition releases this park. Absent
+   * means the park holds until the user lifts it.
+   */
+  gateRunId?: string;
+}
+
+/**
  * One agent run: a single agent terminal living in a single worktree.
  *
  * The run — not the project — is the unit here, and that is the whole point of
@@ -14,13 +44,14 @@ import type { PanelTitleMode } from "../panel.js";
  * Every field here is already on the pty-host's terminal record, so the whole
  * row is free: main fetches exactly this data today and discards it.
  *
- * Deliberately excludes the terminal's `lastOutputTime`. It is rewritten on
- * every PTY data chunk (`PtyDataPipeline`), so carrying it would change the
+ * Deliberately excludes the terminal's raw `lastOutputTime`. It is rewritten
+ * on every PTY data chunk (`PtyDataPipeline`), so carrying it would change the
  * payload many times a second for any working agent and defeat the snapshot's
- * unchanged-payload suppression exactly when the fleet is busiest. Stall
- * detection wants that signal, but it needs per-run calibration against the
- * run's own output rhythm and belongs beside the agent FSM, not on a list
- * projection whose whole cost model depends on changing rarely.
+ * unchanged-payload suppression exactly when the fleet is busiest. What rides
+ * instead is {@link quietSince}: the same signal, but only once a working run
+ * has been silent long enough to be worth saying — a value that is absent for
+ * a healthy busy agent and CONSTANT for a stalled one, so it costs one
+ * broadcast at the threshold crossing and nothing after.
  */
 export interface FleetRunRow {
   /** Terminal id. The run's identity, and the handle any action takes. */
@@ -73,6 +104,23 @@ export interface FleetRunRow {
   everDetectedAgent?: boolean;
   /** User-chosen preset colour, which outranks the agent's default brand hue. */
   agentPresetColor?: string;
+  /**
+   * Present iff the user parked this run. Rides the row so every surface reads
+   * one source of truth; the band logic demotes a parked run below the fold and
+   * the note travels with it.
+   */
+  park?: RunParkRecord;
+  /**
+   * When a WORKING run last showed signs of life — the later of its last
+   * output and its entry into the current working stint — present only once
+   * that silence has crossed main's stall threshold. "Working · 47m" and
+   * "working but wedged for 12 minutes" are different facts, and without this
+   * field they render identically. Anchoring on the stint and not output
+   * alone keeps a freshly resumed run from inheriting its old waiting silence
+   * as a stall. Absent means healthy (or not working at all), never merely
+   * unknown.
+   */
+  quietSince?: number;
 }
 
 /**
