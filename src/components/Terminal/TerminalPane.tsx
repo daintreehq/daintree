@@ -40,6 +40,7 @@ import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
 import { ScrollbackRestoreErrorBanner } from "./ScrollbackRestoreErrorBanner";
+import { TerminalAttachErrorBanner } from "./TerminalAttachErrorBanner";
 import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { ErrorBanner } from "../Errors/ErrorBanner";
@@ -308,6 +309,8 @@ export interface TerminalPaneProps {
   reconnectError?: TerminalReconnectError;
   spawnError?: SpawnError;
   scrollbackRestoreError?: TerminalScrollbackRestoreError;
+  /** Renderer attach failure (#11776) — the pane cannot paint at all. */
+  attachError?: string;
   isMultiPanelGrid?: boolean;
   detectedProcessId?: string;
   // Group-level ambient state: highest-urgency state across all tabs, for container border styling
@@ -354,6 +357,7 @@ function TerminalPaneComponent({
   reconnectError,
   spawnError,
   scrollbackRestoreError,
+  attachError,
   isMultiPanelGrid = true,
   detectedProcessId,
   ambientAgentState,
@@ -968,6 +972,26 @@ function TerminalPaneComponent({
     clearScrollbackRestoreError(id);
   };
 
+  // No dismiss counterpart on purpose (#11776): the banner is the only sign
+  // the pane is dead, so it clears when the rebuild actually succeeds, not
+  // when the user waves it away. The busy state keeps the button spinning for
+  // the rebuild's duration — it awaits a write drain, an addon load, an open
+  // and a scrollback replay, well past the Doherty threshold.
+  //
+  // Stored as the id being rebuilt rather than a bare boolean: this component
+  // is reused across tab switches within a group, so a plain flag would let a
+  // retry on one terminal disable the Retry button of whichever terminal the
+  // pane shows next — and let the first terminal's late settlement clear the
+  // second one's busy state.
+  const [retryingAttachId, setRetryingAttachId] = useState<string | null>(null);
+  const isRebuildingDisplay = retryingAttachId === id;
+  const handleRetryAttach = useCallback(() => {
+    setRetryingAttachId(id);
+    void terminalInstanceService
+      .recoverPoisonedTerminal(id, { manual: true })
+      .finally(() => setRetryingAttachId((current) => (current === id ? null : current)));
+  }, [id]);
+
   useEffect(() => {
     terminalInstanceService.setFocused(id, isFocused);
 
@@ -1348,6 +1372,17 @@ function TerminalPaneComponent({
             onDismiss={handleDismissScrollbackRestoreError}
             onRestart={handleRestart}
             isRestarting={isRestarting}
+          />
+        )}
+      </BannerSlot>
+
+      <BannerSlot visible={Boolean(attachError)}>
+        {attachError && (
+          <TerminalAttachErrorBanner
+            terminalId={id}
+            error={attachError}
+            onRetry={handleRetryAttach}
+            isRetrying={isRebuildingDisplay}
           />
         )}
       </BannerSlot>

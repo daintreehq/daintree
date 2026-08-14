@@ -385,6 +385,11 @@ export interface PtyPanelData extends BasePanelData {
   reconnectError?: TerminalReconnectError;
   /** Scrollback restore failure - set when deferred scrollback replay fails */
   scrollbackRestoreError?: TerminalScrollbackRestoreError;
+  /** Renderer attach failure (#11776) — the xterm instance could not be opened,
+   *  so the pane cannot paint even though the PTY is healthy and streaming.
+   *  Deliberately not persisted: a restart builds a fresh terminal anyway, and
+   *  a restored banner would describe a failure that no longer exists. */
+  attachError?: string;
   /** Error that occurred when spawning the PTY process */
   spawnError?: import("./pty-host.js").SpawnError;
   /** Flow control status - indicates if terminal is paused/suspended due to backpressure or safety policy.

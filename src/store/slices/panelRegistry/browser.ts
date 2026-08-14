@@ -36,6 +36,8 @@ export const createBrowserActions = (
   | "clearReconnectError"
   | "setScrollbackRestoreError"
   | "clearScrollbackRestoreError"
+  | "setTerminalAttachError"
+  | "clearTerminalAttachError"
 > => ({
   setBrowserUrl: (id, url) => {
     set((state) => {
@@ -324,6 +326,41 @@ export const createBrowserActions = (
         panelsById: {
           ...state.panelsById,
           [id]: { ...terminal, scrollbackRestoreError: undefined },
+        },
+      };
+    });
+  },
+
+  // Renderer attach failure (#11776). Unlike the scrollback banner above this
+  // one IS an error: the pane paints nothing at all while its agent keeps
+  // working, so the user is blind to a running process rather than missing
+  // history. No debounce — the service only writes it after it has already
+  // classified the open as failed.
+  setTerminalAttachError: (id, error) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal || !isPtyPanel(terminal)) return state;
+      if (terminal.attachError === error) return state;
+
+      return {
+        panelsById: {
+          ...state.panelsById,
+          [id]: { ...terminal, attachError: error },
+        },
+      };
+    });
+  },
+
+  clearTerminalAttachError: (id) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal || !isPtyPanel(terminal)) return state;
+      if (terminal.attachError === undefined) return state;
+
+      return {
+        panelsById: {
+          ...state.panelsById,
+          [id]: { ...terminal, attachError: undefined },
         },
       };
     });
