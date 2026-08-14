@@ -232,6 +232,7 @@ jobs:
             const longWindowsSuites = new Set([
               "full-terminal",
               "full-worktree",
+              "full-presets",
               "full-platform",
               "full-resilience",
               "full-panels",

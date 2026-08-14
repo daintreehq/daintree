@@ -70,7 +70,7 @@ function write(repo: string, relativePath: string, contents: string): void {
 }
 
 function read(repo: string, relativePath: string): string {
-  return fs.readFileSync(path.join(repo, relativePath), "utf-8");
+  return fs.readFileSync(path.join(repo, relativePath), "utf-8").replace(/\r\n/g, "\n");
 }
 
 // Registered outside the suite: a skipped suite never runs its hooks, and

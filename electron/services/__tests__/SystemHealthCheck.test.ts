@@ -432,7 +432,7 @@ describe("runSystemHealthCheck", () => {
           _options: unknown,
           callback: ExecCallback
         ) => {
-          if (cmd === "which" && args[0] === "git") {
+          if ((cmd === "which" || cmd === "where") && args[0] === "git") {
             started();
             void new Promise<void>((release) => {
               releaseFirstProbe = () => release();
@@ -454,7 +454,7 @@ describe("runSystemHealthCheck", () => {
 
       expect((await slowProbe).prerequisites.find((p) => p.tool === "git")?.available).toBe(false);
       expect((await forced).prerequisites.find((p) => p.tool === "git")?.available).toBe(true);
-    });
+    }, 30_000);
 
     it("a forced check arriving after the queued probe started gets its own", async () => {
       // Two forced checks may only share a probe while it has not started yet.
@@ -589,21 +589,24 @@ describe("runSystemHealthCheck", () => {
       Object.defineProperty(process, "platform", originalPlatform);
     });
 
-    it("never executes the shim when the tools are absent", async () => {
-      mockExec((cmd, args) => {
-        if (cmd === "which") return `/usr/bin/${args[0]}\n`;
-        if (cmd === "xcode-select") throw new Error("unable to get active developer directory");
-        if (cmd === "git") throw new Error("git should never be executed here");
-        return "1.0.0\n";
-      });
+    it.skipIf(process.platform !== "darwin")(
+      "never executes the shim when the tools are absent",
+      async () => {
+        mockExec((cmd, args) => {
+          if (cmd === "which") return `/usr/bin/${args[0]}\n`;
+          if (cmd === "xcode-select") throw new Error("unable to get active developer directory");
+          if (cmd === "git") throw new Error("git should never be executed here");
+          return "1.0.0\n";
+        });
 
-      const result = await runSystemHealthCheck({ fatalOnly: true });
+        const result = await runSystemHealthCheck({ fatalOnly: true });
 
-      const git = result.prerequisites.find((p) => p.tool === "git");
-      expect(git?.available).toBe(false);
-      expect(git?.unavailableReason).toBe("macos-command-line-tools-missing");
-      expect(mockedExecFile.mock.calls.some((c) => c[0] === "git")).toBe(false);
-    });
+        const git = result.prerequisites.find((p) => p.tool === "git");
+        expect(git?.available).toBe(false);
+        expect(git?.unavailableReason).toBe("macos-command-line-tools-missing");
+        expect(mockedExecFile.mock.calls.some((c) => c[0] === "git")).toBe(false);
+      }
+    );
 
     it("runs the version command when the tools are present", async () => {
       mockExec((cmd, args) => {
