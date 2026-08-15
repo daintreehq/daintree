@@ -152,13 +152,19 @@ export function deactivateEntry(host: ProjectViewManager, current: ViewEntry): v
     // if we froze first (lesson #4684). Skip the freeze for a project with a
     // live agent: a frozen renderer can't apply queued agent:state-changed
     // events, stranding the background dashboard on a stale state (mirrors
-    // the freezeAllCached guard).
+    // the freezeAllCached guard). A live MCP session binding earns the same
+    // skip for the same reason — a frozen renderer can't answer the dispatch
+    // IPC either, and this is the path that would freeze a bound workspace the
+    // moment the user switches away from it (#11790).
     if (
       host.efficiencyFreezeEnabled &&
       !vc.isDestroyed() &&
       !AgentStateCache.hasActiveAgent(host, capturedProjectId)
     ) {
-      void freezeWebContents(vc);
+      const mcp = host.mcpActivityFor(capturedProjectId, vc);
+      if (!mcp.liveBinding && !mcp.dispatchLease && !mcp.unknown) {
+        void freezeWebContents(vc);
+      }
     }
 
     schedulePurge(host, current, CACHED_VIEW_PURGE_DELAY_MS);

@@ -33,6 +33,8 @@ import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
 import { AbusePolicy } from "./mcp-server/abusePolicy.js";
+import { WorkspaceViewLeaseRegistry } from "./mcp-server/workspaceViewLease.js";
+import { setMcpServerServiceRef } from "../window/serviceRefs.js";
 import type {
   PendingRequest,
   DispatchEnvelope,
@@ -80,6 +82,12 @@ export class McpServerService {
    */
   private readonly persistentListeners: Array<() => void> = [];
   private readonly bridge;
+  /**
+   * Views with an MCP operation in flight (#11790). Instance-owned rather than
+   * module-global so the service-class suites, which construct several
+   * instances, cannot leak leases into one another.
+   */
+  private readonly viewLeases = new WorkspaceViewLeaseRegistry();
   private readonly statusListeners = new Set<(running: boolean) => void>();
   private readonly runtimeStateListeners = new Set<(snapshot: McpRuntimeSnapshot) => void>();
 
@@ -187,7 +195,8 @@ export class McpServerService {
     this.bridge = createRendererBridge(
       this.pendingManifests,
       this.pendingDispatches,
-      () => this._registry
+      () => this._registry,
+      this.viewLeases
     );
 
     this.httpLifecycle = new HttpLifecycle({
@@ -434,6 +443,42 @@ export class McpServerService {
 
   async stop(): Promise<void> {
     await this.httpLifecycle.stop();
+    // The stop rejects every pending request, so the leases those requests own
+    // have no one left to release them. Holding them would pin their views
+    // against eviction for renderers that will never answer (#11790).
+    this.viewLeases.clear();
+  }
+
+  /**
+   * Why a project view must not be frozen or evicted right now, from MCP's side
+   * (#11790). Read synchronously by `ProjectViewManager`'s freeze and eviction
+   * policies through the `mcpViewActivity` callback `main.ts` injects.
+   *
+   * Two answers, deliberately separate because they earn different protection:
+   *
+   * - `dispatchLease` — an MCP request is in flight against this exact view.
+   *   Destroying it strands the request and breaks the session's route, so the
+   *   view is excluded from eviction outright, like a paint-gate bridge. Safe
+   *   as an absolute exclusion only because it is self-expiring: every lease is
+   *   held by a pending request, and those are capped by the bridge deadlines.
+   * - `liveBinding` — a live session is bound to this workspace but is not
+   *   mid-call. Enough to skip the efficiency freeze (a frozen renderer cannot
+   *   answer at all, and skipping costs one optimization on one cached view),
+   *   but NOT enough to survive memory pressure: a quiet bound view stays an
+   *   eviction candidate, just the last one.
+   *
+   * Keyed by workspace id for the binding and WebContents id for the lease —
+   * the workspace id outlives the view, the WebContents id is what identifies
+   * the exact renderer a request is waiting on.
+   */
+  getWorkspaceViewActivity(
+    workspaceId: string,
+    webContentsId: number
+  ): { dispatchLease: boolean; liveBinding: boolean } {
+    return {
+      dispatchLease: this.viewLeases.has(webContentsId),
+      liveBinding: this.sessionStore.hasLiveWorkspaceBinding(workspaceId),
+    };
   }
 
   listActiveClients(): import("../../shared/types/ipc/mcpServer.js").McpActiveClientInfo[] {
@@ -761,6 +806,9 @@ export class McpServerService {
   get _bridge() {
     return this.bridge;
   }
+  get _viewLeases() {
+    return this.viewLeases;
+  }
 }
 
 export const mcpServerService = new McpServerService();
@@ -772,3 +820,13 @@ export const mcpServerService = new McpServerService();
 // the server, so the registry's onStatusChange subscription always lands
 // before the first status event.
 wireMcpServerToConnectivityRegistry(mcpServerService);
+
+// Publish the singleton for the project-view freeze/eviction policies (#11790).
+// Same reasoning as the wiring above — at module scope, so every load path
+// covers it — but the direction matters more here: `electron/window/` must
+// never import this module, which sits behind a dynamic import precisely to
+// keep the MCP graph off eager boot. `serviceRefs` is a zero-runtime-import
+// leaf, so publishing into it costs nothing and cannot cycle, and until some
+// path loads this module the getter reads null and both policies fail closed
+// to "not protected" — the pre-#11790 behaviour.
+setMcpServerServiceRef(mcpServerService);

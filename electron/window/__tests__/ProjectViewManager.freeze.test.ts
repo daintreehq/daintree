@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
 
 let nextWebContentsId = 100;
 
@@ -710,5 +710,280 @@ describe("ProjectViewManager — cached-view memory purge", () => {
     initialWc.isDestroyed.mockReturnValue(true);
     vi.advanceTimersByTime(120_000);
     expect(vi.mocked(purgeMemoryWebContents)).toHaveBeenCalledTimes(1);
+  });
+});
+
+type McpActivityFn = (
+  workspaceId: string,
+  webContentsId: number
+) => import("../ProjectViewManager.js").McpViewActivity | null;
+
+describe("ProjectViewManager — MCP session bindings stay thawed (#11790)", () => {
+  let manager: ProjectViewManager;
+  let win: ReturnType<typeof createMockWindow>;
+  let initialWc: ReturnType<typeof createMockWebContents>;
+  /** Workspaces a live MCP session is bound to, and views with a call in flight. */
+  let boundWorkspaces: Set<string>;
+  let leasedWebContentsIds: Set<number>;
+  let mcpViewActivity: Mock<McpActivityFn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    nextWebContentsId = 300;
+    boundWorkspaces = new Set();
+    leasedWebContentsIds = new Set();
+    mcpViewActivity = vi.fn<McpActivityFn>((workspaceId, webContentsId) => ({
+      liveBinding: boundWorkspaces.has(workspaceId),
+      dispatchLease: leasedWebContentsIds.has(webContentsId),
+    }));
+    win = createMockWindow();
+    manager = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      cachedProjectViews: 3,
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      mcpViewActivity,
+    });
+    (manager as unknown as { waitForPaint: () => Promise<string> }).waitForPaint = () =>
+      Promise.resolve("signal");
+    initialWc = createMockWebContents();
+    manager.registerInitialView(
+      { webContents: initialWc, setBounds: vi.fn() } as never,
+      "proj-a",
+      "/path/a"
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const frozeProjA = () =>
+    vi.mocked(freezeWebContents).mock.calls.some((call) => (call[0] as unknown) === initialWc);
+
+  it("does not batch-freeze a cached view whose workspace backs a live session", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    boundWorkspaces.add("proj-a");
+
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+
+    expect(frozeProjA()).toBe(false);
+  });
+
+  it("freezes inline on deactivation when nothing is bound (positive control)", async () => {
+    // Establishes that this setup — efficiency on, still inside the batch
+    // sweep's debounce window, so only the deactivation path can freeze —
+    // really does freeze. Without it the guard test below would pass just as
+    // well if inline freezing were deleted entirely.
+    manager.setEfficiencyFreeze(true);
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(frozeProjA()).toBe(true);
+  });
+
+  it("skips the inline deactivation freeze for a workspace backing a live session", async () => {
+    // Same setup as the control above, one variable changed.
+    boundWorkspaces.add("proj-a");
+
+    manager.setEfficiencyFreeze(true);
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(frozeProjA()).toBe(false);
+  });
+
+  it("skips the inline deactivation freeze while a dispatch is in flight", async () => {
+    leasedWebContentsIds.add(initialWc.id);
+
+    manager.setEfficiencyFreeze(true);
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(frozeProjA()).toBe(false);
+  });
+
+  it("does not freeze a view with a dispatch in flight even with no standing binding", async () => {
+    // Belt and braces: the lease alone is enough, so a call that outlives its
+    // session's liveness record still can't have its renderer suspended.
+    await manager.switchTo("proj-b", "/path/b");
+    leasedWebContentsIds.add(initialWc.id);
+
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+
+    expect(frozeProjA()).toBe(false);
+  });
+
+  it("freezes the view again once the binding is gone", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    boundWorkspaces.add("proj-a");
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+    expect(frozeProjA()).toBe(false);
+
+    // Protection is only as long-lived as the session: a disconnected client
+    // must not cost the efficiency profile a view for the rest of the run.
+    boundWorkspaces.clear();
+    manager.setEfficiencyFreeze(false);
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+
+    expect(frozeProjA()).toBe(true);
+  });
+
+  it("still freezes an unbound cached view — protection is not blanket", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    boundWorkspaces.add("some-other-workspace");
+
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+
+    expect(frozeProjA()).toBe(true);
+  });
+
+  it("asks about the workspace id the view is keyed by", async () => {
+    // ProjectViewManager keys views by an opaque WORKSPACE id (a project's hex
+    // id or a scratch UUID), which is the same vocabulary the MCP binding
+    // stores. Asking with anything else would never match.
+    await manager.switchTo("proj-b", "/path/b");
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+
+    expect(mcpViewActivity).toHaveBeenCalledWith("proj-a", initialWc.id);
+  });
+
+  it("does not freeze when the callback throws — unknown protection resolves as protected here", async () => {
+    // The callback reaches a service behind a dynamic import, so a throw means
+    // protection state is genuinely unavailable rather than false. Freezing on
+    // that would re-create the 30s stranded dispatch for the cost of one
+    // missed optimization, so this policy resolves unknown as protected.
+    await manager.switchTo("proj-b", "/path/b");
+    mcpViewActivity.mockImplementation(() => {
+      throw new Error("MCP service mid-teardown");
+    });
+
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+
+    expect(frozeProjA()).toBe(false);
+  });
+
+  it("keeps sweeping the rest of the view map after the callback throws", async () => {
+    // An exception escaping the accessor would abandon the pass partway
+    // through, silently leaving later views unfrozen for an unrelated reason.
+    await manager.switchTo("proj-b", "/path/b");
+    await manager.switchTo("proj-c", "/path/c");
+    mcpViewActivity.mockImplementation(() => {
+      throw new Error("MCP service mid-teardown");
+    });
+
+    expect(() => {
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+    }).not.toThrow();
+  });
+
+  it("freezes as usual when the callback answers null — MCP simply isn't running", async () => {
+    // Distinct from a throw: null is a definite "no server, so no sessions",
+    // not an unavailable answer.
+    await manager.switchTo("proj-b", "/path/b");
+    mcpViewActivity.mockReturnValue(null);
+
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+
+    expect(frozeProjA()).toBe(true);
+  });
+
+  it("re-freezes a view thawed for a dispatch once the lease is gone", async () => {
+    // The bridge thaws on demand and nothing puts the view back: freezeAllCached
+    // runs only on the transition INTO efficiency, and re-entering while already
+    // enabled is an early no-op. Without the sampler's re-freeze pass, one
+    // dispatch leaves the view running JS for the rest of the profile.
+    await manager.switchTo("proj-b", "/path/b");
+    leasedWebContentsIds.add(initialWc.id);
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+    expect(frozeProjA()).toBe(false);
+
+    leasedWebContentsIds.delete(initialWc.id);
+    manager.refreezeUnprotectedCachedViews();
+
+    expect(frozeProjA()).toBe(true);
+  });
+
+  it("leaves a still-bound view thawed when the re-freeze pass runs", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    boundWorkspaces.add("proj-a");
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+
+    manager.refreezeUnprotectedCachedViews();
+
+    expect(frozeProjA()).toBe(false);
+  });
+
+  it("the re-freeze pass is a no-op outside the efficiency profile", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+
+    manager.refreezeUnprotectedCachedViews();
+
+    expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
+  });
+
+  it("the re-freeze pass defers to a pending freeze-entry debounce", async () => {
+    // The periodic sampler can tick inside the debounce window. Freezing there
+    // would defeat the trailing edge, which exists so a profile that flips back
+    // within the window freezes nothing at all — and would make every
+    // call-count assertion in this file depend on the sampler's random phase.
+    await manager.switchTo("proj-b", "/path/b");
+    manager.setEfficiencyFreeze(true);
+
+    manager.refreezeUnprotectedCachedViews();
+    expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
+
+    manager.setEfficiencyFreeze(false);
+    vi.advanceTimersByTime(500);
+    expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
+  });
+
+  it("never freezes the outgoing bridge view when a sampler tick lands mid-switch", async () => {
+    // The re-freeze pass runs on the periodic sampler, so it can tick inside a
+    // switch. `activeProjectId` already names the incoming project by then,
+    // while the outgoing view is still attached as the anti-flash bridge —
+    // freezing it suspends the renderer painting the visible frame.
+    await manager.switchTo("proj-b", "/path/b");
+    const bridgeWc = manager.getActiveView()!.webContents;
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+    vi.mocked(freezeWebContents).mockClear();
+
+    const switchPromise = manager.switchTo("proj-c", "/path/c");
+    await Promise.resolve();
+    expect(manager.getOutgoingBridgeProjectId()).toBe("proj-b");
+
+    manager.refreezeUnprotectedCachedViews();
+
+    expect(vi.mocked(freezeWebContents).mock.calls.some((call) => call[0] === bridgeWc)).toBe(
+      false
+    );
+    // The pass still swept the genuinely cached view — the guard is targeted,
+    // not a blanket bail-out on any switch being in flight.
+    expect(frozeProjA()).toBe(true);
+
+    await switchPromise;
+  });
+
+  it("never freezes the active view, bound or not", async () => {
+    boundWorkspaces.add("proj-b");
+    await manager.switchTo("proj-b", "/path/b");
+    const activeWc = manager.getActiveView()!.webContents;
+
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+
+    expect(vi.mocked(freezeWebContents).mock.calls.every((call) => call[0] !== activeWc)).toBe(
+      true
+    );
   });
 });

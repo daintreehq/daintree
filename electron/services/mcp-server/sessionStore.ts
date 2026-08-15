@@ -194,6 +194,37 @@ export class SessionStore {
   }
 
   /**
+   * Whether any live session is bound to this workspace (#11790).
+   *
+   * Read by the project-view freeze and eviction policies through the injected
+   * `mcpViewActivity` callback: a bound workspace's view is usually the
+   * background one, and freezing it strands every dispatch (a frozen renderer
+   * cannot run JS) while evicting it breaks the binding outright.
+   *
+   * Two halves, both load-bearing:
+   *
+   * 1. Explicit `external` origin, read straight off `sessionOriginMap` rather
+   *    than through `getOrigin()`. That accessor defaults an *unknown* session
+   *    to `"external"`, so a stale `sessionWorkspaceMap` row whose origin was
+   *    already torn down would read as a live external binding and pin the view
+   *    forever. Presence in the routing map is routing, never ownership
+   *    (#11789) — the two must be asked separately.
+   * 2. Transport liveness. The binding outlives nothing on its own; a session
+   *    that dropped is reaped from `sessions`/`httpSessions` before (or
+   *    alongside) `clearSessionBinding`, so this is what makes protection
+   *    release itself. Transport-agnostic on purpose: only Streamable HTTP can
+   *    bind today, but nothing here should have to change when SSE can.
+   */
+  hasLiveWorkspaceBinding(workspaceId: string): boolean {
+    for (const [sessionId, boundWorkspaceId] of this.sessionWorkspaceMap) {
+      if (boundWorkspaceId !== workspaceId) continue;
+      if (this.sessionOriginMap.get(sessionId) !== "external") continue;
+      if (this.sessions.has(sessionId) || this.httpSessions.has(sessionId)) return true;
+    }
+    return false;
+  }
+
+  /**
    * Drop every per-session routing/ownership record in one place.
    *
    * The four maps must die together: a stale origin would let a recycled

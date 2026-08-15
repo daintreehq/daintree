@@ -79,7 +79,7 @@ import {
   setStopDiskSpaceMonitor,
   getMainProcessWatchdogClientRef,
 } from "./window/windowServices.js";
-import { getResourceProfileService } from "./window/serviceRefs.js";
+import { getMcpServerServiceRef, getResourceProfileService } from "./window/serviceRefs.js";
 import {
   setupPowerMonitor,
   setupWindowFocusThrottle,
@@ -392,6 +392,19 @@ if (!gotTheLock) {
       // async, and a shard that times out comes back as an empty list, which
       // would read as "the assistant is gone" and unprotect a live one.
       isTerminalLive: (terminalId) => getPtyClient()?.hasTerminal(terminalId) === true,
+      // Keeps a workspace an MCP session is bound to out of the freeze sweep,
+      // and out of eviction entirely while a dispatch is in flight (#11790).
+      // A bound session drives a *background* workspace by design, and a frozen
+      // renderer can't run JS — the dispatch IPC would sit in Mojo until the
+      // bridge deadline turned it into an opaque failure.
+      //
+      // Read through serviceRefs rather than imported: the MCP service sits
+      // behind a dynamic import to stay off the eager boot graph, and it
+      // publishes itself there at module scope. Before anything loads it the
+      // ref is null, which is the right answer anyway — no server, no sessions,
+      // nothing to protect.
+      mcpViewActivity: (workspaceId, webContentsId) =>
+        getMcpServerServiceRef()?.getWorkspaceViewActivity(workspaceId, webContentsId) ?? null,
       onViewEvicted: (wcId) => {
         // Each cleanup is isolated: if removeDirectPort throws, the worktree
         // port must still close. Partial cleanup leaves a live producer

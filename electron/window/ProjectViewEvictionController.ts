@@ -14,8 +14,14 @@ import type { EvictionReason, ViewEntry } from "./ProjectViewManagerTypes.js";
 import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import { memoryPressureTarget } from "../utils/cachedProjectViews.js";
 
-/** `[projectId, entry, activeAgent, liveAssistantBackend]` — the last two are carried into the eviction log line. */
-type EvictionCandidate = [string, ViewEntry, boolean, boolean];
+/** A view eligible for eviction; the flags beyond the entry are carried into the eviction log line. */
+type EvictionCandidate = {
+  projectId: string;
+  entry: ViewEntry;
+  activeAgent: boolean;
+  liveAssistantBackend: boolean;
+  boundMcpSession: boolean;
+};
 
 /**
  * workingSetSize is the only cross-platform field — privateBytes is
@@ -226,13 +232,41 @@ export function evictStaleViews(
   // real on-screen window.
   const switchOutgoingProjectId = host.pendingColdSwitch?.outgoingProjectId ?? null;
 
+  // Views an MCP request is currently awaiting (#11790). Excluded outright,
+  // like the two bridges above and for the same reason: destroying one does not
+  // just cost a reload, it strands an operation nothing can retry — the caller
+  // waits out the bridge deadline and every later call on that session fails
+  // `SESSION_BINDING_GONE`, since eviction destroys the WebContents the binding
+  // resolves to and nothing recreates it.
+  //
+  // Each individual lease is self-expiring — held by one pending bridge
+  // request, capped at 5s (manifest) or 30s (dispatch), released on the
+  // response, the deadline and the view's own destruction alike — which is what
+  // makes this a bounded lease rather than the unconditional floor a live
+  // assistant backend gets. Note the bound is per-lease, not aggregate: a
+  // session dispatching back-to-back can keep one view's refcount above zero
+  // indefinitely. That is the intended reading of "keep the view alive while a
+  // bound session is actually working", but it does mean sustained traffic can
+  // hold the cache over its cap, so the skipped-eviction log below reports it.
+  // A session that goes quiet holds nothing, which is the property that keeps
+  // this from becoming a floor.
+  const mcpLeasedProjectIds = new Set<string>();
+
   const evictable = Array.from(host.views.entries())
-    .filter(
-      ([id]) =>
-        id !== host.activeProjectId &&
-        id !== gateOutgoingProjectId &&
-        id !== switchOutgoingProjectId
-    )
+    .filter(([id, entry]) => {
+      if (
+        id === host.activeProjectId ||
+        id === gateOutgoingProjectId ||
+        id === switchOutgoingProjectId
+      ) {
+        return false;
+      }
+      if (host.mcpActivityFor(id, entry.view.webContents).dispatchLease) {
+        mcpLeasedProjectIds.add(id);
+        return false;
+      }
+      return true;
+    })
     // Oldest lastUsed first — pure LRU. Sequential switchTo calls stamp
     // distinct millisecond timestamps so equal-lastUsed ties don't arise
     // in practice; Array.sort stability handles them deterministically.
@@ -272,25 +306,46 @@ export function evictStaleViews(
   // per project, and another window's view of the same project remains an
   // ordinary candidate. The ceiling is the number of assistants actually
   // running — reported below so the over-cap cache is attributable.
+  //
+  // A view backing a live-but-idle MCP session binding sits between the two
+  // (#11790): evicting it breaks the binding with no recovery path, so it
+  // outranks an active-agent view — an ordinary grid terminal's PTY lives in
+  // the pty-host and reconnects on switch-back, while a destroyed bound view
+  // leaves the session `SESSION_BINDING_GONE` until the user reopens that
+  // workspace. But it stays in `candidates`, unlike the assistant floor: the
+  // issue is explicit that a hard floor is the wrong answer here, because
+  // nothing dies with the renderer the way an assistant's process tree does,
+  // and enough concurrent bound sessions would otherwise defeat the pressure
+  // policy. So it yields under real pressure, just last.
   const safeToEvict: EvictionCandidate[] = [];
   const activeAgentFallback: EvictionCandidate[] = [];
+  const boundMcpSessionFallback: EvictionCandidate[] = [];
   const assistantProtected: EvictionCandidate[] = [];
   for (const [projectId, entry] of evictable) {
-    const active = hasActiveAgent(host, projectId);
+    const activeAgent = hasActiveAgent(host, projectId);
+    const mcp = host.mcpActivityFor(projectId, entry.view.webContents);
+    // `unknown` (the activity callback threw) deprioritizes but never protects:
+    // it must not reach the exclusion set above, or one broken callback would
+    // pin every cached view straight through critical pressure.
+    const boundMcpSession = mcp.liveBinding || mcp.unknown;
+    const base = { projectId, entry, activeAgent, boundMcpSession };
     if (hasLiveAssistantBackend(host, projectId, entry)) {
-      assistantProtected.push([projectId, entry, active, true]);
-    } else if (active) {
-      activeAgentFallback.push([projectId, entry, true, false]);
+      assistantProtected.push({ ...base, liveAssistantBackend: true });
+    } else if (boundMcpSession) {
+      boundMcpSessionFallback.push({ ...base, liveAssistantBackend: false });
+    } else if (activeAgent) {
+      activeAgentFallback.push({ ...base, liveAssistantBackend: false });
     } else {
-      safeToEvict.push([projectId, entry, false, false]);
+      safeToEvict.push({ ...base, liveAssistantBackend: false });
     }
   }
 
-  const candidates = [...safeToEvict, ...activeAgentFallback];
+  const candidates = [...safeToEvict, ...activeAgentFallback, ...boundMcpSessionFallback];
 
   let evictedCount = 0;
   while (host.views.size > effectiveMax && candidates.length > 0 && evictedCount < evictionBudget) {
-    const [projectId, entry, activeAgent, liveAssistantBackend] = candidates.shift()!;
+    const { projectId, entry, activeAgent, liveAssistantBackend, boundMcpSession } =
+      candidates.shift()!;
     const ageMs = Date.now() - entry.lastUsed;
     const memoryKb = memoryFor(entry);
     const guestMemoryKb = guestMemoryFor(entry);
@@ -301,6 +356,10 @@ export function evictStaleViews(
       activeAgent,
     };
     if (liveAssistantBackend) ctx.liveAssistantBackend = true;
+    // Recorded so a bound session going `SESSION_BINDING_GONE` is traceable to
+    // the pass that took its view, rather than looking like the binding broke
+    // on its own.
+    if (boundMcpSession) ctx.boundMcpSession = true;
     if (memoryKb > 0) ctx.memoryKb = memoryKb;
     if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
     if (availableMb != null) ctx.memoryAvailableMb = availableMb;
@@ -320,7 +379,16 @@ export function evictStaleViews(
   // tier-2 reclaim that converges to "active view + protected assistants"
   // rather than the active view alone is now the expected outcome, and it is
   // exactly the case where an unexplained over-cap cache would read as a leak.
-  if (host.views.size > effectiveMax && candidates.length === 0 && assistantProtected.length > 0) {
+  //
+  // MCP dispatch leases open the gate too (#11790). A lease is self-expiring
+  // per request, but a session dispatching continuously renews one, so a
+  // lease-only stall can persist — exactly the case where an over-cap cache
+  // would otherwise sit in the logs with nothing explaining it.
+  if (
+    host.views.size > effectiveMax &&
+    candidates.length === 0 &&
+    (assistantProtected.length > 0 || mcpLeasedProjectIds.size > 0)
+  ) {
     // `overflow` counts views over target; the two counts beside it say what is
     // holding them, so a reader can tell a pinned assistant (persistent, this
     // pass will never take it) from a paint-gate/cold-switch bridge (temporary,
@@ -341,7 +409,14 @@ export function evictStaleViews(
       overflow: host.views.size - effectiveMax,
       protectedCount: assistantProtected.length,
       transientlyExcludedCount: transientlyExcludedProjectIds.size,
-      protectedProjectIds: assistantProtected.map(([projectId]) => projectId),
+      // Reported as its own reason rather than folded into the transient count
+      // (#11790). A lease resolves on its own like the two bridges above, but
+      // it is excluded BEFORE assistant protection is evaluated, so folding
+      // them together would report an assistant-backed view that happens to be
+      // mid-dispatch as transient when its floor outlives the call. Kept apart,
+      // each count means exactly one thing.
+      mcpLeasedCount: mcpLeasedProjectIds.size,
+      protectedProjectIds: assistantProtected.map(({ projectId }) => projectId),
     });
   }
 

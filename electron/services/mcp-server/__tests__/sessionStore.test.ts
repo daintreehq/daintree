@@ -1317,3 +1317,113 @@ describe("SessionStore session origin and workspace binding (#11789)", () => {
     }
   });
 });
+
+describe("SessionStore.hasLiveWorkspaceBinding (#11790)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+  });
+
+  function bindLiveExternal(sessionId: string, workspaceId: string): void {
+    store.httpSessions.set(sessionId, fakeHttpSession());
+    store.sessionOriginMap.set(sessionId, "external");
+    store.sessionWorkspaceMap.set(sessionId, workspaceId);
+  }
+
+  it("reports a live external session bound to the workspace", () => {
+    bindLiveExternal("s1", "ws-a");
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(true);
+  });
+
+  it("scopes the answer to the asked-for workspace", () => {
+    bindLiveExternal("s1", "ws-a");
+    expect(store.hasLiveWorkspaceBinding("ws-b")).toBe(false);
+  });
+
+  it("answers for an SSE-transport session too, not just Streamable HTTP", () => {
+    // Only Streamable HTTP can bind today, but liveness must not be
+    // transport-specific — nothing here should need changing when SSE can.
+    store.sessions.set("s1", fakeSseSession());
+    store.sessionOriginMap.set("s1", "external");
+    store.sessionWorkspaceMap.set("s1", "ws-a");
+
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(true);
+  });
+
+  it("does not report a workspace routing record whose session is no longer live", () => {
+    // Presence in sessionWorkspaceMap is routing, not liveness. Without the
+    // liveness half, a dropped session would pin its view against freeze and
+    // deprioritize it for eviction for the rest of the app's life.
+    store.sessionOriginMap.set("s1", "external");
+    store.sessionWorkspaceMap.set("s1", "ws-a");
+
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(false);
+  });
+
+  it("does not treat a routing record with no recorded origin as external", () => {
+    // getOrigin() defaults an unknown session to "external", so reading through
+    // it would let a half-torn-down record — origin already dropped, workspace
+    // row not yet — read as a live binding. The origin map is read directly for
+    // exactly this case.
+    store.httpSessions.set("s1", fakeHttpSession());
+    store.sessionWorkspaceMap.set("s1", "ws-a");
+
+    expect(store.getOrigin("s1")).toBe("external");
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(false);
+  });
+
+  it("ignores a renderer-owned session that somehow carries a workspace row", () => {
+    store.httpSessions.set("s1", fakeHttpSession());
+    store.sessionOriginMap.set("s1", "help");
+    store.sessionWorkspaceMap.set("s1", "ws-a");
+
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(false);
+  });
+
+  it("still reports the workspace while a second session is bound to it", () => {
+    bindLiveExternal("s1", "ws-a");
+    bindLiveExternal("s2", "ws-a");
+
+    store.revokeSession("s1");
+
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(true);
+  });
+
+  it("releases the workspace once its last session is revoked", () => {
+    bindLiveExternal("s1", "ws-a");
+    bindLiveExternal("s2", "ws-a");
+
+    store.revokeSession("s1");
+    store.revokeSession("s2");
+
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(false);
+  });
+
+  it("releases the workspace on drain", () => {
+    bindLiveExternal("s1", "ws-a");
+
+    store.drain();
+
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(false);
+  });
+
+  it("releases the workspace when the session idles out", () => {
+    vi.useFakeTimers();
+    try {
+      setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+      bindLiveExternal("s1", "ws-a");
+      store.httpSessions.get("s1")!.idleTimer = store.createHttpIdleTimer("s1");
+
+      vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 10);
+
+      expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
