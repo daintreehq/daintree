@@ -16,7 +16,7 @@ import { agentStateDotColor } from "@/components/Worktree/AgentStatusIndicator";
 import { cn } from "@/lib/utils";
 import { notify } from "@/lib/notify";
 import { deriveAgentDominantStates } from "@/lib/agentDominantStates";
-import { isAgentBlocked, isAgentLaunchable } from "@shared/utils/agentAvailability";
+import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { isAgentButtonOnToolbar } from "@shared/utils/agentPinned";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import {
@@ -54,6 +54,7 @@ import {
   type DockLaunchItem,
   type DockLaunchRow,
 } from "./dockLaunchItems";
+import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
 import type { RecipeContext } from "@/utils/recipeVariables";
 
 // Same weighting as the ⌘⇧P panel palette so a name match outranks an alias or
@@ -553,16 +554,15 @@ export function DockLaunchButton({
       // Everything closes through `closeLauncher`, so Radix cannot tell a
       // launch from an Escape and restores focus to the trigger either way —
       // landing a beat after the new panel took it, once the content's exit
-      // animation ends (#11664). Cancel that return, but only for rows that
-      // genuinely launch: the redirect below navigates instead, into settings
-      // that manage their own focus, and its dispatch can fail — the WAI-ARIA
-      // return is what keeps the keyboard somewhere useful if it does.
+      // animation ends (#11664). Every non-disabled item row now launches:
+      // an unavailable agent opens a recovery panel rather than navigating to
+      // settings (#11760), and that panel claims focus exactly like a terminal,
+      // so the return has to be cancelled for it too. Cue rows keep the return —
+      // they navigate into surfaces that manage their own focus.
       //
       // Decided on intent, not outcome: every launch below is fire-and-forget,
       // so whether a panel actually appears is not knowable here.
-      const launches = item.category !== "agent" || isAgentLaunchable(item.agent.availability);
-
-      closeLauncher(launches);
+      closeLauncher(true);
       activateDockLaunchItem(
         item,
         { cwd, activeWorktreeId, recipeContext, onLaunchAgent: launchAgent, source: "menu" },
@@ -1047,9 +1047,10 @@ function DockLaunchOption({
     shortcutAgentId ? `agent.${shortcutAgentId}` : panelActionId
   );
 
-  // A filtered row must carry the same warnings as its unfiltered twin: a
-  // blocked agent that silently opens Settings, or a shadowed recipe that
-  // resolves to a different winner, is worse when the row looks ordinary.
+  // A filtered row must carry the same warnings as its unfiltered twin: an
+  // agent that lands on the recovery panel instead of a session, or a shadowed
+  // recipe that resolves to a different winner, is worse when the row looks
+  // ordinary.
   const unavailableAgent = agent && !isAgentLaunchable(agent.availability) ? agent : null;
   const disabledReason = item?.disabled?.reason;
   const isDimmed =
@@ -1057,9 +1058,7 @@ function DockLaunchOption({
     disabledReason !== undefined ||
     (item?.category === "recipe" && item.isShadowed);
   const title = unavailableAgent
-    ? isAgentBlocked(unavailableAgent.availability)
-      ? `${unavailableAgent.name} is blocked by endpoint security. Click to configure.`
-      : `${unavailableAgent.name} needs setup. Click to configure.`
+    ? unavailableAgentHint(unavailableAgent.name, unavailableAgent.availability)
     : undefined;
 
   const displayName =

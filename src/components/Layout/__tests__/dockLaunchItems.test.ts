@@ -799,7 +799,12 @@ describe("activateDockLaunchItem", () => {
     expect(notifyMock).not.toHaveBeenCalled();
   });
 
-  it("routes a non-launchable agent to settings without recording MRU", () => {
+  // A non-launchable agent is a launch attempt like any other now: the launcher
+  // re-probes and answers with either a session or the recovery gate. Settling
+  // it here on a stale reading skipped that gate (#11760). MRU records the
+  // attempt — the visible recency band filters to the launch band, so an
+  // unavailable agent only surfaces there once it actually resolves.
+  it("launches a non-launchable agent and records MRU instead of redirecting", () => {
     const item: DockLaunchItem = {
       category: "agent",
       key: "agent:gemini",
@@ -808,13 +813,21 @@ describe("activateDockLaunchItem", () => {
       agentBand: "needs-setup",
     };
     activateDockLaunchItem(item, ctx);
-    expect(ctx.onLaunchAgent).not.toHaveBeenCalled();
-    expect(recordActionMruMock).not.toHaveBeenCalled();
-    expect(actionDispatchMock).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      { tab: "agents", subtab: "gemini" },
-      { source: "menu" }
-    );
+    expect(ctx.onLaunchAgent).toHaveBeenCalledWith("gemini", undefined);
+    expect(recordActionMruMock).toHaveBeenCalledWith("agent.gemini");
+    expect(actionDispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards an explicit preset for a non-launchable agent so the gate can carry it", () => {
+    const item: DockLaunchItem = {
+      category: "agent",
+      key: "agent:gemini",
+      name: "Gemini",
+      agent: AGENTS[1]!,
+      agentBand: "needs-setup",
+    };
+    activateDockLaunchItem(item, ctx, "fast");
+    expect(ctx.onLaunchAgent).toHaveBeenCalledWith("gemini", "fast");
   });
 
   it("runs a recipe and surfaces spawn failures", async () => {

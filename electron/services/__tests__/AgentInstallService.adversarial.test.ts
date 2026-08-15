@@ -13,7 +13,11 @@ vi.mock("../../../shared/config/agentRegistry.js", async (importOriginal) => {
   };
 });
 
-import { isBlockExecutable, runAgentInstall } from "../AgentInstallService.js";
+import {
+  isBlockExecutable,
+  runAgentInstall,
+  resetInFlightInstalls,
+} from "../AgentInstallService.js";
 
 interface FakeChild extends EventEmitter {
   stdout: EventEmitter;
@@ -408,6 +412,222 @@ describe("AgentInstallService adversarial", () => {
 
       expect(result.exitCode).toBe(1);
       expect(result.success).toBe(false);
+    });
+  });
+});
+
+describe("AgentInstallService — elevation and prerequisite targets (#11763)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setPlatform("linux");
+  });
+
+  afterEach(() => {
+    setPlatform(originalPlatform);
+  });
+
+  describe("sudo gate", () => {
+    it("refuses a bare sudo command", () => {
+      // No pipe, so the pipe-to-shell regex never saw it: spawning this with
+      // piped stdio hangs on a password prompt the user cannot see.
+      expect(isBlockExecutable({ commands: ["sudo apt-get install git"] })).toBe(false);
+    });
+
+    it("refuses a block where only a later command needs sudo", () => {
+      expect(isBlockExecutable({ commands: ["mkdir -p /tmp/x", "sudo apt-get install gh"] })).toBe(
+        false
+      );
+    });
+
+    it("refuses sudo regardless of leading whitespace or case", () => {
+      expect(isBlockExecutable({ commands: ["   sudo apt-get install git"] })).toBe(false);
+      expect(isBlockExecutable({ commands: ["SUDO apt-get install git"] })).toBe(false);
+    });
+
+    it("allows a command that merely mentions sudo later in the line", () => {
+      expect(isBlockExecutable({ commands: ["echo run sudo yourself"] })).toBe(true);
+    });
+
+    it("allows sudoedit and other commands with a sudo prefix in the name", () => {
+      expect(isBlockExecutable({ commands: ["sudoku --solve"] })).toBe(true);
+    });
+
+    it("never spawns for a sudo block", async () => {
+      getAgentConfigMock.mockReturnValue({
+        install: { byOs: { linux: [{ commands: ["sudo apt-get install gh"] }] } },
+      });
+
+      const result = await runAgentInstall({ agentId: "gh", jobId: "j-sudo" }, vi.fn());
+
+      expect(result.success).toBe(false);
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("prerequisite install targets", () => {
+    it("rejects an unknown prerequisite without spawning", async () => {
+      const result = await runAgentInstall(
+        { prerequisiteTool: "definitely-not-a-tool", jobId: "j2" },
+        vi.fn()
+      );
+
+      expect(result.success).toBe(false);
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it("resolves commands from the baseline spec, not from the caller", async () => {
+      setPlatform("darwin");
+      const child = makeFakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const promise = runAgentInstall({ prerequisiteTool: "git", jobId: "j3" }, vi.fn());
+      await Promise.resolve();
+      child.emitClose(0);
+      const result = await promise;
+
+      expect(result.success).toBe(true);
+      // The renderer named a tool; main chose the binary and its arguments.
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expect(spawnMock.mock.calls[0]?.[0]).toBe("brew");
+    });
+
+    it("refuses the Linux git block because it needs sudo", async () => {
+      setPlatform("linux");
+
+      const result = await runAgentInstall({ prerequisiteTool: "git", jobId: "j4" }, vi.fn());
+
+      expect(result.success).toBe(false);
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it("does not consult the agent registry for a prerequisite target", async () => {
+      setPlatform("darwin");
+      const child = makeFakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const promise = runAgentInstall({ prerequisiteTool: "git", jobId: "j5" }, vi.fn());
+      await Promise.resolve();
+      child.emitClose(0);
+      await promise;
+
+      expect(getAgentConfigMock).not.toHaveBeenCalled();
+    });
+
+    it("selects the Command Line Tools block by methodIndex on macOS", async () => {
+      setPlatform("darwin");
+      const child = makeFakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const promise = runAgentInstall(
+        { prerequisiteTool: "git", methodIndex: 1, jobId: "j6" },
+        vi.fn()
+      );
+      await Promise.resolve();
+      child.emitClose(0);
+      await promise;
+
+      expect(spawnMock.mock.calls[0]?.[0]).toBe("xcode-select");
+    });
+  });
+
+  describe("install method validation", () => {
+    it.each([99, -1, 1.5, NaN])(
+      "rejects out-of-range prerequisite method %s without spawning",
+      async (methodIndex) => {
+        setPlatform("darwin");
+
+        const result = await runAgentInstall(
+          { prerequisiteTool: "git", methodIndex, jobId: "j-idx" },
+          vi.fn()
+        );
+
+        // Block 0 is `brew install git` and block 1 hands off to Apple's
+        // installer — silently substituting one for the other would run an
+        // install the caller never asked for.
+        expect(result.success).toBe(false);
+        expect(spawnMock).not.toHaveBeenCalled();
+      }
+    );
+  });
+
+  describe("concurrent installs", () => {
+    beforeEach(() => {
+      resetInFlightInstalls();
+    });
+
+    it("refuses a second install of the same target while one is running", async () => {
+      // Each project view is its own WebContentsView with its own store, so the
+      // renderer-side guard cannot see an install started in another view.
+      setPlatform("darwin");
+      const child = makeFakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const first = runAgentInstall({ prerequisiteTool: "git", jobId: "job-a" }, vi.fn());
+      await Promise.resolve();
+      const second = await runAgentInstall({ prerequisiteTool: "git", jobId: "job-b" }, vi.fn());
+
+      expect(second.success).toBe(false);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+
+      child.emitClose(0);
+      expect((await first).success).toBe(true);
+    });
+
+    it("releases the target once the install settles", async () => {
+      setPlatform("darwin");
+      const first = makeFakeChild();
+      spawnMock.mockReturnValue(first);
+
+      const failed = runAgentInstall({ prerequisiteTool: "git", jobId: "job-a" }, vi.fn());
+      await Promise.resolve();
+      first.emitClose(1);
+      expect((await failed).success).toBe(false);
+
+      const second = makeFakeChild();
+      spawnMock.mockReturnValue(second);
+      const retry = runAgentInstall({ prerequisiteTool: "git", jobId: "job-b" }, vi.fn());
+      await Promise.resolve();
+      second.emitClose(0);
+
+      expect((await retry).success).toBe(true);
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not block a different target", async () => {
+      setPlatform("darwin");
+      const child = makeFakeChild();
+      spawnMock.mockReturnValue(child);
+      getAgentConfigMock.mockReturnValue({
+        install: { byOs: { macos: [{ commands: ["brew install foo"] }] } },
+      });
+
+      const gitInstall = runAgentInstall({ prerequisiteTool: "git", jobId: "job-a" }, vi.fn());
+      await Promise.resolve();
+      const agentInstall = runAgentInstall({ agentId: "foo", jobId: "job-b" }, vi.fn());
+      await Promise.resolve();
+
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      child.emitClose(0);
+      await gitInstall;
+      await agentInstall;
+    });
+  });
+
+  describe("windows git command", () => {
+    it("passes the agreement flags winget needs under piped stdio", async () => {
+      setPlatform("win32");
+      const child = makeFakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const promise = runAgentInstall({ prerequisiteTool: "git", jobId: "j7" }, vi.fn());
+      await Promise.resolve();
+      child.emitClose(0);
+      await promise;
+
+      const args = spawnMock.mock.calls[0]?.[1] as string[];
+      expect(spawnMock.mock.calls[0]?.[0]).toBe("winget");
+      expect(args).toContain("--accept-source-agreements");
+      expect(args).toContain("--accept-package-agreements");
     });
   });
 });

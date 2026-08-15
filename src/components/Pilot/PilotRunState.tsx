@@ -5,6 +5,8 @@ import {
   InteractingCircle,
   ExitedCircle,
   CircleCheck,
+  CircleDashed,
+  CirclePause,
   CircleSlash,
 } from "@/components/icons";
 import type { FleetBand } from "@/lib/fleetAttention";
@@ -49,6 +51,12 @@ export const BAND_GLYPH: Record<FleetBand, ComponentType<{ className?: string }>
   review: CircleCheck,
   running: SpinnerCircle,
   done: CircleCheck,
+  parked: CirclePause,
+  // Dashed rather than paused: a park is held, a snooze is merely quiet for
+  // now, and the two must not share a shape when the row's only other
+  // difference between them is a word. The dash is the same signal the project
+  // switcher's snoozed dot uses, so one vocabulary covers both surfaces.
+  snoozed: CircleDashed,
   idle: HollowCircle,
 };
 
@@ -71,16 +79,23 @@ export const BAND_GLYPH: Record<FleetBand, ComponentType<{ className?: string }>
  * `done` and `idle` stay neutral: an acknowledged completion and an exited
  * shell are not news.
  *
- * Module-private: the collapsed-group pip cluster that used to draw from it is
- * gone, and the filter bar spells its own segment tones out in full because
- * Tailwind's scanner cannot see an assembled `${tone}/40`.
+ * Exported for the group header's demand chip, which has to speak the same
+ * hue as the rows it summarises. The filter bar still spells its own segment
+ * tones out in full because Tailwind's scanner cannot see an assembled
+ * `${tone}/40`.
  */
-const BAND_GLYPH_TONE: Record<FleetBand, string> = {
+export const BAND_GLYPH_TONE: Record<FleetBand, string> = {
   blocked: "text-status-danger",
   "needs-you": "text-state-waiting",
   review: "text-category-blue",
   running: "text-state-working",
   done: NEUTRAL_TONE,
+  // Parked is the user's own quiet, so it takes the quiet tone: hued parked
+  // rows would re-demand the attention parking just released.
+  parked: NEUTRAL_TONE,
+  // Snoozed is quiet for the same reason parked is: hueing a run the user just
+  // silenced would re-demand the attention the snooze exists to withdraw.
+  snoozed: NEUTRAL_TONE,
   idle: NEUTRAL_TONE,
 };
 
@@ -96,10 +111,10 @@ const BAND_GLYPH_TONE: Record<FleetBand, string> = {
  * ordering beside it: an acknowledged completion has to stop looking like a
  * hand-back at the same moment it stops being counted as one.
  *
- * The three demand bands and `running` are hued; the two quiet ones are not.
- * Shape still carries the state as a second channel for all six — spinner,
- * hollow circle, prohibition, check and exited stay distinct — and the row
- * keeps the state in text in its accessible name either way. Never colour
+ * The three demand bands and `running` are hued; the quiet ones are not.
+ * Shape still carries the state as a second channel for every band — spinner,
+ * hollow circle, prohibition, check, pause and exited stay distinct — and the
+ * row keeps the state in text in its accessible name either way. Never colour
  * alone, and never colour where there is nothing happening.
  */
 export function PilotRunState({ band, agentState }: PilotRunStateProps) {

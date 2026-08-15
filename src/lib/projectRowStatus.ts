@@ -6,7 +6,8 @@ import type {
 import { formatTimeAgo } from "@/utils/timeAgo";
 
 /** Visual weight of a row's status line. Maps to status tokens, never the accent. */
-export type ProjectRowTone = "blocked" | "waiting" | "review" | "working" | "running" | "muted";
+export type ProjectRowTone =
+  "blocked" | "waiting" | "review" | "working" | "running" | "snoozed" | "muted";
 
 /**
  * Text colour for a status line, by tone.
@@ -26,6 +27,10 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   review: "text-activity-completed",
   working: "text-activity-working",
   running: "text-daintree-text/50",
+  // Muted like the other settled states, and deliberately NOT the accent: a
+  // snooze is the user telling this row to stop asking for them, so it must not
+  // be the loudest thing in the list on the way out.
+  snoozed: "text-daintree-text/50",
   muted: "text-daintree-text/50",
 };
 
@@ -35,6 +40,11 @@ export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
   review: "bg-activity-completed",
   working: "bg-activity-active animate-activity-pulse",
   running: "bg-status-success",
+  // Dashed rather than solid, because "snoozed" and "settled" are different
+  // facts and the switcher's greys already carry the settled ones. Colour alone
+  // could not separate them — a dashed ring reads as temporarily suspended at a
+  // glance, and survives both high-contrast modes and a colour-blind reader.
+  snoozed: "border border-dashed border-daintree-text/40",
   // Hollow, because "finished" and "suspended" are settled states rather than
   // live ones. It used to sit on every dormant row too, which made a ring the
   // most common mark in the list and left it competing with the filled dots
@@ -107,6 +117,21 @@ export function agoPhrase(age: string): string {
 
 function pluralAgents(count: number, singular: string, plural: string): string {
   return count === 1 ? singular : `${count} ${plural}`;
+}
+
+/**
+ * A snooze's wake time as a wall clock reading ("3:45 PM"), in the user's own
+ * locale and hour convention.
+ *
+ * A clock time rather than a duration because it is the one form that stays
+ * true without being redrawn: "until 3:45 PM" is as correct ten minutes later
+ * as when it rendered, so the row never needs a ticking timer to stay honest.
+ */
+export function formatWakeTime(wakeAtMs: number): string {
+  return new Date(wakeAtMs).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 type WorkspaceActivityStatus = Omit<ProjectRowStatus, "pathHint">;
@@ -228,6 +253,24 @@ function getWorkspaceActivityStatus(
       text: pluralAgents(project.activeAgentCount, "Agent running", "agents running"),
       tone: "working",
     };
+  }
+
+  // Everything here is snoozed and nothing is running. Below `active` on
+  // purpose — a project with one snoozed agent and one working one is Running,
+  // because something genuinely is. Above the completed/dormant lines because a
+  // snoozed agent is live and coming back, which "Agent finished" would deny.
+  //
+  // The wake time is stated once, statically. A counting-down "in 12m" would
+  // pull the eye back to the row every minute, which is the precise thing the
+  // user snoozed it to stop.
+  if (project.snoozedAgentCount > 0) {
+    const lead = pluralAgents(project.snoozedAgentCount, "Agent snoozed", "agents snoozed");
+    const wakeAt = project.nextSnoozeWakeAt;
+    // Absent when every snooze is the unlimited option — there is no wake time
+    // to name, and inventing one would promise a return that no clock will
+    // deliver.
+    if (wakeAt === undefined) return { text: lead, tone: "snoozed" };
+    return { text: `${lead} · until ${formatWakeTime(wakeAt)}`, tone: "snoozed" };
   }
 
   // Everything completed has been seen: drop the action phrase and mute. The

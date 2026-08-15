@@ -8,7 +8,8 @@ import {
   useRef,
   useState,
 } from "react";
-import type { StagingStatus, GitStatus } from "@shared/types";
+import type { RefObject } from "react";
+import type { StagingFileEntry, StagingStatus, GitStatus } from "@shared/types";
 import type { PanelLocation } from "@shared/types/panel";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
@@ -26,7 +27,12 @@ import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { basename } from "@shared/utils/path";
+import { basename, join } from "@shared/utils/path";
+import {
+  isFileRowMenuKey,
+  openFileRowMenuFromKeyboard,
+  useFileRowMenuItems,
+} from "@/hooks/useFileRowMenuItems";
 import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
@@ -1197,6 +1203,26 @@ export function ReviewHubContent({
     savedScrollTop.current = e.currentTarget.scrollTop;
   }, []);
 
+  // The plain "show me this file's diff" gesture, shared by a click, Enter and
+  // the row menu's `Open diff` (#11757) so all three clear the selection the
+  // same way and hand focus back to the same row on close. A second opener
+  // would drift from this one the first time either changed.
+  const openFileDiff = useCallback(
+    (
+      section: FileStageRowSection,
+      filePath: string,
+      fileStatus: GitStatus,
+      triggerEl: HTMLElement | null
+    ) => {
+      setSelectedPaths((prev) => (prev.size === 0 ? prev : new Set()));
+      setSelectionSection((prev) => (prev === null ? prev : null));
+      selectionAnchorRef.current = filePath;
+      diffTriggerRef.current = triggerEl;
+      setSelectedFile({ path: filePath, status: fileStatus, section });
+    },
+    []
+  );
+
   const handleRowClick = useCallback(
     (
       section: FileStageRowSection,
@@ -1243,13 +1269,14 @@ export function ReviewHubContent({
       }
 
       // Plain click: clear any selection, open diff.
-      setSelectedPaths((prev) => (prev.size === 0 ? prev : new Set()));
-      setSelectionSection((prev) => (prev === null ? prev : null));
-      selectionAnchorRef.current = filePath;
-      diffTriggerRef.current = e.currentTarget instanceof HTMLElement ? e.currentTarget : null;
-      setSelectedFile({ path: filePath, status: fileStatus, section });
+      openFileDiff(
+        section,
+        filePath,
+        fileStatus,
+        e.currentTarget instanceof HTMLElement ? e.currentTarget : null
+      );
     },
-    [status, selectionSection]
+    [status, selectionSection, openFileDiff]
   );
 
   const handleViewedChange = useCallback(
@@ -1257,6 +1284,40 @@ export function ReviewHubContent({
       setStoreViewed(worktreePath, viewedKey, viewed);
     },
     [setStoreViewed, worktreePath]
+  );
+
+  // The one file-row menu, shared with the worktree card, the file browser and
+  // the diff sidebar (#11757). Built once here rather than per row: a large
+  // changeset renders thousands of rows, and a hook per row would be a store
+  // subscription per row.
+  const { renderItems: renderFileRowMenuItems } = useFileRowMenuItems({
+    worktreePath,
+    worktreeId: worktreeId ?? null,
+    copyTreeRunSource: "worktree-card",
+  });
+
+  const renderRowMenu = useCallback(
+    (
+      file: StagingFileEntry,
+      section: FileStageRowSection,
+      triggerRef: RefObject<HTMLElement | null>
+    ) =>
+      renderFileRowMenuItems(
+        {
+          absolutePath: join(worktreePath, file.path),
+          relativePath: file.path,
+          name: basename(file.path),
+          isDirectory: false,
+          status: file.status,
+        },
+        {
+          // Routed through the hub's own opener so the menu lands on the same
+          // overlay a click does, with the same selection reset.
+          onOpenDiff: () => openFileDiff(section, file.path, file.status, triggerRef.current),
+          hasChanges: true,
+        }
+      ),
+    [renderFileRowMenuItems, worktreePath, openFileDiff]
   );
 
   const handleDiffModeChange = useCallback(
@@ -1305,6 +1366,29 @@ export function ReviewHubContent({
     if (!fileListExpanded) return;
     if (navigableItems.length === 0) return;
 
+    // Shift+F10 / the ContextMenu key open the focused row's menu. The rows
+    // never take DOM focus (the listbox owns it and names the row through
+    // `aria-activedescendant`), so the menu is replayed as a synthetic
+    // contextmenu on that row's node — Radix's ContextMenu has no imperative
+    // open. Gated on the index resolving to a rendered row, not merely on a
+    // non-empty list: a filter change can leave `focusedIndex` naming a row
+    // that is no longer in the DOM.
+    if (isFileRowMenuKey(e)) {
+      const rowElement =
+        focusedIndex >= 0
+          ? (fileListRef.current?.querySelector<HTMLElement>(
+              `[data-row-index="${focusedIndex}"]`
+            ) ?? null)
+          : null;
+      if (openFileRowMenuFromKeyboard(rowElement)) {
+        // Also suppresses the browser's own contextmenu for the keypress, so
+        // the menu can't double-fire.
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      return;
+    }
+
     // Action keys (Enter/Space/v) carry side effects; never let them fire while a
     // button or link has focus, or we'd hijack that control's native activation
     // (e.g. Space on Refresh) and instead act on the last keyboard-focused row.
@@ -1339,13 +1423,13 @@ export function ReviewHubContent({
         if (!item) return;
         e.preventDefault();
         e.stopPropagation();
-        setSelectedPaths((prev) => (prev.size === 0 ? prev : new Set()));
-        setSelectionSection((prev) => (prev === null ? prev : null));
-        selectionAnchorRef.current = item.file.path;
-        diffTriggerRef.current =
+        openFileDiff(
+          item.section,
+          item.file.path,
+          item.file.status,
           fileListRef.current?.querySelector<HTMLElement>(`[data-row-index="${focusedIndex}"]`) ??
-          fileListRef.current;
-        setSelectedFile({ path: item.file.path, status: item.file.status, section: item.section });
+            fileListRef.current
+        );
         return;
       }
       case " ": {
@@ -1752,6 +1836,10 @@ export function ReviewHubContent({
                       role="listbox"
                       aria-label="Changed files"
                       tabIndex={-1}
+                      // Stands the global Shift+F10 / Menu-key handler down so
+                      // the focused row's own menu opens instead of the focused
+                      // panel's (`useGlobalKeybindings`).
+                      data-row-menu=""
                       aria-activedescendant={
                         focusedIndex >= 0 ? `review-hub-row-${focusedIndex}` : undefined
                       }
@@ -1804,6 +1892,7 @@ export function ReviewHubContent({
                         }
                         viewedFiles={viewedFiles}
                         onViewedChange={handleViewedChange}
+                        renderRowMenu={renderRowMenu}
                       />
 
                       {/* Unstaged section */}
@@ -1834,6 +1923,7 @@ export function ReviewHubContent({
                         }
                         viewedFiles={viewedFiles}
                         onViewedChange={handleViewedChange}
+                        renderRowMenu={renderRowMenu}
                       />
                     </div>
                   )}

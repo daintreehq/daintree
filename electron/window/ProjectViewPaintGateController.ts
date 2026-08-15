@@ -26,7 +26,10 @@ import type { PaintGate, PaintGateOutcome } from "./ProjectViewManagerTypes.js";
  *
  * Both timer values are captured at gate creation. A later
  * `setPaintGateTimeoutMs` / `setPaintGateHardTimeoutMs` call updates the
- * fields but does NOT retime an in-flight gate.
+ * fields but does NOT retime an in-flight gate. The sole exception is
+ * {@link retimeSkeletonPaintGateHardTimeout}, an explicit lifecycle call from
+ * the switch controller that restarts the hard timer on a value captured
+ * before navigation — not a setter-driven retime, so that guarantee holds.
  */
 export function waitForPaint(
   host: ProjectViewManager,
@@ -85,6 +88,45 @@ export function waitForPaint(
     };
     host.pendingPaintGate = gate;
   });
+}
+
+/**
+ * Restart an open cold-start skeleton gate's hard timer from now, for `hardMs`.
+ * Called once by the switch controller when `loadView()` resolves.
+ *
+ * The gate is armed before navigation starts (so a signal landing on the same
+ * tick as `did-finish-load` is captured rather than dropped), which means its
+ * bound would otherwise be spent on renderer spawn, preload eval and the load
+ * itself — and a slow-but-legitimate cold load expired it mid-flight, losing
+ * the switch to a rollback and an error toast (#11765). The switch controller
+ * arms it wide enough to outlast the load's own fatal ceiling and tightens it
+ * back to the paint bound here, so "never painted" is measured from the moment
+ * the document was verified rather than from before it was even requested.
+ *
+ * Returns whether the retime happened. `false` is normal and expected: the
+ * common fast path releases the gate on its signal during the load, a
+ * superseding switch may have cancelled it, and suites that stub `waitForPaint`
+ * out have no gate at all. Guarded on gate identity exactly like
+ * {@link signalSkeletonPainted}, so a late call from a switch that has already
+ * been superseded can never retime the gate that replaced it.
+ */
+export function retimeSkeletonPaintGateHardTimeout(
+  host: ProjectViewManager,
+  webContentsId: number,
+  hardMs: number
+): boolean {
+  const gate = host.pendingPaintGate;
+  if (!gate) return false;
+  if (gate.releaseChannel !== "skeleton-painted") return false;
+  if (gate.webContentsId !== webContentsId) return false;
+  // Cleared before reassigning: overwriting the handle first would drop the
+  // only reference that can cancel the provisional timer, leaving it to fire
+  // later against a gate `resolve` has since settled.
+  clearTimeout(gate.hardTimeout);
+  gate.hardTimeout = setTimeout(() => {
+    gate.resolve("hard-timeout");
+  }, hardMs);
+  return true;
 }
 
 export function clearPaintGate(host: ProjectViewManager): void {

@@ -317,7 +317,31 @@ export interface ManagedTerminal {
   attachRevealTimer?: ReturnType<typeof setTimeout>;
   attachRevealDisposable?: { dispose: () => void };
 
+  // Count of PTY-bound entries at the head of `listeners`, recorded before
+  // installTerminalBoundListeners appends the xterm-bound ones. The split
+  // point matters for the #11776 rebuild: the tail belongs to the disposed
+  // Terminal and must be re-installed, the head belongs to the PTY and must
+  // survive.
   ipcListenerCount: number;
+
+  // Attach failure state (#11776). Deliberately NOT folded into `isOpened`:
+  // that flag answers "has open() been completed", and overloading it with
+  // "did open() succeed" is what let a permanently-unpaintable terminal look
+  // healthy to every retry path. Message only — the Error itself would pin the
+  // whole poisoned instance graph via its stack.
+  lastAttachError?: string;
+  // Consecutive automatic rebuild attempts. Bounds recovery so a terminal that
+  // cannot be rebuilt (a host that is genuinely never renderable) degrades to a
+  // banner rather than looping.
+  attachRecoveryAttempts?: number;
+  // In-flight rebuild, so concurrent triggers (attach, reveal, watchdog, the
+  // banner's Retry) share one rebuild instead of racing several.
+  attachRecoveryInFlight?: Promise<boolean>;
+  // The custom key handler XtermAdapter installed on the current Terminal.
+  // Recorded so a rebuild can re-attach it: `keyHandlerInstalled` would
+  // otherwise stay true against a fresh Terminal that has no handler, leaving
+  // the rebuilt pane unable to accept keyboard input.
+  customKeyEventHandler?: (event: KeyboardEvent) => boolean;
 
   // Visibility-driven WebGL restore debounce. Show path waits ~100ms before
   // re-ensuring the addon, so rapid tab/panel toggles don't repeatedly

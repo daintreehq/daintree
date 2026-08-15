@@ -109,6 +109,7 @@ export function buildPanelProps({
     reconnectError: pty?.reconnectError,
     spawnError: pty?.spawnError,
     scrollbackRestoreError: pty?.scrollbackRestoreError,
+    attachError: pty?.attachError,
     detectedProcessId: pty?.detectedProcessId,
 
     // Extension state

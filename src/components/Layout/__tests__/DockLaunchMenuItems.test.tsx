@@ -180,18 +180,17 @@ describe("DockLaunchMenuItems", () => {
     expect(recordActionMruMock).toHaveBeenCalledWith("agent.claude");
   });
 
-  it("routes a blocked agent to its settings subtab under the caller's source", () => {
+  // Convergence (#11760): the dock and context menus must recover the same way
+  // the toolbar and palette do, so a blocked agent launches into the gate here
+  // too rather than being redirected on a possibly-stale probe.
+  it("launches a blocked agent rather than redirecting it to settings", () => {
     const onLaunchAgent = vi.fn();
     const { getByText } = renderItems({ onLaunchAgent, source: "context-menu" });
 
     fireEvent.click(getByText("Gemini"));
-    expect(onLaunchAgent).not.toHaveBeenCalled();
-    expect(actionDispatchMock).toHaveBeenCalledWith(
-      "app.settings.openTab",
-      { tab: "agents", subtab: "gemini" },
-      { source: "context-menu" }
-    );
-    expect(recordActionMruMock).not.toHaveBeenCalled();
+    expect(onLaunchAgent).toHaveBeenCalledWith("gemini", undefined);
+    expect(recordActionMruMock).toHaveBeenCalledWith("agent.gemini");
+    expect(actionDispatchMock).not.toHaveBeenCalled();
   });
 
   it("routes the create-recipe cue to the manager when no worktree is active", () => {

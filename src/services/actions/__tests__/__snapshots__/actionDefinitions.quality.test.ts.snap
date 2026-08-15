@@ -1823,6 +1823,25 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "List every CI check on one pull request — each check's name, whether it is still running, how it finished, and a link to its log where the forge reports one. Reach for it once the roll-up shows trouble and the question becomes which check broke and where to read its output. A check with no conclusion reported has not passed; the roll-up stays the authority on whether a PR is green. An empty list means no checks, a null one no such PR, and a provider that cannot read checks fails instead.",
+    "examples": [
+      {
+        "args": {
+          "prNumber": 42,
+        },
+        "description": "List the checks on PR #42 to find which one failed",
+      },
+    ],
+    "id": "forge.getChecks",
+    "keywords": undefined,
+    "kind": "query",
+    "requiresArgs": true,
+    "title": "Get CI Checks",
+  },
+  {
+    "category": "forge",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Fetch the roll-up CI verdict for one pull request from the active forge provider. Read the overall state for the answer: the accompanying counts cover required checks only, and a zero total also appears when the required-check list could not be read in full, so it is never evidence that nothing gates the merge. Values are provider-cached and can lag by around a minute, so poll for a settled verdict rather than treating a single success as final.",
     "examples": [
       {

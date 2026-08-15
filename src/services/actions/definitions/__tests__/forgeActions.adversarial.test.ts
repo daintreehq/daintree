@@ -26,6 +26,7 @@ const forgeClientMock = vi.hoisted(() => ({
   getIssue: vi.fn(),
   listIssueComments: vi.fn(),
   getCIStatus: vi.fn(),
+  getChecks: vi.fn(),
   closePR: vi.fn(),
   reopenPR: vi.fn(),
   mergePR: vi.fn(),
@@ -1164,5 +1165,81 @@ describe("githubClient import boundary", () => {
     }
 
     expect(violations).toEqual([]);
+  });
+});
+
+describe("forge.getChecks", () => {
+  const check = {
+    name: "build",
+    status: "completed" as const,
+    conclusion: "failure" as const,
+    required: true,
+    detailsUrl: "https://ci.test/build",
+  };
+
+  it("wraps a missing PR as {checks:null}, never a bare null", async () => {
+    // A bare null would be dropped by the MCP structured-content path, taking
+    // "PR not found" with it.
+    forgeClientMock.getChecks.mockResolvedValue(null);
+
+    const result = await runAction(
+      "forge.getChecks",
+      { prNumber: 7 },
+      { activeWorktreePath: "/repo" }
+    );
+
+    expect(result).toEqual({ checks: null });
+  });
+
+  it("distinguishes a PR with no checks from a missing PR", async () => {
+    forgeClientMock.getChecks.mockResolvedValue({ checks: [] });
+
+    const result = await runAction(
+      "forge.getChecks",
+      { prNumber: 7 },
+      { activeWorktreePath: "/repo" }
+    );
+
+    expect(result).toEqual({ checks: [] });
+  });
+
+  it("forwards the resolved check list under the checks key", async () => {
+    forgeClientMock.getChecks.mockResolvedValue({ checks: [check] });
+
+    const result = await runAction(
+      "forge.getChecks",
+      { prNumber: 7 },
+      { activeWorktreePath: "/repo" }
+    );
+
+    expect(result).toEqual({ checks: [check] });
+  });
+
+  it("falls back to the active worktree path and prefers an explicit cwd", async () => {
+    forgeClientMock.getChecks.mockResolvedValue({ checks: [] });
+
+    await runAction("forge.getChecks", { prNumber: 9 }, { activeWorktreePath: "/active" });
+    expect(forgeClientMock.getChecks).toHaveBeenCalledWith("/active", 9);
+
+    await runAction(
+      "forge.getChecks",
+      { cwd: "/explicit", prNumber: 9 },
+      { activeWorktreePath: "/active" }
+    );
+    expect(forgeClientMock.getChecks).toHaveBeenCalledWith("/explicit", 9);
+  });
+
+  it("throws without calling the client when no cwd and no active worktree", async () => {
+    await expect(runAction("forge.getChecks", { prNumber: 9 }, {})).rejects.toThrow(
+      /No active worktree/
+    );
+    expect(forgeClientMock.getChecks).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-positive prNumber through the args schema", async () => {
+    const def = setupActions()("forge.getChecks");
+    expect(def.argsSchema?.safeParse({ prNumber: 0 }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ prNumber: 1.5 }).success).toBe(false);
+    expect(def.argsSchema?.safeParse({ prNumber: 12 }).success).toBe(true);
   });
 });

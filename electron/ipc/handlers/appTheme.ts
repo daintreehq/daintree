@@ -6,6 +6,7 @@ import { store } from "../../store.js";
 import { parseAppThemeFile } from "../../utils/appThemeImporter.js";
 import { resolveAppTheme, normalizeAccentHex } from "../../../shared/theme/index.js";
 import { typedHandle, typedHandleWithContext, typedSend } from "../utils.js";
+import { setTitleBarOverlayTheme } from "../../window/titleBarOverlay.js";
 import {
   appCustomSchemesReadSchema,
   appCustomSchemesWriteSchema,
@@ -74,6 +75,21 @@ function getAppThemeConfig(): AppThemeConfig {
 export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void {
   const handlers: Array<() => void> = [];
 
+  /**
+   * Push the freshly-persisted scheme at every window's caption strip.
+   * Picking a theme in settings only writes the store — without this the
+   * native strip keeps the previous theme's colours until an OS appearance
+   * change happens to reapply them (#11766).
+   */
+  const refreshTitleBarOverlayTheme = () => {
+    if (process.platform !== "win32") return;
+    const config = getAppThemeConfig();
+    const scheme = resolveAppTheme(config.colorSchemeId, config.customSchemes ?? []);
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) setTitleBarOverlayTheme(win, scheme.tokens);
+    }
+  };
+
   handlers.push(typedHandle(CHANNELS.APP_THEME_GET, async () => getAppThemeConfig()));
 
   handlers.push(
@@ -83,6 +99,7 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
         return;
       }
       store.set("appTheme.colorSchemeId", schemeId.trim());
+      refreshTitleBarOverlayTheme();
     })
   );
 
@@ -94,6 +111,7 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
         return;
       }
       store.set("appTheme.customSchemes", result.data as AppColorScheme[]);
+      refreshTitleBarOverlayTheme();
     })
   );
 
@@ -246,13 +264,10 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
       const scheme = resolveAppTheme(schemeId, customSchemes);
       win.setBackgroundColor(scheme.tokens["surface-canvas"]);
 
-      if (process.platform === "win32") {
-        win.setTitleBarOverlay({
-          color: scheme.tokens["surface-canvas"],
-          symbolColor: "#a1a1aa",
-          height: 48,
-        });
-      }
+      // Hand the new tokens to the overlay owner rather than writing the native
+      // strip here: it re-tints in place when a global banner currently holds
+      // the caption band, instead of reverting it to bare canvas (#11766).
+      setTitleBarOverlayTheme(win, scheme.tokens);
     }, 300);
   };
 

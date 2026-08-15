@@ -13,6 +13,8 @@ import {
   buildResumeCommand,
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
+  stripAssignedSessionIdArgs,
+  supportsSessionIdAssignment,
   reconcileBypassFlags,
   reconcileInlineModeFlag,
   resolveEffectiveBypass,
@@ -273,6 +275,12 @@ export const createRestartActions = (
           reconnectError: undefined,
           spawnError: undefined,
           scrollbackRestoreError: undefined,
+          // attachError is deliberately NOT cleared here: this reset runs
+          // before the restart is validated, so clearing it would hide the
+          // banner while the old unpaintable terminal is still on screen
+          // (#11776). The service clears it when a terminal actually opens, and
+          // destroy() clears it when one is torn down — both strictly after the
+          // point of no return.
           // A restart spins up a fresh PTY process; flow state from the previous
           // process must not survive into it or the paused pill would linger
           // (#9899). The host only re-emits flow status on a pause/resume
@@ -695,7 +703,14 @@ export const createRestartActions = (
           }
         }
         if (!consumedSessionId && !usedResumeLatest) {
-          commandToRun = freshCommand;
+          // Genuinely starting over. `freshCommand` can still be the pane's
+          // original launch command, which for an assigning agent carries the
+          // id this pane already used — replaying it would be rejected by the
+          // CLI and the restart would fail outright (#11782). Strip it and let
+          // this launch be what it is: a new conversation with no id yet.
+          commandToRun = freshCommand
+            ? stripAssignedSessionIdArgs(freshCommand, effectiveAgentId)
+            : freshCommand;
           nextAgentLaunchFlags = freshLaunchFlags;
         }
       }
@@ -703,9 +718,25 @@ export const createRestartActions = (
       const spawnCommand = commandToRun;
       // Resume commands are transient: keep the original command as the
       // durable stored command so a later restart doesn't replay a consumed
-      // session id or re-run resume-latest instead of launching fresh.
-      const durableCommand =
+      // session id or re-run resume-latest instead of launching fresh. The
+      // assigning flag is transient for the same reason and is dropped here
+      // too, so no copy of it survives in panel state (#11782).
+      // An absent command stays absent: coercing it to "" would flip the
+      // strict `command !== undefined` gate on `failedAgentLaunch` above.
+      const durableSource =
         consumedSessionId || usedResumeLatest ? currentTerminal.command : spawnCommand;
+      const durableCommand = durableSource
+        ? stripAssignedSessionIdArgs(durableSource, effectiveAgentId)
+        : durableSource;
+      // An assigned id stays valid across a resume — the CLI reuses it rather
+      // than minting a new one — so carrying it through the restart keeps the
+      // pane's conversation addressable without waiting on a teardown scrape.
+      // Agents that mint their own id keep the previous behaviour of clearing
+      // it and re-capturing at the next teardown.
+      const nextSessionId =
+        isAgent && supportsSessionIdAssignment(currentTerminal.launchAgentId)
+          ? consumedSessionId
+          : undefined;
 
       // Update terminal in store: increment restartKey, reset agent state, update location
       set((state) => {
@@ -732,7 +763,7 @@ export const createRestartActions = (
           agentPresetId: nextAgentPresetId,
           agentPresetColor: nextAgentPresetColor,
           originalPresetId: nextOriginalPresetId,
-          agentSessionId: undefined,
+          agentSessionId: nextSessionId,
           isRestarting: true,
           restartError: undefined,
           exitCode: undefined,
@@ -789,6 +820,10 @@ export const createRestartActions = (
         env: restartEnv,
         agentLaunchFlags: isAgent ? nextAgentLaunchFlags : undefined,
         agentModelId: isAgent ? currentTerminal.agentModelId : undefined,
+        // Lands on the terminal record as the PTY is created, so the restarted
+        // pane is addressable immediately rather than only if a later teardown
+        // manages to observe an id (#11782).
+        agentSessionId: nextSessionId,
         agentPresetId: nextAgentPresetId,
         agentPresetColor: nextAgentPresetColor,
         originalAgentPresetId: nextOriginalPresetId ?? nextAgentPresetId,
@@ -867,6 +902,7 @@ export const createRestartActions = (
         ...t,
         restartError: undefined,
         scrollbackRestoreError: undefined,
+        attachError: undefined,
       }))
     );
   },

@@ -3256,3 +3256,91 @@ describe("lastActiveAt propagation (issue #9933)", () => {
     expect(result).not.toHaveProperty("lastActiveAt");
   });
 });
+
+// #11782 — a pane's session id must reach the terminal record at spawn rather
+// than depending on a teardown to observe it, so the respawn args carry it.
+describe("buildArgsForRespawn — assigned session id", () => {
+  const saved = (overrides: Record<string, unknown> = {}) => ({
+    id: "t1",
+    kind: "terminal" as const,
+    agentId: "claude",
+    cwd: "/p",
+    location: "grid",
+    ...overrides,
+  });
+
+  it("carries the saved id when the pane genuinely reattaches to it", () => {
+    const result = buildArgsForRespawn(
+      saved({ agentSessionId: "sess-keep" }),
+      "terminal",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      "/tmp"
+    );
+
+    expect(result.command).toBe("claude --resume sess-keep");
+    // Same conversation the command resumes — not a new one.
+    expect(result.agentSessionId).toBe("sess-keep");
+  });
+
+  it("mints a different id when the saved session can no longer be resumed", () => {
+    // Replaying the dead id would offer the CLI one it has already issued and
+    // the relaunch would be rejected, so this branch must start over.
+    buildResumeCommandMock.mockReturnValue(undefined);
+
+    const result = buildArgsForRespawn(
+      saved({ agentSessionId: "sess-expired" }),
+      "terminal",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      "/tmp"
+    );
+
+    expect(result.sessionLostOnRestore).toBe(true);
+    expect(result.agentSessionId).not.toBe("sess-expired");
+    // Must be a real UUID — the CLI rejects anything else — and, crucially, the
+    // SAME id the rebuilt command was given. A record holding an id the command
+    // never carried would resume a conversation this pane isn't running.
+    expect(result.agentSessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    );
+    expect(generateAgentCommandMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ sessionId: result.agentSessionId })
+    );
+  });
+
+  it("gives two restores of the same dead snapshot different ids", () => {
+    buildResumeCommandMock.mockReturnValue(undefined);
+    const build = () =>
+      buildArgsForRespawn(
+        saved({ agentSessionId: "sess-expired" }),
+        "terminal",
+        "/p",
+        { agents: { claude: {} } },
+        false,
+        "/tmp"
+      ).agentSessionId;
+
+    expect(build()).not.toBe(build());
+  });
+
+  it("assigns nothing for an agent that mints its own id", () => {
+    buildResumeCommandMock.mockReturnValue(undefined);
+
+    const result = buildArgsForRespawn(
+      saved({ agentId: "codex", agentSessionId: "sess-expired" }),
+      "terminal",
+      "/p",
+      { agents: { codex: {} } },
+      false,
+      "/tmp"
+    );
+
+    expect(result.agentSessionId).toBeUndefined();
+  });
+});

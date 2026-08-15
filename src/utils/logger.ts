@@ -1,3 +1,5 @@
+import { normalizeErrorsInLogContext } from "@shared/utils/logErrorNormalization";
+
 type LogLevel = "debug" | "info" | "warn" | "error";
 
 interface LogContext {
@@ -132,9 +134,18 @@ function flushBatch(): void {
 
   for (let i = 0; i < snapshot.length; i += MAX_BATCH_ENTRIES) {
     const chunk = snapshot.slice(i, i + MAX_BATCH_ENTRIES);
-    window.electron.logs.writeBatch(chunk).catch(() => {
-      for (const entry of chunk) consoleFallback(entry.level, entry.message, entry.context);
-    });
+    try {
+      window.electron.logs.writeBatch(chunk).catch(() => {
+        for (const entry of chunk) consoleFallback(entry.level, entry.message, entry.context);
+      });
+    } catch {
+      // The contextBridge clones synchronously as the call is made, so an
+      // un-cloneable value — or a context whose getter throws — raises here
+      // rather than rejecting, and `.catch` would never be reached. A log call
+      // must not become the failure it was reporting. The context is dropped
+      // on this path precisely because reading it is what failed.
+      for (const entry of chunk) consoleFallback(entry.level, entry.message);
+    }
   }
 }
 
@@ -150,7 +161,17 @@ function writeLog(level: LogLevel, message: string, context?: LogContext): void 
 
   if (!shouldRendererLog(level)) return;
 
-  const entry: BatchEntry = { level, message, context };
+  // Flatten Errors before the entry is queued, because `writeBatch` crosses the
+  // `contextBridge` — a clone boundary of its own, ahead of the IPC hop — and
+  // that cloner copies only own-enumerable properties. An Error's name, message
+  // and stack are non-enumerable, so by the time main sees the payload there is
+  // nothing left to recover: normalizing here is the last point where it can be
+  // done at all. Running after the level gate keeps suppressed calls free.
+  const entry: BatchEntry = {
+    level,
+    message,
+    context: context ? normalizeErrorsInLogContext(context) : context,
+  };
   batchQueue.push(entry);
 
   // warn/error must never be deferred beyond the current tick: flush the queue
@@ -181,17 +202,12 @@ export function logWarn(message: string, context?: LogContext): void {
 
 export function logError(message: string, error?: unknown, context?: LogContext): void {
   const errorContext: LogContext = { ...context };
-  if (error !== undefined) {
-    if (error instanceof Error) {
-      errorContext.error = {
-        name: error.name,
-        message: error.message,
-        stack: error.stack,
-      };
-    } else {
-      errorContext.error = error;
-    }
-  }
+  // The dedicated `error` argument is merged in raw and flattened by the same
+  // pass in `writeLog` that handles Errors found anywhere else in the context,
+  // so both routes produce one shape. Leaving it live until then also lets the
+  // non-electron console fallback print a real Error, which DevTools renders
+  // with an expandable stack.
+  if (error !== undefined) errorContext.error = error;
   writeLog("error", message, errorContext);
 }
 

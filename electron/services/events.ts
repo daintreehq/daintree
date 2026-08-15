@@ -276,6 +276,24 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: false,
     description: "Terminal restored from trash",
   },
+  "terminal:park-changed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A run was parked or unparked (user intent, not agent state)",
+  },
+  "terminal:park-released": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A parked run was released because its gate terminal came free or closed",
+  },
+  "terminal:snooze-changed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A run was snoozed or unsnoozed (user intent, not agent state)",
+  },
   "agent-session:captured": {
     category: "agent",
     requiresContext: false,
@@ -768,6 +786,49 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * Emitted whenever a run's park record is created, replaced or removed —
+   * by the user or by an automatic release. Attention projections
+   * (`FleetSnapshotService`) subscribe to recompute; the payload deliberately
+   * carries only the id so no consumer is tempted to bypass the service as the
+   * single reader of park state.
+   */
+  "terminal:park-changed": {
+    id: string;
+    parked: boolean;
+    timestamp: number;
+  };
+
+  /**
+   * Emitted whenever a run's snooze record is created, replaced or removed —
+   * by the user, or automatically when they typed at the run. Both attention
+   * projections subscribe: `ProjectStatsService` because a snooze changes the
+   * project's counts, `FleetSnapshotService` because it changes the row.
+   *
+   * Expiry deliberately emits NOTHING. A lapsed snooze stops applying because
+   * the next read resolves it against the clock, which is why the feature owns
+   * no timers; an expiry event would need one to fire.
+   */
+  "terminal:snooze-changed": {
+    id: string;
+    snoozed: boolean;
+    timestamp: number;
+  };
+
+  /**
+   * Emitted when a park is lifted automatically rather than by hand: the gate
+   * terminal finished its stint (busy → ready) or was closed. Carries the note
+   * so the "this run is ready for you again" surface can say why the run was
+   * waiting without a second read.
+   */
+  "terminal:park-released": {
+    id: string;
+    gateRunId: string;
+    note?: string;
+    reason: "gate-ready" | "gate-closed";
+    timestamp: number;
+  };
+
+  /**
    * Emitted in the pty-host when trash expiry captures a resumable session,
    * and re-emitted on the Main bus by PtyEventsBridge. Main persists the
    * record (single journal writer — the pty-host writing the file itself
@@ -931,6 +992,9 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "action:dispatched",
   "terminal:trashed",
   "terminal:restored",
+  "terminal:park-changed",
+  "terminal:park-released",
+  "terminal:snooze-changed",
   "agent-session:captured",
   "agent-session:recorded",
   "terminal:activity",

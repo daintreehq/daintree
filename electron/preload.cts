@@ -76,6 +76,7 @@ import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
+import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
 import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
 import { buildProjectHistoryPreloadBindings } from "./ipc/handlers/projectHistory.preload.js";
 import { buildProjectRelocationPreloadBindings } from "./ipc/handlers/projectRelocation.preload.js";
@@ -1480,6 +1481,10 @@ function buildElectronApi(): ElectronAPI {
     // Editor API
     editor: buildEditorConfigPreloadBindings(_unwrappingInvoke),
 
+    // Native window chrome — keeps the Windows caption strip in step with the
+    // global banner occupying the same band (#11766)
+    windowChrome: buildWindowChromePreloadBindings(_unwrappingInvoke),
+
     // Per-window back/forward over visited projects
     projectHistory: buildProjectHistoryPreloadBindings(_unwrappingInvoke),
 
@@ -1545,8 +1550,8 @@ function buildElectronApi(): ElectronAPI {
       startAgentUpdate: (payload: { agentId: string; method?: string }) =>
         _unwrappingInvoke(CHANNELS.SYSTEM_START_AGENT_UPDATE, payload),
 
-      healthCheck: (agentIds?: string[]) =>
-        _unwrappingInvoke(CHANNELS.SYSTEM_HEALTH_CHECK, agentIds),
+      healthCheck: (options?: import("../shared/types/ipc/system.js").SystemHealthCheckOptions) =>
+        _unwrappingInvoke(CHANNELS.SYSTEM_HEALTH_CHECK, options),
 
       getHealthCheckSpecs: (agentIds?: string[]) =>
         _unwrappingInvoke(CHANNELS.SYSTEM_HEALTH_CHECK_SPECS, agentIds),
@@ -1591,7 +1596,7 @@ function buildElectronApi(): ElectronAPI {
         return _eventBusOn("system:wake", callback);
       },
 
-      installAgent: (payload: { agentId: string; methodIndex?: number; jobId: string }) =>
+      installAgent: (payload: import("../shared/types/ipc/system.js").AgentInstallPayload) =>
         _unwrappingInvoke(CHANNELS.SETUP_AGENT_INSTALL, payload),
 
       onAgentInstallProgress: (
@@ -2833,6 +2838,8 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_GET_PR_REVIEW_THREADS, payload),
       listIssueComments: (payload: { cwd: string; issueNumber: number; opts?: unknown }) =>
         _unwrappingInvoke(CHANNELS.FORGE_LIST_ISSUE_COMMENTS, payload),
+      getChecks: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_CHECKS, payload),
       resolveAuthorAvatar: (payload: { cwd: string; email: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, payload),
       getTokenHealth: (payload: { providerId: string }) =>

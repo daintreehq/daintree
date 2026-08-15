@@ -29,6 +29,27 @@ export interface ProjectAgentCounts {
   /** Latest transition into `working`, or null. Orders the Running band. */
   latestWorkingSince: number | null;
   /**
+   * Agents the user snoozed — counted whatever they are doing underneath, so
+   * this is NOT a subset of any single state above.
+   *
+   * A snoozed run keeps contributing to {@link active} and {@link completed}
+   * (snooze suppresses attention, not presence) but is withheld from
+   * {@link waiting}, {@link blocked} and {@link unacknowledgedCompleted}, which
+   * are the tallies that make a project read as needing someone. Without this
+   * field a project whose every agent is snoozed would be indistinguishable
+   * from one with nothing in it.
+   */
+  snoozed: number;
+  /**
+   * Earliest wake time among snoozed agents, or null when nothing is snoozed —
+   * or when every snooze is the unlimited option, which has no wake time.
+   *
+   * Lets a row say "until 3:45 PM" instead of drawing a countdown, which is the
+   * point: the wake time has to be discoverable without a ticking number
+   * pulling the eye back to the run the user just shelved.
+   */
+  nextSnoozeWakeAt: number | null;
+  /**
    * Live Daintree Assistant PTYs. The PTY host tallies these into
    * `terminalCount`, but the assistant is tooling-internal, so callers must
    * subtract this from any process count they report (#10989).
@@ -114,6 +135,8 @@ function empty(): ProjectAgentCounts {
     latestUnacknowledgedCompletionAt: null,
     latestCompletionAt: null,
     latestWorkingSince: null,
+    snoozed: 0,
+    nextSnoozeWakeAt: null,
     helpTerminals: 0,
   };
 }
@@ -139,7 +162,18 @@ export function computeProjectAgentCounts(
    * completion counts as unacknowledged. Omitting the map entirely means the
    * caller doesn't consume the acknowledgement split (same effect).
    */
-  lastCompletionSeenAt?: ReadonlyMap<string, number>
+  lastCompletionSeenAt?: ReadonlyMap<string, number>,
+  /**
+   * Runs the user has snoozed, keyed by terminal id, with expiry ALREADY
+   * resolved by the caller — a lapsed snooze must simply be absent.
+   *
+   * Resolving expiry here would mean taking a clock, and this function is
+   * deliberately pure: it is the one definition of what a project's agents are
+   * doing, and two callers that disagreed about "now" would reintroduce exactly
+   * the drift it exists to prevent. `RunAttentionService.getActiveSnoozes()` is
+   * the intended source.
+   */
+  activeSnoozes?: ReadonlyMap<string, { snoozedUntil?: number }>
 ): Map<string, ProjectAgentCounts> {
   const counts = new Map<string, ProjectAgentCounts>();
   for (const id of projectIds) counts.set(id, empty());
@@ -157,19 +191,45 @@ export function computeProjectAgentCounts(
     }
     if (exclusion !== null) continue;
 
-    if (terminal.agentState === "waiting") {
-      entry.waiting += 1;
-      // `"error"` means the agent settled after a blocking failure, where input
-      // may not unblock it — a materially different ask than an empty prompt.
-      // Counted as a subset of `waiting`, never in addition to it.
-      if (terminal.waitingReason === "error") entry.blocked += 1;
+    // The user's own decision about this run, which outranks what the run is
+    // doing when it comes to demanding their attention — and only then.
+    const snooze =
+      terminal.id !== undefined && activeSnoozes !== undefined
+        ? activeSnoozes.get(terminal.id)
+        : undefined;
+    const isSnoozed = snooze !== undefined;
+    if (isSnoozed) {
+      entry.snoozed += 1;
+      // An unlimited snooze carries no wake time and must not be allowed to
+      // stand in for one — a project mixing unlimited and timed snoozes reports
+      // the earliest real wake, and one holding only unlimited snoozes reports
+      // none at all rather than a misleading soonest.
+      if (snooze.snoozedUntil !== undefined) {
+        entry.nextSnoozeWakeAt =
+          entry.nextSnoozeWakeAt === null
+            ? snooze.snoozedUntil
+            : Math.min(entry.nextSnoozeWakeAt, snooze.snoozedUntil);
+      }
+    }
 
-      // Age the wait from the transition into `waiting`. Terminals that haven't
-      // recorded one yet still count toward `waiting` but can't contribute an age.
-      const since = terminal.lastStateChange;
-      if (typeof since === "number" && since > 0) {
-        entry.oldestWaitingSince =
-          entry.oldestWaitingSince === null ? since : Math.min(entry.oldestWaitingSince, since);
+    if (terminal.agentState === "waiting") {
+      // A snoozed wait is withheld from every attention tally — waiting, its
+      // blocked subset, and the age that dates them. The run is still there and
+      // still waiting; the user has said it does not need them yet.
+      if (!isSnoozed) {
+        entry.waiting += 1;
+        // `"error"` means the agent settled after a blocking failure, where input
+        // may not unblock it — a materially different ask than an empty prompt.
+        // Counted as a subset of `waiting`, never in addition to it.
+        if (terminal.waitingReason === "error") entry.blocked += 1;
+
+        // Age the wait from the transition into `waiting`. Terminals that haven't
+        // recorded one yet still count toward `waiting` but can't contribute an age.
+        const since = terminal.lastStateChange;
+        if (typeof since === "number" && since > 0) {
+          entry.oldestWaitingSince =
+            entry.oldestWaitingSince === null ? since : Math.min(entry.oldestWaitingSince, since);
+        }
       }
     } else if (terminal.agentState === "working") {
       entry.active += 1;
@@ -185,8 +245,10 @@ export function computeProjectAgentCounts(
         // Unacknowledged = finished after the user last saw this project.
         // Deliberately no elapsed-time cutoff: a completion that happened
         // while the user was away must stay surfaced until actually seen.
+        // A snoozed completion is exempt: the hand-back is real, but the user
+        // has already said they don't want to be reminded of it yet.
         const seenUpTo = lastCompletionSeenAt?.get(terminal.projectId) ?? 0;
-        if (at > seenUpTo) {
+        if (!isSnoozed && at > seenUpTo) {
           entry.unacknowledgedCompleted += 1;
           entry.oldestUnacknowledgedCompletionAt = Math.min(
             entry.oldestUnacknowledgedCompletionAt ?? Number.POSITIVE_INFINITY,

@@ -183,6 +183,7 @@ function makeScratch(overrides: Partial<SearchableScratch> = {}): SearchableScra
     blockedAgentCount: 0,
     completedAgentCount: 0,
     unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
     processCount: 0,
     ...overrides,
   };

@@ -56,6 +56,7 @@ import type {
   AgentUpdateSettings,
   StartAgentUpdatePayload,
   StartAgentUpdateResult,
+  SystemHealthCheckOptions,
   SystemHealthCheckResult,
   AppMetricsSummary,
   HardwareInfo,
@@ -347,7 +348,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   };
 
   "system:health-check": {
-    args: [agentIds?: string[]];
+    args: [options?: SystemHealthCheckOptions];
     result: SystemHealthCheckResult;
   };
   "system:download-diagnostics": {
@@ -1380,6 +1381,16 @@ export interface IpcEventMap {
   "terminal:error": [id: string, error: string];
   "terminal:trashed": { id: string; expiresAt: number };
   "terminal:restored": { id: string };
+  // A gated park lifted itself: the gate terminal came free ("gate-ready") or
+  // was closed ("gate-closed"). Carries the note so the hand-back surface can
+  // say why the run was waiting without a second read.
+  "terminal:park-released": {
+    id: string;
+    gateRunId: string;
+    note?: string;
+    reason: "gate-ready" | "gate-closed";
+    timestamp: number;
+  };
   // A close path journaled a resumable agent session (trash expiry, kill,
   // gracefulKill). Signal-only for resume surfaces to refetch the journal.
   "agent-session:recorded": {
@@ -2097,6 +2108,8 @@ export type IpcEventBusMap = Pick<
   | "terminal:status"
   // Agent session journaled — resume surfaces refetch (global broadcast)
   | "agent-session:recorded"
+  // A gated park auto-released — the ready-again hand-back (global broadcast)
+  | "terminal:park-released"
   // Watchdog deadlock detector — emitted once on cap-hit; global broadcast.
   | "watchdog:disabled"
   | "watchdog:active"

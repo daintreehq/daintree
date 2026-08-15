@@ -84,8 +84,10 @@ export const systemClient = {
     return promise;
   },
 
-  healthCheck: (agentIds?: string[]): ReturnType<typeof window.electron.system.healthCheck> => {
-    return window.electron.system.healthCheck(agentIds);
+  healthCheck: (
+    options?: import("@shared/types/ipc/system").SystemHealthCheckOptions
+  ): ReturnType<typeof window.electron.system.healthCheck> => {
+    return window.electron.system.healthCheck(options);
   },
 
   getHealthCheckSpecs: (

@@ -129,6 +129,11 @@ export const config: AgentConfig = {
     quitCommand: "/quit",
     sessionIdPattern: "claude --resume ([\\w-]+)",
     resumeLatestArgs: ["--continue"],
+    // #11782: Claude Code accepts the session id up front, so we mint it at
+    // launch instead of scraping it back out at teardown. `--resume` reuses
+    // that same id on every later relaunch (only `--fork-session` mints a new
+    // one), which makes the id stable for the life of the conversation.
+    assignSessionIdArgs: (sessionId: string) => ["--session-id", sessionId],
   },
   env: {
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",

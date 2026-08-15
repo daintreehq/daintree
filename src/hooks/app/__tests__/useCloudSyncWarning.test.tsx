@@ -111,7 +111,7 @@ describe("useCloudSyncWarning", () => {
     rerender({ home: "/Users/foo" });
 
     const cloudSyncCalls = notify.mock.calls.filter(
-      ([payload]) => payload?.title === "Cloud sync folder detected"
+      ([payload]) => payload?.supersedeKey === "cloud-sync:p1"
     );
     expect(cloudSyncCalls).toHaveLength(1);
     expect(cloudSyncCalls[0]?.[0]).toMatchObject({

@@ -46,6 +46,17 @@ export interface WorkspaceRowStatusFields {
   latestUnacknowledgedCompletionAt?: number;
   /** Latest completion regardless of acknowledgement, absent when none. */
   latestCompletionAt?: number;
+  /**
+   * Agents the user snoozed. NOT a subset of the counts above — a snoozed run
+   * still counts as active or completed, but is withheld from the waiting,
+   * blocked and unacknowledged tallies that make a project read as demanding.
+   */
+  snoozedAgentCount: number;
+  /**
+   * Earliest wake time among snoozed agents, absent when nothing is snoozed or
+   * when every snooze is the unlimited option.
+   */
+  nextSnoozeWakeAt?: number;
   processCount: number;
 }
 
@@ -94,6 +105,7 @@ export const PROJECT_SECTION_ORDER = [
   "attention",
   "pinned",
   "running",
+  "snoozed",
   "other",
   "unavailable",
 ] as const;
@@ -122,6 +134,11 @@ export const PROJECT_SECTION_LABELS: Record<ProjectSectionKey, string> = {
   attention: "Needs attention",
   pinned: "Pinned",
   running: "Running",
+  // Its own band rather than a line inside Other, because the two mean opposite
+  // things: Other is the residual nothing-happening catch-all, and a snoozed
+  // project has live agents the user deliberately quieted. Sorting them
+  // together is what made a project with three snoozed agents read as dormant.
+  snoozed: "Snoozed",
   other: "Other projects",
   unavailable: "Unavailable",
 };
@@ -439,6 +456,12 @@ function sectionForProject(project: SearchableProject): ProjectSectionKey {
   }
   if (project.isPinned) return "pinned";
   if (project.activeAgentCount > 0) return "running";
+  // Last stop before the residual band. Below `pinned` and `running` for the
+  // same reason a pinned running project stays in Pinned: snooze withdraws a
+  // demand, it does not override an explicit pin or the fact that something is
+  // still executing. Above `other` because a project holding snoozed agents is
+  // not the dormant shell that band is for.
+  if (project.snoozedAgentCount > 0) return "snoozed";
   return "other";
 }
 
@@ -699,6 +722,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
               ...(entry.latestWorkingSince !== undefined
                 ? { latestWorkingSince: entry.latestWorkingSince }
                 : {}),
+              snoozedAgentCount: entry.snoozedAgentCount,
+              ...(entry.nextSnoozeWakeAt !== undefined
+                ? { nextSnoozeWakeAt: entry.nextSnoozeWakeAt }
+                : {}),
               processCount: entry.processCount,
             };
             changed = true;
@@ -764,6 +791,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         latestUnacknowledgedCompletionAt: stats?.latestUnacknowledgedCompletionAt,
         latestCompletionAt: stats?.latestCompletionAt,
         latestWorkingSince: stats?.latestWorkingSince,
+        snoozedAgentCount: stats?.snoozedAgentCount ?? 0,
+        nextSnoozeWakeAt: stats?.nextSnoozeWakeAt,
         processCount: stats?.processCount ?? 0,
         displayPath: displayPathById.get(p.id) ?? p.path,
         section: "other",
@@ -1026,6 +1055,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         oldestUnacknowledgedCompletionAt: stats?.oldestUnacknowledgedCompletionAt,
         latestUnacknowledgedCompletionAt: stats?.latestUnacknowledgedCompletionAt,
         latestCompletionAt: stats?.latestCompletionAt,
+        snoozedAgentCount: stats?.snoozedAgentCount ?? 0,
+        nextSnoozeWakeAt: stats?.nextSnoozeWakeAt,
         processCount: stats?.processCount ?? 0,
       };
     });

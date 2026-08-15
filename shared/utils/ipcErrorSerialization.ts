@@ -15,7 +15,37 @@ const KNOWN_ERROR_KEYS = new Set([
   "path",
   "context",
   "cause",
+  "errors",
 ]);
+
+// `Error.isError` reads the [[ErrorData]] internal slot, so it recognizes an
+// Error from any realm. Feature-checked rather than assumed: it is recent
+// enough that the CI runtime does not have it, and this must not quietly become
+// a no-op there — hence the `Object.prototype.toString` fallback below.
+const nativeIsError = (Error as unknown as { isError?: (value: unknown) => boolean }).isError;
+
+/**
+ * True when `value` is an Error, including one constructed in another realm.
+ *
+ * Realms matter here: each has its own `Error.prototype`, so `instanceof` says
+ * no to an error that arrived from a utility process or the preload's isolated
+ * world — precisely the errors most worth reporting. `Object.prototype.toString`
+ * consults the same internal slot `Error.isError` does and is available
+ * everywhere, so detection does not depend on the runtime being new enough.
+ *
+ * Never throws. `instanceof` runs a Proxy's `getPrototypeOf` trap and the
+ * `toString` path can trip a `get` trap, so a hostile — or merely unusual —
+ * context value must not turn a log call into the exception it was reporting.
+ */
+export function isErrorLike(value: unknown): value is Error {
+  if (typeof nativeIsError === "function" && nativeIsError(value)) return true;
+  try {
+    if (value instanceof Error) return true;
+    return Object.prototype.toString.call(value) === "[object Error]";
+  } catch {
+    return false;
+  }
+}
 
 function sanitizeCloneValue(value: unknown, seen: WeakSet<object>): unknown {
   if (value === null) return null;
@@ -34,7 +64,7 @@ function sanitizeCloneValue(value: unknown, seen: WeakSet<object>): unknown {
     return undefined;
   }
 
-  if (value instanceof Error) {
+  if (isErrorLike(value)) {
     return serializeError(value, seen);
   }
 
@@ -122,6 +152,26 @@ export function serializeError(error: unknown, seen = new WeakSet<object>()): Se
 
   const properties: Record<string, unknown> = {};
   let hasProperties = false;
+
+  // `AggregateError.prototype.errors` is an own but NON-enumerable property, so
+  // the `Object.keys` walk below never reaches it and every aggregated failure
+  // would be dropped. Handled here (and listed in `KNOWN_ERROR_KEYS` so the
+  // walk skips it) because `sanitizeCloneValue` shares the `seen` set — a
+  // second visit to the same array would serialize as "[Circular]". Carried in
+  // the `properties` bag rather than a new top-level field so `SerializedError`
+  // and the packaged-build strip in `electron/setup/security.ts` are unchanged.
+  // Read once: a getter could answer differently on a second access, and
+  // `sanitizeCloneValue` shares `seen`, so a second visit to the same array
+  // would serialize as "[Circular]".
+  const aggregateMembers = err.errors;
+  if (aggregateMembers !== undefined) {
+    const aggregated = sanitizeCloneValue(aggregateMembers, seen);
+    if (aggregated !== undefined) {
+      properties.errors = aggregated;
+      hasProperties = true;
+    }
+  }
+
   for (const key of Object.keys(err)) {
     if (KNOWN_ERROR_KEYS.has(key)) continue;
     const val = err[key];

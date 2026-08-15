@@ -56,6 +56,38 @@ function sentEntry(callIndex = 0, entryIndex = 0): SentEntry {
   return entry;
 }
 
+/** What survives a structured copy: no Errors, no functions, no prototypes. */
+type WireValue = string | number | boolean | null | WireValue[] | { [key: string]: WireValue };
+
+function isWireRecord(value: unknown): value is Record<string, WireValue> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Narrow a wire value to a record, failing the test with what it actually was. */
+function wireRecord(value: unknown): Record<string, WireValue> {
+  if (!isWireRecord(value)) throw new Error(`expected a record, received ${JSON.stringify(value)}`);
+  return value;
+}
+
+/**
+ * The context as `writeBatch` will actually deliver it.
+ *
+ * The mock captures the live argument, but the real call crosses the
+ * contextBridge, which copies only own-enumerable properties — exactly what
+ * `JSON.stringify` sees. Asserting against the raw argument would let a live
+ * Error pass every field check while still arriving as `{}` in production, so
+ * every wire assertion goes through this.
+ */
+function wireContext(entry: SentEntry): Record<string, WireValue> {
+  const parsed: unknown = JSON.parse(JSON.stringify(entry.context ?? {}));
+  return wireRecord(parsed);
+}
+
+/** The record at `key`, as it survived the wire. */
+function wireField(context: Record<string, WireValue>, key: string): Record<string, WireValue> {
+  return wireRecord(context[key]);
+}
+
 /** Let the init's getLevelOverrides().then() microtask settle. */
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
@@ -219,11 +251,26 @@ describe("renderer logger warn/error bypass", () => {
   });
 
   it("flushes error synchronously and serializes the Error", () => {
-    logError("boom", new Error("kaboom"));
+    const error = new Error("kaboom");
+    logError("boom", error);
     expect(logsApi.writeBatch).toHaveBeenCalledTimes(1);
     const entry = sentEntry();
     expect(entry.level).toBe("error");
-    expect(entry.context?.error).toMatchObject({ name: "Error", message: "kaboom" });
+    expect(wireContext(entry).error).toMatchObject({ name: "Error", message: "kaboom" });
+    // The stack has to survive too — it is the part the contextBridge drops.
+    expect(wireField(wireContext(entry), "error").stack).toBe(error.stack);
+  });
+
+  it("carries the cause chain of a wrapped Error across the wire", () => {
+    logError("boom", new Error("outer", { cause: new Error("root cause") }));
+
+    const cause = wireField(wireField(wireContext(sentEntry()), "error"), "cause");
+    expect(cause.message).toBe("root cause");
+  });
+
+  it("sends a non-Error error argument through unchanged", () => {
+    logError("boom", "just a string");
+    expect(sentEntry().context?.error).toBe("just a string");
   });
 
   it("flushes pending info ahead of an error, preserving order, in one batch", () => {
@@ -246,6 +293,84 @@ describe("renderer logger warn/error bypass", () => {
   });
 });
 
+describe("renderer logger error normalization", () => {
+  it("flattens an Error passed inside a warn context, not just logError's argument", () => {
+    const error = new Error("wake failed");
+    logWarn("[wakeActiveWorktreeTerminals] wake failed", { id: "terminal-1", error });
+
+    const entry = sentEntry();
+    // The queued value must already be a record; a live Error here is what
+    // reached the log file as `{}` in the reported bug.
+    expect(entry.context?.error).not.toBeInstanceOf(Error);
+
+    const context = wireContext(entry);
+    expect(context.error).toMatchObject({ name: error.name, message: error.message });
+    expect(wireField(context, "error").stack).toBe(error.stack);
+    expect(context.id).toBe("terminal-1");
+  });
+
+  it("flattens Errors nested in objects and arrays at every level", () => {
+    const nested = new Error("nested");
+    const listed = new Error("listed");
+    logWarn("failures", { task: { error: nested }, failures: [[listed]] });
+
+    const context = wireContext(sentEntry());
+    expect(wireField(wireField(context, "task"), "error").message).toBe(nested.message);
+
+    const failures = context.failures;
+    if (!Array.isArray(failures) || !Array.isArray(failures[0])) {
+      throw new Error(`expected a nested array, received ${JSON.stringify(failures)}`);
+    }
+    expect(wireRecord(failures[0][0]).message).toBe(listed.message);
+  });
+
+  it("sends a payload that survives JSON serialization with the failure intact", () => {
+    logInfo("attempt failed", { error: new Error("recoverable") });
+    vi.advanceTimersByTime(LOG_BATCH_MS);
+
+    expect(wireField(wireContext(sentEntry()), "error").message).toBe("recoverable");
+  });
+
+  it("does not mutate the caller's context object", () => {
+    const error = new Error("untouched");
+    const context = { error };
+    logWarn("keep the caller's object intact", context);
+
+    expect(context.error).toBe(error);
+  });
+
+  it("does not let a context the bridge rejects escape into the caller", () => {
+    // The real contextBridge clones synchronously as the call is made, so an
+    // un-cloneable context throws out of writeBatch rather than rejecting.
+    logsApi.writeBatch.mockImplementation(() => {
+      throw new Error("could not be cloned");
+    });
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(() => logWarn("unclonable", { error: new Error("still reported") })).not.toThrow();
+    // The entry is not silently dropped — it falls back to the console.
+    expect(consoleSpy).toHaveBeenCalled();
+  });
+
+  it("normalizes after the level gate, so a suppressed call does no work", () => {
+    let stackReads = 0;
+    const error = new Error("gated");
+    Object.defineProperty(error, "stack", {
+      get: () => {
+        stackReads++;
+        return "counted";
+      },
+    });
+
+    // debug sits below the default info floor.
+    logDebug("gated", { error });
+    vi.advanceTimersByTime(LOG_BATCH_MS);
+
+    expect(logsApi.writeBatch).not.toHaveBeenCalled();
+    expect(stackReads).toBe(0);
+  });
+});
+
 describe("renderer logger fallback", () => {
   it("logs to console (without gating) when electron is unavailable", () => {
     removeElectron();
@@ -258,5 +383,20 @@ describe("renderer logger fallback", () => {
 
     expect(debugSpy).toHaveBeenCalled();
     expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it("hands the console the live Error, which DevTools can expand", () => {
+    removeElectron();
+    _resetRendererLoggerForTesting();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const error = new Error("live");
+
+    logError("boom", error);
+
+    const context: unknown = errorSpy.mock.calls[0]?.[1];
+    if (context === null || typeof context !== "object" || !("error" in context)) {
+      throw new Error("expected the console call to carry the error in its context");
+    }
+    expect(context.error).toBe(error);
   });
 });

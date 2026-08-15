@@ -124,9 +124,13 @@ describe("revealUntilStable", () => {
 
     await expect(result).resolves.toBe(false);
     expect(attempt).toHaveBeenCalledTimes(1);
+    // The MESSAGE, not the Error (#11776). `Error.message` is non-enumerable,
+    // so logging the object itself serialised the whole context to
+    // `{"error":{}}` — the one line that could explain a wedged terminal said
+    // nothing at all in the diagnostics bundle.
     expect(logWarnMock).toHaveBeenCalledWith("[assistantReveal] reveal failed", {
       id: "t-1",
-      error: boom,
+      error: "renderer gone",
     });
   });
 

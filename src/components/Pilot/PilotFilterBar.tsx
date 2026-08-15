@@ -45,6 +45,13 @@ const SEGMENT_TONE: Record<
     tone: "text-category-blue",
     toneFaded: "text-category-blue/40",
   },
+  // Parked never earns a hue: it is the user's own quiet, and a coloured
+  // segment would re-demand the attention parking just released.
+  parked: {
+    Icon: BAND_GLYPH.parked,
+    tone: NEUTRAL_TONE,
+    toneFaded: NEUTRAL_TONE_FADED,
+  },
 };
 
 /**

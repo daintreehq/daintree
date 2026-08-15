@@ -20,6 +20,7 @@ function makeScratch(
     blockedAgentCount: 0,
     completedAgentCount: 0,
     unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
     processCount: 0,
     ...overrides,
   };
@@ -42,6 +43,7 @@ function makeProject(
     blockedAgentCount: 0,
     completedAgentCount: 0,
     unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
     processCount: 0,
     section: "other",
     displayPath: overrides.path.split("/").filter(Boolean).pop() ?? overrides.path,

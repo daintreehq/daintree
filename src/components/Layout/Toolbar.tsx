@@ -39,6 +39,7 @@ import { getToolbarDividerAfterIds, orderToolbarButtonsByGroup } from "./toolbar
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { cn } from "@/lib/utils";
 import { isMac, isLinux, isWindows } from "@/lib/platform";
+import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AgentButton } from "./AgentButton";
 import {
@@ -2211,11 +2212,7 @@ export function Toolbar({
                 "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
                 isFullscreen && "w-0"
               )}
-              style={
-                isFullscreen
-                  ? undefined
-                  : { width: "calc(100vw - env(titlebar-area-width, calc(100vw - 138px)))" }
-              }
+              style={isFullscreen ? undefined : { width: `${WINDOWS_CAPTION_WIDTH_PX}px` }}
             />
           )}
         </div>

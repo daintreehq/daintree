@@ -373,6 +373,28 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./fleet.js").FleetSnapshot | null;
   };
+  "fleet:park-run": {
+    args: [
+      runId: string,
+      options?: { note?: string | undefined; gateRunId?: string | undefined } | undefined,
+    ];
+    result: import("./fleet.js").RunParkRecord;
+  };
+  "fleet:snooze-run": {
+    args: [
+      runId: string,
+      option: import("../../utils/agentSnoozeDurations.js").AgentSnoozeDurationOption,
+    ];
+    result: import("./fleet.js").RunSnoozeRecord;
+  };
+  "fleet:unpark-run": {
+    args: [runId: string];
+    result: boolean;
+  };
+  "fleet:unsnooze-run": {
+    args: [runId: string];
+    result: boolean;
+  };
   "forge-audit:clear-log": {
     args: [];
     result: void;
@@ -476,6 +498,10 @@ export interface GeneratedIpcInvokeMap {
       },
     ];
     result: import("../forge.js").PR;
+  };
+  "forge:get-checks": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: { checks: import("./forge.js").ForgeCheckRun[] } | null;
   };
   "forge:get-ci-status": {
     args: [payload: { cwd: string; prNumber: number }];
@@ -1649,6 +1675,7 @@ export interface GeneratedIpcInvokeMap {
         isEphemeral?: boolean | undefined;
         agentLaunchFlags?: string[] | undefined;
         agentModelId?: string | undefined;
+        agentSessionId?: string | undefined;
         worktreeId?: string | undefined;
         agentPresetId?: string | undefined;
         agentPresetColor?: string | undefined;
@@ -1707,6 +1734,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "webview:go-to-history-index": {
     args: [webContentsId: number, index: number];
+    result: void;
+  };
+  "window-chrome:set-banner-severity": {
+    args: [payload: { severity: "success" | "error" | "info" | "warning" | "neutral" | null }];
     result: void;
   };
   "worktree-config:dismiss-wsl-banner": {

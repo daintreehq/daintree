@@ -121,19 +121,109 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     // upstream to rebase onto (#11746).
     /fatal: unable to read config file|fatal: bad config|fatal: The current branch .* has no upstream branch|fatal: no upstream configured for branch|fatal: no push destination configured for branch|fatal: could not resolve the (?:push destination|upstream) for branch|fatal: the remote configured for branch .* has an unusable name/i,
   ],
-  [
-    "system-io-error",
-    /ENOENT|EACCES|EPERM|EBUSY|Disk full|No space left on device|could not create work tree dir/i,
-  ],
 ];
 
-export function classifyGitError(error: unknown): GitOperationReason {
-  const raw = extractGitErrorMessage(error);
-  if (!raw) return "unknown";
-  const normalized = normalizeGitErrorMessage(raw);
-  for (const [reason, pattern] of PATTERNS) {
-    if (pattern.test(normalized)) return reason;
+/**
+ * The generic filesystem/permissions catch-all, deliberately kept OUT of
+ * `PATTERNS`: it has to run after the missing-git cause walk, not with the
+ * specific rules. A spawn ENOENT matches it too, so any wrapper that quotes its
+ * cause's message would be bucketed as a disk problem before the walk ever got
+ * to identify it as a missing binary.
+ */
+const SYSTEM_IO_PATTERN =
+  /ENOENT|EACCES|EPERM|EBUSY|Disk full|No space left on device|could not create work tree dir/i;
+
+/**
+ * The spawn failure Node reports when the `git` binary isn't on PATH.
+ *
+ * simple-git 3.36.0 destroys the provenance: its child-process `error` handler
+ * pushes `String(err.stack)` into the stderr buffer and rethrows a bare
+ * `GitError` whose own properties are only `stack`, `message`, and `task` — no
+ * `code`, no `syscall`, no `cause`. So the message arrives as a whole Node
+ * stack trace (`Error: spawn git ENOENT\n    at ChildProcess...`), not the
+ * one-line `spawn git ENOENT` the raw `SystemError` carries.
+ *
+ * Both forms are accepted, and the pattern is anchored to the *entire* message
+ * so that neither can be forged by content quoted inside a larger one. That
+ * matters: git stderr legitimately quotes arbitrary text (a repository path
+ * like `/repos/spawn git ENOENT`), and a hook or filter that shells out can
+ * print its own child's spawn failure. Matching such a line anywhere in the
+ * message — which is all a bare `m` flag would buy — would report "Git isn't
+ * installed" for a repo that merely has an unlucky path.
+ *
+ * The binary is pinned to `git` on purpose. `createWslHardenedGit` spawns
+ * `wsl.exe git`, so a missing WSL launcher must not be reported as a missing
+ * Git. Re-check on simple-git upgrade.
+ */
+const GIT_SPAWN_ENOENT_PATTERN = /^(?:Error: )?spawn git ENOENT(?:\r?\n[ \t]+at [^\r\n]*)*\r?\n?$/;
+
+/**
+ * True when `error` is a failed *spawn* of the `git` binary — i.e. Git isn't
+ * installed, or isn't on PATH.
+ *
+ * Walks `.cause` chains because the error is routinely rewrapped before it
+ * reaches a classifier (`GitService.handleGitOperation` turns it into a
+ * `WorktreeRemovedError` whose `.cause` is the original).
+ *
+ * Both a structured check and a message check are needed. The structured one
+ * never fires for simple-git's laundered error, and the message one would miss
+ * a raw Node error arriving from somewhere that doesn't launder it.
+ *
+ * This is deliberately *not* a general "some executable is missing" predicate:
+ * callers act on it by telling the user to install Git.
+ */
+/** Missing-git evidence carried by one value, ignoring anything it wraps. */
+function showsMissingGitDirectly(value: unknown): boolean {
+  if (typeof value === "string") return GIT_SPAWN_ENOENT_PATTERN.test(value);
+  if (!value || typeof value !== "object") return false;
+
+  const candidate = value as { code?: unknown; syscall?: unknown; message?: unknown };
+  if (candidate.code === "ENOENT" && candidate.syscall === "spawn git") return true;
+  return typeof candidate.message === "string" && GIT_SPAWN_ENOENT_PATTERN.test(candidate.message);
+}
+
+export function isMissingGitExecutableError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+
+  while (current !== null && current !== undefined && !seen.has(current)) {
+    if (showsMissingGitDirectly(current)) return true;
+    if (typeof current !== "object") return false;
+    seen.add(current);
+    current = (current as { cause?: unknown }).cause;
   }
+
+  return false;
+}
+
+export function classifyGitError(error: unknown): GitOperationReason {
+  // The error's own evidence outranks everything: structured errno fields and
+  // simple-git's laundered stack trace don't survive into the string PATTERNS
+  // matches, so without this the failure reaches the generic `system-io-error`
+  // rule and is reported as a filesystem problem.
+  if (showsMissingGitDirectly(error)) return "git-not-installed";
+
+  const raw = extractGitErrorMessage(error);
+  const normalized = raw ? normalizeGitErrorMessage(raw) : "";
+  if (normalized) {
+    for (const [reason, pattern] of PATTERNS) {
+      if (pattern.test(normalized)) return reason;
+    }
+  }
+
+  // Only once the error's own message has said nothing specific. A wrapper
+  // preserves the original as `cause` (`GitService.handleGitOperation`), and
+  // its own message — "Git operation failed: <context>" — matches nothing. But
+  // an ancestor must not outrank a top-level failure that did classify:
+  // "Authentication failed" wrapping a spawn ENOENT is an auth failure.
+  //
+  // Still ahead of the generic rule below, which a spawn ENOENT also matches:
+  // a wrapper that quotes its cause's message would otherwise be reported as a
+  // disk problem.
+  if (isMissingGitExecutableError(error)) return "git-not-installed";
+
+  if (normalized && SYSTEM_IO_PATTERN.test(normalized)) return "system-io-error";
+
   return "unknown";
 }
 
@@ -161,6 +251,7 @@ const RECOVERY_HINTS: Record<GitOperationReason, string | undefined> = {
   "lfs-quota-exceeded":
     "This repository has exceeded its Git LFS storage or bandwidth quota. Contact the repo owner or upgrade the plan.",
   "hook-rejected": "A server-side hook rejected the push. See the server output for details.",
+  "git-not-installed": "Daintree couldn't run Git. Install Git and make sure it's on your PATH.",
   "system-io-error": "A filesystem or permissions problem prevented the git operation.",
   unknown: undefined,
 };

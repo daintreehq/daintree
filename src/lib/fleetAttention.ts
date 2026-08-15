@@ -12,8 +12,28 @@ import type { FleetRunRow } from "@shared/types/ipc/fleet";
  * implies (`src/lib/projectRowStatus.ts`), one grain finer. Two surfaces
  * disagreeing about which agent is most urgent is worse than either ordering
  * being individually wrong.
+ *
+ * `parked` sits between `done` and `idle`: the user has explicitly shelved the
+ * run, so it must never read as a demand — but unlike an idle shell it carries
+ * intent (a note, maybe a gate) worth finding above the dead rows.
+ *
+ * `snoozed` sits just below `parked`, and the order encodes which decision is
+ * the stronger one rather than which is the more recent. A park is indefinite
+ * and carries a note; a snooze is a ceiling the user expects to lapse. Ranking
+ * park above snooze also keeps this list agreeing with `bandForRun`, which
+ * checks the park record first — an ordering that disagreed with the
+ * precedence check would be a bug nobody could see from either site alone.
  */
-export const FLEET_BANDS = ["blocked", "needs-you", "review", "running", "done", "idle"] as const;
+export const FLEET_BANDS = [
+  "blocked",
+  "needs-you",
+  "review",
+  "running",
+  "done",
+  "parked",
+  "snoozed",
+  "idle",
+] as const;
 
 export type FleetBand = (typeof FLEET_BANDS)[number];
 
@@ -36,8 +56,21 @@ export function isDemandBand(band: FleetBand): boolean {
  *
  * A completion with no `since` cannot be compared to the watermark and stays in
  * `review`: unknown is not evidence of having been seen.
+ *
+ * A park beats every state, including `blocked`. Parking is the user saying
+ * "this one does not need me until further notice", and an attention model
+ * that second-guesses that promise the moment something looks urgent is a
+ * model the user has to keep re-checking — the exact cost parking exists to
+ * remove. The release paths (manual unpark, gate coming free, gate closed)
+ * are the only ways back above the fold, and all of them are the user's own
+ * rules firing.
  */
 export function bandForRun(run: FleetRunRow, acknowledgedAt?: number): FleetBand {
+  if (run.park !== undefined) return "parked";
+  // Presence alone, deliberately: main strips expired snoozes before the row is
+  // built, so this needs no clock. A run carrying both records reads as parked
+  // — the stronger, indefinite decision wins, matching FLEET_BANDS' order.
+  if (run.snooze !== undefined) return "snoozed";
   switch (run.agentState) {
     case "waiting":
       return run.waitingReason === "error" ? "blocked" : "needs-you";
@@ -80,8 +113,17 @@ export function bandLabel(band: FleetBand, run: FleetRunRow): string {
       return run.agentState === "directing" ? "Directing" : "Working";
     case "done":
       return "Finished";
-    default:
+    case "parked":
+      return "Parked";
+    case "snoozed":
+      return "Snoozed";
+    case "idle":
       return run.agentState === "exited" ? "Exited" : "Idle";
+    default: {
+      // Exhaustive: a new band must pick its words here, not inherit idle's.
+      const exhaustive: never = band;
+      return exhaustive;
+    }
   }
 }
 
@@ -121,5 +163,14 @@ export function compareWithinBand(a: FleetRunRow, b: FleetRunRow): number {
 export type FleetBandCounts = Record<FleetBand, number>;
 
 export function emptyBandCounts(): FleetBandCounts {
-  return { blocked: 0, "needs-you": 0, review: 0, running: 0, done: 0, idle: 0 };
+  return {
+    blocked: 0,
+    "needs-you": 0,
+    review: 0,
+    running: 0,
+    done: 0,
+    parked: 0,
+    snoozed: 0,
+    idle: 0,
+  };
 }

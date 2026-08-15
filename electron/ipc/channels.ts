@@ -244,6 +244,10 @@ export const CHANNELS = {
   PROJECT_STATS_UPDATED: "project:stats-updated",
   FLEET_SNAPSHOT_UPDATED: "fleet:snapshot-updated",
   FLEET_GET_SNAPSHOT: "fleet:get-snapshot",
+  FLEET_PARK_RUN: "fleet:park-run",
+  FLEET_UNPARK_RUN: "fleet:unpark-run",
+  FLEET_SNOOZE_RUN: "fleet:snooze-run",
+  FLEET_UNSNOOZE_RUN: "fleet:unsnooze-run",
   PROJECT_HISTORY_PEEK: "project-history:peek",
   PROJECT_CREATE_FOLDER: "project:create-folder",
   PROJECT_INIT_GIT: "project:init-git",
@@ -561,6 +565,8 @@ export const CHANNELS = {
   APP_THEME_SET_RECENT_SCHEME_IDS: "app-theme:set-recent-scheme-ids",
   APP_THEME_SET_ACCENT_COLOR_OVERRIDE: "app-theme:set-accent-color-override",
   APP_THEME_SYSTEM_APPEARANCE_CHANGED: "app-theme:system-appearance-changed",
+
+  WINDOW_CHROME_SET_BANNER_SEVERITY: "window-chrome:set-banner-severity",
 
   TELEMETRY_GET: "telemetry:get",
   TELEMETRY_SET_ENABLED: "telemetry:set-enabled",
@@ -898,6 +904,7 @@ export const CHANNELS = {
   FORGE_GET_ISSUE: "forge:get-issue",
   FORGE_GET_PR: "forge:get-pr",
   FORGE_GET_CI_STATUS: "forge:get-ci-status",
+  FORGE_GET_CHECKS: "forge:get-checks",
   FORGE_GET_REPO_METADATA: "forge:get-repo-metadata",
   FORGE_GET_CURRENT_USER: "forge:get-current-user",
   FORGE_CLASSIFY_PUSH_ERROR: "forge:classify-push-error",

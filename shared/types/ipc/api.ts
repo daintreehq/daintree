@@ -434,7 +434,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getAgentUpdateSettings(): Promise<AgentUpdateSettings>;
     setAgentUpdateSettings(settings: AgentUpdateSettings): Promise<void>;
     startAgentUpdate(payload: StartAgentUpdatePayload): Promise<StartAgentUpdateResult>;
-    healthCheck(agentIds?: string[]): Promise<SystemHealthCheckResult>;
+    healthCheck(
+      options?: import("./system.js").SystemHealthCheckOptions
+    ): Promise<SystemHealthCheckResult>;
     getHealthCheckSpecs(agentIds?: string[]): Promise<PrerequisiteSpec[]>;
     checkTool(spec: PrerequisiteSpec): Promise<PrerequisiteCheckResult>;
     downloadDiagnostics(): Promise<boolean>;
@@ -450,11 +452,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     getReportEnrichment(): Promise<import("./system.js").ReportIssueEnrichment>;
     startRendererCpuProfile(): Promise<import("./system.js").RendererCpuProfileStartResult>;
     stopRendererCpuProfile(): Promise<import("./system.js").RendererCpuProfileStopResult>;
-    installAgent(payload: {
-      agentId: string;
-      methodIndex?: number;
-      jobId: string;
-    }): Promise<import("./system.js").AgentInstallResult>;
+    installAgent(
+      payload: import("./system.js").AgentInstallPayload
+    ): Promise<import("./system.js").AgentInstallResult>;
     onAgentInstallProgress(
       callback: (event: import("./system.js").AgentInstallProgressEvent) => void
     ): () => void;
@@ -1715,6 +1715,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       issueNumber: number;
       opts?: ListOptions;
     }): Promise<Page<IssueComment>>;
+    /**
+     * Every CI check on a PR — name, state, and log link — via the provider's
+     * `checks` capability, for answering "which check failed?" where
+     * {@link forge.getCIStatus} answers only "is it green?". Rejects when the
+     * provider lacks the capability, so an empty list always means "this PR has
+     * no checks" and never "couldn't look". `null` means no such PR.
+     */
+    getChecks(payload: {
+      cwd: string;
+      prNumber: number;
+    }): Promise<{ checks: import("./forge.js").ForgeCheckRun[] } | null>;
     /** Resolve a commit-author email to an avatar URL. Best-effort — `null` on any failure. */
     resolveAuthorAvatar(payload: { cwd: string; email: string }): Promise<string | null>;
     /**

@@ -26,6 +26,7 @@ const registerMocks = vi.hoisted(() => ({
   registerSlashCommandHandlers: vi.fn(),
   registerSystemShellHandlers: vi.fn(),
   registerEditorConfigHandlers: vi.fn(),
+  registerWindowChromeHandlers: vi.fn(),
   registerPaintFabricSurfaceHandlers: vi.fn(),
   registerAgentCliHandlers: vi.fn(),
   registerProjectCrudHandlers: vi.fn(),
@@ -111,6 +112,9 @@ vi.mock("../handlers/systemShell.js", () => ({
 }));
 vi.mock("../handlers/editorConfig.js", () => ({
   registerEditorConfigHandlers: registerMocks.registerEditorConfigHandlers,
+}));
+vi.mock("../handlers/windowChrome.js", () => ({
+  registerWindowChromeHandlers: registerMocks.registerWindowChromeHandlers,
 }));
 vi.mock("../handlers/paintFabricSurface.js", () => ({
   registerPaintFabricSurfaceHandlers: registerMocks.registerPaintFabricSurfaceHandlers,

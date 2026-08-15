@@ -1,10 +1,14 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import {
   isSensitiveVar,
   filterEnvironment,
   injectDaintreeMetadata,
   ensureUtf8Locale,
   shouldInjectForceColor,
+  getEnvVar,
+  hasEnvVar,
+  mergeEnvVars,
+  setEnvVar,
 } from "../EnvironmentFilter.js";
 
 describe("shouldInjectForceColor", () => {
@@ -342,5 +346,149 @@ describe("filterEnvironment + injectDaintreeMetadata integration", () => {
     expect(final.DAINTREE_PANE_ID).toBe("new-pane-id");
     expect(final.DAINTREE_CWD).toBe("/Users/dev/project");
     expect(final.DAINTREE_PROJECT_ID).toBe("proj-1");
+  });
+});
+
+describe("case-aware environment primitives", () => {
+  const realPlatform = process.platform;
+  const setPlatform = (platform: NodeJS.Platform) => {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  };
+
+  afterEach(() => setPlatform(realPlatform));
+
+  describe("on Windows, where env names are case-insensitive", () => {
+    beforeEach(() => setPlatform("win32"));
+
+    it("collapses a case-variant override onto the existing key", () => {
+      const merged = mergeEnvVars({ Path: "C:\\Windows" }, { PATH: "C:\\Windows;C:\\Python313" });
+
+      expect(Object.keys(merged)).toEqual(["Path"]);
+      expect(merged.Path).toBe("C:\\Windows;C:\\Python313");
+    });
+
+    it("leaves exactly one key per name however many spellings arrive", () => {
+      const merged = mergeEnvVars({ Path: "a", Temp: "t" }, { PATH: "b", TEMP: "u", path: "c" });
+
+      expect(
+        Object.keys(merged)
+          .map((k) => k.toUpperCase())
+          .sort()
+      ).toEqual(["PATH", "TEMP"]);
+      expect(merged.Path).toBe("c");
+      expect(merged.Temp).toBe("u");
+    });
+
+    it("collapses a base that already carries two spellings of one name", () => {
+      // Seeding with `{ ...base }` would normalize only the overrides and leave
+      // the stale `Path` in place beside the updated `PATH`.
+      const merged = mergeEnvVars({ Path: "old", PATH: "older" }, { PATH: "new" });
+
+      expect(Object.keys(merged)).toEqual(["Path"]);
+      expect(merged.Path).toBe("new");
+    });
+
+    it("collapses duplicates while filtering an inherited environment", () => {
+      const filtered = filterEnvironment({ Path: "first", PATH: "second" });
+
+      expect(Object.keys(filtered)).toEqual(["Path"]);
+      expect(filtered.Path).toBe("second");
+    });
+
+    it("mutates neither input", () => {
+      const base = { Path: "C:\\Windows" };
+      const overrides = { PATH: "C:\\Python313" };
+
+      mergeEnvVars(base, overrides);
+
+      expect(base).toEqual({ Path: "C:\\Windows" });
+      expect(overrides).toEqual({ PATH: "C:\\Python313" });
+    });
+
+    it("finds a value stored under different casing", () => {
+      expect(getEnvVar({ Path: "C:\\Windows" }, "PATH")).toBe("C:\\Windows");
+      expect(hasEnvVar({ Path: "C:\\Windows" }, "PATH")).toBe(true);
+    });
+
+    it("treats an explicitly empty value as present", () => {
+      expect(hasEnvVar({ Path: "" }, "PATH")).toBe(true);
+    });
+
+    it("reports a genuinely absent name as absent", () => {
+      expect(hasEnvVar({ Temp: "t" }, "PATH")).toBe(false);
+      expect(getEnvVar({ Temp: "t" }, "PATH")).toBeUndefined();
+    });
+
+    it("writes through the existing key rather than adding a second", () => {
+      const env = { Path: "C:\\Windows" };
+
+      setEnvVar(env, "PATH", "C:\\Python313");
+
+      expect(env).toEqual({ Path: "C:\\Python313" });
+    });
+
+    it("adds the name as spelled when nothing matches it", () => {
+      const env: Record<string, string> = { Temp: "t" };
+
+      setEnvVar(env, "PATH", "C:\\Windows");
+
+      expect(env.PATH).toBe("C:\\Windows");
+    });
+
+    it("strips a lower-cased DAINTREE_ var that would survive the spoofing guard", () => {
+      const filtered = filterEnvironment({ daintree_pane_id: "spoofed", Path: "C:\\Windows" });
+
+      expect(filtered.daintree_pane_id).toBeUndefined();
+      expect(filtered.Path).toBe("C:\\Windows");
+    });
+
+    it("overwrites case-variant metadata in place instead of duplicating it", () => {
+      const injected = injectDaintreeMetadata(
+        { daintree_pane_id: "stale" },
+        { paneId: "fresh", cwd: "C:\\repo" }
+      );
+
+      expect(injected.daintree_pane_id).toBe("fresh");
+      expect(injected.DAINTREE_PANE_ID).toBeUndefined();
+    });
+
+    it("recognises a mixed-case LANG that already states UTF-8", () => {
+      const result = ensureUtf8Locale({ Lang: "en_GB.UTF-8" });
+
+      expect(result).toEqual({ Lang: "en_GB.UTF-8" });
+    });
+
+    it("replaces a mixed-case non-UTF-8 LANG under its own key", () => {
+      const result = ensureUtf8Locale({ Lang: "C" });
+
+      expect(result).toEqual({ Lang: "en_US.UTF-8" });
+    });
+  });
+
+  describe("on POSIX, where env names are case-sensitive", () => {
+    beforeEach(() => setPlatform("darwin"));
+
+    it("keeps differently-cased names as the distinct variables they are", () => {
+      const merged = mergeEnvVars({ Path: "/a" }, { PATH: "/b" });
+
+      expect(merged).toEqual({ Path: "/a", PATH: "/b" });
+    });
+
+    it("does not resolve a name through another casing", () => {
+      expect(hasEnvVar({ Path: "/a" }, "PATH")).toBe(false);
+      expect(getEnvVar({ Path: "/a" }, "PATH")).toBeUndefined();
+    });
+
+    it("keeps a lower-cased daintree_ var, which is not the reserved prefix", () => {
+      const filtered = filterEnvironment({ daintree_pane_id: "mine" });
+
+      expect(filtered.daintree_pane_id).toBe("mine");
+    });
+
+    it("leaves a mixed-case Lang alone and sets LANG separately", () => {
+      const result = ensureUtf8Locale({ Lang: "C" });
+
+      expect(result).toEqual({ Lang: "C", LANG: "en_US.UTF-8" });
+    });
   });
 });

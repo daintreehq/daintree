@@ -5,6 +5,10 @@ import {
   injectDaintreeMetadata,
   ensureUtf8Locale,
   shouldInjectForceColor,
+  getEnvVar,
+  hasEnvVar,
+  mergeEnvVars,
+  setEnvVar,
 } from "./EnvironmentFilter.js";
 import { getDefaultShell, getDefaultShellArgs } from "./terminalShell.js";
 import { computePoolEnvHash } from "./ptyPoolEnvHash.js";
@@ -65,8 +69,12 @@ function injectAgentStartupProfiling(env: Record<string, string>, options: PtySp
 
   const profileDir = path.join(userData, "agent-profiles");
   const injection = `--cpu-prof --cpu-prof-dir=${profileDir}`;
-  const existing = env.NODE_OPTIONS;
-  env.NODE_OPTIONS = existing && existing.length > 0 ? `${existing} ${injection}` : injection;
+  const existing = getEnvVar(env, "NODE_OPTIONS");
+  setEnvVar(
+    env,
+    "NODE_OPTIONS",
+    existing && existing.length > 0 ? `${existing} ${injection}` : injection
+  );
 }
 
 /**
@@ -95,14 +103,16 @@ export function buildTerminalEnv(
         string
       >)
     : {};
-  const mergedEnv = injectDaintreeMetadata(
-    { ...filteredBaseEnv, ...intentionalEnv },
-    {
-      paneId: id,
-      cwd: options.cwd,
-      projectId: options.projectId,
-    }
-  );
+  // Case-collapsing merge, not a spread: on Windows the inherited base carries
+  // the OS's own casing (`Path`) while our overrides use the JS convention
+  // (`PATH`). A plain spread keeps both, node-pty writes both into the child's
+  // environment block, and the base one wins — which would silently defeat the
+  // refreshed PATH main stamps onto every spawn (#11773).
+  const mergedEnv = injectDaintreeMetadata(mergeEnvVars(filteredBaseEnv, intentionalEnv), {
+    paneId: id,
+    cwd: options.cwd,
+    projectId: options.projectId,
+  });
 
   // Universal colour hints — xterm.js supports truecolor, and most CLIs
   // (chalk, supports-color, termenv, ink) honour these. The FORCE_COLOR default
@@ -110,9 +120,11 @@ export function buildTerminalEnv(
   // COLORTERM stays unconditional: it feeds depth detection behind NO_COLOR's
   // own check, so it cannot resurrect colour the user opted out of.
   if (shouldInjectForceColor(mergedEnv)) {
-    mergedEnv.FORCE_COLOR = "3";
+    setEnvVar(mergedEnv, "FORCE_COLOR", "3");
   }
-  mergedEnv.COLORTERM = mergedEnv.COLORTERM ?? "truecolor";
+  if (!hasEnvVar(mergedEnv, "COLORTERM")) {
+    setEnvVar(mergedEnv, "COLORTERM", "truecolor");
+  }
 
   // V8 bytecode cache for Node-based agent CLIs. Path is per-agent to
   // avoid cross-CLI cache invalidation; Node also auto-isolates by
@@ -127,10 +139,10 @@ export function buildTerminalEnv(
     userData &&
     launchAgentId &&
     NODE_COMPILE_CACHE_AGENTS.has(launchAgentId) &&
-    mergedEnv.NODE_COMPILE_CACHE === undefined
+    !hasEnvVar(mergedEnv, "NODE_COMPILE_CACHE")
   ) {
     const cacheDir = getAgentCompileCacheDir(userData, launchAgentId);
-    if (cacheDir) mergedEnv.NODE_COMPILE_CACHE = cacheDir;
+    if (cacheDir) setEnvVar(mergedEnv, "NODE_COMPILE_CACHE", cacheDir);
   }
 
   return ensureUtf8Locale(mergedEnv);

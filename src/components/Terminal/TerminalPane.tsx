@@ -40,6 +40,7 @@ import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
 import { ScrollbackRestoreErrorBanner } from "./ScrollbackRestoreErrorBanner";
+import { TerminalAttachErrorBanner } from "./TerminalAttachErrorBanner";
 import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { ErrorBanner } from "../Errors/ErrorBanner";
@@ -66,6 +67,10 @@ import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { notifyWorktreeTerminalAttached } from "@/services/terminal/worktreeRevealCoordinator";
 import { actionService } from "@/services/ActionService";
+import {
+  buildMissingCliContinueArgs,
+  buildMissingCliRelaunchOptions,
+} from "@/utils/missingCliGate";
 import { useReviewDialogOpenForWorktree } from "./useReviewDialogOpenForWorktree";
 import { InputTracker } from "@/services/clearCommandDetection";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
@@ -304,6 +309,8 @@ export interface TerminalPaneProps {
   reconnectError?: TerminalReconnectError;
   spawnError?: SpawnError;
   scrollbackRestoreError?: TerminalScrollbackRestoreError;
+  /** Renderer attach failure (#11776) — the pane cannot paint at all. */
+  attachError?: string;
   isMultiPanelGrid?: boolean;
   detectedProcessId?: string;
   // Group-level ambient state: highest-urgency state across all tabs, for container border styling
@@ -350,6 +357,7 @@ function TerminalPaneComponent({
   reconnectError,
   spawnError,
   scrollbackRestoreError,
+  attachError,
   isMultiPanelGrid = true,
   detectedProcessId,
   ambientAgentState,
@@ -424,33 +432,38 @@ function TerminalPaneComponent({
     return cliDetails[agentId];
   };
 
-  const handleRunAnyway = () => {
-    const _panel = usePanelStore.getState().panelsById[id];
-    if (!_panel || !agentId || !isPtyPanel(_panel)) return;
-    const panel = _panel;
-
-    const presetEnv = panel.extensionState?.presetEnv as Record<string, string> | undefined;
+  /**
+   * "Run anyway" — spawn the command the gate captured, on the user's word.
+   * Goes straight to `addPanel` precisely because that skips the probe: the
+   * whole point is overriding a verdict the user believes is wrong (an alias,
+   * a wrapper, a version-manager shim, a false-negative probe).
+   */
+  const runMissingCliAnyway = () => {
+    const panel = usePanelStore.getState().panelsById[id];
+    if (!panel || !isPtyPanel(panel)) return;
+    const options = buildMissingCliRelaunchOptions(panel);
+    if (!options) return;
 
     removePanel(id);
-    void addPanel({
-      kind: "terminal",
-      launchAgentId: agentId,
-      command: panel.command,
-      title: panel.title,
-      cwd: panel.cwd ?? "",
-      worktreeId: panel.worktreeId,
-      location: panel.location as "grid" | "dock" | undefined,
-      agentLaunchFlags: panel.agentLaunchFlags,
-      agentModelId: panel.agentModelId,
-      agentPresetId: panel.agentPresetId,
-      env: presetEnv,
-      // Carry the gate panel's persistence policy through the re-launch. Since
-      // env is now persisted onto the panel (#10922), dropping these would let a
-      // session-scoped secret (e.g. DAINTREE_MCP_TOKEN on a help session, which
-      // launches excluded) leak into the on-disk snapshot on "Run anyway".
-      excludeFromPersistence: panel.excludeFromPersistence,
-      removeOnExit: panel.removeOnExit,
-    });
+    void addPanel(options);
+  };
+
+  /**
+   * Re-check found the CLI — continue the original launch through the launcher
+   * rather than replaying the captured command. The gate's command was resolved
+   * while the CLI was unavailable, so it fell back to the bare registry name;
+   * re-dispatching re-resolves it against the freshly probed path, which is the
+   * whole reason the binary is now reachable. It also re-runs the gate check,
+   * so a state that flipped back lands on a gate instead of a failed spawn.
+   */
+  const continueMissingCliLaunch = () => {
+    const panel = usePanelStore.getState().panelsById[id];
+    if (!panel || !isPtyPanel(panel)) return;
+    const args = buildMissingCliContinueArgs(panel);
+    if (!args) return;
+
+    removePanel(id);
+    void actionService.dispatch("agent.launch", args, { source: "user" });
   };
 
   // Fleet arming store for multi-select gestures. Selection treatment is
@@ -959,6 +972,26 @@ function TerminalPaneComponent({
     clearScrollbackRestoreError(id);
   };
 
+  // No dismiss counterpart on purpose (#11776): the banner is the only sign
+  // the pane is dead, so it clears when the rebuild actually succeeds, not
+  // when the user waves it away. The busy state keeps the button spinning for
+  // the rebuild's duration — it awaits a write drain, an addon load, an open
+  // and a scrollback replay, well past the Doherty threshold.
+  //
+  // Stored as the id being rebuilt rather than a bare boolean: this component
+  // is reused across tab switches within a group, so a plain flag would let a
+  // retry on one terminal disable the Retry button of whichever terminal the
+  // pane shows next — and let the first terminal's late settlement clear the
+  // second one's busy state.
+  const [retryingAttachId, setRetryingAttachId] = useState<string | null>(null);
+  const isRebuildingDisplay = retryingAttachId === id;
+  const handleRetryAttach = useCallback(() => {
+    setRetryingAttachId(id);
+    void terminalInstanceService
+      .recoverPoisonedTerminal(id, { manual: true })
+      .finally(() => setRetryingAttachId((current) => (current === id ? null : current)));
+  }, [id]);
+
   useEffect(() => {
     terminalInstanceService.setFocused(id, isFocused);
 
@@ -1343,6 +1376,17 @@ function TerminalPaneComponent({
         )}
       </BannerSlot>
 
+      <BannerSlot visible={Boolean(attachError)}>
+        {attachError && (
+          <TerminalAttachErrorBanner
+            terminalId={id}
+            error={attachError}
+            onRetry={handleRetryAttach}
+            isRetrying={isRebuildingDisplay}
+          />
+        )}
+      </BannerSlot>
+
       <BannerSlot visible={showRestartStatus}>
         <TerminalRestartStatusBanner
           variant={restartBannerVariant}
@@ -1411,7 +1455,15 @@ function TerminalPaneComponent({
           <MissingCliGate
             agentId={agentId}
             detail={getPanelCliDetail() ?? { state: "missing", resolvedPath: null, via: null }}
-            onRunAnyway={handleRunAnyway}
+            onRunAnyway={runMissingCliAnyway}
+            onAvailabilityReady={continueMissingCliLaunch}
+            onOpenAgentSettings={() =>
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "agents", subtab: agentId },
+                { source: "user" }
+              )
+            }
           />
         ) : spawnStatus === "spawning" && !eagerAttach ? (
           <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />

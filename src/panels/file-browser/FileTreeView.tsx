@@ -7,6 +7,7 @@ import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { FILE_DRAG_MIME, encodeFileDragPaths } from "@/lib/fileDragPayload";
 import { Spinner } from "@/components/ui/Spinner";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
@@ -655,7 +656,12 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
   return (
     <div className="h-6 w-full px-1">
       <ContextMenu>
-        <ContextMenuTrigger asChild>{rowSurface}</ContextMenuTrigger>
+        {/* The innermost object owns the menu (#11757). Radix's trigger only
+            prevents the default; without this the event keeps bubbling and any
+            enclosing trigger opens its own menu over this one. */}
+        <ContextMenuTrigger asChild onContextMenu={stopFileRowMenuPropagation}>
+          {rowSurface}
+        </ContextMenuTrigger>
         <ContextMenuContent>{menuItems}</ContextMenuContent>
       </ContextMenu>
     </div>

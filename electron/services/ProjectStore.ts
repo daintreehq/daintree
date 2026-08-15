@@ -17,7 +17,7 @@ import { existsSync } from "fs";
 import { app } from "electron";
 import { GitService } from "./GitService.js";
 import { AppError, isDaintreeError } from "../utils/errorTypes.js";
-import { assertProjectDirectory, isMissingExecutableError } from "./projectOpenPreflight.js";
+import { assertProjectDirectory, isMissingGitExecutableError } from "./projectOpenPreflight.js";
 import { logError } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { store } from "../store.js";
@@ -422,7 +422,7 @@ export class ProjectStore {
       // of the machine, not the path: a transient stat failure must not mask
       // "git isn't installed", and a missing binary must not be reported as a
       // problem with the folder.
-      if (isMissingExecutableError(error)) {
+      if (isMissingGitExecutableError(error)) {
         throw new AppError({
           code: "GIT_NOT_INSTALLED",
           message: "Git executable not found",

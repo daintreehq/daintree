@@ -187,6 +187,7 @@ function makeProject(overrides: Partial<SearchableProject> = {}): ProjectSwitche
     blockedAgentCount: 0,
     completedAgentCount: 0,
     unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
     section: "other",
     displayPath:
       (overrides.path ?? "/tmp/test").replace(/\\/g, "/").split("/").filter(Boolean).pop() ??
@@ -489,6 +490,7 @@ describe("ProjectSwitcherPalette keyboard on a scratch row", () => {
     blockedAgentCount: 0,
     completedAgentCount: 0,
     unacknowledgedCompletedAgentCount: 0,
+    snoozedAgentCount: 0,
     processCount: 0,
   };
 

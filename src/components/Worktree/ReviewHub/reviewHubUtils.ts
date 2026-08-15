@@ -83,6 +83,12 @@ export const PUSH_BANNER_CONFIGS: Record<GitOperationReason, PushBannerConfig> =
     detailPolicy: "hide",
     cta: { kind: "retry", label: "Retry" },
   },
+  "git-not-installed": {
+    message: getGitRecoveryHint("git-not-installed") ?? "Daintree couldn't run Git.",
+    // No retry CTA: the push can't succeed until Git is installed, and the
+    // raw detail is a Node stack trace with nothing for the user in it.
+    detailPolicy: "hide",
+  },
   "push-rejected-outdated": {
     message:
       getGitRecoveryHint("push-rejected-outdated") ??

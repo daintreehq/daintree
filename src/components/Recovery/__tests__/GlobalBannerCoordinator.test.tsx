@@ -22,13 +22,53 @@ import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { useForgeProviderHealthStore } from "@/store/forgeProviderHealthStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
 import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
+import { getCloudSyncWarningCopy } from "@/utils/cloudSyncWarningCopy";
+import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
+import type { PrerequisiteCheckResult } from "@shared/types";
+
+function missingGit(overrides: Partial<PrerequisiteCheckResult> = {}): PrerequisiteCheckResult {
+  return {
+    tool: "git",
+    label: "Git",
+    available: false,
+    unavailableReason: "not-found",
+    version: null,
+    severity: "fatal",
+    meetsMinVersion: false,
+    ...overrides,
+  };
+}
 
 const PROVIDER_ID = "daintree.github.github";
+
+// These cases assert which banner wins the slot, not its wording — resolve the
+// title from the copy module so rewording can't churn the routing tests.
+const cloudSyncTitle = getCloudSyncWarningCopy("Dropbox").title;
 
 function setForgeTokenUnhealthy(value: boolean) {
   const store = useForgeProviderHealthStore.getState();
   store.setTokenUnhealthy(PROVIDER_ID, value);
   store.setProviderMeta(PROVIDER_ID, { providerName: "GitHub", pluginId: "daintree.github" });
+}
+
+// MissingPrerequisiteBanner probes for a package manager on mount whenever it
+// has an install block to offer. Installed per test rather than once for the
+// file: the caption-strip blocks below swap in their own window.electron and
+// delete it on teardown, which would otherwise strip this stub for every test
+// that runs after them.
+function installBaseElectronStub() {
+  Object.defineProperty(window, "electron", {
+    writable: true,
+    configurable: true,
+    value: {
+      system: {
+        checkCommand: vi.fn().mockResolvedValue(false),
+        onAgentInstallProgress: vi.fn().mockReturnValue(() => {}),
+        installAgent: vi.fn(),
+        healthCheck: vi.fn().mockResolvedValue({ prerequisites: [], allRequired: true }),
+      },
+    },
+  });
 }
 
 beforeAll(() => {
@@ -65,9 +105,16 @@ function resetStores() {
   useForgeProviderHealthStore.setState({ providers: {} });
   useCloudSyncBannerStore.setState({ service: null, projectId: null });
   useRosettaBannerStore.setState({ visible: false });
+  useMissingPrerequisiteStore.setState({
+    missing: [],
+    dismissed: false,
+    inlineSurfaceCount: 0,
+    install: null,
+  });
 }
 
 beforeEach(() => {
+  installBaseElectronStub();
   resetStores();
   cleanup();
 });
@@ -296,7 +343,7 @@ describe("GlobalBannerCoordinator", () => {
 
     expect(screen.getByText("Crash watchdog disabled")).toBeTruthy();
     expect(screen.queryByText("GitHub token expired")).toBeNull();
-    expect(screen.queryByText("Project in a synced folder")).toBeNull();
+    expect(screen.queryByText(cloudSyncTitle)).toBeNull();
   });
 
   it("renders the GitHub token banner when only the token is unhealthy", () => {
@@ -312,7 +359,7 @@ describe("GlobalBannerCoordinator", () => {
 
     render(<GlobalBannerCoordinator />);
 
-    expect(screen.getByText("Project in a synced folder")).toBeTruthy();
+    expect(screen.getByText(cloudSyncTitle)).toBeTruthy();
   });
 
   it("prefers the GitHub token banner over cloud sync when both are active", () => {
@@ -322,7 +369,7 @@ describe("GlobalBannerCoordinator", () => {
     render(<GlobalBannerCoordinator />);
 
     expect(screen.getByText("GitHub token expired")).toBeTruthy();
-    expect(screen.queryByText("Project in a synced folder")).toBeNull();
+    expect(screen.queryByText(cloudSyncTitle)).toBeNull();
   });
 
   it("suppresses forge-token and cloud-sync while restore is active", () => {
@@ -334,7 +381,7 @@ describe("GlobalBannerCoordinator", () => {
 
     expect(screen.getByText("Session recovered after unexpected exit.")).toBeTruthy();
     expect(screen.queryByText("GitHub token expired")).toBeNull();
-    expect(screen.queryByText("Project in a synced folder")).toBeNull();
+    expect(screen.queryByText(cloudSyncTitle)).toBeNull();
   });
 
   it("suppresses every lower-priority banner when the host has crashed", () => {
@@ -346,7 +393,7 @@ describe("GlobalBannerCoordinator", () => {
 
     expect(screen.getByText("Terminal service crashed")).toBeTruthy();
     expect(screen.queryByText("GitHub token expired")).toBeNull();
-    expect(screen.queryByText("Project in a synced folder")).toBeNull();
+    expect(screen.queryByText(cloudSyncTitle)).toBeNull();
   });
 
   it("renders the Rosetta banner when only the translation warning is active", () => {
@@ -373,7 +420,310 @@ describe("GlobalBannerCoordinator", () => {
 
     render(<GlobalBannerCoordinator />);
 
-    expect(screen.getByText("Project in a synced folder")).toBeTruthy();
+    expect(screen.getByText(cloudSyncTitle)).toBeTruthy();
     expect(screen.queryByText("Running under Rosetta")).toBeNull();
+  });
+});
+
+/**
+ * Issue #11766. The Windows caption strip is painted by the OS above every
+ * WebContentsView, so main has to be told which banner severity currently sits
+ * under it — otherwise the strip keeps the canvas colour and reads as a pale
+ * rectangle punched into a tinted banner.
+ */
+describe("GlobalBannerCoordinator caption-strip reporting", () => {
+  let setBannerSeverity: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    setBannerSeverity = vi.fn().mockResolvedValue(undefined);
+    (window as unknown as { electron?: unknown }).electron = {
+      windowChrome: { setBannerSeverity },
+    };
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { electron?: unknown }).electron;
+  });
+
+  it("reports the severity of the banner actually on screen", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("reports the winning banner's severity, not the suppressed one's", () => {
+    // Host crash (error) outranks cloud sync (warning); the strip must follow
+    // whichever banner actually renders.
+    usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "error" });
+    expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("asserts an empty band rather than staying silent", () => {
+    // A project view that becomes visible with no banner has to clear whatever
+    // tint the previously presenting view left on the caption strip.
+    render(<GlobalBannerCoordinator />);
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: null });
+  });
+
+  it("goes straight from one severity to the next when banners swap", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    // Host crash outranks cloud sync, so the mounted banner is replaced.
+    act(() => {
+      usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    });
+
+    // Bouncing through null would repaint the native frame back to canvas
+    // mid-swap — a visible flash between two tinted banners.
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "error" });
+    expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: null });
+  });
+
+  it("does not tint for a slot whose banner is still gated and renders nothing", () => {
+    // HostCrashBanner claims the slot immediately but renders nothing for the
+    // first 400ms (Doherty gate). Tinting off the slot rather than the mounted
+    // banner would colour the strip for a banner that isn't on screen.
+    vi.useFakeTimers();
+    try {
+      usePanelStore.setState({ backendStatus: "recovering", lastCrashType: null });
+      render(<GlobalBannerCoordinator />);
+
+      expect(screen.queryByText("Terminal service crashed")).toBeNull();
+      expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: "error" });
+      expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: "warning" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-asserts its severity when a cached view becomes visible again", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    // Switching back to a cached project view produces no re-render, so
+    // without this the strip would keep the other view's tint.
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("does not re-assert while hidden", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(setBannerSeverity).not.toHaveBeenCalled();
+    } finally {
+      visibility.mockRestore();
+    }
+  });
+
+  it("clears the report when the banner goes away", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    const { unmount } = render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    unmount();
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: null });
+  });
+
+  it("survives a host without the windowChrome bridge", () => {
+    delete (window as unknown as { electron?: unknown }).electron;
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+
+    expect(() => render(<GlobalBannerCoordinator />)).not.toThrow();
+  });
+});
+
+/**
+ * A cached project view is parked with `setVisible(false)`, which emits no DOM
+ * lifecycle event — so DOM `visibilitychange` never fires for a warm project
+ * switch and main's explicit `app:view-revealed` signal is the only thing that
+ * can drive the re-assert.
+ */
+describe("GlobalBannerCoordinator cached-view reveal", () => {
+  let setBannerSeverity: ReturnType<typeof vi.fn>;
+  let revealListeners: Set<() => void>;
+
+  function revealView() {
+    act(() => {
+      for (const listener of [...revealListeners]) listener();
+    });
+  }
+
+  beforeEach(() => {
+    setBannerSeverity = vi.fn().mockResolvedValue(undefined);
+    revealListeners = new Set();
+    (window as unknown as { electron?: unknown }).electron = {
+      windowChrome: { setBannerSeverity },
+      app: {
+        onViewRevealed: (callback: () => void) => {
+          revealListeners.add(callback);
+          return () => revealListeners.delete(callback);
+        },
+      },
+    };
+  });
+
+  afterEach(() => {
+    delete (window as unknown as { electron?: unknown }).electron;
+  });
+
+  it("re-asserts its severity when main reveals the cached view", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    revealView();
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("re-asserts the severity on screen now, not the one captured at subscribe time", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+
+    act(() => {
+      usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    });
+    setBannerSeverity.mockClear();
+
+    revealView();
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: "error" });
+    expect(setBannerSeverity).not.toHaveBeenCalledWith({ severity: "warning" });
+  });
+
+  it("re-asserts an empty band when the revealed view has no banner", () => {
+    render(<GlobalBannerCoordinator />);
+    setBannerSeverity.mockClear();
+
+    revealView();
+
+    expect(setBannerSeverity).toHaveBeenCalledWith({ severity: null });
+  });
+
+  it("keeps a single reveal subscription across banner swaps", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    render(<GlobalBannerCoordinator />);
+
+    act(() => {
+      usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: "UNKNOWN_CRASH" });
+    });
+
+    expect(revealListeners.size).toBe(1);
+  });
+
+  it("stops listening once the view is torn down", () => {
+    useCloudSyncBannerStore.setState({ service: "Dropbox", projectId: "p1" });
+    const { unmount } = render(<GlobalBannerCoordinator />);
+
+    unmount();
+    setBannerSeverity.mockClear();
+    revealView();
+
+    expect(revealListeners.size).toBe(0);
+    expect(setBannerSeverity).not.toHaveBeenCalled();
+  });
+});
+
+describe("GlobalBannerCoordinator — missing prerequisite slot (#11763)", () => {
+  it("renders the banner when a fatal prerequisite is missing", () => {
+    useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Git is missing")).toBeTruthy();
+  });
+
+  it("loses the slot to restore confirmation", () => {
+    useRestoreConfirmationStore.setState({ visible: true, suspectCount: 0, crashCount: 1 });
+    useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.queryByText("Git is missing")).toBeNull();
+    expect(screen.getByText(/Session recovered after unexpected exit/)).toBeTruthy();
+  });
+
+  it("wins the slot over an expired forge token", () => {
+    // A stale token breaks one panel's data; a missing Git breaks every git
+    // operation in the app.
+    setForgeTokenUnhealthy(true);
+    useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Git is missing")).toBeTruthy();
+  });
+
+  it("wins the slot over the Rosetta warning", () => {
+    useRosettaBannerStore.setState({ visible: true });
+    useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Git is missing")).toBeTruthy();
+    expect(screen.queryByText("Running under Rosetta")).toBeNull();
+  });
+
+  it("yields the slot to the next banner once dismissed for the session", () => {
+    setForgeTokenUnhealthy(true);
+    useMissingPrerequisiteStore.setState({ missing: [missingGit()], dismissed: true });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.queryByText("Git is missing")).toBeNull();
+    // Asserting the promotion, not just the disappearance — the slot must go to
+    // forge-token rather than the coordinator rendering nothing.
+    expect(screen.getByText("GitHub token expired")).toBeTruthy();
+  });
+
+  it("stands down while a surface already showing prerequisites is mounted", () => {
+    useMissingPrerequisiteStore.setState({ missing: [missingGit()], inlineSurfaceCount: 1 });
+
+    const { container } = render(<GlobalBannerCoordinator />);
+
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("clears once a re-check reports the tool healthy", () => {
+    useMissingPrerequisiteStore.setState({ missing: [missingGit()] });
+    render(<GlobalBannerCoordinator />);
+    expect(screen.getByText("Git is missing")).toBeTruthy();
+
+    act(() => {
+      useMissingPrerequisiteStore.setState({ missing: [] });
+    });
+
+    expect(screen.queryByText("Git is missing")).toBeNull();
+  });
+
+  it("names the tools collectively when more than one is missing", () => {
+    useMissingPrerequisiteStore.setState({
+      missing: [missingGit(), missingGit({ tool: "node", label: "Node.js" })],
+    });
+
+    render(<GlobalBannerCoordinator />);
+
+    expect(screen.getByText("Required tools are missing")).toBeTruthy();
   });
 });

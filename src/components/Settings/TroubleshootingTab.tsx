@@ -16,10 +16,13 @@ import {
   Square,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Spinner } from "@/components/ui/Spinner";
 import { appClient, systemClient, logsClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
+import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
+import { useSettingsStore } from "@/store/settingsStore";
 import { logError, logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { SettingsSection } from "./SettingsSection";
@@ -34,11 +37,25 @@ function SystemHealthSection() {
   const [isChecking, setIsChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
 
+  // While this section is on screen the user is already looking at the health
+  // check, so the global missing-prerequisite banner stands down. Gated on the
+  // active tab, not just the mount: SettingsDialog keeps visited tabs mounted
+  // behind `hidden`, so a mount-scoped claim would outlive the tab being
+  // visible. The dialog unmounts its children on close, so being mounted at all
+  // already implies Settings is open.
+  const isVisible = useSettingsStore((s) => s.activeTab === "troubleshooting");
+  useEffect(() => {
+    if (!isVisible) return;
+    return useMissingPrerequisiteStore.getState().claimInlineSurface();
+  }, [isVisible]);
+
   const runCheck = async () => {
     setIsChecking(true);
     setCheckError(null);
     try {
-      const data = await systemClient.healthCheck();
+      // Forced: a manual re-check must re-probe, never replay main's cached
+      // startup result.
+      const data = await systemClient.healthCheck({ force: true });
       setResult(data);
     } catch (err) {
       setCheckError(formatErrorMessage(err, "Health check failed"));
@@ -95,7 +112,7 @@ function SystemHealthSection() {
   );
 }
 
-function DownloadDiagnosticsSection() {
+export function DownloadDiagnosticsSection() {
   const isCollecting = useDiagnosticsReviewStore((s) => s.isCollecting);
   const downloadError = useDiagnosticsReviewStore((s) => s.downloadError);
 
@@ -120,8 +137,8 @@ function DownloadDiagnosticsSection() {
         disabled={isCollecting}
         className="text-daintree-text border-daintree-border hover:bg-daintree-border hover:text-daintree-text mb-3"
       >
-        <Download className={cn("w-4 h-4", isCollecting && "animate-spin")} />
-        {isCollecting ? "Collecting..." : "Download Diagnostics"}
+        {isCollecting ? <Spinner size="sm" /> : <Download className="w-4 h-4" />}
+        {isCollecting ? "Collecting…" : "Download diagnostics"}
       </Button>
       {downloadError && <p className="text-xs text-status-error mb-3">{downloadError}</p>}
     </SettingsSection>

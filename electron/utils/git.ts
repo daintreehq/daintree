@@ -3,6 +3,7 @@ import { promises as fs, type Stats } from "fs";
 import type { SimpleGit, StatusResult } from "simple-git";
 import type { FileChangeDetail, GitStatus, WorktreeChanges } from "../types/index.js";
 import { WorktreeRemovedError, toGitOperationError } from "./errorTypes.js";
+import { isMissingGitExecutableError } from "../../shared/utils/gitOperationErrors.js";
 import { logWarn, logError } from "./logger.js";
 import { Cache } from "./cache.js";
 import { createHardenedGit, createWslHardenedGit } from "./hardenedGit.js";
@@ -984,10 +985,15 @@ export async function getWorktreeChangesWithStats(
 
       const errorMessage = formatErrorMessage(error, "Git worktree changes failed");
       if (
-        errorMessage.includes("ENOENT") ||
-        errorMessage.includes("no such file or directory") ||
-        errorMessage.includes("Unable to read current working directory") ||
-        errorMessage.includes("not a git repository")
+        // A missing git binary also arrives as a spawn ENOENT. Left to the
+        // check below it would retire every polled worktree on a machine that
+        // simply has no Git installed, so it falls through to the classified
+        // `toGitOperationError` path instead (#11764).
+        !isMissingGitExecutableError(error) &&
+        (errorMessage.includes("ENOENT") ||
+          errorMessage.includes("no such file or directory") ||
+          errorMessage.includes("Unable to read current working directory") ||
+          errorMessage.includes("not a git repository"))
       ) {
         throw new WorktreeRemovedError(cwd, error instanceof Error ? error : undefined);
       }

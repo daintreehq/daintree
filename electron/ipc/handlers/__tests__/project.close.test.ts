@@ -55,8 +55,11 @@ vi.mock("../../../services/pty/projectSessionJournal.js", () => teardownMock);
 
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
-import { registerProjectCrudHandlers } from "../projectCrud/index.js";
+import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
 import type { HandlerDependencies } from "../../types.js";
+// Disposes the stats/fleet pollers this registration starts; see the helper for
+// why dropping the disposer leaks live timers into the rest of the file.
+const registerProjectCrudHandlers = createProjectCrudRegistrar();
 
 describe("project:close handler", () => {
   beforeEach(() => {

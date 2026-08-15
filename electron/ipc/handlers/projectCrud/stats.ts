@@ -5,6 +5,9 @@ import type { BulkProjectStats } from "../../../../shared/types/ipc/project.js";
 import type { MemoryRollup, MemoryRollupProject } from "../../../../shared/types/pty-host.js";
 import { ProjectStatsService } from "../../../services/ProjectStatsService.js";
 import { FleetSnapshotService } from "../../../services/FleetSnapshotService.js";
+import { RunAttentionService } from "../../../services/RunAttentionService.js";
+import { isCleaningUp } from "../../../lifecycle/shutdownCoordinator.js";
+import { store } from "../../../store.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
 import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
 import { projectStore } from "../../../services/ProjectStore.js";
@@ -16,6 +19,7 @@ import { BrowserWindow } from "electron";
 
 let projectStatsServiceInstance: ProjectStatsService | null = null;
 let fleetSnapshotServiceInstance: FleetSnapshotService | null = null;
+let runAttentionServiceInstance: RunAttentionService | null = null;
 
 export function getProjectStatsService(): ProjectStatsService | null {
   return projectStatsServiceInstance;
@@ -25,10 +29,41 @@ export function getFleetSnapshotService(): FleetSnapshotService | null {
   return fleetSnapshotServiceInstance;
 }
 
+export function getRunAttentionService(): RunAttentionService | null {
+  return runAttentionServiceInstance;
+}
+
 export function registerProjectStatsHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const projectStatsService = new ProjectStatsService(deps.ptyClient);
+  // Park and snooze intent lives beside the projections that read it: the
+  // attention service owns the records, the stats counts and the fleet snapshot
+  // both consult it, and a park- or snooze-changed event drives the same
+  // refresh path as an agent transition. Constructed FIRST because both
+  // projections take it as a dependency.
+  // `isCleaningUp` freezes releases during graceful shutdown — the chain kills
+  // every terminal, and those kills would otherwise read as busy→ready edges
+  // and wipe the very parks persistence is carrying across the restart.
+  const runAttentionService = new RunAttentionService(
+    {
+      load: () => store.get("parkedRuns"),
+      save: (records) => store.set("parkedRuns", records),
+      loadSnoozes: () => store.get("snoozedRuns"),
+      saveSnoozes: (records) => store.set("snoozedRuns", records),
+    },
+    { isQuitting: isCleaningUp }
+  );
+  runAttentionServiceInstance = runAttentionService;
+  handlers.push(() => {
+    runAttentionService.dispose();
+    // Identity-guarded: a stale cleanup from a superseded registration must
+    // not null out a newer instance's global.
+    if (runAttentionServiceInstance === runAttentionService) {
+      runAttentionServiceInstance = null;
+    }
+  });
+
+  const projectStatsService = new ProjectStatsService(deps.ptyClient, runAttentionService);
   projectStatsServiceInstance = projectStatsService;
   projectStatsService.start();
   // Defer the initial compute off the first-interactive critical path. The
@@ -42,14 +77,20 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
   });
   handlers.push(() => {
     projectStatsService.stop();
-    projectStatsServiceInstance = null;
+    // Identity-guarded like the attention service above: a late cleanup from a
+    // superseded registration must not null out a newer instance's global,
+    // which would leave the getters reporting "unavailable" while a live
+    // service is still polling.
+    if (projectStatsServiceInstance === projectStatsService) {
+      projectStatsServiceInstance = null;
+    }
   });
 
   // The run-grained sibling of the counts above, on the same source and the
   // same cadence. Registered here so the two can never be started apart, and so
   // one lifecycle owns both. They sample independently, so a surface reading
   // runs and one reading counts can differ across a single transition.
-  const fleetSnapshotService = new FleetSnapshotService(deps.ptyClient);
+  const fleetSnapshotService = new FleetSnapshotService(deps.ptyClient, runAttentionService);
   fleetSnapshotServiceInstance = fleetSnapshotService;
   fleetSnapshotService.start();
   registerDeferredTask({
@@ -60,7 +101,9 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
   });
   handlers.push(() => {
     fleetSnapshotService.stop();
-    fleetSnapshotServiceInstance = null;
+    if (fleetSnapshotServiceInstance === fleetSnapshotService) {
+      fleetSnapshotServiceInstance = null;
+    }
   });
 
   // Acknowledgement watermark for completed agents: the project the user has
@@ -167,7 +210,17 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       ...projectStore.getLastCompletionSeenMap(),
       ...scratchStore.getLastCompletionSeenMap(),
     ]);
-    const agentCounts = computeProjectAgentCounts(uniqueIds, allTerminals, seenMap);
+    // Same snooze view the pushed status map uses. Omitting it here would
+    // recreate exactly the drift this shared helper exists to prevent: opening
+    // the palette would hydrate rows that still counted snoozed agents as
+    // waiting, and the push path suppresses unchanged payloads, so nothing
+    // would correct them until agent state next moved.
+    const agentCounts = computeProjectAgentCounts(
+      uniqueIds,
+      allTerminals,
+      seenMap,
+      runAttentionServiceInstance?.getActiveSnoozes()
+    );
 
     const result: BulkProjectStats = {};
     for (const entry of statsResults) {
@@ -209,6 +262,10 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
             : {}),
           ...(counts.latestWorkingSince !== null
             ? { latestWorkingSince: counts.latestWorkingSince }
+            : {}),
+          snoozedAgentCount: counts.snoozed,
+          ...(counts.nextSnoozeWakeAt !== null
+            ? { nextSnoozeWakeAt: counts.nextSnoozeWakeAt }
             : {}),
           terminalMemoryMB: hasMeasured ? Math.round(measured!.memoryKb / 1024) : undefined,
           topProcess: top

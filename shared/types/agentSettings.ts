@@ -558,6 +558,19 @@ export interface GenerateAgentCommandOptions {
    * registry default applies (see {@link resolveEffectiveInlineMode}).
    */
   globalUseAltScreen?: boolean;
+  /**
+   * Session id to ASSIGN to this launch, for agents declaring
+   * `resume.assignSessionIdArgs` (#11782). Mint it with
+   * {@link mintAssignedSessionId} and persist the same value on the panel, so
+   * the conversation is addressable even if the process is force-killed before
+   * any teardown runs.
+   *
+   * Only valid for a launch that starts a NEW conversation — the flag is
+   * rejected by the CLI when the id already exists. Resume paths pass the id
+   * through {@link buildResumeCommand} instead. Ignored for agents that don't
+   * declare the capability.
+   */
+  sessionId?: string;
 }
 
 /**
@@ -617,6 +630,15 @@ export function generateAgentCommand(
         resolveEffectiveInlineMode(entry, agentId, options?.globalUseAltScreen)
       );
       if (screenModeFlag) parts.push(screenModeFlag);
+    }
+
+    // Pre-assigned session id (#11782). Emitted here — ahead of user flags and
+    // well ahead of the positional prompt appended at the end — so the id can
+    // never be parsed as the prompt itself.
+    if (options?.sessionId) {
+      for (const arg of buildAssignedSessionIdArgs(agentId, options.sessionId) ?? []) {
+        parts.push(arg.startsWith("-") ? arg : escapeShellArg(arg));
+      }
     }
   }
 
@@ -988,6 +1010,156 @@ export function buildResumeLatestCommand(
   return parts.join(" ");
 }
 
+/**
+ * Args that assign `sessionId` to a NEW conversation at launch, or `undefined`
+ * when the agent doesn't accept a caller-supplied id (#11782).
+ *
+ * See {@link AgentResume} `assignSessionIdArgs`: assignment is one-shot, so
+ * this belongs only on a launch that starts a fresh conversation. Resuming an
+ * existing one goes through {@link buildResumeCommand}.
+ */
+export function buildAssignedSessionIdArgs(
+  agentId: string,
+  sessionId: string
+): string[] | undefined {
+  if (!sessionId) return undefined;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  if (!resume || resume.kind !== "session-id") return undefined;
+  return resume.assignSessionIdArgs?.(sessionId);
+}
+
+/**
+ * Whether `agentId` lets Daintree choose the session id at launch, making the
+ * teardown scrape unnecessary for it (#11782).
+ */
+export function supportsSessionIdAssignment(agentId: string | undefined): boolean {
+  if (!agentId) return false;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  return resume?.kind === "session-id" && typeof resume.assignSessionIdArgs === "function";
+}
+
+/**
+ * Mints a session id for a fresh launch of `agentId`, or `undefined` when the
+ * agent captures its id the old way (teardown scrape).
+ *
+ * Always mint per launch — never reuse a persisted id here. Re-assigning an
+ * existing id is rejected by the CLI ("Session ID <id> is already in use"),
+ * which would take down the launch, so a duplicated pane and a restore that
+ * falls through to a fresh start each need their own new id.
+ */
+export function mintAssignedSessionId(agentId: string | undefined): string | undefined {
+  return supportsSessionIdAssignment(agentId) ? crypto.randomUUID() : undefined;
+}
+
+/** Sentinel used to locate the id slot among an agent's assigning args. */
+const SESSION_ID_SLOT = " daintree-session-id-slot ";
+
+/**
+ * Split a command into shell words, keeping quoted runs whole (quotes and all).
+ *
+ * Enough to tell a real argument from text that merely looks like one: a prompt
+ * such as `'Explain --session-id foo'` stays a SINGLE word, so the scan for the
+ * assigning flag below can't reach inside it. A regex over the raw string can,
+ * and would cut that prompt in half and leave an unbalanced quote behind.
+ *
+ * Unquoted backslash escapes are honoured because `escapeShellArg` emits
+ * `'\''` for every apostrophe: read without them, that sequence leaves the
+ * quote state inverted and splits an ordinary prompt like `don't` mid-word.
+ */
+function splitShellWords(command: string): string[] {
+  const words: string[] = [];
+  let current = "";
+  let started = false;
+  let escaped = false;
+  let quote: '"' | "'" | null = null;
+
+  for (const char of command) {
+    if (quote) {
+      current += char;
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (escaped) {
+      current += char;
+      escaped = false;
+      started = true;
+      continue;
+    }
+    if (char === "\\") {
+      current += char;
+      escaped = true;
+      started = true;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (started) {
+        words.push(current);
+        current = "";
+        started = false;
+      }
+      continue;
+    }
+    current += char;
+    started = true;
+  }
+  if (started) words.push(current);
+  return words;
+}
+
+/** Does one command word fill this slot of the agent's assigning-arg shape? */
+function shapeWordMatches(shapeToken: string, word: string): boolean {
+  if (!shapeToken.includes(SESSION_ID_SLOT)) return word === shapeToken;
+  // Covers a separate `--flag <id>` and a fused `--flag=<id>` alike.
+  const [prefix = "", suffix = ""] = shapeToken.split(SESSION_ID_SLOT);
+  return (
+    word.length > prefix.length + suffix.length && word.startsWith(prefix) && word.endsWith(suffix)
+  );
+}
+
+/**
+ * Removes the session-id-assigning arguments from a launch command (#11782).
+ *
+ * For paths that COPY or REPLAY a pane's command instead of rebuilding it —
+ * reopen-last, duplication's settings-failure fallback, a restart that abandons
+ * the session, a crash respawn — carrying the flag across re-offers an id the
+ * CLI has already issued, and that launch is rejected outright. Stripping
+ * leaves the plain fresh launch those paths actually mean.
+ *
+ * Matches on the flag's SHAPE rather than on a known id, which matters because
+ * callers reach here with the id already cleared: the worktree-move flow drops
+ * `agentSessionId` before restarting precisely because it wants a fresh launch,
+ * and a strip that needed the id would silently no-op exactly there. The shape
+ * comes from the agent's own `assignSessionIdArgs`, so the id slot is located
+ * rather than guessed.
+ *
+ * Works on shell WORDS, not raw text, so a prompt that merely contains the flag
+ * is left alone and a quoted argument keeps its internal spacing.
+ *
+ * Returns `command` untouched when no assigning form is present.
+ */
+export function stripAssignedSessionIdArgs(command: string, agentId: string | undefined): string {
+  if (!command || !agentId) return command;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  if (!resume || resume.kind !== "session-id") return command;
+  const shape = resume.assignSessionIdArgs?.(SESSION_ID_SLOT);
+  if (!shape?.length) return command;
+
+  const words = splitShellWords(command);
+  for (let i = 0; i + shape.length <= words.length; i++) {
+    if (shape.every((token, offset) => shapeWordMatches(token, words[i + offset] ?? ""))) {
+      words.splice(i, shape.length);
+      return words.join(" ");
+    }
+  }
+  return command;
+}
+
 export interface BuildLaunchCommandFromFlagsOptions {
   /** Absolute path to the clipboard temp directory (re-injected for agents that support it) */
   clipboardDirectory?: string;
@@ -1033,6 +1205,10 @@ export function buildLaunchCommandFromFlags(
     }
   }
 
+  // Deliberately no session-id assignment here. This builder's contract is to
+  // reproduce the CAPTURED launch configuration, and an assigned id is a
+  // one-shot per-launch value rather than part of that configuration (#11782).
+  // Fresh launches that should carry one go through `generateAgentCommand`.
   const parts: string[] = [baseCommand];
   for (const flag of flags) {
     if (flag.startsWith("-")) {

@@ -135,6 +135,15 @@ describe("spawnPanelsFromRecipe", () => {
 
   it("spawns an agent panel with regenerated command", async () => {
     const cb = vi.fn();
+    // Typed capture of the id handed to the CLI, so the pairing assertion below
+    // needs no cast (#11782).
+    let generatedSessionId: string | undefined;
+    mockGenerateAgentCommand.mockImplementation(
+      (_base: string, _entry: unknown, _agentId: string, options?: { sessionId?: string }) => {
+        generatedSessionId = options?.sessionId;
+        return "claude --model sonnet";
+      }
+    );
     await spawnPanelsFromRecipe({
       terminals: [makeAgent()],
       worktreeId: "wt-1",
@@ -149,12 +158,12 @@ describe("spawnPanelsFromRecipe", () => {
       "claude",
       { modelId: "sonnet" },
       "claude",
-      {
+      expect.objectContaining({
         clipboardDirectory: "/tmp/daintree/daintree-clipboard",
         modelId: "sonnet",
         globalSkipPermissions: false,
         globalUseAltScreen: false,
-      }
+      })
     );
     expect(mockAddPanel).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -162,6 +171,12 @@ describe("spawnPanelsFromRecipe", () => {
         launchAgentId: "claude",
         command: "claude --model sonnet",
       })
+    );
+    // #11782: the id handed to the CLI and the id recorded on the panel have to
+    // be the same one, or the record points at a conversation nothing is running.
+    expect(generatedSessionId).toBeTruthy();
+    expect(mockAddPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ agentSessionId: generatedSessionId })
     );
     expect(cb).toHaveBeenCalledWith(0, "panel-id-123");
   });

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { systemClient } from "@/clients";
 import type { PrerequisiteCheckResult, PrerequisiteSpec } from "@shared/types";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
 
 const POOL_CONCURRENCY = 3;
 
@@ -102,6 +103,12 @@ export function useSystemHealthCheck(): SystemHealthCheckState {
       activeRef.current = false;
     };
   }, [runCheck]);
+
+  // Anything rendering this hook already puts prerequisite state on screen, so
+  // the global missing-prerequisite banner would be repeating itself. The claim
+  // is scoped to the mount rather than plumbed from dialog-open state, which
+  // keeps it true by construction for every consumer.
+  useEffect(() => useMissingPrerequisiteStore.getState().claimInlineSurface(), []);
 
   // Re-check when the user returns to Daintree — tools installed while the
   // wizard was backgrounded should appear without a manual "Re-check" click.

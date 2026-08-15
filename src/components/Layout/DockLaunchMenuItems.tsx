@@ -5,7 +5,7 @@ import { BrandMark, Workflow } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import type { RecipeContext } from "@/utils/recipeVariables";
 import type { ActionSource } from "@shared/types";
-import { isAgentBlocked, isAgentLaunchable } from "@shared/utils/agentAvailability";
+import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import {
   activateCreateRecipeCue,
   activateDockLaunchItem,
@@ -16,6 +16,7 @@ import {
   type DockLaunchRecipeItem,
   type DockLaunchSurface,
 } from "./dockLaunchItems";
+import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
 
 export type { DockLaunchAgent } from "./dockLaunchItems";
 
@@ -86,15 +87,11 @@ export function DockLaunchMenuItems({
   const renderAgentItem = (agent: DockLaunchAgent, keyPrefix?: string) => {
     const Icon = agent.icon;
     const isLaunchable = isAgentLaunchable(agent.availability);
-    const blocked = isAgentBlocked(agent.availability);
-    const settingsTooltip = blocked
-      ? `${agent.name} is blocked by endpoint security. Click to configure.`
-      : `${agent.name} needs setup. Click to configure.`;
     return (
       <C.Item
         key={keyPrefix ? `${keyPrefix}-${agent.id}` : agent.id}
         className={!isLaunchable ? "opacity-70" : undefined}
-        title={!isLaunchable ? settingsTooltip : undefined}
+        title={!isLaunchable ? unavailableAgentHint(agent.name, agent.availability) : undefined}
         onSelect={() =>
           activate({
             category: "agent",

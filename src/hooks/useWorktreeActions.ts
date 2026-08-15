@@ -4,19 +4,23 @@ import { useErrorStore, type ErrorRecord } from "@/store";
 import { useRecipeStore } from "@/store/recipeStore";
 import { logError } from "@/utils/logger";
 import { useNotificationStore } from "@/store/notificationStore";
-import { describeEmptyFolderCopy, formatCopyResultMessage } from "@/lib/formatCopyResult";
+import {
+  describeEmptyFileCopy,
+  describeEmptyFolderCopy,
+  formatCopyResultMessage,
+} from "@/lib/formatCopyResult";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionSource } from "@shared/types/actions";
 import type { CopyTreeRunSource } from "@shared/types";
 import type { CopyTreeBudgetStats, CopyTreeOptions } from "@shared/types/ipc/copyTree";
 
-// Both live in a leaf module: `formatCopyResultMessage` because the copyTree
-// action definitions need it and importing it from here would close a cycle
-// through `actionService` below (#11722), and `describeEmptyFolderCopy` to keep
-// the two CopyTree result formatters together. Re-exported from their original
-// public home so existing importers are unaffected.
-export { describeEmptyFolderCopy, formatCopyResultMessage };
+// All three live in a leaf module: `formatCopyResultMessage` because the
+// copyTree action definitions need it and importing it from here would close a
+// cycle through `actionService` below (#11722), and the two empty-copy
+// describers to keep the CopyTree result formatters together. Re-exported from
+// their original public home so existing importers are unaffected.
+export { describeEmptyFileCopy, describeEmptyFolderCopy, formatCopyResultMessage };
 
 /**
  * Copy a worktree's context with an in-place spinner-to-result toast.
@@ -30,7 +34,19 @@ export { describeEmptyFolderCopy, formatCopyResultMessage };
 export async function copyContextWithFeedback(
   worktreeId: string,
   source: Extract<ActionSource, "context-menu">,
-  options?: { modified?: boolean; includePaths?: string[]; scopePaths?: string[] },
+  options?: {
+    modified?: boolean;
+    includePaths?: string[];
+    scopePaths?: string[];
+    /**
+     * What a scoped copy was scoped to, so the progress and empty-result
+     * wording can name it. Defaults to `"folder"` — every scoped caller before
+     * the shared file-row menu (#11757) scoped a directory, and calling a
+     * single file a folder is the kind of lie a transient toast gets away with
+     * exactly once. Local to the feedback; never forwarded to the action.
+     */
+    scopeKind?: "file" | "folder";
+  },
   // Which surface this is. `source` can't answer it — the worktree card and the
   // file browser both dispatch as "context-menu" — so callers that know say so.
   copyTreeRunSource?: CopyTreeRunSource
@@ -41,14 +57,17 @@ export async function copyContextWithFeedback(
   // updateNotification handoff below. The user just clicked "copy context",
   // so feedback is required regardless of quiet-hour preferences.
   const store = useNotificationStore.getState();
-  const isFolderCopy = Boolean(options?.scopePaths?.length || options?.includePaths?.length);
+  const isScopedCopy = Boolean(options?.scopePaths?.length || options?.includePaths?.length);
+  const isFileScope = isScopedCopy && options?.scopeKind === "file";
   const toastId = store.addNotification({
     type: "info",
     message: options?.modified
       ? "Copying modified files…"
-      : isFolderCopy
-        ? "Copying folder context…"
-        : "Copying context…",
+      : isFileScope
+        ? "Copying file context…"
+        : isScopedCopy
+          ? "Copying folder context…"
+          : "Copying context…",
     priority: "high",
     duration: 0,
   });
@@ -85,13 +104,15 @@ export async function copyContextWithFeedback(
       format?: string;
     };
 
-    // A folder the project ignores wholesale still resolves and copies cleanly,
+    // A path the project ignores wholesale still resolves and copies cleanly,
     // it just yields nothing — so say why instead of reporting a bare zero.
-    if (isFolderCopy && payload.fileCount === 0) {
+    if (isScopedCopy && payload.fileCount === 0) {
       store.updateNotification(toastId, {
         type: "info",
         title: "No files copied",
-        message: describeEmptyFolderCopy(payload.stats),
+        message: isFileScope
+          ? describeEmptyFileCopy(payload.stats)
+          : describeEmptyFolderCopy(payload.stats),
         duration: 5000,
         dismissed: false,
       });

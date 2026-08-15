@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveRequiredCIStatus,
   deriveGlobalCIStatus,
+  mapRollupContextToCheckRun,
   normalizeRawState,
 } from "../prRequiredCIStatus.js";
 
@@ -211,6 +212,104 @@ describe("deriveRequiredCIStatus", () => {
     expect(r.ciStatus).toBe("FAILURE");
     expect(r.ciSummary).toEqual({ requiredTotal: 2, requiredFailing: 1, requiredPending: 1 });
   });
+
+  it.each([
+    ["an unknown CheckRun conclusion", { __typename: "CheckRun", conclusion: "SOME_NEW_STATE" }],
+    ["an unknown CheckRun status with no conclusion", { __typename: "CheckRun", status: "WEIRD" }],
+    ["a completed CheckRun with no conclusion", { __typename: "CheckRun", status: "COMPLETED" }],
+    ["an unknown StatusContext state", { __typename: "StatusContext", state: "SOME_NEW_STATE" }],
+  ])("refuses to derive a verdict from %s", (_label, ctx) => {
+    // An unclassifiable required check used to land in neither the failing nor
+    // the pending bucket, so the summary reported SUCCESS — turning a check the
+    // raw rollup called failing into a false green. Fall back to the raw state
+    // instead, exactly as the truncated-page path does.
+    const r = deriveRequiredCIStatus([{ ...ctx, isRequired: true }], false, "FAILURE");
+    expect(r.ciStatus).toBe("FAILURE");
+    expect(r.ciSummary).toBeUndefined();
+  });
+
+  it.each([
+    ["a CheckRun NEUTRAL conclusion", { __typename: "CheckRun", conclusion: "NEUTRAL" }],
+    ["a CheckRun SKIPPED conclusion", { __typename: "CheckRun", conclusion: "SKIPPED" }],
+    ["a StatusContext SUCCESS state", { __typename: "StatusContext", state: "SUCCESS" }],
+  ])("still counts %s as a pass rather than tripping the bail-out", (_label, ctx) => {
+    // The unclassified bail-out must not swallow legitimate non-SUCCESS passes,
+    // or every PR with a skipped required check would lose its summary.
+    const r = deriveRequiredCIStatus([{ ...ctx, isRequired: true }], false, "SUCCESS");
+    expect(r.ciStatus).toBe("SUCCESS");
+    expect(r.ciSummary).toEqual({ requiredTotal: 1, requiredFailing: 0, requiredPending: 0 });
+  });
+
+  it.each(["QUEUED", "IN_PROGRESS", "WAITING", "PENDING", "REQUESTED"])(
+    "still counts a required CheckRun in %s as pending, not unclassified",
+    (status) => {
+      const r = deriveRequiredCIStatus(
+        [{ __typename: "CheckRun", status, conclusion: null, isRequired: true }],
+        false,
+        "PENDING"
+      );
+      expect(r.ciStatus).toBe("PENDING");
+      expect(r.ciSummary?.requiredPending).toBe(1);
+    }
+  );
+
+  it("does not let an unknown union member pass as not-required", () => {
+    // The query has no inline fragment for a new union member, so it arrives
+    // with only __typename — no state AND no isRequired. Skipping it for the
+    // missing isRequired would let the sibling check derive a green verdict.
+    const r = deriveRequiredCIStatus(
+      [
+        { __typename: "CheckRun", conclusion: "SUCCESS", status: "COMPLETED", isRequired: true },
+        { __typename: "SomeFutureCheckKind" },
+      ],
+      false,
+      "FAILURE"
+    );
+    expect(r.ciStatus).toBe("FAILURE");
+    expect(r.ciSummary).toBeUndefined();
+  });
+
+  it("does not accept the lifecycle value COMPLETED as a passing conclusion", () => {
+    // COMPLETED is a status, never a conclusion. It sits in the aggregate bucket
+    // set `deriveGlobalCIStatus` reads, so reusing that set here would read a
+    // malformed `conclusion: "COMPLETED"` as a pass.
+    const r = deriveRequiredCIStatus(
+      [{ __typename: "CheckRun", conclusion: "COMPLETED", isRequired: true }],
+      false,
+      "FAILURE"
+    );
+    expect(r.ciStatus).toBe("FAILURE");
+    expect(r.ciSummary).toBeUndefined();
+  });
+
+  it("passes the raw rollup state through unchanged when it bails out", () => {
+    // The bail-out returns whatever CI actually reported — it must not collapse
+    // every unclassified case to FAILURE.
+    for (const raw of ["SUCCESS", "PENDING", "ERROR"]) {
+      const r = deriveRequiredCIStatus(
+        [{ __typename: "CheckRun", conclusion: "SOME_NEW_STATE", isRequired: true }],
+        false,
+        raw
+      );
+      expect(r.ciStatus).toBe(raw);
+      expect(r.ciSummary).toBeUndefined();
+    }
+  });
+
+  it("still derives a summary when every required check is classifiable", () => {
+    // Guards the bail-out above from swallowing the normal path: an unknown
+    // NON-required check must not suppress the derivation.
+    const r = deriveRequiredCIStatus(
+      [
+        { __typename: "CheckRun", conclusion: "SUCCESS", status: "COMPLETED", isRequired: true },
+        { __typename: "CheckRun", conclusion: "SOME_NEW_STATE", isRequired: false },
+      ],
+      false,
+      "FAILURE"
+    );
+    expect(r.ciStatus).toBe("SUCCESS");
+    expect(r.ciSummary).toEqual({ requiredTotal: 1, requiredFailing: 0, requiredPending: 0 });
+  });
 });
 
 describe("normalizeRawState", () => {
@@ -415,5 +514,264 @@ describe("deriveGlobalCIStatus", () => {
     });
     expect(r.ciStatus).toBeUndefined();
     expect(r.ciSummary).toBeUndefined();
+  });
+});
+
+describe("mapRollupContextToCheckRun", () => {
+  it("maps a completed CheckRun onto the normalized vocabulary", () => {
+    const check = mapRollupContextToCheckRun({
+      __typename: "CheckRun",
+      name: "unit (ubuntu)",
+      status: "COMPLETED",
+      conclusion: "FAILURE",
+      detailsUrl: "https://ci.example/run/1",
+      isRequired: true,
+    });
+    expect(check).toEqual({
+      name: "unit (ubuntu)",
+      status: "completed",
+      conclusion: "failure",
+      required: true,
+      detailsUrl: "https://ci.example/run/1",
+      rawData: expect.anything(),
+    });
+  });
+
+  it("folds the failing conclusions the normalized vocabulary cannot spell into failure", () => {
+    // STARTUP_FAILURE and STALE are in FAILING_CHECK_CONCLUSIONS, so the
+    // per-check read must agree with the roll-up that they are failures rather
+    // than dropping them for want of an exact word.
+    for (const raw of ["STARTUP_FAILURE", "STALE"]) {
+      const check = mapRollupContextToCheckRun({
+        __typename: "CheckRun",
+        name: `check-${raw}`,
+        status: "COMPLETED",
+        conclusion: raw,
+      });
+      expect(check?.conclusion).toBe("failure");
+    }
+  });
+
+  it("agrees with deriveRequiredCIStatus on which required checks are failing", () => {
+    const contexts = [
+      {
+        __typename: "CheckRun",
+        name: "a",
+        status: "COMPLETED",
+        conclusion: "SUCCESS",
+        isRequired: true,
+      },
+      {
+        __typename: "CheckRun",
+        name: "b",
+        status: "COMPLETED",
+        conclusion: "STALE",
+        isRequired: true,
+      },
+      {
+        __typename: "CheckRun",
+        name: "c",
+        status: "COMPLETED",
+        conclusion: "TIMED_OUT",
+        isRequired: true,
+      },
+      {
+        __typename: "CheckRun",
+        name: "d",
+        status: "COMPLETED",
+        conclusion: "CANCELLED",
+        isRequired: true,
+      },
+      {
+        __typename: "CheckRun",
+        name: "e",
+        status: "COMPLETED",
+        conclusion: "ACTION_REQUIRED",
+        isRequired: true,
+      },
+      { __typename: "StatusContext", context: "f", state: "ERROR", isRequired: true },
+      // Non-required failures must be excluded by both sides.
+      {
+        __typename: "CheckRun",
+        name: "g",
+        status: "COMPLETED",
+        conclusion: "FAILURE",
+        isRequired: false,
+      },
+    ];
+    // The two derivations classify independently (FAILING_CHECK_CONCLUSIONS vs
+    // CHECK_CONCLUSION_MAP), so this pins that they partition the same contexts
+    // identically. The normalized side spans every non-passing terminal
+    // conclusion, not just "failure": CANCELLED/TIMED_OUT/ACTION_REQUIRED keep
+    // their own words here while the roll-up buckets them as failing.
+    const NON_PASSING = new Set(["failure", "cancelled", "timed_out", "action_required"]);
+    const derived = deriveRequiredCIStatus(contexts, false, "FAILURE");
+    const mappedFailing = contexts
+      .map((c) => mapRollupContextToCheckRun(c))
+      .filter((c) => c?.required && c.conclusion && NON_PASSING.has(c.conclusion)).length;
+    expect(derived.ciSummary?.requiredFailing).toBeGreaterThan(0);
+    expect(mappedFailing).toBe(derived.ciSummary?.requiredFailing);
+  });
+
+  it("carries the provider's own node through as rawData", () => {
+    // The escape hatch must be the real node, not a reconstruction — a caller
+    // reaching past the normalized fields needs what the provider actually sent.
+    const node = {
+      __typename: "CheckRun",
+      name: "a",
+      status: "COMPLETED",
+      conclusion: "SUCCESS",
+      someProviderOnlyField: 1,
+    };
+    expect(mapRollupContextToCheckRun(node)?.rawData).toBe(node);
+  });
+
+  it("distinguishes queued from in-progress check statuses", () => {
+    const queued = ["QUEUED", "WAITING", "PENDING", "REQUESTED"].map(
+      (status) => mapRollupContextToCheckRun({ __typename: "CheckRun", name: "n", status })?.status
+    );
+    expect(new Set(queued)).toEqual(new Set(["queued"]));
+    expect(
+      mapRollupContextToCheckRun({ __typename: "CheckRun", name: "n", status: "IN_PROGRESS" })
+        ?.status
+    ).toBe("in_progress");
+  });
+
+  it("does not report a pending legacy status as completed", () => {
+    // PENDING/EXPECTED are in PENDING_STATUS_STATES — treating every
+    // StatusContext as finished would contradict the roll-up.
+    expect(
+      mapRollupContextToCheckRun({ __typename: "StatusContext", context: "c", state: "PENDING" })
+    ).toMatchObject({ status: "in_progress" });
+    expect(
+      mapRollupContextToCheckRun({ __typename: "StatusContext", context: "c", state: "EXPECTED" })
+    ).toMatchObject({ status: "queued" });
+    for (const state of ["PENDING", "EXPECTED"]) {
+      const check = mapRollupContextToCheckRun({
+        __typename: "StatusContext",
+        context: "c",
+        state,
+      });
+      expect(check?.conclusion).toBeUndefined();
+    }
+  });
+
+  it("reads a legacy status's link from targetUrl", () => {
+    const check = mapRollupContextToCheckRun({
+      __typename: "StatusContext",
+      context: "legacy/build",
+      state: "SUCCESS",
+      targetUrl: "https://legacy.example/build",
+    });
+    expect(check).toMatchObject({
+      name: "legacy/build",
+      status: "completed",
+      conclusion: "success",
+      detailsUrl: "https://legacy.example/build",
+    });
+  });
+
+  it("omits an unrecognized conclusion rather than guessing at it", () => {
+    // A future GitHub enum value must cost one field on one check, never a
+    // false success and never the whole read.
+    const check = mapRollupContextToCheckRun({
+      __typename: "CheckRun",
+      name: "future",
+      status: "COMPLETED",
+      conclusion: "SOME_NEW_GITHUB_CONCLUSION",
+    });
+    expect(check?.name).toBe("future");
+    expect(check?.conclusion).toBeUndefined();
+  });
+
+  it("treats an unknown lifecycle value as finished only when a conclusion proves it", () => {
+    expect(
+      mapRollupContextToCheckRun({ __typename: "CheckRun", name: "n", status: "SOME_NEW_STATE" })
+        ?.status
+    ).toBe("queued");
+    expect(
+      mapRollupContextToCheckRun({
+        __typename: "CheckRun",
+        name: "n",
+        status: "SOME_NEW_STATE",
+        conclusion: "SUCCESS",
+      })?.status
+    ).toBe("completed");
+  });
+
+  it("reports a completed run with an unreadable conclusion as finished but unverdicted", () => {
+    // The pair "completed, no conclusion" is the honest encoding of an enum we
+    // cannot spell — never a silent success.
+    const check = mapRollupContextToCheckRun({
+      __typename: "CheckRun",
+      name: "n",
+      status: "COMPLETED",
+      conclusion: "SOME_NEW_CONCLUSION",
+    });
+    expect(check?.status).toBe("completed");
+    expect(check?.conclusion).toBeUndefined();
+  });
+
+  it("maps an unknown union member by field shape", () => {
+    const check = mapRollupContextToCheckRun({
+      __typename: "SomeFutureCheckKind",
+      context: "future/thing",
+      state: "FAILURE",
+    });
+    expect(check).toMatchObject({ name: "future/thing", conclusion: "failure" });
+  });
+
+  it("does not claim an unrecognized legacy state has finished", () => {
+    // "completed" would assert a verdict exists for a state we cannot read.
+    const check = mapRollupContextToCheckRun({
+      __typename: "StatusContext",
+      context: "c",
+      state: "SOME_NEW_STATE",
+    });
+    expect(check?.status).toBe("queued");
+    expect(check?.conclusion).toBeUndefined();
+  });
+
+  it("never reports a conclusion on a check it also calls unfinished", () => {
+    // The contract says a conclusion exists only once a run completed, and the
+    // host validator rejects any check that says otherwise — so a contradictory
+    // provider lifecycle value must not survive the mapper.
+    const nodes = [
+      { __typename: "CheckRun", name: "a", status: "IN_PROGRESS", conclusion: "SUCCESS" },
+      { __typename: "CheckRun", name: "b", status: "QUEUED", conclusion: "FAILURE" },
+      { __typename: "CheckRun", name: "c", status: "SOME_NEW_STATE", conclusion: "SUCCESS" },
+    ];
+    for (const node of nodes) {
+      const check = mapRollupContextToCheckRun(node);
+      expect(check?.conclusion).toBeDefined();
+      expect(check?.status).toBe("completed");
+    }
+  });
+
+  it("returns null for a node with no usable name", () => {
+    expect(mapRollupContextToCheckRun({ __typename: "CheckRun", status: "COMPLETED" })).toBeNull();
+    expect(mapRollupContextToCheckRun({ __typename: "CheckRun", name: "   " })).toBeNull();
+  });
+
+  it("omits required and detailsUrl when the provider reports neither", () => {
+    const check = mapRollupContextToCheckRun({
+      __typename: "CheckRun",
+      name: "bare",
+      status: "COMPLETED",
+      conclusion: "SUCCESS",
+    });
+    expect(check).not.toHaveProperty("required");
+    expect(check).not.toHaveProperty("detailsUrl");
+  });
+
+  it("preserves isRequired false rather than dropping it", () => {
+    const check = mapRollupContextToCheckRun({
+      __typename: "CheckRun",
+      name: "optional-check",
+      status: "COMPLETED",
+      conclusion: "SUCCESS",
+      isRequired: false,
+    });
+    expect(check?.required).toBe(false);
   });
 });

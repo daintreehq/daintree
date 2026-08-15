@@ -4,8 +4,14 @@ import {
   extractGitErrorMessage,
   getGitRecoveryAction,
   getGitRecoveryHint,
+  isMissingGitExecutableError,
   normalizeGitErrorMessage,
 } from "../gitOperationErrors.js";
+import {
+  SIMPLE_GIT_MISSING_BINARY_MESSAGE,
+  SIMPLE_GIT_MISSING_CWD_MESSAGE,
+  simpleGitMissingBinaryError,
+} from "../../testing/simpleGitErrorFixtures.js";
 import type { GitOperationReason } from "../../types/ipc/errors.js";
 
 describe("classifyGitError — table-driven", () => {
@@ -289,12 +295,180 @@ describe("getGitRecoveryHint", () => {
       "lfs-missing",
       "lfs-quota-exceeded",
       "hook-rejected",
+      "git-not-installed",
       "system-io-error",
     ];
     for (const reason of reasons) {
       expect(getGitRecoveryHint(reason)).toBeTruthy();
     }
     expect(getGitRecoveryHint("unknown")).toBeUndefined();
+  });
+});
+
+describe("classifyGitError — missing git binary", () => {
+  it("classifies the real simple-git failure as git-not-installed", () => {
+    // Pre-fix this fell through to the generic ENOENT rule and was reported as
+    // a filesystem problem, which sent the user looking at their disk instead
+    // of installing Git (#11764).
+    expect(classifyGitError(simpleGitMissingBinaryError())).toBe("git-not-installed");
+    expect(classifyGitError(SIMPLE_GIT_MISSING_BINARY_MESSAGE)).toBe("git-not-installed");
+  });
+
+  it("classifies it through a wrapped cause chain", () => {
+    // The patterns only ever see the outermost message, which by this point
+    // says nothing about spawning — so the guard has to read the raw value.
+    const wrapped = new Error("Git operation failed: status", {
+      cause: simpleGitMissingBinaryError(["status", "--porcelain"]),
+    });
+
+    expect(classifyGitError(wrapped)).toBe("git-not-installed");
+  });
+
+  it("still classifies an ordinary filesystem ENOENT as system-io-error", () => {
+    // The carve-out must not swallow the generic case it was added in front of.
+    expect(classifyGitError("ENOENT: no such file or directory, open '/path/to/file'")).toBe(
+      "system-io-error"
+    );
+    expect(classifyGitError(SIMPLE_GIT_MISSING_CWD_MESSAGE)).not.toBe("git-not-installed");
+  });
+
+  it("leaves a classifiable git failure alone when the phrase is only quoted", () => {
+    const message = `fatal: detected dubious ownership in repository at '/repos/spawn git ENOENT'`;
+
+    expect(classifyGitError(message)).toBe("dubious-ownership");
+  });
+
+  it("lets a classified top-level failure outrank a missing-git ancestor", () => {
+    // A wrapper that says nothing specific should defer to its cause, but one
+    // that reports a real failure of its own must win — otherwise any error
+    // that happened to be wrapped around a spawn ENOENT would be reported as
+    // "Git isn't installed" and its actual cause never surfaced.
+    const wrapped = new Error("Authentication failed for 'https://github.com/org/repo.git/'", {
+      cause: simpleGitMissingBinaryError(),
+    });
+
+    expect(classifyGitError(wrapped)).toBe("auth-failed");
+  });
+
+  it("outranks the generic filesystem rule when a wrapper quotes its cause", () => {
+    // Wrappers that interpolate the cause's message carry "ENOENT" in their
+    // own text, which the generic system-io-error rule matches. It must not
+    // win: the actionable answer is "install Git", not "check your disk".
+    const wrapped = new Error(`Git worktree changes failed: ${SIMPLE_GIT_MISSING_BINARY_MESSAGE}`, {
+      cause: simpleGitMissingBinaryError(["status", "--porcelain"]),
+    });
+
+    expect(classifyGitError(wrapped)).toBe("git-not-installed");
+  });
+
+  it("recognizes the message however the platform ended its lines", () => {
+    // Git for Windows is where this failure was reported, and it is also where
+    // CRLF turns up.
+    const crlf = SIMPLE_GIT_MISSING_BINARY_MESSAGE.replace(/\n/g, "\r\n");
+
+    expect(classifyGitError(new Error(crlf))).toBe("git-not-installed");
+    expect(classifyGitError(new Error(`${SIMPLE_GIT_MISSING_BINARY_MESSAGE}\n`))).toBe(
+      "git-not-installed"
+    );
+    expect(classifyGitError(new Error(`${crlf}\r\n`))).toBe("git-not-installed");
+  });
+});
+
+describe("isMissingGitExecutableError", () => {
+  it("recognizes what simple-git actually throws for a missing git binary", () => {
+    expect(isMissingGitExecutableError(simpleGitMissingBinaryError())).toBe(true);
+  });
+
+  it("recognizes a raw Node spawn error, whose message carries no stack", () => {
+    // Nothing laundered it, so both signals are intact and either should do.
+    const raw = Object.assign(new Error("spawn git ENOENT"), {
+      code: "ENOENT",
+      syscall: "spawn git",
+    });
+
+    expect(isMissingGitExecutableError(raw)).toBe(true);
+    expect(isMissingGitExecutableError(new Error("spawn git ENOENT"))).toBe(true);
+    expect(isMissingGitExecutableError(Object.assign(new Error("opaque"), raw))).toBe(true);
+  });
+
+  it("finds it through the wrapping GitService applies", () => {
+    // handleGitOperation rewraps failures and keeps the original as `cause`;
+    // detection has to survive that or the reported bug reappears.
+    const wrapped = new Error("Worktree directory no longer exists", {
+      cause: new Error("Git operation failed: getRepositoryRoot", {
+        cause: simpleGitMissingBinaryError(),
+      }),
+    });
+
+    expect(isMissingGitExecutableError(wrapped)).toBe(true);
+  });
+
+  it("ignores a spawn failure of some other binary", () => {
+    // `createWslHardenedGit` spawns `wsl.exe git` — a missing WSL launcher is
+    // not a missing Git, and telling the user to install Git wouldn't help.
+    for (const binary of ["node", "wsl.exe", "git-lfs"]) {
+      const message = SIMPLE_GIT_MISSING_BINARY_MESSAGE.replace("spawn git", `spawn ${binary}`);
+      expect(isMissingGitExecutableError(new Error(message))).toBe(false);
+      expect(
+        isMissingGitExecutableError(
+          Object.assign(new Error(message), { code: "ENOENT", syscall: `spawn ${binary}` })
+        )
+      ).toBe(false);
+    }
+  });
+
+  it("ignores the phrase when it is quoted inside a larger message", () => {
+    // Anchoring is what separates these from the real thing. A repository path
+    // and a hook's own child-process failure both put the exact spawn line in
+    // git's output without Git itself being missing.
+    const quotedPath = new Error(
+      "fatal: detected dubious ownership in repository at '/repos/spawn git ENOENT'"
+    );
+    const hookOutput = new Error(
+      `hook failed:\n${SIMPLE_GIT_MISSING_BINARY_MESSAGE}\nfatal: the remote end hung up`
+    );
+    const ownLineInStderr = new Error(`remote: spawn git ENOENT\nfatal: push declined`);
+
+    expect(isMissingGitExecutableError(quotedPath)).toBe(false);
+    expect(isMissingGitExecutableError(hookOutput)).toBe(false);
+    expect(isMissingGitExecutableError(ownLineInStderr)).toBe(false);
+  });
+
+  it("does not mistake a missing directory for a missing binary", () => {
+    // simple-git never reaches spawn when the cwd is already gone, so this
+    // stays a problem with the folder.
+    expect(isMissingGitExecutableError(new Error(SIMPLE_GIT_MISSING_CWD_MESSAGE))).toBe(false);
+    expect(
+      isMissingGitExecutableError(
+        Object.assign(new Error("ENOENT: no such file or directory, stat '/gone'"), {
+          code: "ENOENT",
+          syscall: "stat",
+        })
+      )
+    ).toBe(false);
+  });
+
+  it("survives a cause chain that loops", () => {
+    const a = new Error("a") as Error & { cause?: unknown };
+    const b = new Error("b") as Error & { cause?: unknown };
+    a.cause = b;
+    b.cause = a;
+
+    expect(isMissingGitExecutableError(a)).toBe(false);
+  });
+
+  it("handles values that are not errors", () => {
+    expect(isMissingGitExecutableError(undefined)).toBe(false);
+    expect(isMissingGitExecutableError(null)).toBe(false);
+    expect(isMissingGitExecutableError("ENOENT")).toBe(false);
+    // classifyGitError accepts bare strings, so the predicate has to too —
+    // including one reached partway down a cause chain.
+    expect(isMissingGitExecutableError(SIMPLE_GIT_MISSING_BINARY_MESSAGE)).toBe(true);
+    expect(
+      isMissingGitExecutableError(
+        new Error("wrapped", { cause: SIMPLE_GIT_MISSING_BINARY_MESSAGE })
+      )
+    ).toBe(true);
   });
 });
 

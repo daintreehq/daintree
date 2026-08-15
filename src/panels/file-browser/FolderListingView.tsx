@@ -7,6 +7,7 @@ import { formatBytes } from "@/lib/formatBytes";
 import { formatRelativeTime } from "@/lib/formatRelativeTime";
 import { FILE_DRAG_MIME, encodeFileDragPaths } from "@/lib/fileDragPayload";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
 import type { FileEntryLike, FolderListingRow } from "./fileBrowserTree";
 import { FILE_TREE_ICON_CLASS, FILE_TREE_ICON_COLOR_CLASS, getFileTypeIcon } from "./fileTypeIcons";
 
@@ -213,7 +214,12 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
   return (
     <div className="h-7 w-full px-1">
       <ContextMenu>
-        <ContextMenuTrigger asChild>{rowSurface}</ContextMenuTrigger>
+        {/* The innermost object owns the menu (#11757). Radix's trigger only
+            prevents the default; without this the event keeps bubbling and any
+            enclosing trigger opens its own menu over this one. */}
+        <ContextMenuTrigger asChild onContextMenu={stopFileRowMenuPropagation}>
+          {rowSurface}
+        </ContextMenuTrigger>
         <ContextMenuContent>{menuItems}</ContextMenuContent>
       </ContextMenu>
     </div>

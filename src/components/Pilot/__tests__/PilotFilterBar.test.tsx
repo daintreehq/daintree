@@ -7,7 +7,7 @@ import type { PilotBandFilter, PilotBandFilterCounts } from "../pilotRows";
 import { emptyBandCounts, type FleetBandCounts } from "@/lib/fleetAttention";
 
 function counts(overrides: Partial<PilotBandFilterCounts> = {}): PilotBandFilterCounts {
-  return { all: 0, "needs-you": 0, working: 0, finished: 0, ...overrides };
+  return { all: 0, "needs-you": 0, working: 0, finished: 0, parked: 0, ...overrides };
 }
 
 function bands(overrides: Partial<FleetBandCounts> = {}): FleetBandCounts {
@@ -60,13 +60,13 @@ function segmentNames(): string[] {
 }
 
 describe("PilotFilterBar", () => {
-  it("offers the four states as one mutually exclusive choice", () => {
+  it("offers the states as one mutually exclusive choice", () => {
     // A radiogroup, not the sidebar's toolbar of toggles: these segments are
     // exclusive with All as the null option, which is what a radiogroup IS.
     renderBar();
 
     expect(screen.getByRole("radiogroup")).toBeTruthy();
-    expect(screen.getAllByRole("radio")).toHaveLength(4);
+    expect(screen.getAllByRole("radio")).toHaveLength(5);
   });
 
   it("reports exactly one checked segment", () => {
@@ -91,13 +91,14 @@ describe("PilotFilterBar", () => {
   });
 
   it("carries the count in each segment's name, so it is never colour-and-digit alone", () => {
-    renderBar("all", counts({ all: 7, "needs-you": 2, working: 4, finished: 1 }));
+    renderBar("all", counts({ all: 7, "needs-you": 2, working: 4, finished: 1, parked: 3 }));
 
     expect(segmentNames()).toEqual([
       "All, 7 agents",
       "Waiting, 2 agents",
       "Working, 4 agents",
       "Finished, 1 agent",
+      "Parked, 3 agents",
     ]);
   });
 
@@ -153,11 +154,11 @@ describe("PilotFilterBar", () => {
 
       press("ArrowLeft");
 
-      expect(liveState().checked).toBe("Finished");
+      expect(liveState().checked).toBe("Parked");
     });
 
     it("wraps forwards off the last segment", () => {
-      render(<StatefulBar initial="finished" />);
+      render(<StatefulBar initial="parked" />);
 
       press("ArrowRight");
 
@@ -171,7 +172,7 @@ describe("PilotFilterBar", () => {
       expect(liveState().checked).toBe("All");
 
       press("End");
-      expect(liveState().checked).toBe("Finished");
+      expect(liveState().checked).toBe("Parked");
     });
 
     it("keeps exactly one tab stop through every move", () => {

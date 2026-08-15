@@ -163,9 +163,11 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
   };
   handlers.push(typedHandle(CHANNELS.SYSTEM_START_AGENT_UPDATE, handleSystemStartAgentUpdate));
 
-  const handleSystemHealthCheck = async (agentIds?: string[]) => {
+  const handleSystemHealthCheck = async (
+    options?: import("../../../shared/types/ipc/system.js").SystemHealthCheckOptions
+  ) => {
     const { runSystemHealthCheck } = await import("../../services/SystemHealthCheck.js");
-    return await runSystemHealthCheck(agentIds);
+    return await runSystemHealthCheck(options);
   };
   handlers.push(typedHandle(CHANNELS.SYSTEM_HEALTH_CHECK, handleSystemHealthCheck));
 
@@ -178,12 +180,23 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
   const handleSystemCheckTool = async (
     spec: import("../../../shared/types/ipc/system.js").PrerequisiteSpec
   ) => {
-    const { checkPrerequisite } = await import("../../services/SystemHealthCheck.js");
-    return new Promise<import("../../../shared/types/ipc/system.js").PrerequisiteCheckResult>(
-      (resolve) => {
-        setImmediate(() => resolve(checkPrerequisite(spec)));
-      }
-    );
+    const { checkPrerequisite, isShellInertInvocation } =
+      await import("../../services/SystemHealthCheck.js");
+
+    // The spec names a binary and the flags main will execute, so it is checked
+    // here rather than trusted: on Windows a `.cmd` shim has to be spawned
+    // through cmd.exe, which parses whatever it is handed.
+    if (
+      !spec ||
+      typeof spec.tool !== "string" ||
+      !spec.tool ||
+      (spec.command !== undefined && typeof spec.command !== "string") ||
+      !isShellInertInvocation(spec.command ?? spec.tool, spec.versionArgs)
+    ) {
+      throw new Error("Invalid PrerequisiteSpec");
+    }
+
+    return await checkPrerequisite(spec);
   };
   handlers.push(typedHandle(CHANNELS.SYSTEM_CHECK_TOOL, handleSystemCheckTool));
 
@@ -193,10 +206,15 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
   ) => {
     const senderWindow = ctx.senderWindow;
 
+    const hasAgentId = typeof payload?.agentId === "string" && payload.agentId.length > 0;
+    const hasPrerequisiteTool =
+      typeof payload?.prerequisiteTool === "string" && payload.prerequisiteTool.length > 0;
+
+    // Exactly one target — a payload naming both is ambiguous about which
+    // command list main should resolve, so it's rejected rather than guessed.
     if (
       !payload ||
-      !payload.agentId ||
-      typeof payload.agentId !== "string" ||
+      hasAgentId === hasPrerequisiteTool ||
       !payload.jobId ||
       typeof payload.jobId !== "string"
     ) {
