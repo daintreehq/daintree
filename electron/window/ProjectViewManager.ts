@@ -195,7 +195,33 @@ export interface ProjectViewManagerOptions {
    * eviction protection needs a liveness source that tracks exits.
    */
   isTerminalLive?: (terminalId: string) => boolean;
+  /**
+   * Why MCP needs this view kept running right now (#11790) — a live session
+   * binding, an in-flight dispatch, or neither. Injected from the composition
+   * root for the same reason as `assistantBackendForProject`: electron/window/
+   * stays free of the service, and here it also keeps the MCP module graph off
+   * eager boot, since it is deliberately behind a dynamic import.
+   *
+   * Absent — as in tests that don't exercise MCP — every workspace reads as
+   * unprotected, which is the pre-#11790 behavior.
+   */
+  mcpViewActivity?: (workspaceId: string, webContentsId: number) => McpViewActivity | null;
 }
+
+/**
+ * What MCP is doing with a project view, as read by the freeze and eviction
+ * policies (#11790). The two fields earn different protection — see
+ * `McpServerService.getWorkspaceViewActivity` for why one is an outright
+ * eviction exclusion and the other only a deprioritization.
+ */
+export interface McpViewActivity {
+  /** An MCP request is in flight against this exact view. */
+  dispatchLease: boolean;
+  /** A live MCP session is bound to this workspace, call or no call. */
+  liveBinding: boolean;
+}
+
+const NO_MCP_ACTIVITY: McpViewActivity = { dispatchLease: false, liveBinding: false };
 
 export class ProjectViewManager {
   // The fields below are intentionally not `private`: sibling
@@ -221,6 +247,7 @@ export class ProjectViewManager {
     webContentsId: number;
   } | null;
   isTerminalLive?: (terminalId: string) => boolean;
+  mcpViewActivity?: (workspaceId: string, webContentsId: number) => McpViewActivity | null;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
   private resizeHandler: (() => void) | null = null;
@@ -286,6 +313,7 @@ export class ProjectViewManager {
     this.onViewCrashed = opts.onViewCrashed;
     this.assistantBackendForProject = opts.assistantBackendForProject;
     this.isTerminalLive = opts.isTerminalLive;
+    this.mcpViewActivity = opts.mcpViewActivity;
     this.windowRegistry = opts.windowRegistry;
     if (opts.cachedProjectViews != null) {
       this.maxCachedViews = opts.cachedProjectViews;
@@ -835,6 +863,29 @@ export class ProjectViewManager {
     }
   }
 
+  /**
+   * What MCP is doing with `workspaceId`'s view right now (#11790).
+   *
+   * Never throws and never returns null: the callback reaches a service behind
+   * a dynamic import, and a freeze or eviction pass must not be abandoned
+   * halfway through the view map because that service was mid-teardown. Every
+   * failure — no callback wired, MCP never loaded, the call threw, the view
+   * already destroyed — reads as "not protected", the same conservative answer
+   * `hasActiveAgent` gives before its cache is seeded.
+   *
+   * Takes a workspace id, not a project id: `views` is keyed by the opaque
+   * workspace identity (a project's 64-hex id or a scratch workspace's UUID),
+   * which is the same vocabulary the MCP session binding stores.
+   */
+  mcpActivityFor(workspaceId: string, wc: Electron.WebContents): McpViewActivity {
+    if (!this.mcpViewActivity || wc.isDestroyed()) return NO_MCP_ACTIVITY;
+    try {
+      return this.mcpViewActivity(workspaceId, wc.id) ?? NO_MCP_ACTIVITY;
+    } catch {
+      return NO_MCP_ACTIVITY;
+    }
+  }
+
   private freezeAllCached(): void {
     for (const [projectId, entry] of this.views) {
       if (projectId === this.activeProjectId) continue;
@@ -846,6 +897,20 @@ export class ProjectViewManager {
       if (hasActiveAgent(this, projectId)) continue;
       const wc = entry.view.webContents;
       if (wc.isDestroyed()) continue;
+      // A live MCP session binding is the same argument (#11790): the whole
+      // point of binding is to drive this workspace while the user works
+      // elsewhere, so its view is a background one by design, and freezing it
+      // strands every dispatch until the bridge deadline fires. The bridge also
+      // thaws on demand, which covers a session that binds after this pass;
+      // this guard is what stops a later pass from re-freezing underneath a
+      // session that is already using the view.
+      //
+      // Unlike eviction, skipping the freeze needs no bounded lease. It costs
+      // one optimization on one cached view — CPU throttling and the periodic
+      // memory purge still apply — rather than the memory a resident renderer
+      // holds, so a quiet binding can hold it for as long as the session lives.
+      const mcp = this.mcpActivityFor(projectId, wc);
+      if (mcp.liveBinding || mcp.dispatchLease) continue;
       void freezeWebContents(wc);
     }
   }

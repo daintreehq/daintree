@@ -17,6 +17,7 @@ import type { CcrConfigService } from "../services/CcrConfigService.js";
 import type { autoUpdaterService as AutoUpdaterServiceType } from "../services/AutoUpdaterService.js";
 import type { agentNotificationService as AgentNotificationServiceType } from "../services/AgentNotificationService.js";
 import type { windowsStoreNotifierService as WindowsStoreNotifierServiceType } from "../services/WindowsStoreNotifierService.js";
+import type { mcpServerService as McpServerServiceType } from "../services/McpServerService.js";
 
 // Guard: process.argv CLI path should only be consumed by the first window
 let processArgvCliHandled = false;
@@ -57,6 +58,14 @@ let ccrConfigService: CcrConfigService | null = null;
 let autoUpdaterServiceRef: typeof AutoUpdaterServiceType | null = null;
 let agentNotificationServiceRef: typeof AgentNotificationServiceType | null = null;
 let windowsStoreNotifierServiceRef: typeof WindowsStoreNotifierServiceType | null = null;
+// Published by McpServerService at module scope, so it lands on whichever load
+// path reaches that module first (#11790). Read by main.ts to hand each
+// ProjectViewManager its `mcpViewActivity` callback: the MCP graph is behind a
+// dynamic import to stay off eager boot, and electron/window/ must not drag it
+// back on by importing the service directly. Null until something loads it,
+// which reads as "no view is protected" — the correct answer when there is no
+// server and therefore no session.
+let mcpServerServiceRef: typeof McpServerServiceType | null = null;
 
 // ── Public getters/setters (consumed by main.ts, menu.ts, shutdown.ts) ──
 export function getPtyClient(): PtyClient | null {
@@ -186,6 +195,12 @@ export function getCcrConfigService(): CcrConfigService | null {
 }
 export function setCcrConfigService(v: CcrConfigService | null): void {
   ccrConfigService = v;
+}
+export function getMcpServerServiceRef(): typeof McpServerServiceType | null {
+  return mcpServerServiceRef;
+}
+export function setMcpServerServiceRef(v: typeof McpServerServiceType | null): void {
+  mcpServerServiceRef = v;
 }
 export function getAutoUpdaterServiceRef(): typeof AutoUpdaterServiceType | null {
   return autoUpdaterServiceRef;

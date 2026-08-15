@@ -3318,3 +3318,309 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     expect(manager.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
   });
 });
+
+describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)", () => {
+  let win: ReturnType<typeof createMockWindow>;
+  /** Workspaces a live MCP session is bound to, and views with a call in flight. */
+  let boundWorkspaces: Set<string>;
+  let leasedWebContentsIds: Set<number>;
+
+  type MemInfo = { free: number; purgeable?: number; total: number };
+  const originalSystemMemoryInfo = (process as unknown as { getSystemMemoryInfo?: () => MemInfo })
+    .getSystemMemoryInfo;
+
+  function setAvailableMb(availableMb: number) {
+    Object.defineProperty(process, "getSystemMemoryInfo", {
+      configurable: true,
+      value: () => ({ free: availableMb * 1024, purgeable: 0, total: 8 * 1024 * 1024 }),
+    });
+  }
+
+  const BAND = { criticalMb: 1000, warningMb: 2000 };
+
+  const evictedProjectIds = () =>
+    vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.eviction")
+      .map(([, ctx]) => (ctx as { projectId: string }).projectId);
+
+  const evictionLogFor = (projectId: string) =>
+    vi
+      .mocked(logInfo)
+      .mock.calls.find(
+        ([event, ctx]) =>
+          event === "projectview.eviction" && (ctx as { projectId: string }).projectId === projectId
+      )?.[1] as Record<string, unknown> | undefined;
+
+  const skippedLog = (): Record<string, unknown> | undefined =>
+    vi
+      .mocked(logInfo)
+      .mock.calls.filter(([event]) => event === "projectview.eviction-skipped")
+      .pop()?.[1] as Record<string, unknown> | undefined;
+
+  function makeManager(cachedProjectViews: number) {
+    return new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews,
+      assistantBackendForProject,
+      isTerminalLive,
+      mcpViewActivity: (workspaceId: string, webContentsId: number) => ({
+        liveBinding: boundWorkspaces.has(workspaceId),
+        dispatchLease: leasedWebContentsIds.has(webContentsId),
+      }),
+    });
+  }
+
+  /** Three views: proj-a and proj-b cached (oldest-first), proj-c active. */
+  async function seedThreeViews(mgr: ProjectViewManager) {
+    const wcA = createMockWebContents();
+    mgr.registerInitialView({ webContents: wcA, setBounds: vi.fn() } as never, "proj-a", "/path/a");
+    await mgr.switchTo("proj-b", "/path/b");
+    await flushImmediates();
+    await mgr.switchTo("proj-c", "/path/c");
+    await flushImmediates();
+  }
+
+  const webContentsIdFor = (mgr: ProjectViewManager, projectId: string): number =>
+    mgr.getAllViews().find((v) => v.projectId === projectId)!.view.webContents.id;
+
+  const tickPressureCheck = (mgr: ProjectViewManager) =>
+    (mgr as unknown as { maybeEvictUnderPressure(): void }).maybeEvictUnderPressure();
+
+  beforeEach(() => {
+    nextWebContentsId = 100;
+    nextOsProcessId = 1000;
+    vi.clearAllMocks();
+    mockGetAllTerminals.mockReset();
+    mockGetAllTerminals.mockResolvedValue([]);
+    mockGetAppMetrics.mockReset();
+    mockGetAppMetrics.mockReturnValue([]);
+    assistantBackends.clear();
+    liveTerminals.clear();
+    boundWorkspaces = new Set();
+    leasedWebContentsIds = new Set();
+    win = createMockWindow();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "getSystemMemoryInfo", {
+      configurable: true,
+      value: originalSystemMemoryInfo,
+    });
+  });
+
+  describe("in-flight dispatch leases", () => {
+    it("evicts a newer view rather than the LRU one that is answering a dispatch", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      leasedWebContentsIds.add(webContentsIdFor(mgr, "proj-a"));
+
+      mgr.setCachedViewLimit(2);
+
+      // Destroying proj-a would strand the in-flight call and leave every later
+      // one on that session failing SESSION_BINDING_GONE.
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+      expect(evictedProjectIds()).toEqual(["proj-b"]);
+    });
+
+    it("survives the forced tier-2 reclaim, which collapses everything else", async () => {
+      // The lease is an absolute exclusion, safe only because it self-expires
+      // with the request that owns it.
+      const mgr = makeManager(3);
+      mgr.setMemoryPressurePolicy(BAND);
+      setAvailableMb(2500);
+      await seedThreeViews(mgr);
+      leasedWebContentsIds.add(webContentsIdFor(mgr, "proj-a"));
+
+      mgr.reclaimCachedViewsUnderPressure();
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+    });
+
+    it("becomes an ordinary candidate again the moment the dispatch settles", async () => {
+      const mgr = makeManager(3);
+      mgr.setMemoryPressurePolicy(BAND);
+      setAvailableMb(2500);
+      await seedThreeViews(mgr);
+      const wcIdA = webContentsIdFor(mgr, "proj-a");
+      leasedWebContentsIds.add(wcIdA);
+
+      mgr.reclaimCachedViewsUnderPressure();
+      expect(mgr.getAllViews().map((v) => v.projectId)).toContain("proj-a");
+
+      // Bounded, not permanent: this is the difference from the assistant floor.
+      leasedWebContentsIds.delete(wcIdA);
+      mgr.reclaimCachedViewsUnderPressure();
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+
+    it("counts a lease as a transient exclusion, not as part of the assistant floor", async () => {
+      // The over-cap log exists so extra resident renderers are attributable
+      // rather than reading as a leak. A lease resolves on its own, like the
+      // paint-gate and cold-switch bridges, so it must not inflate the
+      // persistent `protectedCount` a pinned assistant reports.
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      const wcA = mgr.getAllViews().find((v) => v.projectId === "proj-a")!.view.webContents;
+      assistantBackends.set("proj-a", { terminalId: "t-help-a", webContentsId: wcA.id });
+      liveTerminals.add("t-help-a");
+      leasedWebContentsIds.add(webContentsIdFor(mgr, "proj-b"));
+
+      mgr.setCachedViewLimit(1);
+
+      expect(mgr.getAllViews().length).toBe(3);
+      const skipped = skippedLog();
+      expect(skipped?.protectedCount).toBe(1);
+      expect(skipped?.protectedProjectIds).toEqual(["proj-a"]);
+      expect(skipped?.transientlyExcludedCount).toBe(1);
+    });
+
+    it("leases only the exact view, not every view of the workspace's project id", async () => {
+      // Keyed by WebContents id because that is what a pending request awaits;
+      // a replacement view after a cold start gets a new id and no stale
+      // protection.
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      leasedWebContentsIds.add(webContentsIdFor(mgr, "proj-a") + 9999);
+
+      mgr.setCachedViewLimit(1);
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+  });
+
+  describe("quiet bound sessions", () => {
+    it("evicts an active-agent view before a quiet bound one", async () => {
+      // An agent view is cheap to lose — its PTY lives in the pty-host and
+      // reconnects on switch-back. A bound view's destruction breaks the
+      // session's route with no recovery path, so it goes last.
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      boundWorkspaces.add("proj-a");
+      mockGetAllTerminals.mockResolvedValue([
+        { id: "t-b", projectId: "proj-b", agentState: "working" },
+      ]);
+      await mgr.initAgentStateCache(mockPtyClient as never);
+
+      mgr.setCachedViewLimit(2);
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+      expect(evictedProjectIds()).toEqual(["proj-b"]);
+    });
+
+    it("evicts an ordinary idle view before a quiet bound one", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      // proj-a is the LRU view, so pure LRU would take it first.
+      boundWorkspaces.add("proj-a");
+
+      mgr.setCachedViewLimit(2);
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+    });
+
+    it("still evicts a quiet bound view once nothing safer is left", async () => {
+      // The issue is explicit that this must NOT become a hard floor: enough
+      // concurrent bound sessions would otherwise defeat the pressure policy.
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      boundWorkspaces.add("proj-a");
+      boundWorkspaces.add("proj-b");
+
+      mgr.setCachedViewLimit(1);
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+      expect(evictedProjectIds()).toEqual(["proj-a", "proj-b"]);
+    });
+
+    it("yields to the forced tier-2 reclaim", async () => {
+      const mgr = makeManager(3);
+      mgr.setMemoryPressurePolicy(BAND);
+      setAvailableMb(2500);
+      await seedThreeViews(mgr);
+      boundWorkspaces.add("proj-a");
+      boundWorkspaces.add("proj-b");
+
+      mgr.reclaimCachedViewsUnderPressure();
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+
+    it("yields one at a time under graduated pressure, bound views last", async () => {
+      const mgr = makeManager(3);
+      mgr.setMemoryPressurePolicy(BAND);
+      setAvailableMb(2500);
+      await seedThreeViews(mgr);
+      boundWorkspaces.add("proj-a");
+
+      setAvailableMb(1200);
+      tickPressureCheck(mgr);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+
+      tickPressureCheck(mgr);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+
+    it("records the binding on the eviction log line so a broken session is traceable", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      boundWorkspaces.add("proj-a");
+      boundWorkspaces.add("proj-b");
+
+      mgr.setCachedViewLimit(1);
+
+      expect(evictionLogFor("proj-a")?.boundMcpSession).toBe(true);
+    });
+
+    it("leaves the assistant floor above it — a bound view goes first", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      const wcA = mgr.getAllViews().find((v) => v.projectId === "proj-a")!.view.webContents;
+      assistantBackends.set("proj-a", { terminalId: "t-help-a", webContentsId: wcA.id });
+      liveTerminals.add("t-help-a");
+      boundWorkspaces.add("proj-b");
+
+      mgr.setCachedViewLimit(1);
+
+      // proj-a holds a live assistant (unconditional floor) so the bound-but-quiet
+      // proj-b is what the pass can actually take.
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+      expect(evictedProjectIds()).toEqual(["proj-b"]);
+    });
+
+    it("never protects the workspace the user is actively looking at from being active", async () => {
+      // The active view is excluded before any tiering, bound or not — a
+      // binding must not change which view is on screen.
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      boundWorkspaces.add("proj-c");
+
+      mgr.setCachedViewLimit(1);
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+  });
+
+  it("behaves exactly as before when no mcpViewActivity callback is wired", async () => {
+    const mgr = new ProjectViewManager(win as never, {
+      dirname: "/test",
+      paintGateTimeoutMs: 0,
+      paintGateHardTimeoutMs: 0,
+      warmPaintGateTimeoutMs: 0,
+      warmPaintGateHardTimeoutMs: 0,
+      cachedProjectViews: 3,
+      assistantBackendForProject,
+      isTerminalLive,
+    });
+    await seedThreeViews(mgr);
+
+    mgr.setCachedViewLimit(1);
+
+    expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+  });
+});

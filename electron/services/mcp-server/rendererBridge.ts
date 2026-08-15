@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import type { WindowRegistry } from "../../window/WindowRegistry.js";
 import { getProjectViewManager } from "../../window/windowRef.js";
 import { getWebContentsForProject } from "../../window/webContentsRegistry.js";
+import { unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
+import type { WorkspaceViewLeaseRegistry } from "./workspaceViewLease.js";
 import type { ActionContext, ActionManifestEntry } from "../../../shared/types/actions.js";
 import type { McpBearerIdentity } from "../../../shared/types/ipc/mcpServer.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -79,10 +81,106 @@ export class RendererBridgeUnavailableError extends Error {
   }
 }
 
+/**
+ * Which binding a bridge operation is routed by, or `undefined` for the
+ * unpinned focused-window path (#11790).
+ *
+ * A routed operation targets a view the user is not looking at, which is what
+ * makes it different in three ways at once, all handled off this one value:
+ *
+ * 1. The target may be CDP-frozen by the efficiency profile, so it must be
+ *    thawed before the dispatch IPC — a frozen renderer cannot run JS and the
+ *    message would sit in Mojo until the bridge deadline fired.
+ * 2. It must hold an eviction lease while the request is outstanding, or a
+ *    memory-pressure pass can destroy the very view being awaited.
+ * 3. Losing the target is a *binding* failure (`SESSION_BINDING_GONE`), not a
+ *    generic retriable execution error — the same classification the resolver
+ *    already applies when the target is gone before the send.
+ *
+ * The unpinned path opts out of all three: it resolves the active view, which
+ * is never frozen and never an eviction candidate, so thawing it would spend a
+ * CDP round trip per tool call for nothing.
+ */
+type BridgeRoute =
+  { kind: "workspace"; workspaceId: string } | { kind: "pinned"; webContentsId: number };
+
+/**
+ * The error a routed operation should fail with when its target dies while the
+ * request is in flight. Mirrors what the resolver throws when the target is
+ * already gone, so "destroyed just before" and "destroyed just after" report
+ * the same thing instead of the second one degrading to `EXECUTION_ERROR`.
+ */
+function routeLostError(route: BridgeRoute): McpRouteBindingError {
+  return route.kind === "workspace"
+    ? new WorkspaceBindingError(route.workspaceId, "not-found")
+    : new SessionBindingError(route.webContentsId);
+}
+
+/** Names the unreachable target in a deadline message, so a timeout says which view went quiet. */
+function routeTimeoutSuffix(route: BridgeRoute | undefined, timeoutMs: number): string {
+  if (!route) return "";
+  const target =
+    route.kind === "workspace"
+      ? `workspace ${route.workspaceId}`
+      : `pinned view ${route.webContentsId}`;
+  return ` — the view bound to ${target} did not answer within ${Math.round(timeoutMs / 1000)}s`;
+}
+
+/**
+ * Thaw a routed target, then send — the fix for the stranded-dispatch half of
+ * #11790.
+ *
+ * Under the efficiency profile a cached background view is CDP-frozen, and a
+ * frozen renderer cannot run JS: the dispatch IPC queues in Mojo and nothing
+ * ever answers it, so the caller waits out the full bridge deadline for what
+ * looks like an execution failure. Chromium never auto-resumes a frozen
+ * renderer on focus or re-attach, so an explicit `"active"` is the only thing
+ * that rescues it.
+ *
+ * Awaited, unlike the fire-and-forget `void unfreezeWebContents(...)` at the
+ * lifecycle call sites: those only need the view running again eventually,
+ * whereas the IPC queued here is precisely what the thaw has to precede.
+ *
+ * CPU throttling is deliberately left in place, matching `unfreezeActiveAgentViews`.
+ * `Emulation.setCPUThrottlingRate` is orthogonal to lifecycle state and slows
+ * JS without suspending it, so a thawed-but-throttled view still answers — and
+ * clearing it would hand a background workspace the CPU budget of a foreground
+ * one. Nothing here attaches, shows, focuses, or activates the view either: a
+ * bound session driving project A must never disturb what the user is looking at.
+ */
+function thawThenSend(
+  webContents: Electron.WebContents,
+  isStillPending: () => boolean,
+  send: () => void
+): void {
+  void unfreezeWebContents(webContents)
+    .catch(() => {
+      // `unfreezeWebContents` already swallows the expected teardown/navigation
+      // CDP errors, so anything landing here is unexpected. Refusing to send
+      // would convert a thaw hiccup into a guaranteed deadline failure; sending
+      // anyway leaves a genuinely-still-frozen view failing exactly as it did
+      // before this path existed, and costs nothing when the thaw did work.
+    })
+    .then(() => {
+      // The deadline may have fired, or the view may have been destroyed, while
+      // the CDP round trip was outstanding. Either way the request is already
+      // settled and its lease released, so sending now would emit an IPC for a
+      // requestId nothing is waiting on.
+      if (!isStillPending() || webContents.isDestroyed()) return;
+      send();
+    });
+}
+
 export function createRendererBridge(
   pendingManifests: Map<string, PendingRequest<ActionManifestEntry[]>>,
   pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>,
-  getRegistry: () => WindowRegistry | null
+  getRegistry: () => WindowRegistry | null,
+  /**
+   * Eviction leases for routed operations (#11790). Optional so a bridge built
+   * without one (tests, older construction paths) simply takes no leases —
+   * views then stay ordinary eviction candidates, the pre-#11790 behavior.
+   */
+  viewLeases?: WorkspaceViewLeaseRegistry
 ) {
   let cachedManifest: ActionManifestEntry[] | null = null;
 
@@ -236,7 +334,8 @@ export function createRendererBridge(
 
   function sendManifestRequest(
     resolveWebContents: () => Electron.WebContents,
-    onResolved: (manifest: ActionManifestEntry[]) => void
+    onResolved: (manifest: ActionManifestEntry[]) => void,
+    route?: BridgeRoute
   ): Promise<ActionManifestEntry[]> {
     return new Promise((resolve, reject) => {
       let webContents: Electron.WebContents;
@@ -249,11 +348,21 @@ export function createRendererBridge(
 
       const requestId = randomUUID();
       const webContentsId = webContents.id;
+      // Taken before the thaw round trip below, so the window between picking
+      // this view and sending to it is covered too — an eviction pass landing
+      // inside a CDP round trip would otherwise destroy the target we just
+      // resolved. `tools/list` is usually a bound session's first operation and
+      // has the shorter deadline of the two, so it is the more exposed one.
+      const releaseLease = route ? (viewLeases?.acquire(webContentsId) ?? null) : null;
       const timer = setTimeout(() => {
         const pending = pendingManifests.get(requestId);
         pending?.destroyedCleanup?.();
         pendingManifests.delete(requestId);
-        reject(new Error("Manifest request timed out"));
+        reject(
+          new Error(
+            `Manifest request timed out${routeTimeoutSuffix(route, MCP_MANIFEST_REQUEST_TIMEOUT_MS)}`
+          )
+        );
       }, MCP_MANIFEST_REQUEST_TIMEOUT_MS);
 
       const onDestroyed = () => {
@@ -261,15 +370,26 @@ export function createRendererBridge(
         if (!pending) return;
         clearTimeout(pending.timer);
         pendingManifests.delete(requestId);
-        pending.reject(new Error("MCP renderer bridge destroyed"));
+        settle();
+        pending.reject(route ? routeLostError(route) : new Error("MCP renderer bridge destroyed"));
       };
       webContents.once("destroyed", onDestroyed);
-      const destroyedCleanup = () => {
+      // Idempotent: a request can settle through the response, the deadline,
+      // WebContents destruction, or a synchronous `send()` throw, and more than
+      // one of those can run for the same request. A double release would
+      // decrement another caller's lease; a missed one would pin the view for
+      // the rest of the session, quietly recreating the permanent eviction
+      // floor #11790 exists to avoid.
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
         try {
           webContents.removeListener("destroyed", onDestroyed);
         } catch {
           // best-effort cleanup; webContents may already be gone
         }
+        releaseLease?.();
       };
 
       pendingManifests.set(requestId, {
@@ -280,16 +400,24 @@ export function createRendererBridge(
         reject,
         timer,
         webContentsId,
-        destroyedCleanup,
+        destroyedCleanup: settle,
       });
 
-      try {
-        webContents.send(CHANNELS.MCP_SERVER_GET_MANIFEST_REQUEST, { requestId });
-      } catch (err) {
-        clearTimeout(timer);
-        destroyedCleanup();
-        pendingManifests.delete(requestId);
-        reject(normalizeError(err, "Failed to request action manifest"));
+      const send = () => {
+        try {
+          webContents.send(CHANNELS.MCP_SERVER_GET_MANIFEST_REQUEST, { requestId });
+        } catch (err) {
+          clearTimeout(timer);
+          settle();
+          pendingManifests.delete(requestId);
+          reject(normalizeError(err, "Failed to request action manifest"));
+        }
+      };
+
+      if (route) {
+        thawThenSend(webContents, () => pendingManifests.has(requestId), send);
+      } else {
+        send();
       }
     });
   }
@@ -300,7 +428,8 @@ export function createRendererBridge(
     args: unknown,
     confirmed: boolean,
     contextOverride?: ActionContext,
-    callerInfo?: McpBearerIdentity
+    callerInfo?: McpBearerIdentity,
+    route?: BridgeRoute
   ): Promise<DispatchEnvelope> {
     return new Promise((resolve, reject) => {
       let webContents: Electron.WebContents;
@@ -313,11 +442,18 @@ export function createRendererBridge(
 
       const requestId = randomUUID();
       const webContentsId = webContents.id;
+      // See sendManifestRequest: acquired before the thaw so the resolve → send
+      // window is covered, released by `settle()` on every outcome.
+      const releaseLease = route ? (viewLeases?.acquire(webContentsId) ?? null) : null;
       const timer = setTimeout(() => {
         const pending = pendingDispatches.get(requestId);
         pending?.destroyedCleanup?.();
         pendingDispatches.delete(requestId);
-        reject(new Error(`Action dispatch timed out: ${actionId}`));
+        reject(
+          new Error(
+            `Action dispatch timed out: ${actionId}${routeTimeoutSuffix(route, MCP_DISPATCH_TIMEOUT_MS)}`
+          )
+        );
       }, MCP_DISPATCH_TIMEOUT_MS);
 
       const onDestroyed = () => {
@@ -325,15 +461,20 @@ export function createRendererBridge(
         if (!pending) return;
         clearTimeout(pending.timer);
         pendingDispatches.delete(requestId);
-        pending.reject(new Error("MCP renderer bridge destroyed"));
+        settle();
+        pending.reject(route ? routeLostError(route) : new Error("MCP renderer bridge destroyed"));
       };
       webContents.once("destroyed", onDestroyed);
-      const destroyedCleanup = () => {
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
         try {
           webContents.removeListener("destroyed", onDestroyed);
         } catch {
           // best-effort cleanup; webContents may already be gone
         }
+        releaseLease?.();
       };
 
       pendingDispatches.set(requestId, {
@@ -341,29 +482,37 @@ export function createRendererBridge(
         reject,
         timer,
         webContentsId,
-        destroyedCleanup,
+        destroyedCleanup: settle,
       });
 
-      try {
-        webContents.send(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, {
-          requestId,
-          actionId,
-          args,
-          confirmed,
-          // Only pinned help-session dispatch passes a contextOverride; the
-          // unpinned external/api-key path leaves this undefined so the
-          // renderer keeps its live focused-window context (#8317).
-          context: contextOverride,
-          // Display-only requesting-bearer identity for the confirm dialog
-          // (#9157). Only the unpinned external path supplies it; absent for
-          // pinned help-session dispatch so the dialog stays provenance-free.
-          callerInfo,
-        });
-      } catch (err) {
-        clearTimeout(timer);
-        destroyedCleanup();
-        pendingDispatches.delete(requestId);
-        reject(normalizeError(err, `Failed to dispatch action: ${actionId}`));
+      const send = () => {
+        try {
+          webContents.send(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, {
+            requestId,
+            actionId,
+            args,
+            confirmed,
+            // Only pinned help-session dispatch passes a contextOverride; the
+            // unpinned external/api-key path leaves this undefined so the
+            // renderer keeps its live focused-window context (#8317).
+            context: contextOverride,
+            // Display-only requesting-bearer identity for the confirm dialog
+            // (#9157). Only the unpinned external path supplies it; absent for
+            // pinned help-session dispatch so the dialog stays provenance-free.
+            callerInfo,
+          });
+        } catch (err) {
+          clearTimeout(timer);
+          settle();
+          pendingDispatches.delete(requestId);
+          reject(normalizeError(err, `Failed to dispatch action: ${actionId}`));
+        }
+      };
+
+      if (route) {
+        thawThenSend(webContents, () => pendingDispatches.has(requestId), send);
+      } else {
+        send();
       }
     });
   }
@@ -447,7 +596,13 @@ export function createRendererBridge(
           perWebContentsCache.set(id, manifest);
           perWebContentsInflight.delete(id);
         }
-      }
+      },
+      // A pinned view is a project view like any other: it can be cached,
+      // frozen and evicted while its help session is still live (#11790).
+      // Callers that coalesce onto this in-flight fetch inherit its thaw and
+      // its lease — the lease covers the fetch, not the caller, so one is
+      // enough for all of them.
+      { kind: "pinned", webContentsId: id }
     );
     perWebContentsInflight.set(id, { token, promise: fetchPromise });
     // Drop the inflight marker on failure so the next call retries — never cache
@@ -479,7 +634,9 @@ export function createRendererBridge(
       actionId,
       args,
       confirmed,
-      contextOverride
+      contextOverride,
+      undefined,
+      { kind: "pinned", webContentsId: id }
     );
   }
 
@@ -497,7 +654,16 @@ export function createRendererBridge(
     } catch (err) {
       return Promise.reject(normalizeError(err, "MCP workspace binding unavailable"));
     }
-    return requestManifestForWebContents(id);
+    return requestManifestForWebContents(id).catch((err: unknown) => {
+      // The shared fetch reports a mid-flight teardown as a dead *pin* — "do
+      // not retry", which is right for a help session whose window closed but
+      // wrong for a workspace binding. The workspace id outlives the view, so
+      // reopening it makes the very same call work (#11790).
+      if (err instanceof SessionBindingError) {
+        throw new WorkspaceBindingError(workspaceId, "not-found");
+      }
+      throw err;
+    });
   }
 
   /**
@@ -517,7 +683,10 @@ export function createRendererBridge(
       () => getWorkspaceWebContents(workspaceId),
       actionId,
       args,
-      confirmed
+      confirmed,
+      undefined,
+      undefined,
+      { kind: "workspace", workspaceId }
     );
   }
 

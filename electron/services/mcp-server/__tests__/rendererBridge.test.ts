@@ -51,14 +51,32 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWebContentsForProject: (projectId: string) => mockProjectViews.get(projectId) ?? [],
 }));
 
+// `unfreezeWebContents` is the only member the bridge imports. Mocked so the
+// routed paths' thaw is observable and so the real CDP helper doesn't warn its
+// way through every test against a WebContents fake with no `debugger`.
+vi.mock("../../../utils/webContentsLifecycle.js", () => ({
+  unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
+}));
+
 import {
   createRendererBridge,
   SessionBindingError,
   WorkspaceBindingError,
   McpRouteBindingError,
 } from "../rendererBridge.js";
+import { unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
+import { WorkspaceViewLeaseRegistry } from "../workspaceViewLease.js";
 import type { PendingRequest, DispatchEnvelope } from "../shared.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
+
+/**
+ * Drain the microtask chain a routed send awaits before it reaches
+ * `webContents.send` (#11790). A routed operation thaws its target first — a
+ * real await — so a test that answers as the renderer would before that
+ * settles clears the pending entry, and the send then (correctly) never
+ * happens. A macrotask hop drains the whole chain regardless of its length.
+ */
+const flushThaw = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 interface FakeWebContents {
   id: number;
@@ -263,7 +281,11 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
     await Promise.resolve();
     wc.triggerDestroyed();
 
-    await expect(promise).rejects.toThrow(/MCP renderer bridge destroyed/);
+    // Same classification as a view already gone before the send (#11790):
+    // "destroyed a moment later" is still the route dying, so it must not
+    // degrade to an opaque retriable EXECUTION_ERROR.
+    await expect(promise).rejects.toBeInstanceOf(SessionBindingError);
+    await expect(promise).rejects.toThrow(/Do not retry/);
   });
 });
 
@@ -409,9 +431,11 @@ describe("rendererBridge — per-WebContents manifest cache (#9887)", () => {
       manual: true,
     });
 
-    // Kick off a fetch that stays in flight.
+    // Kick off a fetch that stays in flight. The routed paths thaw before they
+    // send (#11790), so the request only reaches the renderer a chain of
+    // microtasks later.
     const inflight = bridge.requestManifestForWebContents(161);
-    await Promise.resolve();
+    await flushThaw();
     expect(requestIds).toHaveLength(1);
 
     // The server clears all caches (stop/restart) while the fetch is pending.
@@ -454,7 +478,7 @@ describe("rendererBridge — per-WebContents manifest cache (#9887)", () => {
     await Promise.resolve();
     wc.triggerDestroyed();
 
-    await expect(inflight).rejects.toThrow(/MCP renderer bridge destroyed/);
+    await expect(inflight).rejects.toBeInstanceOf(SessionBindingError);
     expect(bridge.getCachedManifestForWebContents(181)).toBeNull();
   });
 
@@ -1047,7 +1071,8 @@ describe("rendererBridge — workspace-bound routing (#11789)", () => {
   }
 
   /** Settle whichever dispatch the bridge just sent, as the renderer would. */
-  function settleDispatch(): void {
+  async function settleDispatch(): Promise<void> {
+    await flushThaw();
     const [requestId] = [...pendingDispatches.keys()];
     mockIpcMain.emit(
       CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
@@ -1061,7 +1086,7 @@ describe("rendererBridge — workspace-bound routing (#11789)", () => {
     registerView("ws-b", 202);
 
     const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
-    settleDispatch();
+    await settleDispatch();
     await promise;
 
     expect(wc.send).toHaveBeenCalledWith(
@@ -1076,12 +1101,12 @@ describe("rendererBridge — workspace-bound routing (#11789)", () => {
     // appearing (or being focused) may move workspace A's session.
     const wcA = registerView("ws-a", 101);
     const promiseOne = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
-    settleDispatch();
+    await settleDispatch();
     await promiseOne;
 
     registerView("ws-b", 202);
     const promiseTwo = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
-    settleDispatch();
+    await settleDispatch();
     await promiseTwo;
 
     expect(wcA.send).toHaveBeenCalledTimes(2);
@@ -1101,7 +1126,7 @@ describe("rendererBridge — workspace-bound routing (#11789)", () => {
 
     const replacement = registerView("ws-a", 303);
     const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
-    settleDispatch();
+    await settleDispatch();
     await promise;
 
     expect(replacement.send).toHaveBeenCalled();
@@ -1166,5 +1191,288 @@ describe("rendererBridge — workspace-bound routing (#11789)", () => {
     // are unresolvable — losing a label must never cost a working binding.
     registerView("ws-a", 101);
     expect(bridge.resolveWorkspaceBinding("ws-a")).toEqual({ workspaceId: "ws-a" });
+  });
+});
+
+describe("rendererBridge — thaw and eviction lease for routed operations (#11790)", () => {
+  let pendingManifests: Map<string, PendingRequest<ActionManifestEntry[]>>;
+  let pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>;
+  let leases: WorkspaceViewLeaseRegistry;
+  let bridge: ReturnType<typeof createRendererBridge>;
+
+  beforeEach(() => {
+    mockIpcMain.removeAllListeners();
+    mockWebContentsRegistry.clear();
+    mockProjectViews.clear();
+    vi.mocked(unfreezeWebContents).mockClear();
+    vi.mocked(unfreezeWebContents).mockResolvedValue(undefined);
+    pendingManifests = new Map();
+    pendingDispatches = new Map();
+    leases = new WorkspaceViewLeaseRegistry();
+    bridge = createRendererBridge(pendingManifests, pendingDispatches, () => null, leases);
+    bridge.setupListeners([]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function registerView(workspaceId: string, id: number): FakeWebContents {
+    const wc = makeWebContents(id);
+    mockWebContentsRegistry.set(id, wc);
+    mockProjectViews.set(workspaceId, [...(mockProjectViews.get(workspaceId) ?? []), wc]);
+    return wc;
+  }
+
+  function settlePendingDispatch(webContentsId: number): void {
+    const [requestId] = [...pendingDispatches.keys()];
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: webContentsId } },
+      { requestId, result: { ok: true, result: "done" } }
+    );
+  }
+
+  it("thaws the bound view before the dispatch IPC, not after", async () => {
+    // The whole defect: a CDP-frozen renderer cannot run JS, so the dispatch
+    // sits in Mojo unanswered until the 30s bridge deadline. Sending first and
+    // thawing after would not fix it — the ordering is the fix.
+    const wc = registerView("ws-a", 101);
+    let thawedBeforeSend: boolean | null = null;
+    wc.send.mockImplementation(() => {
+      thawedBeforeSend = vi.mocked(unfreezeWebContents).mock.calls.length > 0;
+    });
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    await flushThaw();
+
+    expect(thawedBeforeSend).toBe(true);
+    expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(wc);
+
+    settlePendingDispatch(101);
+    await promise;
+  });
+
+  it("thaws a pinned view too — a help session's view is an ordinary cached view", async () => {
+    const wc = makeWebContents(505);
+    mockWebContentsRegistry.set(505, wc);
+
+    const promise = bridge.dispatchActionForWebContents(505, "actions.list", {}, false);
+    await flushThaw();
+
+    expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(wc);
+
+    settlePendingDispatch(505);
+    await promise;
+  });
+
+  it("thaws before the manifest IPC as well — tools/list has the shorter deadline", async () => {
+    const wc = registerView("ws-a", 101);
+
+    const promise = bridge.requestManifestForWorkspace("ws-a");
+    await flushThaw();
+
+    expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(wc);
+
+    const [requestId] = [...pendingManifests.keys()];
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE,
+      { sender: { id: 101 } },
+      { requestId, manifest: [] }
+    );
+    await promise;
+  });
+
+  it("does not thaw the unpinned focused-window path", async () => {
+    // That path resolves the ACTIVE view, which is never frozen and never an
+    // eviction candidate. Thawing it would spend a CDP round trip per tool
+    // call for nothing.
+    await expect(bridge.dispatchAction("actions.list", {}, false)).rejects.toThrow(
+      /renderer bridge unavailable/
+    );
+    expect(vi.mocked(unfreezeWebContents)).not.toHaveBeenCalled();
+  });
+
+  it("holds a lease for the life of the dispatch and releases it on the response", async () => {
+    registerView("ws-a", 101);
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    // Taken synchronously, before the thaw round trip — an eviction pass
+    // landing inside that window would otherwise destroy the view we just
+    // resolved.
+    expect(leases.has(101)).toBe(true);
+
+    await flushThaw();
+    expect(leases.has(101)).toBe(true);
+
+    settlePendingDispatch(101);
+    await promise;
+
+    expect(leases.has(101)).toBe(false);
+  });
+
+  it("releases the lease when the dispatch times out", async () => {
+    vi.useFakeTimers();
+    registerView("ws-a", 101);
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    const assertion = expect(promise).rejects.toThrow(/Action dispatch timed out/);
+    expect(leases.has(101)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    await assertion;
+
+    // A leaked lease would pin the view for the rest of the session, quietly
+    // recreating the permanent eviction floor this design avoids.
+    expect(leases.has(101)).toBe(false);
+  });
+
+  it("names the unreachable workspace in the timeout message", async () => {
+    vi.useFakeTimers();
+    registerView("ws-a", 101);
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    const assertion = expect(promise).rejects.toThrow(
+      /Action dispatch timed out: terminal\.list.*workspace ws-a.*30s/
+    );
+    await vi.advanceTimersByTimeAsync(31_000);
+    await assertion;
+  });
+
+  it("releases the lease when the view is destroyed mid-dispatch", async () => {
+    const wc = registerView("ws-a", 101);
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    expect(leases.has(101)).toBe(true);
+
+    wc.triggerDestroyed();
+
+    await expect(promise).rejects.toBeInstanceOf(WorkspaceBindingError);
+    expect(leases.has(101)).toBe(false);
+  });
+
+  it("reports a view destroyed mid-dispatch as a workspace route loss, not a dead pin", async () => {
+    // "Do not retry" is right for a help session whose window closed, and wrong
+    // for a workspace binding: the workspace id outlives the view, so reopening
+    // it makes the very same call work.
+    const wc = registerView("ws-a", 101);
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    wc.triggerDestroyed();
+
+    await expect(promise).rejects.toMatchObject({
+      code: "SESSION_BINDING_GONE",
+      reason: "not-found",
+    });
+    await expect(promise).rejects.toThrow(/Reopen that workspace and retry/);
+  });
+
+  it("reports a workspace manifest fetch destroyed mid-flight as a workspace route loss", async () => {
+    const wc = registerView("ws-a", 101);
+    const promise = bridge.requestManifestForWorkspace("ws-a");
+    wc.triggerDestroyed();
+
+    await expect(promise).rejects.toBeInstanceOf(WorkspaceBindingError);
+    await expect(promise).rejects.toThrow(/Reopen that workspace and retry/);
+  });
+
+  it("releases the lease when the send throws", async () => {
+    const wc = registerView("ws-a", 101);
+    wc.send.mockImplementation(() => {
+      throw new Error("send blew up");
+    });
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    // `normalizeError` passes a real Error straight through, so the renderer's
+    // own failure is what surfaces — the fallback text is for non-Error throws.
+    await expect(promise).rejects.toThrow(/send blew up/);
+    expect(leases.has(101)).toBe(false);
+  });
+
+  it("keeps the view leased until the last of several concurrent dispatches settles", async () => {
+    registerView("ws-a", 101);
+
+    const first = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    const second = bridge.dispatchActionForWorkspace("ws-a", "worktree.list", {}, false);
+    await flushThaw();
+
+    const [firstId, secondId] = [...pendingDispatches.keys()];
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 101 } },
+      { requestId: firstId, result: { ok: true, result: "one" } }
+    );
+    await first;
+    expect(leases.has(101)).toBe(true);
+
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 101 } },
+      { requestId: secondId, result: { ok: true, result: "two" } }
+    );
+    await second;
+    expect(leases.has(101)).toBe(false);
+  });
+
+  it("takes no lease when the target cannot be resolved at all", async () => {
+    await expect(
+      bridge.dispatchActionForWorkspace("ws-missing", "terminal.list", {}, false)
+    ).rejects.toBeInstanceOf(WorkspaceBindingError);
+    expect(vi.mocked(unfreezeWebContents)).not.toHaveBeenCalled();
+  });
+
+  it("does not send after a deadline that fired while the thaw was outstanding", async () => {
+    vi.useFakeTimers();
+    const wc = registerView("ws-a", 101);
+    // A thaw that never settles until we let it — the window in which the
+    // request can time out underneath.
+    let releaseThaw: () => void = () => {};
+    vi.mocked(unfreezeWebContents).mockReturnValue(
+      new Promise<void>((resolve) => {
+        releaseThaw = resolve;
+      })
+    );
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    const assertion = expect(promise).rejects.toThrow(/Action dispatch timed out/);
+    await vi.advanceTimersByTimeAsync(31_000);
+    await assertion;
+
+    releaseThaw();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Sending now would emit an IPC for a requestId nothing is waiting on.
+    expect(wc.send).not.toHaveBeenCalled();
+    expect(leases.has(101)).toBe(false);
+  });
+
+  it("still sends when the thaw itself fails — a hiccup must not guarantee a timeout", async () => {
+    const wc = registerView("ws-a", 101);
+    vi.mocked(unfreezeWebContents).mockRejectedValue(new Error("CDP exploded"));
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    await flushThaw();
+
+    expect(wc.send).toHaveBeenCalled();
+
+    settlePendingDispatch(101);
+    await promise;
+  });
+
+  it("takes no lease when the bridge was built without a registry", async () => {
+    // Older construction paths and focused unit tests keep the pre-#11790
+    // behavior: views stay ordinary eviction candidates.
+    const bare = createRendererBridge(pendingManifests, pendingDispatches, () => null);
+    bare.setupListeners([]);
+    const wc = registerView("ws-bare", 909);
+
+    const promise = bare.dispatchActionForWorkspace("ws-bare", "terminal.list", {}, false);
+    await flushThaw();
+
+    expect(leases.has(909)).toBe(false);
+    // The thaw is independent of the lease and still happens.
+    expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(wc);
+
+    settlePendingDispatch(909);
+    await promise;
   });
 });
