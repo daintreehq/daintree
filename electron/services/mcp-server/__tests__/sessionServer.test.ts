@@ -4336,7 +4336,7 @@ describe("workspace-bound external sessions (#11789)", () => {
       expect(deps.dispatchAction).not.toHaveBeenCalled();
     });
 
-    it("still runs main-process tools, which never reach a renderer dialog", async () => {
+    it("still runs main-process tools, which return before the renderer check", async () => {
       const deps = boundDeps({
         requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list")]),
         handleSkillsSearch: vi.fn(() => ({ skills: [] })),

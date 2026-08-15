@@ -720,45 +720,6 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
       }
 
-      // An action the manifest doesn't describe has unknown danger, and unknown
-      // is not the same as safe. A stale or partial manifest that omits a
-      // newly-registered confirm-gated action would otherwise let exactly the
-      // call this guard exists to refuse through to a renderer nobody is
-      // watching. Main-process tools are exempt: they never reach a renderer
-      // and so never raise a dialog. Refusing an unknown id costs nothing —
-      // dispatch would reject it anyway — while allowing one costs the
-      // guarantee.
-      const isMainProcessTool =
-        actionId === MCP_SURFACE_TOOL_ID ||
-        actionId === TERMINAL_WAIT_UNTIL_IDLE_TOOL ||
-        actionId === TERMINAL_WAIT_UNTIL_IDLE_BATCH_TOOL ||
-        actionId === PROJECT_RUN_CHECK_TOOL ||
-        actionId === SKILLS_SEARCH_TOOL ||
-        actionId === SKILLS_LOAD_TOOL ||
-        actionId === HELP_DISPLAY_IMAGE_TOOL;
-      if (!isMainProcessTool && !boundManifest.some((entry) => entry.id === actionId)) {
-        const message =
-          `Action '${actionId}' is not present in workspace '${workspaceBinding?.workspaceId}'s action surface, ` +
-          `so this workspace-bound session cannot establish whether it needs confirmation. The action was not run.`;
-        try {
-          appendAuditRecord({
-            toolId: actionId,
-            sessionId,
-            tier,
-            args,
-            durationMs: Date.now() - startedAt,
-            outcome: {
-              kind: "result",
-              value: { ok: false, error: { code: "NOT_FOUND", message } },
-            },
-            capturedTurnId,
-          });
-        } catch (err) {
-          console.error("[MCP] Failed to append audit record:", err);
-        }
-        return buildToolError({ code: "NOT_FOUND", message });
-      }
-
       if (withheldIds.has(actionId)) {
         const message =
           `Action '${actionId}' requires confirmation, and this MCP session is bound to workspace ` +
@@ -1251,6 +1212,27 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
 
         const entry = await lookupManifestEntry(actionId, getCachedManifest, requestManifest);
+
+        // An action the manifest doesn't describe has unknown danger, and
+        // unknown is not safe: a stale or partial manifest that omits a
+        // newly-registered confirm-gated action would otherwise let exactly the
+        // call the guard above exists to refuse reach a renderer nobody is
+        // watching (#11789). Sited here rather than beside that guard because
+        // every main-process short circuit has already returned by this point,
+        // so whatever is still running is renderer-bound by construction —
+        // which beats maintaining a list of exempt tool ids that would silently
+        // rot the next time a main-process tool is added.
+        if (sessionSurface.workspaceBound && tier === "external" && entry === undefined) {
+          const message =
+            `Action '${actionId}' is not present in workspace '${workspaceBinding?.workspaceId}'s action surface, ` +
+            `so this workspace-bound session cannot establish whether it needs confirmation. The action was not run.`;
+          outcome = {
+            kind: "result",
+            value: { ok: false, error: { code: "NOT_FOUND", message } },
+          };
+          return buildToolError({ code: "NOT_FOUND", message });
+        }
+
         // Announce the in-flight call now that `danger` is known — before the
         // host-side confirmation wait, so the strip can show "awaiting
         // confirmation" while the user decides on a `danger: "confirm"`

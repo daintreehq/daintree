@@ -1214,7 +1214,6 @@ export class HttpLifecycle {
       }
     } else if (req.method === "POST" && url.pathname === "/messages") {
       const sid = url.searchParams.get("sessionId") ?? "";
-      const session = this.deps.sessionStore.sessions.get(sid);
 
       // SSE sessions can never be workspace-bound — the GET /sse handshake
       // refuses a selector outright. A selector arriving on the message leg is
@@ -1235,6 +1234,7 @@ export class HttpLifecycle {
         return;
       }
 
+      const session = this.deps.sessionStore.sessions.get(sid);
       if (session) {
         this.deps.sessionStore.resetIdleTimer(sid);
         this.markBearerActive(sid);
