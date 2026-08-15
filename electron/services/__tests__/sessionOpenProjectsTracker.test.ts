@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   addSessionOpenProject,
   getPreviousSessionOpenProjects,
@@ -6,6 +6,7 @@ import {
   removeSessionOpenProject,
   resetSessionOpenProjectsTrackerForTests,
   retrySessionOpenProjectsIfDirty,
+  type SessionOpenProjectsWriter,
 } from "../sessionOpenProjectsTracker.js";
 
 /**
@@ -21,7 +22,7 @@ describe("session-open projects tracker", () => {
    * on exactly that distinction.
    */
   let stored: string[] | null;
-  let write: ReturnType<typeof vi.fn>;
+  let write: Mock<SessionOpenProjectsWriter>;
   let warn: ReturnType<typeof vi.spyOn>;
 
   const init = (opts?: { previous?: string[]; readOnly?: boolean; launchAtMs?: number }) => {
@@ -36,7 +37,7 @@ describe("session-open projects tracker", () => {
 
   beforeEach(() => {
     stored = null;
-    write = vi.fn((ids: ReadonlySet<string>) => {
+    write = vi.fn<SessionOpenProjectsWriter>((ids) => {
       stored = [...ids].sort();
     });
     warn = vi.spyOn(console, "warn").mockImplementation(() => {});
