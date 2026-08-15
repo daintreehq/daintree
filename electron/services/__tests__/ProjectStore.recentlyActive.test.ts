@@ -86,7 +86,17 @@ vi.mock("../projectQuarantineCleanup.js", () => ({
   cleanupQuarantinedProjectFiles: vi.fn(),
 }));
 
-import { ProjectStore, resetLaunchSnapshotForTests } from "../ProjectStore.js";
+import { ProjectStore } from "../ProjectStore.js";
+import {
+  initSessionOpenProjectsTracker,
+  resetSessionOpenProjectsTrackerForTests,
+} from "../sessionOpenProjectsTracker.js";
+import { writeSessionOpenProjects } from "../persistence/sessionOpenProjectsStore.js";
+import {
+  SESSION_OPEN_PROJECTS_KEY,
+  parseSessionOpenProjects,
+  serializeSessionOpenProjects,
+} from "../persistence/sessionOpenProjects.js";
 
 /** Comfortably outside the recency window, without naming its length. */
 const LONG_AGO = Date.now() - 24 * 60 * 60 * 1000;
@@ -97,6 +107,39 @@ describe("ProjectStore recently-active marker (#11791)", () => {
   let projectId: string;
   let otherDir: string;
   let otherId: string;
+
+  /** Write a previous session's checkpoint the way a real shutdown left one. */
+  const seedCheckpoint = (ids: string[]) => {
+    const value = serializeSessionOpenProjects(ids);
+    db.insert(schema.appState)
+      .values({ key: SESSION_OPEN_PROJECTS_KEY, value })
+      .onConflictDoUpdate({ target: schema.appState.key, set: { value } })
+      .run();
+  };
+
+  /** The checkpoint as it now stands on disk, for the next launch to read. */
+  const storedCheckpoint = (): string[] => {
+    const row = db
+      .select()
+      .from(schema.appState)
+      .where(eq(schema.appState.key, SESSION_OPEN_PROJECTS_KEY))
+      .get();
+    return parseSessionOpenProjects(row?.value ?? null);
+  };
+
+  /**
+   * Boot the tracker the way main.ts does: read whatever is persisted, freeze
+   * it, and start this session's set empty.
+   */
+  const launch = (opts?: { readOnly?: boolean }) => {
+    resetSessionOpenProjectsTrackerForTests();
+    initSessionOpenProjectsTracker({
+      previousSessionProjectIds: storedCheckpoint(),
+      launchAtMs: Date.now(),
+      readOnly: opts?.readOnly ?? false,
+      write: writeSessionOpenProjects,
+    });
+  };
 
   const seed = (
     id: string,
@@ -135,13 +178,14 @@ describe("ProjectStore recently-active marker (#11791)", () => {
     seed(projectId, canonical, "Recent", { status: "closed" });
     seed(otherId, otherCanonical, "Other", { status: "closed" });
 
-    // The launch snapshot is module state deliberately captured once per
-    // process; each test seeds its own DB, so it has to be re-taken.
-    resetLaunchSnapshotForTests();
+    // The tracker is module state deliberately held for the life of a process;
+    // each test seeds its own DB, so the launch has to be replayed.
+    launch();
     store = new ProjectStore();
   });
 
   afterEach(() => {
+    resetSessionOpenProjectsTrackerForTests();
     sqlite.close();
     fs.rmSync(projectDir, { recursive: true, force: true });
     fs.rmSync(otherDir, { recursive: true, force: true });
@@ -227,7 +271,6 @@ describe("ProjectStore recently-active marker (#11791)", () => {
         .set({ status: "missing" })
         .where(eq(schema.projects.id, projectId))
         .run();
-      resetLaunchSnapshotForTests();
 
       await store.checkMissingProjects();
 
@@ -240,12 +283,9 @@ describe("ProjectStore recently-active marker (#11791)", () => {
   });
 
   describe("the launch clock", () => {
-    it("marks a project that was still open when the app went away", () => {
-      db.update(schema.projects)
-        .set({ status: "background" })
-        .where(eq(schema.projects.id, projectId))
-        .run();
-      resetLaunchSnapshotForTests();
+    it("marks a project the previous session's checkpoint names", () => {
+      seedCheckpoint([projectId]);
+      launch();
 
       const project = store.getProjectById(projectId);
       // No close ever happened, so only the launch clock can be marking it.
@@ -253,16 +293,39 @@ describe("ProjectStore recently-active marker (#11791)", () => {
       expect(project?.recentlyActiveUntil).toBeGreaterThan(Date.now());
     });
 
-    it("keeps the two populations apart: a stale close stays expired, an open project does not", () => {
+    it("leaves every project unmarked when no checkpoint has been written yet", () => {
+      // The first launch after upgrading, and the #11794 regression: both rows
+      // are `background`, which used to be read as "open at shutdown" and lit
+      // up the entire list. Nothing may substitute for the missing checkpoint.
+      db.update(schema.projects).set({ status: "background" }).run();
+      launch();
+
+      expect(store.getProjectById(projectId)?.recentlyActiveUntil).toBeUndefined();
+      expect(store.getProjectById(otherId)?.recentlyActiveUntil).toBeUndefined();
+    });
+
+    it("ignores status entirely — a checkpointed project is marked whatever its row says", () => {
       db.update(schema.projects)
-        .set({ status: "background", recentlyClosedAt: LONG_AGO })
+        .set({ status: "closed" })
         .where(eq(schema.projects.id, projectId))
         .run();
       db.update(schema.projects)
-        .set({ status: "closed", recentlyClosedAt: LONG_AGO })
+        .set({ status: "background" })
         .where(eq(schema.projects.id, otherId))
         .run();
-      resetLaunchSnapshotForTests();
+      seedCheckpoint([projectId]);
+      launch();
+
+      // The checkpoint names `projectId` and not `otherId`; the statuses say
+      // the opposite. Membership is the user's intent, not the row's state.
+      expect(store.getProjectById(projectId)?.recentlyActiveUntil).toBeGreaterThan(Date.now());
+      expect(store.getProjectById(otherId)?.recentlyActiveUntil).toBeUndefined();
+    });
+
+    it("keeps the two populations apart: a stale close stays expired, a checkpointed project does not", () => {
+      db.update(schema.projects).set({ recentlyClosedAt: LONG_AGO }).run();
+      seedCheckpoint([projectId]);
+      launch();
 
       // Same stale stamp on both rows; only the one that was open at shutdown
       // gets the launch clock, which is the whole point of the two populations.
@@ -270,24 +333,15 @@ describe("ProjectStore recently-active marker (#11791)", () => {
       expect(store.getProjectById(otherId)?.recentlyActiveUntil).toBeLessThan(Date.now());
     });
 
-    it("does not extend the mark to projects that were already closed at shutdown", () => {
-      resetLaunchSnapshotForTests();
-      expect(store.getProjectById(otherId)?.recentlyActiveUntil).toBeUndefined();
-    });
-
-    it("holds the open set fixed once taken, so closing during the session cannot join it", () => {
-      db.update(schema.projects)
-        .set({ status: "background" })
-        .where(eq(schema.projects.id, projectId))
-        .run();
-      resetLaunchSnapshotForTests();
-      // Take the snapshot while only `projectId` is open.
+    it("holds the previous set fixed, so opening a project now cannot join it", async () => {
+      seedCheckpoint([projectId]);
+      launch();
       expect(store.getProjectById(projectId)?.recentlyActiveUntil).toBeGreaterThan(Date.now());
 
-      // `otherId` opens AFTER the snapshot was taken. It must not join the
-      // launch population — that set is the previous session's, and a set
-      // recomputed on read would wrongly hand it the launch clock here.
-      store.updateProjectStatus(otherId, "background");
+      // `otherId` opens during THIS session. It must not join the launch
+      // population — that set is the previous session's, and a set recomputed
+      // on read would wrongly hand it the launch clock here.
+      await store.setCurrentProject(otherId);
       expect(store.getProjectById(otherId)?.recentlyActiveUntil).toBeUndefined();
 
       // Closing it puts it on the close clock instead, where a stale stamp
@@ -296,22 +350,97 @@ describe("ProjectStore recently-active marker (#11791)", () => {
       expect(store.getProjectById(otherId)?.recentlyActiveUntil).toBeLessThan(Date.now());
     });
 
-    it("does not pull a closed current project into the open set via the status repair", () => {
-      db.update(schema.projects)
-        .set({ status: "closed" })
-        .where(eq(schema.projects.id, projectId))
-        .run();
+    it("does not pull a project into the set via the status repair", () => {
       db.insert(schema.appState)
         .values({ key: "currentProjectId", value: projectId })
         .onConflictDoUpdate({ target: schema.appState.key, set: { value: projectId } })
         .run();
-      resetLaunchSnapshotForTests();
+      launch();
 
-      // getAllProjects() promotes the current row to `active`; the snapshot has
-      // to have been taken from the persisted statuses before that happens.
+      // getAllProjects() promotes the current row to `active`. That repair is
+      // bookkeeping about which row is current, never evidence of last session.
       const listed = store.getAllProjects().find((p) => p.id === projectId);
       expect(listed?.status).toBe("active");
       expect(listed?.recentlyActiveUntil).toBeUndefined();
+    });
+  });
+
+  describe("the checkpoint this session leaves behind", () => {
+    it("starts empty, so last session's projects never carry over", async () => {
+      seedCheckpoint([projectId, otherId]);
+      launch();
+
+      await store.setCurrentProject(projectId);
+
+      // Persisting the union with the previous set is the lifetime latch that
+      // made every project look recently active (#11794).
+      expect(storedCheckpoint()).toEqual([projectId]);
+    });
+
+    it("accumulates the union across switches — backgrounding is not closing", async () => {
+      await store.setCurrentProject(projectId);
+      await store.setCurrentProject(otherId);
+
+      expect(store.getProjectById(projectId)?.status).toBe("background");
+      expect(storedCheckpoint().sort()).toEqual([projectId, otherId].sort());
+    });
+
+    it("drops a project the user closed", async () => {
+      await store.setCurrentProject(projectId);
+      await store.setCurrentProject(otherId);
+
+      store.updateProjectStatus(projectId, "closed");
+
+      expect(storedCheckpoint()).toEqual([otherId]);
+    });
+
+    it("drops a project closed without killing its terminals", async () => {
+      await store.setCurrentProject(projectId);
+
+      // The `killTerminals: false` branch of project:close writes `background`.
+      // Same gesture as the killing branch — the status only says the processes
+      // were kept, not that the user still considers the project open.
+      store.updateProjectStatus(projectId, "background");
+
+      expect(storedCheckpoint()).toEqual([]);
+    });
+
+    it("drops a project whose folder went missing", async () => {
+      await store.setCurrentProject(projectId);
+
+      store.updateProjectStatus(projectId, "missing");
+
+      expect(storedCheckpoint()).toEqual([]);
+    });
+
+    it("drops a project that was removed outright", async () => {
+      await store.setCurrentProject(projectId);
+      await store.setCurrentProject(otherId);
+
+      await store.removeProject(projectId);
+
+      // Ids are derived from the path, so leaving it would let a project later
+      // re-added at the same folder inherit the deleted one's membership.
+      expect(storedCheckpoint()).toEqual([otherId]);
+    });
+
+    it("is left untouched by a recovery launch, whose reduced set must not overwrite it", async () => {
+      seedCheckpoint([projectId, otherId]);
+      launch({ readOnly: true });
+
+      await store.setCurrentProject(projectId);
+      store.updateProjectStatus(otherId, "closed");
+
+      // Safe mode opens one window on purpose; rolling that over would lose the
+      // fleet the user actually had.
+      expect(storedCheckpoint().sort()).toEqual([projectId, otherId].sort());
+    });
+
+    it("still marks the previous session's projects during a recovery launch", () => {
+      seedCheckpoint([projectId]);
+      launch({ readOnly: true });
+
+      expect(store.getProjectById(projectId)?.recentlyActiveUntil).toBeGreaterThan(Date.now());
     });
   });
 

@@ -113,7 +113,13 @@ import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js"
 import {
   readLastActiveProjectIdSync,
   readOpenWindowsManifestSync,
+  readSessionOpenProjectsSync,
 } from "./services/persistence/readLastProjectId.js";
+import { writeSessionOpenProjects } from "./services/persistence/sessionOpenProjectsStore.js";
+import {
+  flushSessionOpenProjects,
+  initSessionOpenProjectsTracker,
+} from "./services/sessionOpenProjectsTracker.js";
 import {
   initOpenWindowsTracker,
   resumeOpenWindowsSaves,
@@ -714,6 +720,19 @@ if (!gotTheLock) {
       // manifest should describe it.
       initOpenWindowsTracker({ registry: windowRegistry, readOnly: launchIntent === "recovery" });
 
+      // Freeze the previous session's open projects before anything can join
+      // this one's set (#11794). Read unconditionally — a targeted or recovery
+      // launch still draws the dot for what the last session had open, it just
+      // doesn't get to rewrite the checkpoint. This must precede every
+      // `registerInitialView()` and `setCurrentProject()` below, which write
+      // into the same key as the fleet comes up.
+      initSessionOpenProjectsTracker({
+        previousSessionProjectIds: readSessionOpenProjectsSync(),
+        launchAtMs: Date.now(),
+        readOnly: launchIntent === "recovery",
+        write: writeSessionOpenProjects,
+      });
+
       const { hadManifest, records: restoreRecords } = shouldRestoreWindowFleet(launchIntent)
         ? readOpenWindowsManifestSync()
         : { hadManifest: false, records: [] };
@@ -760,6 +779,15 @@ if (!gotTheLock) {
           console.error("[MAIN] Restoring a background window failed:", reason);
         },
       });
+
+      // Every open/close already persists the checkpoint, so this only matters
+      // for the session that opens nothing — picker window, then quit. Without
+      // it the previous session's value would survive on disk and the launch
+      // after would light up its projects a second time (#11794). Deliberately
+      // here rather than before the fleet comes up: it writes whatever has
+      // accumulated, so it needs no ordering guarantee, and running it after
+      // keeps the shared DB (and its migrations) off the first-paint path.
+      flushSessionOpenProjects();
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
       // Startup crashes hard-exit without running before-quit, which means

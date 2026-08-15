@@ -22,6 +22,7 @@ import {
   parseOpenWindowsManifest,
   type OpenWindowRecord,
 } from "./windowManifest.js";
+import { SESSION_OPEN_PROJECTS_KEY, parseSessionOpenProjects } from "./sessionOpenProjects.js";
 
 export function readLastActiveProjectIdSync(): string | null {
   try {
@@ -162,5 +163,46 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
   } catch {
     // Any error (corrupt DB, missing table, etc.) — restore a single window.
     return NO_MANIFEST;
+  }
+}
+
+/**
+ * Synchronous, standalone reader for the session-open checkpoint (#11794) — the
+ * projects that were open when the app last ran, which the switcher's
+ * recently-active dot marks.
+ *
+ * Reads on the same throwaway read-only connection idiom as its siblings above,
+ * and for a sharper reason than they have: the restore fan-out writes into this
+ * same key as each window comes up, so the previous session's set has to be
+ * captured before any window exists. Read it lazily on the first DB query
+ * instead and a project opened fresh this session — a CLI-targeted launch, a
+ * restore that fell back to the last-active project — would leak into the set
+ * that is supposed to be frozen from last time.
+ *
+ * Missing DB, missing row, corrupt JSON, or an unreadable version all report an
+ * empty set, which costs one launch's dots rather than marking projects the
+ * user never had open. There is deliberately no fallback to project `status`:
+ * inferring the set from `active`/`background` rows IS #11794.
+ */
+export function readSessionOpenProjectsSync(): string[] {
+  try {
+    const dbPath = path.join(app.getPath("userData"), "daintree.db");
+
+    if (!fs.existsSync(dbPath)) {
+      return []; // First launch — no database yet
+    }
+
+    const sqlite = new Database(dbPath, { readonly: true });
+    try {
+      const row = sqlite
+        .prepare("SELECT value FROM app_state WHERE key = ?")
+        .get(SESSION_OPEN_PROJECTS_KEY) as { value: string } | undefined;
+      return parseSessionOpenProjects(row?.value ?? null);
+    } finally {
+      sqlite.close();
+    }
+  } catch {
+    // Any error (corrupt DB, missing table, etc.) — no dots for one session.
+    return [];
   }
 }

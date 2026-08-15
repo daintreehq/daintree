@@ -27,8 +27,13 @@ import {
   appState as appStateTable,
   type ProjectRow,
 } from "./persistence/schema.js";
-import { eq, desc, inArray } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { RECENTLY_ACTIVE_WINDOW_MS } from "../../shared/config/recentlyActive.js";
+import {
+  addSessionOpenProject,
+  getPreviousSessionOpenProjects,
+  removeSessionOpenProject,
+} from "./sessionOpenProjectsTracker.js";
 import {
   generateProjectId,
   mintProjectId,
@@ -125,55 +130,21 @@ function rowToRepoStats(row: ProjectRow): ProjectRepoStats | null {
 }
 
 /**
- * The previous session's open projects, plus the moment this one started
- * (#11791).
- *
- * Captured once per main process, from the persisted statuses themselves —
- * nothing in the shutdown chain closes a project, and the only status repair
- * `getAllProjects()` performs demotes a stray `active` to `background`, so the
- * `active`/`background` rows still on disk at boot ARE the set that was open
- * when the app went away. That makes a separate persisted checkpoint redundant.
- *
- * Taken before `getAllProjects()` performs its status repair, which promotes
- * the current project to `active`: a row that was `closed` on disk must not be
- * pulled into the previous session's open set on the way past.
- */
-let launchSnapshot: { atMs: number; openProjectIds: ReadonlySet<string> } | null = null;
-
-function ensureLaunchSnapshot(): { atMs: number; openProjectIds: ReadonlySet<string> } {
-  if (launchSnapshot) return launchSnapshot;
-  let openProjectIds: ReadonlySet<string> = new Set();
-  try {
-    const rows = getSharedDb()
-      .select({ id: projectsTable.id })
-      .from(projectsTable)
-      .where(inArray(projectsTable.status, ["active", "background"]))
-      .all();
-    openProjectIds = new Set(rows.map((r) => r.id));
-  } catch {
-    // The mark is a hint, never session state. A DB that can't be read here
-    // costs the user some grey dots, not a launch.
-  }
-  launchSnapshot = { atMs: Date.now(), openProjectIds };
-  return launchSnapshot;
-}
-
-/** Test-only: the snapshot is module state that outlives a per-test DB. */
-export function resetLaunchSnapshotForTests(): void {
-  launchSnapshot = null;
-}
-
-/**
  * The later of the two deadlines that can apply, or undefined when neither
  * does. Open-at-shutdown runs from launch rather than from the close that never
  * happened; a hand-closed project runs from its own close and decays across
  * restarts. A project in both populations — closed this session after being
  * restored from the last one — takes whichever reaches further.
+ *
+ * The open-at-shutdown half comes from the persisted session-open checkpoint,
+ * frozen at boot before any window could touch it. It was originally inferred
+ * from `active`/`background` rows instead, which read as a lifetime "opened at
+ * least once" latch and marked the entire project list every launch (#11794).
  */
 function resolveRecentlyActiveUntil(row: ProjectRow): number | undefined {
-  const snapshot = ensureLaunchSnapshot();
+  const snapshot = getPreviousSessionOpenProjects();
   const deadlines: number[] = [];
-  if (snapshot.openProjectIds.has(row.id)) {
+  if (snapshot?.projectIds.has(row.id)) {
     deadlines.push(snapshot.atMs + RECENTLY_ACTIVE_WINDOW_MS);
   }
   if (typeof row.recentlyClosedAt === "number") {
@@ -262,10 +233,6 @@ export class ProjectStore {
   }
 
   async initialize(): Promise<void> {
-    // Pin the previous session's open set before this one starts changing it
-    // (#11791). Idempotent, and safe this early — the shared DB is already open
-    // by the time initialize() runs.
-    ensureLaunchSnapshot();
     if (!existsSync(this.projectsConfigDir)) {
       await fs.mkdir(this.projectsConfigDir, { recursive: true });
     }
@@ -874,6 +841,12 @@ export class ProjectStore {
     const db = getSharedDb();
     db.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
 
+    // No status write happens on this path — the row is gone — so the session
+    // set has to be told directly (#11794). Ids are derived from the project
+    // path, so a project later re-added at the same folder would otherwise
+    // inherit the deleted one's membership.
+    removeSessionOpenProject(projectId);
+
     if (project) {
       this.pruneInRepoRecipeHashes(project.path);
     }
@@ -1098,13 +1071,33 @@ export class ProjectStore {
       // the next transition.
       updates.recentlyClosedAt = null;
     }
-    return this.updateProject(projectId, updates);
+
+    const project = this.updateProject(projectId, updates);
+
+    // The session-open checkpoint moves with the same transitions, and for the
+    // same reason it is centralized here rather than at the call sites: every
+    // close the user performs reaches this method, so no future one can forget
+    // to leave the set (#11794).
+    //
+    // `background` removes, which is the one mapping that isn't self-evident.
+    // Only the close-without-killing-terminals branch of `project:close`
+    // writes it through here, and that is the same "Close Project" gesture as
+    // the killing branch — `background` there means "keep the processes", not
+    // "the user still considers this open". Switching away also backgrounds a
+    // project, but `setCurrentProject` writes that status inside its own
+    // transaction and never reaches this method, so a switch keeps membership.
+    if (status === "active") {
+      addSessionOpenProject(projectId);
+    } else {
+      // closed, missing, or anything a corrupt row repair collapses: the
+      // project is no longer one the user has open.
+      removeSessionOpenProject(projectId);
+    }
+
+    return project;
   }
 
   getAllProjects(): Project[] {
-    // Before the repair below, which can promote a row to `active` — the
-    // snapshot has to see the statuses as they were persisted (#11791).
-    ensureLaunchSnapshot();
     const db = getSharedDb();
     const rows = db
       .select()
@@ -1543,6 +1536,12 @@ export class ProjectStore {
       },
       { behavior: "immediate" }
     );
+
+    // After the transaction, not inside it: the dot is auxiliary state, and a
+    // checkpoint write that failed must not roll back a real project switch
+    // (#11794). Only the incoming project joins — the departing one is
+    // backgrounded, not closed, and stays in the set.
+    addSessionOpenProject(projectId);
 
     if (process.env.DAINTREE_VERBOSE) {
       const updatedPrevious = previousProjectId ? this.getProjectById(previousProjectId) : null;
