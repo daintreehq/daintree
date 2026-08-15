@@ -446,3 +446,63 @@ describe("hash", () => {
 // Registration is not asserted here: mirroring the allowlist arrays would only
 // restate them. The real guard is that `tools/list` serves `mcp.surface` at
 // every tier, which sessionServer.test.ts checks against the live handler.
+
+describe("buildSurfaceManifest with a workspace-bound session (#11789)", () => {
+  const BOUND = { workspaceBound: true };
+
+  it("omits confirm-gated tools a bound external session cannot reach", () => {
+    const manifest = [
+      entry({ id: "actions.list" }),
+      entry({ id: "recipe.run", kind: "command", danger: "confirm" }),
+    ];
+
+    const unbound = buildSurfaceManifest(manifest, "external", APP_VERSION);
+    const bound = buildSurfaceManifest(manifest, "external", APP_VERSION, BOUND);
+
+    expect(unbound.tools.map((t) => t.id)).toContain("recipe.run");
+    expect(bound.tools.map((t) => t.id)).not.toContain("recipe.run");
+    expect(bound.tools.map((t) => t.id)).toContain("actions.list");
+  });
+
+  it("reports exactly what `tools/list` would expose for the same session", () => {
+    // The invariant the shared `shouldExposeTool` gate exists to hold: a report
+    // that advertised a tool the listing withheld is the drift it detects.
+    const manifest = realisticManifest();
+    const reported = buildSurfaceManifest(manifest, "external", APP_VERSION, BOUND).tools.map(
+      (t) => t.id
+    );
+    const listed = manifest
+      .filter((e) => shouldExposeTool(e, "external", BOUND))
+      .map((e) => e.id)
+      .sort();
+
+    expect(reported).toEqual(listed);
+  });
+
+  it("changes the hash when the bound surface differs from the unbound one", () => {
+    const manifest = [
+      entry({ id: "actions.list" }),
+      entry({ id: "recipe.run", kind: "command", danger: "confirm" }),
+    ];
+
+    expect(buildSurfaceManifest(manifest, "external", APP_VERSION, BOUND).hash).not.toBe(
+      buildSurfaceManifest(manifest, "external", APP_VERSION).hash
+    );
+  });
+
+  it("leaves the unbound output identical to the pre-binding shape", () => {
+    const manifest = realisticManifest();
+    expect(
+      buildSurfaceManifest(manifest, "external", APP_VERSION, { workspaceBound: false })
+    ).toEqual(buildSurfaceManifest(manifest, "external", APP_VERSION));
+  });
+
+  it("does not narrow a non-external tier, so the pinned Assistant is unaffected", () => {
+    const manifest = realisticManifest();
+    for (const tier of ["workbench", "action", "system"] as const) {
+      expect(buildSurfaceManifest(manifest, tier, APP_VERSION, BOUND)).toEqual(
+        buildSurfaceManifest(manifest, tier, APP_VERSION)
+      );
+    }
+  });
+});

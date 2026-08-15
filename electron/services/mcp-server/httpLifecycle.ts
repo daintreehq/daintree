@@ -20,7 +20,11 @@ import type {
   AssistantPaneWebContentsResolver,
   AssistantPaneActionContextResolver,
   McpTier,
+  McpSessionOrigin,
+  McpWorkspaceBinding,
 } from "./shared.js";
+import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
+import { WorkspaceBindingError } from "./rendererBridge.js";
 import type {
   ActiveBearerRecord,
   HelpSessionBearerRecord,
@@ -62,6 +66,9 @@ import {
   MCP_NATIVE_GRANT_MAX_MAX_USES,
   MCP_NATIVE_GRANT_MAX_ALLOWED_TOOLS,
   MCP_NATIVE_GRANT_MIN_TTL_MS,
+  MCP_WORKSPACE_ID_HEADER,
+  MCP_WORKSPACE_ID_QUERY_PARAM,
+  MCP_HANDSHAKE_REJECTED_CODE,
   minimumPermittingTier,
 } from "./shared.js";
 
@@ -90,6 +97,28 @@ export interface HttpLifecycleDeps {
     confirmed?: boolean,
     contextOverride?: import("../../../shared/types/actions.js").ActionContext
   ) => Promise<import("./shared.js").DispatchEnvelope>;
+  // Workspace-bound variants used for external sessions that named a workspace
+  // at handshake (#11789). They resolve the workspace's current view per call,
+  // so a session survives its view being replaced and fails closed rather than
+  // following focus when it can't. Optional for the same reason as the pinned
+  // variants above: test fixtures that don't wire workspace routing.
+  requestManifestForWorkspace?: (
+    workspaceId: string
+  ) => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>;
+  dispatchActionForWorkspace?: (
+    workspaceId: string,
+    actionId: string,
+    args: unknown,
+    confirmed?: boolean
+  ) => Promise<import("./shared.js").DispatchEnvelope>;
+  getCachedManifestForWorkspace?: (
+    workspaceId: string
+  ) => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
+  /**
+   * Validate a handshake workspace selector, or throw when it names no live
+   * view or more than one (#11789).
+   */
+  resolveWorkspaceBinding?: (workspaceId: string) => McpWorkspaceBinding;
   handleWaitUntilIdle: (
     rawArgs: unknown,
     signal: AbortSignal,
@@ -306,17 +335,112 @@ export class HttpLifecycle {
 
   /**
    * Parses a Bearer header and asks the help-session resolver — then the
-   * assistant-pane resolver (#10647) — for the pinned WebContents id. Returns
-   * null for non-pinned bearers (api-key / generic pane tokens) so external
-   * sessions keep the existing focused-window fallback in
-   * `buildSessionServerDeps`.
+   * assistant-pane resolver (#10647) — which renderer minted it, keeping *which*
+   * resolver matched (#11789).
+   *
+   * The origin is the part that cannot be re-derived later: both resolvers
+   * produce a bare WebContents id, and once it lands in `sessionWebContentsMap`
+   * there is no way to tell a Daintree assistant surface from anything else that
+   * happens to route to a renderer. Authorization, notification routing, and
+   * external-client inventory all need that distinction, so it is recorded here
+   * rather than inferred downstream.
+   *
+   * Returns null for bearers that own no renderer — api-key clients and generic
+   * pane tokens — which are classified `external` and keep the focused-window
+   * fallback in `buildSessionServerDeps` unless they bind a workspace.
    */
-  private resolvePinnedWebContentsId(authHeader: string): number | null {
+  private resolveSessionPin(
+    authHeader: string
+  ): { origin: McpSessionOrigin; webContentsId: number } | null {
     const token = extractBearerToken(authHeader);
     if (!token) return null;
     const fromHelp = this.helpSessionWebContentsResolver?.(token) ?? null;
-    if (fromHelp !== null) return fromHelp;
-    return this.assistantPaneWebContentsResolver?.(token) ?? null;
+    if (fromHelp !== null) return { origin: "help", webContentsId: fromHelp };
+    const fromPane = this.assistantPaneWebContentsResolver?.(token) ?? null;
+    if (fromPane !== null) return { origin: "assistant-pane", webContentsId: fromPane };
+    return null;
+  }
+
+  /**
+   * Read and resolve a new session's workspace selector (#11789).
+   *
+   * Returns `null` when no selector was sent (the session keeps focused-window
+   * routing, unchanged), a binding when one resolved to exactly one live view,
+   * or a rejection the caller turns into a 400 — creating no session, no
+   * transport, and no `Mcp-Session-Id`.
+   *
+   * Only `external` sessions may bind. A help or assistant-pane bearer already
+   * routes through the renderer that minted it, so a selector from one is a
+   * configuration mistake with two plausible targets; refusing it keeps the two
+   * binding models disjoint instead of silently letting one win.
+   */
+  private resolveWorkspaceSelector(
+    req: http.IncomingMessage,
+    url: URL,
+    tier: McpTier,
+    origin: McpSessionOrigin
+  ): { binding: McpWorkspaceBinding } | { rejection: WorkspaceSelectorRejection } | null {
+    const parsed = parseWorkspaceSelector(
+      req.headers[MCP_WORKSPACE_ID_HEADER],
+      url.searchParams.getAll(MCP_WORKSPACE_ID_QUERY_PARAM)
+    );
+    if (parsed.kind === "absent") return null;
+    if (parsed.kind === "reject") return { rejection: parsed.rejection };
+
+    if (origin !== "external" || tier !== "external") {
+      return {
+        rejection: {
+          code: "WORKSPACE_SELECTOR_NOT_ALLOWED",
+          message:
+            "This bearer is already bound to the Daintree window that issued it, so it cannot request a workspace. Drop the workspace selector, or connect with an API key.",
+        },
+      };
+    }
+
+    const resolve = this.deps.resolveWorkspaceBinding;
+    if (!resolve) {
+      return {
+        rejection: {
+          code: "WORKSPACE_NOT_FOUND",
+          message: "This Daintree build cannot resolve workspace bindings.",
+        },
+      };
+    }
+    try {
+      return { binding: resolve(parsed.workspaceId) };
+    } catch (err) {
+      const reason = err instanceof WorkspaceBindingError ? err.reason : null;
+      return {
+        rejection: {
+          code: reason === "ambiguous" ? "WORKSPACE_AMBIGUOUS" : "WORKSPACE_NOT_FOUND",
+          message: formatErrorMessage(
+            err,
+            `Workspace ${parsed.workspaceId} could not be resolved to a Daintree view.`
+          ),
+        },
+      };
+    }
+  }
+
+  /**
+   * Refuse a handshake before any session state exists. HTTP 400 with a
+   * JSON-RPC error in the implementation-defined range, carrying a stable
+   * `data.code` clients can branch on, and deliberately no `Mcp-Session-Id` —
+   * there is no session to resume.
+   */
+  private rejectHandshake(res: http.ServerResponse, rejection: WorkspaceSelectorRejection): void {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        error: {
+          code: MCP_HANDSHAKE_REJECTED_CODE,
+          message: rejection.message,
+          data: { code: rejection.code },
+        },
+        id: null,
+      })
+    );
   }
 
   /**
@@ -950,7 +1074,13 @@ export class HttpLifecycle {
       if (claimedSessionId) {
         const result = this.deps.abusePolicy.recordDenial(claimedSessionId, "auth401");
         if (result.tripped) {
-          const pinnedId = this.deps.sessionStore.sessionWebContentsMap.get(claimedSessionId);
+          // Same origin gate as the notification closures in
+          // `buildSessionServerDeps` (#11789): a workspace-bound external
+          // session has a renderer route, but its revocation is not an
+          // Assistant event and must not raise a banner in someone's HelpPanel.
+          const pinnedId = this.deps.sessionStore.isRendererOwnedOrigin(claimedSessionId)
+            ? this.deps.sessionStore.sessionWebContentsMap.get(claimedSessionId)
+            : undefined;
           this.deps.sessionStore.revokeSession(claimedSessionId);
           this.deps.abusePolicy.dropSession(claimedSessionId);
           if (pinnedId !== undefined) {
@@ -977,6 +1107,25 @@ export class HttpLifecycle {
     }
 
     if (req.method === "GET" && url.pathname === "/sse") {
+      // Workspace binding is a `/mcp` feature (#11789). SSE was deprecated by
+      // the MCP spec in revision 2025-03-26 and no external client is pointed
+      // at it, so it isn't worth a second handshake path — but silently
+      // ignoring a routing selector is worse than not supporting it, since the
+      // caller would believe its calls were scoped when they still followed
+      // focus. Refuse loudly instead, before the transport allocates a session.
+      const sseSelector = parseWorkspaceSelector(
+        req.headers[MCP_WORKSPACE_ID_HEADER],
+        url.searchParams.getAll(MCP_WORKSPACE_ID_QUERY_PARAM)
+      );
+      if (sseSelector.kind !== "absent") {
+        this.rejectHandshake(res, {
+          code: "WORKSPACE_SELECTOR_NOT_ALLOWED",
+          message:
+            "Workspace binding is only supported on the /mcp (Streamable HTTP) endpoint. Point this client at /mcp.",
+        });
+        return;
+      }
+
       const allowedHosts = [`127.0.0.1:${this.port}`, `localhost:${this.port}`];
       const allowedOrigins = [`http://127.0.0.1:${this.port}`, `http://localhost:${this.port}`];
       const transport = new SSEServerTransport("/messages", res, {
@@ -994,7 +1143,9 @@ export class HttpLifecycle {
       );
       this.touchBearer(authHeader, resolveUserAgent(req), sessionId, tier);
 
-      const pinnedWebContentsId = this.resolvePinnedWebContentsId(authHeader);
+      const pin = this.resolveSessionPin(authHeader);
+      this.deps.sessionStore.sessionOriginMap.set(sessionId, pin?.origin ?? "external");
+      const pinnedWebContentsId = pin?.webContentsId ?? null;
       if (pinnedWebContentsId !== null) {
         this.deps.sessionStore.sessionWebContentsMap.set(sessionId, pinnedWebContentsId);
       }
@@ -1028,8 +1179,7 @@ export class HttpLifecycle {
         // `session-ended` reason. Without this, grants accumulate
         // forever in the cache across a long-running session lifecycle.
         this.deps.sessionStore.grantCache.revokeSession(sessionId, "session-ended");
-        this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
-        this.deps.sessionStore.sessionContextMap.delete(sessionId);
+        this.deps.sessionStore.clearSessionBinding(sessionId);
         // Resolve the public help-session id before deleting the map entry.
         this.deps.sessionStore.clearFigureCounter(sessionId);
         this.deps.sessionStore.sessionHelpIdMap.delete(sessionId);
@@ -1050,8 +1200,7 @@ export class HttpLifecycle {
         // Same pin-before-clear ordering — the connect failure path
         // mirrors normal close cleanup.
         this.deps.sessionStore.grantCache.revokeSession(sessionId, "session-ended");
-        this.deps.sessionStore.sessionWebContentsMap.delete(sessionId);
-        this.deps.sessionStore.sessionContextMap.delete(sessionId);
+        this.deps.sessionStore.clearSessionBinding(sessionId);
         // Resolve the public help-session id before deleting the map entry.
         this.deps.sessionStore.clearFigureCounter(sessionId);
         this.deps.sessionStore.sessionHelpIdMap.delete(sessionId);
@@ -1084,7 +1233,7 @@ export class HttpLifecycle {
         res.end("Method not allowed");
         return;
       }
-      await this.handleStreamableHttpRequest(req, res);
+      await this.handleStreamableHttpRequest(req, res, url);
     } else {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not found");
@@ -1093,7 +1242,8 @@ export class HttpLifecycle {
 
   private async handleStreamableHttpRequest(
     req: http.IncomingMessage,
-    res: http.ServerResponse
+    res: http.ServerResponse,
+    url: URL
   ): Promise<void> {
     const headerValue = req.headers["mcp-session-id"];
     const sessionId = Array.isArray(headerValue) ? headerValue[0] : headerValue;
@@ -1117,19 +1267,37 @@ export class HttpLifecycle {
       return;
     }
 
-    const newSessionId = randomUUID();
     const authHeader = req.headers.authorization ?? "";
     const tier = resolveTokenTier(authHeader, this.apiKeyBearerHash, this.helpTokenValidator);
+    const pin = this.resolveSessionPin(authHeader);
+    const origin: McpSessionOrigin = pin?.origin ?? "external";
+
+    // Resolve the workspace selector before anything is allocated (#11789). A
+    // refused handshake must leave nothing behind — no session id, no tier
+    // entry, no client metadata, no transport — so this runs ahead of every
+    // write below, and returns without creating a session.
+    const selector = this.resolveWorkspaceSelector(req, url, tier, origin);
+    if (selector !== null && "rejection" in selector) {
+      this.rejectHandshake(res, selector.rejection);
+      return;
+    }
+    const workspaceBinding = selector?.binding ?? null;
+
+    const newSessionId = randomUUID();
     this.deps.sessionStore.sessionTierMap.set(newSessionId, tier);
+    this.deps.sessionStore.sessionOriginMap.set(newSessionId, origin);
     this.deps.sessionStore.registerClientMetadata(
       newSessionId,
       this.headerString(req.headers["user-agent"]),
       "streamable-http"
     );
 
-    const pinnedWebContentsId = this.resolvePinnedWebContentsId(authHeader);
-    if (pinnedWebContentsId !== null) {
-      this.deps.sessionStore.sessionWebContentsMap.set(newSessionId, pinnedWebContentsId);
+    if (pin !== null) {
+      this.deps.sessionStore.sessionWebContentsMap.set(newSessionId, pin.webContentsId);
+    }
+
+    if (workspaceBinding !== null) {
+      this.deps.sessionStore.sessionWorkspaceMap.set(newSessionId, workspaceBinding.workspaceId);
     }
 
     const boundActionContext = this.resolveActionContext(authHeader);
@@ -1142,7 +1310,7 @@ export class HttpLifecycle {
       this.deps.sessionStore.sessionHelpIdMap.set(newSessionId, helpSessionId);
     }
 
-    const deps = this.buildSessionServerDeps(newSessionId);
+    const deps = this.buildSessionServerDeps(newSessionId, workspaceBinding ?? undefined);
     const server = createSessionServer(newSessionId, deps);
     const allowedHosts = [`127.0.0.1:${this.port}`, `localhost:${this.port}`];
     const allowedOrigins = [`http://127.0.0.1:${this.port}`, `http://localhost:${this.port}`];
@@ -1182,8 +1350,7 @@ export class HttpLifecycle {
       // Pin-before-revoke ordering identical to the SSE path above —
       // see `transport.onclose` in the GET /sse branch.
       this.deps.sessionStore.grantCache.revokeSession(id, "session-ended");
-      this.deps.sessionStore.sessionWebContentsMap.delete(id);
-      this.deps.sessionStore.sessionContextMap.delete(id);
+      this.deps.sessionStore.clearSessionBinding(id);
       // Resolve the public help-session id before deleting the map entry.
       this.deps.sessionStore.clearFigureCounter(id);
       this.deps.sessionStore.sessionHelpIdMap.delete(id);
@@ -1209,8 +1376,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.clearElevationTimer(id);
         this.deps.sessionStore.sessionTierMap.delete(id);
         this.deps.sessionStore.grantCache.revokeSession(id, "session-ended");
-        this.deps.sessionStore.sessionWebContentsMap.delete(id);
-        this.deps.sessionStore.sessionContextMap.delete(id);
+        this.deps.sessionStore.clearSessionBinding(id);
         // Resolve the public help-session id before deleting the map entry.
         this.deps.sessionStore.clearFigureCounter(id);
         this.deps.sessionStore.sessionHelpIdMap.delete(id);
@@ -1223,8 +1389,7 @@ export class HttpLifecycle {
         this.deps.sessionStore.clearElevationTimer(newSessionId);
         this.deps.sessionStore.sessionTierMap.delete(newSessionId);
         this.deps.sessionStore.grantCache.revokeSession(newSessionId, "session-ended");
-        this.deps.sessionStore.sessionWebContentsMap.delete(newSessionId);
-        this.deps.sessionStore.sessionContextMap.delete(newSessionId);
+        this.deps.sessionStore.clearSessionBinding(newSessionId);
         // Resolve the public help-session id before deleting the map entry.
         this.deps.sessionStore.clearFigureCounter(newSessionId);
         this.deps.sessionStore.sessionHelpIdMap.delete(newSessionId);
@@ -1243,18 +1408,34 @@ export class HttpLifecycle {
   }
 
   /**
-   * Builds per-session dispatch deps. When the session was pinned to a
-   * renderer WebContents at handshake (help-session bearers, #7002), routes
-   * through the pinned `*ForWebContents` helpers and forces a cache-free
-   * manifest lookup so window A's manifest can never be served to window B.
-   * Sessions without a pin (api-key / pane tokens) keep the existing shared
-   * dispatch + cached-manifest path.
+   * Builds per-session dispatch deps, routing on how the session was bound at
+   * handshake. Three routes, in precedence order:
+   *
+   * 1. **Workspace-bound** (#11789) — an external session that named a
+   *    workspace. Every operation re-resolves that workspace's current view, so
+   *    the session survives its view being replaced and fails closed rather
+   *    than following focus when the workspace has no single live view.
+   * 2. **WebContents-pinned** (#7002) — help-session and assistant-pane
+   *    bearers, routed to the renderer that minted them, with a cache-free
+   *    manifest lookup so window A's manifest can never be served to window B.
+   * 3. **Unbound** — api-key / pane tokens, which keep the shared dispatch and
+   *    cached-manifest path and follow window focus, as documented.
+   *
+   * The two bound routes are mutually exclusive by construction: a selector
+   * from a pinned bearer is refused at handshake.
    */
   private buildSessionServerDeps(
-    sessionId: string
+    sessionId: string,
+    workspaceBinding?: McpWorkspaceBinding
   ): import("./sessionServer.js").SessionServerDeps {
     const pinnedDispatch = this.deps.dispatchActionForWebContents;
     const pinnedManifest = this.deps.requestManifestForWebContents;
+    const workspaceDispatch = this.deps.dispatchActionForWorkspace;
+    const workspaceManifest = this.deps.requestManifestForWorkspace;
+    // Snapshotted for the same reason as the pin below: a session torn down
+    // mid-call must keep failing closed to its own workspace rather than
+    // silently reverting to the focused-window path.
+    const boundWorkspaceId = workspaceBinding?.workspaceId ?? null;
     // Captured at build time (both handshakes populate the map before calling
     // this) so an in-flight dispatch settling after teardown deletes the map
     // entry still stamps its audit record / resolves its turnId correctly.
@@ -1271,6 +1452,9 @@ export class HttpLifecycle {
 
     const requestManifest: import("./sessionServer.js").SessionServerDeps["requestManifest"] =
       () => {
+        if (boundWorkspaceId !== null && workspaceManifest) {
+          return workspaceManifest(boundWorkspaceId);
+        }
         const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
         if (id !== undefined && pinnedManifest) {
           return pinnedManifest(id);
@@ -1283,6 +1467,17 @@ export class HttpLifecycle {
       args,
       confirmed
     ) => {
+      if (boundWorkspaceId !== null && workspaceDispatch) {
+        // No context override: unlike a help session, which replays the
+        // ActionContext snapshot taken when the user launched it (#8317), a
+        // bound external session has no launch moment to replay — and the bound
+        // view's own live context already describes the right workspace.
+        //
+        // No `callerInfo` either: it exists solely to name the requesting client
+        // in the confirm dialog (#9157), and a bound session's surface excludes
+        // every confirm-gated tool, so nothing could ever read it.
+        return workspaceDispatch(boundWorkspaceId, actionId, args, confirmed);
+      }
       const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
       if (id !== undefined && pinnedDispatch) {
         // Replay the provision-time context snapshot so the assistant's
@@ -1311,18 +1506,42 @@ export class HttpLifecycle {
         // crossing windows. Reading the captured id (not a live map lookup)
         // means a session torn down mid-call stays pinned here and fails closed
         // to `null` (evicted cache) rather than flipping to the shared cache.
+        // Workspace-bound sessions get the same treatment against the view that
+        // currently owns their workspace (#11789).
+        if (boundWorkspaceId !== null) {
+          return this.deps.getCachedManifestForWorkspace?.(boundWorkspaceId) ?? null;
+        }
         if (pinnedWebContentsId !== null) {
           return this.deps.getCachedManifestForWebContents?.(pinnedWebContentsId) ?? null;
         }
         return this.deps.getCachedManifest();
       };
 
+    /**
+     * Whether this session's events belong in a Daintree assistant surface
+     * (#11789).
+     *
+     * The five notification closures below all used to gate on "is there a
+     * WebContents pinned to this session", which was an accidental proxy for
+     * "is this one of ours" — accidental because external sessions were never
+     * pinned. Workspace-bound external sessions have a renderer route and are
+     * still not ours: `HelpPanel` is mounted unconditionally in `AppLayout`, so
+     * these events would genuinely land, putting a third-party client's tool
+     * calls in the Assistant's activity strip and offering its tier-mismatch
+     * approval controls — controls whose `issueGrant` / `setSessionTier` calls
+     * the origin gate then has to refuse.
+     */
+    const isRendererOwned = (notifiedSessionId: string): boolean =>
+      this.deps.sessionStore.isRendererOwnedOrigin(notifiedSessionId);
+
     const notifyTierMismatch: import("./sessionServer.js").SessionServerDeps["notifyTierMismatch"] =
       (payload) => {
-        // Help-session bearers only — external/api-key sessions have no
-        // associated UI to surface a banner. Targeted at the pinned WebContents
-        // so the assistant panel that triggered the call gets the event,
-        // even if a different project view is currently focused.
+        // Daintree's own assistant surfaces only — a third-party client has no
+        // panel to show a banner in, and its denials are not the user's to
+        // approve. Targeted at the pinned WebContents so the assistant panel
+        // that triggered the call gets the event, even if a different project
+        // view is currently focused.
+        if (!isRendererOwned(payload.sessionId)) return;
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
         const wc = webContentsModule.fromId(id);
@@ -1348,6 +1567,7 @@ export class HttpLifecycle {
 
     const notifySessionRevoked: import("./sessionServer.js").SessionServerDeps["notifySessionRevoked"] =
       (payload) => {
+        if (!isRendererOwned(payload.sessionId)) return;
         const id =
           payload.pinnedWebContentsId ??
           this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
@@ -1366,10 +1586,11 @@ export class HttpLifecycle {
 
     const notifyToolCallStarted: import("./sessionServer.js").SessionServerDeps["notifyToolCallStarted"] =
       (payload) => {
-        // Help-session bearers only — targeted at the pinned WebContents so the
-        // assistant panel that triggered the call gets the live activity event,
-        // even if a different project view is focused. External/api-key sessions
-        // have no panel to show the strip, so the map lookup no-ops for them.
+        // Daintree's own assistant surfaces only — targeted at the pinned
+        // WebContents so the assistant panel that triggered the call gets the
+        // live activity event, even if a different project view is focused. A
+        // third-party client's calls do not belong in that strip.
+        if (!isRendererOwned(payload.sessionId)) return;
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
         const wc = webContentsModule.fromId(id);
@@ -1396,6 +1617,7 @@ export class HttpLifecycle {
 
     const notifyToolCallSettled: import("./sessionServer.js").SessionServerDeps["notifyToolCallSettled"] =
       (payload) => {
+        if (!isRendererOwned(payload.sessionId)) return;
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
         const wc = webContentsModule.fromId(id);
@@ -1423,10 +1645,12 @@ export class HttpLifecycle {
 
     const notifyDisplayImage: import("./sessionServer.js").SessionServerDeps["notifyDisplayImage"] =
       (payload) => {
-        // Help-session bearers only — targeted at the pinned WebContents so the
-        // figure renders in the assistant panel that triggered the call, even
-        // if a different project view is focused. The tool is outside the
-        // external/api-key allowlist, so this never fires for those sessions.
+        // Daintree's own assistant surfaces only — targeted at the pinned
+        // WebContents so the figure renders in the assistant panel that
+        // triggered the call, even if a different project view is focused. The
+        // tool is outside the external allowlist as well, so this is belt and
+        // braces.
+        if (!isRendererOwned(payload.sessionId)) return;
         const id = this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);
         if (id === undefined) return;
         const wc = webContentsModule.fromId(id);
@@ -1544,11 +1768,13 @@ export class HttpLifecycle {
     ) {
       throw new Error("Session is no longer active");
     }
-    // Only help-session bearers should be elevated through this surface —
-    // an unpinned session is api-key/external and has no UI invariant to
-    // satisfy.
+    // Only Daintree's own assistant surfaces may be elevated here — a
+    // third-party client has no UI invariant to satisfy. Gated on the recorded
+    // origin, not on merely having a renderer route (#11789): a
+    // workspace-bound external session has a route, and inferring eligibility
+    // from it would hand this surface to exactly the caller class it excludes.
     const pinnedWcId = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
-    if (pinnedWcId === undefined) {
+    if (pinnedWcId === undefined || !this.deps.sessionStore.isRendererOwnedOrigin(sessionId)) {
       throw new Error("Session is not eligible for renderer tier elevation");
     }
     if (callerWcId !== undefined && callerWcId !== pinnedWcId) {
@@ -1615,8 +1841,14 @@ export class HttpLifecycle {
     ) {
       throw new Error("Session is no longer active");
     }
+    // Origin-gated for the same reason as {@link setSessionTier} (#11789), and
+    // more urgently: `issueGrant` has no rank floor to fall back on. Its only
+    // other check is `minimumPermittingTier(toolId) !== null`, and the call gate
+    // honours a grant over failed tier membership — so an external session that
+    // reached this surface could hold a grant for a tool outside
+    // `MCP_EXTERNAL_TIER_TOOLS` entirely.
     const pinnedWcId = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
-    if (pinnedWcId === undefined) {
+    if (pinnedWcId === undefined || !this.deps.sessionStore.isRendererOwnedOrigin(sessionId)) {
       throw new Error("Session is not eligible for renderer tier elevation");
     }
     if (callerWcId !== undefined && callerWcId !== pinnedWcId) {

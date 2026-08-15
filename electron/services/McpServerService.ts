@@ -201,6 +201,11 @@ export class McpServerService {
       requestManifestForWebContents: (id) => this.bridge.requestManifestForWebContents(id),
       dispatchActionForWebContents: (id, actionId, args, confirmed, contextOverride) =>
         this.bridge.dispatchActionForWebContents(id, actionId, args, confirmed, contextOverride),
+      requestManifestForWorkspace: (workspaceId) =>
+        this.bridge.requestManifestForWorkspace(workspaceId),
+      dispatchActionForWorkspace: (workspaceId, actionId, args, confirmed) =>
+        this.bridge.dispatchActionForWorkspace(workspaceId, actionId, args, confirmed),
+      resolveWorkspaceBinding: (workspaceId) => this.bridge.resolveWorkspaceBinding(workspaceId),
       handleWaitUntilIdle: (rawArgs, signal, options) =>
         handleWaitUntilIdle(rawArgs, signal, options),
       handleWaitUntilIdleBatch: (rawArgs, signal, options) =>
@@ -210,6 +215,8 @@ export class McpServerService {
       handleProjectRunCheck: (rawArgs, signal) => handleProjectRunCheck(rawArgs, signal),
       getCachedManifest: () => this.bridge.getCachedManifest(),
       getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
+      getCachedManifestForWorkspace: (workspaceId) =>
+        this.bridge.getCachedManifestForWorkspace(workspaceId),
       clearCachedManifest: () => this.bridge.clearCache(),
       cleanupListeners: this.cleanupListeners,
       pendingManifests: this.pendingManifests,
@@ -680,6 +687,11 @@ export class McpServerService {
       console.error("[MCP] Failed to append grant audit record:", err);
     }
 
+    // Origin-gated like every other renderer push (#11789). Unreachable in
+    // practice — a third-party session can never hold a grant, since
+    // `issueGrant` refuses it — but stating the rule beats relying on that
+    // inference holding, which is the habit this issue exists to break.
+    if (!this.sessionStore.isRendererOwnedOrigin(sessionId)) return;
     const id = this.sessionStore.sessionWebContentsMap.get(sessionId);
     if (id === undefined) return;
     const wc = webContentsModule.fromId(id);

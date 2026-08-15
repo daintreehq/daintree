@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 
-const { mockIpcMain, mockWebContentsRegistry } = vi.hoisted(() => {
+const { mockIpcMain, mockWebContentsRegistry, mockProjectViews } = vi.hoisted(() => {
   class IpcMainMock {
     private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
     on(event: string, listener: (...args: unknown[]) => void): this {
@@ -28,6 +28,11 @@ const { mockIpcMain, mockWebContentsRegistry } = vi.hoisted(() => {
   return {
     mockIpcMain: new IpcMainMock(),
     mockWebContentsRegistry: new Map<number, unknown>(),
+    // workspaceId -> the live views registered for it (#11789). Drives
+    // `getWebContentsForProject`, which is the only thing the workspace route
+    // consults — deliberately, since it reads the registry without attaching,
+    // thawing, focusing, or switching anything.
+    mockProjectViews: new Map<string, unknown[]>(),
   };
 });
 
@@ -42,7 +47,16 @@ vi.mock("../../../window/windowRef.js", () => ({
   getProjectViewManager: () => null,
 }));
 
-import { createRendererBridge, SessionBindingError } from "../rendererBridge.js";
+vi.mock("../../../window/webContentsRegistry.js", () => ({
+  getWebContentsForProject: (projectId: string) => mockProjectViews.get(projectId) ?? [],
+}));
+
+import {
+  createRendererBridge,
+  SessionBindingError,
+  WorkspaceBindingError,
+  McpRouteBindingError,
+} from "../rendererBridge.js";
 import type { PendingRequest, DispatchEnvelope } from "../shared.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
@@ -1003,5 +1017,154 @@ describe("rendererBridge — unpinned routing follows focus order (#11536)", () 
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("rendererBridge — workspace-bound routing (#11789)", () => {
+  let pendingManifests: Map<string, PendingRequest<ActionManifestEntry[]>>;
+  let pendingDispatches: Map<string, PendingRequest<DispatchEnvelope>>;
+  let bridge: ReturnType<typeof createRendererBridge>;
+
+  beforeEach(() => {
+    mockIpcMain.removeAllListeners();
+    mockWebContentsRegistry.clear();
+    mockProjectViews.clear();
+    pendingManifests = new Map();
+    pendingDispatches = new Map();
+    bridge = createRendererBridge(pendingManifests, pendingDispatches, () => null);
+    bridge.setupListeners([]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function registerView(workspaceId: string, id: number): FakeWebContents {
+    const wc = makeWebContents(id);
+    mockWebContentsRegistry.set(id, wc);
+    mockProjectViews.set(workspaceId, [...(mockProjectViews.get(workspaceId) ?? []), wc]);
+    return wc;
+  }
+
+  /** Settle whichever dispatch the bridge just sent, as the renderer would. */
+  function settleDispatch(): void {
+    const [requestId] = [...pendingDispatches.keys()];
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: pendingDispatches.get(requestId!)!.webContentsId } },
+      { requestId, result: { ok: true, result: "done" } }
+    );
+  }
+
+  it("dispatches to the view that owns the workspace", async () => {
+    const wc = registerView("ws-a", 101);
+    registerView("ws-b", 202);
+
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    settleDispatch();
+    await promise;
+
+    expect(wc.send).toHaveBeenCalledWith(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST,
+      expect.objectContaining({ actionId: "terminal.list" })
+    );
+    expect((mockWebContentsRegistry.get(202) as FakeWebContents).send).not.toHaveBeenCalled();
+  });
+
+  it("keeps routing to its workspace after another workspace's view is registered", async () => {
+    // The isolation the whole feature is for: nothing about workspace B
+    // appearing (or being focused) may move workspace A's session.
+    const wcA = registerView("ws-a", 101);
+    const promiseOne = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    settleDispatch();
+    await promiseOne;
+
+    registerView("ws-b", 202);
+    const promiseTwo = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    settleDispatch();
+    await promiseTwo;
+
+    expect(wcA.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("follows the workspace to a replacement view rather than dying with the old one", async () => {
+    // A WebContents id lives and dies with one view; the workspace id outlives
+    // it. Binding to the id would leave the session permanently gone even after
+    // its workspace came back — which is why the route re-resolves per call.
+    registerView("ws-a", 101);
+    mockProjectViews.set("ws-a", []);
+    mockWebContentsRegistry.delete(101);
+
+    await expect(
+      bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false)
+    ).rejects.toBeInstanceOf(WorkspaceBindingError);
+
+    const replacement = registerView("ws-a", 303);
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    settleDispatch();
+    await promise;
+
+    expect(replacement.send).toHaveBeenCalled();
+  });
+
+  it("fails closed when the workspace has no live view, never falling back to another", async () => {
+    registerView("ws-b", 202);
+
+    await expect(
+      bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false)
+    ).rejects.toMatchObject({ code: "SESSION_BINDING_GONE", reason: "not-found" });
+    expect((mockWebContentsRegistry.get(202) as FakeWebContents).send).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the workspace has more than one live view", async () => {
+    // Two views own the workspace, so "the" target is undefined. Guessing here
+    // would reintroduce exactly the ambiguity the binding removes.
+    registerView("ws-a", 101);
+    registerView("ws-a", 102);
+
+    await expect(
+      bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false)
+    ).rejects.toMatchObject({ code: "SESSION_BINDING_GONE", reason: "ambiguous" });
+  });
+
+  it("reports both binding failures as one route-error family", async () => {
+    // `sessionServer` narrows on the base class, so both must be caught by it
+    // or a workspace failure would surface as an opaque EXECUTION_ERROR.
+    await expect(bridge.requestManifestForWorkspace("ws-a")).rejects.toBeInstanceOf(
+      McpRouteBindingError
+    );
+    expect(new SessionBindingError(1)).toBeInstanceOf(McpRouteBindingError);
+  });
+
+  it("reads the bound workspace's cached manifest, and nothing when it can't resolve one", async () => {
+    registerView("ws-a", 101);
+    const promise = bridge.requestManifestForWorkspace("ws-a");
+    const [requestId] = [...pendingManifests.keys()];
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE,
+      { sender: { id: 101 } },
+      { requestId, manifest: [{ id: "terminal.list" }] }
+    );
+    await promise;
+
+    expect(bridge.getCachedManifestForWorkspace("ws-a")).toEqual([{ id: "terminal.list" }]);
+    // An unresolvable workspace must not silently fall through to the shared
+    // cache — that would serve another workspace's tool surface.
+    expect(bridge.getCachedManifestForWorkspace("ws-missing")).toBeNull();
+  });
+
+  it("resolveWorkspaceBinding refuses unknown and ambiguous workspaces", () => {
+    registerView("ws-dup", 101);
+    registerView("ws-dup", 102);
+
+    expect(() => bridge.resolveWorkspaceBinding("ws-missing")).toThrow(WorkspaceBindingError);
+    expect(() => bridge.resolveWorkspaceBinding("ws-dup")).toThrow(/more than one/);
+  });
+
+  it("resolveWorkspaceBinding returns the requested id even with no workspace-ref accessor", () => {
+    // `getProjectViewManager` is mocked to null here, so the descriptive fields
+    // are unresolvable — losing a label must never cost a working binding.
+    registerView("ws-a", 101);
+    expect(bridge.resolveWorkspaceBinding("ws-a")).toEqual({ workspaceId: "ws-a" });
   });
 });

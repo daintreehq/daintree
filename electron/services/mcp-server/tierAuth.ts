@@ -105,14 +105,68 @@ export function resolveTokenTier(
  * reach are now cut from the tier allowlist itself, which revokes them honestly
  * at both gates.
  */
-export function shouldExposeTool(entry: ActionManifestEntry, tier: McpTier): boolean {
+export function shouldExposeTool(
+  entry: ActionManifestEntry,
+  tier: McpTier,
+  session: SessionSurfacePolicy = UNBOUND_SESSION_SURFACE
+): boolean {
   if (entry.danger === "restricted") {
     return false;
   }
   if (entry.mcpVisibility === "hidden") {
     return false;
   }
+  if (isWithheldFromBoundSession(entry, tier, session)) {
+    return false;
+  }
   return isTierPermitted(tier, entry.id);
+}
+
+/**
+ * Whether this session routes every call to one workspace it was bound to at
+ * handshake (#11789), rather than following window focus.
+ */
+export interface SessionSurfacePolicy {
+  workspaceBound: boolean;
+}
+
+/** The default for every session that did not send a workspace selector. */
+export const UNBOUND_SESSION_SURFACE: SessionSurfacePolicy = { workspaceBound: false };
+
+/**
+ * Whether a confirm-gated tool must be withheld from a workspace-bound external
+ * session (#11789).
+ *
+ * A `danger: "confirm"` dispatch is only ever approved by a human in the target
+ * renderer's native dialog, which gives up after 28s — inside main's 30s
+ * dispatch timeout and the client's 60s request timeout. A session bound to a
+ * background workspace has no one watching that view, and no arrangement holds
+ * the call open long enough to go find someone. Presenting the dialog in some
+ * *other* visible renderer was considered and rejected: it turns approval into a
+ * cross-renderer trust boundary needing a one-use nonce bound to the session,
+ * workspace generation, target and presenter ids, action id, args hash and
+ * deadline, plus presenter re-election mid-dialog — a great deal of machinery to
+ * buy back one tool.
+ *
+ * So the tool is withheld from the session's effective surface *and* refused
+ * before dispatch, per the #6653 rule that confirmation is a pre-dispatch
+ * protocol primitive rather than something a model is trusted to honour.
+ *
+ * Derived from the manifest's own `danger` rather than a hand-written id list,
+ * so a future confirm-gated addition to `MCP_EXTERNAL_TIER_TOOLS` is covered the
+ * day it lands — the drift a second curated allowlist would have guaranteed.
+ *
+ * Keyed on external tier AND bound, never on "this session has a renderer
+ * route": the Daintree Assistant is pinned and carries `recipe.run` in its own
+ * tier allowlist, so a blanket "routed sessions can't confirm" rule would
+ * silently regress it.
+ */
+export function isWithheldFromBoundSession(
+  entry: Pick<ActionManifestEntry, "danger">,
+  tier: McpTier,
+  session: SessionSurfacePolicy
+): boolean {
+  return session.workspaceBound && tier === "external" && entry.danger === "confirm";
 }
 
 /**

@@ -47,6 +47,7 @@ import {
   MCP_CLIENT_CONFIGS,
   type McpClientConfigId,
 } from "@shared/config/mcpClientConfigs";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 
 interface McpServerStatus {
   enabled: boolean;
@@ -84,6 +85,7 @@ export function McpServerSettingsTab() {
   // don't flash a loading state for sub-400ms work.
   const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
   const [copied, setCopied] = useState(false);
+  const [copiedScoped, setCopiedScoped] = useState(false);
   const [clientConfigId, setClientConfigId] = useState<McpClientConfigId>("claude-code");
   const [error, setError] = useState<string | null>(null);
   const [portInput, setPortInput] = useState("");
@@ -140,6 +142,12 @@ export function McpServerSettingsTab() {
   // snapshot hasn't caught up yet (matches the assistant tab precedent at
   // DaintreeAssistantSettingsTab.tsx:740).
   const boundPort = runtimeSnapshot.port ?? status.port;
+  // The workspace this settings view itself belongs to — immutable for the life
+  // of the WebContents, and the only view-local identity that is safe to hand
+  // out here (#11789). `useProjectStore`-style current-project reads describe
+  // what the user is looking at globally, which is exactly the focus-following
+  // ambiguity a scoped config exists to remove.
+  const viewWorkspaceId = getViewWorkspaceId();
   // Displayed URL and copied snippet come from one build, so they can't drift
   // the way the old `/sse` box did beside a `/mcp` snippet (#11535).
   const clientConfig = buildMcpClientConfig(clientConfigId, {
@@ -152,6 +160,7 @@ export function McpServerSettingsTab() {
   const clearConfigCopyFeedback = () => {
     copyGenerationRef.current += 1;
     setCopied(false);
+    setCopiedScoped(false);
     if (configCopyTimeoutRef.current) {
       clearTimeout(configCopyTimeoutRef.current);
       configCopyTimeoutRef.current = null;
@@ -348,7 +357,16 @@ export function McpServerSettingsTab() {
     setDisableClients([]);
   };
 
-  const handleCopyConfig = async () => {
+  /**
+   * Copy the client config, optionally scoped to this view's workspace (#11789).
+   *
+   * A scoped config adds the workspace header, so the client it configures binds
+   * to this project and keeps routing there no matter which Daintree window the
+   * user later focuses. The unscoped copy is left exactly as it was: it produces
+   * the same bytes it always did, and the session it configures follows focus,
+   * which is the documented behaviour for clients that don't ask for a binding.
+   */
+  const copyClientConfig = async (workspaceId: string | null) => {
     const generation = ++copyGenerationRef.current;
     try {
       setError(null);
@@ -361,12 +379,14 @@ export function McpServerSettingsTab() {
       const { snippet } = buildMcpClientConfig(clientConfigId, {
         port: runtimeSnapshot.port ?? fresh.port,
         apiKey: fresh.apiKey,
+        workspaceId,
       });
       await navigator.clipboard.writeText(snippet);
       if (generation !== copyGenerationRef.current) return;
-      setCopied(true);
+      const setFlag = workspaceId === null ? setCopied : setCopiedScoped;
+      setFlag(true);
       if (configCopyTimeoutRef.current) clearTimeout(configCopyTimeoutRef.current);
-      configCopyTimeoutRef.current = setTimeout(() => setCopied(false), COPY_FEEDBACK_MS);
+      configCopyTimeoutRef.current = setTimeout(() => setFlag(false), COPY_FEEDBACK_MS);
     } catch (err) {
       if (generation !== copyGenerationRef.current) return;
       clearConfigCopyFeedback();
@@ -374,6 +394,9 @@ export function McpServerSettingsTab() {
       logError("Failed to copy MCP config", err);
     }
   };
+
+  const handleCopyConfig = () => copyClientConfig(null);
+  const handleCopyScopedConfig = () => copyClientConfig(viewWorkspaceId);
 
   // Stale "Copied!" would otherwise describe a payload the user no longer has.
   const handleSelectClientConfig = (id: McpClientConfigId) => {
@@ -648,19 +671,49 @@ export function McpServerSettingsTab() {
                   columns={3}
                 />
 
-                <button
-                  onClick={handleCopyConfig}
-                  className={cn(
-                    "flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
-                    "border border-daintree-border hover:bg-overlay-soft",
-                    copied
-                      ? "text-status-success border-status-success/30"
-                      : "text-daintree-text/70 hover:text-daintree-text"
-                  )}
-                >
-                  {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  {copied ? "Copied!" : "Copy MCP config"}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={handleCopyConfig}
+                    className={cn(
+                      "flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
+                      "border border-daintree-border hover:bg-overlay-soft",
+                      copied
+                        ? "text-status-success border-status-success/30"
+                        : "text-daintree-text/70 hover:text-daintree-text"
+                    )}
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copied ? "Copied!" : "Copy MCP config"}
+                  </button>
+
+                  {viewWorkspaceId ? (
+                    <button
+                      onClick={handleCopyScopedConfig}
+                      className={cn(
+                        "flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
+                        "border border-daintree-border hover:bg-overlay-soft",
+                        copiedScoped
+                          ? "text-status-success border-status-success/30"
+                          : "text-daintree-text/70 hover:text-daintree-text"
+                      )}
+                    >
+                      {copiedScoped ? (
+                        <Check className="w-3.5 h-3.5" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5" />
+                      )}
+                      {copiedScoped ? "Copied!" : "Copy config for this project"}
+                    </button>
+                  ) : null}
+                </div>
+
+                {viewWorkspaceId ? (
+                  <p className="text-xs text-daintree-text/50 leading-relaxed select-text">
+                    A project-scoped config pins that client to this project, so its calls keep
+                    landing here whichever window you're looking at. The plain config follows
+                    whichever Daintree window you focused last.
+                  </p>
+                ) : null}
 
                 {status.apiKey ? (
                   <p className="text-xs text-daintree-text/50 leading-relaxed select-text">

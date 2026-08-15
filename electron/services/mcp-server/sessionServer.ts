@@ -49,13 +49,14 @@ import {
   buildToolError,
   buildMcpErrorPayload,
   withResolvedWorkspace,
+  WORKSPACE_BINDING_CAPABILITY_KEY,
   type DispatchedWorkspaceRef,
 } from "./shared.js";
 import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
   MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
-import { SessionBindingError, RendererBridgeUnavailableError } from "./rendererBridge.js";
+import { McpRouteBindingError, RendererBridgeUnavailableError } from "./rendererBridge.js";
 import {
   buildDedupKey,
   canonicalArgsHash,
@@ -64,6 +65,8 @@ import {
 } from "./sessionDedup.js";
 import {
   shouldExposeTool,
+  isWithheldFromBoundSession,
+  type SessionSurfacePolicy,
   isTierPermitted,
   buildToolInputSchema,
   buildAnnotations,
@@ -171,6 +174,12 @@ export function validateDisplayImageUrl(
 
 export interface SessionServerDeps {
   sessionStore: SessionStore;
+  /**
+   * The workspace this session was bound to at handshake (#11789), echoed in
+   * the `initialize` result so a client can verify where its calls will land
+   * before issuing a mutation. Absent for unbound sessions.
+   */
+  workspaceBinding?: DispatchedWorkspaceRef;
   requestManifest: () => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>;
   dispatchAction: (
     actionId: string,
@@ -355,7 +364,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifyToolCallStarted,
     notifyToolCallSettled,
     notifyDisplayImage,
+    workspaceBinding,
   } = deps;
+
+  /**
+   * Whether every call from this session routes to one bound workspace
+   * (#11789). Read live rather than captured, so a session torn down mid-call
+   * loses its binding here at the same moment routing loses it — the two can
+   * never disagree about which surface the caller has.
+   */
+  const sessionSurface = (): SessionSurfacePolicy => ({
+    workspaceBound: sessionStore.sessionWorkspaceMap.has(sessionId),
+  });
 
   const server = new Server(
     { name: "Daintree", version: app.getVersion() },
@@ -368,6 +388,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         tools: { listChanged: true },
         resources: { subscribe: true, listChanged: false },
         prompts: {},
+        // Echo the resolved workspace binding so a client can verify it before
+        // issuing a mutation (#11789). `experimental` is the SDK's sanctioned
+        // slot for server-defined capabilities and the SDK folds it into the
+        // initialize result verbatim — which is why this is declared here
+        // rather than by registering our own `InitializeRequestSchema` handler,
+        // a second handler would shadow the SDK's `_oninitialize` and lose the
+        // `_clientCapabilities` capture that elicitation negotiation reads.
+        ...(workspaceBinding
+          ? {
+              experimental: {
+                [WORKSPACE_BINDING_CAPABILITY_KEY]: { ...workspaceBinding },
+              },
+            }
+          : {}),
       },
       // The SDK folds this into the `initialize` result on its own, so no
       // handler of ours is involved (#11541). Passed at construction because
@@ -407,6 +441,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     try {
       return await requestManifest();
     } catch (err) {
+      // A dead routing target is not a transient fetch failure (#11789). Both
+      // the pinned and workspace-bound routes fail closed on purpose, so
+      // serving a cached manifest here would answer `tools/list` from a view
+      // this session can no longer reach — and report it as an ordinary
+      // "unavailable" rather than the binding failure it is. Surface
+      // SESSION_BINDING_GONE in `data` so a client can tell "reconnect and
+      // rebind" from "retry in a moment".
+      if (err instanceof McpRouteBindingError) {
+        throw new McpError(ErrorCode.InternalError, err.message, {
+          code: SESSION_BINDING_GONE,
+        });
+      }
       if (cachedFallback === null) {
         throw new McpError(ErrorCode.InternalError, "Action manifest unavailable");
       }
@@ -418,8 +464,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const manifest = await resolveManifest("tools/list");
     const tier = sessionStore.getTier(sessionId);
+    const session = sessionSurface();
     const tools = manifest
-      .filter((entry) => shouldExposeTool(entry, tier))
+      .filter((entry) => shouldExposeTool(entry, tier, session))
       .map((entry) => {
         const outputSchema = buildToolOutputSchema(entry);
         const _meta =
@@ -442,6 +489,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const { args, requestKey } = parseToolArguments(request.params.arguments);
     const startedAt = Date.now();
     const tier = sessionStore.getTier(sessionId);
+    // Captured once, alongside the tier the permission gate authorizes against,
+    // so every surface decision in this call describes one session state
+    // (#11789).
+    const boundSessionSurface = sessionSurface();
     // Snapshot the turn id once, at dispatch start, before any guard or await
     // can yield to an active→passive FSM transition that would clear it (#10067).
     // Every consumer below — the started/settled strip events and all audit
@@ -585,6 +636,105 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         return buildToolError({
           code: TIER_NOT_PERMITTED_CODE,
           message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
+        });
+      }
+    }
+
+    // Confirm-gated tools are unreachable for a workspace-bound external
+    // session, so refuse them here — after tier/grant admission, but before a
+    // native grant use is charged, before dedup can cache an answer, and long
+    // before anything reaches a renderer (#11789).
+    //
+    // Placed after the tier gate so a tool that is simply outside the surface
+    // still reports TIER_NOT_PERMITTED, which is the truer answer. Placed
+    // before everything else because this is a hard ceiling: a live per-tool or
+    // native grant widens dispatch past the tier floor, and must not widen past
+    // this one — the dialog those grants would bypass is the same dialog nobody
+    // is watching.
+    if (boundSessionSurface.workspaceBound && tier === "external") {
+      let boundManifest: import("../../../shared/types/actions.js").ActionManifestEntry[];
+      try {
+        boundManifest = getCachedManifest() ?? (await requestManifest());
+      } catch (err) {
+        // Fail closed. Proceeding on an unresolved manifest would erase the
+        // only evidence that this action needs confirmation, turning a refusal
+        // into an unattended dispatch. Audited as a throw, matching how the
+        // post-dispatch binding failure below records the same class of error.
+        try {
+          appendAuditRecord({
+            toolId: actionId,
+            sessionId,
+            tier,
+            args,
+            durationMs: Date.now() - startedAt,
+            outcome: { kind: "throw", error: err },
+            capturedTurnId,
+          });
+        } catch (auditErr) {
+          console.error("[MCP] Failed to append audit record:", auditErr);
+        }
+        if (err instanceof McpRouteBindingError) {
+          return buildToolError({ code: SESSION_BINDING_GONE, message: err.message });
+        }
+        return buildToolError({
+          code: EXECUTION_ERROR_CODE,
+          message: formatErrorMessage(
+            err,
+            `Could not resolve the action surface for workspace-bound tool '${actionId}'`
+          ),
+        });
+      }
+
+      const withheldIds = new Set(
+        boundManifest
+          .filter((entry) => isWithheldFromBoundSession(entry, tier, boundSessionSurface))
+          .map((entry) => entry.id)
+      );
+
+      // Discovery must mirror dispatch authority (#11525): narrow the
+      // introspection surface by the same ceiling, after the grant union, so a
+      // grant can never make a withheld tool findable.
+      if (introspectionSurface) {
+        for (const withheldId of withheldIds) {
+          introspectionSurface.permittedActionIds.delete(withheldId);
+        }
+      }
+
+      if (withheldIds.has(actionId)) {
+        const message =
+          `Action '${actionId}' requires confirmation, and this MCP session is bound to workspace ` +
+          `'${sessionStore.sessionWorkspaceMap.get(sessionId)}', which runs in the background with no one ` +
+          `watching it to approve the dialog. The action was not run. Confirm-gated actions are not part ` +
+          `of a workspace-bound session's tool surface — run this one from Daintree, or connect without a ` +
+          `workspace binding.`;
+        const value: import("../../../shared/types/actions.js").ActionDispatchResult = {
+          ok: false,
+          error: {
+            code: CONFIRMATION_REQUIRED_CODE,
+            message,
+            // Distinct from the `"unavailable"` a windowless host reports: that
+            // one clears when a window opens, so retrying is sane. This one is
+            // structural for the life of the session, so retrying never is.
+            details: { confirmationChannel: "workspace-bound" },
+          },
+        };
+        try {
+          appendAuditRecord({
+            toolId: actionId,
+            sessionId,
+            tier,
+            args,
+            durationMs: Date.now() - startedAt,
+            outcome: { kind: "result", value },
+            capturedTurnId,
+          });
+        } catch (err) {
+          console.error("[MCP] Failed to append audit record:", err);
+        }
+        return buildToolError({
+          code: CONFIRMATION_REQUIRED_CODE,
+          message,
+          details: { confirmationChannel: "workspace-bound" },
         });
       }
     }
@@ -887,7 +1037,15 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // and keeps it consistent with the audit record, which logs the
             // same value. A tier that changes mid-call fires
             // `notifications/tools/list_changed`, so a client re-reads anyway.
-            const result = buildSurfaceManifest(manifest, tier, app.getVersion());
+            const result = buildSurfaceManifest(
+              manifest,
+              tier,
+              app.getVersion(),
+              // Same binding the gate above authorized this call against, and
+              // the same one `tools/list` filters by — so the report can never
+              // advertise a tool the listing withholds (#11789).
+              boundSessionSurface
+            );
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
@@ -1123,7 +1281,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           dispatchedWorkspace = envelope.dispatchedWorkspace;
         } catch (err) {
           outcome = { kind: "throw", error: err };
-          if (err instanceof SessionBindingError) {
+          if (err instanceof McpRouteBindingError) {
             return buildToolError({
               code: SESSION_BINDING_GONE,
               message: err.message,

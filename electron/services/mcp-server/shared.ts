@@ -29,6 +29,7 @@ import {
   WORKBENCH_TIER_TOOLS as WORKBENCH_TIER_TOOLS_LIST,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { MCP_EXTERNAL_TIER_TOOLS } from "../../../shared/config/mcpExternalTierAllowlist.js";
+import { MCP_WORKSPACE_ID_HEADER as MCP_WORKSPACE_ID_HEADER_CANONICAL } from "../../../shared/config/mcpClientConfigs.js";
 import { safeSerializeToolResult } from "../../utils/safeSerializeToolResult.js";
 import { buildToolCallTextResult } from "./toolCallResult.js";
 
@@ -234,6 +235,92 @@ export const SESSION_BINDING_GONE = "SESSION_BINDING_GONE";
 export const MCP_DEDUP_KEY_COLLISION_CODE = "MCP_DEDUP_KEY_COLLISION";
 export const PRE_AUTH_FAILED_CODE = "PRE_AUTH_FAILED";
 export const INVALID_URL_CODE = "INVALID_URL";
+
+/**
+ * How a session's bearer was authenticated, recorded explicitly at handshake
+ * (#11789). Before this, "which renderer owns this session" was inferred from
+ * presence in `sessionWebContentsMap` — but that map is simultaneously the
+ * routing table and the authorization gate for `issueGrant` / `setSessionTier`,
+ * so binding an external session to a workspace would have made it eligible for
+ * renderer-driven privilege elevation it must never have.
+ *
+ * Routing reads the WebContents / workspace maps. Authorization, notifications
+ * and external-client inventory read this. `external` covers api-key bearers,
+ * unauthenticated loopback, and generic pane tokens — everything that is not one
+ * of Daintree's own assistant surfaces.
+ */
+export type McpSessionOrigin = "help" | "assistant-pane" | "external";
+
+/**
+ * Lookup key for the workspace-selector header on an incoming request (#11789).
+ *
+ * Derived from the canonical spelling the config builders emit rather than
+ * written out again, because Node lower-cases incoming header names and the two
+ * strings would otherwise be free to drift — leaving clients sending a header
+ * the server no longer reads.
+ */
+export const MCP_WORKSPACE_ID_HEADER = MCP_WORKSPACE_ID_HEADER_CANONICAL.toLowerCase();
+
+/** Query-param spelling of {@link MCP_WORKSPACE_ID_HEADER}, for clients that cannot set headers. */
+export const MCP_WORKSPACE_ID_QUERY_PARAM = "workspaceId";
+
+/**
+ * `capabilities.experimental` key carrying the workspace a session resolved to,
+ * echoed in the `initialize` result so a client can verify its binding before
+ * issuing a single mutation (#11789).
+ *
+ * Declared at `Server` construction — the SDK folds `getCapabilities()` into the
+ * initialize result itself, so no handler of ours is involved. Registering a
+ * second `InitializeRequestSchema` handler to inject `_meta` instead would skip
+ * the SDK's own `_oninitialize`, losing the `_clientCapabilities` /
+ * `_clientVersion` capture that `getClientCapabilities()` — and therefore the
+ * elicitation-capability negotiation — depends on.
+ *
+ * Distinct from {@link RESOLVED_WORKSPACE_META_KEY}: that reports where a call
+ * actually landed, after the fact. This declares where every call *will* land.
+ */
+export const WORKSPACE_BINDING_CAPABILITY_KEY = "org.daintree/workspace-binding";
+
+/**
+ * Payload advertised under {@link WORKSPACE_BINDING_CAPABILITY_KEY} (#11789).
+ *
+ * `workspaceId` is the routing identity and is always present — it is the value
+ * the client sent and the one every later call resolves through. `kind` and
+ * `workspacePath` are human-verification detail resolved from the bound view;
+ * they are optional because a host whose view manager predates the workspace-ref
+ * accessor still binds and routes correctly, and losing a label must never cost
+ * a working binding.
+ */
+export interface McpWorkspaceBinding {
+  workspaceId: string;
+  kind?: DispatchedWorkspaceRef["kind"];
+  workspacePath?: string;
+}
+
+/**
+ * JSON-RPC error code for a refused handshake (#11789). In the `-32000..-32099`
+ * range the spec reserves for implementation-defined server errors, and distinct
+ * from the `-32001` this server already returns for "Session not found" so a
+ * client can tell "your selector is wrong" from "your session expired".
+ */
+export const MCP_HANDSHAKE_REJECTED_CODE = -32002;
+
+/**
+ * Stable machine-readable reasons a workspace selector was refused, carried in
+ * `error.data.code`. Clients branch on these; the human-readable `message` is
+ * free to change.
+ */
+export type McpWorkspaceSelectorRejectionCode =
+  /** Header and query param both present, naming different workspaces. */
+  | "WORKSPACE_SELECTOR_MISMATCH"
+  /** Empty, repeated, or comma-folded selector — no single unambiguous value. */
+  | "WORKSPACE_SELECTOR_INVALID"
+  /** Selector sent by a bearer that binds through its own renderer pin instead. */
+  | "WORKSPACE_SELECTOR_NOT_ALLOWED"
+  /** No live registered view owns that workspace. */
+  | "WORKSPACE_NOT_FOUND"
+  /** More than one live view owns it, so "the" target is undefined. */
+  | "WORKSPACE_AMBIGUOUS";
 
 /**
  * Application-level convention: codes here flag transient failures that a

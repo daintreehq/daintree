@@ -4,6 +4,7 @@ import {
   MCP_CLIENT_CONFIGS,
   buildMcpClientConfig,
   buildMcpServerUrl,
+  MCP_WORKSPACE_ID_HEADER,
   type McpClientConfigId,
 } from "../mcpClientConfigs.js";
 
@@ -116,5 +117,69 @@ describe("mcpClientConfigs", () => {
     expect(fields.get("Transport")).toBe("Streamable HTTP");
     expect(fields.get("URL")).toBe(built.url);
     expect(fields.get("Header")).toBe(`Authorization: Bearer ${READY.apiKey}`);
+  });
+});
+
+describe("workspace-scoped configs (#11789)", () => {
+  const SCOPED = { ...READY, workspaceId: "ws-abc123" };
+
+  describe.each(ALL_IDS)("%s", (id) => {
+    it("carries the workspace header when scoped", () => {
+      const { snippet } = buildMcpClientConfig(id, SCOPED);
+      expect(snippet).toContain(MCP_WORKSPACE_ID_HEADER);
+      expect(snippet).toContain("ws-abc123");
+    });
+
+    it.each([undefined, null, ""])(
+      "produces the pre-binding snippet byte-for-byte when workspaceId is %o",
+      (workspaceId) => {
+        // An unscoped copy must keep working exactly as it did — the binding is
+        // opt-in, and a silent change here would rebind every existing user.
+        expect(buildMcpClientConfig(id, { ...READY, workspaceId }).snippet).toBe(
+          buildMcpClientConfig(id, READY).snippet
+        );
+      }
+    );
+
+    it("keeps the Authorization header alongside the workspace one", () => {
+      const { snippet } = buildMcpClientConfig(id, SCOPED);
+      expect(snippet).toContain("Bearer dnt-key-abc123");
+    });
+
+    it("scopes without an api key too", () => {
+      const { snippet } = buildMcpClientConfig(id, { ...SCOPED, apiKey: null });
+      expect(snippet).toContain("ws-abc123");
+      expect(snippet).not.toContain("Bearer");
+    });
+  });
+
+  it("emits parseable JSON for Claude Code with both headers", () => {
+    const { snippet } = buildMcpClientConfig("claude-code", SCOPED);
+    const parsed = JSON.parse(snippet) as {
+      mcpServers: { daintree: { headers: Record<string, string> } };
+    };
+    expect(parsed.mcpServers.daintree.headers).toEqual({
+      Authorization: "Bearer dnt-key-abc123",
+      [MCP_WORKSPACE_ID_HEADER]: "ws-abc123",
+    });
+  });
+
+  it("emits parseable TOML for Codex with both headers", () => {
+    const { snippet } = buildMcpClientConfig("codex", SCOPED);
+    const parsed = parseToml(snippet) as {
+      mcp_servers: { daintree: { http_headers: Record<string, string> } };
+    };
+    expect(parsed.mcp_servers.daintree.http_headers).toEqual({
+      Authorization: "Bearer dnt-key-abc123",
+      [MCP_WORKSPACE_ID_HEADER]: "ws-abc123",
+    });
+  });
+
+  it("escapes a workspace id containing TOML-significant characters", () => {
+    const { snippet } = buildMcpClientConfig("codex", { ...SCOPED, workspaceId: 'ws"a\\b' });
+    const parsed = parseToml(snippet) as {
+      mcp_servers: { daintree: { http_headers: Record<string, string> } };
+    };
+    expect(parsed.mcp_servers.daintree.http_headers[MCP_WORKSPACE_ID_HEADER]).toBe('ws"a\\b');
   });
 });

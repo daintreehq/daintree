@@ -2,14 +2,31 @@ import { ipcMain, webContents as electronWebContents } from "electron";
 import { randomUUID } from "node:crypto";
 import type { WindowRegistry } from "../../window/WindowRegistry.js";
 import { getProjectViewManager } from "../../window/windowRef.js";
+import { getWebContentsForProject } from "../../window/webContentsRegistry.js";
 import type { ActionContext, ActionManifestEntry } from "../../../shared/types/actions.js";
 import type { McpBearerIdentity } from "../../../shared/types/ipc/mcpServer.js";
 import { CHANNELS } from "../../ipc/channels.js";
-import type { PendingRequest, DispatchEnvelope, DispatchedWorkspaceRef } from "./shared.js";
+import type {
+  PendingRequest,
+  DispatchEnvelope,
+  DispatchedWorkspaceRef,
+  McpWorkspaceBinding,
+} from "./shared.js";
 import { MCP_MANIFEST_REQUEST_TIMEOUT_MS, MCP_DISPATCH_TIMEOUT_MS } from "./shared.js";
 
-export class SessionBindingError extends Error {
+/**
+ * Base for every "this session's routing target can't be reached" failure, so
+ * the one `instanceof` check in `sessionServer` covers both the WebContents-pin
+ * and workspace-binding routes (#11789). All of them surface to the client as
+ * `SESSION_BINDING_GONE`: the session is bound to a target it cannot reach, and
+ * dispatching anywhere else is exactly the retargeting these bindings exist to
+ * prevent.
+ */
+export class McpRouteBindingError extends Error {
   readonly code = "SESSION_BINDING_GONE";
+}
+
+export class SessionBindingError extends McpRouteBindingError {
   readonly webContentsId: number;
 
   constructor(webContentsId: number) {
@@ -18,6 +35,33 @@ export class SessionBindingError extends Error {
     );
     this.name = "SessionBindingError";
     this.webContentsId = webContentsId;
+  }
+}
+
+/**
+ * Thrown when a workspace-bound external session (#11789) cannot resolve its
+ * workspace to exactly one live view.
+ *
+ * `not-found` is recoverable in principle — the binding is to a stable workspace
+ * id, so a later call succeeds once that workspace has a live view again — but
+ * the *current* call fails closed rather than falling back to another window.
+ * `ambiguous` means the same workspace is open in more than one view, so "the"
+ * target is undefined; guessing would reintroduce the retargeting this binding
+ * removes.
+ */
+export class WorkspaceBindingError extends McpRouteBindingError {
+  readonly workspaceId: string;
+  readonly reason: "not-found" | "ambiguous";
+
+  constructor(workspaceId: string, reason: "not-found" | "ambiguous") {
+    super(
+      reason === "not-found"
+        ? `No live Daintree view is open for workspace ${workspaceId}, which this MCP session is bound to. The call was not routed anywhere else. Reopen that workspace and retry.`
+        : `Workspace ${workspaceId} is open in more than one Daintree view, so this MCP session's bound target is ambiguous. The call was not routed anywhere. Close the duplicate view and retry.`
+    );
+    this.name = "WorkspaceBindingError";
+    this.workspaceId = workspaceId;
+    this.reason = reason;
   }
 }
 
@@ -115,6 +159,34 @@ export function createRendererBridge(
       throw new SessionBindingError(id);
     }
     return wc;
+  }
+
+  /**
+   * Resolve a workspace-bound session's target renderer (#11789).
+   *
+   * Re-resolved for every operation rather than pinned once at handshake,
+   * because a WebContents id is only stable for the life of one view: a warm
+   * project switch reuses the same view, but LRU eviction destroys it and a
+   * later cold start registers a *new* id under the same workspace id
+   * (`ProjectViewSwitchController`). Caching the handshake id would leave the
+   * session permanently `SESSION_BINDING_GONE` even after its workspace came
+   * back; the workspace id is the identity that survives.
+   *
+   * Deliberately side-effect free — `getWebContentsForProject` is a registry
+   * read that includes cached/frozen views without attaching, thawing,
+   * activating, focusing, or switching anything. Binding a background workspace
+   * must never disturb what the user is looking at.
+   *
+   * Exactly one match, or nothing: zero and many both fail closed. There is no
+   * "pick the first" branch, because that is the focus-order guessing this
+   * whole binding replaces. Dispatching into a *frozen* view is #11790; this
+   * resolver is correct whenever the bound view is live.
+   */
+  function getWorkspaceWebContents(workspaceId: string): Electron.WebContents {
+    const matches = getWebContentsForProject(workspaceId).filter((wc) => !wc.isDestroyed());
+    if (matches.length === 0) throw new WorkspaceBindingError(workspaceId, "not-found");
+    if (matches.length > 1) throw new WorkspaceBindingError(workspaceId, "ambiguous");
+    return matches[0];
   }
 
   function normalizeError(err: unknown, fallback: string): Error {
@@ -411,6 +483,44 @@ export function createRendererBridge(
     );
   }
 
+  /**
+   * Manifest fetch for a workspace-bound external session (#11789). Resolves
+   * the workspace's current view, then reuses the per-WebContents fetch and
+   * cache the pinned path already uses — so a bound session gets the same
+   * cross-window isolation and the same warm cache, keyed by whichever view
+   * currently owns its workspace.
+   */
+  function requestManifestForWorkspace(workspaceId: string): Promise<ActionManifestEntry[]> {
+    let id: number;
+    try {
+      id = getWorkspaceWebContents(workspaceId).id;
+    } catch (err) {
+      return Promise.reject(normalizeError(err, "MCP workspace binding unavailable"));
+    }
+    return requestManifestForWebContents(id);
+  }
+
+  /**
+   * Action dispatch for a workspace-bound external session (#11789). No
+   * `contextOverride`: unlike a help session — which replays the ActionContext
+   * snapshot taken when the user launched it — a bound external session has no
+   * launch moment to replay, and the bound view's own live context already
+   * describes the right workspace.
+   */
+  function dispatchActionForWorkspace(
+    workspaceId: string,
+    actionId: string,
+    args: unknown,
+    confirmed = false
+  ): Promise<DispatchEnvelope> {
+    return sendDispatchRequest(
+      () => getWorkspaceWebContents(workspaceId),
+      actionId,
+      args,
+      confirmed
+    );
+  }
+
   const manifestHandler = (
     event: Electron.IpcMainEvent,
     payload: { requestId: string; manifest: unknown }
@@ -485,9 +595,41 @@ export function createRendererBridge(
     dispatchAction,
     requestManifestForWebContents,
     dispatchActionForWebContents,
+    requestManifestForWorkspace,
+    dispatchActionForWorkspace,
+    /**
+     * Validate a handshake workspace selector and describe what it resolved to
+     * (#11789). Throws {@link WorkspaceBindingError} when the workspace has no
+     * live view or more than one, so the handshake is refused before any session
+     * state exists.
+     *
+     * The descriptive fields are best-effort: `workspaceId` is the routing
+     * identity and is always returned, while `kind`/`workspacePath` come from
+     * the same accessor that stamps `org.daintree/resolved-workspace` and are
+     * omitted if it can't answer.
+     */
+    resolveWorkspaceBinding: (workspaceId: string): McpWorkspaceBinding => {
+      const wc = getWorkspaceWebContents(workspaceId);
+      const ref = resolveDispatchedWorkspace(wc.id);
+      return ref ? { ...ref, workspaceId } : { workspaceId };
+    },
     getCachedManifest: () => cachedManifest,
     getCachedManifestForWebContents: (id: number): ActionManifestEntry[] | null =>
       perWebContentsCache.get(id) ?? null,
+    /**
+     * Warm-cache read for a workspace-bound session (#11789). Fails closed to
+     * `null` when the workspace has no single live view, so a bound session can
+     * never fall back to the shared cache and serve another workspace's tool
+     * surface — the same isolation `getCachedManifestForWebContents` gives the
+     * pinned path.
+     */
+    getCachedManifestForWorkspace: (workspaceId: string): ActionManifestEntry[] | null => {
+      try {
+        return perWebContentsCache.get(getWorkspaceWebContents(workspaceId).id) ?? null;
+      } catch {
+        return null;
+      }
+    },
     clearCache: () => {
       cachedManifest = null;
       // Drop all per-WebContents manifest knowledge in lockstep (#9887) so a

@@ -25,11 +25,14 @@ import {
   readSearchLimit,
   resolveTokenTier,
   shouldExposeTool,
+  isWithheldFromBoundSession,
+  UNBOUND_SESSION_SURFACE,
   ACTIONS_SEARCH_DEFAULT_LIMIT,
   ACTIONS_SEARCH_MAX_LIMIT,
   INTROSPECTION_TOOL_IDS,
 } from "../tierAuth.js";
 import { TIER_ALLOWLISTS } from "../shared.js";
+import { MCP_EXTERNAL_TIER_TOOLS } from "../../../../shared/config/mcpExternalTierAllowlist.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
@@ -1130,5 +1133,79 @@ describe("filterIntrospectionResultForSession", () => {
         error: { code: "NOT_FOUND", message: expect.stringContaining("git.push") },
       });
     });
+  });
+});
+
+describe("isWithheldFromBoundSession (#11789)", () => {
+  const BOUND = { workspaceBound: true };
+
+  it("withholds a confirm-gated tool from a bound external session", () => {
+    expect(isWithheldFromBoundSession({ danger: "confirm" }, "external", BOUND)).toBe(true);
+  });
+
+  it("leaves an unbound external session's confirm-gated tools alone", () => {
+    // An unbound session follows focus into a window someone is looking at, so
+    // the native dialog still has a human in front of it.
+    expect(
+      isWithheldFromBoundSession({ danger: "confirm" }, "external", UNBOUND_SESSION_SURFACE)
+    ).toBe(false);
+  });
+
+  it.each(["workbench", "action", "system"] as const)(
+    "never withholds from the %s tier, so the pinned Assistant is untouched",
+    (tier) => {
+      // The Daintree Assistant is pinned to a renderer and carries confirm-gated
+      // tools in its own allowlist. Keying this on "has a route" instead of
+      // "external and bound" would silently regress it.
+      expect(isWithheldFromBoundSession({ danger: "confirm" }, tier, BOUND)).toBe(false);
+    }
+  );
+
+  it.each(["safe", "destructive", "restricted"] as const)(
+    "does not withhold a %s tool from a bound session",
+    (danger) => {
+      expect(isWithheldFromBoundSession({ danger }, "external", BOUND)).toBe(false);
+    }
+  );
+
+  it("is derived from manifest danger, so it covers any confirm-gated tool in the external allowlist", () => {
+    // Not a curated id list: a future confirm-gated addition to
+    // MCP_EXTERNAL_TIER_TOOLS is withheld the day it lands, with no second
+    // allowlist to keep in step.
+    for (const toolId of MCP_EXTERNAL_TIER_TOOLS) {
+      expect(isWithheldFromBoundSession({ danger: "confirm" }, "external", BOUND)).toBe(true);
+      expect(typeof toolId).toBe("string");
+    }
+  });
+});
+
+describe("shouldExposeTool with a workspace-bound session (#11789)", () => {
+  const BOUND = { workspaceBound: true };
+
+  it("hides a confirm-gated tool the tier would otherwise permit", () => {
+    const entry = makeEntry({ id: "recipe.run", kind: "command", danger: "confirm" });
+    expect(shouldExposeTool(entry, "external")).toBe(isTierPermitted("external", "recipe.run"));
+    expect(shouldExposeTool(entry, "external", BOUND)).toBe(false);
+  });
+
+  it("keeps the rest of the external surface, including its mutating tools", () => {
+    // The bound surface is not "read-only" — losing terminal/agent/worktree
+    // tools would gut the feature rather than narrow it.
+    for (const id of [
+      "terminal.sendCommand",
+      "terminal.new",
+      "agent.launch",
+      "worktree.createWithRecipe",
+    ]) {
+      const entry = makeEntry({ id, kind: "command", danger: "destructive" });
+      expect(shouldExposeTool(entry, "external", BOUND)).toBe(isTierPermitted("external", id));
+    }
+  });
+
+  it("leaves every non-external tier's exposure unchanged when bound", () => {
+    const entry = makeEntry({ id: "recipe.run", kind: "command", danger: "confirm" });
+    for (const tier of ["workbench", "action", "system"] as const) {
+      expect(shouldExposeTool(entry, tier, BOUND)).toBe(shouldExposeTool(entry, tier));
+    }
   });
 });
