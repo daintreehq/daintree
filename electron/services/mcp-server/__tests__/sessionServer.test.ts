@@ -4258,8 +4258,23 @@ describe("workspace-bound external sessions (#11789)", () => {
       await callTool(server, { name: "recipe.run", arguments: {} });
 
       expect(deps.appendAuditRecord).toHaveBeenCalledWith(
-        expect.objectContaining({ toolId: "recipe.run", sessionId: SESSION })
+        expect.objectContaining({
+          toolId: "recipe.run",
+          sessionId: SESSION,
+          tier: "external",
+          outcome: {
+            kind: "result",
+            value: {
+              ok: false,
+              error: expect.objectContaining({
+                code: "CONFIRMATION_REQUIRED",
+                details: { confirmationChannel: "workspace-bound" },
+              }),
+            },
+          },
+        })
       );
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
     });
 
     it("beats a live per-tool grant", async () => {
@@ -4304,6 +4319,53 @@ describe("workspace-bound external sessions (#11789)", () => {
       expect(deps.dispatchAction).toHaveBeenCalled();
     });
 
+    it("refuses an action the resolved manifest does not describe", async () => {
+      // A stale or partial manifest that omits a newly confirm-gated action
+      // would otherwise let exactly the call this guard exists to refuse
+      // through to a renderer nobody is watching. Unknown danger is not safe.
+      const deps = boundDeps({
+        requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list")]),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "recipe.run", arguments: {} });
+
+      expect(result.isError).toBe(true);
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("still runs main-process tools, which never reach a renderer dialog", async () => {
+      const deps = boundDeps({
+        requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list")]),
+        handleSkillsSearch: vi.fn(() => ({ skills: [] })),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "skills.search", arguments: { query: "x" } });
+
+      expect(result.isError).toBeFalsy();
+    });
+
+    it("keeps refusing after teardown clears the session's workspace map", async () => {
+      // Routing captures the binding once; the surface policy must share that
+      // lifetime, or a torn-down session loses its ceiling while its dispatch
+      // closure still targets the bound workspace.
+      const deps = boundDeps();
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+      deps.sessionStore.sessionWorkspaceMap.delete(SESSION);
+
+      const result = await callTool(server, { name: "recipe.run", arguments: {} });
+
+      expect(JSON.stringify(result.content)).toContain("CONFIRMATION_REQUIRED");
+      // And the message names the workspace, not `undefined`.
+      expect(JSON.stringify(result.content)).toContain(WORKSPACE);
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
     it("fails closed rather than dispatching when the manifest can't be resolved", async () => {
       // Proceeding on an unresolved manifest would erase the only evidence that
       // an action is confirm-gated, turning a refusal into a silent dispatch.
@@ -4336,7 +4398,9 @@ describe("workspace-bound external sessions (#11789)", () => {
       await server.connect(makeMockTransport());
 
       await expect(listTools(server)).rejects.toMatchObject({
-        data: { code: SESSION_BINDING_GONE },
+        // Same envelope the resource path uses, so one shape covers both —
+        // `retriable: false` is what stops a conductor hammering a dead binding.
+        data: { code: SESSION_BINDING_GONE, retriable: false, errorCategory: "business" },
       });
     });
 

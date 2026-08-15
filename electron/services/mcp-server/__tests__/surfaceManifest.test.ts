@@ -464,19 +464,27 @@ describe("buildSurfaceManifest with a workspace-bound session (#11789)", () => {
     expect(bound.tools.map((t) => t.id)).toContain("actions.list");
   });
 
-  it("reports exactly what `tools/list` would expose for the same session", () => {
-    // The invariant the shared `shouldExposeTool` gate exists to hold: a report
-    // that advertised a tool the listing withheld is the drift it detects.
-    const manifest = realisticManifest();
-    const reported = buildSurfaceManifest(manifest, "external", APP_VERSION, BOUND).tools.map(
+  it("drops exactly the confirm-gated entries from the unbound report, and nothing else", () => {
+    // Stated against an independently-derived expectation rather than against
+    // `shouldExposeTool` — comparing the builder to its own gate would pass
+    // just as happily with that gate deleted.
+    // `recipe.run`, not `git.commit`: the confirm-gated entry has to be one the
+    // external tier actually permits, or neither report would list it and the
+    // comparison would hold vacuously.
+    const manifest = [
+      entry({ id: "actions.list" }),
+      entry({ id: "terminal.new", kind: "command" }),
+      entry({ id: "recipe.run", kind: "command", danger: "confirm" }),
+    ];
+    const unbound = buildSurfaceManifest(manifest, "external", APP_VERSION).tools.map((t) => t.id);
+    const bound = buildSurfaceManifest(manifest, "external", APP_VERSION, BOUND).tools.map(
       (t) => t.id
     );
-    const listed = manifest
-      .filter((e) => shouldExposeTool(e, "external", BOUND))
-      .map((e) => e.id)
-      .sort();
+    const confirmGated = new Set(manifest.filter((e) => e.danger === "confirm").map((e) => e.id));
 
-    expect(reported).toEqual(listed);
+    expect(bound).toEqual(unbound.filter((id) => !confirmGated.has(id)));
+    // And the manifest genuinely contained one, so the assertion has teeth.
+    expect(unbound.some((id) => confirmGated.has(id))).toBe(true);
   });
 
   it("changes the hash when the bound surface differs from the unbound one", () => {

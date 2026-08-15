@@ -84,8 +84,10 @@ export function McpServerSettingsTab() {
   // Gate the "Loading…" copy past the Doherty threshold so fast IPC resolutions
   // don't flash a loading state for sub-400ms work.
   const showInlineLoading = useDeferredLoading(loading, UI_DOHERTY_THRESHOLD);
-  const [copied, setCopied] = useState(false);
-  const [copiedScoped, setCopiedScoped] = useState(false);
+  // One state, not two booleans: the plain and scoped copies share a single
+  // reset timer, so independent flags let the second copy cancel the first's
+  // reset and strand its "Copied!" indefinitely.
+  const [copiedTarget, setCopiedTarget] = useState<"plain" | "scoped" | null>(null);
   const [clientConfigId, setClientConfigId] = useState<McpClientConfigId>("claude-code");
   const [error, setError] = useState<string | null>(null);
   const [portInput, setPortInput] = useState("");
@@ -159,8 +161,7 @@ export function McpServerSettingsTab() {
   // resolves after the payload changed can't resurrect "Copied!" for it.
   const clearConfigCopyFeedback = () => {
     copyGenerationRef.current += 1;
-    setCopied(false);
-    setCopiedScoped(false);
+    setCopiedTarget(null);
     if (configCopyTimeoutRef.current) {
       clearTimeout(configCopyTimeoutRef.current);
       configCopyTimeoutRef.current = null;
@@ -383,10 +384,9 @@ export function McpServerSettingsTab() {
       });
       await navigator.clipboard.writeText(snippet);
       if (generation !== copyGenerationRef.current) return;
-      const setFlag = workspaceId === null ? setCopied : setCopiedScoped;
-      setFlag(true);
+      setCopiedTarget(workspaceId === null ? "plain" : "scoped");
       if (configCopyTimeoutRef.current) clearTimeout(configCopyTimeoutRef.current);
-      configCopyTimeoutRef.current = setTimeout(() => setFlag(false), COPY_FEEDBACK_MS);
+      configCopyTimeoutRef.current = setTimeout(() => setCopiedTarget(null), COPY_FEEDBACK_MS);
     } catch (err) {
       if (generation !== copyGenerationRef.current) return;
       clearConfigCopyFeedback();
@@ -677,13 +677,17 @@ export function McpServerSettingsTab() {
                     className={cn(
                       "flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                       "border border-daintree-border hover:bg-overlay-soft",
-                      copied
+                      copiedTarget === "plain"
                         ? "text-status-success border-status-success/30"
                         : "text-daintree-text/70 hover:text-daintree-text"
                     )}
                   >
-                    {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    {copied ? "Copied!" : "Copy MCP config"}
+                    {copiedTarget === "plain" ? (
+                      <Check className="w-3.5 h-3.5" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                    {copiedTarget === "plain" ? "Copied!" : "Copy MCP config"}
                   </button>
 
                   {viewWorkspaceId ? (
@@ -692,17 +696,17 @@ export function McpServerSettingsTab() {
                       className={cn(
                         "flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                         "border border-daintree-border hover:bg-overlay-soft",
-                        copiedScoped
+                        copiedTarget === "scoped"
                           ? "text-status-success border-status-success/30"
                           : "text-daintree-text/70 hover:text-daintree-text"
                       )}
                     >
-                      {copiedScoped ? (
+                      {copiedTarget === "scoped" ? (
                         <Check className="w-3.5 h-3.5" />
                       ) : (
                         <Copy className="w-3.5 h-3.5" />
                       )}
-                      {copiedScoped ? "Copied!" : "Copy config for this project"}
+                      {copiedTarget === "scoped" ? "Copied!" : "Copy config for this project"}
                     </button>
                   ) : null}
                 </div>

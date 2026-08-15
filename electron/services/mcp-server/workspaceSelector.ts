@@ -16,17 +16,23 @@ export type WorkspaceSelectorParse =
   | { kind: "reject"; rejection: WorkspaceSelectorRejection };
 
 /**
- * Normalize one raw selector value. Returns `null` when the value carries no
- * selector at all, and `false` when it carries a malformed one.
+ * Normalize one raw selector value. Returns `false` when the value is present
+ * but malformed.
+ *
+ * An empty or whitespace-only value is malformed, not absent. A client that
+ * sends the field at all believes it is scoping itself; treating a blank one as
+ * "no selector" would hand it an unbound, focus-following session while it
+ * thought otherwise — the exact silent misrouting this selector removes. A
+ * templated config that interpolated nothing is the obvious way to produce one.
  *
  * A comma is rejected rather than split: Node folds repeated instances of most
  * headers into one comma-joined string, so `a,b` is indistinguishable from a
  * client that sent the header twice with different workspaces. Both are exactly
  * the ambiguity this selector exists to remove, so neither gets a guess.
  */
-function normalizeSelectorValue(raw: string): string | false | null {
+function normalizeSelectorValue(raw: string): string | false {
   const trimmed = raw.trim();
-  if (trimmed.length === 0) return null;
+  if (trimmed.length === 0) return false;
   if (trimmed.includes(",")) return false;
   return trimmed;
 }
@@ -70,7 +76,7 @@ export function parseWorkspaceSelector(
         kind: "reject",
         rejection: {
           code: "WORKSPACE_SELECTOR_INVALID",
-          message: `The ${MCP_WORKSPACE_ID_HEADER} header named more than one workspace. Send exactly one workspace id.`,
+          message: `The ${MCP_WORKSPACE_ID_HEADER} header must name exactly one workspace id. Send one, or omit the header entirely to follow the focused window.`,
         },
       };
     }
@@ -94,7 +100,7 @@ export function parseWorkspaceSelector(
         kind: "reject",
         rejection: {
           code: "WORKSPACE_SELECTOR_INVALID",
-          message: `The ${MCP_WORKSPACE_ID_QUERY_PARAM} query parameter named more than one workspace. Send exactly one workspace id.`,
+          message: `The ${MCP_WORKSPACE_ID_QUERY_PARAM} query parameter must name exactly one workspace id. Send one, or omit the parameter entirely to follow the focused window.`,
         },
       };
     }

@@ -42,9 +42,23 @@ describe("parseWorkspaceSelector (#11789)", () => {
     expect(result.kind === "reject" && result.rejection.code).toBe("WORKSPACE_SELECTOR_MISMATCH");
   });
 
-  it("treats a whitespace-only value as no selector at all", () => {
-    expect(parseWorkspaceSelector("   ", [])).toEqual({ kind: "absent" });
-    expect(parseWorkspaceSelector(undefined, [""])).toEqual({ kind: "absent" });
+  it.each([
+    ["a whitespace-only header", "   " as string | undefined, [] as string[]],
+    ["an empty header", "", []],
+    ["an empty query param", undefined, [""]],
+    ["a whitespace-only query param", undefined, ["  "]],
+  ])("rejects %s rather than reading it as no selector", (_label, header, query) => {
+    // Fail-open here is the whole bug class: a client that sent the field at
+    // all believes it is scoped, and "absent" would hand it a focus-following
+    // session while it thought otherwise.
+    const result = parseWorkspaceSelector(header, query);
+    expect(result.kind).toBe("reject");
+    expect(result.kind === "reject" && result.rejection.code).toBe("WORKSPACE_SELECTOR_INVALID");
+  });
+
+  it("rejects a blank header even when a valid query param is present", () => {
+    const result = parseWorkspaceSelector("", ["ws-a"]);
+    expect(result.kind).toBe("reject");
   });
 
   it("rejects a comma-folded header instead of splitting it", () => {

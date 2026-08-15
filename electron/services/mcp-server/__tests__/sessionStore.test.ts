@@ -930,19 +930,32 @@ describe("SessionStore.listExternalActiveClients (#8779)", () => {
   });
 
   it("still lists a workspace-bound external client (#11789)", () => {
-    // The regression this classification exists to prevent: a bound session
-    // routes to a renderer, so the old "has a pin ⇒ internal" test would have
-    // hidden it — and a background-bound agent is the one the user most needs
-    // to be able to find and disconnect, since they cannot see it working.
+    // A real workspace handshake writes `sessionWorkspaceMap` only — the
+    // selector and renderer-pin routes are mutually exclusive by construction,
+    // since a pinned bearer's selector is refused. A background-bound agent is
+    // the one the user most needs to be able to find and disconnect, since
+    // they cannot see it working.
     store.httpSessions.set("bound", fakeHttpSession());
     store.sessionTierMap.set("bound", "external");
     store.sessionOriginMap.set("bound", "external");
     store.sessionWorkspaceMap.set("bound", "ws-a");
-    store.sessionWebContentsMap.set("bound", 42);
     store.registerClientMetadata("bound", "Claude Code/1.2", "streamable-http");
 
     const clients = store.listExternalActiveClients();
     expect(clients.map((c) => c.sessionId)).toEqual(["bound"]);
+  });
+
+  it("lists an external client even if one somehow also carried a renderer pin", () => {
+    // Defence in depth rather than a reachable state: the point is that
+    // classification reads origin, so no future route can silently hide a
+    // third-party client from the disconnect UI again.
+    store.httpSessions.set("bound", fakeHttpSession());
+    store.sessionTierMap.set("bound", "external");
+    store.sessionOriginMap.set("bound", "external");
+    store.sessionWebContentsMap.set("bound", 42);
+    store.registerClientMetadata("bound", "Claude Code/1.2", "streamable-http");
+
+    expect(store.listExternalActiveClients().map((c) => c.sessionId)).toEqual(["bound"]);
   });
 
   it("excludes non-external (workbench/action/system) sessions", () => {

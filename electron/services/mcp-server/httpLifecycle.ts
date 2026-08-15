@@ -1216,6 +1216,25 @@ export class HttpLifecycle {
       const sid = url.searchParams.get("sessionId") ?? "";
       const session = this.deps.sessionStore.sessions.get(sid);
 
+      // SSE sessions can never be workspace-bound — the GET /sse handshake
+      // refuses a selector outright. A selector arriving on the message leg is
+      // therefore always a client that believes it is scoped and is not, which
+      // is worse than an unsupported feature (#11789). This leg is the exact
+      // place clients are already known to attach headers inconsistently.
+      if (
+        parseWorkspaceSelector(
+          req.headers[MCP_WORKSPACE_ID_HEADER],
+          url.searchParams.getAll(MCP_WORKSPACE_ID_QUERY_PARAM)
+        ).kind !== "absent"
+      ) {
+        this.rejectHandshake(res, {
+          code: "WORKSPACE_SELECTOR_NOT_ALLOWED",
+          message:
+            "Workspace binding is only supported on the /mcp (Streamable HTTP) endpoint. Point this client at /mcp.",
+        });
+        return;
+      }
+
       if (session) {
         this.deps.sessionStore.resetIdleTimer(sid);
         this.markBearerActive(sid);
@@ -1261,6 +1280,42 @@ export class HttpLifecycle {
         );
         return;
       }
+      // A selector on an established session never rebinds it — the binding is
+      // fixed at handshake — but it must not be ignored either (#11789). All
+      // three generated configs put the header in a per-request `headers` map,
+      // so a client that scoped itself repeats it on every call; one that
+      // attaches headers inconsistently across legs (a real failure mode on
+      // this server — see the `/sse` note in `mcpClientConfigs.ts`) could send
+      // it on calls but not on `initialize`, ending up convinced its calls are
+      // scoped while every one of them follows focus. That is precisely the
+      // silent misrouting this feature exists to remove, so a selector that
+      // disagrees with what the session actually resolved to is refused.
+      // DELETE is exempt: it terminates the session and routes no action
+      // anywhere, so refusing it over a selector would only strand a client
+      // that can no longer clean up after itself.
+      const boundWorkspaceId = this.deps.sessionStore.sessionWorkspaceMap.get(sessionId) ?? null;
+      const liveSelector =
+        req.method === "DELETE"
+          ? ({ kind: "absent" } as const)
+          : parseWorkspaceSelector(
+              req.headers[MCP_WORKSPACE_ID_HEADER],
+              url.searchParams.getAll(MCP_WORKSPACE_ID_QUERY_PARAM)
+            );
+      if (liveSelector.kind === "reject") {
+        this.rejectHandshake(res, liveSelector.rejection);
+        return;
+      }
+      if (liveSelector.kind === "selector" && liveSelector.workspaceId !== boundWorkspaceId) {
+        this.rejectHandshake(res, {
+          code: "WORKSPACE_SELECTOR_MISMATCH",
+          message:
+            boundWorkspaceId === null
+              ? "This session is not bound to a workspace — its workspace selector was not present when it was created. Start a new session with the selector on the initialize request."
+              : `This session is bound to workspace ${boundWorkspaceId} and cannot be rebound. Start a new session to target a different workspace.`,
+        });
+        return;
+      }
+
       this.deps.sessionStore.resetHttpIdleTimer(sessionId);
       this.markBearerActive(sessionId);
       await session.transport.handleRequest(req, res);
@@ -1450,10 +1505,22 @@ export class HttpLifecycle {
     // the shared cache and leak another window's tool surface (#7003 / #9887).
     const pinnedWebContentsId = this.deps.sessionStore.sessionWebContentsMap.get(sessionId) ?? null;
 
+    /**
+     * A bound session whose workspace route is unwired must fail, never fall
+     * through (#11789). The helpers are individually optional for the same
+     * reason the pinned ones are — test fixtures that don't wire routing — but
+     * "bound, and quietly following focus instead" is the precise bug this
+     * feature exists to remove, so it can never be a fallback.
+     */
+    const missingWorkspaceRoute = (): Error =>
+      new WorkspaceBindingError(boundWorkspaceId ?? "", "not-found");
+
     const requestManifest: import("./sessionServer.js").SessionServerDeps["requestManifest"] =
       () => {
-        if (boundWorkspaceId !== null && workspaceManifest) {
-          return workspaceManifest(boundWorkspaceId);
+        if (boundWorkspaceId !== null) {
+          return workspaceManifest
+            ? workspaceManifest(boundWorkspaceId)
+            : Promise.reject(missingWorkspaceRoute());
         }
         const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
         if (id !== undefined && pinnedManifest) {
@@ -1467,7 +1534,7 @@ export class HttpLifecycle {
       args,
       confirmed
     ) => {
-      if (boundWorkspaceId !== null && workspaceDispatch) {
+      if (boundWorkspaceId !== null) {
         // No context override: unlike a help session, which replays the
         // ActionContext snapshot taken when the user launched it (#8317), a
         // bound external session has no launch moment to replay — and the bound
@@ -1476,7 +1543,9 @@ export class HttpLifecycle {
         // No `callerInfo` either: it exists solely to name the requesting client
         // in the confirm dialog (#9157), and a bound session's surface excludes
         // every confirm-gated tool, so nothing could ever read it.
-        return workspaceDispatch(boundWorkspaceId, actionId, args, confirmed);
+        return workspaceDispatch
+          ? workspaceDispatch(boundWorkspaceId, actionId, args, confirmed)
+          : Promise.reject(missingWorkspaceRoute());
       }
       const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
       if (id !== undefined && pinnedDispatch) {
@@ -1567,7 +1636,13 @@ export class HttpLifecycle {
 
     const notifySessionRevoked: import("./sessionServer.js").SessionServerDeps["notifySessionRevoked"] =
       (payload) => {
-        if (!isRendererOwned(payload.sessionId)) return;
+        // Prefer the caller's snapshot over a live read (#11789). This event
+        // fires *after* `revokeSession`, which clears the origin along with
+        // everything else — so re-reading it here would hit the fail-closed
+        // `external` default and silently drop the recovery banner for a
+        // genuine help session that tripped the abuse threshold. The caller
+        // captured both fields before revoking for exactly this reason.
+        if (!(payload.rendererOwned ?? isRendererOwned(payload.sessionId))) return;
         const id =
           payload.pinnedWebContentsId ??
           this.deps.sessionStore.sessionWebContentsMap.get(payload.sessionId);

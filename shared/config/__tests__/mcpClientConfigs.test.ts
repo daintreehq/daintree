@@ -131,13 +131,13 @@ describe("workspace-scoped configs (#11789)", () => {
     });
 
     it.each([undefined, null, ""])(
-      "produces the pre-binding snippet byte-for-byte when workspaceId is %o",
+      "treats workspaceId %o as unscoped, emitting no workspace header",
       (workspaceId) => {
         // An unscoped copy must keep working exactly as it did — the binding is
         // opt-in, and a silent change here would rebind every existing user.
-        expect(buildMcpClientConfig(id, { ...READY, workspaceId }).snippet).toBe(
-          buildMcpClientConfig(id, READY).snippet
-        );
+        const { snippet } = buildMcpClientConfig(id, { ...READY, workspaceId });
+        expect(snippet).toBe(buildMcpClientConfig(id, READY).snippet);
+        expect(snippet).not.toContain(MCP_WORKSPACE_ID_HEADER);
       }
     );
 

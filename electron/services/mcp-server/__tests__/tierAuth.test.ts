@@ -32,7 +32,6 @@ import {
   INTROSPECTION_TOOL_IDS,
 } from "../tierAuth.js";
 import { TIER_ALLOWLISTS } from "../shared.js";
-import { MCP_EXTERNAL_TIER_TOOLS } from "../../../../shared/config/mcpExternalTierAllowlist.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 
@@ -1170,16 +1169,6 @@ describe("isWithheldFromBoundSession (#11789)", () => {
       expect(isWithheldFromBoundSession({ danger }, "external", BOUND)).toBe(false);
     }
   );
-
-  it("is derived from manifest danger, so it covers any confirm-gated tool in the external allowlist", () => {
-    // Not a curated id list: a future confirm-gated addition to
-    // MCP_EXTERNAL_TIER_TOOLS is withheld the day it lands, with no second
-    // allowlist to keep in step.
-    for (const toolId of MCP_EXTERNAL_TIER_TOOLS) {
-      expect(isWithheldFromBoundSession({ danger: "confirm" }, "external", BOUND)).toBe(true);
-      expect(typeof toolId).toBe("string");
-    }
-  });
 });
 
 describe("shouldExposeTool with a workspace-bound session (#11789)", () => {
