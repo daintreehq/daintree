@@ -1,6 +1,21 @@
-import type { AgentConfig, AgentModelConfig } from "../../config/agentRegistry.js";
+import type { AgentModelConfig } from "../../config/agentRegistry.js";
 
-export type AgentRegistry = Record<string, AgentConfig>;
+/**
+ * One registry entry as it crosses IPC. Deliberately NOT `AgentConfig`: every
+ * `AgentResume` variant carries a live function (`args`, `argsForTarget`,
+ * `assignSessionIdArgs`), and the structured-clone serializer behind
+ * `ipcRenderer.invoke` cannot encode a function — returning raw configs left
+ * the caller's promise unsettled rather than rejecting, so `agent.listAvailable`
+ * burned the full 30s MCP dispatch timeout on every call (#11795).
+ *
+ * Only widen this with plain data, and only for a field a caller actually
+ * reads: it is the wire contract, not a view of the config.
+ */
+export interface AgentRegistryEntry {
+  name: string;
+}
+
+export type AgentRegistry = Record<string, AgentRegistryEntry>;
 
 export interface AgentMetadata {
   id: string;

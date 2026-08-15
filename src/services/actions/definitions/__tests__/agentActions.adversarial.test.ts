@@ -1270,6 +1270,95 @@ describe("agent.listAvailable", () => {
     expect(second.agents.map((row) => row.id)).toEqual(["claude"]);
     expect(clientsMock.agentCapabilitiesClient.getRegistry).toHaveBeenCalledTimes(2);
   });
+
+  describe("discovery-read deadline (#11795)", () => {
+    // Belt and braces with the per-test `finally`: if the deadline regresses,
+    // `advanceTimersToNextTimerAsync` no-ops, the awaited assertion never
+    // settles, and vitest kills the test externally — which unwinds nothing, so
+    // the local `finally` never runs and fake timers would leak into the rest
+    // of the file.
+    afterEach(() => {
+      vi.useRealTimers();
+      clientsMock.agentCapabilitiesClient.getRegistry.mockReset();
+    });
+
+    /**
+     * Prime the dynamic `import()`s inside `readAgentDiscoveryState` under real
+     * timers. They are mocked, but vitest registers mocks lazily and the first
+     * import still traverses the module runner, which can stall under fake
+     * timers — the hazard `fakeTimersImportOrder.contract.test.ts` exists for.
+     * Importing the modules directly rather than running the whole action keeps
+     * the warm-up from arming a real 25s timer.
+     */
+    async function primeDiscoveryImports(): Promise<void> {
+      await Promise.all([
+        import("@/store/agentSettingsStore"),
+        import("@/store/cliAvailabilityStore"),
+      ]);
+    }
+
+    it("settles instead of hanging when a discovery read never resolves", async () => {
+      await primeDiscoveryImports();
+      setStores({ agents: {} }, { claude: "ready" });
+      clientsMock.userAgentRegistryClient.get.mockResolvedValue({});
+      // Exactly the shape that shipped broken: an IPC leg that never settles
+      // rather than rejecting. Main abandons the dispatch at 30s without
+      // cancelling the renderer, so this promise stayed pending indefinitely
+      // and held its focus-suppression lease with it.
+      clientsMock.agentCapabilitiesClient.getRegistry.mockReturnValue(new Promise(() => {}));
+      const actions = setupActions(makeCallbacks());
+
+      vi.useFakeTimers();
+      try {
+        const startedAt = Date.now();
+        const pending = callAction(actions, "agent.listAvailable");
+        // Assert before advancing: attaching the handler afterwards races the
+        // rejection and trips vitest's unhandled-rejection guard.
+        const rejects = expect(pending).rejects.toThrow(/still waiting on: agentRegistry$/);
+        // The deadline must be the only timer in flight, so advancing to "next"
+        // provably lands on it rather than on something scheduled nearby.
+        expect(vi.getTimerCount()).toBe(1);
+
+        await vi.advanceTimersToNextTimerAsync();
+        await rejects;
+
+        // The bound is only correct relative to two constants in other files;
+        // pinning the elapsed window catches drift in either direction that a
+        // bare "it rejected" assertion would sail past. Lower bound: the real
+        // cold-read ceiling, refreshPath's 10s (electron/setup/environment.ts
+        // REFRESH_TIMEOUT_MS) plus CliAvailabilityService's 10s CHECK_TIMEOUT_MS,
+        // below which a slow cold start fails spuriously. Upper bound:
+        // MCP_DISPATCH_TIMEOUT_MS (electron/services/mcp-server/shared.ts), past
+        // which main has already abandoned the dispatch and the bound is moot.
+        const elapsed = Date.now() - startedAt;
+        expect(elapsed).toBeGreaterThan(20_000);
+        expect(elapsed).toBeLessThan(30_000);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("disarms the deadline once the reads succeed", async () => {
+      await primeDiscoveryImports();
+      setStores({ agents: {} }, { claude: "ready" });
+      clientsMock.agentCapabilitiesClient.getRegistry.mockResolvedValue({
+        claude: { name: "Claude" },
+      });
+      clientsMock.userAgentRegistryClient.get.mockResolvedValue({});
+      const actions = setupActions(makeCallbacks());
+
+      vi.useFakeTimers();
+      try {
+        await callAction(actions, "agent.listAvailable");
+
+        // A deadline that resolves the action but leaves its timer armed would
+        // keep the renderer awake for 25s after every call.
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });
 
 describe("agentSessionHistory.list (#10854)", () => {
