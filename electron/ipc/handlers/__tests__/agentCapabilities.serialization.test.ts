@@ -43,11 +43,17 @@ const sampleAgentId = (() => {
   return first;
 })();
 
-/** Own-property function values are what the IPC serializer chokes on. */
-function hasFunctionValue(value: unknown): boolean {
+/**
+ * Own-property function values are what the IPC serializer chokes on. Tracks
+ * visited objects so a cyclic config fails the assertion below rather than
+ * overflowing the stack with an unrelated error.
+ */
+function hasFunctionValue(value: unknown, seen = new WeakSet<object>()): boolean {
   if (typeof value === "function") return true;
   if (typeof value !== "object" || value === null) return false;
-  return Object.values(value).some(hasFunctionValue);
+  if (seen.has(value)) return false;
+  seen.add(value);
+  return Object.values(value).some((nested) => hasFunctionValue(nested, seen));
 }
 
 describe("agentCapabilities getRegistry serialization (issue #11795)", () => {
@@ -59,7 +65,7 @@ describe("agentCapabilities getRegistry serialization (issue #11795)", () => {
     // never to widen the handler back to raw configs.
     const raw = getEffectiveRegistry();
 
-    expect(Object.values(raw).some(hasFunctionValue)).toBe(true);
+    expect(Object.values(raw).some((config) => hasFunctionValue(config))).toBe(true);
   });
 
   it("cannot put the raw effective registry on the wire", () => {
