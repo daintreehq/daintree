@@ -23,6 +23,7 @@ import type {
   RateLimitDetails,
 } from "@shared/types/forge";
 import type {
+  ForgeCheckRun,
   ForgeCIStatusSummary,
   ForgeRepositoryStats,
   ForgeRepoStatsAndPagePayload,
@@ -200,6 +201,10 @@ export const forgeClient = {
     opts?: ListOptions
   ): Promise<Page<IssueComment>> => {
     return window.electron.forge.listIssueComments({ cwd, issueNumber, opts });
+  },
+
+  getChecks: (cwd: string, prNumber: number): Promise<{ checks: ForgeCheckRun[] } | null> => {
+    return window.electron.forge.getChecks({ cwd, prNumber });
   },
 
   resolveAuthorAvatar: (cwd: string, email: string): Promise<string | null> => {

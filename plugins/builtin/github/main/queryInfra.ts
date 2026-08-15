@@ -1,7 +1,14 @@
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import { createHash } from "node:crypto";
 import { configure } from "safe-stable-stringify";
-import type { CIStatus, Issue, IssueComment, Page, PR } from "../../../../shared/types/forge.js";
+import type {
+  CheckRun,
+  CIStatus,
+  Issue,
+  IssueComment,
+  Page,
+  PR,
+} from "../../../../shared/types/forge.js";
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS } from "./GitHubAuth.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
 import { forgeQueryCache, forgeQueryInflight } from "./GitHubCaches.js";
@@ -109,6 +116,7 @@ export const listPRsInflight = new Map<string, Promise<Page<PR>>>();
 export const getIssueInflight = new Map<string, Promise<Issue | null>>();
 export const getPRInflight = new Map<string, Promise<PR | null>>();
 export const getCIStatusInflight = new Map<string, Promise<CIStatus | null>>();
+export const getChecksInflight = new Map<string, Promise<{ checks: CheckRun[] } | null>>();
 export const findPRsByBranchesInflight = new Map<string, Promise<Map<string, PR | null>>>();
 export const findPRsByNumbersInflight = new Map<string, Promise<Map<number, PR | null>>>();
 export const getCIStatusesInflight = new Map<string, Promise<Map<number, CIStatus | null>>>();

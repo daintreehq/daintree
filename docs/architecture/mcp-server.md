@@ -337,7 +337,7 @@ Two axes are independent — do not infer one from another:
 
 ### Forge reads (`workbench` tier)
 
-All seven are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline), so they are reachable at `workbench` and above — but not at `external`. All are `kind:"query"`, `danger:"safe"`, on the `standard` bucket, and not deduped.
+All eight are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline), so they are reachable at `workbench` and above — but not at `external`. All are `kind:"query"`, `danger:"safe"`, on the `standard` bucket, and not deduped.
 
 | Action ID | Key args |
 | --- | --- |
@@ -348,6 +348,7 @@ All seven are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline), so they a
 | `forge.listIssueComments` | `issueNumber`, `cursor?`, `perPage?`, `cwd?` |
 | `forge.getPR` | `prNumber`, `cwd?` |
 | `forge.getCIStatus` | `prNumber`, `cwd?` |
+| `forge.getChecks` | `prNumber`, `cwd?` |
 
 The two list actions are the only **strict** action schemas in the codebase (#11527): an unrecognized arg is a validation error, not a silently stripped key. That is deliberate — Zod's default strip meant `labels: [...]` or `limit: 10` came back as a confidently _unfiltered_ page, which an agent would then act on.
 
@@ -356,7 +357,9 @@ The two list actions are the only **strict** action schemas in the codebase (#11
 - **`bypassCache` is the only escape from a warm list cache.** Providers cache list pages, so a change made outside the app — the user running a forge CLI in a terminal, another agent closing an issue — stays invisible until the entry ages out. Pass `bypassCache: true` to re-read; it costs a provider round trip, so leave it off for ordinary paging. Same knob as `forge.getRepoStats`.
 - `perPage` is 1-100 (default 20), `sort` is `created`|`updated`, `direction` is `asc`|`desc`. Structured `labels`/`assignee` filtering is not yet wired provider-side; use `search`.
 
-`forge.getCIStatus` is the only forge read that sets `mcpOutputSchema: true`, so it is also the only one advertising an MCP `outputSchema` and returning `structuredContent`. Its result is wrapped as `{ ciStatus }` rather than returned bare: `buildToolOutputSchema` forwards only object-typed schemas, so a top-level nullable would silently advertise nothing. The handler projects the provider's `CIStatus` down to the roll-up fields and drops `rawData`/`freshnessToken`/`notModified` — `rawData` in particular is populated on a network fetch but `null` on a cache hit, so forwarding it would make the response depend on cache state.
+`forge.getCIStatus` and `forge.getChecks` are the only forge reads that set `mcpOutputSchema: true`, so they are also the only ones advertising an MCP `outputSchema` and returning `structuredContent`. Both wrap their result — as `{ ciStatus }` and `{ checks }` — rather than returning it bare: `buildToolOutputSchema` forwards only object-typed schemas, so a top-level nullable would silently advertise nothing. The handler projects the provider's `CIStatus` down to the roll-up fields and drops `rawData`/`freshnessToken`/`notModified` — `rawData` in particular is populated on a network fetch but `null` on a cache hit, so forwarding it would make the response depend on cache state. `forge.getChecks` drops per-check `rawData` too, though for a different reason: it bypasses that cache entirely, so its `rawData` is always populated — it is dropped because the verbatim provider node is not part of the advertised cross-provider schema.
+
+The two answer different questions and are deliberately separate calls. `getCIStatus` is the cheap roll-up — "is this PR green?" — and stays the authority on that verdict. `getChecks` is the diagnostic follow-up — "which check failed, and where is its log?" (#11786) — and costs a request per 100 checks, since it pages the provider's check list to the end rather than returning a first page that might be short. Its three outcomes are distinct and must not be conflated: `{ checks: [] }` means the PR has no checks, `{ checks: null }` means no such PR, and a provider without the `checks` capability rejects.
 
 ### Forge writes and commands (`system` tier)
 

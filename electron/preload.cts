@@ -2838,6 +2838,8 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_GET_PR_REVIEW_THREADS, payload),
       listIssueComments: (payload: { cwd: string; issueNumber: number; opts?: unknown }) =>
         _unwrappingInvoke(CHANNELS.FORGE_LIST_ISSUE_COMMENTS, payload),
+      getChecks: (payload: { cwd: string; prNumber: number }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_CHECKS, payload),
       resolveAuthorAvatar: (payload: { cwd: string; email: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, payload),
       getTokenHealth: (payload: { providerId: string }) =>

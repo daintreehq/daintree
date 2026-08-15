@@ -1,4 +1,6 @@
 import type {
+  CheckRunConclusion,
+  CheckRunStatus,
   CIStatusState,
   ForgeTokenHealthState,
   Issue,
@@ -86,6 +88,23 @@ export interface ForgeCIStatusSummary {
   pending: number;
   /** Whether required-checks gating is satisfied. Omitted if the provider doesn't gate. */
   requiredChecksPassing?: boolean;
+}
+
+/**
+ * Renderer-facing projection of {@link import("../forge.js").CheckRun}, used by
+ * `forge:get-checks`. Drops `rawData` for the same reason
+ * {@link ForgeCIStatusSummary} does — it is provider-shaped and unstable — while
+ * keeping every cross-provider field, since this read exists precisely to name
+ * the failing check and link to its log.
+ */
+export interface ForgeCheckRun {
+  name: string;
+  status: CheckRunStatus;
+  conclusion?: CheckRunConclusion;
+  /** Whether this check gates merging. Omitted if the provider doesn't report required checks. */
+  required?: boolean;
+  /** Link to the check's output or job log. Omitted if the provider has no URL for it. */
+  detailsUrl?: string;
 }
 
 /** Payload for PR cleared notification. */
@@ -251,6 +270,7 @@ export type ForgeProviderMethodName =
   | "getIssue"
   | "getPR"
   | "getCIStatus"
+  | "getChecks"
   | "listIssueComments"
   | "getRepoMetadata"
   | "createIssue"

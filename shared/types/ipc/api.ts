@@ -1715,6 +1715,17 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       issueNumber: number;
       opts?: ListOptions;
     }): Promise<Page<IssueComment>>;
+    /**
+     * Every CI check on a PR — name, state, and log link — via the provider's
+     * `checks` capability, for answering "which check failed?" where
+     * {@link forge.getCIStatus} answers only "is it green?". Rejects when the
+     * provider lacks the capability, so an empty list always means "this PR has
+     * no checks" and never "couldn't look". `null` means no such PR.
+     */
+    getChecks(payload: {
+      cwd: string;
+      prNumber: number;
+    }): Promise<{ checks: import("./forge.js").ForgeCheckRun[] } | null>;
     /** Resolve a commit-author email to an avatar URL. Best-effort — `null` on any failure. */
     resolveAuthorAvatar(payload: { cwd: string; email: string }): Promise<string | null>;
     /**

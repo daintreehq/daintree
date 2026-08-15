@@ -237,3 +237,105 @@ describe("forge.getCIStatus results validate against the advertised schema (#115
     expect(validate({ state: "success", total: 1, passed: 1, failed: 0, pending: 0 })).toBe(false);
   });
 });
+
+// #11786 — forge.getChecks is the MCP surface for "which check failed?". Same
+// structuredContent contract as getCIStatus, so these assert the generated
+// JSON Schema rather than the literal flag.
+describe("forge.getChecks advertises a usable MCP outputSchema (#11786)", () => {
+  function checksSchema(): Record<string, unknown> {
+    const schema = outputSchema(registerAll(), "forge.getChecks");
+    if (!schema) throw new Error("forge.getChecks has no outputSchema");
+    return schema;
+  }
+
+  function checkItemSchema(): Record<string, unknown> {
+    const checks = (checksSchema().properties as { checks: Record<string, unknown> }).checks;
+    const branches = (checks.anyOf as Array<Record<string, unknown>> | undefined) ?? [];
+    const arrayBranch = branches.find((b) => b.type === "array");
+    if (!arrayBranch) {
+      throw new Error(
+        `no array branch in \`checks\` anyOf: ${JSON.stringify(branches).slice(0, 200)}`
+      );
+    }
+    return arrayBranch.items as Record<string, unknown>;
+  }
+
+  function validator(): (payload: unknown) => boolean {
+    return new Ajv2020({ strict: false }).compile(checksSchema());
+  }
+
+  it("generates an object-typed outputSchema", () => {
+    // buildToolOutputSchema forwards only object-typed schemas, so a bare
+    // nullable array here would advertise nothing at all.
+    const schema = checksSchema();
+    expect(schema.type).toBe("object");
+    expect((schema.properties as Record<string, unknown>).checks).toBeDefined();
+  });
+
+  it("keeps the not-found case expressible by making checks nullable", () => {
+    const checks = (checksSchema().properties as { checks: Record<string, unknown> }).checks;
+    const branches = (checks.anyOf as Array<Record<string, unknown>> | undefined) ?? [];
+    expect(branches.some((b) => b.type === "null")).toBe(true);
+    expect(branches.some((b) => b.type === "array")).toBe(true);
+  });
+
+  it("requires the two fields every check must carry and no more", () => {
+    const item = checkItemSchema();
+    expect(item.required).toEqual(expect.arrayContaining(["name", "status"]));
+    for (const optional of ["conclusion", "required", "detailsUrl"]) {
+      expect(item.required as string[]).not.toContain(optional);
+    }
+  });
+
+  it("does not advertise rawData, which dispatch strips", () => {
+    expect((checkItemSchema().properties as Record<string, unknown>).rawData).toBeUndefined();
+  });
+
+  it("accepts a not-found result and an empty check list as distinct values", () => {
+    const validate = validator();
+    expect(validate({ checks: null })).toBe(true);
+    expect(validate({ checks: [] })).toBe(true);
+  });
+
+  it("accepts a fully-populated failing check", () => {
+    expect(
+      validator()({
+        checks: [
+          {
+            name: "build",
+            status: "completed",
+            conclusion: "failure",
+            required: true,
+            detailsUrl: "https://ci.test/build",
+          },
+        ],
+      })
+    ).toBe(true);
+  });
+
+  it("accepts a running check that has no conclusion yet", () => {
+    expect(validator()({ checks: [{ name: "build", status: "in_progress" }] })).toBe(true);
+  });
+
+  it("rejects the provider's raw uppercase vocabulary", () => {
+    // The mapper normalizes GitHub's COMPLETED/FAILURE spellings; leaking them
+    // through would break a strict MCP client.
+    const validate = validator();
+    expect(validate({ checks: [{ name: "build", status: "COMPLETED" }] })).toBe(false);
+    expect(
+      validate({ checks: [{ name: "build", status: "completed", conclusion: "FAILURE" }] })
+    ).toBe(false);
+  });
+
+  it("rejects a check missing its name or carrying an unknown conclusion", () => {
+    const validate = validator();
+    expect(validate({ checks: [{ status: "completed" }] })).toBe(false);
+    expect(
+      validate({ checks: [{ name: "build", status: "completed", conclusion: "exploded" }] })
+    ).toBe(false);
+  });
+
+  it("rejects a bare array that isn't wrapped under checks", () => {
+    expect(validator()([{ name: "build", status: "completed" }])).toBe(false);
+  });
+});

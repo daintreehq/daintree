@@ -175,6 +175,10 @@ export type {
   NormalizedIssueState,
   RateLimitInfo,
   FileDecoration,
+  ChecksCapability,
+  CheckRun,
+  CheckRunStatus,
+  CheckRunConclusion,
 } from "./forge.js";
 
 // ── Plugin-managed process stream events ────────────────────────────

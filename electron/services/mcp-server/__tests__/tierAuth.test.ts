@@ -502,6 +502,8 @@ describe("external tool surface budget (#11585)", () => {
     // assistant does not, so both stay at workbench.
     { id: "forge.getCIStatus", keptAt: "workbench" },
     { id: "worktree.reviewReadiness", keptAt: "workbench" },
+    // #11786's per-check read, for the same reason as its roll-up sibling.
+    { id: "forge.getChecks", keptAt: "workbench" },
     // Caller has its own filesystem and `gh`.
     { id: "file.read", keptAt: "workbench" },
     { id: "forge.listIssues", keptAt: "workbench" },
@@ -597,6 +599,17 @@ describe("forge tool exposure is help-assistant-only (#11585)", () => {
     const entry = makeEntry({ id: "forge.listIssueComments", kind: "query", danger: "safe" });
     for (const tier of ["workbench", "system"] as const) {
       expect(isTierPermitted(tier, "forge.listIssueComments")).toBe(true);
+      expect(shouldExposeTool(entry, tier)).toBe(true);
+    }
+  });
+
+  // Sentinel for the read added in #11786, for the same reason as the one
+  // above: an agent that can see a PR is red must be able to ask which check
+  // failed, and the cohort checks stay green if this id is dropped everywhere.
+  it("permits forge.getChecks at the workbench and system tiers", () => {
+    const entry = makeEntry({ id: "forge.getChecks", kind: "query", danger: "safe" });
+    for (const tier of ["workbench", "system"] as const) {
+      expect(isTierPermitted(tier, "forge.getChecks")).toBe(true);
       expect(shouldExposeTool(entry, tier)).toBe(true);
     }
   });

@@ -499,6 +499,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("../forge.js").PR;
   };
+  "forge:get-checks": {
+    args: [payload: { cwd: string; prNumber: number }];
+    result: { checks: import("./forge.js").ForgeCheckRun[] } | null;
+  };
   "forge:get-ci-status": {
     args: [payload: { cwd: string; prNumber: number }];
     result: import("./forge.js").ForgeCIStatusSummary | null;

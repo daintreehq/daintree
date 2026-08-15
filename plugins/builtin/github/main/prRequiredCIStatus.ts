@@ -3,6 +3,11 @@ import type {
   GitHubPRCISummary,
   GitHubPRGlobalCISummary,
 } from "../shared/types.js";
+import type {
+  CheckRun,
+  CheckRunConclusion,
+  CheckRunStatus,
+} from "../../../../shared/types/forge.js";
 
 // Failing CheckRun conclusions per GitHub schema. STALE is included because a stale required
 // run has not resolved to a passing state and must not be silently treated as success.
@@ -36,13 +41,24 @@ const PENDING_STATUS_STATES = new Set(["PENDING", "EXPECTED"]);
 const NON_FAILING_CHECK_STATES = new Set(["SUCCESS", "NEUTRAL", "SKIPPED", "COMPLETED"]);
 const NON_FAILING_STATUS_STATES = new Set(["SUCCESS"]);
 
+// The passing CheckRun *conclusions*, as distinct from the mixed bucket above —
+// `deriveGlobalCIStatus` reads aggregate buckets keyed by either lifecycle or
+// conclusion, so its set includes COMPLETED, which is a status and never a
+// conclusion. Per-context classification must not accept it as one, or a
+// `conclusion: "COMPLETED"` would read as a pass.
+const NON_FAILING_CHECK_CONCLUSIONS = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
+
 export interface RollupContextNode {
   __typename?: string;
   // CheckRun fields
+  name?: string | null;
   status?: string | null;
   conclusion?: string | null;
+  detailsUrl?: string | null;
   // StatusContext fields
+  context?: string | null;
   state?: string | null;
+  targetUrl?: string | null;
   // Shared
   isRequired?: boolean | null;
 }
@@ -98,12 +114,28 @@ export function deriveRequiredCIStatus(
   let requiredTotal = 0;
   let requiredFailing = 0;
   let requiredPending = 0;
+  // Required contexts whose conclusion/state matched none of the known buckets.
+  // Counted so an unrecognized value can't be silently absorbed into "passing"
+  // — see the bail-out below.
+  let requiredUnclassified = 0;
 
   for (const ctx of contexts) {
-    if (!ctx?.isRequired) continue;
-    requiredTotal++;
+    if (!ctx) continue;
 
     const typename = ctx.__typename;
+    // A union member the query has no inline fragment for arrives carrying only
+    // `__typename` — not its state, and not its `isRequired`. It must be counted
+    // as unclassifiable BEFORE the requiredness guard below, since skipping it
+    // for a missing `isRequired` would read an unknown member as "not required"
+    // and let the remaining checks derive a green verdict over the top of it.
+    if (typename !== undefined && typename !== "CheckRun" && typename !== "StatusContext") {
+      requiredUnclassified++;
+      continue;
+    }
+
+    if (!ctx.isRequired) continue;
+    requiredTotal++;
+
     if (typename === "CheckRun") {
       const conclusion = ctx.conclusion?.toUpperCase();
       const status = ctx.status?.toUpperCase();
@@ -111,6 +143,12 @@ export function deriveRequiredCIStatus(
         requiredFailing++;
       } else if (!conclusion && status && PENDING_CHECK_STATUSES.has(status)) {
         requiredPending++;
+        // Neither failing nor pending: only an explicitly non-failing conclusion
+        // counts as passing. A conclusion this vocabulary doesn't know, or a run
+        // that reports no conclusion and no recognized in-flight status, is
+        // unclassifiable rather than green.
+      } else if (!(conclusion && NON_FAILING_CHECK_CONCLUSIONS.has(conclusion))) {
+        requiredUnclassified++;
       }
     } else if (typename === "StatusContext") {
       const state = ctx.state?.toUpperCase();
@@ -118,17 +156,35 @@ export function deriveRequiredCIStatus(
         requiredFailing++;
       } else if (state && PENDING_STATUS_STATES.has(state)) {
         requiredPending++;
+      } else if (!(state && NON_FAILING_STATUS_STATES.has(state))) {
+        requiredUnclassified++;
       }
     } else {
-      // Unknown union member — treat a non-success conclusion/state as failure conservatively
+      // No `__typename` at all — classify by whichever fields are present, and
+      // treat "neither recognizably passing" as unclassifiable.
       const conclusion = ctx.conclusion?.toUpperCase();
       const state = ctx.state?.toUpperCase();
       if (conclusion && FAILING_CHECK_CONCLUSIONS.has(conclusion)) {
         requiredFailing++;
       } else if (state && FAILING_STATUS_STATES.has(state)) {
         requiredFailing++;
+      } else if (
+        !(conclusion && NON_FAILING_CHECK_CONCLUSIONS.has(conclusion)) &&
+        !(state && NON_FAILING_STATUS_STATES.has(state))
+      ) {
+        requiredUnclassified++;
       }
     }
+  }
+
+  if (requiredUnclassified > 0) {
+    // A required check reported something this vocabulary can't bucket — a
+    // GitHub enum addition, or a malformed node. Deriving a summary from the
+    // rest would count it as neither failing nor pending and land on SUCCESS,
+    // turning an unrecognized failure into a false green. Keep the raw rollup,
+    // matching both the truncated-page bail-out above and `deriveGlobalCIStatus`,
+    // which likewise refuses to declare SUCCESS with unclassified buckets.
+    return { ciStatus: rawCiStatus, ciSummary: undefined };
   }
 
   if (requiredTotal === 0) {
@@ -150,6 +206,113 @@ export function deriveRequiredCIStatus(
   }
 
   return { ciStatus, ciSummary: summary };
+}
+
+// GitHub CheckRun conclusions that map onto a normalized conclusion. The two
+// failing spellings the normalized vocabulary has no word for — STARTUP_FAILURE
+// and STALE — fold into "failure", matching how FAILING_CHECK_CONCLUSIONS above
+// already buckets them for the roll-up. Both derivations therefore agree on
+// which checks are failing; only the wording differs.
+const CHECK_CONCLUSION_MAP: Readonly<Record<string, CheckRunConclusion>> = {
+  SUCCESS: "success",
+  FAILURE: "failure",
+  NEUTRAL: "neutral",
+  CANCELLED: "cancelled",
+  TIMED_OUT: "timed_out",
+  ACTION_REQUIRED: "action_required",
+  SKIPPED: "skipped",
+  STARTUP_FAILURE: "failure",
+  STALE: "failure",
+};
+
+// GitHub StatusContext states. Legacy commit statuses carry no separate
+// lifecycle field, so the state alone decides both halves: EXPECTED is a status
+// GitHub knows is coming but has not received, PENDING is one being reported.
+const STATUS_STATE_MAP: Readonly<
+  Record<string, { status: CheckRunStatus; conclusion?: CheckRunConclusion }>
+> = {
+  SUCCESS: { status: "completed", conclusion: "success" },
+  FAILURE: { status: "completed", conclusion: "failure" },
+  ERROR: { status: "completed", conclusion: "failure" },
+  PENDING: { status: "in_progress" },
+  EXPECTED: { status: "queued" },
+};
+
+const QUEUED_CHECK_STATUSES = new Set(["QUEUED", "WAITING", "PENDING", "REQUESTED"]);
+
+/**
+ * Normalize one rollup context node onto the cross-provider {@link CheckRun}
+ * shape, or `null` when the node carries no usable name.
+ *
+ * The two failure modes are deliberately separated. An unrecognized *value* —
+ * a conclusion or state from a future GitHub enum — degrades: the conclusion is
+ * omitted (never guessed as success or failure) and the run reads as unfinished
+ * unless a known conclusion proves otherwise, so one enum addition costs one
+ * field on one check. An unrecognized *structure* — a node with no name at all,
+ * which is what a genuinely new union member returns since the query's inline
+ * fragments don't apply to it — returns `null`, and the caller must treat that
+ * as an incomplete read rather than drop it: silently omitting a check would
+ * turn "there is a check I can't describe" into "there is no such check".
+ *
+ * A conclusion always implies `status: "completed"`; a run that reported an
+ * outcome has finished, whatever its lifecycle field says. That keeps the
+ * emitted shape non-contradictory for consumers validating the contract.
+ */
+export function mapRollupContextToCheckRun(node: RollupContextNode): CheckRun | null {
+  const name = node.name?.trim() || node.context?.trim();
+  if (!name) return null;
+
+  const required = typeof node.isRequired === "boolean" ? node.isRequired : undefined;
+  const detailsUrl = node.detailsUrl?.trim() || node.targetUrl?.trim() || undefined;
+
+  // A node exposing `state` is a legacy StatusContext regardless of whether the
+  // union member was named — an unknown __typename still maps by field shape.
+  const rawState = node.state?.toUpperCase();
+  if (rawState) {
+    const mapped = STATUS_STATE_MAP[rawState];
+    return {
+      name,
+      // An unrecognized state is not evidence the status finished, so it reads
+      // as not-yet-started rather than claiming a completion we can't verify.
+      status: mapped?.status ?? "queued",
+      ...(mapped?.conclusion ? { conclusion: mapped.conclusion } : {}),
+      ...(required !== undefined ? { required } : {}),
+      ...(detailsUrl ? { detailsUrl } : {}),
+      rawData: node,
+    };
+  }
+
+  const rawConclusion = node.conclusion?.toUpperCase();
+  const conclusion = rawConclusion ? CHECK_CONCLUSION_MAP[rawConclusion] : undefined;
+  const rawStatus = node.status?.toUpperCase();
+
+  let status: CheckRunStatus;
+  if (rawConclusion) {
+    // A reported outcome settles the lifecycle, whatever `status` says. Trusting
+    // it here is what keeps `conclusion` from ever appearing on a run this shape
+    // also calls unfinished.
+    status = "completed";
+  } else if (rawStatus === "COMPLETED") {
+    status = "completed";
+  } else if (rawStatus === "IN_PROGRESS") {
+    status = "in_progress";
+  } else if (rawStatus && QUEUED_CHECK_STATUSES.has(rawStatus)) {
+    status = "queued";
+  } else {
+    // Missing or unrecognized lifecycle value with no conclusion to settle it:
+    // "queued" understates progress but never claims a run is done when it may
+    // still be going.
+    status = "queued";
+  }
+
+  return {
+    name,
+    status,
+    ...(conclusion ? { conclusion } : {}),
+    ...(required !== undefined ? { required } : {}),
+    ...(detailsUrl ? { detailsUrl } : {}),
+    rawData: node,
+  };
 }
 
 export interface GlobalCIDeriveInput {

@@ -230,6 +230,16 @@ describe("summarizeForgeArgs redaction", () => {
     expect(summarizeForgeArgs("assignIssue", 99)).toBe('{"number":99}');
   });
 
+  it("records only the PR number for getChecks, never check names or log URLs", () => {
+    // getChecks returns check names and detailsUrls; neither reaches the audit
+    // ring, and a non-number arg redacts to an empty object like the rest of
+    // the number group.
+    expect(summarizeForgeArgs("getChecks", 31)).toBe('{"number":31}');
+    expect(
+      summarizeForgeArgs("getChecks", { name: "deploy-prod", detailsUrl: "https://ci/secret" })
+    ).toBe("{}");
+  });
+
   it("keeps only the PR number for review-write ops, omitting bodies/ids/reviewers", () => {
     // Each of these receives content (review body, dismissal message),
     // identifiers (review id), or PII (reviewer logins) beyond the PR number —

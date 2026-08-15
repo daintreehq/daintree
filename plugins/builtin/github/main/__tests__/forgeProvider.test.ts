@@ -3332,3 +3332,342 @@ describe("getRateLimit", () => {
     });
   });
 });
+
+describe("checks.getChecks", () => {
+  beforeEach(() => mockGraphQLClient.mockReset());
+
+  function checksResponse(
+    nodes: unknown[],
+    pageInfo: { hasNextPage: boolean; endCursor?: string | null } = { hasNextPage: false },
+    oid = "head-sha"
+  ) {
+    return {
+      repository: {
+        pullRequest: {
+          commits: {
+            nodes: [
+              {
+                commit: {
+                  oid,
+                  statusCheckRollup: { state: "FAILURE", contexts: { nodes, pageInfo } },
+                },
+              },
+            ],
+          },
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    };
+  }
+
+  it("projects both union members onto the normalized check shape", async () => {
+    mockGraphQLClient.mockResolvedValue(
+      checksResponse([
+        {
+          __typename: "CheckRun",
+          name: "unit",
+          status: "COMPLETED",
+          conclusion: "FAILURE",
+          detailsUrl: "https://ci.example/unit",
+          isRequired: true,
+        },
+        {
+          __typename: "StatusContext",
+          context: "legacy/lint",
+          state: "SUCCESS",
+          targetUrl: "https://legacy.example/lint",
+          isRequired: false,
+        },
+      ])
+    );
+    const result = await githubForgeProvider.checks!.getChecks(repo, 7);
+    expect(result?.checks).toEqual([
+      {
+        name: "unit",
+        status: "completed",
+        conclusion: "failure",
+        required: true,
+        detailsUrl: "https://ci.example/unit",
+        rawData: expect.anything(),
+      },
+      {
+        name: "legacy/lint",
+        status: "completed",
+        conclusion: "success",
+        required: false,
+        detailsUrl: "https://legacy.example/lint",
+        rawData: expect.anything(),
+      },
+    ]);
+  });
+
+  it("pages to the end and returns every check across pages", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(
+        checksResponse([{ __typename: "CheckRun", name: "page1", status: "COMPLETED" }], {
+          hasNextPage: true,
+          endCursor: "CURSOR_1",
+        })
+      )
+      .mockResolvedValueOnce(
+        checksResponse([{ __typename: "CheckRun", name: "page2", status: "COMPLETED" }], {
+          hasNextPage: false,
+        })
+      );
+    const result = await githubForgeProvider.checks!.getChecks(repo, 7);
+    expect(result?.checks.map((c) => c.name)).toEqual(["page1", "page2"]);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes the previous page's endCursor as the next request's cursor", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(
+        checksResponse([{ __typename: "CheckRun", name: "a", status: "COMPLETED" }], {
+          hasNextPage: true,
+          endCursor: "CURSOR_1",
+        })
+      )
+      .mockResolvedValueOnce(checksResponse([]));
+    await githubForgeProvider.checks!.getChecks(repo, 7);
+    expect(mockGraphQLClient.mock.calls[0][1]).toMatchObject({ cursor: null });
+    expect(mockGraphQLClient.mock.calls[1][1]).toMatchObject({ cursor: "CURSOR_1" });
+  });
+
+  it("rejects rather than returning a partial list when the cursor is missing", async () => {
+    mockGraphQLClient.mockResolvedValue(
+      checksResponse([{ __typename: "CheckRun", name: "a", status: "COMPLETED" }], {
+        hasNextPage: true,
+        endCursor: null,
+      })
+    );
+    await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(/pagination/i);
+  });
+
+  it("rejects rather than looping when the cursor stops advancing", async () => {
+    mockGraphQLClient.mockResolvedValue(
+      checksResponse([{ __typename: "CheckRun", name: "a", status: "COMPLETED" }], {
+        hasNextPage: true,
+        endCursor: "SAME",
+      })
+    );
+    await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(/pagination/i);
+    // The repeated cursor is caught on the second page, not walked to the cap.
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops at the page cap instead of paging without bound", async () => {
+    let cursor = 0;
+    mockGraphQLClient.mockImplementation(() =>
+      Promise.resolve(
+        checksResponse([{ __typename: "CheckRun", name: `c${cursor}`, status: "COMPLETED" }], {
+          hasNextPage: true,
+          endCursor: `CURSOR_${cursor++}`,
+        })
+      )
+    );
+    await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(/more than/i);
+    expect(mockGraphQLClient.mock.calls.length).toBeLessThanOrEqual(10);
+  });
+
+  it("returns null for a missing PR but an empty list for a PR with no checks", async () => {
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: { pullRequest: null },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+    expect(await githubForgeProvider.checks!.getChecks(repo, 7)).toBeNull();
+
+    mockGraphQLClient.mockResolvedValueOnce(checksResponse([]));
+    expect(await githubForgeProvider.checks!.getChecks(repo, 8)).toEqual({ checks: [] });
+  });
+
+  it("returns an empty list when the PR exists but has no rollup at all", async () => {
+    mockGraphQLClient.mockResolvedValue({
+      repository: { pullRequest: { commits: { nodes: [{ commit: {} }] } } },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+    expect(await githubForgeProvider.checks!.getChecks(repo, 9)).toEqual({ checks: [] });
+  });
+
+  it("rejects when the PR disappears partway through pagination", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(
+        checksResponse([{ __typename: "CheckRun", name: "a", status: "COMPLETED" }], {
+          hasNextPage: true,
+          endCursor: "CURSOR_1",
+        })
+      )
+      .mockResolvedValueOnce({
+        repository: { pullRequest: null },
+        rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+      });
+    await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(/disappeared/i);
+  });
+
+  it("coalesces concurrent identical reads but not reads of different PRs", async () => {
+    mockGraphQLClient.mockResolvedValue(checksResponse([]));
+    await Promise.all([
+      githubForgeProvider.checks!.getChecks(repo, 11),
+      githubForgeProvider.checks!.getChecks(repo, 11),
+    ]);
+    const afterSamePR = mockGraphQLClient.mock.calls.length;
+    await githubForgeProvider.checks!.getChecks(repo, 12);
+    expect(afterSamePR).toBe(1);
+    expect(mockGraphQLClient.mock.calls.length).toBe(2);
+  });
+
+  it("rejects rather than dropping a node it cannot even name", async () => {
+    // A new GraphQL union member matches neither inline fragment, so it arrives
+    // with only __typename. Skipping it would report "no such check" for a check
+    // that exists — the same silent-truncation failure the cursor guards prevent.
+    mockGraphQLClient.mockResolvedValue(
+      checksResponse([
+        { __typename: "SomeFutureCheckKind" },
+        { __typename: "CheckRun", name: "named", status: "COMPLETED", conclusion: "SUCCESS" },
+      ])
+    );
+    await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(/unreadable/i);
+  });
+
+  it("rejects when the PR head moves mid-pagination", async () => {
+    // Every page re-resolves commits(last:1), so a push between pages would
+    // otherwise splice two commits' checks into one list presented as complete.
+    mockGraphQLClient
+      .mockResolvedValueOnce(
+        checksResponse(
+          [{ __typename: "CheckRun", name: "old-head", status: "COMPLETED" }],
+          { hasNextPage: true, endCursor: "CURSOR_1" },
+          "sha-a"
+        )
+      )
+      .mockResolvedValueOnce(
+        checksResponse(
+          [{ __typename: "CheckRun", name: "new-head", status: "COMPLETED" }],
+          { hasNextPage: false },
+          "sha-b"
+        )
+      );
+    await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(
+      /updated mid-read/i
+    );
+  });
+
+  it("rejects when a page reports no pagination info to prove it is the last", async () => {
+    mockGraphQLClient.mockResolvedValue({
+      repository: {
+        pullRequest: {
+          commits: {
+            nodes: [
+              {
+                commit: {
+                  oid: "head-sha",
+                  statusCheckRollup: {
+                    state: "FAILURE",
+                    contexts: {
+                      nodes: [{ __typename: "CheckRun", name: "a", status: "COMPLETED" }],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+    await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(
+      /no pagination info/i
+    );
+  });
+
+  it("rejects when the rollup vanishes after the first page", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(
+        checksResponse([{ __typename: "CheckRun", name: "a", status: "COMPLETED" }], {
+          hasNextPage: true,
+          endCursor: "CURSOR_1",
+        })
+      )
+      .mockResolvedValueOnce({
+        repository: {
+          pullRequest: { commits: { nodes: [{ commit: { oid: "head-sha" } }] } },
+        },
+        rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+      });
+    await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(/went away/i);
+  });
+
+  it("rejects a rollup that reports no node list rather than reading it as empty", async () => {
+    mockGraphQLClient.mockResolvedValue({
+      repository: {
+        pullRequest: {
+          commits: {
+            nodes: [
+              {
+                commit: {
+                  oid: "head-sha",
+                  statusCheckRollup: {
+                    state: "FAILURE",
+                    contexts: { nodes: null, pageInfo: { hasNextPage: false } },
+                  },
+                },
+              },
+            ],
+          },
+        },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+    await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(/no check list/i);
+  });
+
+  it("rejects a pageInfo that omits hasNextPage instead of assuming the page is last", async () => {
+    mockGraphQLClient.mockResolvedValue(
+      checksResponse([{ __typename: "CheckRun", name: "a", status: "COMPLETED" }], {} as never)
+    );
+    await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(
+      /no pagination info/i
+    );
+  });
+
+  it("rejects paging on when the head commit cannot be pinned", async () => {
+    // Without an oid there is nothing to compare later pages against, so a push
+    // mid-read would go undetected.
+    mockGraphQLClient.mockResolvedValue(
+      checksResponse(
+        [{ __typename: "CheckRun", name: "a", status: "COMPLETED" }],
+        { hasNextPage: true, endCursor: "CURSOR_1" },
+        "" as never
+      )
+    );
+    await expect(githubForgeProvider.checks!.getChecks(repo, 7)).rejects.toThrow(/no head commit/i);
+  });
+
+  it("does not write its pages into the cache getCIStatus reads", async () => {
+    // getChecks bypasses the shared response cache in both directions: a page it
+    // fetched must not later be served to the roll-up read as a cache hit.
+    mockGraphQLClient.mockResolvedValueOnce(checksResponse([]));
+    await githubForgeProvider.checks!.getChecks(repo, 31);
+    const afterChecks = mockGraphQLClient.mock.calls.length;
+
+    mockGraphQLClient.mockResolvedValueOnce(ciResponse());
+    await githubForgeProvider.getCIStatus(repo, 31);
+
+    expect(mockGraphQLClient.mock.calls.length).toBe(afterChecks + 1);
+  });
+
+  it("does not serve a stale cached first page", async () => {
+    // getCIStatus shares this query and caches its response for 60s. Reusing
+    // that entry would let a check added since then vanish from a list that
+    // promises to be complete, so getChecks must re-read.
+    mockGraphQLClient.mockResolvedValueOnce(ciResponse());
+    await githubForgeProvider.getCIStatus(repo, 21);
+
+    mockGraphQLClient.mockResolvedValueOnce(
+      checksResponse([{ __typename: "CheckRun", name: "added-later", status: "COMPLETED" }])
+    );
+    const result = await githubForgeProvider.checks!.getChecks(repo, 21);
+
+    expect(result?.checks.map((c) => c.name)).toEqual(["added-later"]);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+});

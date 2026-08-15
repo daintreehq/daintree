@@ -1,5 +1,6 @@
 import type { GraphQlQueryResponseData } from "@octokit/graphql";
 import type {
+  CheckRun,
   CIStatus,
   Issue,
   IssueComment,
@@ -47,7 +48,7 @@ import {
   type PRRequiredStatusEntry,
 } from "./GitHubCaches.js";
 import { probeOpenPRList } from "./GitHubPRDiscovery.js";
-import { deriveRequiredCIStatus } from "./prRequiredCIStatus.js";
+import { deriveRequiredCIStatus, mapRollupContextToCheckRun } from "./prRequiredCIStatus.js";
 import type { RollupContextNode } from "./prRequiredCIStatus.js";
 import { getIssuesByNumbersForContext } from "./GitHubIssues.js";
 import {
@@ -75,6 +76,7 @@ import {
   getIssueInflight,
   getPRInflight,
   getCIStatusInflight,
+  getChecksInflight,
   findPRsByBranchesInflight,
   findPRsByNumbersInflight,
   getCIStatusesInflight,
@@ -774,32 +776,11 @@ export async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<
   if (cached) return buildCIStatus(cached, null);
 
   return dedupe(getCIStatusInflight, cacheKey, false, async () => {
-    const response = await runQuery(
-      PR_CI_STATUS_QUERY,
-      {
-        owner: repo.owner,
-        repo: repo.repo,
-        number: prNumber,
-      },
-      "PR_CI_STATUS_QUERY"
-    );
+    const page = await fetchCIRollupPage(repo, prNumber, null);
+    if (!page) return null;
 
-    const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
-      Record<string, unknown> | null | undefined;
-    if (!pr) return null;
-
-    const commits = pr.commits as
-      { nodes?: Array<{ commit?: { statusCheckRollup?: unknown } }> } | undefined;
-    const rollup = commits?.nodes?.[0]?.commit?.statusCheckRollup as
-      | {
-          state?: string;
-          contexts?: { nodes?: RollupContextNode[]; pageInfo?: { hasNextPage?: boolean } };
-        }
-      | undefined;
-
-    const contextNodes = rollup?.contexts?.nodes ?? null;
-    const hasNextPage = rollup?.contexts?.pageInfo?.hasNextPage === true;
-    const derived = deriveRequiredCIStatus(contextNodes, hasNextPage, rollup?.state ?? null);
+    const { rollup } = page;
+    const derived = deriveRequiredCIStatus(page.nodes, page.hasNextPage, rollup?.state ?? null);
 
     const entry: PRRequiredStatusEntry = {
       ciStatus: derived.ciStatus,
@@ -807,6 +788,163 @@ export async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<
     };
     prRequiredStatusCache.set(cacheKey, entry);
     return buildCIStatus(entry, rollup ?? null);
+  });
+}
+
+interface CIRollupPage {
+  rollup: { state?: string } | undefined;
+  /** Head commit the page was read from; `null` when the response omitted it. */
+  headOid: string | null;
+  nodes: RollupContextNode[] | null;
+  hasNextPage: boolean;
+  endCursor: string | null;
+  /** `false` when the rollup exists but reported no `pageInfo` to prove completeness. */
+  hasPageInfo: boolean;
+}
+
+/**
+ * One page of the head commit's status-check rollup, or `null` when the PR
+ * doesn't exist. Shared by the roll-up and per-check reads so both see the same
+ * response shape from the same query.
+ *
+ * `bypassCache` is what separates the two callers. `getCIStatus` wants the 60s
+ * response cache — it is the hottest forge path and a minute-stale verdict is
+ * documented. `getChecks` must not: a cached first page reporting
+ * `hasNextPage: false` would let a since-added 101st check vanish from a list
+ * that promises to be complete.
+ */
+async function fetchCIRollupPage(
+  repo: RepoRef,
+  prNumber: number,
+  cursor: string | null,
+  bypassCache = false
+): Promise<CIRollupPage | null> {
+  const response = await runQuery(
+    PR_CI_STATUS_QUERY,
+    { owner: repo.owner, repo: repo.repo, number: prNumber, cursor },
+    "PR_CI_STATUS_QUERY",
+    bypassCache
+  );
+
+  const pr = (response?.repository as Record<string, unknown> | undefined)?.pullRequest as
+    Record<string, unknown> | null | undefined;
+  if (!pr) return null;
+
+  const commits = pr.commits as
+    { nodes?: Array<{ commit?: { oid?: string; statusCheckRollup?: unknown } }> } | undefined;
+  const commit = commits?.nodes?.[0]?.commit;
+  const rollup = commit?.statusCheckRollup as
+    | {
+        state?: string;
+        contexts?: {
+          nodes?: RollupContextNode[];
+          pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+        };
+      }
+    | undefined;
+
+  const pageInfo = rollup?.contexts?.pageInfo;
+  const nodes = rollup?.contexts?.nodes;
+  return {
+    rollup,
+    headOid: typeof commit?.oid === "string" && commit.oid ? commit.oid : null,
+    nodes: Array.isArray(nodes) ? nodes : null,
+    hasNextPage: pageInfo?.hasNextPage === true,
+    endCursor: pageInfo?.endCursor ?? null,
+    // Only a real boolean proves anything. A `pageInfo` that omits the flag says
+    // nothing about whether more pages exist, and reading its absence as "no"
+    // is how a list silently stops at 100.
+    hasPageInfo: typeof pageInfo?.hasNextPage === "boolean",
+  };
+}
+
+/**
+ * Ceiling on rollup pages walked by one {@link getChecksImpl} call. At 100
+ * contexts per page this is 1000 checks — far past any real PR, so it never
+ * truncates legitimate data. It exists so a provider bug or a cursor that keeps
+ * reporting `hasNextPage` cannot spin an unbounded request loop against a
+ * rate-limited API.
+ */
+const MAX_CHECK_PAGES = 10;
+
+/**
+ * Per-check CI detail for one PR (#11786). Pages the rollup to the end and
+ * returns every check, so a caller diagnosing a red PR sees which check failed
+ * and where to read its log.
+ *
+ * Rejects rather than returning a short list whenever the traversal can't be
+ * completed — a truncated answer to "which check failed?" is wrong, not partial.
+ * `null` is reserved for a PR that doesn't exist; a PR with no checks yields an
+ * empty array.
+ */
+export async function getChecksImpl(
+  repo: RepoRef,
+  prNumber: number
+): Promise<{ checks: CheckRun[] } | null> {
+  const inflightKey = `${repo.owner}/${repo.repo}:${prNumber}`;
+  return dedupe(getChecksInflight, inflightKey, false, async () => {
+    const incomplete = (why: string): Error =>
+      new Error(`Could not read all checks for PR #${prNumber}: ${why}`);
+
+    const checks: CheckRun[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    let headOid: string | null = null;
+
+    for (let page = 0; page < MAX_CHECK_PAGES; page++) {
+      const result: CIRollupPage | null = await fetchCIRollupPage(repo, prNumber, cursor, true);
+      // Only the first page distinguishes "no such PR"; a later page losing the
+      // PR means it moved under us, which is a failed traversal, not absence.
+      if (!result) {
+        if (page === 0) return null;
+        throw incomplete("the pull request disappeared mid-read");
+      }
+
+      // Every page re-resolves `commits(last: 1)`, so a push between pages would
+      // otherwise splice two commits' checks into one list — dropping the new
+      // head's failures while presenting the result as complete.
+      if (page === 0) {
+        headOid = result.headOid;
+      } else if (result.headOid === null || result.headOid !== headOid) {
+        throw incomplete("the pull request was updated mid-read");
+      }
+
+      if (!result.rollup) {
+        // No rollup at all: on the first page that is a PR with no checks; later
+        // it means the data moved under us, which is not an empty result.
+        if (page === 0) return { checks: [] };
+        throw incomplete("its checks went away mid-read");
+      }
+
+      // A rollup that reports no node list at all isn't an empty page — it is a
+      // page we can't read, and treating it as empty drops whatever it held.
+      if (!result.nodes) throw incomplete("the provider returned no check list");
+
+      for (const node of result.nodes) {
+        const check = mapRollupContextToCheckRun(node);
+        // A node we cannot even name is a check we would be omitting silently —
+        // "no such check" instead of "a check I can't describe". Fail loudly.
+        if (!check) throw incomplete("the provider returned an unreadable check");
+        checks.push(check);
+      }
+
+      // Without pageInfo there is no evidence this page is the last one, and
+      // assuming it is truncates at 100 without saying so.
+      if (!result.hasPageInfo) throw incomplete("the provider reported no pagination info");
+      if (!result.hasNextPage) return { checks };
+
+      // Another page is coming, so from here on the head has to be verifiable.
+      if (headOid === null) throw incomplete("the provider reported no head commit to pin");
+
+      // A next page we can't address, or a cursor that repeats, would loop or
+      // silently drop the remainder. Fail instead of returning a partial list.
+      const next = result.endCursor?.trim();
+      if (!next || seenCursors.has(next)) throw incomplete("pagination stalled");
+      seenCursors.add(next);
+      cursor = next;
+    }
+
+    throw incomplete(`more than ${MAX_CHECK_PAGES * 100} checks`);
   });
 }
 
