@@ -674,8 +674,8 @@ function splitHexAlpha(hex: string): { hex: string; opacity: number } | null {
 // *towards* the outline, so the pair that looks safe against the surrounding
 // surface can still fail against the row it encloses.
 /**
- * The switcher's "recently active" dot is a filled `activity-idle` disc drawn in
- * the project row's status slot (#11791).
+ * The switcher's "recently active" dot is a filled `text-secondary` disc drawn
+ * in the project row's status slot (#11791).
  *
  * It gets its own gate rather than a CONTRAST_PAIRS entry because the palette
  * row is not one of DISPLAY_SURFACES: rows are transparent until selected, so
@@ -684,15 +684,19 @@ function splitHexAlpha(hex: string): { hex: string; opacity: number } | null {
  * actually paint on, and a dot that clears one but not the other is invisible
  * exactly half the time it matters.
  *
- * `activity-idle` is also checked light-only and advisory-only by the matrix
- * pass; this promotes it to the hard-fail gate for the surfaces it now has to
- * hold. Nothing here relies on the dot being the sole carrier of the fact — the
- * row says "recently active" in its accessible name too — but a mark quiet
- * enough to miss is not a subtle mark, it is an absent one.
+ * `text-secondary` rather than the semantically tempting `activity-idle`:
+ * measured against these surfaces, `activity-idle` lands between 2.18:1 and
+ * 2.94:1 on five of the dark built-ins (daintree included), because it was
+ * calibrated as a cursor/ring hue rather than as a filled indicator.
+ * `text-secondary` is the palette's quiet-but-legible tier and already holds a
+ * 3.0 floor against every display surface. Nothing here relies on the dot being
+ * the sole carrier of the fact — the row says "recently active" in its
+ * accessible name too — but a mark quiet enough to miss is not a subtle mark,
+ * it is an absent one.
  */
 function getRecentActivityDotWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
   const warnings: AppThemeValidationWarning[] = [];
-  const dotToken = scheme.tokens["activity-idle"];
+  const dotToken = scheme.tokens["text-secondary"];
   const fillToken = scheme.tokens["overlay-raised"];
 
   const surfaces = resolvePaletteSurfaces(scheme);
@@ -724,7 +728,7 @@ function getRecentActivityDotWarnings(scheme: AppColorScheme): AppThemeValidatio
       if (dot === null) {
         warnings.push({
           kind: "unevaluable",
-          message: `Cannot evaluate recent-activity dot contrast: activity-idle="${dotToken}" is neither hex nor rgba()`,
+          message: `Cannot evaluate recent-activity dot contrast: text-secondary="${dotToken}" is neither hex nor rgba()`,
         });
         return warnings;
       }
@@ -738,7 +742,7 @@ function getRecentActivityDotWarnings(scheme: AppColorScheme): AppThemeValidatio
     if (ratio < RECENT_ACTIVITY_DOT_MIN_CONTRAST) {
       warnings.push({
         kind: "low-contrast",
-        message: `activity-idle (recent-activity dot) against ${label} is ${ratio.toFixed(2)}:1; target is ${RECENT_ACTIVITY_DOT_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
+        message: `text-secondary (recent-activity dot) against ${label} is ${ratio.toFixed(2)}:1; target is ${RECENT_ACTIVITY_DOT_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
       });
     }
   }

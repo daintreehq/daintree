@@ -247,7 +247,7 @@ function StatusDot({
         // active" phrase instead — a live region per row would re-announce the
         // whole list on every render, and colour must not be the only carrier.
         <div
-          className="w-1.5 h-1.5 rounded-full bg-activity-idle"
+          className="w-1.5 h-1.5 rounded-full bg-text-secondary"
           data-testid="workspace-recent-dot"
           aria-hidden="true"
         />
