@@ -75,6 +75,14 @@ Header: Authorization: Bearer <api-key>
 
 Editors such as Cursor and VS Code read their own config files; their exact schemas aren't verified here, so use the values above rather than assuming the Claude Code JSON is portable to them.
 
+### Scoping a client to one project
+
+By default an external client's calls land in whichever Daintree window you focused last, which makes two agents driving two projects unsafe: focusing one retargets the other. **Copy config for this project** in the same tab emits the same config plus a `Daintree-Workspace-Id` header, and a client configured from it stays on that project no matter where focus goes — running in the background, without switching projects or stealing focus.
+
+The plain **Copy MCP config** button is unchanged and still follows focus, so existing configs keep working exactly as before.
+
+Two things to know about a scoped client: the project has to be open in exactly one window when it connects (a closed or duplicated project refuses the connection with a message naming which), and confirm-gated tools such as `recipe.run` are not part of its tool surface — nobody is watching a background project to approve the dialog, so those calls are refused up front rather than hanging until they time out. Run those from Daintree, or connect an unscoped client for them.
+
 ### Keeping a connection working
 
 The copied config embeds the key verbatim, so treat any file holding it as a secret and keep it out of commits. Rotating the key (**Rotate API key** in the same tab) is the revoke-all primitive: it immediately invalidates every client still presenting the old key, and each one has to be re-pasted. Changing the configured port likewise invalidates the URL every client holds.
@@ -194,15 +202,53 @@ How `danger` interacts with tier gating:
 
 A session is created on transport open: SSE sessions live in `SessionStore.sessions`, Streamable-HTTP in `SessionStore.httpSessions`. At handshake `httpLifecycle`:
 
-1. Resolves and records the tier (`sessionTierMap`).
+1. Resolves and records the tier (`sessionTierMap`) and the **origin** (`sessionOriginMap`).
 2. Registers client metadata + the bearer in `bearerRegister` (`touchBearer`).
-3. Pins the WebContents (`sessionWebContentsMap`) and `ActionContext` (`sessionContextMap`) for help bearers.
+3. Pins the WebContents (`sessionWebContentsMap`) and `ActionContext` (`sessionContextMap`) for help bearers, or records a **workspace binding** (`sessionWorkspaceMap`) for an external bearer that sent a selector.
 4. Builds the per-session `SessionServerDeps` and calls `createSessionServer`.
 5. Arms an idle timer (`MCP_SSE_IDLE_TIMEOUT_MS`, 30 min).
 
 `transport.onclose` tears everything down: clears the idle/elevation timers, deletes the tier, revokes the session's grants (`grantCache.revokeSession(..., "session-ended")` — _before_ dropping the WebContents pin so the lifecycle emitter can still target the pinned renderer), clears dedup + rate-limit + client metadata, drops abuse state, and detaches the bearer.
 
 The **idle reaper** is awake-time corrected (`SystemSleepService.getAwakeTimeSince` / `recomputeIdleTimers` on wake) so suspend time doesn't count against the 30-minute window.
+
+### Session origin vs. routing (#11789)
+
+Every session records an explicit `origin` — `"help" | "assistant-pane" | "external"` — separate from how it routes. Before #11789, "is this one of Daintree's own surfaces" was inferred from presence in `sessionWebContentsMap`, which was safe only while external sessions were never pinned. They can be now, so the two questions are answered by different fields:
+
+- **Routing** reads `sessionWorkspaceMap` first, then `sessionWebContentsMap`, then falls back to focus order.
+- **Authorization** (`issueGrant`, `setSessionTier`), **notifications** (the five `wc.send` closures in `buildSessionServerDeps`, plus the 401-abuse revoke) and **inventory** (`listExternalActiveClients`) read `origin` via `SessionStore.isRendererOwnedOrigin`.
+
+`getOrigin` defaults to `"external"` — the least-privileged answer — so a session whose handshake never recorded one, or one already half torn down, can never be mistaken for an assistant surface. `clearSessionBinding` drops route, context, origin and workspace together; every teardown path calls it rather than deleting maps individually.
+
+Getting this wrong is not theoretical. `issueGrant` has no rank floor (`setSessionTier` is saved by `external` sitting top of the rank order); its only other check is `minimumPermittingTier(toolId) !== null`, and the call gate honours a grant over failed tier membership. A bound external session reaching that surface could hold a grant for a tool outside `MCP_EXTERNAL_TIER_TOOLS` entirely.
+
+### Workspace binding (#11789)
+
+An external session can bind to one workspace at handshake and route there for its whole life, instead of following window focus. The selector is read **only** when creating a new session, on `/mcp`:
+
+- Header `Daintree-Workspace-Id: <opaque workspace id>`, and/or
+- Query param `?workspaceId=<opaque workspace id>`
+
+Both spellings are equal-authority: sending both is fine when they agree and **fails the handshake** when they don't — there is no precedence order, because silently preferring one would let a stale value in a copied config override an explicit one on the URL. The id is the same one `org.daintree/resolved-workspace` already reports (a project id or a scratch id), and stays opaque — it is never parsed as a path.
+
+An empty or whitespace-only selector is **invalid, not absent**: a client that sends the field at all believes it is scoping itself, and reading a blank one as "no selector" would hand it a focus-following session while it thought otherwise. The same reasoning covers the later legs — a selector on an established `/mcp` session must match what that session actually resolved to (it never rebinds; `DELETE` is exempt so a client can always clean up), and a selector on `POST /messages` is refused, because that is precisely where clients are known to attach headers inconsistently.
+
+Resolution goes through `getWebContentsForProject`, a registry read with no attach/thaw/focus/switch side effects. **Exactly one** live view must own the workspace; zero and many both refuse. A refused handshake returns HTTP 400 with a JSON-RPC error body at `MCP_HANDSHAKE_REJECTED_CODE` (`-32002`, distinct from the `-32001` "Session not found"), a stable `error.data.code` (`WORKSPACE_SELECTOR_MISMATCH` / `_INVALID` / `_NOT_ALLOWED`, `WORKSPACE_NOT_FOUND`, `WORKSPACE_AMBIGUOUS`), and **no** `Mcp-Session-Id` — no session state is created at all. Note that SDK 1.29's `StreamableHTTPClientTransport` surfaces a non-2xx handshake as a `StreamableHTTPError` carrying the raw body as text, so a client that wants to branch on `data.code` has to parse that body itself; the codes are a stable contract, not something the stock client destructures for you.
+
+A selector from a help or assistant-pane bearer is refused: those already route through the renderer that minted them, so a selector would name a second plausible target. Binding is likewise `/mcp`-only — a selector on the deprecated `/sse` endpoint is refused rather than ignored, since a silently-ignored routing selector is worse than an unsupported one.
+
+The binding is echoed in the `initialize` result under `capabilities.experimental["org.daintree/workspace-binding"]`, so a client can verify where its calls will land before issuing a mutation. It is declared at `Server` construction, never by registering a second `InitializeRequestSchema` handler — that would shadow the SDK's own `_oninitialize` and lose the `_clientCapabilities` capture the elicitation negotiation depends on.
+
+A bound view that Chromium has **frozen** (`Page.setWebLifecycleState`, applied to cached views under the Efficiency profile) is a known gap, not a handled case: its renderer event loop is suspended, so a dispatch queues rather than running, the caller times out at 30s, and the action executes on reactivation with its response discarded. Freezing is skipped for a project with a live agent, which covers the common orchestration case, but keeping a bound view thawed is #11790's job. Refusing dispatch to any _cached_ view would not be a stand-in — most cached views are merely CPU-throttled and work fine, so that would break the feature's whole point.
+
+**The binding stores the workspace id, not a WebContents id.** A view's id lives and dies with that view: a warm project switch reuses the same view, but LRU eviction destroys it and a later cold start registers a new id under the same workspace. Re-resolving per call lets a session recover once its workspace has a live view again; caching the handshake id would leave it permanently `SESSION_BINDING_GONE`. Dispatching into a _frozen_ view is #11790 — this is correct whenever the bound view is live.
+
+Failures fail closed and never fall back to another window. `tools/list` surfaces `SESSION_BINDING_GONE` in `McpError.data` rather than the generic "Action manifest unavailable", and a bound session never serves a cached manifest after a binding failure — that cache describes a view it can no longer reach.
+
+**Confirm-gated tools are withheld from a bound session.** A `danger: "confirm"` dispatch is only ever approved in the target renderer's native dialog, which gives up at 28s — inside main's 30s dispatch timeout and the client's 60s request timeout. Nobody is watching a background-bound view, and no arrangement holds the call open long enough to find someone. So such tools are dropped from the session's effective surface across `tools/list`, the introspection tools and `mcp.surface`, and a direct call is refused **before dispatch** with `CONFIRMATION_REQUIRED` and `details.confirmationChannel: "workspace-bound"` (distinct from the `"unavailable"` a windowless host reports, which clears when a window opens). The exclusion is derived from the manifest's own `danger` rather than a curated id list, so a future confirm-gated addition to `MCP_EXTERNAL_TIER_TOOLS` is covered the day it lands. It is a hard ceiling: a live per-tool or native grant widens dispatch past the tier floor but not past this. The guard keys on external tier **and** bound, never on "has a renderer route" — the Daintree Assistant is pinned and carries confirm-gated tools in its own allowlist.
+
+Binding is opt-in. An unbound external session keeps the documented focus-following behaviour, `recipe.run` included.
 
 ### Bearer register
 

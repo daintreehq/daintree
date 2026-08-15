@@ -902,17 +902,60 @@ describe("SessionStore.listExternalActiveClients (#8779)", () => {
     });
   });
 
-  it("excludes the internal help-assistant (renderer-pinned) session", () => {
+  it("excludes the internal help-assistant session", () => {
     addExternal("ext", "Claude Code", "streamable-http");
-    // A help-session bearer: external-classified at handshake but pinned to a
-    // renderer WebContents — Daintree's own consumer, must not self-name.
+    // Daintree's own consumer, pinned to the renderer that minted it — must
+    // not self-name in the disconnect dialog. Classified by origin rather than
+    // by having a pin (#11789), because a bound external client has a pin too.
     store.httpSessions.set("internal", fakeHttpSession());
     store.sessionTierMap.set("internal", "external");
+    store.sessionOriginMap.set("internal", "help");
     store.sessionWebContentsMap.set("internal", 7);
     store.registerClientMetadata("internal", "node", "streamable-http");
 
     const clients = store.listExternalActiveClients();
     expect(clients.map((c) => c.sessionId)).toEqual(["ext"]);
+  });
+
+  it("excludes an assistant-pane session", () => {
+    addExternal("ext", "Claude Code", "streamable-http");
+    store.httpSessions.set("pane", fakeHttpSession());
+    store.sessionTierMap.set("pane", "external");
+    store.sessionOriginMap.set("pane", "assistant-pane");
+    store.sessionWebContentsMap.set("pane", 8);
+    store.registerClientMetadata("pane", "node", "streamable-http");
+
+    const clients = store.listExternalActiveClients();
+    expect(clients.map((c) => c.sessionId)).toEqual(["ext"]);
+  });
+
+  it("still lists a workspace-bound external client (#11789)", () => {
+    // A real workspace handshake writes `sessionWorkspaceMap` only — the
+    // selector and renderer-pin routes are mutually exclusive by construction,
+    // since a pinned bearer's selector is refused. A background-bound agent is
+    // the one the user most needs to be able to find and disconnect, since
+    // they cannot see it working.
+    store.httpSessions.set("bound", fakeHttpSession());
+    store.sessionTierMap.set("bound", "external");
+    store.sessionOriginMap.set("bound", "external");
+    store.sessionWorkspaceMap.set("bound", "ws-a");
+    store.registerClientMetadata("bound", "Claude Code/1.2", "streamable-http");
+
+    const clients = store.listExternalActiveClients();
+    expect(clients.map((c) => c.sessionId)).toEqual(["bound"]);
+  });
+
+  it("lists an external client even if one somehow also carried a renderer pin", () => {
+    // Defence in depth rather than a reachable state: the point is that
+    // classification reads origin, so no future route can silently hide a
+    // third-party client from the disconnect UI again.
+    store.httpSessions.set("bound", fakeHttpSession());
+    store.sessionTierMap.set("bound", "external");
+    store.sessionOriginMap.set("bound", "external");
+    store.sessionWebContentsMap.set("bound", 42);
+    store.registerClientMetadata("bound", "Claude Code/1.2", "streamable-http");
+
+    expect(store.listExternalActiveClients().map((c) => c.sessionId)).toEqual(["bound"]);
   });
 
   it("excludes non-external (workbench/action/system) sessions", () => {
@@ -1170,5 +1213,107 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
     wireLiveHelpSession({ tier: "system" });
 
     expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.tier).toBe("system");
+  });
+});
+
+describe("SessionStore session origin and workspace binding (#11789)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+  });
+
+  it("classifies an unrecorded session as external", () => {
+    // Fail-closed default: a session whose handshake never recorded an origin
+    // — or one already half torn down — must never be mistaken for one of
+    // Daintree's own surfaces and handed elevation rights.
+    expect(store.getOrigin("never-seen")).toBe("external");
+    expect(store.isRendererOwnedOrigin("never-seen")).toBe(false);
+  });
+
+  it("treats help and assistant-pane as renderer-owned, external as not", () => {
+    store.sessionOriginMap.set("help", "help");
+    store.sessionOriginMap.set("pane", "assistant-pane");
+    store.sessionOriginMap.set("ext", "external");
+
+    expect(store.isRendererOwnedOrigin("help")).toBe(true);
+    expect(store.isRendererOwnedOrigin("pane")).toBe(true);
+    expect(store.isRendererOwnedOrigin("ext")).toBe(false);
+  });
+
+  it("does not treat a workspace-bound external session as renderer-owned", () => {
+    // The whole point of splitting origin from routing: this session HAS a
+    // renderer route, and must still be refused renderer-driven elevation.
+    store.sessionOriginMap.set("bound", "external");
+    store.sessionWorkspaceMap.set("bound", "ws-a");
+    store.sessionWebContentsMap.set("bound", 42);
+
+    expect(store.isRendererOwnedOrigin("bound")).toBe(false);
+  });
+
+  it("clearSessionBinding drops route, context, origin and workspace together", () => {
+    store.sessionWebContentsMap.set("s", 42);
+    store.sessionContextMap.set("s", { worktreeId: "w1" } as never);
+    store.sessionOriginMap.set("s", "help");
+    store.sessionWorkspaceMap.set("s", "ws-a");
+
+    store.clearSessionBinding("s");
+
+    expect(store.sessionWebContentsMap.has("s")).toBe(false);
+    expect(store.sessionContextMap.has("s")).toBe(false);
+    expect(store.sessionOriginMap.has("s")).toBe(false);
+    expect(store.sessionWorkspaceMap.has("s")).toBe(false);
+    // And the accessor reverts to the fail-closed default rather than keeping
+    // a stale privilege a recycled session id could inherit.
+    expect(store.isRendererOwnedOrigin("s")).toBe(false);
+  });
+
+  it("revokeSession clears the binding record", () => {
+    store.httpSessions.set("bound", fakeHttpSession());
+    store.sessionTierMap.set("bound", "external");
+    store.sessionOriginMap.set("bound", "external");
+    store.sessionWorkspaceMap.set("bound", "ws-a");
+    store.sessionWebContentsMap.set("bound", 42);
+
+    expect(store.revokeSession("bound")).toBe(true);
+
+    expect(store.sessionOriginMap.has("bound")).toBe(false);
+    expect(store.sessionWorkspaceMap.has("bound")).toBe(false);
+    expect(store.sessionWebContentsMap.has("bound")).toBe(false);
+  });
+
+  it("drain clears the binding records", () => {
+    store.httpSessions.set("bound", fakeHttpSession());
+    store.sessionOriginMap.set("bound", "external");
+    store.sessionWorkspaceMap.set("bound", "ws-a");
+
+    store.drain();
+
+    expect(store.sessionOriginMap.size).toBe(0);
+    expect(store.sessionWorkspaceMap.size).toBe(0);
+  });
+
+  it("idle expiry clears the binding records", () => {
+    vi.useFakeTimers();
+    try {
+      setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+      const session = fakeHttpSession();
+      store.httpSessions.set("bound", session);
+      store.sessionOriginMap.set("bound", "external");
+      store.sessionWorkspaceMap.set("bound", "ws-a");
+      session.idleTimer = store.createHttpIdleTimer("bound");
+
+      vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 10);
+
+      expect(store.httpSessions.has("bound")).toBe(false);
+      expect(store.sessionOriginMap.has("bound")).toBe(false);
+      expect(store.sessionWorkspaceMap.has("bound")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

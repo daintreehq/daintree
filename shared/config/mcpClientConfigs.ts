@@ -14,6 +14,17 @@
 
 export const MCP_SERVER_KEY = "daintree";
 
+/**
+ * Canonical spelling of the header that binds a session to one workspace
+ * (#11789). Lives beside the config builders because they are what a user
+ * actually copies, and the server derives its (lower-cased) lookup key from
+ * this — so the string a client is told to send and the string the server reads
+ * cannot drift apart.
+ *
+ * External contract: renaming it breaks every config already in the wild.
+ */
+export const MCP_WORKSPACE_ID_HEADER = "Daintree-Workspace-Id";
+
 export type McpClientConfigId = "claude-code" | "codex" | "streamable-http";
 
 export type McpClientConfigLanguage = "json" | "toml" | "text";
@@ -23,6 +34,17 @@ export interface McpClientConfigInput {
   port: number | null;
   /** Bearer token, or null/empty when no key is provisioned. */
   apiKey: string | null;
+  /**
+   * Opaque workspace id to bind the session to (#11789). When set, the snippet
+   * carries a `Daintree-Workspace-Id` header, so every call from that client
+   * routes to this workspace instead of following whichever Daintree window the
+   * user last focused.
+   *
+   * Omitted by default, and omitting it leaves the generated snippet
+   * byte-identical to what this module produced before workspace binding
+   * existed — an unscoped config keeps the documented focus-following behaviour.
+   */
+  workspaceId?: string | null;
 }
 
 export interface McpClientConfigDescriptor {
@@ -97,10 +119,21 @@ function escapeTomlBasicString(value: string): string {
  * Field order and 2-space indent are load-bearing: `HttpLifecycle.getConfigSnippet()`
  * delegates here, and its output is copied verbatim by the assistant settings tab.
  */
-function buildClaudeCodeSnippet(url: string, apiKey: string | null): string {
+function buildClaudeCodeSnippet(
+  url: string,
+  apiKey: string | null,
+  workspaceId: string | null
+): string {
   const entry: Record<string, unknown> = { type: "http", url };
+  const headers: Record<string, string> = {};
   if (apiKey) {
-    entry.headers = { Authorization: `Bearer ${apiKey}` };
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+  if (workspaceId) {
+    headers[MCP_WORKSPACE_ID_HEADER] = workspaceId;
+  }
+  if (Object.keys(headers).length > 0) {
+    entry.headers = headers;
   }
   return JSON.stringify({ mcpServers: { [MCP_SERVER_KEY]: entry } }, null, 2);
 }
@@ -112,19 +145,35 @@ function buildClaudeCodeSnippet(url: string, apiKey: string | null): string {
  * tab, which would strand an exported variable. Verified against Codex CLI
  * 0.146.0, which reports `transport: streamable_http` for this shape.
  */
-function buildCodexSnippet(url: string, apiKey: string | null): string {
+function buildCodexSnippet(url: string, apiKey: string | null, workspaceId: string | null): string {
   const lines = [`[mcp_servers.${MCP_SERVER_KEY}]`, `url = "${escapeTomlBasicString(url)}"`];
+  const headers: string[] = [];
   if (apiKey) {
-    lines.push(`http_headers = { Authorization = "Bearer ${escapeTomlBasicString(apiKey)}" }`);
+    headers.push(`Authorization = "Bearer ${escapeTomlBasicString(apiKey)}"`);
+  }
+  if (workspaceId) {
+    // Quoted key: TOML bare keys allow dashes, but quoting keeps the header
+    // spelling verbatim rather than relying on that.
+    headers.push(`"${MCP_WORKSPACE_ID_HEADER}" = "${escapeTomlBasicString(workspaceId)}"`);
+  }
+  if (headers.length > 0) {
+    lines.push(`http_headers = { ${headers.join(", ")} }`);
   }
   return lines.join("\n");
 }
 
 /** Transport-level truth for clients whose config format we haven't verified. */
-function buildGenericSnippet(url: string, apiKey: string | null): string {
+function buildGenericSnippet(
+  url: string,
+  apiKey: string | null,
+  workspaceId: string | null
+): string {
   const lines = ["Transport: Streamable HTTP", `URL: ${url}`];
   if (apiKey) {
     lines.push(`Header: Authorization: Bearer ${apiKey}`);
+  }
+  if (workspaceId) {
+    lines.push(`Header: ${MCP_WORKSPACE_ID_HEADER}: ${workspaceId}`);
   }
   return lines.join("\n");
 }
@@ -136,13 +185,14 @@ export function buildMcpClientConfig(
   const descriptor = getDescriptor(id);
   const url = buildMcpServerUrl(input.port);
   const apiKey = input.apiKey ? input.apiKey : null;
+  const workspaceId = input.workspaceId ? input.workspaceId : null;
 
   const snippet =
     id === "claude-code"
-      ? buildClaudeCodeSnippet(url, apiKey)
+      ? buildClaudeCodeSnippet(url, apiKey, workspaceId)
       : id === "codex"
-        ? buildCodexSnippet(url, apiKey)
-        : buildGenericSnippet(url, apiKey);
+        ? buildCodexSnippet(url, apiKey, workspaceId)
+        : buildGenericSnippet(url, apiKey, workspaceId);
 
   return { ...descriptor, url, snippet };
 }

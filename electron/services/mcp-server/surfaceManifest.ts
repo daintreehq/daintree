@@ -7,6 +7,8 @@ import {
   buildToolInputSchema,
   buildToolOutputSchema,
   shouldExposeTool,
+  UNBOUND_SESSION_SURFACE,
+  type SessionSurfacePolicy,
 } from "./tierAuth.js";
 
 export const MCP_SURFACE_TOOL_ID = "mcp.surface";
@@ -162,16 +164,21 @@ function resolveToolTier(entry: ActionManifestEntry, tier: McpTier): McpSurfaceT
  * manifest — that shared gate is what makes the two describe one surface rather
  * than two that happen to agree today.
  *
- * The reported set is tier-only. Transient per-tool approvals widen dispatch for
- * minutes at a time and never appear in `tools/list`; including them would make
- * `hash` flap on a timer and describe a surface no listing ever showed.
+ * The reported set is tier plus the session's own binding, matching `tools/list`
+ * exactly. Transient per-tool approvals are excluded: they widen dispatch for
+ * minutes at a time and never appear in `tools/list`, so including them would
+ * make `hash` flap on a timer and describe a surface no listing ever showed. A
+ * workspace binding (#11789) is the opposite — fixed at handshake for the life
+ * of the session — so it belongs in the report, and omitting it would have this
+ * tool advertise a `recipe.run` the same session's `tools/list` withholds.
  */
 export function buildSurfaceManifest(
   manifest: readonly ActionManifestEntry[],
   tier: McpTier,
-  appVersion: string
+  appVersion: string,
+  session: SessionSurfacePolicy = UNBOUND_SESSION_SURFACE
 ): McpSurfaceManifest {
-  const exposed = manifest.filter((entry) => shouldExposeTool(entry, tier));
+  const exposed = manifest.filter((entry) => shouldExposeTool(entry, tier, session));
   exposed.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   const tools: McpSurfaceTool[] = [];
