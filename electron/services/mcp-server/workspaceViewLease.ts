@@ -12,11 +12,17 @@
  * eviction pass can skip it, alongside the paint-gate and cold-switch
  * exclusions. Deliberately NOT the unconditional floor a live assistant backend
  * gets (#11157): that floor exists because eviction there kills a PTY process
- * tree, and the argument does not transfer. A lease is bounded by construction —
- * every holder is a pending bridge request, and those are capped by
- * `MCP_MANIFEST_REQUEST_TIMEOUT_MS` / `MCP_DISPATCH_TIMEOUT_MS` — so enough
- * concurrent bound sessions can never defeat the pressure policy the way a
- * permanent floor would. A bound session that goes quiet holds nothing.
+ * tree, and the argument does not transfer. Every individual lease is bounded by
+ * construction — each holder is a pending bridge request, capped by
+ * `MCP_MANIFEST_REQUEST_TIMEOUT_MS` / `MCP_DISPATCH_TIMEOUT_MS`.
+ *
+ * That bound is per-lease, not aggregate: a session dispatching back-to-back
+ * renews protection for as long as it keeps working. That is the intended
+ * reading of "keep the view alive while a bound session is actually working" —
+ * destroying the exact renderer a valid request is awaiting is the failure this
+ * exists to prevent, and a deadline is not a reason to allow it. What keeps it
+ * from being a floor is the other half: a bound session that goes quiet holds
+ * nothing at all, and its view is an ordinary eviction candidate again.
  *
  * Keyed by `webContentsId`, not workspace id: the id is what eviction has in
  * hand for each candidate entry, and it is the exact view the request is

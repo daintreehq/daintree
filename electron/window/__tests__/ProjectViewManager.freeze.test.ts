@@ -931,6 +931,22 @@ describe("ProjectViewManager — MCP session bindings stay thawed (#11790)", () 
     expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
   });
 
+  it("the re-freeze pass defers to a pending freeze-entry debounce", async () => {
+    // The periodic sampler can tick inside the debounce window. Freezing there
+    // would defeat the trailing edge, which exists so a profile that flips back
+    // within the window freezes nothing at all — and would make every
+    // call-count assertion in this file depend on the sampler's random phase.
+    await manager.switchTo("proj-b", "/path/b");
+    manager.setEfficiencyFreeze(true);
+
+    manager.refreezeUnprotectedCachedViews();
+    expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
+
+    manager.setEfficiencyFreeze(false);
+    vi.advanceTimersByTime(500);
+    expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
+  });
+
   it("never freezes the active view, bound or not", async () => {
     boundWorkspaces.add("proj-b");
     await manager.switchTo("proj-b", "/path/b");

@@ -3490,14 +3490,14 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       expect(mgr.getAllViews().length).toBe(3);
       const skipped = skippedLog();
       expect(skipped?.protectedCount).toBe(0);
-      expect(skipped?.transientlyExcludedCount).toBe(2);
+      expect(skipped?.mcpLeasedCount).toBe(2);
     });
 
-    it("counts a lease as a transient exclusion, not as part of the assistant floor", async () => {
+    it("reports a lease separately from the assistant floor holding the same cache open", async () => {
       // The over-cap log exists so extra resident renderers are attributable
-      // rather than reading as a leak. A lease resolves on its own, like the
-      // paint-gate and cold-switch bridges, so it must not inflate the
-      // persistent `protectedCount` a pinned assistant reports.
+      // rather than reading as a leak, which means each count has to mean one
+      // thing: a pinned assistant is persistent, a lease is not, and neither
+      // may be reported as the other.
       const mgr = makeManager(3);
       await seedThreeViews(mgr);
       const wcA = mgr.getAllViews().find((v) => v.projectId === "proj-a")!.view.webContents;
@@ -3511,7 +3511,9 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       const skipped = skippedLog();
       expect(skipped?.protectedCount).toBe(1);
       expect(skipped?.protectedProjectIds).toEqual(["proj-a"]);
-      expect(skipped?.transientlyExcludedCount).toBe(1);
+      expect(skipped?.mcpLeasedCount).toBe(1);
+      // Paint-gate / cold-switch bridges only — a lease is not one of those.
+      expect(skipped?.transientlyExcludedCount).toBe(0);
     });
 
     it("leases only the exact view, not every view of the workspace's project id", async () => {
@@ -3687,6 +3689,10 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       assistantBackendForProject,
       isTerminalLive,
     });
+    // Built directly rather than via makeManager (the point is the missing
+    // option), so it still has to join the teardown list or its sampler
+    // outlives the test.
+    managers.push(mgr);
     await seedThreeViews(mgr);
 
     mgr.setCachedViewLimit(1);

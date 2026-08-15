@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The composition seam #11790 depends on spans three layers that are otherwise
 // only ever tested in isolation: SessionStore's binding predicate, the bridge's
@@ -52,13 +52,18 @@ function fakeHttpSession(): McpHttpSession {
 }
 
 describe("McpServerService.getWorkspaceViewActivity (#11790)", () => {
-  let service: McpServerService;
+  // One service for the suite, reset between tests. Construction subscribes to
+  // the global event bus and the sleep service, and `stop()` deliberately keeps
+  // those (they must survive a server restart) — so a fresh instance per test
+  // would leave every previous one subscribed and reachable.
+  const service: McpServerService = new McpServerService();
 
   beforeEach(() => {
-    service = new McpServerService();
+    service._sessionStore.drain();
+    service._viewLeases.clear();
   });
 
-  afterEach(() => {
+  afterAll(() => {
     service._sessionStore.drain();
     service._sessionStore.grantCache.dispose();
   });

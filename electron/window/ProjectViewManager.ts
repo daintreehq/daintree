@@ -987,6 +987,12 @@ export class ProjectViewManager {
    */
   refreezeUnprotectedCachedViews(): void {
     if (!this.efficiencyFreezeEnabled) return;
+    // A freeze-entry debounce is still pending — let its trailing edge do the
+    // work. `setEfficiencyFreeze(true)` flips the flag immediately but delays
+    // the sweep, precisely so a profile that flips back inside the window
+    // freezes nothing at all; a sampler tick landing in that window would
+    // freeze early and defeat it.
+    if (this.efficiencyFreezeTimer !== null) return;
     this.freezeAllCached();
   }
 

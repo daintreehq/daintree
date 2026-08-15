@@ -380,11 +380,10 @@ export function evictStaleViews(
   // rather than the active view alone is now the expected outcome, and it is
   // exactly the case where an unexplained over-cap cache would read as a leak.
   //
-  // MCP dispatch leases are included in the gate, not just in the counts
-  // (#11790). A lease is self-expiring per request, but a session dispatching
-  // continuously can renew one indefinitely, so a lease-only stall is exactly
-  // the case where an over-cap cache would otherwise sit in the logs with
-  // nothing explaining it.
+  // MCP dispatch leases open the gate too (#11790). A lease is self-expiring
+  // per request, but a session dispatching continuously renews one, so a
+  // lease-only stall can persist — exactly the case where an over-cap cache
+  // would otherwise sit in the logs with nothing explaining it.
   if (
     host.views.size > effectiveMax &&
     candidates.length === 0 &&
@@ -402,10 +401,6 @@ export function evictStaleViews(
         (id): id is string => id !== null && id !== host.activeProjectId
       )
     );
-    // MCP dispatch leases belong with the paint-gate/cold-switch bridges, not
-    // with the assistant floor: all three resolve on their own, so a reader
-    // seeing them here knows the over-cap cache is temporary (#11790).
-    for (const projectId of mcpLeasedProjectIds) transientlyExcludedProjectIds.add(projectId);
     logInfo("projectview.eviction-skipped", {
       reason: effectiveReason,
       forced: criticalPressure,
@@ -414,6 +409,13 @@ export function evictStaleViews(
       overflow: host.views.size - effectiveMax,
       protectedCount: assistantProtected.length,
       transientlyExcludedCount: transientlyExcludedProjectIds.size,
+      // Reported as its own reason rather than folded into the transient count
+      // (#11790). A lease resolves on its own like the two bridges above, but
+      // it is excluded BEFORE assistant protection is evaluated, so folding
+      // them together would report an assistant-backed view that happens to be
+      // mid-dispatch as transient when its floor outlives the call. Kept apart,
+      // each count means exactly one thing.
+      mcpLeasedCount: mcpLeasedProjectIds.size,
       protectedProjectIds: assistantProtected.map(({ projectId }) => projectId),
     });
   }
