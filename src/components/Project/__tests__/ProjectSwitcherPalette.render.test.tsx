@@ -1272,3 +1272,140 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     ).toBeTruthy();
   });
 });
+
+/**
+ * The decaying "recently active" mark (#11791). It exists to give the Other
+ * Projects band a mark again without reintroducing the permanent ring #11692
+ * removed: it lands only where the slot was already empty, and clears itself.
+ */
+describe("ProjectSwitcherPalette recently-active dot", () => {
+  const QUIET = { lastOpened: Date.now() - 2 * 3600000 };
+  const soon = () => Date.now() + 5 * 60_000;
+
+  it("marks a quiet row whose recency has not run out yet", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ ...QUIET, recentlyActiveUntil: soon() })]}
+      />
+    );
+    expect(screen.getByTestId("workspace-recent-dot")).toBeTruthy();
+  });
+
+  it("leaves the row unmarked once the deadline has passed", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ ...QUIET, recentlyActiveUntil: Date.now() - 1 })]}
+      />
+    );
+    expect(screen.queryByTestId("workspace-recent-dot")).toBeNull();
+  });
+
+  it("leaves a row with no recency at all unmarked", () => {
+    render(<ProjectSwitcherPalette {...baseProps} results={[makeProject(QUIET)]} />);
+    expect(screen.queryByTestId("workspace-recent-dot")).toBeNull();
+  });
+
+  it("yields to a row that has a real status to report", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ waitingAgentCount: 1, recentlyActiveUntil: soon() })]}
+      />
+    );
+    // The status dot says what the project is doing; recency only says someone
+    // was here. Two dots in a one-dot slot would be the regression.
+    expect(screen.getByTestId("workspace-status-dot")).toBeTruthy();
+    expect(screen.queryByTestId("workspace-recent-dot")).toBeNull();
+  });
+
+  it("keys off recency rather than the band, so a pinned row keeps the mark", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({ ...QUIET, isPinned: true, section: "pinned", recentlyActiveUntil: soon() }),
+        ]}
+      />
+    );
+    expect(screen.getByTestId("workspace-recent-dot")).toBeTruthy();
+  });
+
+  it("says it in the row's name too, rather than in colour alone", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ ...QUIET, name: "Marked", recentlyActiveUntil: soon() })]}
+      />
+    );
+    // Reachable by accessible name, so the fact survives without the hue.
+    expect(screen.getByRole("option", { name: /recently active/i })).toBeTruthy();
+    expect(screen.getByTestId("workspace-recent-dot").getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("does not widen the slot it shares with the status dot", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({ ...QUIET, id: "recent", name: "Recent", recentlyActiveUntil: soon() }),
+          makeProject({ ...QUIET, id: "quiet", name: "Quiet" }),
+        ]}
+      />
+    );
+    const slotIn = (row: HTMLElement) => row.querySelector("[data-testid='workspace-status-slot']");
+    const marked = slotIn(screen.getByRole("option", { name: /Recent/ }));
+    const unmarked = slotIn(screen.getByRole("option", { name: /Quiet/ }));
+
+    // The mark goes inside the reserved slot, not beside it — so the slot has to
+    // both contain the dot and stay the same element it is on an unmarked row.
+    expect(marked?.querySelector("[data-testid='workspace-recent-dot']")).toBeTruthy();
+    expect(unmarked?.querySelector("[data-testid='workspace-recent-dot']")).toBeNull();
+    expect(marked?.className).toBe(unmarked?.className);
+  });
+
+  it("never marks the project you are already in", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({
+            ...QUIET,
+            name: "Here",
+            isActive: true,
+            status: "active",
+            // Open at the last shutdown, so main really does hand it a deadline.
+            recentlyActiveUntil: soon(),
+          }),
+        ]}
+      />
+    );
+    // The row is otherwise exactly the quiet shape the mark applies to — no
+    // status dot of its own — so the suppression is what this proves, rather
+    // than a real status having displaced the mark.
+    expect(screen.queryByTestId("workspace-status-dot")).toBeNull();
+    expect(screen.queryByTestId("workspace-recent-dot")).toBeNull();
+    // "…, current, recently active" would be the nonsense this rules out.
+    expect(screen.queryByRole("option", { name: /recently active/i })).toBeNull();
+  });
+
+  it("clears itself as the deadline passes, without the row's props changing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // One fixed deadline, then let the shared ticker carry the clock past it —
+      // the decay has to come from the tick, not from a re-render with new props.
+      const results = [makeProject({ ...QUIET, recentlyActiveUntil: Date.now() + 60_000 })];
+      render(<ProjectSwitcherPalette {...baseProps} results={results} />);
+      expect(screen.getByTestId("workspace-recent-dot")).toBeTruthy();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+
+      expect(screen.queryByTestId("workspace-recent-dot")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
