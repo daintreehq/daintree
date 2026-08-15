@@ -212,6 +212,11 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     // `gitBacked` joins them: it decides whether the workspace host enumerates
     // worktrees at all, and only `addProject` — which actually looked for a
     // repository — may set it (#11405).
+    // `recentlyClosedAt`/`recentlyActiveUntil` join them: the recency mark is
+    // main-owned derived state, stamped and cleared off real lifecycle
+    // transitions (#11791). A renderer that could write either could hand any
+    // project a mark it never earned, and the deadline is computed on read
+    // anyway, so accepting it would only ever be a lie.
     const {
       id: _id,
       path: _path,
@@ -219,6 +224,8 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       frecencyScore: _fs,
       lastAccessedAt: _lat,
       gitBacked: _gitBacked,
+      recentlyClosedAt: _rca,
+      recentlyActiveUntil: _rau,
       ...safeUpdates
     } = updates;
     const updated = projectStore.updateProject(projectId, safeUpdates);

@@ -1357,7 +1357,55 @@ describe("ProjectSwitcherPalette recently-active dot", () => {
     const slotIn = (row: HTMLElement) => row.querySelector("[data-testid='workspace-status-slot']");
     const marked = slotIn(screen.getByRole("option", { name: /Recent/ }));
     const unmarked = slotIn(screen.getByRole("option", { name: /Quiet/ }));
-    // Same slot element, same classes — the mark goes inside it, not beside it.
+
+    // The mark goes inside the reserved slot, not beside it — so the slot has to
+    // both contain the dot and stay the same element it is on an unmarked row.
+    expect(marked?.querySelector("[data-testid='workspace-recent-dot']")).toBeTruthy();
+    expect(unmarked?.querySelector("[data-testid='workspace-recent-dot']")).toBeNull();
     expect(marked?.className).toBe(unmarked?.className);
+  });
+
+  it("never marks the project you are already in", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({
+            ...QUIET,
+            name: "Here",
+            isActive: true,
+            status: "active",
+            // Open at the last shutdown, so main really does hand it a deadline.
+            recentlyActiveUntil: soon(),
+          }),
+        ]}
+      />
+    );
+    // The row is otherwise exactly the quiet shape the mark applies to — no
+    // status dot of its own — so the suppression is what this proves, rather
+    // than a real status having displaced the mark.
+    expect(screen.queryByTestId("workspace-status-dot")).toBeNull();
+    expect(screen.queryByTestId("workspace-recent-dot")).toBeNull();
+    // "…, current, recently active" would be the nonsense this rules out.
+    expect(screen.queryByRole("option", { name: /recently active/i })).toBeNull();
+  });
+
+  it("clears itself as the deadline passes, without the row's props changing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // One fixed deadline, then let the shared ticker carry the clock past it —
+      // the decay has to come from the tick, not from a re-render with new props.
+      const results = [makeProject({ ...QUIET, recentlyActiveUntil: Date.now() + 60_000 })];
+      render(<ProjectSwitcherPalette {...baseProps} results={results} />);
+      expect(screen.getByTestId("workspace-recent-dot")).toBeTruthy();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(120_000);
+      });
+
+      expect(screen.queryByTestId("workspace-recent-dot")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

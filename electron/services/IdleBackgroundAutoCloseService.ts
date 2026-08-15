@@ -448,7 +448,13 @@ export class IdleBackgroundAutoCloseService {
     // Keep the project in the list as `closed` WITHOUT clearProjectState, so its
     // panel/terminal layout survives a non-destructive reopen. The autoParkedAt
     // marker distinguishes this from a manual close in the switcher.
-    projectStore.updateProjectStatus(projectId, "closed", { autoParkedAt: now });
+    // No recency stamp: the sweep closes projects precisely because they have
+    // been idle, so "recently active" is the one thing this close does not mean
+    // (#11791). The row says "Suspended to free memory" instead.
+    projectStore.updateProjectStatus(projectId, "closed", {
+      autoParkedAt: now,
+      recentlyClosedAt: null,
+    });
     const updated = projectStore.getProjectById(projectId);
     if (updated) {
       try {

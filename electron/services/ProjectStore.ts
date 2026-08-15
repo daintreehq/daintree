@@ -134,9 +134,9 @@ function rowToRepoStats(row: ProjectRow): ProjectRepoStats | null {
  * `active`/`background` rows still on disk at boot ARE the set that was open
  * when the app went away. That makes a separate persisted checkpoint redundant.
  *
- * A late capture is safe for the same reason: the only transitions a launch
- * performs are active/background, and both stay in the set. Only a genuine
- * close or a missing folder removes a project, and both are correct.
+ * Taken before `getAllProjects()` performs its status repair, which promotes
+ * the current project to `active`: a row that was `closed` on disk must not be
+ * pulled into the previous session's open set on the way past.
  */
 let launchSnapshot: { atMs: number; openProjectIds: ReadonlySet<string> } | null = null;
 
@@ -1075,12 +1075,13 @@ export class ProjectStore {
       // Pass null straight through to clear; updateProject writes NULL for it.
       updates.autoParkedAt = options.autoParkedAt;
     }
-    // Stamped here rather than at the three close call sites (#11791). This is
-    // the only path that writes `closed` — `setCurrentProject` moves projects
-    // between active and background and never closes one — so centralizing it
-    // means no future close site can forget to mark its own recency. An
-    // explicit `recentlyClosedAt` in the options still wins, so a caller that
-    // already holds the operation's clock can pass it rather than re-reading it.
+    // Stamped here rather than at the three close call sites (#11791). Every
+    // transition to `closed` goes through this method — `setCurrentProject`
+    // only ever moves a project between active and background, and clears the
+    // stamp itself on both sides — so centralizing it means no future close
+    // site can forget to mark its own recency. An explicit `recentlyClosedAt`
+    // in the options still wins, so a caller that has a reason not to stamp
+    // (or already holds the operation's clock) can say so.
     if (options && "recentlyClosedAt" in options) {
       updates.recentlyClosedAt = options.recentlyClosedAt;
     } else if (status === "closed") {
@@ -1095,6 +1096,9 @@ export class ProjectStore {
   }
 
   getAllProjects(): Project[] {
+    // Before the repair below, which can promote a row to `active` — the
+    // snapshot has to see the statuses as they were persisted (#11791).
+    ensureLaunchSnapshot();
     const db = getSharedDb();
     const rows = db
       .select()

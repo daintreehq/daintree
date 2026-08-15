@@ -218,6 +218,7 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(workspaceClientMock.evictProject).toHaveBeenCalledWith("/projects/proj-1");
       expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
         autoParkedAt: expect.any(Number),
+        recentlyClosedAt: null,
       });
       // PROJECT_UPDATED drives the switcher row → "Suspended to free memory".
       expect(broadcastToRendererMock).toHaveBeenCalledWith(
@@ -253,6 +254,7 @@ describe("IdleBackgroundAutoCloseService", () => {
       // The assistant PTY did not block the reclaim…
       expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
         autoParkedAt: expect.any(Number),
+        recentlyClosedAt: null,
       });
       // …and its session was capture-revoked (conversation preserved via the
       // pending-hibernation entry) BEFORE the project-wide kill.
@@ -291,6 +293,7 @@ describe("IdleBackgroundAutoCloseService", () => {
 
       expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
         autoParkedAt: expect.any(Number),
+        recentlyClosedAt: null,
       });
       expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
     });
@@ -331,6 +334,7 @@ describe("IdleBackgroundAutoCloseService", () => {
       });
       expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
         autoParkedAt: expect.any(Number),
+        recentlyClosedAt: null,
       });
     });
 

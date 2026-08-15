@@ -203,6 +203,25 @@ describe("ProjectStore recently-active marker (#11791)", () => {
       expect(store.getProjectById(projectId)?.recentlyClosedAt).toBe(LONG_AGO);
     });
 
+    it("keeps the stamp through an unrelated update to the same row", () => {
+      store.updateProjectStatus(projectId, "closed");
+      const stamped = store.getProjectById(projectId)?.recentlyClosedAt;
+
+      store.updateProject(projectId, { name: "Renamed" });
+
+      // A rename is not a lifecycle transition; only those move the mark.
+      expect(store.getProjectById(projectId)?.recentlyClosedAt).toBe(stamped);
+    });
+
+    it("re-stamps on a second close after the project was reopened", async () => {
+      store.updateProjectStatus(projectId, "closed", { recentlyClosedAt: LONG_AGO });
+      await store.setCurrentProject(projectId);
+      store.updateProjectStatus(projectId, "closed");
+
+      // The stale stamp must not survive the round trip and win the Math.max.
+      expect(store.getProjectById(projectId)?.recentlyActiveUntil).toBeGreaterThan(Date.now());
+    });
+
     it("does not mark a project whose folder merely reappeared on disk", async () => {
       db.update(schema.projects)
         .set({ status: "missing" })
@@ -254,6 +273,39 @@ describe("ProjectStore recently-active marker (#11791)", () => {
     it("does not extend the mark to projects that were already closed at shutdown", () => {
       resetLaunchSnapshotForTests();
       expect(store.getProjectById(otherId)?.recentlyActiveUntil).toBeUndefined();
+    });
+
+    it("holds the open set fixed once taken, so closing during the session cannot join it", () => {
+      db.update(schema.projects)
+        .set({ status: "background" })
+        .where(eq(schema.projects.id, projectId))
+        .run();
+      resetLaunchSnapshotForTests();
+      // Take the snapshot while only `projectId` is open.
+      expect(store.getProjectById(projectId)?.recentlyActiveUntil).toBeGreaterThan(Date.now());
+
+      // `otherId` opens and closes afterwards; it belongs to the close clock, so
+      // a stale close of its own must still read as expired.
+      store.updateProjectStatus(otherId, "closed", { recentlyClosedAt: LONG_AGO });
+      expect(store.getProjectById(otherId)?.recentlyActiveUntil).toBeLessThan(Date.now());
+    });
+
+    it("does not pull a closed current project into the open set via the status repair", () => {
+      db.update(schema.projects)
+        .set({ status: "closed" })
+        .where(eq(schema.projects.id, projectId))
+        .run();
+      db.insert(schema.appState)
+        .values({ key: "currentProjectId", value: projectId })
+        .onConflictDoUpdate({ target: schema.appState.key, set: { value: projectId } })
+        .run();
+      resetLaunchSnapshotForTests();
+
+      // getAllProjects() promotes the current row to `active`; the snapshot has
+      // to have been taken from the persisted statuses before that happens.
+      const listed = store.getAllProjects().find((p) => p.id === projectId);
+      expect(listed?.status).toBe("active");
+      expect(listed?.recentlyActiveUntil).toBeUndefined();
     });
   });
 

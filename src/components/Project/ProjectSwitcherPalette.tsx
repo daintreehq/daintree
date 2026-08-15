@@ -265,12 +265,19 @@ function StatusDot({
  * already empty — the dormant rows #11692 cleared — and never displaces a mark
  * that means more. Keyed off the deadline rather than which band the row sorts
  * into, so a pinned project keeps it too.
+ *
+ * The current project is excluded outright. Its deadline is real — it was open
+ * at the last shutdown, so main hands it the launch clock — but an idle current
+ * row falls through to the same dormant fallback as any other quiet row, and
+ * "recently" is the wrong word for where you are standing. Without this the row
+ * would read ", current, recently active".
  */
 function showRecentlyActiveMark(
   status: ProjectRowStatus,
   project: SearchableProject,
   nowMs: number
 ): boolean {
+  if (project.isActive) return false;
   if (status.isDormantFallback !== true) return false;
   return project.recentlyActiveUntil !== undefined && nowMs < project.recentlyActiveUntil;
 }
@@ -799,15 +806,12 @@ function ProjectListContent({
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
 
-  // Held here, once for the whole list, and handed to each row as a prop
-  // (#11791). It has to live in a component that renders the rows rather than at
-  // the palette root: the clock is state, so a tick re-runs THIS body, and the
-  // changed `nowMs` is then what invalidates each auto-memoized row. A tick held
-  // further up re-renders the root and stops there.
-  const nowMs = useGlobalMinuteClock();
-
   // Mounted here, once for the whole list, rather than per row: sixty timers in
-  // a hundred-project list would all fire for the same reason.
+  // a hundred-project list would all fire for the same reason. It has to be a
+  // component that renders the rows, too — the clock is state, so a tick re-runs
+  // THIS body and the changed `nowMs` is what invalidates each auto-memoized
+  // row. A tick held at the palette root re-renders the root and stops there.
+  const nowMs = useGlobalMinuteClock();
 
   // Bands are contiguous runs of `results`, never a re-filter of it. The hook
   // has already sorted by section, so walking the array once and cutting where
