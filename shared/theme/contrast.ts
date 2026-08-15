@@ -569,6 +569,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
   // Palette selected-row indicator (#11686) — the outline is the whole non-text
   // signal there, so it carries 1.4.11 on its own.
   warnings.push(...getPaletteSelectionWarnings(scheme));
+  warnings.push(...getRecentActivityDotWarnings(scheme));
 
   // Terminal ANSI / syntax legibility and distinctness — OKLab-based because
   // the terminal background is always dark and WCAG ratios are unreliable there.
@@ -625,6 +626,9 @@ function resolvePaletteSurfaces(scheme: AppColorScheme): string[] | null {
 
 const SELECTION_OUTLINE_MIN_CONTRAST = 3.0;
 
+/** WCAG 1.4.11's non-text floor, same basis as the selection outline above. */
+const RECENT_ACTIVITY_DOT_MIN_CONTRAST = 3.0;
+
 // The pixel a token actually paints when it lands on `backdrop`. Tokens reach us
 // as an opaque hex, an alpha hex (`#RGBA`/`#RRGGBBAA`, which `isHexColor` accepts
 // and `relativeLuminance` would otherwise read as opaque and pass on a ratio the
@@ -669,6 +673,79 @@ function splitHexAlpha(hex: string): { hex: string; opacity: number } | null {
 // neighbours it touches. The fill is the binding one — on dark the row lifts
 // *towards* the outline, so the pair that looks safe against the surrounding
 // surface can still fail against the row it encloses.
+/**
+ * The switcher's "recently active" dot is a filled `activity-idle` disc drawn in
+ * the project row's status slot (#11791).
+ *
+ * It gets its own gate rather than a CONTRAST_PAIRS entry because the palette
+ * row is not one of DISPLAY_SURFACES: rows are transparent until selected, so
+ * the dot lands on the composited palette surface, and on the selected row it
+ * lands on `overlay-raised` over that surface. Both are backgrounds it can
+ * actually paint on, and a dot that clears one but not the other is invisible
+ * exactly half the time it matters.
+ *
+ * `activity-idle` is also checked light-only and advisory-only by the matrix
+ * pass; this promotes it to the hard-fail gate for the surfaces it now has to
+ * hold. Nothing here relies on the dot being the sole carrier of the fact — the
+ * row says "recently active" in its accessible name too — but a mark quiet
+ * enough to miss is not a subtle mark, it is an absent one.
+ */
+function getRecentActivityDotWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+  const dotToken = scheme.tokens["activity-idle"];
+  const fillToken = scheme.tokens["overlay-raised"];
+
+  const surfaces = resolvePaletteSurfaces(scheme);
+  if (surfaces === null) {
+    warnings.push({
+      kind: "unevaluable",
+      message: `Cannot evaluate recent-activity dot contrast: the palette surface for a ${scheme.type} theme is not a hex color`,
+    });
+    return warnings;
+  }
+
+  const worstByLabel = new Map<string, number>();
+
+  for (const surface of surfaces) {
+    const fill = resolveOverBackdrop(fillToken, surface);
+    if (fill === null) {
+      warnings.push({
+        kind: "unevaluable",
+        message: `Cannot evaluate recent-activity dot contrast: overlay-raised="${fillToken}" is neither hex nor rgba()`,
+      });
+      return warnings;
+    }
+
+    for (const [label, against] of [
+      ["the selected row fill", fill],
+      ["the surrounding palette surface", surface],
+    ] as const) {
+      const dot = resolveOverBackdrop(dotToken, against);
+      if (dot === null) {
+        warnings.push({
+          kind: "unevaluable",
+          message: `Cannot evaluate recent-activity dot contrast: activity-idle="${dotToken}" is neither hex nor rgba()`,
+        });
+        return warnings;
+      }
+      const ratio = contrastRatio(dot, against);
+      const seen = worstByLabel.get(label);
+      if (seen === undefined || ratio < seen) worstByLabel.set(label, ratio);
+    }
+  }
+
+  for (const [label, ratio] of worstByLabel) {
+    if (ratio < RECENT_ACTIVITY_DOT_MIN_CONTRAST) {
+      warnings.push({
+        kind: "low-contrast",
+        message: `activity-idle (recent-activity dot) against ${label} is ${ratio.toFixed(2)}:1; target is ${RECENT_ACTIVITY_DOT_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
+      });
+    }
+  }
+
+  return warnings;
+}
+
 function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
   const warnings: AppThemeValidationWarning[] = [];
   const outlineToken = scheme.tokens["selection-outline"];

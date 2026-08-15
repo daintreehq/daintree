@@ -54,6 +54,7 @@ import {
 } from "@/lib/projectRowStatus";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
+import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import { useScratchDeletionProgress } from "@/hooks/useScratchDeletionProgress";
 import { useOverlayClaim } from "@/hooks";
 // Leaf import, not the `@/hooks` barrel: several palette suites mock that barrel
@@ -192,6 +193,17 @@ export interface ProjectSwitcherPaletteProps {
 interface ProjectListItemProps {
   project: ProjectSwitcherProjectRow;
   isSelected: boolean;
+  /**
+   * The clock this row renders against, passed rather than read (#11791).
+   *
+   * React Compiler auto-memoizes these rows, so a re-render of the palette root
+   * does not re-run this component's body while its props are referentially
+   * unchanged — an ambient `Date.now()` inside it would simply freeze. Ages and
+   * the recency deadline both derive from this prop instead, so the tick that
+   * changes it is what invalidates the row. `ScratchSection` already threads its
+   * `now` the same way.
+   */
+  nowMs: number;
   onSelect: (row: ProjectSwitcherProjectRow) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
@@ -215,7 +227,13 @@ interface ProjectListItemProps {
  * omitted dot would pull every quiet row 14px left of the busy ones, and a list
  * that is mostly quiet would read as the ragged edge rather than the tidy one.
  */
-function StatusDot({ status }: { status: ProjectRowStatus }) {
+function StatusDot({
+  status,
+  showRecentDot = false,
+}: {
+  status: ProjectRowStatus;
+  showRecentDot?: boolean;
+}) {
   return (
     <div className="w-1.5 shrink-0" data-testid="workspace-status-slot">
       {!status.isDormantFallback && (
@@ -224,8 +242,37 @@ function StatusDot({ status }: { status: ProjectRowStatus }) {
           data-testid="workspace-status-dot"
         />
       )}
+      {showRecentDot && (
+        // Hidden from assistive tech, which hears the row's own "recently
+        // active" phrase instead — a live region per row would re-announce the
+        // whole list on every render, and colour must not be the only carrier.
+        <div
+          className="w-1.5 h-1.5 rounded-full bg-activity-idle"
+          data-testid="workspace-recent-dot"
+          aria-hidden="true"
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * Whether the row should carry the decaying "recently active" mark (#11791).
+ *
+ * Gated on the dormant fallback because a live status always outranks a recency
+ * hint: the coloured dot says what the project is doing now, the grey one only
+ * says someone was here lately. So the mark lands exactly where the slot was
+ * already empty — the dormant rows #11692 cleared — and never displaces a mark
+ * that means more. Keyed off the deadline rather than which band the row sorts
+ * into, so a pinned project keeps it too.
+ */
+function showRecentlyActiveMark(
+  status: ProjectRowStatus,
+  project: SearchableProject,
+  nowMs: number
+): boolean {
+  if (status.isDormantFallback !== true) return false;
+  return project.recentlyActiveUntil !== undefined && nowMs < project.recentlyActiveUntil;
 }
 
 /** Matches the resolution of the wait ages on screen — they change by the minute. */
@@ -255,6 +302,7 @@ function useWaitAgeTick(active: boolean): void {
 function ProjectListItem({
   project,
   isSelected,
+  nowMs,
   onSelect,
   onStopProject,
   onCloseProject,
@@ -279,7 +327,8 @@ function ProjectListItem({
   );
   const isProjectNotificationsMuted = areProjectNotificationsMuted(notificationOverrides);
 
-  const status = getProjectRowStatus(project);
+  const status = getProjectRowStatus(project, nowMs);
+  const showRecentDot = showRecentlyActiveMark(status, project, nowMs);
 
   const row = (
     <div
@@ -315,7 +364,7 @@ function ProjectListItem({
       onPointerEnter={onHoverProject ? (e) => onHoverProject(project.id, e.pointerType) : undefined}
       onPointerLeave={onHoverProjectEnd ? (e) => onHoverProjectEnd(e.pointerType) : undefined}
     >
-      <StatusDot status={status} />
+      <StatusDot status={status} showRecentDot={showRecentDot} />
 
       <div
         className={cn(
@@ -354,6 +403,14 @@ function ProjectListItem({
            * attach itself to the wrong noun.
            */}
           {project.isActive && <span className="sr-only">, current</span>}
+          {/*
+           * The grey dot's meaning, said rather than shown (#11791). The dot
+           * itself is `aria-hidden`, so without this the row would carry the
+           * fact in colour alone. Same shape as `, current` above — part of the
+           * accessible name, not a live region, so a list render doesn't
+           * announce every recently-active row.
+           */}
+          {showRecentDot && <span className="sr-only">, recently active</span>}
           {isProjectNotificationsMuted && (
             <>
               {/*
@@ -742,6 +799,13 @@ function ProjectListContent({
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
 
+  // Held here, once for the whole list, and handed to each row as a prop
+  // (#11791). It has to live in a component that renders the rows rather than at
+  // the palette root: the clock is state, so a tick re-runs THIS body, and the
+  // changed `nowMs` is then what invalidates each auto-memoized row. A tick held
+  // further up re-renders the root and stops there.
+  const nowMs = useGlobalMinuteClock();
+
   // Mounted here, once for the whole list, rather than per row: sixty timers in
   // a hundred-project list would all fire for the same reason.
 
@@ -792,6 +856,7 @@ function ProjectListContent({
           <ProjectListItem
             project={row}
             isSelected={isSelected}
+            nowMs={nowMs}
             onSelect={onSelect}
             onStopProject={onStopProject}
             onCloseProject={onCloseProject}

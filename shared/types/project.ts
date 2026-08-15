@@ -99,6 +99,27 @@ export interface Project {
    */
   autoParkedAt?: number;
   /**
+   * Timestamp (ms) this project stopped being active — stamped on the
+   * transition to `closed`, cleared the moment it goes active or background
+   * again (#11791). Anchored to the END of an interaction rather than
+   * `lastOpened`: a project worked in for three hours and then stopped would
+   * otherwise carry no recency at the moment that recency is most useful.
+   */
+  recentlyClosedAt?: number;
+  /**
+   * Epoch ms until which this project counts as recently active, or absent when
+   * it doesn't (#11791). Main owns the arithmetic so the renderer holds an
+   * absolute deadline it can compare against its own clock, rather than a
+   * duration it would have to re-base every render.
+   *
+   * Two populations feed it, on deliberately different clocks: a project the
+   * user closed runs from {@link Project.recentlyClosedAt}, while one still open
+   * at the previous shutdown runs from app launch — the app went away, not the
+   * project, so anchoring it to shutdown would show nothing the next morning,
+   * which is the case the mark exists for.
+   */
+  recentlyActiveUntil?: number;
+  /**
    * Last-known repository counts, persisted so switch-back seeds the toolbar
    * immediately instead of shifting its pill widths (issue #11078). Main owns
    * the write; absent until the project's first clean stats poll.

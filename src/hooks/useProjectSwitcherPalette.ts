@@ -161,6 +161,12 @@ export interface SearchableProject extends WorkspaceRowStatusFields {
   status: Project["status"];
   /** Set when the project was auto-closed by the background-idle sweep (#10830). */
   autoParkedAt?: number;
+  /**
+   * Epoch ms until which this project reads as recently active (#11791). Main
+   * resolves which clock applies and hands down an absolute deadline, so the
+   * row only ever compares it against the current time.
+   */
+  recentlyActiveUntil?: number;
   isActive: boolean;
   isBackground: boolean;
   isMissing: boolean;
@@ -772,6 +778,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         lastOpened: p.lastOpened ?? 0,
         status: p.status,
         autoParkedAt: p.autoParkedAt,
+        recentlyActiveUntil: p.recentlyActiveUntil,
         isActive,
         isBackground,
         isMissing,

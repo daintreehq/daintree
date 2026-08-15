@@ -571,6 +571,7 @@ const CREATE_TABLES_SQL = `
     last_accessed_at INTEGER NOT NULL DEFAULT 0,
     last_completion_seen_at INTEGER,
     auto_parked_at INTEGER,
+    recently_closed_at INTEGER,
     stats_commit_count INTEGER,
     stats_issue_count INTEGER,
     stats_pr_count INTEGER,
