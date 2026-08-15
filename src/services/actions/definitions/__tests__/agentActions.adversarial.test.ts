@@ -1270,6 +1270,36 @@ describe("agent.listAvailable", () => {
     expect(second.agents.map((row) => row.id)).toEqual(["claude"]);
     expect(clientsMock.agentCapabilitiesClient.getRegistry).toHaveBeenCalledTimes(2);
   });
+
+  it("settles instead of hanging when a discovery read never resolves (#11795)", async () => {
+    setStores({ agents: {} }, { claude: "ready" });
+    clientsMock.agentCapabilitiesClient.getRegistry.mockResolvedValue({
+      claude: { name: "Claude" },
+    });
+    clientsMock.userAgentRegistryClient.get.mockResolvedValue({});
+    const actions = setupActions(makeCallbacks());
+    // Warm `readAgentDiscoveryState`'s dynamic store imports under real timers;
+    // resolving a dynamic import while fake timers are installed can stall the
+    // module runner, which would make this test hang for the wrong reason.
+    await callAction(actions, "agent.listAvailable");
+
+    // Exactly the shape that shipped broken: an IPC leg that never settles
+    // rather than rejecting. Main abandons the dispatch at 30s without
+    // cancelling the renderer, so before the deadline this promise stayed
+    // pending indefinitely and held its focus-suppression lease with it.
+    clientsMock.agentCapabilitiesClient.getRegistry.mockReturnValueOnce(new Promise(() => {}));
+    vi.useFakeTimers();
+    try {
+      const pending = callAction(actions, "agent.listAvailable");
+      // Assert before advancing: attaching the handler afterwards races the
+      // rejection and trips vitest's unhandled-rejection guard.
+      const rejects = expect(pending).rejects.toThrow(/still waiting on: agentRegistry/);
+      await vi.advanceTimersToNextTimerAsync();
+      await rejects;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("agentSessionHistory.list (#10854)", () => {

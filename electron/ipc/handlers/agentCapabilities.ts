@@ -11,6 +11,7 @@ import {
 import type {
   AgentMetadata,
   AgentRegistry,
+  AgentRegistryEntry,
   ResolvedModelCatalog,
 } from "../../../shared/types/ipc/agentCapabilities.js";
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
@@ -40,13 +41,34 @@ function toAgentMetadata(config: AgentConfig, agentId: string): AgentMetadata {
   };
 }
 
+/**
+ * Reduce a config to the fields `getRegistry` puts on the wire.
+ *
+ * The raw `AgentConfig` is not structured-cloneable — every `AgentResume`
+ * variant holds a live function — so returning the effective registry whole
+ * stalled the renderer instead of resolving (#11795). Explicit by design: a
+ * generic function-stripper would keep working while silently promoting each
+ * new config field onto the wire.
+ */
+function toAgentRegistryEntry(config: AgentConfig): AgentRegistryEntry {
+  return { name: config.name };
+}
+
 export const agentCapabilitiesNamespace = defineIpcNamespace({
   name: "agentCapabilities",
   ops: {
     getRegistry: op(
       AGENT_CAPABILITIES_METHOD_CHANNELS.getRegistry,
       async (): Promise<AgentRegistry> => {
-        return getEffectiveRegistry();
+        // `fromEntries` rather than index assignment: it defines own properties,
+        // so a plugin-contributed `__proto__` id lands as a key instead of
+        // reassigning the result's prototype.
+        return Object.fromEntries(
+          Object.entries(getEffectiveRegistry()).map(([agentId, config]) => [
+            agentId,
+            toAgentRegistryEntry(config),
+          ])
+        );
       }
     ),
     getAgentIds: op(AGENT_CAPABILITIES_METHOD_CHANNELS.getAgentIds, async (): Promise<string[]> => {

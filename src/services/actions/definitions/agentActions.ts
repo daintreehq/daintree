@@ -160,6 +160,21 @@ function keepRepresentableRecords(records: AgentSessionRecord[]): AgentSessionRe
   return records.filter((record) => AgentFacingSessionRecordSchema.safeParse(record).success);
 }
 
+/**
+ * Deadline for `agent.listAvailable`'s discovery reads.
+ *
+ * Main abandons an MCP dispatch after `MCP_DISPATCH_TIMEOUT_MS` (30s) without
+ * cancelling the renderer-side action, so an IPC leg that never settles used to
+ * hold its `mcpSpawnFocusGuard` lease indefinitely — long past the 45s TTL, and
+ * observed pending for over 13 hours (#11795). Settling first keeps that lease
+ * bounded and turns a stall into a diagnosable error.
+ *
+ * Sits above `CliAvailabilityService`'s own 10s probe ceiling, which
+ * `readAgentDiscoveryState` can reach before the stores hydrate, and below both
+ * the 30s dispatch timeout and the 45s lease TTL.
+ */
+const AGENT_DISCOVERY_READ_TIMEOUT_MS = 15_000;
+
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   const readAgentDiscoveryState = async () => {
     // These are the same normalized renderer stores the toolbar reads. Fall back to
@@ -183,6 +198,47 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     // which renders from the same hydrating store.
     const availabilityLive = availabilityStore.isInitialized === true;
     return { settings, availability, availabilityLive };
+  };
+
+  /**
+   * Read the three sources `agent.listAvailable` needs, under a deadline.
+   *
+   * Each leg is tracked by name so a timeout says which one is still
+   * outstanding — the whole difficulty of #11795 was that a bare dispatch
+   * timeout gave no hint which await had stalled. The deadline only stops
+   * waiting; `ipcRenderer.invoke` takes no `AbortSignal`, so an in-flight
+   * invoke keeps running and its late settle is absorbed below.
+   */
+  const readAvailableAgentSources = async () => {
+    const pending = new Set(["agentDiscoveryState", "agentRegistry", "userAgentRegistry"]);
+    const track = <T>(leg: string, work: Promise<T>): Promise<T> =>
+      work.finally(() => pending.delete(leg));
+
+    const sources = Promise.all([
+      track("agentDiscoveryState", readAgentDiscoveryState()),
+      track("agentRegistry", agentCapabilitiesClient.getRegistry()),
+      track("userAgentRegistry", userAgentRegistryClient.get()),
+    ]);
+    // A leg that rejects after the deadline fired would otherwise surface as an
+    // unhandled rejection — by then the race has stopped listening.
+    sources.catch(() => {});
+
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      deadlineTimer = setTimeout(() => {
+        reject(
+          new Error(
+            `Timed out after ${AGENT_DISCOVERY_READ_TIMEOUT_MS}ms reading agent discovery data; still waiting on: ${[...pending].join(", ")}`
+          )
+        );
+      }, AGENT_DISCOVERY_READ_TIMEOUT_MS);
+    });
+
+    try {
+      return await Promise.race([sources, deadline]);
+    } finally {
+      clearTimeout(deadlineTimer);
+    }
   };
 
   actions.set("agent.launch", () => ({
@@ -1019,11 +1075,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     mcpOutputSchema: true,
     run: async () => {
       const [{ settings, availability, availabilityLive }, registry, userRegistry] =
-        await Promise.all([
-          readAgentDiscoveryState(),
-          agentCapabilitiesClient.getRegistry(),
-          userAgentRegistryClient.get(),
-        ]);
+        await readAvailableAgentSources();
       const registryIds = [
         ...LAUNCHABLE_AGENT_IDS.filter((id) => Object.hasOwn(registry, id)),
         ...Object.keys(registry)
