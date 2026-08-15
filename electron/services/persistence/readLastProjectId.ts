@@ -3,9 +3,12 @@
  * Synchronous, standalone readers for the last-active project.
  *
  * Called BEFORE app.whenReady() / on the early-renderer boot path. Each uses its
- * own read-only better-sqlite3 connection — they do not depend on getSharedDb()
- * or ProjectStore.initialize() (the shared DB is not open yet at this point in
+ * own better-sqlite3 connection — they do not depend on getSharedDb() or
+ * ProjectStore.initialize() (the shared DB is not open yet at this point in
  * boot, and opening it would run migrations on the loadURL-dispatch path).
+ *
+ * Read-only, with one exception: the session-open checkpoint is consumed rather
+ * than merely read, and says so at its own definition.
  *
  * Returns null on first launch, corrupt DB, or any error (safe fallback).
  */
@@ -15,6 +18,7 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "path";
 import type { Project } from "../../../shared/types/project.js";
+import { tightenFilePermissionsSync } from "../../utils/fs.js";
 import {
   OPEN_WINDOWS_KEY,
   filterRestorableWindows,
@@ -210,6 +214,13 @@ export function readSessionOpenProjectsSync(opts: { clear: boolean }): string[] 
     if (!fs.existsSync(dbPath)) {
       return []; // First launch — no database yet
     }
+
+    // Before opening writable, never after: bundled SQLite derives the
+    // -wal/-shm sidecar mode from the main file's, so a legacy 0o644 database
+    // would otherwise get world-readable sidecars created here — ahead of the
+    // chmod `openDb()` performs for exactly this reason. Best-effort and
+    // POSIX-gated, like its counterpart there.
+    if (opts.clear) tightenFilePermissionsSync(dbPath);
 
     const sqlite = new Database(dbPath, { readonly: !opts.clear });
     try {

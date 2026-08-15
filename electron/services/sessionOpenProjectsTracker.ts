@@ -19,10 +19,11 @@
  * `app.exit(0)`, which skips `before-quit`, and a main-process crash skips
  * everything. Those are exactly the exits after which you want the set back.
  *
- * No shutdown gate, unlike openWindowsTracker: every mutator here is reached
- * from a ProjectStore method that has already written the same shared database
- * on the line before, so a write during teardown cannot be the call that
- * reopens a closed connection.
+ * No shutdown gate, unlike openWindowsTracker: every mutator here runs after a
+ * synchronous shared-database access in the same call — the ProjectStore write
+ * that prompted it, or the `getProjectById()` the restore path resolved its
+ * project with — so a write during teardown cannot be the call that reopens a
+ * closed connection.
  *
  * Membership is NOT residency. `ProjectViewManager` evicts views under memory
  * pressure, and that is a decision the user never sees — it must not silently
@@ -124,6 +125,21 @@ export function removeSessionOpenProject(projectId: string): void {
   if (!state || !projectId) return;
   const removed = state.current.delete(projectId);
   if (!removed && !state.dirty) return;
+  persist();
+}
+
+/**
+ * Re-persist the set if the last write failed, otherwise do nothing.
+ *
+ * Ordinary mutations retry on their own, because a failed write leaves the
+ * tracker dirty and the next add or remove writes the whole set again. That
+ * covers everything except the session whose only write was the startup
+ * restore: with nothing further to trigger a retry, a transient failure there
+ * would leave the boot-cleared checkpoint empty for the next launch. Called
+ * once the fleet is up, where the shared database is certainly open.
+ */
+export function retrySessionOpenProjectsIfDirty(): void {
+  if (!state || !state.dirty) return;
   persist();
 }
 

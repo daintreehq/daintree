@@ -5,6 +5,7 @@ import {
   initSessionOpenProjectsTracker,
   removeSessionOpenProject,
   resetSessionOpenProjectsTrackerForTests,
+  retrySessionOpenProjectsIfDirty,
 } from "../sessionOpenProjectsTracker.js";
 
 /**
@@ -16,8 +17,8 @@ describe("session-open projects tracker", () => {
   /**
    * A stand-in for the app_state row, seeded with a previous session's value.
    * Stateful on purpose: asserting on the writer's arguments alone cannot tell
-   * "wrote an empty set" apart from "never wrote", which is exactly the
-   * distinction the flush exists to make.
+   * "wrote an empty set" apart from "never wrote", and the read-only gate turns
+   * on exactly that distinction.
    */
   let stored: string[] | null;
   let write: ReturnType<typeof vi.fn>;
@@ -179,11 +180,12 @@ describe("session-open projects tracker", () => {
     });
 
     it("retries the whole set on the next mutation, even a duplicate add", () => {
-      init({ previous: ["proj-a"] });
+      init();
       failNextWrite();
       addSessionOpenProject("proj-a");
-      // The failed attempt left last session's value on disk.
-      expect(stored).toEqual(["proj-a"]);
+      // The boot read already emptied the row, and the failed write left it
+      // that way — the checkpoint no longer describes what is open.
+      expect(stored).toBeNull();
       expect(write).toHaveBeenCalledTimes(1);
 
       // Normally a no-op — but the stored value is known stale, so this has to
@@ -204,6 +206,37 @@ describe("session-open projects tracker", () => {
       addSessionOpenProject("proj-a");
 
       expect(write).toHaveBeenCalledTimes(2);
+    });
+
+    it("repairs a restore-only session, whose failed write has nothing later to retry it", () => {
+      init();
+      failNextWrite();
+      // The startup restore's add is the only write this session makes.
+      addSessionOpenProject("proj-a");
+      expect(stored).toBeNull();
+
+      retrySessionOpenProjectsIfDirty();
+
+      expect(stored).toEqual(["proj-a"]);
+    });
+
+    it("does not re-write when the last write succeeded", () => {
+      init();
+      addSessionOpenProject("proj-a");
+
+      retrySessionOpenProjectsIfDirty();
+
+      expect(write).toHaveBeenCalledTimes(1);
+    });
+
+    it("stays inert on a recovery launch", () => {
+      init({ previous: ["proj-a"], readOnly: true });
+      addSessionOpenProject("proj-b");
+
+      retrySessionOpenProjectsIfDirty();
+
+      expect(write).not.toHaveBeenCalled();
+      expect(stored).toEqual(["proj-a"]);
     });
   });
 

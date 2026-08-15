@@ -116,7 +116,10 @@ import {
   readSessionOpenProjectsSync,
 } from "./services/persistence/readLastProjectId.js";
 import { writeSessionOpenProjects } from "./services/persistence/sessionOpenProjectsStore.js";
-import { initSessionOpenProjectsTracker } from "./services/sessionOpenProjectsTracker.js";
+import {
+  initSessionOpenProjectsTracker,
+  retrySessionOpenProjectsIfDirty,
+} from "./services/sessionOpenProjectsTracker.js";
 import {
   initOpenWindowsTracker,
   resumeOpenWindowsSaves,
@@ -780,6 +783,11 @@ if (!gotTheLock) {
           console.error("[MAIN] Restoring a background window failed:", reason);
         },
       });
+
+      // The restore's checkpoint writes are the only ones a session might make,
+      // so a transient failure there has nothing later to retry it (#11794).
+      // No-op unless one actually failed.
+      retrySessionOpenProjectsIfDirty();
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
       // Startup crashes hard-exit without running before-quit, which means
