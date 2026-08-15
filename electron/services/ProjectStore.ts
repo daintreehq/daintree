@@ -1075,13 +1075,19 @@ export class ProjectStore {
       // Pass null straight through to clear; updateProject writes NULL for it.
       updates.autoParkedAt = options.autoParkedAt;
     }
-    // Stamped here rather than at the three close call sites (#11791). Every
-    // transition to `closed` goes through this method — `setCurrentProject`
-    // only ever moves a project between active and background, and clears the
-    // stamp itself on both sides — so centralizing it means no future close
-    // site can forget to mark its own recency. An explicit `recentlyClosedAt`
-    // in the options still wins, so a caller that has a reason not to stamp
-    // (or already holds the operation's clock) can say so.
+    // Stamped here rather than at the three close call sites (#11791): every
+    // close the USER performs — close, free memory, idle sweep — goes through
+    // this method, so centralizing it means no future one can forget to mark
+    // its own recency. An explicit `recentlyClosedAt` in the options still
+    // wins, so a caller that has a reason not to stamp (the idle sweep) or
+    // already holds the operation's clock can say so.
+    //
+    // The other writers of `closed` deliberately leave the mark alone by going
+    // through `updateProject` instead: folder adoption, relocation, and the
+    // invalid-status repair are bookkeeping about where a project IS, not the
+    // user putting it down, and none of them should light up the switcher.
+    // `setCurrentProject` is the reverse case — it only moves a project between
+    // active and background, and clears the stamp itself on both sides.
     if (options && "recentlyClosedAt" in options) {
       updates.recentlyClosedAt = options.recentlyClosedAt;
     } else if (status === "closed") {

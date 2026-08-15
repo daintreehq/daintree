@@ -284,8 +284,14 @@ describe("ProjectStore recently-active marker (#11791)", () => {
       // Take the snapshot while only `projectId` is open.
       expect(store.getProjectById(projectId)?.recentlyActiveUntil).toBeGreaterThan(Date.now());
 
-      // `otherId` opens and closes afterwards; it belongs to the close clock, so
-      // a stale close of its own must still read as expired.
+      // `otherId` opens AFTER the snapshot was taken. It must not join the
+      // launch population — that set is the previous session's, and a set
+      // recomputed on read would wrongly hand it the launch clock here.
+      store.updateProjectStatus(otherId, "background");
+      expect(store.getProjectById(otherId)?.recentlyActiveUntil).toBeUndefined();
+
+      // Closing it puts it on the close clock instead, where a stale stamp
+      // reads as expired.
       store.updateProjectStatus(otherId, "closed", { recentlyClosedAt: LONG_AGO });
       expect(store.getProjectById(otherId)?.recentlyActiveUntil).toBeLessThan(Date.now());
     });
