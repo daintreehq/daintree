@@ -169,11 +169,15 @@ function keepRepresentableRecords(records: AgentSessionRecord[]): AgentSessionRe
  * observed pending for over 13 hours (#11795). Settling first keeps that lease
  * bounded and turns a stall into a diagnosable error.
  *
- * Sits above `CliAvailabilityService`'s own 10s probe ceiling, which
- * `readAgentDiscoveryState` can reach before the stores hydrate, and below both
- * the 30s dispatch timeout and the 45s lease TTL.
+ * Sized above the slowest LEGITIMATE cold read, which is ~20s rather than the
+ * 10s it first looks like: before the stores hydrate `readAgentDiscoveryState`
+ * calls `getCliAvailability`, which on an empty cache falls through to
+ * `CliAvailabilityService.checkAvailability()` — and that awaits `refreshPath()`
+ * (its own 10s budget) BEFORE starting its 10s probe timer. Undershooting turns
+ * a slow cold start into a spurious failure. Still clears main's 30s dispatch
+ * timeout and the guard's 45s lease TTL.
  */
-const AGENT_DISCOVERY_READ_TIMEOUT_MS = 15_000;
+const AGENT_DISCOVERY_READ_TIMEOUT_MS = 25_000;
 
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   const readAgentDiscoveryState = async () => {
@@ -207,7 +211,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
    * outstanding — the whole difficulty of #11795 was that a bare dispatch
    * timeout gave no hint which await had stalled. The deadline only stops
    * waiting; `ipcRenderer.invoke` takes no `AbortSignal`, so an in-flight
-   * invoke keeps running and its late settle is absorbed below.
+   * invoke keeps running. A late rejection needs no extra guard: `Promise.race`
+   * leaves its handlers attached, so the leg stays handled after the deadline
+   * has already won.
    */
   const readAvailableAgentSources = async () => {
     const pending = new Set(["agentDiscoveryState", "agentRegistry", "userAgentRegistry"]);
@@ -219,9 +225,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       track("agentRegistry", agentCapabilitiesClient.getRegistry()),
       track("userAgentRegistry", userAgentRegistryClient.get()),
     ]);
-    // A leg that rejects after the deadline fired would otherwise surface as an
-    // unhandled rejection — by then the race has stopped listening.
-    sources.catch(() => {});
 
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_resolve, reject) => {

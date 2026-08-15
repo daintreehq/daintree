@@ -34,17 +34,38 @@ function callOp(name: OpName, ...args: unknown[]): Promise<unknown> {
 /**
  * Derived from the live registry rather than hardcoded, so renaming or dropping
  * a built-in agent can't leave this suite probing an id that no longer exists.
+ * Throws at construction so a missing fixture fails once, loudly, instead of
+ * surfacing as a confusing assertion failure in every case below.
  */
-const sampleAgentId = Object.keys(getEffectiveRegistry())[0];
+const sampleAgentId = (() => {
+  const [first] = Object.keys(getEffectiveRegistry());
+  if (!first) throw new Error("effective registry is empty — no agent id to probe with");
+  return first;
+})();
+
+/** Own-property function values are what the IPC serializer chokes on. */
+function hasFunctionValue(value: unknown): boolean {
+  if (typeof value === "function") return true;
+  if (typeof value !== "object" || value === null) return false;
+  return Object.values(value).some(hasFunctionValue);
+}
 
 describe("agentCapabilities getRegistry serialization (issue #11795)", () => {
+  it("still holds live functions in the raw registry the projection guards against", () => {
+    // Names the actual hazard rather than only its symptom. If configs ever
+    // become pure data this fails with "the historical cause is gone", not with
+    // a vague clone error — and the projection stays justified on its own terms
+    // (a narrow wire contract), so the right response is to update this test,
+    // never to widen the handler back to raw configs.
+    const raw = getEffectiveRegistry();
+
+    expect(Object.values(raw).some(hasFunctionValue)).toBe(true);
+  });
+
   it("cannot put the raw effective registry on the wire", () => {
-    // The premise of the fix. Every `AgentResume` variant holds a live function
-    // (`args`, `argsForTarget`, `assignSessionIdArgs`), and structuredClone is
-    // the same algorithm Electron's IPC serializer uses — so returning the raw
-    // registry could never reach the renderer. If this ever stops throwing the
-    // projection below has become dead weight and should be revisited, not
-    // silently kept. The message is runtime-specific, so it isn't asserted.
+    // structuredClone is the same algorithm Electron's IPC serializer uses, so
+    // this is the fix's premise: returning the raw registry could never reach
+    // the renderer. The thrown message is runtime-specific and isn't asserted.
     expect(() => structuredClone(getEffectiveRegistry())).toThrow();
   });
 
@@ -69,16 +90,18 @@ describe("agentCapabilities getRegistry serialization (issue #11795)", () => {
     const projected = (await callOp("getRegistry")) as Record<string, object>;
 
     for (const [agentId, entry] of Object.entries(projected)) {
-      // Locking the wire shape is the point: a generic deep function-stripper
-      // would clone cleanly while quietly promoting every other config field
-      // onto the wire. Widening this is a deliberate edit, never a side effect.
-      expect(Object.keys(entry)).toEqual(["name"]);
+      // A generic deep function-stripper would clone cleanly while quietly
+      // promoting every other config field onto the wire. One field, strictly
+      // fewer than the config has — paired with the name check above, that
+      // pins the payload to exactly the field the consumer reads, without
+      // restating the projection's own key list.
+      expect(Object.keys(entry)).toHaveLength(1);
       expect(Object.keys(entry).length).toBeLessThan(Object.keys(raw[agentId]!).length);
     }
   });
 });
 
-describe("agentCapabilities namespace wire safety", () => {
+describe("agentCapabilities representative happy-path wire safety", () => {
   // Exhaustive by construction: `satisfies` fails to compile when an op is
   // added without deciding what arguments exercise it, so a new op can't slip
   // onto the wire unchecked the way getRegistry did.
@@ -90,10 +113,6 @@ describe("agentCapabilities namespace wire safety", () => {
     getCcrPresets: [],
     getResolvedModelList: [sampleAgentId],
   } satisfies Record<OpName, unknown[]>;
-
-  it("has a sample agent id to probe with", () => {
-    expect(sampleAgentId).toBeTruthy();
-  });
 
   it.each(Object.keys(opArgs) as OpName[])(
     "%s resolves to a structured-cloneable value",
