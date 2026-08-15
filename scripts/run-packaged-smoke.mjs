@@ -32,6 +32,7 @@ const BASE_REQUIRED_MARKERS = [
 ];
 const SUCCESS_MARKER = "[SMOKE] Stability soak complete";
 const CHILD_EXIT_GRACE_MS = 5_000;
+const FLUSH_TIMEOUT_MS = 5_000;
 
 export function buildRequiredMarkers(platform) {
   const markers = [...BASE_REQUIRED_MARKERS];
@@ -71,6 +72,12 @@ function terminateProcessTree(child) {
   if (!child.pid) return;
 
   if (process.platform === "win32") {
+    // `/t` walks the tree as it stands at call time, so anything already
+    // orphaned by the root's own exit is out of reach. That is survivable for
+    // the kill itself, but not for our exit: Electron's child processes
+    // inherit this script's stdout/stderr under ELECTRON_ENABLE_LOGGING, so a
+    // single survivor pins those pipes open and the event loop never drains.
+    // forceKillProcessTree covers the remainder by image name.
     spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
       stdio: "ignore",
       windowsHide: true,
@@ -90,7 +97,19 @@ function terminateProcessTree(child) {
 }
 
 function forceKillProcessTree(child) {
-  if (!child.pid || process.platform === "win32") return;
+  if (!child.pid) return;
+
+  if (process.platform === "win32") {
+    // Last resort for survivors `taskkill /t` could not reach. Scoped to the
+    // binary we launched, and only ever reached after the graceful kill has
+    // been given CHILD_EXIT_GRACE_MS, so a healthy run never gets here. The
+    // runner is single-tenant, so there is no other Daintree to catch.
+    spawn("taskkill", ["/im", "Daintree.exe", "/f"], {
+      stdio: "ignore",
+      windowsHide: true,
+    }).on("error", () => {});
+    return;
+  }
 
   try {
     process.kill(-child.pid, "SIGKILL");
@@ -319,12 +338,45 @@ async function main() {
 
 const invokedDirectly =
   process.argv[1] && import.meta.url === url.pathToFileURL(process.argv[1]).href;
-if (invokedDirectly) {
-  main().catch((error) => {
-    console.error(
-      "[PACKAGED-SMOKE] FAILED:",
-      error instanceof Error ? error.message : String(error)
-    );
-    process.exit(1);
+/**
+ * Exit without waiting for the event loop to drain.
+ *
+ * The child is spawned with piped stdio and Electron's descendants inherit
+ * those handles, so a single survivor `taskkill /t` failed to reach keeps them
+ * open and this process alive — costing the step its entire timeout long after
+ * the smoke run passed. The failure path has always exited explicitly; this
+ * makes success symmetric rather than dependent on a clean teardown.
+ *
+ * Flush first: when stdout/stderr are pipes (which they are under CI) they are
+ * async, and this script has been forwarding every chunk of the app's output
+ * through them, so a bare exit can truncate the tail of the log. The timer is
+ * the backstop for the case that motivated all of this — a blocked pipe whose
+ * write callback never fires — and is unref'd so it can't itself hold us open.
+ */
+function exitAfterFlush(code) {
+  let exited = false;
+  const done = () => {
+    if (exited) return;
+    exited = true;
+    process.exit(code);
+  };
+
+  const bail = setTimeout(done, FLUSH_TIMEOUT_MS);
+  bail.unref();
+
+  process.stdout.write("", () => {
+    process.stderr.write("", done);
   });
+}
+
+if (invokedDirectly) {
+  main()
+    .then(() => exitAfterFlush(0))
+    .catch((error) => {
+      console.error(
+        "[PACKAGED-SMOKE] FAILED:",
+        error instanceof Error ? error.message : String(error)
+      );
+      exitAfterFlush(1);
+    });
 }
