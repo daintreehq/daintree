@@ -1233,21 +1233,32 @@ describe("rendererBridge — thaw and eviction lease for routed operations (#117
     );
   }
 
-  it("thaws the bound view before the dispatch IPC, not after", async () => {
+  it("waits for the thaw to RESOLVE before the dispatch IPC, not merely to start", async () => {
     // The whole defect: a CDP-frozen renderer cannot run JS, so the dispatch
-    // sits in Mojo unanswered until the 30s bridge deadline. Sending first and
-    // thawing after would not fix it — the ordering is the fix.
+    // sits in Mojo unanswered until the 30s bridge deadline. Issuing the thaw
+    // and sending in the same turn would not fix it — the send has to be
+    // downstream of the thaw completing.
     const wc = registerView("ws-a", 101);
-    let thawedBeforeSend: boolean | null = null;
-    wc.send.mockImplementation(() => {
-      thawedBeforeSend = vi.mocked(unfreezeWebContents).mock.calls.length > 0;
-    });
+    let completeThaw: () => void = () => {};
+    vi.mocked(unfreezeWebContents).mockReturnValue(
+      new Promise<void>((resolve) => {
+        completeThaw = resolve;
+      })
+    );
 
     const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
     await flushThaw();
 
-    expect(thawedBeforeSend).toBe(true);
     expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(wc);
+    expect(wc.send).not.toHaveBeenCalled();
+
+    completeThaw();
+    await flushThaw();
+
+    expect(wc.send).toHaveBeenCalledWith(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST,
+      expect.objectContaining({ actionId: "terminal.list" })
+    );
 
     settlePendingDispatch(101);
     await promise;
@@ -1283,14 +1294,39 @@ describe("rendererBridge — thaw and eviction lease for routed operations (#117
     await promise;
   });
 
-  it("does not thaw the unpinned focused-window path", async () => {
+  it("does not thaw or lease the unpinned focused-window path, even with a live target", async () => {
     // That path resolves the ACTIVE view, which is never frozen and never an
     // eviction candidate. Thawing it would spend a CDP round trip per tool
-    // call for nothing.
-    await expect(bridge.dispatchAction("actions.list", {}, false)).rejects.toThrow(
-      /renderer bridge unavailable/
+    // call for nothing. The target must actually resolve, or an implementation
+    // that thaws every resolved active view would pass this too.
+    const activeWc = makeWebContents(707);
+    const registryBridge = createRendererBridge(
+      pendingManifests,
+      pendingDispatches,
+      () =>
+        ({
+          focusOrder: () => [
+            {
+              browserWindow: { isDestroyed: () => false },
+              services: {
+                projectViewManager: { getActiveView: () => ({ webContents: activeWc }) },
+              },
+            },
+          ],
+        }) as never,
+      leases
     );
+    registryBridge.setupListeners([]);
+
+    const promise = registryBridge.dispatchAction("actions.list", {}, false);
+    await flushThaw();
+
+    expect(activeWc.send).toHaveBeenCalled();
     expect(vi.mocked(unfreezeWebContents)).not.toHaveBeenCalled();
+    expect(leases.has(707)).toBe(false);
+
+    settlePendingDispatch(707);
+    await promise;
   });
 
   it("holds a lease for the life of the dispatch and releases it on the response", async () => {
@@ -1458,21 +1494,167 @@ describe("rendererBridge — thaw and eviction lease for routed operations (#117
     await promise;
   });
 
-  it("takes no lease when the bridge was built without a registry", async () => {
-    // Older construction paths and focused unit tests keep the pre-#11790
-    // behavior: views stay ordinary eviction candidates.
-    const bare = createRendererBridge(pendingManifests, pendingDispatches, () => null);
-    bare.setupListeners([]);
+  it("still dispatches when built without a lease registry, taking no lease", async () => {
+    // Differential against the leased bridge on the same workspace, so the
+    // "no lease" half is pinned to the missing registry rather than being
+    // trivially true of an object nothing writes to.
     const wc = registerView("ws-bare", 909);
 
-    const promise = bare.dispatchActionForWorkspace("ws-bare", "terminal.list", {}, false);
+    const leasedRun = bridge.dispatchActionForWorkspace("ws-bare", "terminal.list", {}, false);
+    await flushThaw();
+    expect(leases.has(909)).toBe(true);
+    settlePendingDispatch(909);
+    await leasedRun;
+    expect(leases.has(909)).toBe(false);
+
+    const bare = createRendererBridge(pendingManifests, pendingDispatches, () => null);
+    bare.setupListeners([]);
+    wc.send.mockClear();
+
+    const bareRun = bare.dispatchActionForWorkspace("ws-bare", "terminal.list", {}, false);
     await flushThaw();
 
-    expect(leases.has(909)).toBe(false);
-    // The thaw is independent of the lease and still happens.
+    // Same call, same target, no registry: dispatch still works and the thaw
+    // still happens — only the lease is absent.
+    expect(wc.send).toHaveBeenCalled();
     expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(wc);
+    expect(leases.has(909)).toBe(false);
 
     settlePendingDispatch(909);
+    await bareRun;
+  });
+
+  it("keeps the lease when a spoofed sender answers, and releases it on the real response", async () => {
+    // The mismatch branch deliberately leaves the pending entry alone so the
+    // legitimate renderer can still answer. Releasing the lease there would let
+    // any wrong-sender message expose the view mid-call.
+    const wc = registerView("ws-a", 101);
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    await flushThaw();
+
+    const [requestId] = [...pendingDispatches.keys()];
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 999 } },
+      { requestId, result: { ok: true, result: "spoofed" } }
+    );
+
+    expect(leases.has(101)).toBe(true);
+    expect(pendingDispatches.has(requestId)).toBe(true);
+
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: wc.id } },
+      { requestId, result: { ok: true, result: "real" } }
+    );
+    const envelope = await promise;
+
+    expect(envelope.result).toEqual({ ok: true, result: "real" });
+    expect(leases.has(101)).toBe(false);
+  });
+
+  it("releases the lease when server teardown rejects the pending request", async () => {
+    // What HttpLifecycle does on stop and on unexpected close: it reaches into
+    // the pending maps and settles them itself, so the release has to ride the
+    // pending entry's own cleanup rather than the bridge's normal paths.
+    registerView("ws-a", 101);
+    const promise = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    const assertion = expect(promise).rejects.toThrow(/MCP server stopped/);
+    expect(leases.has(101)).toBe(true);
+
+    for (const [id, pending] of pendingDispatches) {
+      clearTimeout(pending.timer);
+      pending.destroyedCleanup?.();
+      pending.reject(new Error("MCP server stopped"));
+      pendingDispatches.delete(id);
+    }
+    await assertion;
+
+    expect(leases.has(101)).toBe(false);
+  });
+
+  it("holds and releases a lease around a workspace manifest fetch", async () => {
+    registerView("ws-a", 101);
+
+    const promise = bridge.requestManifestForWorkspace("ws-a");
+    expect(leases.has(101)).toBe(true);
+    await flushThaw();
+
+    const [requestId] = [...pendingManifests.keys()];
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE,
+      { sender: { id: 101 } },
+      { requestId, manifest: [] }
+    );
     await promise;
+
+    expect(leases.has(101)).toBe(false);
+  });
+
+  it("releases the manifest lease when the 5s deadline fires", async () => {
+    vi.useFakeTimers();
+    registerView("ws-a", 101);
+
+    const promise = bridge.requestManifestForWorkspace("ws-a");
+    const assertion = expect(promise).rejects.toThrow(/Manifest request timed out/);
+    expect(leases.has(101)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(6_000);
+    await assertion;
+
+    expect(leases.has(101)).toBe(false);
+  });
+
+  it("releases the manifest lease when the view is destroyed mid-fetch", async () => {
+    const wc = registerView("ws-a", 101);
+
+    const promise = bridge.requestManifestForWorkspace("ws-a");
+    expect(leases.has(101)).toBe(true);
+    wc.triggerDestroyed();
+
+    await expect(promise).rejects.toBeInstanceOf(WorkspaceBindingError);
+    expect(leases.has(101)).toBe(false);
+  });
+
+  it("coalesced manifest callers share one lease, released once the shared fetch settles", async () => {
+    // Singleflight: the lease covers the fetch, not the caller, so a joiner
+    // must neither add a second reference nor be left unprotected.
+    registerView("ws-a", 101);
+
+    const first = bridge.requestManifestForWorkspace("ws-a");
+    const second = bridge.requestManifestForWorkspace("ws-a");
+    await flushThaw();
+
+    expect(pendingManifests.size).toBe(1);
+    expect(leases.has(101)).toBe(true);
+
+    const [requestId] = [...pendingManifests.keys()];
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE,
+      { sender: { id: 101 } },
+      { requestId, manifest: [{ id: "terminal.list" }] }
+    );
+    await Promise.all([first, second]);
+
+    expect(leases.has(101)).toBe(false);
+  });
+
+  it("releases the manifest lease even when clearCache drops the singleflight mid-fetch", async () => {
+    registerView("ws-a", 101);
+
+    const promise = bridge.requestManifestForWorkspace("ws-a");
+    await flushThaw();
+    // Drops the inflight/cache bookkeeping but not the pending request itself.
+    bridge.clearCache();
+
+    const [requestId] = [...pendingManifests.keys()];
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE,
+      { sender: { id: 101 } },
+      { requestId, manifest: [] }
+    );
+    await promise;
+
+    expect(leases.has(101)).toBe(false);
   });
 });

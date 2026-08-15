@@ -3358,8 +3358,13 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       .mock.calls.filter(([event]) => event === "projectview.eviction-skipped")
       .pop()?.[1] as Record<string, unknown> | undefined;
 
+  /** Every manager built here, so the randomized sampler each one starts is torn down. */
+  let managers: ProjectViewManager[];
+  /** Workspaces the injected activity callback throws for, exercising the unknown path. */
+  let activityThrowsFor: Set<string>;
+
   function makeManager(cachedProjectViews: number) {
-    return new ProjectViewManager(win as never, {
+    const mgr = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
       paintGateHardTimeoutMs: 0,
@@ -3368,11 +3373,16 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       cachedProjectViews,
       assistantBackendForProject,
       isTerminalLive,
-      mcpViewActivity: (workspaceId: string, webContentsId: number) => ({
-        liveBinding: boundWorkspaces.has(workspaceId),
-        dispatchLease: leasedWebContentsIds.has(webContentsId),
-      }),
+      mcpViewActivity: (workspaceId: string, webContentsId: number) => {
+        if (activityThrowsFor.has(workspaceId)) throw new Error("MCP service mid-teardown");
+        return {
+          liveBinding: boundWorkspaces.has(workspaceId),
+          dispatchLease: leasedWebContentsIds.has(webContentsId),
+        };
+      },
     });
+    managers.push(mgr);
+    return mgr;
   }
 
   /** Three views: proj-a and proj-b cached (oldest-first), proj-c active. */
@@ -3403,10 +3413,17 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
     liveTerminals.clear();
     boundWorkspaces = new Set();
     leasedWebContentsIds = new Set();
+    activityThrowsFor = new Set();
+    managers = [];
     win = createMockWindow();
   });
 
   afterEach(() => {
+    // Each manager starts a randomly-phased memory sampler. Left running, a
+    // previous test's tick can fire mid-test, write into the shared logInfo
+    // mock, and read the sets after they have been rebound for another case.
+    for (const mgr of managers) mgr.dispose();
+    managers = [];
     Object.defineProperty(process, "getSystemMemoryInfo", {
       configurable: true,
       value: originalSystemMemoryInfo,
@@ -3457,6 +3474,23 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       mgr.reclaimCachedViewsUnderPressure();
 
       expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+
+    it("reports a lease-only over-cap cache, which nothing else would explain", async () => {
+      // A lease is self-expiring per request, but a session dispatching
+      // continuously renews one, so this stall can persist. Without the log it
+      // reads as a leak in the memory logs.
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      leasedWebContentsIds.add(webContentsIdFor(mgr, "proj-a"));
+      leasedWebContentsIds.add(webContentsIdFor(mgr, "proj-b"));
+
+      mgr.setCachedViewLimit(1);
+
+      expect(mgr.getAllViews().length).toBe(3);
+      const skipped = skippedLog();
+      expect(skipped?.protectedCount).toBe(0);
+      expect(skipped?.transientlyExcludedCount).toBe(2);
     });
 
     it("counts a lease as a transient exclusion, not as part of the assistant floor", async () => {
@@ -3603,6 +3637,42 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       mgr.setCachedViewLimit(1);
 
       expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+  });
+
+  describe("an activity callback that throws", () => {
+    it("never becomes an absolute exclusion — a broken callback must not pin the cache", async () => {
+      // The dangerous direction: if unknown granted the lease exclusion, one
+      // failing callback would make every cached view unreclaimable straight
+      // through critical pressure and turn a wiring bug into an OOM.
+      const mgr = makeManager(3);
+      mgr.setMemoryPressurePolicy(BAND);
+      setAvailableMb(2500);
+      await seedThreeViews(mgr);
+      activityThrowsFor.add("proj-a");
+      activityThrowsFor.add("proj-b");
+
+      mgr.reclaimCachedViewsUnderPressure();
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+
+    it("deprioritizes like a quiet binding rather than reading as unprotected", async () => {
+      // proj-a is LRU, so pure LRU would take it first. An agent-active proj-b
+      // is the cheaper loss, so an unknown proj-a should outlive it. Scoped to
+      // one workspace on purpose: if every view read as unknown the tiers would
+      // flatten back to plain LRU and there would be no differential to observe.
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      mockGetAllTerminals.mockResolvedValue([
+        { id: "t-b", projectId: "proj-b", agentState: "working" },
+      ]);
+      await mgr.initAgentStateCache(mockPtyClient as never);
+      activityThrowsFor.add("proj-a");
+
+      mgr.setCachedViewLimit(2);
+
+      expect(evictedProjectIds()).toEqual(["proj-b"]);
     });
   });
 

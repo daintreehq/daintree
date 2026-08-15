@@ -162,7 +162,7 @@ export function deactivateEntry(host: ProjectViewManager, current: ViewEntry): v
       !AgentStateCache.hasActiveAgent(host, capturedProjectId)
     ) {
       const mcp = host.mcpActivityFor(capturedProjectId, vc);
-      if (!mcp.liveBinding && !mcp.dispatchLease) {
+      if (!mcp.liveBinding && !mcp.dispatchLease && !mcp.unknown) {
         void freezeWebContents(vc);
       }
     }

@@ -239,13 +239,17 @@ export function evictStaleViews(
   // `SESSION_BINDING_GONE`, since eviction destroys the WebContents the binding
   // resolves to and nothing recreates it.
   //
-  // An absolute exclusion is safe here only because it is self-expiring: each
-  // lease is held by one pending bridge request, capped at 5s (manifest) or 30s
-  // (dispatch), and released on the response, the deadline, and the view's own
-  // destruction alike. That is what makes this a bounded lease rather than the
-  // unconditional floor a live assistant backend gets — enough concurrent bound
-  // sessions could defeat the pressure policy outright if it were permanent, so
-  // "bound but quiet" is deliberately NOT excluded here (see the tiers below).
+  // Each individual lease is self-expiring — held by one pending bridge
+  // request, capped at 5s (manifest) or 30s (dispatch), released on the
+  // response, the deadline and the view's own destruction alike — which is what
+  // makes this a bounded lease rather than the unconditional floor a live
+  // assistant backend gets. Note the bound is per-lease, not aggregate: a
+  // session dispatching back-to-back can keep one view's refcount above zero
+  // indefinitely. That is the intended reading of "keep the view alive while a
+  // bound session is actually working", but it does mean sustained traffic can
+  // hold the cache over its cap, so the skipped-eviction log below reports it.
+  // A session that goes quiet holds nothing, which is the property that keeps
+  // this from becoming a floor.
   const mcpLeasedProjectIds = new Set<string>();
 
   const evictable = Array.from(host.views.entries())
@@ -319,7 +323,11 @@ export function evictStaleViews(
   const assistantProtected: EvictionCandidate[] = [];
   for (const [projectId, entry] of evictable) {
     const activeAgent = hasActiveAgent(host, projectId);
-    const boundMcpSession = host.mcpActivityFor(projectId, entry.view.webContents).liveBinding;
+    const mcp = host.mcpActivityFor(projectId, entry.view.webContents);
+    // `unknown` (the activity callback threw) deprioritizes but never protects:
+    // it must not reach the exclusion set above, or one broken callback would
+    // pin every cached view straight through critical pressure.
+    const boundMcpSession = mcp.liveBinding || mcp.unknown;
     const base = { projectId, entry, activeAgent, boundMcpSession };
     if (hasLiveAssistantBackend(host, projectId, entry)) {
       assistantProtected.push({ ...base, liveAssistantBackend: true });
@@ -371,7 +379,17 @@ export function evictStaleViews(
   // tier-2 reclaim that converges to "active view + protected assistants"
   // rather than the active view alone is now the expected outcome, and it is
   // exactly the case where an unexplained over-cap cache would read as a leak.
-  if (host.views.size > effectiveMax && candidates.length === 0 && assistantProtected.length > 0) {
+  //
+  // MCP dispatch leases are included in the gate, not just in the counts
+  // (#11790). A lease is self-expiring per request, but a session dispatching
+  // continuously can renew one indefinitely, so a lease-only stall is exactly
+  // the case where an over-cap cache would otherwise sit in the logs with
+  // nothing explaining it.
+  if (
+    host.views.size > effectiveMax &&
+    candidates.length === 0 &&
+    (assistantProtected.length > 0 || mcpLeasedProjectIds.size > 0)
+  ) {
     // `overflow` counts views over target; the two counts beside it say what is
     // holding them, so a reader can tell a pinned assistant (persistent, this
     // pass will never take it) from a paint-gate/cold-switch bridge (temporary,

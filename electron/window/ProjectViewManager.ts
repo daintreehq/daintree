@@ -221,7 +221,38 @@ export interface McpViewActivity {
   liveBinding: boolean;
 }
 
-const NO_MCP_ACTIVITY: McpViewActivity = { dispatchLease: false, liveBinding: false };
+/**
+ * What the freeze and eviction policies actually read: the activity, plus
+ * whether the answer could be obtained at all.
+ */
+export interface McpViewActivityReading extends McpViewActivity {
+  /**
+   * The wired callback threw, so protection state is genuinely unavailable.
+   *
+   * Deliberately distinct from the two "definitely not protected" cases — no
+   * callback wired, and a callback returning null because MCP has not loaded —
+   * because the two policies resolve real uncertainty in OPPOSITE directions.
+   * Freezing treats unknown as protected: the cost is one missed optimization
+   * on one cached view, against re-creating the 30s stranded dispatch. Eviction
+   * must not: an unknown that granted the absolute lease exclusion would let a
+   * single broken callback pin every cached view through critical pressure and
+   * turn a wiring bug into an OOM. It deprioritizes instead — reclaimable, just
+   * last.
+   */
+  unknown: boolean;
+}
+
+const NO_MCP_ACTIVITY: McpViewActivityReading = {
+  dispatchLease: false,
+  liveBinding: false,
+  unknown: false,
+};
+
+const UNKNOWN_MCP_ACTIVITY: McpViewActivityReading = {
+  dispatchLease: false,
+  liveBinding: false,
+  unknown: true,
+};
 
 export class ProjectViewManager {
   // The fields below are intentionally not `private`: sibling
@@ -291,6 +322,8 @@ export class ProjectViewManager {
     intent: ProjectFocusOnActivateIntent;
   } | null = null;
   disposed = false;
+  /** One-shot latch so a persistently broken activity callback can't flood the log. */
+  private warnedMcpActivityFailure = false;
   private cachedMemoryTimerCleanup: (() => void) | null = null;
 
   // Agent-state cache for hasActiveAgent(). The main-process getPtyManager()
@@ -402,6 +435,13 @@ export class ProjectViewManager {
         } catch (error) {
           logWarn("projectview.pressure-check.error", {
             error: formatErrorMessage(error, "maybeEvictUnderPressure threw"),
+          });
+        }
+        try {
+          this.refreezeUnprotectedCachedViews();
+        } catch (error) {
+          logWarn("projectview.refreeze.error", {
+            error: formatErrorMessage(error, "refreezeUnprotectedCachedViews threw"),
           });
         }
         scheduleSample(CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS);
@@ -866,23 +906,34 @@ export class ProjectViewManager {
   /**
    * What MCP is doing with `workspaceId`'s view right now (#11790).
    *
-   * Never throws and never returns null: the callback reaches a service behind
-   * a dynamic import, and a freeze or eviction pass must not be abandoned
-   * halfway through the view map because that service was mid-teardown. Every
-   * failure — no callback wired, MCP never loaded, the call threw, the view
-   * already destroyed — reads as "not protected", the same conservative answer
-   * `hasActiveAgent` gives before its cache is seeded.
+   * Never throws: the callback reaches a service behind a dynamic import, and a
+   * freeze or eviction pass must not be abandoned halfway through the view map
+   * because that service was mid-teardown.
+   *
+   * Three outcomes, not two. No callback wired, a destroyed view, or a null
+   * answer (MCP has not loaded, so there are no sessions) are all *known* to be
+   * unprotected — the pre-#11790 behavior. A callback that throws is not: that
+   * is reported as `unknown` so each policy can resolve it in its own safe
+   * direction, and warned once so a broken composition seam is distinguishable
+   * from "MCP simply isn't running" in the logs.
    *
    * Takes a workspace id, not a project id: `views` is keyed by the opaque
    * workspace identity (a project's 64-hex id or a scratch workspace's UUID),
    * which is the same vocabulary the MCP session binding stores.
    */
-  mcpActivityFor(workspaceId: string, wc: Electron.WebContents): McpViewActivity {
+  mcpActivityFor(workspaceId: string, wc: Electron.WebContents): McpViewActivityReading {
     if (!this.mcpViewActivity || wc.isDestroyed()) return NO_MCP_ACTIVITY;
     try {
-      return this.mcpViewActivity(workspaceId, wc.id) ?? NO_MCP_ACTIVITY;
-    } catch {
-      return NO_MCP_ACTIVITY;
+      const activity = this.mcpViewActivity(workspaceId, wc.id);
+      return activity ? { ...activity, unknown: false } : NO_MCP_ACTIVITY;
+    } catch (error) {
+      if (!this.warnedMcpActivityFailure) {
+        this.warnedMcpActivityFailure = true;
+        logWarn("projectview.mcp-activity.error", {
+          error: formatErrorMessage(error, "mcpViewActivity threw"),
+        });
+      }
+      return UNKNOWN_MCP_ACTIVITY;
     }
   }
 
@@ -910,9 +961,33 @@ export class ProjectViewManager {
       // memory purge still apply — rather than the memory a resident renderer
       // holds, so a quiet binding can hold it for as long as the session lives.
       const mcp = this.mcpActivityFor(projectId, wc);
-      if (mcp.liveBinding || mcp.dispatchLease) continue;
+      if (mcp.liveBinding || mcp.dispatchLease || mcp.unknown) continue;
       void freezeWebContents(wc);
     }
+  }
+
+  /**
+   * Re-freeze cached views that were thawed for MCP but are no longer
+   * protected (#11790).
+   *
+   * The bridge thaws a bound or pinned view on demand, and nothing puts it
+   * back: `freezeAllCached` runs only on the transition INTO the efficiency
+   * profile, and `setEfficiencyFreeze(true)` while already enabled is an early
+   * no-op. Without this, one dispatch into a cached view leaves it running JS
+   * and timers for the rest of the efficiency period, and a session that
+   * disconnects never gives its view back — repeated across workspaces, the
+   * profile quietly stops doing its job.
+   *
+   * Piggybacked on the cached-view memory sampler for the same reason
+   * `maybeEvictUnderPressure` is: it needs a trigger that doesn't depend on the
+   * user switching projects or the profile toggling. Reusing `freezeAllCached`
+   * keeps one copy of the guard set, and re-freezing an already-frozen view is
+   * a harmless no-op, so this converges rather than tracking which views it
+   * personally thawed. A strict no-op outside the efficiency profile.
+   */
+  refreezeUnprotectedCachedViews(): void {
+    if (!this.efficiencyFreezeEnabled) return;
+    this.freezeAllCached();
   }
 
   // Wake any cached background view whose project gained a live agent after it

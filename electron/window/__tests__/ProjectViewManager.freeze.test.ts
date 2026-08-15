@@ -772,11 +772,29 @@ describe("ProjectViewManager — MCP session bindings stay thawed (#11790)", () 
     expect(frozeProjA()).toBe(false);
   });
 
+  it("freezes inline on deactivation when nothing is bound (positive control)", async () => {
+    // Establishes that this setup — efficiency on, still inside the batch
+    // sweep's debounce window, so only the deactivation path can freeze —
+    // really does freeze. Without it the guard test below would pass just as
+    // well if inline freezing were deleted entirely.
+    manager.setEfficiencyFreeze(true);
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(frozeProjA()).toBe(true);
+  });
+
   it("skips the inline deactivation freeze for a workspace backing a live session", async () => {
-    // The path that would freeze a bound workspace the instant the user
-    // switches away from it — inside the batch sweep's debounce window, so the
-    // sweep is not what is being tested here.
+    // Same setup as the control above, one variable changed.
     boundWorkspaces.add("proj-a");
+
+    manager.setEfficiencyFreeze(true);
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(frozeProjA()).toBe(false);
+  });
+
+  it("skips the inline deactivation freeze while a dispatch is in flight", async () => {
+    leasedWebContentsIds.add(initialWc.id);
 
     manager.setEfficiencyFreeze(true);
     await manager.switchTo("proj-b", "/path/b");
@@ -834,9 +852,11 @@ describe("ProjectViewManager — MCP session bindings stay thawed (#11790)", () 
     expect(mcpViewActivity).toHaveBeenCalledWith("proj-a", initialWc.id);
   });
 
-  it("freezes as usual when the callback throws — a broken service can't stall the sweep", async () => {
-    // The callback reaches a service behind a dynamic import. An exception
-    // escaping here would abandon the freeze pass partway through the view map.
+  it("does not freeze when the callback throws — unknown protection resolves as protected here", async () => {
+    // The callback reaches a service behind a dynamic import, so a throw means
+    // protection state is genuinely unavailable rather than false. Freezing on
+    // that would re-create the 30s stranded dispatch for the cost of one
+    // missed optimization, so this policy resolves unknown as protected.
     await manager.switchTo("proj-b", "/path/b");
     mcpViewActivity.mockImplementation(() => {
       throw new Error("MCP service mid-teardown");
@@ -845,10 +865,27 @@ describe("ProjectViewManager — MCP session bindings stay thawed (#11790)", () 
     manager.setEfficiencyFreeze(true);
     vi.advanceTimersByTime(500);
 
-    expect(frozeProjA()).toBe(true);
+    expect(frozeProjA()).toBe(false);
   });
 
-  it("freezes as usual when the callback answers null", async () => {
+  it("keeps sweeping the rest of the view map after the callback throws", async () => {
+    // An exception escaping the accessor would abandon the pass partway
+    // through, silently leaving later views unfrozen for an unrelated reason.
+    await manager.switchTo("proj-b", "/path/b");
+    await manager.switchTo("proj-c", "/path/c");
+    mcpViewActivity.mockImplementation(() => {
+      throw new Error("MCP service mid-teardown");
+    });
+
+    expect(() => {
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+    }).not.toThrow();
+  });
+
+  it("freezes as usual when the callback answers null — MCP simply isn't running", async () => {
+    // Distinct from a throw: null is a definite "no server, so no sessions",
+    // not an unavailable answer.
     await manager.switchTo("proj-b", "/path/b");
     mcpViewActivity.mockReturnValue(null);
 
@@ -856,6 +893,42 @@ describe("ProjectViewManager — MCP session bindings stay thawed (#11790)", () 
     vi.advanceTimersByTime(500);
 
     expect(frozeProjA()).toBe(true);
+  });
+
+  it("re-freezes a view thawed for a dispatch once the lease is gone", async () => {
+    // The bridge thaws on demand and nothing puts the view back: freezeAllCached
+    // runs only on the transition INTO efficiency, and re-entering while already
+    // enabled is an early no-op. Without the sampler's re-freeze pass, one
+    // dispatch leaves the view running JS for the rest of the profile.
+    await manager.switchTo("proj-b", "/path/b");
+    leasedWebContentsIds.add(initialWc.id);
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+    expect(frozeProjA()).toBe(false);
+
+    leasedWebContentsIds.delete(initialWc.id);
+    manager.refreezeUnprotectedCachedViews();
+
+    expect(frozeProjA()).toBe(true);
+  });
+
+  it("leaves a still-bound view thawed when the re-freeze pass runs", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    boundWorkspaces.add("proj-a");
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+
+    manager.refreezeUnprotectedCachedViews();
+
+    expect(frozeProjA()).toBe(false);
+  });
+
+  it("the re-freeze pass is a no-op outside the efficiency profile", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+
+    manager.refreezeUnprotectedCachedViews();
+
+    expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
   });
 
   it("never freezes the active view, bound or not", async () => {

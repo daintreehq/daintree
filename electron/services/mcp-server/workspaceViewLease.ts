@@ -29,6 +29,13 @@
  */
 export class WorkspaceViewLeaseRegistry {
   private readonly counts = new Map<number, number>();
+  /**
+   * Bumped by `clear()`. A release handle remembers the generation it was
+   * issued under and does nothing once that generation is stale — otherwise a
+   * request straggling across a server stop/start could decrement a *new*
+   * request's lease and expose the view it is waiting on.
+   */
+  private generation = 0;
 
   /**
    * Take a lease on `webContentsId` and return its release.
@@ -41,10 +48,11 @@ export class WorkspaceViewLeaseRegistry {
    * must wire the release into every settle path — not just the happy one.
    */
   acquire(webContentsId: number): () => void {
+    const issuedAt = this.generation;
     this.counts.set(webContentsId, (this.counts.get(webContentsId) ?? 0) + 1);
     let released = false;
     return () => {
-      if (released) return;
+      if (released || issuedAt !== this.generation) return;
       released = true;
       const remaining = (this.counts.get(webContentsId) ?? 0) - 1;
       if (remaining > 0) {
@@ -66,6 +74,7 @@ export class WorkspaceViewLeaseRegistry {
    * would pin views for renderers that will never answer.
    */
   clear(): void {
+    this.generation++;
     this.counts.clear();
   }
 }

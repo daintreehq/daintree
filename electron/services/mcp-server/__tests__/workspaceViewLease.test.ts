@@ -76,6 +76,22 @@ describe("WorkspaceViewLeaseRegistry (#11790)", () => {
     expect(leases.has(2)).toBe(false);
   });
 
+  it("a release issued before a clear cannot cancel a lease taken after it", () => {
+    // Server stop snapshots and rejects the pending requests, then clears. A
+    // request that reached the bridge inside the drain window still holds a
+    // release handle; when its stale deadline fires after a restart, that
+    // handle must not decrement the restarted request's lease and expose the
+    // view it is waiting on.
+    const leases = new WorkspaceViewLeaseRegistry();
+    const staleRelease = leases.acquire(5);
+
+    leases.clear();
+    leases.acquire(5);
+    staleRelease();
+
+    expect(leases.has(5)).toBe(true);
+  });
+
   it("takes fresh leases normally after a clear", () => {
     const leases = new WorkspaceViewLeaseRegistry();
     leases.acquire(3);

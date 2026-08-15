@@ -348,12 +348,6 @@ export function createRendererBridge(
 
       const requestId = randomUUID();
       const webContentsId = webContents.id;
-      // Taken before the thaw round trip below, so the window between picking
-      // this view and sending to it is covered too — an eviction pass landing
-      // inside a CDP round trip would otherwise destroy the target we just
-      // resolved. `tools/list` is usually a bound session's first operation and
-      // has the shorter deadline of the two, so it is the more exposed one.
-      const releaseLease = route ? (viewLeases?.acquire(webContentsId) ?? null) : null;
       const timer = setTimeout(() => {
         const pending = pendingManifests.get(requestId);
         pending?.destroyedCleanup?.();
@@ -391,6 +385,16 @@ export function createRendererBridge(
         }
         releaseLease?.();
       };
+
+      // Taken after every listener that could throw is wired, so a failed setup
+      // can never strand a lease with no settle path left to release it — and
+      // still synchronously, before the thaw round trip below, so the window
+      // between picking this view and sending to it is covered. An eviction
+      // pass landing inside that CDP round trip would otherwise destroy the
+      // target we just resolved. `tools/list` is usually a bound session's
+      // first operation and has the shorter deadline, so it is the more
+      // exposed of the two.
+      const releaseLease = route ? (viewLeases?.acquire(webContentsId) ?? null) : null;
 
       pendingManifests.set(requestId, {
         resolve: (manifest) => {
@@ -442,9 +446,6 @@ export function createRendererBridge(
 
       const requestId = randomUUID();
       const webContentsId = webContents.id;
-      // See sendManifestRequest: acquired before the thaw so the resolve → send
-      // window is covered, released by `settle()` on every outcome.
-      const releaseLease = route ? (viewLeases?.acquire(webContentsId) ?? null) : null;
       const timer = setTimeout(() => {
         const pending = pendingDispatches.get(requestId);
         pending?.destroyedCleanup?.();
@@ -476,6 +477,11 @@ export function createRendererBridge(
         }
         releaseLease?.();
       };
+
+      // See sendManifestRequest: after the listener wiring so a throwing setup
+      // can't strand it, before the thaw so the resolve → send window is
+      // covered. Released by `settle()` on every outcome.
+      const releaseLease = route ? (viewLeases?.acquire(webContentsId) ?? null) : null;
 
       pendingDispatches.set(requestId, {
         resolve,

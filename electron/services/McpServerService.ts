@@ -806,6 +806,9 @@ export class McpServerService {
   get _bridge() {
     return this.bridge;
   }
+  get _viewLeases() {
+    return this.viewLeases;
+  }
 }
 
 export const mcpServerService = new McpServerService();
