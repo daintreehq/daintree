@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.32.0] - 2026-08-15
+
+A lot of this release went into making Daintree stable on Windows: a new terminal picks up a PATH change without an app restart, the caption strip reads as part of the window instead of painted over it, and a machine without Git says so at startup rather than blaming the folder you opened. Elsewhere, a run can be parked or snoozed so a deliberate wait stops reading as something that needs you, and git stops parsing filenames as pathspecs — the route by which discarding one file's changes could destroy uncommitted work in another.
+
+### Features
+
+**Pilot & fleet**
+
+- Park a run with a note and an optional gate: it drops into a quiet Parked band, stops counting as demand everywhere, and hands itself back with a notification the next time the gated terminal goes ready (#11781)
+- A Parked filter segment isolates everything you've shelved, and park notes are searchable (#11781)
+- Project group headers carry a demand chip — a count plus the worst band's glyph — so five projects scan without reading a single row (#11781)
+- A working run that's been silent for over ten minutes shows a `quiet 12m` cue, so "working" and "working but wedged" stop rendering identically (#11781)
+- Snooze an agent for 15 minutes, 30 minutes, 6 hours, or until you interact with it, so one agent sitting on a question stops making the whole project read as needing attention; any typed input wakes it (#11783)
+
+**Setup & forge**
+
+- A missing Git is caught at startup with a banner, a re-check on focus, and a one-click install where that's safe — instead of surfacing as a raw spawn error the first time you open the clone dialog (#11763)
+- `forge.getChecks` reads per-check CI detail through the forge abstraction, so an agent can see which check failed rather than only that the roll-up is red (#11786)
+
+### Bug Fixes
+
+**Windows**
+
+- A newly-opened terminal re-reads the registry PATH, so a tool you just installed is on PATH without restarting the app (#11773)
+- The caption strip is tinted to the active global banner and follows the theme picker, instead of painting an opaque rectangle over the top-right corner (#11766)
+- The cloud-folder warning states where the project is rather than asserting a sync that was never checked — Windows redirects Documents into OneDrive by default, so this fired whether sync was running, paused or switched off (#11767)
+
+**Git & files**
+
+- File paths reach git as literal pathspecs: a filename containing `[`, `*` or `?` could resolve to a different file, so discarding one file's changes destroyed uncommitted work in another (#11762)
+- A missing Git binary is named as such instead of reporting a folder that can't be read, which had been retiring healthy worktrees (#11764)
+- Binary detection is anchored to git's own marker line, so a text file whose content quotes "Binary files" stops having its whole diff blanked (#11756)
+- Right-clicking a file gets a file menu on all four surfaces that list files — worktree card, file browser, Review Hub and the diff sidebar — rather than the worktree's menu acting on the whole worktree (#11757)
+
+**Terminals & agents**
+
+- A failed xterm attach rebuilds the pane and surfaces an error banner, instead of retrying into a state the library can never recover from — the pane rendered nothing at all while the agent kept working (#11776)
+- Agent session ids are assigned at launch rather than scraped at teardown, so they survive a crash, a force quit or a SIGKILL, and quitting no longer writes into a mid-turn agent (#11782)
+- Clicking an agent whose CLI is unavailable opens the launch gate with its diagnostics and a re-check, instead of deep-linking into Preferences (#11760)
+
+**App**
+
+- A slow cold project switch spends its paint budget from load settle, so a legitimately slow first load stops being abandoned and rolled back with an error toast (#11765)
+- An Error passed inside a log context is serialized properly instead of reaching the log file as `{}` — for 110 call sites the failure record was empty (#11777)
+- The diagnostics download shows a spinner while collecting rather than rotating the download arrow in place (#11775)
+
 ## [0.31.0] - 2026-08-11
 
 The toolbar's agent and panel trays and the dock's `+` collapse into one searchable launcher, the copy-context button becomes a recents dropdown backed by per-project history, and the palette learns to browse its whole inventory under a quieter selection model. Underneath: terminal geometry work closes the last routes by which a restored or backgrounded pane commits output into the wrong grid, and every git write path stops assuming the remote is called `origin`.
