@@ -51,6 +51,7 @@ import {
   withResolvedWorkspace,
   WORKSPACE_BINDING_CAPABILITY_KEY,
   type DispatchedWorkspaceRef,
+  type McpWorkspaceBinding,
 } from "./shared.js";
 import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
@@ -179,7 +180,7 @@ export interface SessionServerDeps {
    * the `initialize` result so a client can verify where its calls will land
    * before issuing a mutation. Absent for unbound sessions.
    */
-  workspaceBinding?: DispatchedWorkspaceRef;
+  workspaceBinding?: McpWorkspaceBinding;
   requestManifest: () => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>;
   dispatchAction: (
     actionId: string,

@@ -1672,6 +1672,10 @@ export class HttpLifecycle {
 
     return {
       sessionStore: this.deps.sessionStore,
+      // Forwarded so the session server can echo it in the `initialize` result
+      // (#11789) — a client must be able to verify where its calls will land
+      // before it issues the first mutation.
+      ...(workspaceBinding ? { workspaceBinding } : {}),
       requestManifest,
       dispatchAction,
       handleWaitUntilIdle: this.deps.handleWaitUntilIdle,

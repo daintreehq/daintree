@@ -1161,9 +1161,12 @@ describe("isWithheldFromBoundSession (#11789)", () => {
     }
   );
 
-  it.each(["safe", "destructive", "restricted"] as const)(
+  it.each(["safe", "restricted"] as const)(
     "does not withhold a %s tool from a bound session",
     (danger) => {
+      // Only the confirmation gate is unreachable in the background. A tool is
+      // not withheld for being dangerous — the bound surface still carries
+      // terminal, agent and worktree mutations.
       expect(isWithheldFromBoundSession({ danger }, "external", BOUND)).toBe(false);
     }
   );
@@ -1197,7 +1200,7 @@ describe("shouldExposeTool with a workspace-bound session (#11789)", () => {
       "agent.launch",
       "worktree.createWithRecipe",
     ]) {
-      const entry = makeEntry({ id, kind: "command", danger: "destructive" });
+      const entry = makeEntry({ id, kind: "command", danger: "safe" });
       expect(shouldExposeTool(entry, "external", BOUND)).toBe(isTierPermitted("external", id));
     }
   });

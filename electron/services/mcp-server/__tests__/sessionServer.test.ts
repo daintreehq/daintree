@@ -44,7 +44,11 @@ import {
   ACTIONS_SEARCH_TOOL_ID,
   ACTIONS_GET_SCHEMA_TOOL_ID,
 } from "../tierAuth.js";
-import { SessionBindingError, RendererBridgeUnavailableError } from "../rendererBridge.js";
+import {
+  SessionBindingError,
+  WorkspaceBindingError,
+  RendererBridgeUnavailableError,
+} from "../rendererBridge.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
 
@@ -60,6 +64,8 @@ function fakeSessionStore(
     httpSessions: new Map(),
     sessionTierMap: new Map(),
     sessionWebContentsMap: new Map(),
+    sessionOriginMap: new Map(),
+    sessionWorkspaceMap: new Map(),
     resourceSubscriptions: new Map(),
     dedupInFlight: new Map(),
     dedupResultCache: new Map(),
@@ -4135,5 +4141,266 @@ describe("mcp.surface short-circuit (#11549)", () => {
 
     expect(denied.isError).toBe(true);
     expect(JSON.stringify(denied.content)).toContain(TIER_NOT_PERMITTED_CODE);
+  });
+});
+
+describe("workspace-bound external sessions (#11789)", () => {
+  const SESSION = "bound-session";
+  const WORKSPACE = "ws-a";
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** A confirm-gated tool that really is on the external allowlist. */
+  function recipeRun(): ActionManifestEntry {
+    return { ...makeManifestEntry("recipe.run"), kind: "command", danger: "confirm" as const };
+  }
+
+  function boundDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
+    const sessionStore = fakeSessionStore("external");
+    sessionStore.sessionOriginMap.set(SESSION, "external");
+    sessionStore.sessionWorkspaceMap.set(SESSION, WORKSPACE);
+    return fakeDeps({
+      sessionStore,
+      workspaceBinding: { kind: "project", workspaceId: WORKSPACE, workspacePath: "/tmp/a" },
+      requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list"), recipeRun()]),
+      ...overrides,
+    });
+  }
+
+  function unboundDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
+    return fakeDeps({
+      sessionStore: fakeSessionStore("external"),
+      requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list"), recipeRun()]),
+      ...overrides,
+    });
+  }
+
+  describe("effective surface", () => {
+    it("omits the confirm-gated tool from tools/list", async () => {
+      const server = createSessionServer(SESSION, boundDeps());
+      await server.connect(makeMockTransport());
+
+      const names = (await listTools(server)).tools.map((t) => t.name);
+
+      expect(names).toContain("terminal.list");
+      expect(names).not.toContain("recipe.run");
+    });
+
+    it("still lists it for an unbound external session", async () => {
+      // Binding is opt-in: a client that didn't ask for one keeps the
+      // documented focus-following behaviour, dialog and all.
+      const server = createSessionServer("unbound", unboundDeps());
+      await server.connect(makeMockTransport());
+
+      expect((await listTools(server)).tools.map((t) => t.name)).toContain("recipe.run");
+    });
+
+    it("omits it from mcp.surface too, so discovery and listing agree", async () => {
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockResolvedValue([
+            makeManifestEntry("terminal.list"),
+            makeManifestEntry("mcp.surface"),
+            recipeRun(),
+          ]),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = (await callTool(server, { name: "mcp.surface" })) as {
+        structuredContent: { tools: Array<{ id: string }> };
+      };
+
+      const ids = result.structuredContent.tools.map((t) => t.id);
+      expect(ids).toContain("terminal.list");
+      expect(ids).not.toContain("recipe.run");
+    });
+  });
+
+  describe("pre-dispatch refusal", () => {
+    it("refuses a direct call with CONFIRMATION_REQUIRED and never dispatches", async () => {
+      const deps = boundDeps();
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "recipe.run", arguments: {} });
+
+      expect(result.isError).toBe(true);
+      const text = JSON.stringify(result.content);
+      expect(text).toContain("CONFIRMATION_REQUIRED");
+      // Never reached a renderer: the refusal is the protocol's, not a dialog
+      // rendered into a view nobody is watching.
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("distinguishes itself from the no-window case so a conductor knows not to retry", async () => {
+      const server = createSessionServer(SESSION, boundDeps());
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "recipe.run", arguments: {} });
+      const payload = JSON.parse((result.content as Array<{ text: string }>)[0]!.text) as {
+        details: { confirmationChannel: string };
+        retriable: boolean;
+      };
+
+      expect(payload.details.confirmationChannel).toBe("workspace-bound");
+      expect(payload.retriable).toBe(false);
+    });
+
+    it("audits the refusal", async () => {
+      const deps = boundDeps();
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      await callTool(server, { name: "recipe.run", arguments: {} });
+
+      expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ toolId: "recipe.run", sessionId: SESSION })
+      );
+    });
+
+    it("beats a live per-tool grant", async () => {
+      // Grants widen dispatch past the tier floor. They must not widen past
+      // this ceiling — the dialog a grant bypasses is the one nobody can see.
+      const deps = boundDeps();
+      deps.sessionStore.grantCache.issueGrant(SESSION, "recipe.run");
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "recipe.run", arguments: {} });
+
+      expect(JSON.stringify(result.content)).toContain("CONFIRMATION_REQUIRED");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("does not burn a native grant use", async () => {
+      const deps = boundDeps();
+      const grant = deps.sessionStore.grantCache.issueNativeGrant({
+        sessionId: SESSION,
+        actorId: "help-1",
+        actorType: "help-session",
+        allowedTools: ["recipe.run"],
+        maxUses: 3,
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      await callTool(server, { name: "recipe.run", arguments: {} });
+
+      expect(deps.sessionStore.grantCache.getNativeGrant(grant.id)?.remainingUses).toBe(3);
+    });
+
+    it("leaves the rest of the bound surface dispatchable", async () => {
+      const deps = boundDeps();
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+      expect(result.isError).toBeFalsy();
+      expect(deps.dispatchAction).toHaveBeenCalled();
+    });
+
+    it("fails closed rather than dispatching when the manifest can't be resolved", async () => {
+      // Proceeding on an unresolved manifest would erase the only evidence that
+      // an action is confirm-gated, turning a refusal into a silent dispatch.
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "recipe.run", arguments: {} });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain(SESSION_BINDING_GONE);
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("binding failures and metadata", () => {
+    it("surfaces SESSION_BINDING_GONE from tools/list instead of a generic unavailable", async () => {
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      await expect(listTools(server)).rejects.toMatchObject({
+        data: { code: SESSION_BINDING_GONE },
+      });
+    });
+
+    it("never serves a cached manifest after a binding failure", async () => {
+      // A cached manifest describes a view this session can no longer reach;
+      // serving it would answer with another workspace's tool surface.
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "ambiguous")),
+        getCachedManifest: vi.fn(() => [makeManifestEntry("terminal.list")]),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      await expect(listTools(server)).rejects.toMatchObject({
+        data: { code: SESSION_BINDING_GONE },
+      });
+    });
+
+    it("still falls back to the cache for an ordinary transient fetch failure", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const deps = boundDeps({
+        requestManifest: vi.fn().mockRejectedValue(new Error("Manifest request timed out")),
+        getCachedManifest: vi.fn(() => [makeManifestEntry("terminal.list")]),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      expect((await listTools(server)).tools.map((t) => t.name)).toEqual(["terminal.list"]);
+    });
+
+    it("advertises the resolved binding in the initialize capabilities", async () => {
+      const server = createSessionServer(SESSION, boundDeps());
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      try {
+        const capabilities = client.getServerCapabilities();
+        expect(capabilities?.experimental?.["org.daintree/workspace-binding"]).toEqual({
+          kind: "project",
+          workspaceId: WORKSPACE,
+          workspacePath: "/tmp/a",
+        });
+        // Declaring it at construction must not cost the SDK's own initialize
+        // handling — client capability capture still has to work.
+        expect(server.getClientCapabilities()).toBeDefined();
+      } finally {
+        await client.close();
+      }
+    });
+
+    it("advertises no binding capability for an unbound session", async () => {
+      const server = createSessionServer("unbound", unboundDeps());
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      try {
+        expect(
+          client.getServerCapabilities()?.experimental?.["org.daintree/workspace-binding"]
+        ).toBeUndefined();
+      } finally {
+        await client.close();
+      }
+    });
   });
 });

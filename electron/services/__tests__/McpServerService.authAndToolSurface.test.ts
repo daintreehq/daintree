@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { registerProjectView, unregisterProjectView } from "../../window/webContentsRegistry.js";
 import {
   ElicitRequestSchema,
   type ElicitResult,
@@ -1420,5 +1421,192 @@ describe("McpServerService", () => {
     expect(result.content[0].text).toContain("panel.gridLayout.setStrategy");
     expect(result.content[0].text).toContain("external");
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+  describe("workspace-bound external sessions (#11789)", () => {
+    const REF_A = { kind: "project" as const, workspaceId: "proj-a", workspacePath: "/repos/a" };
+    const REF_B = { kind: "project" as const, workspaceId: "proj-b", workspacePath: "/repos/b" };
+    const registeredViews: number[] = [];
+
+    afterEach(() => {
+      for (const wcId of registeredViews) unregisterProjectView(wcId);
+      registeredViews.length = 0;
+    });
+
+    function boundManifest() {
+      return [
+        createManifestEntry({
+          id: "terminal.list",
+          title: "List Terminals",
+          description: "Read the terminal list",
+          kind: "query",
+        }),
+        createManifestEntry({
+          id: "recipe.run",
+          title: "Run Recipe",
+          description: "Run a saved recipe",
+          kind: "command",
+          danger: "confirm",
+        }),
+      ];
+    }
+
+    /** A window whose project view is discoverable through the shared registry. */
+    function boundWindow(
+      ref: { kind: "project"; workspaceId: string; workspacePath: string },
+      result: string
+    ) {
+      const win = createMockWindow({
+        getManifest: boundManifest,
+        dispatchAction: () => ({ ok: true, result }),
+        workspaceRef: ref,
+      });
+      registerProjectView(ref.workspaceId, win.webContents as never);
+      registeredViews.push(win.webContents.id);
+      return win;
+    }
+
+    function twoWindowRegistry(
+      winA: ReturnType<typeof boundWindow>,
+      winB: ReturnType<typeof boundWindow>
+    ) {
+      const focus = { current: [winB.windowContext, winA.windowContext] };
+      const contextByWcId = new Map([
+        [winA.webContents.id, winA.windowContext],
+        [winB.webContents.id, winB.windowContext],
+      ]);
+      const registry = {
+        all: () => [winA.windowContext, winB.windowContext],
+        focusOrder: () => focus.current,
+        getPrimary: () => winA.windowContext,
+        getByWindowId: () => winA.windowContext,
+        getByWebContentsId: (id: number) => contextByWcId.get(id),
+        size: 2,
+      } as never;
+      return { registry, focus };
+    }
+
+    async function connectBound(port: number, workspaceId?: string) {
+      const apiKey = getServiceApiKey();
+      const transport = new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
+        requestInit: {
+          headers: {
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+            ...(workspaceId ? { "Daintree-Workspace-Id": workspaceId } : {}),
+          },
+        },
+      });
+      const client = new Client({ name: "bound-test-client", version: "1.0.0" });
+      await client.connect(transport);
+      httpTransports.push(transport);
+      return client;
+    }
+
+    it("keeps two bound sessions isolated while calls interleave and focus moves", async () => {
+      // The decisive test from the report: focus is the thing that used to
+      // retarget these sessions, so it is moved between every pair of calls.
+      const winA = boundWindow(REF_A, "from-window-A");
+      const winB = boundWindow(REF_B, "from-window-B");
+      const { registry, focus } = twoWindowRegistry(winA, winB);
+      await service.start(registry);
+
+      const clientA = await connectBound(service.currentPort!, REF_A.workspaceId);
+      const clientB = await connectBound(service.currentPort!, REF_B.workspaceId);
+
+      const call = (client: Client) => client.callTool({ name: "terminal.list", arguments: {} });
+
+      focus.current = [winB.windowContext, winA.windowContext];
+      expect(getTextResult(await call(clientA)).content[0].text).toBe('"from-window-A"');
+      expect(getTextResult(await call(clientB)).content[0].text).toBe('"from-window-B"');
+
+      focus.current = [winA.windowContext, winB.windowContext];
+      expect(getTextResult(await call(clientB)).content[0].text).toBe('"from-window-B"');
+      expect(getTextResult(await call(clientA)).content[0].text).toBe('"from-window-A"');
+    });
+
+    it("stamps each result with the workspace it was bound to", async () => {
+      const winA = boundWindow(REF_A, "from-window-A");
+      const winB = boundWindow(REF_B, "from-window-B");
+      const { registry, focus } = twoWindowRegistry(winA, winB);
+      await service.start(registry);
+
+      const clientA = await connectBound(service.currentPort!, REF_A.workspaceId);
+      focus.current = [winB.windowContext, winA.windowContext];
+
+      const result = await clientA.callTool({ name: "terminal.list", arguments: {} });
+
+      expect(result._meta?.["org.daintree/resolved-workspace"]).toEqual(REF_A);
+    });
+
+    it("advertises the resolved binding in the initialize result", async () => {
+      const winA = boundWindow(REF_A, "from-window-A");
+      await service.start(winA.window);
+
+      const client = await connectBound(service.currentPort!, REF_A.workspaceId);
+
+      expect(
+        client.getServerCapabilities()?.experimental?.["org.daintree/workspace-binding"]
+      ).toEqual(REF_A);
+    });
+
+    it("withholds the confirm-gated tool from a bound session but keeps it for an unbound one", async () => {
+      const winA = boundWindow(REF_A, "from-window-A");
+      await service.start(winA.window);
+
+      const bound = await connectBound(service.currentPort!, REF_A.workspaceId);
+      const unbound = await connectBound(service.currentPort!);
+
+      const boundNames = (await bound.listTools()).tools.map((t) => t.name);
+      const unboundNames = (await unbound.listTools()).tools.map((t) => t.name);
+
+      expect(boundNames).toContain("terminal.list");
+      expect(boundNames).not.toContain("recipe.run");
+      // Binding is opt-in, so an unbound session's surface is unchanged.
+      expect(unboundNames).toContain("recipe.run");
+    });
+
+    it("refuses a handshake naming a workspace with no live view, creating no session", async () => {
+      const winA = boundWindow(REF_A, "from-window-A");
+      await service.start(winA.window);
+
+      await expect(connectBound(service.currentPort!, "proj-nonexistent")).rejects.toThrow();
+      // The failed handshake must not leave a client behind in the inventory.
+      expect(service.listActiveClients()).toHaveLength(0);
+    });
+
+    it("still lists a bound session among the external clients", async () => {
+      // A background-bound agent is the one the user most needs to be able to
+      // find and disconnect, since they cannot see it working.
+      const winA = boundWindow(REF_A, "from-window-A");
+      await service.start(winA.window);
+
+      await connectBound(service.currentPort!, REF_A.workspaceId);
+
+      await vi.waitFor(() => {
+        expect(service.listActiveClients()).toHaveLength(1);
+      });
+    });
+
+    it("leaves an unbound external session following focus, exactly as documented", async () => {
+      // The behaviour the pre-binding contract promises, re-asserted through
+      // the new code path so binding can't have quietly changed it.
+      const winA = boundWindow(REF_A, "from-window-A");
+      const winB = boundWindow(REF_B, "from-window-B");
+      const { registry, focus } = twoWindowRegistry(winA, winB);
+      await service.start(registry);
+
+      const client = await connectBound(service.currentPort!);
+
+      focus.current = [winB.windowContext, winA.windowContext];
+      expect(
+        getTextResult(await client.callTool({ name: "terminal.list", arguments: {} })).content[0]
+          .text
+      ).toBe('"from-window-B"');
+
+      focus.current = [winA.windowContext, winB.windowContext];
+      expect(
+        getTextResult(await client.callTool({ name: "terminal.list", arguments: {} })).content[0]
+          .text
+      ).toBe('"from-window-A"');
+    });
   });
 });

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { parse as parseToml } from "smol-toml";
 import { McpServerSettingsTab } from "../McpServerSettingsTab";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
@@ -1694,6 +1694,70 @@ describe("McpServerSettingsTab", () => {
       await waitForContent(container, "MCP server failed to start");
       expect(container.textContent).toContain("listen EACCES: permission denied");
       expect(container.textContent).not.toContain("Running on port");
+    });
+  });
+  describe("workspace-scoped config (#11789)", () => {
+    const scopedButton = () =>
+      screen.queryByRole("button", { name: /copy config for this project/i });
+
+    function seedViewWorkspace(id: string | undefined) {
+      if (id === undefined) {
+        delete (window as { __DAINTREE_INITIAL_PROJECT__?: unknown }).__DAINTREE_INITIAL_PROJECT__;
+        return;
+      }
+      (window as { __DAINTREE_INITIAL_PROJECT__?: { id: string } }).__DAINTREE_INITIAL_PROJECT__ = {
+        id,
+      };
+    }
+
+    async function renderTab() {
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Running on port");
+      return container;
+    }
+
+    afterEach(() => {
+      seedViewWorkspace(undefined);
+    });
+
+    it("offers no scoped copy when the view has no workspace identity", async () => {
+      seedViewWorkspace(undefined);
+      await renderTab();
+
+      expect(scopedButton()).toBeNull();
+      // The plain copy is always available — binding is additive, not a
+      // replacement.
+      expect(screen.getByRole("button", { name: /copy mcp config/i })).toBeTruthy();
+    });
+
+    it("copies a config carrying this view's workspace id", async () => {
+      seedViewWorkspace("ws-abc123");
+      await renderTab();
+
+      fireEvent.click(scopedButton()!);
+
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalled();
+      });
+      expect(lastCopiedText()).toContain("Daintree-Workspace-Id");
+      expect(lastCopiedText()).toContain("ws-abc123");
+    });
+
+    it("leaves the plain copy unscoped, so existing configs keep following focus", async () => {
+      seedViewWorkspace("ws-abc123");
+      await renderTab();
+
+      fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
+
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalled();
+      });
+      expect(lastCopiedText()).not.toContain("Daintree-Workspace-Id");
+      expect(lastCopiedText()).not.toContain("ws-abc123");
     });
   });
 });
