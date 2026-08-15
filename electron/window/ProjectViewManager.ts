@@ -940,6 +940,15 @@ export class ProjectViewManager {
   private freezeAllCached(): void {
     for (const [projectId, entry] of this.views) {
       if (projectId === this.activeProjectId) continue;
+      // The outgoing anti-flash bridge is still attached and on-screen even
+      // though `activeProjectId` already names the incoming project, so it is
+      // as un-freezable as the active view (the eviction guard excludes it for
+      // the same reason). This pass is periodic now, not just the profile
+      // transition, so a sampler tick can land inside any switch: freezing
+      // there suspends the renderer painting the frame the user is looking at,
+      // and it would also beat `deactivateEntry` to the view, freezing before
+      // its requestIdleCallback GC is ever scheduled (lesson #4684).
+      if (projectId === this.getOutgoingBridgeProjectId()) continue;
       // Never freeze a view whose project has a live agent. A frozen renderer
       // cannot run JS, so the queued agent:state-changed IPC sits in Mojo and
       // the background dashboard stays stuck on its pre-freeze state (e.g.

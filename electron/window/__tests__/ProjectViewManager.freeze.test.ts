@@ -947,6 +947,33 @@ describe("ProjectViewManager — MCP session bindings stay thawed (#11790)", () 
     expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
   });
 
+  it("never freezes the outgoing bridge view when a sampler tick lands mid-switch", async () => {
+    // The re-freeze pass runs on the periodic sampler, so it can tick inside a
+    // switch. `activeProjectId` already names the incoming project by then,
+    // while the outgoing view is still attached as the anti-flash bridge —
+    // freezing it suspends the renderer painting the visible frame.
+    await manager.switchTo("proj-b", "/path/b");
+    const bridgeWc = manager.getActiveView()!.webContents;
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
+    vi.mocked(freezeWebContents).mockClear();
+
+    const switchPromise = manager.switchTo("proj-c", "/path/c");
+    await Promise.resolve();
+    expect(manager.getOutgoingBridgeProjectId()).toBe("proj-b");
+
+    manager.refreezeUnprotectedCachedViews();
+
+    expect(vi.mocked(freezeWebContents).mock.calls.some((call) => call[0] === bridgeWc)).toBe(
+      false
+    );
+    // The pass still swept the genuinely cached view — the guard is targeted,
+    // not a blanket bail-out on any switch being in flight.
+    expect(frozeProjA()).toBe(true);
+
+    await switchPromise;
+  });
+
   it("never freezes the active view, bound or not", async () => {
     boundWorkspaces.add("proj-b");
     await manager.switchTo("proj-b", "/path/b");
