@@ -395,22 +395,34 @@ describe("ProjectStore recently-active marker (#11791)", () => {
     });
 
     it("drops a project closed without killing its terminals", async () => {
+      await store.setCurrentProject(otherId);
       await store.setCurrentProject(projectId);
+      expect(storedCheckpoint().sort()).toEqual([projectId, otherId].sort());
 
       // The `killTerminals: false` branch of project:close writes `background`.
       // Same gesture as the killing branch — the status only says the processes
       // were kept, not that the user still considers the project open.
       store.updateProjectStatus(projectId, "background");
 
-      expect(storedCheckpoint()).toEqual([]);
+      // `otherId` is background too, from the switch — and stays, because
+      // switching away is not closing.
+      expect(store.getProjectById(otherId)?.status).toBe("background");
+      expect(storedCheckpoint()).toEqual([otherId]);
     });
 
     it("drops a project whose folder went missing", async () => {
+      await store.setCurrentProject(otherId);
       await store.setCurrentProject(projectId);
+      // Only the current project is skipped by the sweep, so hand the pointer
+      // to `otherId` and let the real sweep find `projectId`'s folder gone.
+      await store.setCurrentProject(otherId);
+      fs.rmSync(projectDir, { recursive: true, force: true });
+      expect(storedCheckpoint().sort()).toEqual([projectId, otherId].sort());
 
-      store.updateProjectStatus(projectId, "missing");
+      await store.checkMissingProjects();
 
-      expect(storedCheckpoint()).toEqual([]);
+      expect(store.getProjectById(projectId)?.status).toBe("missing");
+      expect(storedCheckpoint()).toEqual([otherId]);
     });
 
     it("drops a project that was removed outright", async () => {

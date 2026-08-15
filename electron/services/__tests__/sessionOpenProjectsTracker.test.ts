@@ -1,14 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addSessionOpenProject,
-  flushSessionOpenProjects,
   getPreviousSessionOpenProjects,
   initSessionOpenProjectsTracker,
   removeSessionOpenProject,
   resetSessionOpenProjectsTrackerForTests,
 } from "../sessionOpenProjectsTracker.js";
-
-vi.mock("../../utils/logger.js", () => ({ logError: vi.fn() }));
 
 /**
  * The tracker owns two sets that must never contaminate each other: the
@@ -16,15 +13,18 @@ vi.mock("../../utils/logger.js", () => ({ logError: vi.fn() }));
  * live membership (what gets persisted for next time) — #11794.
  */
 describe("session-open projects tracker", () => {
+  /**
+   * A stand-in for the app_state row, seeded with a previous session's value.
+   * Stateful on purpose: asserting on the writer's arguments alone cannot tell
+   * "wrote an empty set" apart from "never wrote", which is exactly the
+   * distinction the flush exists to make.
+   */
+  let stored: string[] | null;
   let write: ReturnType<typeof vi.fn>;
-
-  /** The set the writer was handed on its most recent call. */
-  const lastWritten = (): string[] => {
-    const call = write.mock.calls.at(-1);
-    return call ? [...(call[0] as ReadonlySet<string>)].sort() : [];
-  };
+  let warn: ReturnType<typeof vi.spyOn>;
 
   const init = (opts?: { previous?: string[]; readOnly?: boolean; launchAtMs?: number }) => {
+    stored = opts?.previous ? [...opts.previous].sort() : null;
     initSessionOpenProjectsTracker({
       previousSessionProjectIds: opts?.previous ?? [],
       launchAtMs: opts?.launchAtMs ?? 1_000,
@@ -34,11 +34,16 @@ describe("session-open projects tracker", () => {
   };
 
   beforeEach(() => {
-    write = vi.fn();
+    stored = null;
+    write = vi.fn((ids: ReadonlySet<string>) => {
+      stored = [...ids].sort();
+    });
+    warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     resetSessionOpenProjectsTrackerForTests();
   });
 
   afterEach(() => {
+    warn.mockRestore();
     resetSessionOpenProjectsTrackerForTests();
   });
 
@@ -53,7 +58,6 @@ describe("session-open projects tracker", () => {
       expect(() => {
         addSessionOpenProject("proj-a");
         removeSessionOpenProject("proj-a");
-        flushSessionOpenProjects();
       }).not.toThrow();
       expect(write).not.toHaveBeenCalled();
     });
@@ -76,7 +80,7 @@ describe("session-open projects tracker", () => {
       // The whole point of the two sets: `proj-b` was opened now, so it was not
       // open last time and must not inherit the launch clock.
       expect([...(getPreviousSessionOpenProjects()?.projectIds ?? [])]).toEqual(["proj-a"]);
-      expect(lastWritten()).toEqual(["proj-b"]);
+      expect(stored).toEqual(["proj-b"]);
     });
 
     it("does not shrink when a project it names is closed this session", () => {
@@ -92,9 +96,9 @@ describe("session-open projects tracker", () => {
 
       addSessionOpenProject("proj-c");
 
-      // Persisting the union with the previous set is exactly the lifetime
-      // latch #11794 was about.
-      expect(lastWritten()).toEqual(["proj-c"]);
+      // Persisting the union with the previous set is the lifetime latch that
+      // made every project look recently active (#11794).
+      expect(stored).toEqual(["proj-c"]);
     });
   });
 
@@ -105,28 +109,26 @@ describe("session-open projects tracker", () => {
       addSessionOpenProject("proj-a");
       addSessionOpenProject("proj-b");
 
-      expect(lastWritten()).toEqual(["proj-a", "proj-b"]);
+      expect(stored).toEqual(["proj-a", "proj-b"]);
     });
 
     it("skips the write when a project already in the set is re-added", () => {
       init();
       addSessionOpenProject("proj-a");
-      const writes = write.mock.calls.length;
 
       // A second window restoring the same project, or a switch back to it.
       addSessionOpenProject("proj-a");
 
-      expect(write.mock.calls.length).toBe(writes);
+      expect(write).toHaveBeenCalledTimes(1);
     });
 
     it("skips the write when removing a project that was never in the set", () => {
       init();
       addSessionOpenProject("proj-a");
-      const writes = write.mock.calls.length;
 
       removeSessionOpenProject("proj-unrelated");
 
-      expect(write.mock.calls.length).toBe(writes);
+      expect(write).toHaveBeenCalledTimes(1);
     });
 
     it("persists what remains after a close", () => {
@@ -136,7 +138,7 @@ describe("session-open projects tracker", () => {
 
       removeSessionOpenProject("proj-a");
 
-      expect(lastWritten()).toEqual(["proj-b"]);
+      expect(stored).toEqual(["proj-b"]);
     });
 
     it("ignores an empty project id on both sides", () => {
@@ -150,41 +152,58 @@ describe("session-open projects tracker", () => {
   });
 
   describe("write failures", () => {
-    it("swallows the error rather than failing the operation that triggered it", () => {
-      init();
-      write.mockImplementation(() => {
+    /** Fail the next write outright, leaving `stored` untouched. */
+    const failNextWrite = () => {
+      write.mockImplementationOnce(() => {
         throw new Error("database is locked");
       });
+    };
+
+    it("swallows the error rather than failing the operation that triggered it", () => {
+      init();
+      failNextWrite();
 
       expect(() => addSessionOpenProject("proj-a")).not.toThrow();
     });
 
-    it("retries the whole set on the next mutation, even a duplicate add", () => {
+    it("logs the underlying cause so a persistently stale checkpoint is diagnosable", () => {
       init();
-      write.mockImplementationOnce(() => {
-        throw new Error("database is locked");
-      });
+      failNextWrite();
+
       addSessionOpenProject("proj-a");
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[1]).toEqual(
+        expect.objectContaining({ message: "database is locked" })
+      );
+    });
+
+    it("retries the whole set on the next mutation, even a duplicate add", () => {
+      init({ previous: ["proj-a"] });
+      failNextWrite();
+      addSessionOpenProject("proj-a");
+      // The failed attempt left last session's value on disk.
+      expect(stored).toEqual(["proj-a"]);
+      expect(write).toHaveBeenCalledTimes(1);
 
       // Normally a no-op — but the stored value is known stale, so this has to
       // reach the disk or the checkpoint stays diverged for the session.
       addSessionOpenProject("proj-a");
 
-      expect(lastWritten()).toEqual(["proj-a"]);
+      expect(write).toHaveBeenCalledTimes(2);
+      expect(stored).toEqual(["proj-a"]);
     });
 
     it("stops retrying once a write lands", () => {
       init();
-      write.mockImplementationOnce(() => {
-        throw new Error("database is locked");
-      });
+      failNextWrite();
       addSessionOpenProject("proj-a");
       addSessionOpenProject("proj-a");
-      const writes = write.mock.calls.length;
+      expect(write).toHaveBeenCalledTimes(2);
 
       addSessionOpenProject("proj-a");
 
-      expect(write.mock.calls.length).toBe(writes);
+      expect(write).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -200,30 +219,9 @@ describe("session-open projects tracker", () => {
 
       addSessionOpenProject("proj-b");
       removeSessionOpenProject("proj-a");
-      flushSessionOpenProjects();
 
       expect(write).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("the flush", () => {
-    it("clears a stale checkpoint for a session that opened nothing", () => {
-      init({ previous: ["proj-a"] });
-
-      flushSessionOpenProjects();
-
-      // Picker window, then quit. Without this the launch after would light up
-      // `proj-a` a second time.
-      expect(lastWritten()).toEqual([]);
-    });
-
-    it("writes whatever has accumulated, so its ordering does not matter", () => {
-      init({ previous: ["proj-a"] });
-      addSessionOpenProject("proj-b");
-
-      flushSessionOpenProjects();
-
-      expect(lastWritten()).toEqual(["proj-b"]);
+      expect(stored).toEqual(["proj-a"]);
     });
   });
 });

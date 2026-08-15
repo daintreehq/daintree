@@ -10,13 +10,19 @@
  *    "you had this open last time", so a project opened during THIS session
  *    must not join it.
  *  - `current` is what this session has open, a deduplicated union across every
- *    window. It starts empty, so the first mutation already overwrites last
- *    session's stored value; membership never carries over.
+ *    window. It starts empty, and the boot read that produced `previous`
+ *    cleared the stored row on its way past, so membership never carries over
+ *    and a session that opens nothing leaves an empty set behind.
  *
  * Continuous persistence rather than a snapshot at quit, for the same reason
  * the window manifest does it (#11492): our own force-quit goes through
  * `app.exit(0)`, which skips `before-quit`, and a main-process crash skips
  * everything. Those are exactly the exits after which you want the set back.
+ *
+ * No shutdown gate, unlike openWindowsTracker: every mutator here is reached
+ * from a ProjectStore method that has already written the same shared database
+ * on the line before, so a write during teardown cannot be the call that
+ * reopens a closed connection.
  *
  * Membership is NOT residency. `ProjectViewManager` evicts views under memory
  * pressure, and that is a decision the user never sees — it must not silently
@@ -30,8 +36,6 @@
  * the module importable from ProjectStore's node-environment unit suites, where
  * it is simply never initialized and every mutator is a no-op.
  */
-
-import { logError } from "../utils/logger.js";
 
 export interface PreviousSessionOpenProjects {
   /** When this launch captured the set, the anchor for the dot's deadline. */
@@ -60,11 +64,11 @@ let state: TrackerState | null = null;
 /**
  * Freeze the previous session's set and start tracking this one.
  *
- * Performs no write: this runs on the boot path before the shared DB is open,
- * and forcing it open here would move drizzle's migrations ahead of the
- * renderer load. The first `add`/`remove` persists the whole current set, which
- * overwrites the stored value on its own; {@link flushSessionOpenProjects}
- * covers the session that never opens anything.
+ * Performs no write, and needs none: the boot-path read that produced
+ * `previousSessionProjectIds` also cleared the stored row, so disk already
+ * reads as "nothing open this session" and every later add/remove keeps it in
+ * step. Writing here instead would force the shared database — and its drizzle
+ * migrations — open ahead of the first window.
  */
 export function initSessionOpenProjectsTracker(opts: {
   previousSessionProjectIds: Iterable<string>;
@@ -103,7 +107,7 @@ function persist(): void {
     // Losing the checkpoint costs the user some grey dots next launch. It must
     // never take down a project switch, a close, or a project deletion.
     state.dirty = true;
-    logError("[sessionOpenProjects] Failed to persist the session-open checkpoint", error);
+    console.warn("[sessionOpenProjects] Failed to persist the session-open checkpoint:", error);
   }
 }
 
@@ -120,21 +124,6 @@ export function removeSessionOpenProject(projectId: string): void {
   if (!state || !projectId) return;
   const removed = state.current.delete(projectId);
   if (!removed && !state.dirty) return;
-  persist();
-}
-
-/**
- * Write the current set once, whatever it holds.
- *
- * Ordinary mutations already persist, so this exists for the session that
- * performs none: open the picker, quit. Without it the previous session's value
- * would still be on disk and the launch after would light up its projects a
- * second time. Order-independent — it writes whatever has accumulated, so it is
- * safe to call after windows are up rather than before, keeping the shared DB
- * off the first-paint path.
- */
-export function flushSessionOpenProjects(): void {
-  if (!state) return;
   persist();
 }
 

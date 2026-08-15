@@ -39,9 +39,11 @@ describe("session-open checkpoint payload", () => {
       expect(serializeSessionOpenProjects(["a", "a", "b"])).toBe(
         serializeSessionOpenProjects(["a", "b"])
       );
-      expect(parseSessionOpenProjects(store({ version: 1, projectIds: ["a", "a"] }))).toEqual([
-        "a",
-      ]);
+      expect(
+        parseSessionOpenProjects(
+          store({ version: SESSION_OPEN_PROJECTS_VERSION, projectIds: ["a", "a"] })
+        )
+      ).toEqual(["a"]);
     });
 
     it("drops empty ids rather than storing an id that matches no row", () => {
@@ -74,27 +76,36 @@ describe("session-open checkpoint payload", () => {
     });
 
     it("refuses a projectIds field that is not an array", () => {
-      expect(parseSessionOpenProjects(store({ version: 1, projectIds: "a" }))).toEqual([]);
+      expect(
+        parseSessionOpenProjects(store({ version: SESSION_OPEN_PROJECTS_VERSION, projectIds: "a" }))
+      ).toEqual([]);
     });
   });
 
   describe("partial corruption", () => {
     it("keeps the valid ids and drops the malformed entries beside them", () => {
       const mixed = store({
-        version: 1,
+        version: SESSION_OPEN_PROJECTS_VERSION,
         projectIds: ["good-a", 42, null, "", { id: "nope" }, ["nested"], "good-b"],
       });
       expect(parseSessionOpenProjects(mixed)).toEqual(["good-a", "good-b"]);
     });
 
     it("reads an all-malformed list as empty rather than inventing ids", () => {
-      expect(parseSessionOpenProjects(store({ version: 1, projectIds: [1, null, ""] }))).toEqual(
-        []
-      );
+      expect(
+        parseSessionOpenProjects(
+          store({ version: SESSION_OPEN_PROJECTS_VERSION, projectIds: [1, null, ""] })
+        )
+      ).toEqual([]);
     });
 
     it("ignores unknown fields inside a version it does recognize", () => {
-      const extra = store({ version: 1, projectIds: ["a"], writtenAt: 123, windows: 4 });
+      const extra = store({
+        version: SESSION_OPEN_PROJECTS_VERSION,
+        projectIds: ["a"],
+        writtenAt: 123,
+        windows: 4,
+      });
       expect(parseSessionOpenProjects(extra)).toEqual(["a"]);
     });
   });
