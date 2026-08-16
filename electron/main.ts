@@ -113,13 +113,7 @@ import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js"
 import {
   readLastActiveProjectIdSync,
   readOpenWindowsManifestSync,
-  readSessionOpenProjectsSync,
 } from "./services/persistence/readLastProjectId.js";
-import { writeSessionOpenProjects } from "./services/persistence/sessionOpenProjectsStore.js";
-import {
-  initSessionOpenProjectsTracker,
-  retrySessionOpenProjectsIfDirty,
-} from "./services/sessionOpenProjectsTracker.js";
 import {
   initOpenWindowsTracker,
   resumeOpenWindowsSaves,
@@ -733,23 +727,6 @@ if (!gotTheLock) {
       // manifest should describe it.
       initOpenWindowsTracker({ registry: windowRegistry, readOnly: launchIntent === "recovery" });
 
-      // Take the previous session's open projects before anything can join this
-      // one's set (#11794). Read on every launch — a targeted or recovery launch
-      // still draws the dot for what the last session had open. Consumed rather
-      // than merely read, so a session that opens nothing leaves an empty set
-      // behind instead of the previous one; recovery is the exception, because
-      // safe mode's single window must not become the user's remembered set.
-      // This must precede every `registerInitialView()` and `setCurrentProject()`
-      // below, which write into the same key as the fleet comes up.
-      initSessionOpenProjectsTracker({
-        previousSessionProjectIds: readSessionOpenProjectsSync({
-          clear: launchIntent !== "recovery",
-        }),
-        launchAtMs: Date.now(),
-        readOnly: launchIntent === "recovery",
-        write: writeSessionOpenProjects,
-      });
-
       const { hadManifest, records: restoreRecords } = shouldRestoreWindowFleet(launchIntent)
         ? readOpenWindowsManifestSync()
         : { hadManifest: false, records: [] };
@@ -796,11 +773,6 @@ if (!gotTheLock) {
           console.error("[MAIN] Restoring a background window failed:", reason);
         },
       });
-
-      // The restore's checkpoint writes are the only ones a session might make,
-      // so a transient failure there has nothing later to retry it (#11794).
-      // No-op unless one actually failed.
-      retrySessionOpenProjectsIfDirty();
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
       // Startup crashes hard-exit without running before-quit, which means

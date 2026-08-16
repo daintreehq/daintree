@@ -674,8 +674,8 @@ function splitHexAlpha(hex: string): { hex: string; opacity: number } | null {
 // *towards* the outline, so the pair that looks safe against the surrounding
 // surface can still fail against the row it encloses.
 /**
- * The switcher's "recently active" dot is a filled `text-secondary` disc drawn
- * in the project row's status slot (#11791).
+ * The switcher's "agents will resume" dot is a filled `text-secondary` disc
+ * drawn in the project row's status slot (#11791, re-pointed by #11801).
  *
  * It gets its own gate rather than a CONTRAST_PAIRS entry because the palette
  * row is not one of DISPLAY_SURFACES: rows are transparent until selected, so
@@ -690,7 +690,7 @@ function splitHexAlpha(hex: string): { hex: string; opacity: number } | null {
  * calibrated as a cursor/ring hue rather than as a filled indicator.
  * `text-secondary` is the palette's quiet-but-legible tier and already holds a
  * 3.0 floor against every display surface. Nothing here relies on the dot being
- * the sole carrier of the fact — the row says "recently active" in its
+ * the sole carrier of the fact — the row says "N agents will resume" in its
  * accessible name too — but a mark quiet enough to miss is not a subtle mark,
  * it is an absent one.
  */

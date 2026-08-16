@@ -59,6 +59,9 @@ import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
 import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
+import { countResumableAgentPanels } from "../services/projectStateRestore.js";
+import type { Project, ProjectState } from "../../shared/types/project.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import { wireUpdateMenuState } from "../menu.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
@@ -100,6 +103,57 @@ import {
   setGlobalServicesInitialized,
 } from "./serviceRefs.js";
 
+/**
+ * Give rows a resume count without reading anything extra off disk (#11801).
+ *
+ * The count is normally maintained by the write that changes it, which leaves
+ * one population uncovered: projects closed before the field existed, and never
+ * saved since. Those are exactly the dormant rows the switcher's dot is for, so
+ * lazy fill would leave the feature dark on the projects it exists to mark.
+ *
+ * It rides the session-eviction sweep rather than adding a pass of its own
+ * because that sweep already loads every project's state for its own reasons —
+ * so the backfill costs no file reads at all, and inherits the sweep's deferral
+ * until after first interactive.
+ *
+ * `states` is index-aligned with `projects`, and each project's count was read
+ * before its state was, which is what makes the compare-and-swap in
+ * `reconcileResumableAgentCount` meaningful: a save that landed mid-sweep is
+ * newer than anything here, and leaves the row alone.
+ */
+function reconcileResumableAgentCounts(projects: Project[], states: (ProjectState | null)[]): void {
+  for (const [i, project] of projects.entries()) {
+    const state = states[i];
+    // Unreadable is neither empty nor countable. A quarantined or unparseable
+    // state.json holds panels this build could not enumerate, so the row
+    // retracts its claim instead of keeping a number nothing can back up —
+    // holding the old count would keep promising agents that no longer restore.
+    // A genuinely absent state.json is different: that is authoritative
+    // emptiness, and a count of zero rather than an unknown.
+    const count = projectStore.wasStateUnreadableThisSession(project.id)
+      ? null
+      : state
+        ? countResumableAgentPanels(state.terminals, `resume-count-backfill(project:${project.id})`)
+        : 0;
+
+    try {
+      const updated = projectStore.reconcileResumableAgentCount(
+        project.id,
+        project.resumableAgentCount ?? null,
+        count
+      );
+      // Only rows that actually moved are broadcast, so a palette already open
+      // redraws exactly the dots that changed and nothing else.
+      if (updated) broadcastToRenderer(CHANNELS.PROJECT_UPDATED, updated);
+    } catch (error) {
+      console.warn(
+        `[MAIN] Session eviction: failed to reconcile resume count for ${project.id}:`,
+        error
+      );
+    }
+  }
+}
+
 async function evictStaleSessionFiles(): Promise<void> {
   try {
     const allProjects = projectStore.getAllProjects();
@@ -113,6 +167,8 @@ async function evictStaleSessionFiles(): Promise<void> {
         }
       }
     }
+
+    reconcileResumableAgentCounts(allProjects, states);
 
     const appTerminals = store.get("appState")?.terminals;
     if (Array.isArray(appTerminals)) {

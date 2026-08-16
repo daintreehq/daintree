@@ -9,7 +9,6 @@ import { getWorkspaceClient } from "../services/WorkspaceClient.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { createApplicationMenu, handleDirectoryOpen } from "../menu.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
-import { addSessionOpenProject } from "../services/sessionOpenProjectsTracker.js";
 import { notificationService } from "../services/NotificationService.js";
 import { getMainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import { projectStore } from "../services/ProjectStore.js";
@@ -642,12 +641,6 @@ export async function setupWindowServices(
       restoreProject.id,
       restoreProject.path
     );
-    // A restored window never goes through `setCurrentProject`, so it has to
-    // join the session's open set here or the fleet would vanish from next
-    // launch's recently-active set (#11794). Membership is a deduplicated union
-    // across windows, so every restored window adds its own project and the
-    // repeats collapse.
-    addSessionOpenProject(restoreProject.id);
     // The menu was built before this binding existed, so its project gates
     // resolved against a PVM with no active project. Converge them now (#11136).
     refreshProjectMenuState();

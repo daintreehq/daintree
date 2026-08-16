@@ -18,6 +18,7 @@ type ProjectFixture = {
   color?: string;
   frecencyScore?: number;
   pinned?: boolean;
+  resumableAgentCount?: number;
 };
 
 const {
@@ -2961,6 +2962,68 @@ describe("useProjectSwitcherPalette", () => {
       });
       // One project needs attention, not two agents' worth of obligation.
       expect(result.current.nonActiveAgentCounts.waitingProjectCount).toBe(1);
+    });
+  });
+  /**
+   * The switcher's resume dot (#11801) is drawn from a count main derives. The
+   * renderer's only job is to carry it across unchanged — and the distinction
+   * between "not counted yet" and "counted zero" is the thing that has to
+   * survive, since the two render identically and only differ in what the row
+   * is entitled to claim later.
+   */
+  describe("resumable agent count mapping", () => {
+    const withCounts: ProjectFixture[] = [
+      {
+        id: "unknown",
+        name: "Never counted",
+        path: "/repo/unknown",
+        emoji: "🌲",
+        lastOpened: 3,
+        status: "background",
+      },
+      {
+        id: "zero",
+        name: "Counted empty",
+        path: "/repo/zero",
+        emoji: "🌲",
+        lastOpened: 2,
+        status: "background",
+        resumableAgentCount: 0,
+      },
+      {
+        id: "some",
+        name: "Counted three",
+        path: "/repo/some",
+        emoji: "🌲",
+        lastOpened: 1,
+        status: "background",
+        resumableAgentCount: 3,
+      },
+    ];
+
+    it("carries absent, zero and positive counts through without collapsing them", async () => {
+      projectState.projects = withCounts;
+      projectState.currentProject = null;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["unknown", "zero", "some"]));
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      act(() => {
+        result.current.open();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+
+      const byId = new Map(
+        result.current.results.map(asProject).map((r) => [r.id, r.resumableAgentCount])
+      );
+      // A `?? 0` here would make the first two indistinguishable, and the row
+      // would start claiming "restores nothing" about a project nobody counted.
+      expect(byId.get("unknown")).toBeUndefined();
+      expect(byId.get("zero")).toBe(0);
+      expect(byId.get("some")).toBe(3);
     });
   });
 });

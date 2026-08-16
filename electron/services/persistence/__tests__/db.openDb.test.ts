@@ -459,6 +459,25 @@ describe("openDb (integration)", () => {
     // Everything except the most recent migration is "already applied".
     const applied = journal.slice(0, -1);
 
+    // Read the newest migration's own effect out of its SQL rather than naming
+    // columns here, so this stays a real assertion about migration application
+    // instead of a copy of whichever migration happens to be last today.
+    const finalTag = journal[journal.length - 1].tag;
+    const finalSql = fs.readFileSync(path.join(migrationsFolder, `${finalTag}.sql`), "utf8");
+    // Whichever table the newest migration happens to touch — naming one here
+    // would reintroduce exactly the copy-of-the-last-migration coupling this
+    // extraction exists to avoid.
+    const additions = [...finalSql.matchAll(/ALTER TABLE `([a-z_]+)` ADD `([a-z_]+)`/g)].map(
+      (m) => ({ table: m[1]!, column: m[2]! })
+    );
+    const removals = [...finalSql.matchAll(/ALTER TABLE `([a-z_]+)` DROP COLUMN `([a-z_]+)`/g)].map(
+      (m) => ({ table: m[1]!, column: m[2]! })
+    );
+    const deletedKeys = [
+      ...finalSql.matchAll(/DELETE FROM `app_state` WHERE `key` = '([^']+)'/g),
+    ].map((m) => m[1]!);
+    expect(additions.length).toBeGreaterThan(0);
+
     const Database = (await import("better-sqlite3")).default;
     const seed = new Database(dbPath);
     // Mirror drizzle's own bookkeeping table + a projects table for openDb's backfill.
@@ -486,23 +505,29 @@ describe("openDb (integration)", () => {
         last_opened INTEGER NOT NULL,
         deleted_at INTEGER
       );
+      CREATE TABLE app_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
     `);
     const ins = seed.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)");
     for (const entry of applied) ins.run(entry.tag, entry.when);
-    seed.close();
 
-    // Read the newest migration's own effect out of its SQL rather than naming
-    // columns here, so this stays a real assertion about migration application
-    // instead of a copy of whichever migration happens to be last today.
-    const finalTag = journal[journal.length - 1].tag;
-    const finalSql = fs.readFileSync(path.join(migrationsFolder, `${finalTag}.sql`), "utf8");
-    // Whichever table the newest migration happens to touch — naming one here
-    // would reintroduce exactly the copy-of-the-last-migration coupling this
-    // extraction exists to avoid.
-    const additions = [...finalSql.matchAll(/ALTER TABLE `([a-z_]+)` ADD `([a-z_]+)`/g)].map(
-      (m) => ({ table: m[1]!, column: m[2]! })
-    );
-    expect(additions.length).toBeGreaterThan(0);
+    // Give any `DELETE FROM app_state` in the newest migration something to
+    // actually delete, plus a neighbour it must leave alone — without rows the
+    // statement could be removed entirely and this test would not notice.
+    const appStateIns = seed.prepare("INSERT INTO app_state (key, value) VALUES (?, ?)");
+    for (const key of deletedKeys) appStateIns.run(key, "seeded");
+    appStateIns.run("currentProjectId", "keep-me");
+
+    // A migration can only drop a column the seeded schema actually has, and
+    // the seed above is a minimal pre-history table. Add each dropped column
+    // back so the DROP has something to act on — derived from the SQL for the
+    // same reason the additions are.
+    for (const { table, column } of removals) {
+      seed.exec(`ALTER TABLE ${table} ADD COLUMN ${column} INTEGER`);
+    }
+    seed.close();
 
     // Those columns must be absent before the upgrade for the test to mean
     // anything — the seed tables were created without them.
@@ -513,6 +538,13 @@ describe("openDb (integration)", () => {
       ).map((c) => c.name);
       expect(seededColumns).not.toContain(column);
     }
+    // And the dropped ones must be present, or the DROP would prove nothing.
+    for (const { table, column } of removals) {
+      const seededColumns = (
+        preCheck.prepare(`PRAGMA table_info(${table})`).all() as ColInfo[]
+      ).map((c) => c.name);
+      expect(seededColumns).toContain(column);
+    }
     preCheck.close();
 
     const { sqlite } = openDb(dbPath, migrationsFolder);
@@ -521,10 +553,56 @@ describe("openDb (integration)", () => {
         const columns = (sqlite.pragma(`table_info(${table})`) as ColInfo[]).map((c) => c.name);
         expect(columns).toContain(column);
       }
+      for (const { table, column } of removals) {
+        const columns = (sqlite.pragma(`table_info(${table})`) as ColInfo[]).map((c) => c.name);
+        expect(columns).not.toContain(column);
+      }
+
+      // Obsolete keys are gone and their neighbours are not — a DELETE without
+      // a WHERE, or one aimed at the wrong key, fails on the second assertion.
+      const remainingKeys = (
+        sqlite.prepare("SELECT key FROM app_state").all() as { key: string }[]
+      ).map((r) => r.key);
+      for (const key of deletedKeys) expect(remainingKeys).not.toContain(key);
+      expect(remainingKeys).toContain("currentProjectId");
 
       // The skipped migration is now recorded — total equals the full journal.
       const migrations = sqlite.prepare("SELECT id FROM __drizzle_migrations").all();
       expect(migrations).toHaveLength(EXPECTED_MIGRATION_COUNT);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("drops the obsolete session-open checkpoint on upgrade (migration 0012)", async () => {
+    // Names the key on purpose, unlike the generic journal test above: that one
+    // derives its expectations from the migration's own SQL, so deleting the
+    // statement would delete the assertion with it. The checkpoint fed the
+    // switcher's old recency dot (#11794) and nothing reads it after #11801, so
+    // leaving the row behind would strand user state no code can reach.
+    const dbPath = path.join(tmpDir, "checkpoint-cleanup.db");
+
+    const Database = (await import("better-sqlite3")).default;
+    const seed = new Database(dbPath);
+    seed.exec(`
+      CREATE TABLE app_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+    const ins = seed.prepare("INSERT INTO app_state (key, value) VALUES (?, ?)");
+    ins.run("sessionOpenProjects", '{"v":1,"projectIds":["proj-1"],"atMs":123}');
+    ins.run("currentProjectId", "proj-1");
+    seed.close();
+
+    const { sqlite } = openDb(dbPath, migrationsFolder);
+    try {
+      const rows = sqlite.prepare("SELECT key FROM app_state").all() as { key: string }[];
+      const keys = rows.map((r) => r.key);
+      expect(keys).not.toContain("sessionOpenProjects");
+      // The neighbouring key is what proves the DELETE was scoped rather than
+      // a table-wide wipe that happened to satisfy the first assertion.
+      expect(keys).toContain("currentProjectId");
     } finally {
       sqlite.close();
     }

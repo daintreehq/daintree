@@ -27,13 +27,8 @@ import {
   appState as appStateTable,
   type ProjectRow,
 } from "./persistence/schema.js";
-import { eq, desc } from "drizzle-orm";
-import { RECENTLY_ACTIVE_WINDOW_MS } from "../../shared/config/recentlyActive.js";
-import {
-  addSessionOpenProject,
-  getPreviousSessionOpenProjects,
-  removeSessionOpenProject,
-} from "./sessionOpenProjectsTracker.js";
+import { eq, desc, and, isNull, ne, or, sql } from "drizzle-orm";
+import { countResumableAgentPanels } from "./projectStateRestore.js";
 import {
   generateProjectId,
   mintProjectId,
@@ -129,30 +124,6 @@ function rowToRepoStats(row: ProjectRow): ProjectRepoStats | null {
   };
 }
 
-/**
- * The later of the two deadlines that can apply, or undefined when neither
- * does. Open-at-shutdown runs from launch rather than from the close that never
- * happened; a hand-closed project runs from its own close and decays across
- * restarts. A project in both populations — closed this session after being
- * restored from the last one — takes whichever reaches further.
- *
- * The open-at-shutdown half comes from the persisted session-open checkpoint,
- * frozen at boot before any window could touch it. It was originally inferred
- * from `active`/`background` rows instead, which read as a lifetime "opened at
- * least once" latch and marked the entire project list every launch (#11794).
- */
-function resolveRecentlyActiveUntil(row: ProjectRow): number | undefined {
-  const snapshot = getPreviousSessionOpenProjects();
-  const deadlines: number[] = [];
-  if (snapshot?.projectIds.has(row.id)) {
-    deadlines.push(snapshot.atMs + RECENTLY_ACTIVE_WINDOW_MS);
-  }
-  if (typeof row.recentlyClosedAt === "number") {
-    deadlines.push(row.recentlyClosedAt + RECENTLY_ACTIVE_WINDOW_MS);
-  }
-  return deadlines.length > 0 ? Math.max(...deadlines) : undefined;
-}
-
 function rowToProject(row: ProjectRow): Project {
   const project: Project = {
     id: row.id,
@@ -174,12 +145,11 @@ function rowToProject(row: ProjectRow): Project {
   if (typeof row.lastCompletionSeenAt === "number")
     project.lastCompletionSeenAt = row.lastCompletionSeenAt;
   if (typeof row.autoParkedAt === "number") project.autoParkedAt = row.autoParkedAt;
-  if (typeof row.recentlyClosedAt === "number") project.recentlyClosedAt = row.recentlyClosedAt;
-  // Derived here rather than at the call sites so every path that hands a
-  // project out — list reads, single lookups, and the update broadcasts —
-  // carries the same deadline.
-  const recentlyActiveUntil = resolveRecentlyActiveUntil(row);
-  if (recentlyActiveUntil !== undefined) project.recentlyActiveUntil = recentlyActiveUntil;
+  // Read through the same validator as the stats counts, so a corrupt row
+  // holding `-1` or `1.5` reads as unknown rather than as a claim. Absence is
+  // carried by leaving the field off entirely (#11801).
+  const resumableAgentCount = readPersistedCount(row.resumableAgentCount);
+  if (resumableAgentCount !== null) project.resumableAgentCount = resumableAgentCount;
   // Only `false` is carried: null means git-backed, and so does absence.
   if (row.gitBacked === false) project.gitBacked = false;
   const lastKnownStats = rowToRepoStats(row);
@@ -230,6 +200,101 @@ export class ProjectStore {
     this.fileStore = new ProjectFileStore(this.projectsConfigDir);
     this.globalFileStore = new GlobalFileStore(this.globalConfigDir);
     this.identityFiles = new ProjectIdentityFiles();
+    // Every write of the terminals array recomputes the switcher's resume count
+    // (#11801), so the number a dormant row carries is whatever its last save
+    // actually persisted rather than whatever was true when it was last opened.
+    this.stateManager.setStatePersistedObserver((projectId, state) =>
+      this.persistResumableAgentCount(projectId, state)
+    );
+  }
+
+  /**
+   * Write the derived resume count for a project whose state just landed.
+   *
+   * Derived metadata, so it never throws into the write path: the state file is
+   * already committed, and a project id with no row — scratch state shares this
+   * manager — simply updates nothing. A miss here self-heals on the next save
+   * or on the deferred maintenance pass.
+   */
+  private persistResumableAgentCount(projectId: string, state: ProjectState | null): void {
+    try {
+      const count = state
+        ? countResumableAgentPanels(state.terminals, `resume-count(project:${projectId})`)
+        : // Cleared state restores nothing. That is an answer, not an absence
+          // of one, so it is written rather than left unknown.
+          0;
+      const db = getSharedDb();
+      // Guarded on the value so the common case writes nothing. Layout, focus,
+      // size and draft edits all save state without touching the panel set, and
+      // an unconditional UPDATE would put every one of them through SQLite and
+      // the WAL on the main process for a number that did not move.
+      db.update(projectsTable)
+        .set({ resumableAgentCount: count })
+        .where(
+          and(
+            eq(projectsTable.id, projectId),
+            or(
+              isNull(projectsTable.resumableAgentCount),
+              ne(projectsTable.resumableAgentCount, count)
+            )
+          )
+        )
+        .run();
+    } catch (error) {
+      logError(`[ProjectStore] Failed to persist resume count for ${projectId}`, error);
+    }
+  }
+
+  /**
+   * Bring a row's resume count in line with a state read taken outside the
+   * write path — the deferred maintenance pass, which is how rows that predate
+   * the field ever get one.
+   *
+   * Compare-and-swap against the value read before that state load, because the
+   * two race: a save landing mid-scan is newer than anything the scan holds, and
+   * an unconditional write would replace a fresh count with a stale one. The
+   * guard is the whole point of the method — a row that had no count matches
+   * only while it still has none, and a row that had one matches only while it
+   * still holds that value, so a row that moved on is left alone.
+   *
+   * Passing `count: null` retracts the row's claim rather than replacing it —
+   * for a project whose state could not be read, where the honest answer is
+   * "unknown" and holding the old number would keep promising panels nothing
+   * can enumerate any more.
+   *
+   * Returns the updated project when the row actually changed, so the caller can
+   * broadcast exactly the rows a palette would need to redraw, and `null`
+   * otherwise.
+   */
+  reconcileResumableAgentCount(
+    projectId: string,
+    previousCount: number | null,
+    count: number | null
+  ): Project | null {
+    if (previousCount === count) return null;
+    const db = getSharedDb();
+    const result = db
+      .update(projectsTable)
+      .set({ resumableAgentCount: count })
+      .where(
+        previousCount === null
+          ? and(
+              eq(projectsTable.id, projectId),
+              // "Unknown" is wider than SQL NULL. `readPersistedCount` also
+              // reports a negative or fractional cell as unknown, so matching
+              // NULL alone would leave a corrupt row permanently unrepairable:
+              // the reader keeps answering unknown, and the swap keeps missing
+              // the very value that made it answer that way.
+              sql`(${projectsTable.resumableAgentCount} IS NULL OR ${projectsTable.resumableAgentCount} < 0 OR ${projectsTable.resumableAgentCount} <> CAST(${projectsTable.resumableAgentCount} AS INTEGER))`
+            )
+          : and(
+              eq(projectsTable.id, projectId),
+              eq(projectsTable.resumableAgentCount, previousCount)
+            )
+      )
+      .run();
+    if (result.changes === 0) return null;
+    return this.getProjectById(projectId);
   }
 
   async initialize(): Promise<void> {
@@ -841,12 +906,6 @@ export class ProjectStore {
     const db = getSharedDb();
     db.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
 
-    // No status write happens on this path — the row is gone — so the session
-    // set has to be told directly (#11794). Ids are derived from the project
-    // path, so a project later re-added at the same folder would otherwise
-    // inherit the deleted one's membership.
-    removeSessionOpenProject(projectId);
-
     if (project) {
       this.pruneInRepoRecipeHashes(project.path);
     }
@@ -878,9 +937,9 @@ export class ProjectStore {
     // number sets it; omitting the key leaves it untouched. Don't route the clear
     // through `undefined` — a callee that strips undefined keys would silently
     // drop the clear (review #4).
-    updates: Partial<Omit<Project, "autoParkedAt" | "recentlyClosedAt">> & {
+    updates: Partial<Omit<Project, "autoParkedAt" | "resumableAgentCount">> & {
       autoParkedAt?: number | null;
-      recentlyClosedAt?: number | null;
+      resumableAgentCount?: number | null;
     }
   ): Project {
     const db = getSharedDb();
@@ -899,7 +958,7 @@ export class ProjectStore {
       lastAccessedAt: number;
       lastCompletionSeenAt: number;
       autoParkedAt: number | null;
-      recentlyClosedAt: number | null;
+      resumableAgentCount: number | null;
       gitBacked: boolean | null;
     }> = {};
     if (updates.name !== undefined) set.name = updates.name;
@@ -917,7 +976,8 @@ export class ProjectStore {
     if (updates.lastCompletionSeenAt !== undefined)
       set.lastCompletionSeenAt = updates.lastCompletionSeenAt;
     if ("autoParkedAt" in updates) set.autoParkedAt = updates.autoParkedAt ?? null;
-    if ("recentlyClosedAt" in updates) set.recentlyClosedAt = updates.recentlyClosedAt ?? null;
+    if ("resumableAgentCount" in updates)
+      set.resumableAgentCount = updates.resumableAgentCount ?? null;
     // Keyed on presence, not on `!== undefined`: promoting a lightweight
     // workspace clears the flag by passing `undefined`, which an existence-blind
     // check would silently drop and leave the row lightweight forever.
@@ -1036,11 +1096,10 @@ export class ProjectStore {
   updateProjectStatus(
     projectId: string,
     status: ProjectStatus,
-    options?: { autoParkedAt?: number | null; recentlyClosedAt?: number | null }
+    options?: { autoParkedAt?: number | null }
   ): Project {
-    const updates: Partial<Omit<Project, "autoParkedAt" | "recentlyClosedAt">> & {
+    const updates: Partial<Omit<Project, "autoParkedAt">> & {
       autoParkedAt?: number | null;
-      recentlyClosedAt?: number | null;
     } = {
       status,
     };
@@ -1048,53 +1107,8 @@ export class ProjectStore {
       // Pass null straight through to clear; updateProject writes NULL for it.
       updates.autoParkedAt = options.autoParkedAt;
     }
-    // Stamped here rather than at the three close call sites (#11791): every
-    // close the USER performs — close, free memory, idle sweep — goes through
-    // this method, so centralizing it means no future one can forget to mark
-    // its own recency. An explicit `recentlyClosedAt` in the options still
-    // wins, so a caller that has a reason not to stamp (the idle sweep) or
-    // already holds the operation's clock can say so.
-    //
-    // The other writers of `closed` deliberately leave the mark alone by going
-    // through `updateProject` instead: folder adoption, relocation, and the
-    // invalid-status repair are bookkeeping about where a project IS, not the
-    // user putting it down, and none of them should light up the switcher.
-    // `setCurrentProject` is the reverse case — it only moves a project between
-    // active and background, and clears the stamp itself on both sides.
-    if (options && "recentlyClosedAt" in options) {
-      updates.recentlyClosedAt = options.recentlyClosedAt;
-    } else if (status === "closed") {
-      updates.recentlyClosedAt = Date.now();
-    } else {
-      // Live again, or gone. Either way the old close is no longer the last
-      // thing that happened here, and leaving it would resurrect the mark on
-      // the next transition.
-      updates.recentlyClosedAt = null;
-    }
 
-    const project = this.updateProject(projectId, updates);
-
-    // The session-open checkpoint moves with the same transitions, and for the
-    // same reason it is centralized here rather than at the call sites: every
-    // close the user performs reaches this method, so no future one can forget
-    // to leave the set (#11794).
-    //
-    // `background` removes, which is the one mapping that isn't self-evident.
-    // Only the close-without-killing-terminals branch of `project:close`
-    // writes it through here, and that is the same "Close Project" gesture as
-    // the killing branch — `background` there means "keep the processes", not
-    // "the user still considers this open". Switching away also backgrounds a
-    // project, but `setCurrentProject` writes that status inside its own
-    // transaction and never reaches this method, so a switch keeps membership.
-    if (status === "active") {
-      addSessionOpenProject(projectId);
-    } else {
-      // closed, missing, or anything a corrupt row repair collapses: the
-      // project is no longer one the user has open.
-      removeSessionOpenProject(projectId);
-    }
-
-    return project;
+    return this.updateProject(projectId, updates);
   }
 
   getAllProjects(): Project[] {
@@ -1250,13 +1264,9 @@ export class ProjectStore {
         } else if (exists && project.status === "missing") {
           // Clear any stale auto-parked marker — a project that went missing and
           // came back wasn't suspended by the idle sweep, so the switcher must
-          // not label it "Suspended to free memory". `recentlyClosedAt` is
-          // cleared explicitly for the same reason: a folder reappearing on disk
-          // is not the user having just worked in it, so this `closed` must not
-          // stamp a recency it never earned (#11791).
+          // not label it "Suspended to free memory".
           this.updateProjectStatus(project.id, "closed", {
             autoParkedAt: null,
-            recentlyClosedAt: null,
           });
         }
       })
@@ -1490,18 +1500,11 @@ export class ProjectStore {
           // Bump the departing project's lastOpened to just before `now` so it
           // becomes the top MRU candidate on the next switch — gives the
           // Cmd+Alt+= shortcut Alt+Tab-style toggle behavior.
-          // `recentlyClosedAt` is cleared on both sides of the switch: this
-          // transaction writes status directly rather than through
-          // `updateProjectStatus`, so it owns its own clears (#11791). Switching
-          // away is not closing — the project stays open in the background and
-          // must not start decaying yet.
           const previousUpdate: {
             status: "background";
             lastOpened?: number;
-            recentlyClosedAt: number | null;
           } = {
             status: "background",
-            recentlyClosedAt: null,
           };
           if (!writesSuppressed) {
             previousUpdate.lastOpened = now - 1;
@@ -1521,12 +1524,9 @@ export class ProjectStore {
           frecencyScore?: number;
           lastAccessedAt?: number;
           autoParkedAt: number | null;
-          recentlyClosedAt: number | null;
           // Reopening a project clears any background-idle "parked" marker so the
           // switcher stops showing "Suspended to free memory" once it's live again.
-          // The recency stamp goes with it: the project is live, so the dot that
-          // stands in for it has nothing left to say (#11791).
-        } = { status: "active", autoParkedAt: null, recentlyClosedAt: null };
+        } = { status: "active", autoParkedAt: null };
         if (!writesSuppressed && newScore !== null) {
           activeUpdate.lastOpened = now;
           activeUpdate.frecencyScore = newScore;
@@ -1536,12 +1536,6 @@ export class ProjectStore {
       },
       { behavior: "immediate" }
     );
-
-    // After the transaction, not inside it: the dot is auxiliary state, and a
-    // checkpoint write that failed must not roll back a real project switch
-    // (#11794). Only the incoming project joins — the departing one is
-    // backgrounded, not closed, and stays in the set.
-    addSessionOpenProject(projectId);
 
     if (process.env.DAINTREE_VERBOSE) {
       const updatedPrevious = previousProjectId ? this.getProjectById(previousProjectId) : null;
