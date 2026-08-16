@@ -200,8 +200,9 @@ interface ProjectListItemProps {
    * does not re-run this component's body while its props are referentially
    * unchanged — an ambient `Date.now()` inside it would simply freeze. Ages and
    * the recency deadline both derive from this prop instead, so the tick that
-   * changes it is what invalidates the row. `ScratchSection` already threads its
-   * `now` the same way.
+   * changes it is what invalidates the row. `ScratchListItem` threads its clock
+   * the same way, and `rowStatusClock.contract.test.ts` holds both ranked rows
+   * to it — source-level, because vitest cannot see the freeze.
    */
   nowMs: number;
   onSelect: (row: ProjectSwitcherProjectRow) => void;
@@ -595,13 +596,16 @@ function ProjectListItem({
 function ScratchListItem({
   scratch,
   isSelected,
+  nowMs,
   onSelect,
 }: {
   scratch: ProjectSwitcherScratchRow;
   isSelected: boolean;
+  /** The clock this row renders against, passed rather than read — see `ProjectListItemProps`. */
+  nowMs: number;
   onSelect: (row: ProjectSwitcherScratchRow) => void;
 }) {
-  const status = getScratchRowStatus(scratch);
+  const status = getScratchRowStatus(scratch, nowMs);
 
   return (
     <div
@@ -881,7 +885,12 @@ function ProjectListContent({
     return (
       <div key={`${row.kind}-${row.id}`} role="presentation">
         {row.kind === "scratch" ? (
-          <ScratchListItem scratch={row} isSelected={isSelected} onSelect={onSelect} />
+          <ScratchListItem
+            scratch={row}
+            isSelected={isSelected}
+            nowMs={nowMs}
+            onSelect={onSelect}
+          />
         ) : (
           <ProjectListItem
             project={row}
