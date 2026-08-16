@@ -51,9 +51,11 @@ beforeEach(() => {
   // Testing Library only unmounts what it rendered; nodes appended by hand
   // would otherwise survive and win document.activeElement in a later test.
   document.body.innerHTML = "";
-  (globalThis as unknown as { window: Window }).window.electron = {
-    menu: { showApplication: (payload?: { x?: number; y?: number }) => showApplication(payload) },
-  } as never;
+  Object.assign(window, {
+    electron: {
+      menu: { showApplication: (payload?: { x?: number; y?: number }) => showApplication(payload) },
+    },
+  });
 });
 
 /**
@@ -71,17 +73,16 @@ function renderInToolbar() {
       <AppMenuButton />
     </div>
   );
-  const button = utils.container.querySelector(
-    "[data-app-menu-button]"
-  ) as HTMLButtonElement | null;
-  const sibling = utils.container.querySelector("[data-testid=sibling]") as HTMLButtonElement;
+  const button = utils.container.querySelector<HTMLButtonElement>("[data-app-menu-button]");
+  const sibling = utils.container.querySelector<HTMLButtonElement>("[data-testid=sibling]")!;
   if (button) stubRect(button, { left: 0, bottom: 0 });
   return { ...utils, button, sibling };
 }
 
 function stubRect(button: HTMLButtonElement, rect: { left: number; bottom: number }) {
-  button.getBoundingClientRect = () =>
-    ({ left: rect.left, bottom: rect.bottom }) as unknown as DOMRect;
+  // Zero-sized rect anchored so that left/bottom are exactly the values under
+  // test — DOMRect derives bottom from y + height.
+  button.getBoundingClientRect = () => new DOMRect(rect.left, rect.bottom, 0, 0);
 }
 
 /** An editable target living outside the toolbar, like a real text input. */
@@ -109,7 +110,7 @@ describe("AppMenuButton", () => {
 
   it("anchors the popup to the button's bottom-left corner", () => {
     const { button } = renderInToolbar();
-    stubRect(button as HTMLButtonElement, { left: 84, bottom: 44 });
+    stubRect(button!, { left: 84, bottom: 44 });
 
     fireEvent.click(button!);
 
