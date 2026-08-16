@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionId } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
@@ -97,6 +97,9 @@ const PTY_KINDS = new Set(["terminal", "agent"]);
 vi.mock("@shared/config/panelKindRegistry", () => ({
   panelKindHasPty: (kind: string) => PTY_KINDS.has(kind),
 }));
+// The coordinator logs a commit that throws; one test provokes that on purpose,
+// and the real logger would print the stack as if the run had broken.
+vi.mock("@/utils/logger", () => ({ logError: vi.fn(), logWarn: vi.fn(), logDebug: vi.fn() }));
 
 import { ActionService } from "../../../ActionService";
 import { registerTerminalLifecycleActions } from "../terminalLifecycleActions";
@@ -147,7 +150,14 @@ describe("terminal.close read-your-writes against the real coordinator (#11805)"
     vi.useFakeTimers();
     __resetOptimisticPanelCloseForTests();
     vi.clearAllMocks();
+    // Reset here as well as in `seed()`, so a test that never seeds cannot
+    // inherit the previous one's trash behavior.
+    store.override.trash = null;
     document.body.innerHTML = "";
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("has already left terminal.list when an agent close resolves", async () => {
@@ -215,8 +225,13 @@ describe("terminal.close read-your-writes against the real coordinator (#11805)"
 
     // The gate is an allowlist of foreground sources, so "plugin" gets the same
     // read-your-writes guarantee without being named anywhere.
-    await service.dispatch("terminal.close", { terminalId: "a" }, { source: "plugin" });
+    const closed = await service.dispatch<{ closedIds: string[] }>(
+      "terminal.close",
+      { terminalId: "a" },
+      { source: "plugin" }
+    );
 
+    expect(closed.ok && closed.result).toEqual({ closedIds: ["a"] });
     expect(await listedIds(service)).toEqual([]);
   });
 
@@ -240,24 +255,28 @@ describe("terminal.close read-your-writes against the real coordinator (#11805)"
     expect(await listedIds(service)).toEqual([]);
   });
 
-  it("reports a panel removed outright as closed", async () => {
-    seed([{ id: "a", kind: "terminal", location: "grid" }]);
+  // "constructor" is a real panel id here (an own key shadowing the prototype),
+  // which is what makes this a regression test for the projection rather than
+  // just the happy path: judging "gone" by `panelsById[id] === undefined` finds
+  // the inherited function instead and reports the close as a no-op.
+  it.each(["a", "constructor"])("reports the panel %s removed outright as closed", async (id) => {
+    seed([{ id, kind: "terminal", location: "grid" }]);
     // Remove-on-exit and dialog panels bypass trash: `trashPanel` routes them to
     // `removePanel`, so the record is gone rather than relocated. Judging that by
     // location alone would report the close as a no-op.
-    store.override.trash = (id) => {
-      delete store.state.panelsById[id];
-      store.state.panelIds = store.state.panelIds.filter((panelId) => panelId !== id);
+    store.override.trash = (target) => {
+      delete store.state.panelsById[target];
+      store.state.panelIds = store.state.panelIds.filter((panelId) => panelId !== target);
     };
     const service = buildService();
 
     const closed = await service.dispatch<{ closedIds: string[] }>(
       "terminal.close",
-      { terminalId: "a" },
+      { terminalId: id },
       { source: "agent" }
     );
 
-    expect(closed.ok && closed.result).toEqual({ closedIds: ["a"] });
+    expect(closed.ok && closed.result).toEqual({ closedIds: [id] });
     expect(await listedIds(service)).toEqual([]);
   });
 
@@ -281,19 +300,25 @@ describe("terminal.close read-your-writes against the real coordinator (#11805)"
     expect(await listedIds(service)).toEqual(["a"]);
   });
 
-  it("closes nothing when focus points at a panel that is gone", async () => {
-    seed([{ id: "a", kind: "terminal", location: "grid" }], "stale");
-    const service = buildService();
+  it.each(["stale", "constructor"])(
+    "closes nothing when focus points at the missing panel %s",
+    async (focusedId) => {
+      seed([{ id: "a", kind: "terminal", location: "grid" }], focusedId);
+      const service = buildService();
 
-    // No explicit id, so the target resolves from focus — which can outlive the
-    // panel it names. Reporting that as a close would be a false positive.
-    const closed = await service.dispatch<{ closedIds: string[] }>("terminal.close", undefined, {
-      source: "keybinding",
-    });
+      // No explicit id, so the target resolves from focus — which can outlive
+      // the panel it names. "constructor" additionally proves the focus branch
+      // does its own own-property check: a plain lookup resolves it off the
+      // prototype and trashes a panel that never existed.
+      const closed = await service.dispatch<{ closedIds: string[] }>("terminal.close", undefined, {
+        source: "keybinding",
+      });
 
-    expect(closed.ok && closed.result).toEqual({ closedIds: [] });
-    expect(await listedIds(service)).toEqual(["a"]);
-  });
+      expect(closed.ok && closed.result).toEqual({ closedIds: [] });
+      expect(store.state.trashPanel).not.toHaveBeenCalled();
+      expect(await listedIds(service)).toEqual(["a"]);
+    }
+  );
 
   it.each(["constructor", "__proto__", "toString"])(
     "rejects the inherited key %s rather than trashing it",

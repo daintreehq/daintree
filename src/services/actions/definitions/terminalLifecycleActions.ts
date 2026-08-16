@@ -35,7 +35,7 @@ const PanelCloseResultSchema = z.object({
   closedIds: z
     .array(z.string())
     .describe(
-      "The panels this call closed. Empty means nothing closed — there was no panel to act on, or the one named was already in the trash."
+      "The panels this call closed. Empty means nothing closed: there was no panel to act on, the one named was already in the trash, or its teardown did not complete. Treat an empty array as a failed close rather than a quiet success."
     ),
 });
 
