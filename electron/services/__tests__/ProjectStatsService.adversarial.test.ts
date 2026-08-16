@@ -39,6 +39,10 @@ vi.mock("../AgentAvailabilityStore.js", () => ({
 }));
 
 import { ProjectStatsService } from "../ProjectStatsService.js";
+import {
+  ASSISTANT_PROJECTION_PARITY,
+  PARITY_ASSISTANT_TERMINAL,
+} from "./helpers/assistantProjectionParity.js";
 
 type FakePtyClient = {
   getAllTerminalsAsync: ReturnType<typeof vi.fn>;
@@ -1022,11 +1026,62 @@ describe("ProjectStatsService assistant presence (#11806)", () => {
     svc.refresh();
     await vi.runAllTimersAsync();
     const firstCount = broadcastMock.mock.calls.length;
+    // The control. Without it this passes against a build that projects no
+    // assistant facts at all, proving only that two empty payloads are equal.
+    expect(lastPayload().p1.assistantWaitingReason).toBe("prompt");
 
     svc.refresh();
     await vi.runAllTimersAsync();
 
     expect(broadcastMock.mock.calls.length).toBe(firstCount);
+    svc.stop();
+  });
+
+  it("clears every assistant field when the assistant goes away", async () => {
+    // Starts from a fully-populated assistant so all three fields have
+    // something to lose — a fixture with no waiting reason cannot prove the
+    // reason is cleared.
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      helpTerminal({ agentState: "waiting", waitingReason: "error", lastStateChange: 1_000 }),
+    ]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(lastPayload().p1.assistantWaitingReason).toBe("error");
+
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([]);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(lastPayload().p1).not.toHaveProperty("assistantState");
+    expect(lastPayload().p1).not.toHaveProperty("assistantWaitingReason");
+    expect(lastPayload().p1).not.toHaveProperty("assistantStateSince");
+    svc.stop();
+  });
+
+  it("projects exactly the assistant subobject the bulk seed projects", async () => {
+    // The #10989 shape: two hand-written projections of the same reducer
+    // output. `project.bulkStats.test.ts` asserts this identical expectation
+    // against the other producer, so either one drifting fails its own suite.
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([helpTerminal(PARITY_ASSISTANT_TERMINAL)]);
+    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 1 });
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const p1 = lastPayload().p1 as Record<string, unknown>;
+    expect({
+      assistantState: p1.assistantState,
+      assistantWaitingReason: p1.assistantWaitingReason,
+      assistantStateSince: p1.assistantStateSince,
+      activeAgentCount: p1.activeAgentCount,
+      waitingAgentCount: p1.waitingAgentCount,
+      processCount: p1.processCount,
+    }).toEqual(ASSISTANT_PROJECTION_PARITY);
     svc.stop();
   });
 });

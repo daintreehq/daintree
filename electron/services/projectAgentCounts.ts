@@ -98,6 +98,13 @@ export interface CountableTerminal {
   detectedAgentId?: string;
   launchAgentId?: string;
   everDetectedAgent?: boolean;
+  /**
+   * When this PTY was spawned. Read only to tell one assistant session from
+   * another during a displacement — `AgentStateService` already treats it as
+   * the live-session identity token, so it is the fact that says which of two
+   * overlapping records is the current one.
+   */
+  spawnedAt?: number;
 }
 
 /**
@@ -168,6 +175,18 @@ function empty(): ProjectAgentCounts {
 }
 
 /**
+ * A timestamp that can be compared and reported, or 0 when it cannot be.
+ *
+ * Zero, negatives, `NaN` and the infinities are all rejected together. `NaN`
+ * in particular has to be screened before any comparison: every comparison
+ * against it is false, so it would silently make "which record is newer"
+ * depend on the order the host happened to list terminals in.
+ */
+function usableTimestamp(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
  * Liveness rank for picking which assistant record speaks for a project.
  * Lower wins: actively doing something, then waiting, then settled.
  */
@@ -185,11 +204,17 @@ function assistantLiveness(state: AgentState | undefined): number {
  * steady state there is nothing to choose between. The window this exists for
  * is displacement: a new backend is provisioned while the old one is still
  * being killed, and for those moments two terminals answer to the same
- * project. The newest transition wins that tie, because the record still
- * moving is the live session and the one left behind is the corpse.
+ * project.
  *
- * Terminal id breaks a dead-heat so the answer can never depend on the order
- * the host happened to list terminals in.
+ * Spawn time decides it, because that is the fact that actually identifies the
+ * session — `AgentStateService` uses the same stamp to reject state updates
+ * from a superseded run. Liveness cannot lead here: a displaced PTY whose kill
+ * has not landed yet still reads `working`, so ranking activity first would let
+ * the corpse keep reporting over a new session that is genuinely blocked.
+ *
+ * The remaining tie-breaks only matter when spawn times are missing or equal,
+ * and terminal id closes the last gap, so the answer never depends on listing
+ * order.
  */
 function beatsIncumbent(
   candidate: CountableTerminal,
@@ -197,12 +222,16 @@ function beatsIncumbent(
 ): boolean {
   if (incumbent === null) return true;
 
+  const candidateSpawn = usableTimestamp(candidate.spawnedAt);
+  const incumbentSpawn = usableTimestamp(incumbent.spawnedAt);
+  if (candidateSpawn !== incumbentSpawn) return candidateSpawn > incumbentSpawn;
+
   const candidateRank = assistantLiveness(candidate.agentState);
   const incumbentRank = assistantLiveness(incumbent.agentState);
   if (candidateRank !== incumbentRank) return candidateRank < incumbentRank;
 
-  const candidateSince = candidate.lastStateChange ?? 0;
-  const incumbentSince = incumbent.lastStateChange ?? 0;
+  const candidateSince = usableTimestamp(candidate.lastStateChange);
+  const incumbentSince = usableTimestamp(incumbent.lastStateChange);
   if (candidateSince !== incumbentSince) return candidateSince > incumbentSince;
 
   return (candidate.id ?? "") < (incumbent.id ?? "");
@@ -350,8 +379,12 @@ export function computeProjectAgentCounts(
     entry.assistantState = assistant.agentState ?? null;
     entry.assistantWaitingReason =
       assistant.agentState === "waiting" ? (assistant.waitingReason ?? null) : null;
-    const since = assistant.lastStateChange;
-    entry.assistantStateSince = typeof since === "number" && since > 0 ? since : null;
+    // Same screen the selection used, so an unusable stamp can neither pick the
+    // winner nor be reported as one. An infinite or wildly-future value would
+    // read as a wait that began after every possible observation, holding the
+    // row in the attention band while the age beside it rendered "just now".
+    const since = usableTimestamp(assistant.lastStateChange);
+    entry.assistantStateSince = since > 0 ? since : null;
   }
 
   return counts;

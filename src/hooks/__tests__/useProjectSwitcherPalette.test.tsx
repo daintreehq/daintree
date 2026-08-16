@@ -3138,8 +3138,8 @@ describe("assistant presence banding (#11806)", () => {
     });
   });
 
-  it("never lets assistant presence inflate the worker tallies or the badge", async () => {
-    const result = await openWithStats({
+  it("never lets assistant presence reach the tray badge", async () => {
+    const assistantOnly = await openWithStats({
       ...idle,
       assistantState: "waiting",
       assistantWaitingReason: "error",
@@ -3147,16 +3147,27 @@ describe("assistant presence banding (#11806)", () => {
     });
 
     await waitFor(() => {
-      const row = asProject(result.current.results[0]);
-      expect(row.activeAgentCount).toBe(0);
-      expect(row.waitingAgentCount).toBe(0);
-      expect(row.blockedAgentCount).toBe(0);
+      // The row IS escalated — so the zeros below are the badge declining to
+      // count it, not the fixture simply being empty.
+      expect(asProject(assistantOnly.current.results[0]).section).toBe("attention");
     });
-    // The tray/toolbar badge answers "how many places are waiting on me?" —
-    // the assistant is not an interruption the user is owed.
-    expect(result.current.nonActiveAgentCounts.waitingAgentCount).toBe(0);
-    expect(result.current.nonActiveAgentCounts.waitingProjectCount).toBe(0);
-    expect(result.current.nonActiveAgentCounts.activeAgentCount).toBe(0);
+    // The badge answers "how many places are waiting on me?" — the assistant
+    // is not an interruption the user is owed.
+    expect(assistantOnly.current.nonActiveAgentCounts.waitingAgentCount).toBe(0);
+    expect(assistantOnly.current.nonActiveAgentCounts.waitingProjectCount).toBe(0);
+    expect(assistantOnly.current.nonActiveAgentCounts.activeAgentCount).toBe(0);
+
+    // The control: the same badge does count a real worker, so the machinery
+    // under test is live rather than inert.
+    const withWorker = await openWithStats({
+      ...idle,
+      waitingAgentCount: 1,
+      assistantState: "working",
+    });
+    await waitFor(() => {
+      expect(withWorker.current.nonActiveAgentCounts.waitingAgentCount).toBe(1);
+    });
+    expect(withWorker.current.nonActiveAgentCounts.waitingProjectCount).toBe(1);
   });
 
   it("carries the assistant fields off the push store onto the row", async () => {
@@ -3181,7 +3192,8 @@ describe("assistant presence banding (#11806)", () => {
     getBulkStatsMock.mockResolvedValue({
       "project-1": {
         ...emptyBulkStats(["project-1"])["project-1"],
-        assistantState: "working",
+        assistantState: "waiting",
+        assistantWaitingReason: "approval",
         assistantStateSince: 7_000,
       },
     });
@@ -3195,7 +3207,8 @@ describe("assistant presence banding (#11806)", () => {
       expect(setStatsMock).toHaveBeenCalled();
     });
     const seeded = setStatsMock.mock.calls.at(-1)![0] as typeof projectStatsState.stats;
-    expect(seeded["project-1"]!.assistantState).toBe("working");
+    expect(seeded["project-1"]!.assistantState).toBe("waiting");
+    expect(seeded["project-1"]!.assistantWaitingReason).toBe("approval");
     expect(seeded["project-1"]!.assistantStateSince).toBe(7_000);
   });
 
@@ -3222,6 +3235,127 @@ describe("assistant presence banding (#11806)", () => {
 
     await waitFor(() => {
       expect(asProject(result.current.results[0]).section).toBe("attention");
+    });
+  });
+
+  describe("ordering", () => {
+    const THREE: ProjectFixture[] = [
+      {
+        id: "p-a",
+        name: "Alpha",
+        path: "/a",
+        emoji: "🌲",
+        lastOpened: LAST_OPENED,
+        status: "background",
+      },
+      {
+        id: "p-b",
+        name: "Bravo",
+        path: "/b",
+        emoji: "🌲",
+        lastOpened: LAST_OPENED,
+        status: "background",
+      },
+      {
+        id: "p-c",
+        name: "Charlie",
+        path: "/c",
+        emoji: "🌲",
+        lastOpened: LAST_OPENED,
+        status: "background",
+      },
+    ];
+
+    async function openWithMany(stats: Record<string, (typeof projectStatsState.stats)[string]>) {
+      projectState.projects = THREE;
+      projectStatsState.stats = stats;
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["p-a", "p-b", "p-c"]));
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open();
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+      return result;
+    }
+
+    it("sorts a blocked assistant above an unseen wait above a completion", async () => {
+      const result = await openWithMany({
+        "p-a": {
+          ...idle,
+          unacknowledgedCompletedAgentCount: 1,
+          oldestUnacknowledgedCompletionAt: 1,
+        },
+        "p-b": {
+          ...idle,
+          assistantState: "waiting",
+          assistantWaitingReason: "prompt",
+          assistantStateSince: LAST_OPENED + 60_000,
+        },
+        "p-c": { ...idle, assistantState: "waiting", assistantWaitingReason: "error" },
+      });
+
+      await waitFor(() => {
+        expect(result.current.results.every((r) => asProject(r).section === "attention")).toBe(
+          true
+        );
+      });
+      expect(result.current.results.map((r) => r.id)).toEqual(["p-c", "p-b", "p-a"]);
+    });
+
+    it("puts the assistant stuck longest at the top of the unseen-wait tier", async () => {
+      const result = await openWithMany({
+        "p-a": { ...idle, assistantState: "waiting", assistantStateSince: LAST_OPENED + 60_000 },
+        "p-b": { ...idle, assistantState: "waiting", assistantStateSince: LAST_OPENED + 10_000 },
+        "p-c": { ...idle, assistantState: "waiting", assistantStateSince: LAST_OPENED + 30_000 },
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+      // Oldest wait first — the one nobody has come for the longest.
+      expect(result.current.results.map((r) => r.id)).toEqual(["p-b", "p-c", "p-a"]);
+    });
+
+    it("keeps a project with real workers above an assistant-only one in Running", async () => {
+      // Charlie is the NEWER assistant but the later name, so a build without
+      // the assistant fallback would tie both at zero and sort them
+      // alphabetically — the two orders differ, which is what makes this bite.
+      const result = await openWithMany({
+        "p-a": { ...idle, assistantState: "working", assistantStateSince: 5_000 },
+        "p-b": { ...idle, activeAgentCount: 1, latestWorkingSince: 1_000 },
+        "p-c": { ...idle, assistantState: "working", assistantStateSince: 9_000 },
+      });
+
+      await waitFor(() => {
+        expect(result.current.results.every((r) => asProject(r).section === "running")).toBe(true);
+      });
+      // Worker first, then the assistant-only rows newest-active first — which
+      // is only possible if the assistant supplies the ordering timestamp.
+      expect(result.current.results.map((r) => r.id)).toEqual(["p-b", "p-c", "p-a"]);
+    });
+
+    it("orders an attention row by its worker's wait when it has both", async () => {
+      // The line and the tier both resolve to the worker, so the clock must too
+      // — dating the row by the assistant would sort it by a reason it never
+      // states.
+      const result = await openWithMany({
+        "p-a": { ...idle, waitingAgentCount: 1, oldestWaitingSince: LAST_OPENED + 90_000 },
+        "p-b": {
+          ...idle,
+          waitingAgentCount: 1,
+          oldestWaitingSince: LAST_OPENED + 95_000,
+          assistantState: "waiting",
+          assistantStateSince: LAST_OPENED + 1,
+        },
+        "p-c": { ...idle, waitingAgentCount: 1, oldestWaitingSince: LAST_OPENED + 80_000 },
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+      expect(result.current.results.map((r) => r.id)).toEqual(["p-c", "p-a", "p-b"]);
     });
   });
 

@@ -510,11 +510,19 @@ function sectionForProject(project: SearchableProject): ProjectSectionKey {
  * its own: a blocked assistant is a blocked thing and an unseen wait is a
  * wait. Without this a project escalated purely by its assistant would fall to
  * the review tier and sort below completions it has nothing to do with.
+ *
+ * Consulted only once no worker is asking, because the status line resolves
+ * the same contest that way. A row tiered as blocked by its assistant while
+ * its line reads "Agent needs input" would be sorted by a reason it never
+ * states — the row would look mis-ranked, and the explanation would be
+ * invisible.
  */
 function attentionClass(project: SearchableProject): number {
+  if (project.blockedAgentCount > 0) return 0;
+  if (project.waitingAgentCount > 0) return 1;
   const assistant = classifyAssistantActivity(project);
-  if (project.blockedAgentCount > 0 || assistant === "blocked") return 0;
-  if (project.waitingAgentCount > 0 || assistant === "waiting-unseen") return 1;
+  if (assistant === "blocked") return 0;
+  if (assistant === "waiting-unseen") return 1;
   return 2;
 }
 
@@ -523,16 +531,15 @@ function attentionClass(project: SearchableProject): number {
  *
  * Assistant-only rows have no `oldestWaitingSince`, so without this they would
  * all tie at infinity and fall through to an ordering that has nothing to do
- * with how long anyone has been stuck.
+ * with how long anyone has been stuck. A row with both falls to the worker's
+ * clock, matching the tier and the line it will actually show.
  */
 function waitOrderingSince(project: SearchableProject): number {
-  const worker = project.oldestWaitingSince;
-  const assistant = assistantNeedsAttention(classifyAssistantActivity(project))
-    ? project.assistantStateSince
-    : undefined;
-  if (worker === undefined) return assistant ?? Number.POSITIVE_INFINITY;
-  if (assistant === undefined) return worker;
-  return Math.min(worker, assistant);
+  if (project.oldestWaitingSince !== undefined) return project.oldestWaitingSince;
+  if (!assistantNeedsAttention(classifyAssistantActivity(project))) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return project.assistantStateSince ?? Number.POSITIVE_INFINITY;
 }
 
 /**

@@ -687,10 +687,14 @@ describe("assistant presence status lines (#11806)", () => {
 
   it("keeps every assistant tone out of the worker vocabulary", () => {
     // The worker dot is the thing the issue says must keep meaning what it
-    // means. Assistant rows must never borrow one of its tones.
+    // means. Assistant rows must never borrow one of its tones — and must earn
+    // a line of their own rather than falling through to the dormant fallback,
+    // which would satisfy the first half of this while saying nothing.
     const workerTones = ["working", "waiting", "blocked", "review", "running", "snoozed"];
     for (const assistantState of ["working", "waiting"] as const) {
       const status = getProjectRowStatus(project({ assistantState, lastOpened: NOW }), NOW);
+      expect(status.text).toContain("Assistant");
+      expect(status.isDormantFallback).toBeUndefined();
       expect(workerTones).not.toContain(status.tone);
     }
   });

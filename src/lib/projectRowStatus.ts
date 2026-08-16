@@ -209,9 +209,13 @@ function getWorkspaceActivityStatus(
   project: WorkspaceRowStatusFields,
   nowMs: number
 ): WorkspaceActivityStatus | null {
-  // Classified once, consumed at three different heights below. The same
-  // helper decides the row's band, so a row can never be filed under "Needs
-  // attention" while this function tells it a different story.
+  // Classified once, consumed at three different heights below. Sharing the
+  // helper with `sectionForProject` is what keeps a row's band and its line
+  // telling the same story about the assistant. Not an absolute guarantee: the
+  // palette freezes band membership while it is open (#11071) and lets the
+  // facts stay live, so a state change mid-session can move this line under a
+  // heading chosen a moment earlier. That is the anti-jump policy working, and
+  // it resolves the next time the palette opens.
   const assistant = classifyAssistantActivity(project);
   const age =
     project.oldestWaitingSince !== undefined

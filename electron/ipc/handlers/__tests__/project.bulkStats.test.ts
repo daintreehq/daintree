@@ -143,6 +143,10 @@ import { projectStore } from "../../../services/ProjectStore.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
 import { getAgentAvailabilityStore } from "../../../services/AgentAvailabilityStore.js";
+import {
+  ASSISTANT_PROJECTION_PARITY,
+  PARITY_ASSISTANT_TERMINAL,
+} from "../../../services/__tests__/helpers/assistantProjectionParity.js";
 
 // Disposes the stats/fleet pollers after each test; see the helper for why
 // dropping the disposer is what produced this file's CI flake. Still returns
@@ -914,11 +918,7 @@ describe("bulk stats assistant presence (#11806)", () => {
 
   it("seeds the same assistant facts the pushed status map reports", async () => {
     const ptyClient = makePtyClient({
-      getAllTerminalsAsync: vi
-        .fn()
-        .mockResolvedValue([
-          helpTerminal({ agentState: "waiting", waitingReason: "error", lastStateChange: 3_000 }),
-        ]),
+      getAllTerminalsAsync: vi.fn().mockResolvedValue([helpTerminal(PARITY_ASSISTANT_TERMINAL)]),
       getProjectStats: vi.fn().mockResolvedValue({
         terminalCount: 1,
         terminalTypes: { terminal: 1 },
@@ -929,25 +929,22 @@ describe("bulk stats assistant presence (#11806)", () => {
 
     const result = (await getBulkStatsHandler()(fakeEvent, [PROJECT_ID])) as Record<
       string,
-      {
-        assistantState?: string;
-        assistantWaitingReason?: string;
-        assistantStateSince?: number;
-        activeAgentCount: number;
-        waitingAgentCount: number;
-        processCount: number;
-      }
+      Record<string, unknown>
     >;
 
     const entry = result[PROJECT_ID]!;
-    expect(entry.assistantState).toBe("waiting");
-    expect(entry.assistantWaitingReason).toBe("error");
-    expect(entry.assistantStateSince).toBe(3_000);
-    // A seed that let the assistant into these would reintroduce exactly the
-    // seed-vs-push disagreement #10989 removed.
-    expect(entry.waitingAgentCount).toBe(0);
-    expect(entry.activeAgentCount).toBe(0);
-    expect(entry.processCount).toBe(0);
+    // The same expectation `ProjectStatsService.adversarial.test.ts` asserts
+    // against the push producer for the same terminal — a seed that let the
+    // assistant into the worker counts, or dropped a presence field the push
+    // keeps, is the seed-vs-push disagreement #10989 removed.
+    expect({
+      assistantState: entry.assistantState,
+      assistantWaitingReason: entry.assistantWaitingReason,
+      assistantStateSince: entry.assistantStateSince,
+      activeAgentCount: entry.activeAgentCount,
+      waitingAgentCount: entry.waitingAgentCount,
+      processCount: entry.processCount,
+    }).toEqual(ASSISTANT_PROJECTION_PARITY);
   });
 
   it("omits the assistant fields when the project has no live assistant", async () => {

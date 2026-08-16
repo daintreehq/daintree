@@ -37,7 +37,14 @@ const {
   const projectStatsState = {
     stats: {} as Record<
       string,
-      { activeAgentCount: number; waitingAgentCount: number; processCount: number }
+      {
+        activeAgentCount: number;
+        waitingAgentCount: number;
+        processCount: number;
+        assistantState?: "idle" | "working" | "waiting" | "directing" | "completed" | "exited";
+        assistantWaitingReason?: "prompt" | "question" | "approval" | "error";
+        assistantStateSince?: number;
+      }
     >,
   };
 
@@ -1190,6 +1197,32 @@ describe("scratch agent-status join", () => {
     const row = scratchRow(result, "scratch-1");
     for (const field of STATS_FIELDS) expect(row[field]).toBe(0);
     expect(row.oldestWaitingSince).toBeUndefined();
+  });
+
+  it("carries assistant presence onto the row without touching its counts", async () => {
+    // A help session is provisioned against an opaque workspace id, so a
+    // scratch can host one. Its row projection is hand-written separately from
+    // the project one and would otherwise go unexercised.
+    seedScratches(1);
+    projectStatsState.stats = {
+      "scratch-1": {
+        activeAgentCount: 0,
+        waitingAgentCount: 0,
+        processCount: 0,
+        assistantState: "waiting",
+        assistantWaitingReason: "error",
+        assistantStateSince: 6_000,
+      },
+    };
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    await waitFor(() => expect(result.current.scratchResults).toHaveLength(1));
+
+    const row = scratchRow(result, "scratch-1");
+    expect(row.assistantState).toBe("waiting");
+    expect(row.assistantWaitingReason).toBe("error");
+    expect(row.assistantStateSince).toBe(6_000);
+    for (const field of STATS_FIELDS) expect(row[field]).toBe(0);
   });
 
   it("carries the map's counts onto the row", async () => {

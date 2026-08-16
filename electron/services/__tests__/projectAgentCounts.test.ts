@@ -545,15 +545,6 @@ describe("computeProjectAgentCounts — assistant presence (#11806)", () => {
     expect(counts.get("p1")!.assistantWaitingReason).toBeNull();
   });
 
-  it("refuses an unusable transition time rather than dating the state to epoch", () => {
-    const counts = computeProjectAgentCounts(
-      ["p1"],
-      [agent({ id: "help", agentState: "waiting", lastStateChange: 0 })]
-    );
-
-    expect(counts.get("p1")!.assistantStateSince).toBeNull();
-  });
-
   it("stays silent for a trashed or dead assistant", () => {
     // Both are already excluded from `helpTerminals`; reporting state for them
     // would leave a killed assistant working forever on every other project's
@@ -614,17 +605,76 @@ describe("computeProjectAgentCounts — assistant presence (#11806)", () => {
     );
   });
 
-  it("resolves a dead heat by terminal id so the answer never depends on order", () => {
+  it("resolves a dead heat identically whichever way the terminals are listed", () => {
+    // The contract is permutation invariance, not which id happens to win —
+    // asserting the winner would pin an arbitrary tie-break rule in place.
     const a = agent({ id: "help-a", agentState: "waiting", waitingReason: "prompt" });
     const b = agent({ id: "help-b", agentState: "waiting", waitingReason: "error" });
 
-    expect(computeProjectAgentCounts(["p1"], [a, b]).get("p1")!.assistantWaitingReason).toBe(
-      "prompt"
-    );
-    expect(computeProjectAgentCounts(["p1"], [b, a]).get("p1")!.assistantWaitingReason).toBe(
-      "prompt"
-    );
+    const forward = computeProjectAgentCounts(["p1"], [a, b]).get("p1")!;
+    const reverse = computeProjectAgentCounts(["p1"], [b, a]).get("p1")!;
+
+    expect(forward.assistantWaitingReason).toBe(reverse.assistantWaitingReason);
+    expect(forward.assistantState).toBe(reverse.assistantState);
+    expect(forward.assistantStateSince).toBe(reverse.assistantStateSince);
   });
+
+  it("lets the newest session win a displacement even while the old one still reads working", () => {
+    // The displaced PTY keeps its last state until the kill lands, so an
+    // outgoing "working" would otherwise outrank the live session's real
+    // state and hide a blocked assistant behind a Running band.
+    const displaced = agent({
+      id: "help-old",
+      spawnedAt: 1_000,
+      agentState: "working",
+      lastStateChange: 5_000,
+    });
+    const live = agent({
+      id: "help-new",
+      spawnedAt: 9_000,
+      agentState: "waiting",
+      waitingReason: "error",
+      lastStateChange: 2_000,
+    });
+
+    for (const listing of [
+      [displaced, live],
+      [live, displaced],
+    ]) {
+      const p1 = computeProjectAgentCounts(["p1"], listing).get("p1")!;
+      expect(p1.assistantState).toBe("waiting");
+      expect(p1.assistantWaitingReason).toBe("error");
+    }
+  });
+
+  it("stays order-independent when a transition time is unusable", () => {
+    // Every comparison against NaN is false, so an unscreened one would leave
+    // whichever record arrived first as the winner.
+    const a = agent({ id: "help-a", agentState: "waiting", lastStateChange: Number.NaN });
+    const b = agent({ id: "help-b", agentState: "waiting", lastStateChange: 4_000 });
+
+    const forward = computeProjectAgentCounts(["p1"], [a, b]).get("p1")!;
+    const reverse = computeProjectAgentCounts(["p1"], [b, a]).get("p1")!;
+
+    expect(forward.assistantStateSince).toBe(reverse.assistantStateSince);
+    expect(forward.assistantStateSince).toBe(4_000);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 0])(
+    "refuses the unusable transition time %p",
+    (lastStateChange) => {
+      // An infinite or wildly-future stamp would read as a wait that began
+      // after every possible observation — permanently unseen, while the age
+      // beside it rendered "just now".
+      const counts = computeProjectAgentCounts(
+        ["p1"],
+        [agent({ id: "help", agentState: "waiting", lastStateChange })]
+      );
+
+      expect(counts.get("p1")!.assistantStateSince).toBeNull();
+      expect(counts.get("p1")!.assistantState).toBe("waiting");
+    }
+  );
 
   it("lets a settled assistant be spoken for by a working one", () => {
     const settled = agent({ id: "help-a", agentState: "exited", lastStateChange: 9_000 });
