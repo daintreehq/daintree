@@ -771,17 +771,31 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       }
     }
 
+    // A load status can land before this effect runs at all — the IPC listener
+    // that sets `worktreeLoadError` is installed at module scope, well before
+    // React mounts the provider — and the subscription below only sees
+    // *transitions*. Without settling it here, that pre-existing error would
+    // leave the banner stacked on a skeleton that never ends.
+    function settleForExistingLoadError(): boolean {
+      if (useProjectStore.getState().worktreeLoadError === null) return false;
+      clearInitialPortTimer();
+      store.getState().setLoading(false);
+      return true;
+    }
+
     function armInitialPortTimer() {
       if (initialPortTimer !== null || initialPortReady) return;
       // Only a window bound to a project ever has a port brokered for it — an
       // unbound picker view legitimately never sees one, so arming there would
       // raise a banner for working software.
       if (!useProjectStore.getState().currentProject) return;
+      if (settleForExistingLoadError()) return;
       initialPortTimer = setTimeout(() => {
         initialPortTimer = null;
         if (initialPortReady || worktreePort.isReady()) return;
-        // A report from main describes the failure better than we can.
-        if (useProjectStore.getState().worktreeLoadError !== null) return;
+        // A report from main describes the failure better than we can, but the
+        // skeleton still has to end.
+        if (settleForExistingLoadError()) return;
         useProjectStore.getState().setWorktreeLoadError(INITIAL_PORT_TIMEOUT_MESSAGE);
         // The banner renders *above* the skeleton, so the skeleton has to be
         // settled too or Retry ends up stacked on a still-spinning sidebar.

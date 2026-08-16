@@ -21,11 +21,9 @@ import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { isCleaningUp } from "../lifecycle/shutdownCoordinator.js";
 import {
-  attachStartupWorktreePort,
-  describeStartupPortFailure,
+  runStartupWorktreeLoad,
   selectStatusTarget,
   sendStartupWorktreeLoadFailure,
-  STARTUP_NO_WORKSPACE_CLIENT_MESSAGE,
 } from "./startupWorktreeLoad.js";
 import { extractRestorePanelCwds } from "./restorePanelCwds.js";
 import { mergeProjectEnv } from "./restoreProjectEnv.js";
@@ -678,18 +676,21 @@ export async function setupWindowServices(
     // fetch — so the sidebar renders its skeleton forever with no banner and
     // nothing in the log. That silent branch is what this block removes.
     //
-    // The id is resolved from the path actually being loaded rather than from
-    // `restoreProject`, which only exists for id-restored windows: a window
-    // opened by path (CLI open, Dock drop) would otherwise resolve no id and
-    // drop the status. `resolveProjectIdForPath` is a synchronous read that
-    // returns the registered id when there is one, so it matches the id the
-    // renderer filters on.
-    let statusProjectId: string | undefined;
-    try {
-      statusProjectId = projectStore.resolveProjectIdForPath(projectPathForWorktrees);
-    } catch (error) {
-      console.warn("[MAIN] Could not resolve a project id for worktree load status:", error);
-      statusProjectId = restoreProject?.id;
+    // A restored window already carries the registered id, which is the one the
+    // renderer filters on — use it directly. Only a window opened by path (CLI
+    // open, Dock drop) has to resolve one, and without that it would resolve no
+    // id at all and drop the status. `resolveProjectIdForPath` is a synchronous
+    // read returning the registered id when the path is known; for a path that
+    // isn't registered yet it hashes the path, which can differ from the id the
+    // project is finally registered under (git-root or realpath resolution).
+    // The renderer's own port watchdog is the backstop for that case.
+    let statusProjectId = restoreProject?.id;
+    if (!statusProjectId) {
+      try {
+        statusProjectId = projectStore.resolveProjectIdForPath(projectPathForWorktrees);
+      } catch (error) {
+        console.warn("[MAIN] Could not resolve a project id for worktree load status:", error);
+      }
     }
 
     // Re-selected at report time rather than captured up front — the window's
@@ -703,48 +704,49 @@ export async function setupWindowServices(
       sendStartupWorktreeLoadFailure(statusTarget, statusProjectId, error);
     };
 
-    if (!capturedWorkspaceClient) {
-      console.error(
-        "[MAIN] Workspace client unavailable - cannot load worktrees for:",
-        projectPathForWorktrees
-      );
-      reportFailure(new Error(STARTUP_NO_WORKSPACE_CLIENT_MESSAGE));
-    } else {
-      const workspaceClient = capturedWorkspaceClient;
+    const workspaceClient = capturedWorkspaceClient;
+    if (workspaceClient) {
       console.log("[MAIN] Loading worktrees for project path:", projectPathForWorktrees);
-      try {
-        await workspaceClient.loadProject(projectPathForWorktrees, win.id);
-        console.log("[MAIN] Worktrees loaded");
+    }
 
-        // Register the renderer in directPortViews so sendToEntryWindows
-        // routes host events (worktree updates, PR detection, etc.) to it,
-        // then broker the worktree port (Phase 1).
+    // Register the renderer in directPortViews so sendToEntryWindows routes
+    // host events (worktree updates, PR detection, etc.) to it, then broker the
+    // worktree port (Phase 1).
+    const outcome = await runStartupWorktreeLoad({
+      loadProject: workspaceClient
+        ? () => workspaceClient.loadProject(projectPathForWorktrees, win.id)
+        : null,
+      getPortTarget: () => opts.initialAppView?.webContents ?? getAppWebContents(win) ?? null,
+      getHost: () => workspaceClient?.getHostForProject(projectPathForWorktrees),
+      attachDirectPort: (target) => {
+        workspaceClient?.attachDirectPort(win.id, target);
+        console.log("[MAIN] Workspace direct port attached");
+      },
+      getBrokerPort: () => {
         const worktreePortBroker = getWorktreePortBrokerRef();
-        const attachResult = attachStartupWorktreePort({
-          target: opts.initialAppView?.webContents ?? getAppWebContents(win) ?? null,
-          host: workspaceClient.getHostForProject(projectPathForWorktrees),
-          attachDirectPort: (target) => {
-            workspaceClient.attachDirectPort(win.id, target);
-            console.log("[MAIN] Workspace direct port attached");
-          },
-          brokerPort: worktreePortBroker
-            ? (host, target) => worktreePortBroker.brokerPort(host, target)
-            : null,
-        });
+        return worktreePortBroker
+          ? (host, target) => worktreePortBroker.brokerPort(host, target)
+          : null;
+      },
+      report: reportFailure,
+    });
 
-        if (attachResult.ok) {
-          console.log("[MAIN] Worktree port brokered");
-        } else {
-          // A resolved `loadProject()` is not enough — with no port the
-          // renderer is in exactly the state a thrown load leaves it in, so
-          // it gets the same banner rather than a silent skip (#11818).
-          console.error("[MAIN] Worktree port not brokered:", attachResult.reason);
-          reportFailure(new Error(describeStartupPortFailure(attachResult.reason)));
-        }
-      } catch (error) {
-        console.error("[MAIN] Failed to load worktrees:", error);
-        reportFailure(error);
-      }
+    switch (outcome.status) {
+      case "loaded":
+        console.log("[MAIN] Worktrees loaded; worktree port brokered");
+        break;
+      case "no-client":
+        console.error(
+          "[MAIN] Workspace client unavailable - cannot load worktrees for:",
+          projectPathForWorktrees
+        );
+        break;
+      case "load-failed":
+        console.error("[MAIN] Failed to load worktrees:", outcome.error);
+        break;
+      case "port-failed":
+        console.error("[MAIN] Worktree port not brokered:", outcome.reason);
+        break;
     }
   }
 

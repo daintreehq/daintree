@@ -131,3 +131,64 @@ export function describeStartupPortFailure(reason: StartupPortFailureReason): st
 /** Reader-facing text for a boot that had no workspace client at all. */
 export const STARTUP_NO_WORKSPACE_CLIENT_MESSAGE =
   "The workspace service wasn't available when this window started.";
+
+/** How a window's startup worktree load ended. */
+export type StartupWorktreeLoadOutcome =
+  | { status: "loaded" }
+  | { status: "no-client" }
+  | { status: "load-failed"; error: unknown }
+  | { status: "port-failed"; reason: StartupPortFailureReason };
+
+/**
+ * Run a window's startup worktree load and report every outcome that leaves the
+ * renderer without a port.
+ *
+ * The reporting lives in here rather than at the call site because the whole
+ * defect in #11818 was a branch that silently did nothing: keeping the decision
+ * flow and its reporting together means the tests cover the thing that broke,
+ * instead of a copy of it.
+ *
+ * `loadProject` is null when no workspace client was available — that is the
+ * case that used to be skipped without a trace.
+ */
+export async function runStartupWorktreeLoad<
+  THost,
+  TTarget extends { isDestroyed(): boolean },
+>(args: {
+  loadProject: (() => Promise<void>) | null;
+  getPortTarget: () => TTarget | null | undefined;
+  getHost: () => THost | null | undefined;
+  attachDirectPort: (target: TTarget) => void;
+  // Resolved after the load rather than before it, so a broker constructed
+  // during init is still picked up, and a genuinely absent one stays
+  // distinguishable from one that rejected the target.
+  getBrokerPort: () => ((host: THost, target: TTarget) => boolean) | null | undefined;
+  report: (error: unknown) => void;
+}): Promise<StartupWorktreeLoadOutcome> {
+  const { loadProject, getPortTarget, getHost, attachDirectPort, getBrokerPort, report } = args;
+
+  if (!loadProject) {
+    report(new Error(STARTUP_NO_WORKSPACE_CLIENT_MESSAGE));
+    return { status: "no-client" };
+  }
+
+  try {
+    await loadProject();
+  } catch (error) {
+    report(error);
+    return { status: "load-failed", error };
+  }
+
+  const attachResult = attachStartupWorktreePort({
+    target: getPortTarget(),
+    host: getHost(),
+    attachDirectPort,
+    brokerPort: getBrokerPort(),
+  });
+  if (attachResult.ok) return { status: "loaded" };
+
+  // A resolved loadProject() is not enough — with no port the renderer sits in
+  // exactly the state a thrown load leaves it in, so it gets the same banner.
+  report(new Error(describeStartupPortFailure(attachResult.reason)));
+  return { status: "port-failed", reason: attachResult.reason };
+}

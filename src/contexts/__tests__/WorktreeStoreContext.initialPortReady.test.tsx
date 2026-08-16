@@ -24,6 +24,8 @@ const TIMEOUT_MESSAGE =
 
 let portReady = false;
 let readyCallbacks: Array<() => void> = [];
+let fatalCallbacks: Array<() => void> = [];
+let requestCount = 0;
 
 function setCurrentProject(path: string | null): void {
   const project = path ? ({ id: "p1", name: "p1", path } as unknown as Project) : null;
@@ -40,18 +42,25 @@ beforeAll(async () => {
 beforeEach(() => {
   portReady = false;
   readyCallbacks = [];
+  fatalCallbacks = [];
+  requestCount = 0;
   useProjectStore.setState({ worktreeLoadError: null });
   setCurrentProject("/repo/proj");
 
   (globalThis as unknown as { window: Window }).window.electron = {
     worktreePort: {
       isReady: () => portReady,
-      request: (_name: string) =>
-        Promise.resolve({
+      request: (_name: string) => {
+        requestCount += 1;
+        return Promise.resolve({
           states: [] as WorktreeSnapshot[],
           watcherDegraded: false,
           topologyWatcherDark: false,
-        }),
+          epoch: "epoch-1",
+          seq: 1,
+          lastAcknowledgedMutationIds: [] as string[],
+        });
+      },
       onEvent: (_name: string, _cb: (data: unknown) => void) => () => {},
       onReady: (cb: () => void) => {
         readyCallbacks.push(cb);
@@ -60,7 +69,12 @@ beforeEach(() => {
         };
       },
       onDisconnected: (_cb: () => void) => () => {},
-      onFatalDisconnect: (_cb: () => void) => () => {},
+      onFatalDisconnect: (cb: () => void) => {
+        fatalCallbacks.push(cb);
+        return () => {
+          fatalCallbacks = fatalCallbacks.filter((entry) => entry !== cb);
+        };
+      },
     },
     worktree: {
       getAllIssueAssociations: () => Promise.resolve({}),
@@ -214,6 +228,68 @@ describe("WorktreeStoreProvider — initial worktree-port watchdog (#11818)", ()
     // And the watchdog no longer overwrites main's better description.
     await advance(60_000);
     expect(useProjectStore.getState().worktreeLoadError).toBe("Repository folder is gone");
+  });
+
+  it("settles a skeleton when the error landed before the provider mounted", async () => {
+    // The IPC listener that sets `worktreeLoadError` is installed at module
+    // scope, so a boot failure can be recorded before React mounts anything.
+    // The subscription below only sees transitions, so this has to be caught
+    // when the watchdog is armed.
+    useProjectStore.setState({ worktreeLoadError: "Repository folder is gone" });
+    vi.useFakeTimers();
+    const { store } = await renderProvider();
+
+    expect(store.getState().isLoading).toBe(false);
+
+    await advance(60_000);
+    expect(useProjectStore.getState().worktreeLoadError).toBe("Repository folder is gone");
+  });
+
+  it("keeps a main-process error that replaced its own timeout message", async () => {
+    vi.useFakeTimers();
+    await renderProvider();
+
+    await advance(60_000);
+    expect(useProjectStore.getState().worktreeLoadError).toBe(TIMEOUT_MESSAGE);
+
+    // Main described the real failure after the watchdog guessed; a late port
+    // must not clear that better description.
+    act(() => {
+      useProjectStore.getState().setWorktreeLoadError("Repository folder is gone");
+    });
+    await becomeReady();
+
+    expect(useProjectStore.getState().worktreeLoadError).toBe("Repository folder is gone");
+  });
+
+  it("cancels the watchdog on a fatal disconnect", async () => {
+    vi.useFakeTimers();
+    const { store } = await renderProvider();
+
+    await act(async () => {
+      fatalCallbacks.forEach((cb) => cb());
+      await Promise.resolve();
+    });
+    await advance(60_000);
+
+    // The fatal error is the better description, and the watchdog must not
+    // stack its own banner on top of it.
+    expect(store.getState().error).not.toBeNull();
+    expect(useProjectStore.getState().worktreeLoadError).toBeNull();
+  });
+
+  it("refetches on every port re-attach, not just the first", async () => {
+    vi.useFakeTimers();
+    await renderProvider();
+
+    await becomeReady();
+    const afterFirst = requestCount;
+    expect(afterFirst).toBeGreaterThan(0);
+
+    // Host restart → the port is re-brokered and fires ready again.
+    await becomeReady();
+
+    expect(requestCount).toBeGreaterThan(afterFirst);
   });
 
   it("clears the timer on unmount", async () => {
