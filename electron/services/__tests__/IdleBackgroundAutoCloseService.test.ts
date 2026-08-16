@@ -33,7 +33,19 @@ const ptyClientMock = vi.hoisted(() => ({
   // PtyClient's main-local spawn registry — the liveness half of the assistant
   // floor, independent of the (truncatable) pty-host terminal snapshot.
   hasTerminal: vi.fn<(id: string) => boolean>((id: string) => liveTerminalIds.has(id)),
+  // The service reads completeness so a silent shard can't read as "no
+  // terminals". Delegates to getAllTerminalsAsync so every fixture below still
+  // drives the snapshot through the one mock; flip `snapshotDegraded` to model
+  // a shard that failed to answer.
+  getAllTerminalsWithCompletenessAsync: vi.fn(async () => ({
+    terminals: await ptyClientMock.getAllTerminalsAsync(),
+    degraded: snapshotDegraded.value,
+    shardsTotal: 2,
+    shardsFailed: snapshotDegraded.value ? 1 : 0,
+  })),
 }));
+
+const snapshotDegraded = vi.hoisted(() => ({ value: false }));
 
 const workspaceClientMock = vi.hoisted(() => ({
   evictProject: vi.fn<(p: string) => boolean>(() => true),
@@ -179,6 +191,7 @@ describe("IdleBackgroundAutoCloseService", () => {
     workspaceClientMock.evictProject.mockReturnValue(true);
     assistantBackends.clear();
     liveTerminalIds.clear();
+    snapshotDegraded.value = false;
   });
 
   afterEach(() => {
@@ -319,9 +332,13 @@ describe("IdleBackgroundAutoCloseService", () => {
         makeIdleProject("proj-1"),
         makeIdleProject("proj-2"),
       ]);
-      liveAssistant("proj-1");
+      const helpId = liveAssistant("proj-1");
       liveAssistant("proj-2");
-      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([]);
+      // proj-1's help PTY is listed in the snapshot the ordinary way, proj-2's
+      // is not — both must be attributed to the assistant, not to "a terminal".
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
+        { id: helpId, projectId: "proj-1", hasPty: true },
+      ]);
       const service = makeService();
       await runCheck(service);
 
@@ -329,7 +346,41 @@ describe("IdleBackgroundAutoCloseService", () => {
         ([event]) => event === "idle-background-auto-close-skip-live-assistant"
       );
       expect(skipLogs).toHaveLength(1);
-      expect(skipLogs[0]?.[1]).toEqual({ projectIds: ["proj-1", "proj-2"] });
+      const logged = (skipLogs[0]?.[1] as { projectIds: string[] }).projectIds;
+      expect([...logged].sort()).toEqual(["proj-1", "proj-2"]);
+    });
+
+    it("a live assistant in one project does not hold back another project's reclaim", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeIdleProject("proj-1"),
+        makeIdleProject("proj-2"),
+      ]);
+      liveAssistant("proj-1");
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([]);
+      const service = makeService();
+      await runCheck(service);
+
+      // proj-1 is floored, proj-2 closes — the floor is per-project, not global.
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledTimes(1);
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith(
+        "proj-2",
+        "closed",
+        expect.anything()
+      );
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalledWith("proj-1");
+
+      const skipLogs = logInfoMock.mock.calls.filter(
+        ([event]) => event === "idle-background-auto-close-skip-live-assistant"
+      );
+      expect(skipLogs[0]?.[1]).toEqual({ projectIds: ["proj-1"] });
+
+      const closedBroadcast = broadcastToRendererMock.mock.calls.find(
+        ([channel]) => channel === "idle-background:closed"
+      );
+      expect(closedBroadcast?.[1].projects).toEqual([
+        { projectId: "proj-2", projectName: "proj-2" },
+      ]);
     });
 
     it("a stale binding whose PTY already exited does not block, and is capture-revoked (#10989)", async () => {
@@ -410,15 +461,18 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
 
-    it("bails after the capture-revoke when the assistant came back during the await", async () => {
+    it("bails after the capture-revoke when a FRESH assistant binding appeared during the await", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
-      staleAssistant("proj-1", "t-help-returning");
+      staleAssistant("proj-1", "t-help-old");
       ptyClientMock.getAllTerminalsAsync.mockResolvedValue([]);
-      // The revoke settles the dead record; the user reopens the panel during
-      // the multi-second await, so the post-revoke recheck must see it live.
+      // The revoke settles the dead record and the user reopens the panel during
+      // the multi-second await, which binds a DIFFERENT terminal. The post-revoke
+      // gate has to re-resolve the project's backend — an implementation that
+      // reused the terminal id it saw before the await would sail past this.
       helpSessionServiceMock.revokeByProjectId.mockImplementationOnce(async () => {
-        liveTerminalIds.add("t-help-returning");
+        assistantBackends.delete("proj-1");
+        liveAssistant("proj-1", "t-help-new");
       });
       const service = makeService();
       await runCheck(service);
@@ -445,6 +499,51 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
         autoParkedAt: expect.any(Number),
       });
+    });
+
+    it("never reclaims on a degraded terminal snapshot — a silent shard is not 'no terminals'", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      // A shard failed to answer, so the empty list proves nothing. Killing here
+      // is the one wrong answer: the project may be full of live agents.
+      snapshotDegraded.value = true;
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([]);
+      const service = makeService();
+      await runCheck(service);
+
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("bails when the snapshot degrades between the sweep and the pre-revoke re-check", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      ptyClientMock.getAllTerminalsWithCompletenessAsync
+        .mockResolvedValueOnce({ terminals: [], degraded: false, shardsTotal: 2, shardsFailed: 0 })
+        .mockResolvedValueOnce({ terminals: [], degraded: true, shardsTotal: 2, shardsFailed: 1 });
+      const service = makeService();
+      await runCheck(service);
+
+      // The revoke sits behind this gate, so nothing was touched at all.
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("halts an in-flight close when the feature is toggled off during the snapshot await", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      ptyClientMock.getAllTerminalsWithCompletenessAsync
+        .mockResolvedValueOnce({ terminals: [], degraded: false, shardsTotal: 2, shardsFailed: 0 })
+        .mockImplementationOnce(async () => {
+          storeBacking.idleBackgroundAutoClose = { enabled: false, thresholdMinutes: 15 };
+          return { terminals: [], degraded: false, shardsTotal: 2, shardsFailed: 0 };
+        });
+      const service = makeService();
+      await runCheck(service);
+
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
 
     it("ignores ghost (hasPty===false) panels when gating on terminals", async () => {
