@@ -1345,12 +1345,19 @@ export class HelpSessionService {
   }
 
   /**
-   * Idle-background auto-close (#10830): the assistant is tooling-internal,
-   * so its PTY must not keep an idle background project resident — and the
-   * renderer's own hibernate timer can't fire there (parked project views
-   * freeze timers, the #10739 class). The sweep capture-revokes the project's
-   * help sessions before reclaiming — the same conversation-preserving path
-   * as LRU eviction, so the next open resumes where the user left off.
+   * Idle-background auto-close (#10830): the sweep capture-revokes a project's
+   * help sessions before reclaiming it — the same conversation-preserving path
+   * as LRU eviction, so the next open resumes where the user left off. The
+   * renderer's own hibernate timer can't do this itself, because a parked
+   * project view freezes timers (the #10739 class).
+   *
+   * A LIVE assistant no longer reaches here: since #11807 the sweep treats one
+   * as a hard floor and skips the project entirely, because nothing tells main
+   * whether an idle-looking assistant is merely at its prompt or sitting on a
+   * scheduled wakeup. So the records this settles are the non-live ones — a
+   * terminal that exited under its own steam (nothing drops that binding), or
+   * a session provisioned but never bound. Only the former has a conversation
+   * to capture; an unbound record writes no pending-hibernation entry.
    */
   async revokeByProjectId(projectId: string): Promise<void> {
     const targets = [...this.sessionsById.values()].filter(

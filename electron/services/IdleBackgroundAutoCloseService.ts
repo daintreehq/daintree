@@ -139,6 +139,10 @@ export class IdleBackgroundAutoCloseService {
     const client = this.ptyClient;
     if (!client) return null;
     const snapshot = await client.getAllTerminalsWithCompletenessAsync();
+    // `stop()` may have landed while that request was in flight — app shutdown
+    // clears the client without touching `enabled`, so the config re-checks
+    // downstream would wave this through on a snapshot nobody owns any more.
+    if (this.ptyClient !== client) return null;
     if (snapshot.degraded) {
       logInfo("idle-background-auto-close-skip-degraded-snapshot", {
         shardsFailed: snapshot.shardsFailed,

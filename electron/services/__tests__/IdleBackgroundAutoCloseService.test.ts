@@ -546,6 +546,44 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
 
+    it("bails when the snapshot degrades at the POST-revoke re-check", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const clean = { terminals: [], degraded: false, shardsTotal: 2, shardsFailed: 0 };
+      ptyClientMock.getAllTerminalsWithCompletenessAsync
+        .mockResolvedValueOnce(clean)
+        .mockResolvedValueOnce(clean)
+        .mockResolvedValueOnce({ terminals: [], degraded: true, shardsTotal: 2, shardsFailed: 1 });
+      const service = makeService();
+      await runCheck(service);
+
+      // The revoke already ran, but the irreversible teardown must not.
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(evictProjectRendererMock).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("halts an in-flight close when stop() clears the client mid-await", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const clean = { terminals: [], degraded: false, shardsTotal: 2, shardsFailed: 0 };
+      const service = makeService();
+      // Shutdown nulls the client without touching `enabled`, so the config
+      // re-checks cannot catch it — only the client-identity check can.
+      ptyClientMock.getAllTerminalsWithCompletenessAsync
+        .mockResolvedValueOnce(clean)
+        .mockImplementationOnce(async () => {
+          service.stop();
+          return clean;
+        });
+      await runCheck(service);
+
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+      expect(evictProjectRendererMock).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
     it("ignores ghost (hasPty===false) panels when gating on terminals", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
