@@ -90,6 +90,13 @@ export interface SearchableScratch extends WorkspaceRowStatusFields {
   name: string;
   path: string;
   createdAt: number;
+  /**
+   * How many saved agent panels this scratch would restore if opened (#11821).
+   * Main derives it from the persisted state, so the row draws its dot without
+   * reading anything. Absent means not yet computed — distinct from a known 0,
+   * which is an answer.
+   */
+  resumableAgentCount?: number;
 }
 
 /**
@@ -1144,6 +1151,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         path: s.path,
         createdAt: s.createdAt,
         lastOpened: s.lastOpened,
+        // Passed through as-is, never `?? 0`: coercing an absent count to 0
+        // here would turn "not computed yet" into "restores nothing".
+        resumableAgentCount: s.resumableAgentCount,
         isActive: currentScratch?.id === s.id,
         activeAgentCount: stats?.activeAgentCount ?? 0,
         waitingAgentCount: stats?.waitingAgentCount ?? 0,

@@ -24,11 +24,13 @@ import { store } from "../store.js";
 import { getSharedDb } from "./persistence/db.js";
 import {
   projects as projectsTable,
+  scratches as scratchesTable,
   appState as appStateTable,
   type ProjectRow,
 } from "./persistence/schema.js";
 import { eq, desc, and, isNull, ne, or, sql } from "drizzle-orm";
 import { countResumableAgentPanels } from "./projectStateRestore.js";
+import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../shared/utils/workspaceIds.js";
 import {
   generateProjectId,
   mintProjectId,
@@ -203,23 +205,36 @@ export class ProjectStore {
     // Every write of the terminals array recomputes the switcher's resume count
     // (#11801), so the number a dormant row carries is whatever its last save
     // actually persisted rather than whatever was true when it was last opened.
-    this.stateManager.setStatePersistedObserver((projectId, state) =>
-      this.persistResumableAgentCount(projectId, state)
+    // The slot holds one observer, and scratch state comes through this same
+    // manager — so this one routes both kinds by id shape (#11821) rather than
+    // a second observer replacing this one.
+    this.stateManager.setStatePersistedObserver((workspaceId, state) =>
+      this.persistResumableAgentCount(workspaceId, state)
     );
   }
 
   /**
-   * Write the derived resume count for a project whose state just landed.
+   * Write the derived resume count for a workspace whose state just landed.
+   *
+   * One observer serves both kinds because one state manager does: scratches
+   * persist their panel grid under the same `projects/<id>/` layout (#11484), so
+   * every scratch save arrives here too. The id's shape says which table owns
+   * the row (#11821) — `workspaceIds` is the authority, and asking a store
+   * "is this id a scratch?" would instead answer whether that store had
+   * finished hydrating. An id of neither shape belongs to no table and writes
+   * nothing.
    *
    * Derived metadata, so it never throws into the write path: the state file is
-   * already committed, and a project id with no row — scratch state shares this
-   * manager — simply updates nothing. A miss here self-heals on the next save
-   * or on the deferred maintenance pass.
+   * already committed, and a miss here self-heals on the next save or on the
+   * deferred maintenance pass.
    */
-  private persistResumableAgentCount(projectId: string, state: ProjectState | null): void {
+  private persistResumableAgentCount(workspaceId: string, state: ProjectState | null): void {
     try {
+      const isScratch = isScratchWorkspaceId(workspaceId);
+      if (!isScratch && !isProjectWorkspaceId(workspaceId)) return;
+      const kind = isScratch ? "scratch" : "project";
       const count = state
-        ? countResumableAgentPanels(state.terminals, `resume-count(project:${projectId})`)
+        ? countResumableAgentPanels(state.terminals, `resume-count(${kind}:${workspaceId})`)
         : // Cleared state restores nothing. That is an answer, not an absence
           // of one, so it is written rather than left unknown.
           0;
@@ -228,11 +243,30 @@ export class ProjectStore {
       // size and draft edits all save state without touching the panel set, and
       // an unconditional UPDATE would put every one of them through SQLite and
       // the WAL on the main process for a number that did not move.
+      if (isScratch) {
+        db.update(scratchesTable)
+          .set({ resumableAgentCount: count })
+          .where(
+            and(
+              eq(scratchesTable.id, workspaceId),
+              // A tombstoned scratch is already gone from every renderer-facing
+              // query, so maintenance writes stop at the tombstone the way every
+              // other write in `ScratchStore` does.
+              isNull(scratchesTable.deletedAt),
+              or(
+                isNull(scratchesTable.resumableAgentCount),
+                ne(scratchesTable.resumableAgentCount, count)
+              )
+            )
+          )
+          .run();
+        return;
+      }
       db.update(projectsTable)
         .set({ resumableAgentCount: count })
         .where(
           and(
-            eq(projectsTable.id, projectId),
+            eq(projectsTable.id, workspaceId),
             or(
               isNull(projectsTable.resumableAgentCount),
               ne(projectsTable.resumableAgentCount, count)
@@ -241,7 +275,7 @@ export class ProjectStore {
         )
         .run();
     } catch (error) {
-      logError(`[ProjectStore] Failed to persist resume count for ${projectId}`, error);
+      logError(`[ProjectStore] Failed to persist resume count for ${workspaceId}`, error);
     }
   }
 

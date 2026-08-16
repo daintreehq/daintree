@@ -22,4 +22,14 @@ export interface Scratch {
    * with a completion on screen.
    */
   lastCompletionSeenAt?: number;
+  /**
+   * How many saved agent panels this scratch would restore if opened (#11821),
+   * mirroring the project field. Main derives it from the persisted state, so
+   * the switcher row draws its resume dot without reading anything.
+   *
+   * Absent means main has not resolved this scratch yet, which is not the same
+   * as resolving it to 0: an unresolved row makes no claim rather than a wrong
+   * one. Main's to set — never something a renderer may assert.
+   */
+  resumableAgentCount?: number;
 }

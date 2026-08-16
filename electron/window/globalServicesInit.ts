@@ -62,6 +62,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { countResumableAgentPanels } from "../services/projectStateRestore.js";
 import type { Project, ProjectState } from "../../shared/types/project.js";
+import type { Scratch } from "../../shared/types/scratch.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import { wireUpdateMenuState } from "../menu.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
@@ -77,6 +78,7 @@ import { setPluginDirResolver } from "../setup/protocols.js";
 import { isE2EFaultMode } from "../setup/runtimeFlags.js";
 import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
+import { scratchStore } from "../services/ScratchStore.js";
 import { registerCommands } from "../services/commands/index.js";
 import { store, wasStoreFreshAtBoot } from "../store.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -154,13 +156,59 @@ function reconcileResumableAgentCounts(projects: Project[], states: (ProjectStat
   }
 }
 
+/**
+ * The scratch half of the same backfill (#11821). Scratches persist their panel
+ * grid under the shared `projects/<id>/` layout, so their states load through
+ * the same call and the sweep costs no extra reads for them either.
+ *
+ * Kept beside the project pass rather than folded into it: the two write
+ * different tables, return different entities and broadcast on different
+ * channels, and the compare-and-swap each needs is the one its own store owns.
+ */
+function reconcileScratchResumableAgentCounts(
+  scratches: Scratch[],
+  states: (ProjectState | null)[]
+): void {
+  for (const [i, scratch] of scratches.entries()) {
+    const state = states[i];
+    // Same three-way reading as projects: unreadable retracts the claim,
+    // genuinely absent state is authoritative emptiness, present state counts.
+    const count = projectStore.wasStateUnreadableThisSession(scratch.id)
+      ? null
+      : state
+        ? countResumableAgentPanels(state.terminals, `resume-count-backfill(scratch:${scratch.id})`)
+        : 0;
+
+    try {
+      const updated = scratchStore.reconcileResumableAgentCount(
+        scratch.id,
+        scratch.resumableAgentCount ?? null,
+        count
+      );
+      if (updated) broadcastToRenderer(CHANNELS.SCRATCH_UPDATED, updated);
+    } catch (error) {
+      console.warn(
+        `[MAIN] Session eviction: failed to reconcile resume count for scratch ${scratch.id}:`,
+        error
+      );
+    }
+  }
+}
+
 async function evictStaleSessionFiles(): Promise<void> {
   try {
     const allProjects = projectStore.getAllProjects();
+    const allScratches = scratchStore.getAllScratches();
     const knownIds = new Set<string>();
 
-    const states = await Promise.all(allProjects.map((p) => projectStore.getProjectState(p.id)));
-    for (const state of states) {
+    const [states, scratchStates] = await Promise.all([
+      Promise.all(allProjects.map((p) => projectStore.getProjectState(p.id))),
+      Promise.all(allScratches.map((s) => projectStore.getProjectState(s.id))),
+    ]);
+    // Scratch terminals belong to the same `.restore` pool as project ones, so
+    // they have to be declared known here or the orphan pass below would read a
+    // live scratch's scrollback as unattributed and delete it.
+    for (const state of [...states, ...scratchStates]) {
       if (state?.terminals) {
         for (const t of state.terminals) {
           knownIds.add(t.id);
@@ -169,6 +217,7 @@ async function evictStaleSessionFiles(): Promise<void> {
     }
 
     reconcileResumableAgentCounts(allProjects, states);
+    reconcileScratchResumableAgentCounts(allScratches, scratchStates);
 
     const appTerminals = store.get("appState")?.terminals;
     if (Array.isArray(appTerminals)) {
@@ -177,21 +226,24 @@ async function evictStaleSessionFiles(): Promise<void> {
       }
     }
 
-    // If any project's state was unreadable this session, `knownIds` is
-    // incomplete — it's missing every terminal id belonging to that project.
-    // A .restore file carries only a bare terminal id (no project reference),
-    // so the missing ids can't be attributed back to the affected project;
-    // the orphan pass can't tell "this project's scrollback" from a genuine
+    // If any workspace's state was unreadable this session, `knownIds` is
+    // incomplete — it's missing every terminal id belonging to that workspace.
+    // A .restore file carries only a bare terminal id (no workspace reference),
+    // so the missing ids can't be attributed back to the affected workspace;
+    // the orphan pass can't tell "this workspace's scrollback" from a genuine
     // orphan. Fail closed: skip the orphan-eviction pass entirely this cycle
     // (pass knownIds: undefined) rather than delete recoverable scrollback.
-    // TTL and max-size passes don't depend on cross-project attribution, so
+    // TTL and max-size passes don't depend on cross-workspace attribution, so
     // they keep running as backstops.
-    const orphanSweepUnsafe = allProjects.some((p) =>
-      projectStore.wasStateUnreadableThisSession(p.id)
+    //
+    // Scratches count here for exactly the reason projects do: their .restore
+    // files are in the same pool and are just as unattributable (#11821).
+    const orphanSweepUnsafe = [...allProjects, ...allScratches].some((w) =>
+      projectStore.wasStateUnreadableThisSession(w.id)
     );
     if (orphanSweepUnsafe) {
       console.warn(
-        "[MAIN] Session eviction: skipping orphan pass — at least one project's state was unreadable or quarantined this session; retaining all .restore files to avoid deleting recoverable scrollback (TTL and size-cap passes still active)"
+        "[MAIN] Session eviction: skipping orphan pass — at least one workspace's state was unreadable or quarantined this session; retaining all .restore files to avoid deleting recoverable scrollback (TTL and size-cap passes still active)"
       );
     }
 

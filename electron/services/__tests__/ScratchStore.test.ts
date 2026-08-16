@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import fs from "fs/promises";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import { eq } from "drizzle-orm";
 import * as schema from "../persistence/schema.js";
 
 const CREATE_TABLES_SQL = `
@@ -13,7 +14,8 @@ const CREATE_TABLES_SQL = `
     created_at INTEGER NOT NULL,
     last_opened INTEGER NOT NULL,
     deleted_at INTEGER,
-    last_completion_seen_at INTEGER
+    last_completion_seen_at INTEGER,
+    resumable_agent_count INTEGER
   );
   CREATE TABLE IF NOT EXISTS app_state (
     key TEXT PRIMARY KEY,
@@ -268,5 +270,153 @@ describe("ScratchStore.markCompletionSeen", () => {
     store.markCompletionSeen(scratchId, 5_000);
 
     expect([...store.getLastCompletionSeenMap().keys()]).toEqual([scratchId]);
+  });
+});
+
+describe("ScratchStore resumable agent count (#11821)", () => {
+  let store: ScratchStore;
+  let scratchId: string;
+
+  const storedCount = (id = scratchId): number | null => {
+    const row = db.select().from(schema.scratches).where(eq(schema.scratches.id, id)).get();
+    return row?.resumableAgentCount ?? null;
+  };
+
+  const setStoredCount = (value: number | null, id = scratchId) => {
+    db.update(schema.scratches)
+      .set({ resumableAgentCount: value })
+      .where(eq(schema.scratches.id, id))
+      .run();
+  };
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+
+    scratchId = randomUUID();
+    db.insert(schema.scratches)
+      .values({
+        id: scratchId,
+        path: "/tmp/daintree-scratch-test/" + scratchId,
+        name: "Test Scratch",
+        createdAt: 1_000,
+        lastOpened: 2_000,
+      })
+      .run();
+
+    store = new ScratchStore();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  describe("what a row reports", () => {
+    it("says nothing at all for a row that has never been counted", () => {
+      // The column is NULL for every scratch that predates the field. Reporting
+      // 0 there would claim it restores nothing, which nobody checked.
+      expect(store.getScratchById(scratchId)?.resumableAgentCount).toBeUndefined();
+    });
+
+    it("carries a counted zero as an answer, distinct from never having counted", () => {
+      setStoredCount(0);
+      expect(store.getScratchById(scratchId)?.resumableAgentCount).toBe(0);
+    });
+
+    it("carries a positive count through both read paths", () => {
+      setStoredCount(4);
+      expect(store.getScratchById(scratchId)?.resumableAgentCount).toBe(4);
+      expect(store.getAllScratches()[0]?.resumableAgentCount).toBe(4);
+    });
+
+    it("treats a corrupt count as never counted rather than as a claim", () => {
+      for (const corrupt of [-1, 1.5]) {
+        setStoredCount(corrupt);
+        expect(store.getScratchById(scratchId)?.resumableAgentCount).toBeUndefined();
+      }
+    });
+  });
+
+  describe("reconciling a row the write path never reached", () => {
+    it("fills in a row that had no count", () => {
+      expect(store.reconcileResumableAgentCount(scratchId, null, 3)?.resumableAgentCount).toBe(3);
+      expect(storedCount()).toBe(3);
+    });
+
+    it("reports no change when the row already agrees", () => {
+      setStoredCount(2);
+      expect(store.reconcileResumableAgentCount(scratchId, 2, 2)).toBeNull();
+    });
+
+    it("repairs a row whose stored count has gone stale", () => {
+      setStoredCount(5);
+      expect(store.reconcileResumableAgentCount(scratchId, 5, 1)?.resumableAgentCount).toBe(1);
+      expect(storedCount()).toBe(1);
+    });
+
+    it("leaves a row alone when a newer write landed since it was read", () => {
+      // The sweep read NULL, then a real save wrote 7 while it was still
+      // loading state off disk. Its answer is older than the row's.
+      setStoredCount(7);
+      expect(store.reconcileResumableAgentCount(scratchId, null, 2)).toBeNull();
+      expect(storedCount()).toBe(7);
+    });
+
+    it("leaves a row alone when its known count moved to a different one", () => {
+      setStoredCount(3);
+      expect(store.reconcileResumableAgentCount(scratchId, 1, 9)).toBeNull();
+      expect(storedCount()).toBe(3);
+    });
+
+    it("retracts the claim when the scratch's state can no longer be read", () => {
+      setStoredCount(3);
+      const updated = store.reconcileResumableAgentCount(scratchId, 3, null);
+      expect(updated?.resumableAgentCount).toBeUndefined();
+      expect(storedCount()).toBeNull();
+    });
+
+    it("repairs a corrupt cell that reads back as unknown", () => {
+      // `readPersistedCount` reports -1 as unknown, so the sweep arrives with
+      // previousCount null. Matching SQL NULL alone would never match this row
+      // and it would stay corrupt forever.
+      setStoredCount(-1);
+      expect(store.reconcileResumableAgentCount(scratchId, null, 2)?.resumableAgentCount).toBe(2);
+      expect(storedCount()).toBe(2);
+    });
+
+    it("does not touch a tombstoned row", () => {
+      db.update(schema.scratches)
+        .set({ deletedAt: 9_000 })
+        .where(eq(schema.scratches.id, scratchId))
+        .run();
+      expect(store.reconcileResumableAgentCount(scratchId, null, 4)).toBeNull();
+      expect(storedCount()).toBeNull();
+    });
+
+    it("rejects a malformed id instead of addressing the whole table", () => {
+      setStoredCount(1);
+      expect(store.reconcileResumableAgentCount("not-a-uuid", null, 6)).toBeNull();
+      expect(storedCount()).toBe(1);
+    });
+  });
+
+  describe("surviving the other writers", () => {
+    it("keeps the count across a rename", () => {
+      setStoredCount(3);
+      expect(store.updateScratch(scratchId, { name: "Renamed" }).resumableAgentCount).toBe(3);
+    });
+
+    it("keeps the count across a switch that restamps lastOpened", () => {
+      setStoredCount(3);
+      store.setCurrentScratch(scratchId);
+      expect(storedCount()).toBe(3);
+    });
+
+    it("keeps the count across a completion watermark stamp", () => {
+      setStoredCount(3);
+      store.markCompletionSeen(scratchId, 5_000);
+      expect(storedCount()).toBe(3);
+    });
   });
 });

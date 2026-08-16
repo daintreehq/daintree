@@ -276,6 +276,17 @@ vi.mock("../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
+const scratchStoreMock = vi.hoisted(() => ({
+  getAllScratches: vi.fn<() => { id: string; resumableAgentCount?: number }[]>(() => []),
+  reconcileResumableAgentCount: vi.fn<
+    (id: string, previous: number | null, count: number | null) => unknown
+  >(() => null),
+}));
+
+vi.mock("../../services/ScratchStore.js", () => ({
+  scratchStore: scratchStoreMock,
+}));
+
 vi.mock("../../setup/environment.js", () => ({
   exposeGc: vi.fn(),
   isSmokeTest: false,
@@ -351,6 +362,10 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
     projectStoreMock.wasStateUnreadableThisSession.mockReturnValue(false);
     projectStoreMock.reconcileResumableAgentCount.mockReset();
     projectStoreMock.reconcileResumableAgentCount.mockReturnValue(null);
+    scratchStoreMock.getAllScratches.mockReset();
+    scratchStoreMock.getAllScratches.mockReturnValue([]);
+    scratchStoreMock.reconcileResumableAgentCount.mockReset();
+    scratchStoreMock.reconcileResumableAgentCount.mockReturnValue(null);
     broadcastToRendererMock.mockReset();
   }
 
@@ -358,6 +373,17 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
   // Restore defaults so a custom implementation set here can't leak into the
   // sibling "task ordering" describe — these hoisted mocks are shared.
   afterEach(resetSweepMocks);
+
+  /** A saved panel the resume count is allowed to count. */
+  const agentPanel = (id: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    title: "Agent",
+    kind: "terminal",
+    cwd: "/repo",
+    location: "grid",
+    launchAgentId: "claude",
+    ...overrides,
+  });
 
   it("passes a populated knownIds set when every project-state read is reliable", async () => {
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }, { id: "proj-b" }]);
@@ -425,16 +451,6 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
    * in ProjectStore.resumableAgentCount.test.ts.
    */
   describe("resume-count backfill", () => {
-    const agentPanel = (id: string, overrides: Record<string, unknown> = {}) => ({
-      id,
-      title: "Agent",
-      kind: "terminal",
-      cwd: "/repo",
-      location: "grid",
-      launchAgentId: "claude",
-      ...overrides,
-    });
-
     it("counts the agent panels a readable state would restore", async () => {
       projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }]);
       projectStoreMock.getProjectState.mockResolvedValue({
@@ -513,6 +529,136 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
       await __test__.evictStaleSessionFiles();
 
       expect(evictSessionFilesMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * The same backfill for scratches (#11821). Without it the write-path fix
+   * alone leaves every scratch that existed before the field dark forever —
+   * which is the bug again, one population over.
+   */
+  describe("scratch resume-count backfill", () => {
+    it("counts a dormant scratch's saved agents and fills its row", async () => {
+      scratchStoreMock.getAllScratches.mockReturnValue([{ id: "scratch-a" }]);
+      projectStoreMock.getProjectState.mockResolvedValue({
+        terminals: [agentPanel("t1"), agentPanel("t2")],
+      });
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(scratchStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith(
+        "scratch-a",
+        null,
+        2
+      );
+    });
+
+    it("reads an absent scratch state as an authoritative zero", async () => {
+      scratchStoreMock.getAllScratches.mockReturnValue([{ id: "scratch-a" }]);
+      projectStoreMock.getProjectState.mockResolvedValue(null);
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(scratchStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith(
+        "scratch-a",
+        null,
+        0
+      );
+    });
+
+    it("retracts the claim when a scratch's state was unreadable", async () => {
+      scratchStoreMock.getAllScratches.mockReturnValue([
+        { id: "scratch-a", resumableAgentCount: 2 },
+      ]);
+      projectStoreMock.getProjectState.mockResolvedValue(null);
+      projectStoreMock.wasStateUnreadableThisSession.mockImplementation(
+        (id: string) => id === "scratch-a"
+      );
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(scratchStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith(
+        "scratch-a",
+        2,
+        null
+      );
+    });
+
+    it("carries the previously known count into the compare-and-swap", async () => {
+      scratchStoreMock.getAllScratches.mockReturnValue([
+        { id: "scratch-a", resumableAgentCount: 0 },
+      ]);
+      projectStoreMock.getProjectState.mockResolvedValue({ terminals: [agentPanel("t1")] });
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(scratchStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith("scratch-a", 0, 1);
+    });
+
+    it("broadcasts moved scratches on the scratch channel, not the project one", async () => {
+      scratchStoreMock.getAllScratches.mockReturnValue([{ id: "moved" }, { id: "unchanged" }]);
+      projectStoreMock.getProjectState.mockResolvedValue({ terminals: [agentPanel("t1")] });
+      scratchStoreMock.reconcileResumableAgentCount.mockImplementation((id: string) =>
+        id === "moved" ? { id: "moved", resumableAgentCount: 1 } : null
+      );
+
+      await __test__.evictStaleSessionFiles();
+
+      const scratchUpdates = broadcastToRendererMock.mock.calls.filter(
+        ([channel]) => channel === "scratch:updated"
+      );
+      expect(scratchUpdates).toHaveLength(1);
+      expect(scratchUpdates[0][1]).toMatchObject({ id: "moved" });
+      expect(
+        broadcastToRendererMock.mock.calls.filter(([channel]) => channel === "project:updated")
+      ).toHaveLength(0);
+    });
+
+    it("still runs the orphan pass when a scratch's count cannot be written", async () => {
+      scratchStoreMock.getAllScratches.mockReturnValue([{ id: "scratch-a" }]);
+      projectStoreMock.getProjectState.mockResolvedValue({ terminals: [agentPanel("t1")] });
+      scratchStoreMock.reconcileResumableAgentCount.mockImplementation(() => {
+        throw new Error("database is locked");
+      });
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(evictSessionFilesMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * Scratch `.restore` files sit in the same pool as project ones and carry no
+   * workspace reference, so the orphan pass has to be told about them too or it
+   * reads a live scratch's scrollback as unattributed.
+   */
+  describe("scratch terminals in the orphan pass", () => {
+    it("declares a scratch's terminals known", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }]);
+      scratchStoreMock.getAllScratches.mockReturnValue([{ id: "scratch-a" }]);
+      projectStoreMock.getProjectState.mockImplementation(async (id: string) =>
+        id === "proj-a" ? { terminals: [{ id: "term-p1" }] } : { terminals: [{ id: "term-s1" }] }
+      );
+
+      await __test__.evictStaleSessionFiles();
+
+      const arg = evictSessionFilesMock.mock.calls[0][0];
+      expect([...(arg.knownIds ?? [])].sort()).toEqual(["term-p1", "term-s1"]);
+    });
+
+    it("disables the orphan pass when a scratch's state was unreadable", async () => {
+      // Fail closed for the same reason a project does: the missing ids can't be
+      // attributed back, so deleting on that basis would eat live scrollback.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }]);
+      scratchStoreMock.getAllScratches.mockReturnValue([{ id: "scratch-quarantined" }]);
+      projectStoreMock.getProjectState.mockResolvedValue({ terminals: [{ id: "term-p1" }] });
+      projectStoreMock.wasStateUnreadableThisSession.mockImplementation(
+        (id: string) => id === "scratch-quarantined"
+      );
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(evictSessionFilesMock.mock.calls[0][0].knownIds).toBeUndefined();
     });
   });
 });
