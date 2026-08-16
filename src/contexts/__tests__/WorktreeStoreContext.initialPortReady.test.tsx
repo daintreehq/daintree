@@ -28,6 +28,7 @@ let fatalCallbacks: Array<() => void> = [];
 let requestCount = 0;
 
 function setCurrentProject(path: string | null): void {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only the fields this suite reads
   const project = path ? ({ id: "p1", name: "p1", path } as unknown as Project) : null;
   useProjectStore.setState({ currentProject: project });
 }
@@ -47,6 +48,7 @@ beforeEach(() => {
   useProjectStore.setState({ worktreeLoadError: null });
   setCurrentProject("/repo/proj");
 
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- jsdom global, stubbed per test
   (globalThis as unknown as { window: Window }).window.electron = {
     worktreePort: {
       isReady: () => portReady,
