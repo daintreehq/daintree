@@ -177,8 +177,9 @@ vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
 }));
 
-function renderAdapter(props: Partial<React.ComponentProps<typeof XtermAdapter>> = {}) {
-  return render(
+/** The element `renderAdapter` mounts, so `rerender` can rebuild it verbatim. */
+function adapterElement(props: Partial<React.ComponentProps<typeof XtermAdapter>> = {}) {
+  return (
     <Suspense fallback={null}>
       <XtermAdapter
         terminalId="term-1"
@@ -192,6 +193,10 @@ function renderAdapter(props: Partial<React.ComponentProps<typeof XtermAdapter>>
       />
     </Suspense>
   );
+}
+
+function renderAdapter(props: Partial<React.ComponentProps<typeof XtermAdapter>> = {}) {
+  return render(adapterElement(props));
 }
 
 describe("XtermAdapter lifecycle", () => {
@@ -1017,6 +1022,26 @@ describe("XtermAdapter lifecycle", () => {
         launchAgentId: "claude",
         detectedAgentId: "codex",
         agentState: "working",
+      });
+    });
+
+    // The hook can only select the panel a drop landed on if the owner's
+    // callback reaches it — and the option is optional, so losing this wiring
+    // would compile, leave every hook-level test green, and quietly restore
+    // #11809. Consumers whose xterm owns no selectable panel (the Assistant,
+    // the Dev Preview console) pass nothing, so absence has to survive too.
+    it("forwards the owner's drop-selection callback, and its absence", async () => {
+      const onDropSelect = vi.fn();
+      const { rerender } = renderAdapter({ onDropSelect });
+      await waitFor(() => expect(mocks.useTerminalFileTransfer).toHaveBeenCalled());
+
+      const [, withOwner] = mocks.useTerminalFileTransfer.mock.calls.at(-1)!;
+      expect(withOwner.onDropSelect).toBe(onDropSelect);
+
+      rerender(adapterElement({}));
+      await waitFor(() => {
+        const [, withoutOwner] = mocks.useTerminalFileTransfer.mock.calls.at(-1)!;
+        expect(withoutOwner.onDropSelect).toBeUndefined();
       });
     });
   });

@@ -671,9 +671,48 @@ describe("useDragDrop", () => {
       );
     });
 
-    // The whole point of the gesture is typing straight after the chip, so the
-    // caret the insertion parked must survive being focused. Routing through
-    // the panel focus registry instead would dispatch it to the end of the draft.
+    // An image waits on a thumbnail over IPC before it can be inserted, and
+    // that is exactly the drop the user has time to start typing after. The
+    // whole gesture has to be committed before the wait, not after it — the
+    // insertion is allowed to arrive late, the keyboard is not.
+    it("selects the pane before an image drop waits on its thumbnail", async () => {
+      const onDropSelect = vi.fn();
+      const { ref, focus, dispatch } = fakeView();
+      let releaseThumbnail!: () => void;
+      thumbnailFromPath.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            releaseThumbnail = () => resolve({ thumbnailDataUrl: "data:image/png;base64,x" });
+          })
+      );
+      const { result } = renderHook(() => useDragDrop(ref, CWD, onDropSelect));
+
+      let pending!: Promise<void>;
+      act(() => {
+        pending = result.current.handleDrop(internalDrop([`${CWD}/shot.png`]));
+      });
+
+      // Nothing is inserted yet, but the keyboard already belongs here.
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("hybridInput");
+      expect(onDropSelect).toHaveBeenCalledTimes(1);
+      expect(focus).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        releaseThumbnail();
+        await pending;
+      });
+
+      // …and the late insertion neither repeats nor re-takes the selection.
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(onDropSelect).toHaveBeenCalledTimes(1);
+      expect(focus).toHaveBeenCalledTimes(1);
+    });
+
+    // The whole point of the gesture is typing straight after the chip, so
+    // focusing must not carry a caret move of its own. Routing through the
+    // panel focus registry instead would dispatch the caret to the end of the
+    // draft, overriding where the insertion parks it.
     it("leaves the caret the insertion parked rather than moving it", async () => {
       const { ref, dispatch, focus, head } = fakeView(6);
       const { result } = renderHook(() => useDragDrop(ref, CWD, vi.fn()));
@@ -689,8 +728,10 @@ describe("useDragDrop", () => {
     });
 
     // A pane that took nothing has not been pointed at in any sense that should
-    // move the selection off whatever the user was already typing into.
-    it("selects nothing when the drop resolves no paths", async () => {
+    // move the selection off whatever the user was already typing into. Each
+    // case ends with a drop that IS accepted, so the assertion is about the
+    // guard rather than about selection being absent everywhere.
+    it("selects nothing for a drop carrying nothing referenceable", async () => {
       const onDropSelect = vi.fn();
       const { ref, focus, dispatch } = fakeView();
       const { result } = renderHook(() => useDragDrop(ref, CWD, onDropSelect));
@@ -703,10 +744,18 @@ describe("useDragDrop", () => {
       expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
       expect(onDropSelect).not.toHaveBeenCalled();
       expect(focus).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await result.current.handleDrop(internalDrop([`${CWD}/src/App.tsx`]));
+      });
+
+      expect(onDropSelect).toHaveBeenCalledTimes(1);
+      expect(focus).toHaveBeenCalledTimes(1);
     });
 
     it("selects nothing when the editor is gone before the drop lands", async () => {
       const onDropSelect = vi.fn();
+      const view = fakeView();
       const ref = { current: null } as React.RefObject<EditorView | null>;
       const { result } = renderHook(() => useDragDrop(ref, CWD, onDropSelect));
 
@@ -716,30 +765,23 @@ describe("useDragDrop", () => {
 
       expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
       expect(onDropSelect).not.toHaveBeenCalled();
-    });
 
-    // A destroyed view rejects the transaction; nothing was inserted, so
-    // nothing about the pane should move either.
-    it("selects nothing when the insertion itself fails", async () => {
-      const onDropSelect = vi.fn();
-      const { ref, dispatch, focus } = fakeView();
-      dispatch.mockImplementation(() => {
-        throw new Error("view destroyed");
-      });
-      const { result } = renderHook(() => useDragDrop(ref, CWD, onDropSelect));
-
+      // The same drop once an editor is mounted, proving the absence above was
+      // the missing view and not a hook that never selects anything.
+      ref.current = view.view;
       await act(async () => {
         await result.current.handleDrop(internalDrop([`${CWD}/src/App.tsx`]));
       });
 
-      expect(onDropSelect).not.toHaveBeenCalled();
-      expect(focus).not.toHaveBeenCalled();
+      expect(onDropSelect).toHaveBeenCalledTimes(1);
+      expect(view.focus).toHaveBeenCalledTimes(1);
     });
 
     // A thumbnail resolves asynchronously, so the pane can remount underneath a
-    // dropped image. Committing then would insert into a detached editor — inert
-    // on its own — and drag the selection to a pane that shows none of it.
-    it("selects nothing when the pane remounts while an image resolves", async () => {
+    // dropped image. The gesture was aimed at this pane and already selected it;
+    // what must not happen is the late insertion landing in a document neither
+    // the old nor the new editor is showing.
+    it("inserts into neither editor when the pane remounts while an image resolves", async () => {
       const onDropSelect = vi.fn();
       const { ref, dispatch, focus } = fakeView();
       let releaseThumbnail!: () => void;
@@ -756,16 +798,20 @@ describe("useDragDrop", () => {
         pending = result.current.handleDrop(internalDrop([`${CWD}/shot.png`]));
       });
       // The replacement a remount installs — same ref, different view.
-      ref.current = fakeView().view;
+      const replacement = fakeView();
+      ref.current = replacement.view;
       await act(async () => {
         releaseThumbnail();
         await pending;
       });
 
       expect(dispatch).not.toHaveBeenCalled();
-      expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
-      expect(onDropSelect).not.toHaveBeenCalled();
-      expect(focus).not.toHaveBeenCalled();
+      expect(replacement.dispatch).not.toHaveBeenCalled();
+      expect(replacement.focus).not.toHaveBeenCalled();
+      // The pane it was dropped on was selected when the gesture landed, which
+      // is before the editor underneath it was replaced.
+      expect(onDropSelect).toHaveBeenCalledTimes(1);
+      expect(focus).toHaveBeenCalledTimes(1);
     });
 
     // The Assistant's input bar runs this hook over a PTY that owns no

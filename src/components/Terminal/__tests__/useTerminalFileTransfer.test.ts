@@ -1002,13 +1002,20 @@ describe("useTerminalFileTransfer hook", () => {
     // delimiters as literal input.
     it("falls back to identity when no managed instance answers", () => {
       instanceState.hasManagedInstance = false;
-      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      const { rerender } = renderFileTransferHook({
+        detectedAgentId: "claude",
+        cwdProvider: () => CWD,
+      });
       dropInternalPaths([`${CWD}/src/App.tsx`]);
       expect(lastWrittenPayload()).toBe(formatWithBracketedPaste("@src/App.tsx "));
 
+      // Drops the agent identity on the same hook rather than rendering a
+      // second one: both would bind to the shared container and answer the
+      // drop below, and reading only the last payload would hide it.
       vi.mocked(terminalClient.write).mockClear();
-      renderFileTransferHook({ cwdProvider: () => CWD });
+      rerender({ cwdProvider: () => CWD });
       dropInternalPaths([`${CWD}/src/App.tsx`]);
+      expect(vi.mocked(terminalClient.write)).toHaveBeenCalledTimes(1);
       expect(lastWrittenPayload()).toBe(`${escapeShellArgOptional(`${CWD}/src/App.tsx`)} `);
     });
 
@@ -1178,7 +1185,11 @@ describe("useTerminalFileTransfer hook", () => {
       // The order is load-bearing, not incidental: the pane's focus effect reads
       // the preference to route the keyboard when selection lands, so leaving it
       // on "hybridInput" would send focus to the input bar the paths bypassed.
+      // And nothing about the pane moves until the paths are actually delivered.
       expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("xterm");
+      expect(vi.mocked(terminalClient.write).mock.invocationCallOrder[0]!).toBeLessThan(
+        setPreferredTerminalFocusTarget.mock.invocationCallOrder[0]!
+      );
       expect(setPreferredTerminalFocusTarget.mock.invocationCallOrder[0]!).toBeLessThan(
         onDropSelect.mock.invocationCallOrder[0]!
       );
@@ -1211,44 +1222,64 @@ describe("useTerminalFileTransfer hook", () => {
     });
 
     /**
-     * Nothing about the pane moved. Each caller renders its own hook: the hook
-     * binds to the shared container, so two live at once would both answer the
-     * same drop.
+     * Nothing about the pane moved, and then a drop that IS accepted moves it —
+     * so the absence above is the guard doing its job rather than a hook that
+     * never selects anything. Renders its own hook per call: the hook binds to
+     * the shared container, so two live at once would both answer one drop.
      */
-    function expectNothingSelected(onDropSelect: ReturnType<typeof vi.fn>) {
+    function expectRejectedThenAcceptedDrop(
+      options: HookProps,
+      rejectedDrop: () => void,
+      accept: (hook: ReturnType<typeof renderFileTransferHook>, onDropSelect: () => void) => void
+    ) {
+      const onDropSelect = vi.fn();
+      const hook = renderFileTransferHook({ cwdProvider: () => CWD, onDropSelect, ...options });
+      rejectedDrop();
+
       expect(terminalClient.write).not.toHaveBeenCalled();
       expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
       expect(onDropSelect).not.toHaveBeenCalled();
       expect(terminalInstanceService.focus).not.toHaveBeenCalled();
+
+      accept(hook, onDropSelect);
+
+      expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("xterm");
+      expect(onDropSelect).toHaveBeenCalledTimes(1);
+      expect(terminalInstanceService.focus).toHaveBeenCalledWith("term-1");
     }
 
     // A terminal that took nothing has not been pointed at in any sense that
     // should move the selection off whatever the user was already typing into.
-    it("selects nothing when the input is locked", () => {
-      const onDropSelect = vi.fn();
-      renderFileTransferHook({ isInputLocked: true, cwdProvider: () => CWD, onDropSelect });
-      dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
-
-      expectNothingSelected(onDropSelect);
+    it("selects nothing while the input is locked", () => {
+      expectRejectedThenAcceptedDrop(
+        { isInputLocked: true },
+        () => dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]),
+        (hook, onDropSelect) => {
+          // Unlocking reuses the same hook rather than rendering a second one,
+          // which would leave two listener sets answering the one drop below.
+          hook.rerender({ cwdProvider: () => CWD, onDropSelect, isInputLocked: false });
+          dropInternalPaths([`${CWD}/src/App.tsx`]);
+        }
+      );
     });
 
     // The OS declined to resolve a path, so there is nothing referenceable.
     it("selects nothing when no dropped file resolves to a path", () => {
-      const onDropSelect = vi.fn();
-      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
-      dropFiles([fileAt("no-path.txt")]);
-
-      expectNothingSelected(onDropSelect);
+      expectRejectedThenAcceptedDrop(
+        { detectedAgentId: "claude" },
+        () => dropFiles([fileAt("no-path.txt")]),
+        () => dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)])
+      );
     });
 
     // A relative path names nothing the agent could open, so the whole payload
     // is rejected rather than partially delivered.
     it("selects nothing when the in-app payload is rejected", () => {
-      const onDropSelect = vi.fn();
-      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
-      dropInternalPaths(["relative/App.tsx"]);
-
-      expectNothingSelected(onDropSelect);
+      expectRejectedThenAcceptedDrop(
+        { detectedAgentId: "claude" },
+        () => dropInternalPaths(["relative/App.tsx"]),
+        () => dropInternalPaths([`${CWD}/src/App.tsx`])
+      );
     });
 
     // Pasting an image writes the same kind of reference, but the pointer never
@@ -1261,6 +1292,13 @@ describe("useTerminalFileTransfer hook", () => {
       expect(terminalClient.write).toHaveBeenCalledTimes(1);
       expect(onDropSelect).not.toHaveBeenCalled();
       expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
+      expect(terminalInstanceService.focus).not.toHaveBeenCalled();
+
+      // The same hook, now given a gesture that did point somewhere.
+      dropInternalPaths([`${CWD}/src/App.tsx`]);
+
+      expect(onDropSelect).toHaveBeenCalledTimes(1);
+      expect(terminalInstanceService.focus).toHaveBeenCalledWith("term-1");
     });
 
     // The owning pane rebuilds this callback every render. Reading it through a

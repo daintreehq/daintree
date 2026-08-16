@@ -110,6 +110,32 @@ export function useDragDrop(
 
       if (dropped.length === 0) return;
 
+      // The gesture already pointed at this input, so it ends the same way a
+      // click on it does: pane selected, caret here, ready to type about the
+      // file that just landed (#11809). A drop carrying nothing referenceable
+      // returned above and leaves the selection alone.
+      //
+      // Committed here rather than after the insertion, because an image drop
+      // waits on a thumbnail over IPC first. Selecting only once that resolved
+      // would leave the keystrokes typed in between going to the pane the user
+      // just navigated away from — the very bug this fixes, still present for
+      // exactly the drops with the longest gap. It would also let a slow
+      // thumbnail pull the selection back long after the user moved on.
+      //
+      // Order matters. The preference is what `TerminalPane`'s focus effect
+      // reads to decide which sub-surface the newly selected pane hands the
+      // keyboard to, so a stale "xterm" would yank focus straight back out.
+      //
+      // `view.focus()` rather than the panel focus registry: the registry
+      // routes to `focusWithCursorAtEnd`, which drags the caret to the end of
+      // the draft whenever the editor doesn't already hold focus — undoing the
+      // caret the insertion below parks after the chip. Focusing directly keeps
+      // it, and makes the pane effect's own later call a no-op, since it
+      // preserves an editor that already owns DOM focus.
+      usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
+      onDropSelect?.();
+      view.focus();
+
       type ResolvedFile =
         | { type: "image"; filePath: string; thumbnailDataUrl: string }
         | {
@@ -147,8 +173,8 @@ export function useDragDrop(
 
       // A thumbnail await above can outlive the editor it started in: the pane
       // can unmount or remount (`useEditorFactory` destroys the view and nulls
-      // the ref) while an image resolves. Inserting into a detached view was
-      // already inert, but selecting a panel off the back of one would not be.
+      // the ref) while an image resolves. Dispatching into the detached view
+      // would insert into a document nothing is showing any more.
       if (editorViewRef.current !== view) return;
 
       try {
@@ -192,25 +218,6 @@ export function useDragDrop(
           effects: [...imageEffects, ...fileEffects],
           selection: { anchor: cursor + insertText.length },
         });
-
-        // The gesture already pointed at this input, so it ends the same way a
-        // click on it does: pane selected, caret here, ready to type about the
-        // file that just landed (#11809). Only a drop that inserted something
-        // earns that — the early returns above leave selection alone.
-        //
-        // Order matters. The preference is what `TerminalPane`'s focus effect
-        // reads to decide which sub-surface the newly selected pane hands the
-        // keyboard to, so a stale "xterm" would yank focus straight back out.
-        //
-        // `view.focus()` rather than the panel focus registry: the registry
-        // routes to `focusWithCursorAtEnd`, which drags the caret to the end of
-        // the draft whenever the editor doesn't already hold focus — undoing
-        // the caret this dispatch just parked after the chip. Focusing directly
-        // keeps it, and makes the pane effect's own later call a no-op, since
-        // it preserves an editor that already owns DOM focus.
-        usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
-        onDropSelect?.();
-        view.focus();
       } catch {
         // Editor may have been destroyed
       }
