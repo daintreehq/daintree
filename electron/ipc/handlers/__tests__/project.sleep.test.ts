@@ -71,12 +71,27 @@ const PROJECT: StoredProject = {
   status: "background",
 };
 
-function setup(overrides: { evictProject?: () => boolean } = {}) {
+function setup(
+  overrides: {
+    evictProject?: () => boolean;
+    /** Project id each window currently has on screen. */
+    windowProjects?: Array<string | null>;
+  } = {}
+) {
   const evictProject = vi.fn(overrides.evictProject ?? (() => true));
+  const unregisterWindow = vi.fn();
+  const windows = (overrides.windowProjects ?? []).map((activeProjectId, index) => ({
+    services: {
+      projectViewManager: {
+        getActiveProjectId: () => activeProjectId,
+        win: { id: index + 1, isDestroyed: () => false },
+      },
+    },
+  }));
   const deps = {
     ptyClient: {},
-    worktreeService: { evictProject },
-    windowRegistry: {},
+    worktreeService: { evictProject, unregisterWindow },
+    windowRegistry: { all: () => windows },
   } as unknown as HandlerDependencies;
 
   const dispose = registerProjectSleepHandlers(deps);
@@ -89,6 +104,7 @@ function setup(overrides: { evictProject?: () => boolean } = {}) {
   return {
     dispose,
     evictProject,
+    unregisterWindow,
     invoke: (projectId: unknown) => handler({}, projectId),
   };
 }
@@ -107,11 +123,6 @@ describe("project:sleep", () => {
       ],
     });
     hibernationMock.evictProjectRenderer.mockReturnValue(1);
-  });
-
-  it("registers on the sleep channel", () => {
-    setup();
-    expect(vi.mocked(ipcMain.handle).mock.calls.map(([c]) => c)).toContain(CHANNELS.PROJECT_SLEEP);
   });
 
   describe("validation", () => {
@@ -148,6 +159,10 @@ describe("project:sleep", () => {
       });
       expect(teardownMock.gracefulTeardownAndJournalProject).not.toHaveBeenCalled();
       expect(persistenceMock.writeHibernatedMarker).not.toHaveBeenCalled();
+      expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(projectStoreMock.clearCurrentProject).not.toHaveBeenCalled();
+      expect(broadcastMock).not.toHaveBeenCalled();
     });
   });
 
@@ -187,6 +202,7 @@ describe("project:sleep", () => {
 
       const result = await invoke("proj-1");
 
+      expect(hibernationMock.evictProjectRenderer).toHaveBeenCalledWith("proj-1");
       expect(evictProject).toHaveBeenCalledWith("/repo/one");
       expect(result).toEqual({
         terminalsKilled: 2,
@@ -195,15 +211,62 @@ describe("project:sleep", () => {
       });
     });
 
-    it("reports the workspace host retained when a window still holds it", async () => {
-      // The on-screen case: that window keeps its live worktree feed, so
-      // evictProject refuses. Sleeping still succeeds.
+    it("reports the workspace host retained when it genuinely can't be dropped", async () => {
       const { invoke } = setup({ evictProject: () => false });
 
       const result = await invoke("proj-1");
 
       expect(result.workspaceEvicted).toBe(false);
       expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed");
+    });
+
+    it("releases the on-screen window's workspace reference so the host can go", async () => {
+      // evictProject refuses a host any window still holds, and a window with
+      // the project on screen holds one. Sleep leaves that window's VIEW alive
+      // on purpose, so nothing else releases the reference — without this the
+      // host survives sleeping the only project using it.
+      const { invoke, unregisterWindow, evictProject } = setup({
+        windowProjects: ["proj-1", "other"],
+      });
+
+      await invoke("proj-1");
+
+      expect(unregisterWindow).toHaveBeenCalledTimes(1);
+      expect(unregisterWindow).toHaveBeenCalledWith(1);
+      // Released before the eviction is attempted, or the refCount still blocks.
+      expect(unregisterWindow.mock.invocationCallOrder[0]!).toBeLessThan(
+        evictProject.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("leaves other projects' windows registered", async () => {
+      // Releasing a window bound to a different project would sever a worktree
+      // feed that is still in use.
+      const { invoke, unregisterWindow } = setup({ windowProjects: ["other", null] });
+
+      await invoke("proj-1");
+
+      expect(unregisterWindow).not.toHaveBeenCalled();
+    });
+
+    it("still closes the project when reclamation throws", async () => {
+      // Past the confirmed kill the terminals are gone, so the operation is
+      // committed: a failing eviction must not strand the row as open with dead
+      // terminals behind it.
+      const { invoke } = setup({
+        evictProject: () => {
+          throw new Error("host wedged");
+        },
+      });
+      hibernationMock.evictProjectRenderer.mockImplementation(() => {
+        throw new Error("view wedged");
+      });
+
+      const result = await invoke("proj-1");
+
+      expect(result.terminalsKilled).toBe(2);
+      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed");
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.PROJECT_SLEPT, "proj-1");
     });
   });
 
@@ -275,6 +338,30 @@ describe("project:sleep", () => {
       await invoke("proj-1");
 
       expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.PROJECT_UPDATED, updated);
+    });
+
+    it("announces the sleep on its own event, not just the status change", async () => {
+      // A window showing this project drops to no-project off THIS event.
+      // Inferring it from a `closed` status would also fire for relocation,
+      // project adoption and the idle sweep, blanking windows that shouldn't be.
+      const { invoke } = setup();
+
+      await invoke("proj-1");
+
+      expect(broadcastMock).toHaveBeenCalledWith(CHANNELS.PROJECT_SLEPT, "proj-1");
+    });
+
+    it("stays silent on both channels when the teardown was not confirmed", async () => {
+      teardownMock.gracefulTeardownAndJournalProject.mockResolvedValue({
+        confirmed: false,
+        terminalsKilled: 0,
+        sessions: [],
+      });
+      const { invoke } = setup();
+
+      await expect(invoke("proj-1")).rejects.toBeInstanceOf(AppError);
+
+      expect(broadcastMock).not.toHaveBeenCalled();
     });
   });
 });

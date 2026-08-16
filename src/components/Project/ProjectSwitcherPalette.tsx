@@ -541,7 +541,7 @@ function ProjectListItem({
         {showSleep && onSleepProject && (
           <ContextMenuItem onSelect={() => onSleepProject(project.id)}>
             <Moon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Sleep
+            Sleep project
           </ContextMenuItem>
         )}
         {onCloseProject && project.isActive && (

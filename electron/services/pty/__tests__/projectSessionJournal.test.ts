@@ -469,16 +469,31 @@ describe("gracefulTeardownAndJournalProject", () => {
       expect(updater({})).toBeNull();
     });
 
-    it("writes back before journaling, so a reopen and the picker agree", async () => {
+    it("waits for the writeback to land before journaling", async () => {
+      // Comparing invocation order would still pass if the writeback were fired
+      // without being awaited, which is the bug worth catching: the snapshot and
+      // the journal are the two halves of a resume and must not interleave.
+      let releaseWriteback!: () => void;
+      projectStoreMock.enqueueProjectStateUpdate.mockReturnValue(
+        new Promise<void>((resolve) => {
+          releaseWriteback = resolve;
+        })
+      );
       const { client } = agentClient([{ id: "t1", agentSessionId: "s1" }]);
 
-      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+      const pending = gracefulTeardownAndJournalProject("proj", client, undefined, {
         writeBackSessionIds: true,
       });
+      await Promise.resolve();
+      await Promise.resolve();
 
-      const writeOrder = projectStoreMock.enqueueProjectStateUpdate.mock.invocationCallOrder[0]!;
-      const journalOrder = journalMock.journalAgentSession.mock.invocationCallOrder[0]!;
-      expect(writeOrder).toBeLessThan(journalOrder);
+      expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalled();
+      expect(journalMock.journalAgentSession).not.toHaveBeenCalled();
+
+      releaseWriteback();
+      await pending;
+
+      expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
     });
 
     it("still journals when the writeback throws", async () => {

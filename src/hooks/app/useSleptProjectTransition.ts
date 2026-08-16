@@ -12,21 +12,20 @@ import { logDebug } from "@/utils/logger";
  * would blank it — the window's renderer IS the project's `WebContentsView`).
  * Without this it would keep painting panels whose terminals are gone.
  *
- * Gated narrowly on the project this view is currently showing flipping to
- * `closed`: the only writers of that transition are sleep and close, and the
- * closing window already transitioned itself, so re-running it there is a
- * no-op rather than a second teardown.
+ * Listens on the dedicated `project:slept` event rather than inferring the
+ * teardown from a `project:updated` that reaches `closed`: relocation, project
+ * adoption, the idle sweep and a plain metadata write all reach that status
+ * too, and blanking a visible window on any of those would be wrong.
  */
 export function useSleptProjectTransition(): void {
   useEffect(() => {
-    return window.electron.project.onUpdated((project) => {
+    return window.electron.project.onSlept((projectId) => {
+      // Read at delivery rather than closing over it: the effect subscribes
+      // once and this window's project changes underneath it.
       const state = useProjectStore.getState();
-      if (state.currentProject?.id !== project.id) return;
-      if (project.status !== "closed") return;
+      if (state.currentProject?.id !== projectId) return;
 
-      logDebug("[useSleptProjectTransition] Current project was slept elsewhere", {
-        projectId: project.id,
-      });
+      logDebug("[useSleptProjectTransition] Current project was slept elsewhere", { projectId });
       state.dropToNoProject();
     });
   }, []);

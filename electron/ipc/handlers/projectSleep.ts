@@ -1,7 +1,9 @@
 import { CHANNELS } from "../channels.js";
 import { broadcastToRenderer } from "../utils.js";
 import { projectStore } from "../../services/ProjectStore.js";
+import { projectViewManagersFrom } from "../../window/activeProjectIds.js";
 import { getHibernationService } from "../../services/HibernationService.js";
+import { logError } from "../../utils/logger.js";
 import { writeHibernatedMarker } from "../../services/pty/terminalSessionPersistence.js";
 import { gracefulTeardownAndJournalProject } from "../../services/pty/projectSessionJournal.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -88,20 +90,45 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
               });
             }
 
+            // Past this point the terminals are gone and the kill is confirmed,
+            // so the operation is COMMITTED: every remaining step is reclamation
+            // or bookkeeping, and letting one of them throw would strand the row
+            // as "open" with dead terminals behind it. Each is isolated, and the
+            // status write + broadcast below always run.
             for (const session of sessions) {
-              writeHibernatedMarker(session.id);
+              try {
+                writeHibernatedMarker(session.id);
+              } catch (markerError) {
+                // Costs this terminal its restore banner, nothing else.
+                console.warn(`[IPC] project:sleep: marker failed for ${session.id}:`, markerError);
+              }
             }
 
-            // Reclaim the project's cached WebContentsViews. No-ops for a window
-            // where the project is on screen (guarded inside the service) — that
-            // window's renderer transitions itself, see the docblock above.
-            const rendererViewsEvicted = getHibernationService().evictProjectRenderer(projectId);
+            let rendererViewsEvicted = 0;
+            try {
+              // Reclaim the project's cached WebContentsViews. No-ops for a
+              // window where the project is on screen (guarded inside the
+              // service) — that window's renderer transitions itself, see the
+              // docblock above.
+              rendererViewsEvicted = getHibernationService().evictProjectRenderer(projectId);
+            } catch (evictError) {
+              console.warn(`[IPC] project:sleep: renderer eviction failed:`, evictError);
+            }
 
-            // Drop the workspace-host utility process. Returns false while any
-            // window still holds the project (refCount > 0), which is exactly the
-            // on-screen case: that window keeps its live worktree feed until the
-            // user moves it elsewhere.
-            const workspaceEvicted = deps.worktreeService?.evictProject(project.path) ?? false;
+            let workspaceEvicted = false;
+            try {
+              // `evictProject` refuses while any window still holds the project
+              // (refCount > 0), and a window showing it holds one — so release
+              // those references first. Safe even though the view stays alive:
+              // it is about to render the welcome screen, which needs no
+              // worktree feed. Without this, sleeping the project on screen
+              // would leave its workspace host resident and report
+              // `workspaceEvicted: false`, defeating half the reclaim.
+              releaseWorkspaceRefsForProject(deps, projectId);
+              workspaceEvicted = deps.worktreeService?.evictProject(project.path) ?? false;
+            } catch (workspaceError) {
+              console.warn(`[IPC] project:sleep: workspace eviction failed:`, workspaceError);
+            }
 
             // Keep the project in the list as `closed` WITHOUT clearProjectState,
             // so its panel/terminal layout survives for a non-destructive reopen.
@@ -118,11 +145,15 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
 
             const updated = projectStore.getProjectById(projectId);
             if (updated) {
-              // Every window listens: one showing this project drops to the
-              // no-project state off this broadcast, so a second window can't be
-              // left painting a project whose terminals are gone.
               broadcastToRenderer(CHANNELS.PROJECT_UPDATED, updated);
             }
+
+            // Its OWN event, not an inference from the `closed` status above:
+            // relocation, project adoption and the idle sweep all reach `closed`
+            // too, and a window blanking itself on any of those would be wrong.
+            // This is what tells a SECOND window showing the project to drop to
+            // the no-project state — main deliberately leaves its view alive.
+            broadcastToRenderer(CHANNELS.PROJECT_SLEPT, projectId);
 
             console.log(
               `[IPC] project:sleep: ${projectId} — killed ${terminalsKilled} terminal(s), ` +
@@ -150,4 +181,43 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
   });
 
   return namespace.register();
+}
+
+/**
+ * Drop every window's workspace-host reference to `projectId`, so the host can
+ * actually be evicted.
+ *
+ * `WorkspaceHostPool.evictProject` refuses a host any window still holds, and a
+ * window with the project on screen holds one. Sleep leaves that window's view
+ * alive on purpose — destroying it would blank the window — so nothing else
+ * releases the reference, and the host would survive a sleep of the only
+ * project using it. Releasing is safe here: the view is about to render the
+ * welcome screen, and a later reopen re-registers through `loadProject`.
+ *
+ * Per-window and best-effort: a disposing window can throw, and one failure
+ * must not skip the rest.
+ */
+function releaseWorkspaceRefsForProject(deps: HandlerDependencies, projectId: string): void {
+  const worktreeService = deps.worktreeService;
+  if (!worktreeService) return;
+
+  let managers;
+  try {
+    managers = projectViewManagersFrom(deps.windowRegistry)();
+  } catch (error) {
+    logError("project-sleep-window-provider-failed", error, { projectId });
+    return;
+  }
+
+  for (const manager of managers) {
+    try {
+      // Only the windows actually bound to this project — releasing another
+      // window's mapping would sever a worktree feed still in use.
+      if (manager.getActiveProjectId() !== projectId) continue;
+      if (manager.win.isDestroyed()) continue;
+      worktreeService.unregisterWindow(manager.win.id);
+    } catch (error) {
+      logError("project-sleep-window-release-failed", error, { projectId });
+    }
+  }
 }

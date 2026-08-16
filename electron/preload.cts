@@ -1817,6 +1817,9 @@ function buildElectronApi(): ElectronAPI {
       onUpdated: (callback: (project: Project) => void) =>
         _typedOn(CHANNELS.PROJECT_UPDATED, callback),
 
+      onSlept: (callback: (projectId: string) => void) =>
+        _typedOn(CHANNELS.PROJECT_SLEPT, callback),
+
       onRemoved: (callback: (projectId: string) => void) =>
         _typedOn(CHANNELS.PROJECT_REMOVED, callback),
 

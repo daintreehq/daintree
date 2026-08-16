@@ -805,7 +805,7 @@ export function Toolbar({
     [projectSwitcher]
   );
 
-  const handleFreeMemoryProject = useCallback(
+  const handleSleepProject = useCallback(
     (projectId: string) => {
       void projectSwitcher.sleepProject(projectId);
     },
@@ -2059,7 +2059,7 @@ export function Toolbar({
                     onCloneRepo={projectSwitcher.cloneRepo}
                     onStopProject={handleStopProject}
                     onCloseProject={handleCloseProject}
-                    onSleepProject={handleFreeMemoryProject}
+                    onSleepProject={handleSleepProject}
                     onLocateProject={handleLocateProject}
                     onMoveOrRenameProject={handleMoveOrRenameProject}
                     onTogglePinProject={projectSwitcher.togglePinProject}

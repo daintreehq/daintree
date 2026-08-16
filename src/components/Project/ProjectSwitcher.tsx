@@ -101,7 +101,7 @@ export function ProjectSwitcher() {
     [projectSwitcher]
   );
 
-  const handleFreeMemoryProject = useCallback(
+  const handleSleepProject = useCallback(
     (projectId: string) => {
       void projectSwitcher.sleepProject(projectId);
     },
@@ -216,7 +216,7 @@ export function ProjectSwitcher() {
             onCreateFolder={handleCreateFolder}
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
-            onSleepProject={handleFreeMemoryProject}
+            onSleepProject={handleSleepProject}
             onLocateProject={handleLocateProject}
             onMoveOrRenameProject={handleMoveOrRenameProject}
             onTogglePinProject={handleTogglePinProject}
@@ -303,7 +303,7 @@ export function ProjectSwitcher() {
         onCreateFolder={handleCreateFolder}
         onStopProject={handleStopProject}
         onCloseProject={handleCloseProject}
-        onSleepProject={handleFreeMemoryProject}
+        onSleepProject={handleSleepProject}
         onLocateProject={handleLocateProject}
         onMoveOrRenameProject={handleMoveOrRenameProject}
         onTogglePinProject={handleTogglePinProject}

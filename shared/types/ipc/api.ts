@@ -607,6 +607,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     onBackgroundResize(callback: (payload: { width: number; height: number }) => void): () => void;
     onUpdated(callback: (project: Project) => void): () => void;
+    /** A project was put to sleep — a window showing it drops to no-project. */
+    onSlept(callback: (projectId: string) => void): () => void;
     onRemoved(callback: (projectId: string) => void): () => void;
     getSettings(projectId: string): Promise<ProjectSettings>;
     saveSettings(projectId: string, settings: ProjectSettings): Promise<void>;
