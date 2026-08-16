@@ -412,6 +412,45 @@ describe("getProjectRowStatus", () => {
     expect(getProjectRowStatus(reportable[1]!, NOW).tone).toBe("muted");
   });
 
+  // Cuts across the flag above rather than with it: an auto-parked row keeps
+  // its line and still yields its dot, which is the pairing #11822 fixed. The
+  // rows that say what a project is doing keep their own mark.
+  it("lets a stopped row yield its dot without giving up its line", () => {
+    const yields = [
+      project({ lastOpened: NOW - 2 * 3600_000 }),
+      project({ lastOpened: 0 }),
+      project({ status: "closed", autoParkedAt: NOW - 1000, lastOpened: NOW - 5000 }),
+    ];
+    for (const row of yields) {
+      expect(getProjectRowStatus(row, NOW).allowsResumeMark).toBe(true);
+    }
+
+    // The auto-parked row is the one that has to hold both answers at once —
+    // yielding the dot while keeping the reason it was parked.
+    const parked = getProjectRowStatus(yields[2]!, NOW);
+    expect(parked.isDormantFallback).toBeUndefined();
+    expect(parked.text.length).toBeGreaterThan(0);
+
+    // Stated as open projects, because that is the only way these arise: a
+    // closed project has no live PTYs, so its counts are always zero. A row
+    // whose agents finished elsewhere is not waiting on disk for anyone.
+    const keepsItsMark = [
+      project({ status: "background", isBackground: true, completedAgentCount: 1 }),
+      project({ status: "background", isBackground: true, waitingAgentCount: 1 }),
+      project({ status: "background", isBackground: true, activeAgentCount: 1 }),
+      project({ status: "background", isBackground: true, snoozedAgentCount: 1 }),
+      project({ status: "background", isBackground: true, processCount: 1 }),
+      project({ isMissing: true }),
+    ];
+    for (const row of keepsItsMark) {
+      expect(getProjectRowStatus(row, NOW).allowsResumeMark).toBeUndefined();
+    }
+
+    // The finished row is muted like the parked one, so the two are only ever
+    // told apart by this flag — a tone check here would light up both.
+    expect(getProjectRowStatus(keepsItsMark[0]!, NOW).tone).toBe("muted");
+  });
+
   // The hint disambiguates two projects sharing a folder name, so it is part of
   // the row's identity rather than its status — it has to survive the flag that
   // takes the status line away.

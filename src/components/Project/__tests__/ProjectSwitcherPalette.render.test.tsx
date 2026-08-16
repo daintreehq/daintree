@@ -322,6 +322,33 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
     expect(screen.getByTestId("workspace-status-dot")).toBeTruthy();
   });
 
+  it("keeps the auto-park reason while its ring gives way to the resume mark", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({
+            name: "Parked",
+            status: "closed",
+            autoParkedAt: Date.now(),
+            lastOpened: Date.now() - 2 * 3600000,
+            resumableAgentCount: 2,
+          }),
+        ]}
+      />
+    );
+
+    // Why it is parked and how much comes back are both facts about this row,
+    // and it only has one dot to spend — so the reason stays in the line while
+    // the dot goes to the promise (#11822).
+    const row = screen.getByRole("option", { name: /Parked, 2 agents will resume/i });
+    expect(within(row).getByText("Suspended to free memory")).toBeTruthy();
+    expect(within(row).getByTestId("workspace-resume-dot")).toBeTruthy();
+    // The slot holds one dot: a fix that left both conditions independent would
+    // stack them here rather than swapping.
+    expect(within(row).queryByTestId("workspace-status-dot")).toBeNull();
+  });
+
   it("says nothing at all for a closed project without the parked marker", () => {
     const twoHoursAgo = Date.now() - 2 * 3600000;
     render(
@@ -1324,6 +1351,32 @@ describe("ProjectSwitcherPalette resumable-agent dot", () => {
     // the regression.
     expect(screen.getByTestId("workspace-status-dot")).toBeTruthy();
     expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+  });
+
+  it("does not read an open project's finished agents as a resume promise", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({
+            name: "Open elsewhere",
+            status: "background",
+            isBackground: true,
+            completedAgentCount: 1,
+            resumableAgentCount: 2,
+          }),
+        ]}
+      />
+    );
+
+    // "Agent finished" is muted like the parked line, so gating the mark on
+    // tone would light this row up — and its agents finished in a window that
+    // is still open, not on disk waiting to be brought back.
+    const row = screen.getByRole("option", { name: /Open elsewhere/i });
+    expect(within(row).getByText(/Agent finished/)).toBeTruthy();
+    expect(within(row).getByTestId("workspace-status-dot")).toBeTruthy();
+    expect(within(row).queryByTestId("workspace-resume-dot")).toBeNull();
+    expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
   });
 
   it("keys off the count rather than the band, so a pinned row keeps the mark", () => {
