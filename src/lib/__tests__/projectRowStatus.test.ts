@@ -627,3 +627,187 @@ describe("snoozed rows", () => {
     expect(snoozed.tone).not.toBe(settled.tone);
   });
 });
+
+describe("assistant presence status lines (#11806)", () => {
+  const SEEN = NOW - 10 * 60_000;
+
+  it("names the assistant instead of claiming an agent count", () => {
+    const status = getProjectRowStatus(
+      project({ assistantState: "working", assistantStateSince: NOW - 60_000 }),
+      NOW
+    );
+
+    expect(status.text).toBe("Assistant working");
+    // The row must not read as a run the user launched.
+    expect(status.text).not.toMatch(/agent/i);
+    expect(status.isDormantFallback).toBeUndefined();
+  });
+
+  it("reads a directing assistant as working too", () => {
+    expect(getProjectRowStatus(project({ assistantState: "directing" }), NOW).text).toBe(
+      "Assistant working"
+    );
+  });
+
+  it("ages a wait so a fresh one and an old one stop rendering identically", () => {
+    const fresh = getProjectRowStatus(
+      project({
+        assistantState: "waiting",
+        assistantStateSince: NOW - 30_000,
+        lastOpened: SEEN,
+      }),
+      NOW
+    );
+    const old = getProjectRowStatus(
+      project({
+        assistantState: "waiting",
+        assistantStateSince: NOW - 42 * 60_000,
+        lastOpened: SEEN,
+      }),
+      NOW
+    );
+
+    expect(fresh.text).toBe("Assistant waiting · just now");
+    expect(old.text).toBe("Assistant waiting · 42m");
+  });
+
+  it("says blocked, in the danger tone, when the assistant failed", () => {
+    const status = getProjectRowStatus(
+      project({
+        assistantState: "waiting",
+        assistantWaitingReason: "error",
+        assistantStateSince: NOW - 5 * 60_000,
+      }),
+      NOW
+    );
+
+    expect(status.text).toBe("Assistant blocked · 5m");
+    expect(status.tone).toBe("assistant-blocked");
+  });
+
+  it("keeps every assistant tone out of the worker vocabulary", () => {
+    // The worker dot is the thing the issue says must keep meaning what it
+    // means. Assistant rows must never borrow one of its tones.
+    const workerTones = ["working", "waiting", "blocked", "review", "running", "snoozed"];
+    for (const assistantState of ["working", "waiting"] as const) {
+      const status = getProjectRowStatus(project({ assistantState, lastOpened: NOW }), NOW);
+      expect(workerTones).not.toContain(status.tone);
+    }
+  });
+
+  it.each(["idle", "completed", "exited"] as const)(
+    "says nothing for a settled assistant in state %s",
+    (assistantState) => {
+      const status = getProjectRowStatus(project({ assistantState, lastOpened: SEEN }), NOW);
+
+      // Falls all the way through to the dormant line, drawing no dot.
+      expect(status.isDormantFallback).toBe(true);
+      expect(status.text).not.toMatch(/assistant/i);
+    }
+  );
+
+  it("lets an assistant failure outrank an unreviewed completion", () => {
+    const status = getProjectRowStatus(
+      project({
+        assistantState: "waiting",
+        assistantWaitingReason: "error",
+        unacknowledgedCompletedAgentCount: 1,
+        latestUnacknowledgedCompletionAt: NOW - 60_000,
+      }),
+      NOW
+    );
+
+    expect(status.text).toContain("Assistant blocked");
+  });
+
+  it("keeps workers waiting on the user above the assistant", () => {
+    // Both land the row in the attention band; the people stalled on a run
+    // they started are the louder ask.
+    const status = getProjectRowStatus(
+      project({
+        waitingAgentCount: 2,
+        assistantState: "waiting",
+        assistantWaitingReason: "error",
+      }),
+      NOW
+    );
+
+    expect(status.text).toContain("agents need input");
+  });
+
+  it("reports a working assistant rather than the snooze beneath it", () => {
+    // A working assistant is why this row is in Running at all — announcing
+    // "Agent snoozed" from that band would contradict its own placement.
+    const status = getProjectRowStatus(
+      project({ assistantState: "working", snoozedAgentCount: 1 }),
+      NOW
+    );
+
+    expect(status.text).toBe("Assistant working");
+  });
+
+  it("leaves a running worker's line alone", () => {
+    const status = getProjectRowStatus(
+      project({ activeAgentCount: 2, assistantState: "working" }),
+      NOW
+    );
+
+    expect(status.text).toBe("2 agents running");
+    expect(status.tone).toBe("working");
+  });
+
+  it("puts a seen wait below the snooze but above the settled lines", () => {
+    const snoozed = getProjectRowStatus(
+      project({
+        snoozedAgentCount: 1,
+        assistantState: "waiting",
+        assistantStateSince: SEEN - 60_000,
+        lastOpened: SEEN,
+      }),
+      NOW
+    );
+    const settled = getProjectRowStatus(
+      project({
+        completedAgentCount: 1,
+        latestCompletionAt: NOW - 60_000,
+        assistantState: "waiting",
+        assistantStateSince: SEEN - 60_000,
+        lastOpened: SEEN,
+      }),
+      NOW
+    );
+
+    expect(snoozed.text).toContain("snoozed");
+    expect(settled.text).toContain("Assistant waiting");
+  });
+
+  it("outranks a bare process count", () => {
+    const status = getProjectRowStatus(
+      project({ processCount: 3, assistantState: "working" }),
+      NOW
+    );
+
+    expect(status.text).toBe("Assistant working");
+  });
+
+  it("gives a scratch the same assistant line a project gets", () => {
+    // A help session is provisioned against an opaque workspace id, so a
+    // scratch can host one and must not render it differently.
+    const status = getScratchRowStatus(
+      scratch({ assistantState: "working", assistantStateSince: NOW - 60_000 }),
+      NOW
+    );
+
+    expect(status.text).toBe("Assistant working");
+    expect(status.tone).toBe("assistant");
+  });
+
+  it("still names the assistant when the wait has no recorded start", () => {
+    const status = getProjectRowStatus(project({ assistantState: "waiting" }), NOW);
+
+    // No age to state, but the presence is still the most useful fact here —
+    // and an undatable wait must not render as an epoch-old one.
+    expect(status.text).toBe("Assistant waiting");
+    expect(status.text).not.toContain("·");
+  });
+});

@@ -55,6 +55,27 @@ export interface ProjectAgentCounts {
    * subtract this from any process count they report (#10989).
    */
   helpTerminals: number;
+  /**
+   * What the live Daintree Assistant is doing, or null when this project has
+   * no live assistant PTY (#11806).
+   *
+   * Reported beside the tallies and never folded into them: the assistant is
+   * not a run the user launched, so it must not read as one. It is here at all
+   * because the `"help"` exclusion is what made a project whose assistant was
+   * working indistinguishable from a dormant one on every cross-project
+   * surface — the state was on the terminal record the whole time and simply
+   * went unread.
+   */
+  assistantState: AgentState | null;
+  /**
+   * Why the assistant is waiting. Null unless {@link assistantState} is
+   * `"waiting"` — a terminal record can carry a stale reason out of the state
+   * it belonged to, and a working assistant holding a leftover `"error"` would
+   * report as blocked.
+   */
+  assistantWaitingReason: WaitingReason | null;
+  /** The assistant's transition into {@link assistantState}, or null. */
+  assistantStateSince: number | null;
 }
 
 /**
@@ -82,10 +103,11 @@ export interface CountableTerminal {
 /**
  * Why a terminal is not a countable agent run, or null when it is one.
  *
- * Exported as a reason rather than a boolean because one caller has to act on
+ * Exported as a reason rather than a boolean because callers have to act on
  * the distinction: `"help"` is the assistant PTY, which the host already
  * tallied into `terminalCount` and which therefore has to be netted back out
- * (#10989), while every other reason is simply "not an agent".
+ * (#10989), and whose state is reported separately as presence (#11806).
+ * Every other reason is simply "not an agent", with nothing left to say.
  */
 export type RunExclusionReason = "trashed" | "help" | "dev-preview" | "no-pty" | "not-an-agent";
 
@@ -105,8 +127,9 @@ export function classifyRun(
   if (terminal.isTrashed) return "trashed";
 
   // The assistant help terminal is a real PTY but tooling-internal: it never
-  // counts as an agent, and is reported here only so callers can net it out of
-  // a process count the host already included it in.
+  // counts as an agent. Named rather than silently dropped so callers can net
+  // it out of a process count the host already included it in, and so its
+  // state can be carried as presence instead of vanishing (#11806).
   if (terminal.id !== undefined && isHelpTerminal(terminal.id)) return "help";
 
   if (terminal.kind === "dev-preview") return "dev-preview";
@@ -138,7 +161,51 @@ function empty(): ProjectAgentCounts {
     snoozed: 0,
     nextSnoozeWakeAt: null,
     helpTerminals: 0,
+    assistantState: null,
+    assistantWaitingReason: null,
+    assistantStateSince: null,
   };
+}
+
+/**
+ * Liveness rank for picking which assistant record speaks for a project.
+ * Lower wins: actively doing something, then waiting, then settled.
+ */
+function assistantLiveness(state: AgentState | undefined): number {
+  if (state === "working" || state === "directing") return 0;
+  if (state === "waiting") return 1;
+  return 2;
+}
+
+/**
+ * Whether `candidate` should replace `incumbent` as the project's reported
+ * assistant.
+ *
+ * `HelpSessionService` enforces at most one assistant PTY per project, so in
+ * steady state there is nothing to choose between. The window this exists for
+ * is displacement: a new backend is provisioned while the old one is still
+ * being killed, and for those moments two terminals answer to the same
+ * project. The newest transition wins that tie, because the record still
+ * moving is the live session and the one left behind is the corpse.
+ *
+ * Terminal id breaks a dead-heat so the answer can never depend on the order
+ * the host happened to list terminals in.
+ */
+function beatsIncumbent(
+  candidate: CountableTerminal,
+  incumbent: CountableTerminal | null
+): boolean {
+  if (incumbent === null) return true;
+
+  const candidateRank = assistantLiveness(candidate.agentState);
+  const incumbentRank = assistantLiveness(incumbent.agentState);
+  if (candidateRank !== incumbentRank) return candidateRank < incumbentRank;
+
+  const candidateSince = candidate.lastStateChange ?? 0;
+  const incumbentSince = incumbent.lastStateChange ?? 0;
+  if (candidateSince !== incumbentSince) return candidateSince > incumbentSince;
+
+  return (candidate.id ?? "") < (incumbent.id ?? "");
 }
 
 /**
@@ -179,6 +246,10 @@ export function computeProjectAgentCounts(
   for (const id of projectIds) counts.set(id, empty());
 
   const availability = getAgentAvailabilityStore();
+  // Which assistant terminal currently speaks for each project. Held aside
+  // rather than written straight into `counts` so the winner is decided by
+  // `beatsIncumbent` alone and never by which terminal happened to come first.
+  const assistantByProject = new Map<string, CountableTerminal>();
 
   for (const terminal of terminals) {
     if (!terminal.projectId) continue;
@@ -186,7 +257,15 @@ export function computeProjectAgentCounts(
     if (!entry) continue;
     const exclusion = classifyRun(terminal, (id) => availability.isHelpTerminal(id));
     if (exclusion === "help") {
-      if (terminal.hasPty !== false) entry.helpTerminals += 1;
+      // Same liveness gate the process-count netting uses: a help terminal
+      // with no PTY is a record, not a running assistant, and must neither be
+      // subtracted from the host's count nor speak for the project.
+      if (terminal.hasPty !== false) {
+        entry.helpTerminals += 1;
+        if (beatsIncumbent(terminal, assistantByProject.get(terminal.projectId) ?? null)) {
+          assistantByProject.set(terminal.projectId, terminal);
+        }
+      }
       continue;
     }
     if (exclusion !== null) continue;
@@ -261,6 +340,18 @@ export function computeProjectAgentCounts(
         }
       }
     }
+  }
+
+  // Assistant presence, written last so it can never be mistaken for a tally
+  // that accumulated alongside the worker states above.
+  for (const [projectId, assistant] of assistantByProject) {
+    const entry = counts.get(projectId);
+    if (!entry) continue;
+    entry.assistantState = assistant.agentState ?? null;
+    entry.assistantWaitingReason =
+      assistant.agentState === "waiting" ? (assistant.waitingReason ?? null) : null;
+    const since = assistant.lastStateChange;
+    entry.assistantStateSince = typeof since === "number" && since > 0 ? since : null;
   }
 
   return counts;

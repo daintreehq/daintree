@@ -891,3 +891,142 @@ describe("ProjectStatsService scratch workspaces", () => {
     svc.stop();
   });
 });
+
+describe("ProjectStatsService assistant presence (#11806)", () => {
+  function helpTerminal(over: Record<string, unknown> = {}) {
+    return {
+      id: "help-1",
+      projectId: "p1",
+      kind: "terminal",
+      launchAgentId: "daintree-assistant",
+      ...over,
+    };
+  }
+
+  function lastPayload() {
+    return broadcastMock.mock.calls.at(-1)![1] as Record<
+      string,
+      {
+        assistantState?: string;
+        assistantWaitingReason?: string;
+        assistantStateSince?: number;
+        activeAgentCount: number;
+        waitingAgentCount: number;
+        processCount: number;
+      }
+    >;
+  }
+
+  beforeEach(() => {
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    availabilityMock.isHelpTerminal.mockImplementation((id: string) => id.startsWith("help"));
+  });
+
+  it("pushes the assistant's state while still keeping it out of every count", async () => {
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      helpTerminal({ agentState: "working", lastStateChange: 1_000 }),
+    ]);
+    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 1 });
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const p1 = lastPayload().p1;
+    expect(p1.assistantState).toBe("working");
+    expect(p1.assistantStateSince).toBe(1_000);
+    expect(p1.activeAgentCount).toBe(0);
+    expect(p1.waitingAgentCount).toBe(0);
+    // Still netted out of the host's count — presence is not residency.
+    expect(p1.processCount).toBe(0);
+    svc.stop();
+  });
+
+  it("omits the assistant fields entirely when no assistant is live", async () => {
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(lastPayload().p1).not.toHaveProperty("assistantState");
+    expect(lastPayload().p1).not.toHaveProperty("assistantWaitingReason");
+    expect(lastPayload().p1).not.toHaveProperty("assistantStateSince");
+    svc.stop();
+  });
+
+  // The change gate is hand-enumerated, so each field needs its own proof: one
+  // left out of `shallowEqual` would leave an already-open switcher showing
+  // stale assistant state until some unrelated worker tally happened to move.
+  it.each([
+    {
+      field: "assistantState",
+      before: { agentState: "working", lastStateChange: 1_000 },
+      after: { agentState: "waiting", lastStateChange: 1_000 },
+    },
+    {
+      field: "assistantWaitingReason",
+      before: { agentState: "waiting", waitingReason: "prompt", lastStateChange: 1_000 },
+      after: { agentState: "waiting", waitingReason: "error", lastStateChange: 1_000 },
+    },
+    {
+      field: "assistantStateSince",
+      before: { agentState: "waiting", waitingReason: "prompt", lastStateChange: 1_000 },
+      after: { agentState: "waiting", waitingReason: "prompt", lastStateChange: 2_000 },
+    },
+  ])("broadcasts when only $field changes", async ({ before, after }) => {
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([helpTerminal(before)]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    const firstCount = broadcastMock.mock.calls.length;
+
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([helpTerminal(after)]);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(broadcastMock.mock.calls.length).toBeGreaterThan(firstCount);
+    svc.stop();
+  });
+
+  it("broadcasts the assistant going away so the row can stop reporting it", async () => {
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      helpTerminal({ agentState: "working", lastStateChange: 1_000 }),
+    ]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(lastPayload().p1.assistantState).toBe("working");
+
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([]);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(lastPayload().p1).not.toHaveProperty("assistantState");
+    svc.stop();
+  });
+
+  it("still suppresses a payload whose assistant state did not move", async () => {
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      helpTerminal({ agentState: "waiting", waitingReason: "prompt", lastStateChange: 1_000 }),
+    ]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    const firstCount = broadcastMock.mock.calls.length;
+
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(broadcastMock.mock.calls.length).toBe(firstCount);
+    svc.stop();
+  });
+});

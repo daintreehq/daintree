@@ -52,6 +52,9 @@ const {
         latestWorkingSince?: number;
         snoozedAgentCount?: number;
         nextSnoozeWakeAt?: number;
+        assistantState?: "idle" | "working" | "waiting" | "directing" | "completed" | "exited";
+        assistantWaitingReason?: "prompt" | "question" | "approval" | "error";
+        assistantStateSince?: number;
         processCount: number;
       }
     >,
@@ -3024,6 +3027,215 @@ describe("useProjectSwitcherPalette", () => {
       expect(byId.get("unknown")).toBeUndefined();
       expect(byId.get("zero")).toBe(0);
       expect(byId.get("some")).toBe(3);
+    });
+  });
+});
+
+describe("assistant presence banding (#11806)", () => {
+  // Well in the past, so a wait stamped after it counts as unseen and one
+  // stamped before it counts as already looked at.
+  const LAST_OPENED = 1_000_000;
+
+  const assistantProjects: ProjectFixture[] = [
+    {
+      id: "project-1",
+      name: "Project One",
+      path: "/repo/one",
+      emoji: "🌲",
+      lastOpened: LAST_OPENED,
+      frecencyScore: 3.0,
+      status: "background",
+    },
+  ];
+
+  let savedProjects: typeof projectState.projects;
+
+  beforeEach(() => {
+    savedProjects = projectState.projects;
+    projectState.projects = assistantProjects;
+    vi.clearAllMocks();
+    projectState.currentProject = null;
+    projectStatsState.stats = {};
+    getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
+    setStatsMock.mockImplementation((stats: typeof projectStatsState.stats) => {
+      projectStatsState.stats = stats;
+    });
+    usePaletteStore.setState({ activePaletteId: null });
+  });
+
+  afterEach(() => {
+    projectState.projects = savedProjects;
+  });
+
+  async function openWithStats(stats: (typeof projectStatsState.stats)[string]) {
+    projectStatsState.stats = { "project-1": stats };
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      result.current.open();
+    });
+    await waitFor(() => {
+      expect(result.current.results).toHaveLength(1);
+    });
+    return result;
+  }
+
+  const idle = { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 };
+
+  it("lifts a project whose only live thing is a working assistant into Running", async () => {
+    const result = await openWithStats({ ...idle, assistantState: "working" });
+
+    await waitFor(() => {
+      expect(asProject(result.current.results[0]).section).toBe("running");
+    });
+  });
+
+  it("leaves it dormant when the assistant is idle", async () => {
+    const result = await openWithStats({ ...idle, assistantState: "idle" });
+
+    await waitFor(() => {
+      expect(asProject(result.current.results[0]).section).toBe("other");
+    });
+  });
+
+  it("keeps an assistant parked at its prompt out of Needs attention", async () => {
+    // Its resting state. A band that fills up with these stops meaning
+    // anything, which is the whole point of the restraint.
+    const result = await openWithStats({
+      ...idle,
+      assistantState: "waiting",
+      assistantWaitingReason: "prompt",
+      assistantStateSince: LAST_OPENED - 60_000,
+    });
+
+    await waitFor(() => {
+      expect(asProject(result.current.results[0]).section).toBe("other");
+    });
+  });
+
+  it("escalates a wait that started after the user was last in the project", async () => {
+    const result = await openWithStats({
+      ...idle,
+      assistantState: "waiting",
+      assistantWaitingReason: "prompt",
+      assistantStateSince: LAST_OPENED + 60_000,
+    });
+
+    await waitFor(() => {
+      expect(asProject(result.current.results[0]).section).toBe("attention");
+    });
+  });
+
+  it("escalates an errored assistant however recently the project was seen", async () => {
+    const result = await openWithStats({
+      ...idle,
+      assistantState: "waiting",
+      assistantWaitingReason: "error",
+      assistantStateSince: LAST_OPENED - 60_000,
+    });
+
+    await waitFor(() => {
+      expect(asProject(result.current.results[0]).section).toBe("attention");
+    });
+  });
+
+  it("never lets assistant presence inflate the worker tallies or the badge", async () => {
+    const result = await openWithStats({
+      ...idle,
+      assistantState: "waiting",
+      assistantWaitingReason: "error",
+      assistantStateSince: LAST_OPENED + 60_000,
+    });
+
+    await waitFor(() => {
+      const row = asProject(result.current.results[0]);
+      expect(row.activeAgentCount).toBe(0);
+      expect(row.waitingAgentCount).toBe(0);
+      expect(row.blockedAgentCount).toBe(0);
+    });
+    // The tray/toolbar badge answers "how many places are waiting on me?" —
+    // the assistant is not an interruption the user is owed.
+    expect(result.current.nonActiveAgentCounts.waitingAgentCount).toBe(0);
+    expect(result.current.nonActiveAgentCounts.waitingProjectCount).toBe(0);
+    expect(result.current.nonActiveAgentCounts.activeAgentCount).toBe(0);
+  });
+
+  it("carries the assistant fields off the push store onto the row", async () => {
+    const result = await openWithStats({
+      ...idle,
+      assistantState: "waiting",
+      assistantWaitingReason: "question",
+      assistantStateSince: 4_242,
+    });
+
+    await waitFor(() => {
+      const row = asProject(result.current.results[0]);
+      expect(row.assistantState).toBe("waiting");
+      expect(row.assistantWaitingReason).toBe("question");
+      expect(row.assistantStateSince).toBe(4_242);
+    });
+  });
+
+  it("seeds the assistant fields from bulk stats when no push has landed", async () => {
+    // The cold-start path. A seed that dropped these would render an
+    // assistant-only project as dormant until some unrelated tally moved.
+    getBulkStatsMock.mockResolvedValue({
+      "project-1": {
+        ...emptyBulkStats(["project-1"])["project-1"],
+        assistantState: "working",
+        assistantStateSince: 7_000,
+      },
+    });
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => {
+      expect(setStatsMock).toHaveBeenCalled();
+    });
+    const seeded = setStatsMock.mock.calls.at(-1)![0] as typeof projectStatsState.stats;
+    expect(seeded["project-1"]!.assistantState).toBe("working");
+    expect(seeded["project-1"]!.assistantStateSince).toBe(7_000);
+  });
+
+  it("keeps a pinned project pinned when its assistant is merely working", async () => {
+    // Same rule a running worker gets: an explicit pin outranks the
+    // operational fact that something is executing.
+    projectState.projects = [{ ...assistantProjects[0]!, pinned: true }];
+
+    const result = await openWithStats({ ...idle, assistantState: "working" });
+
+    await waitFor(() => {
+      expect(asProject(result.current.results[0]).section).toBe("pinned");
+    });
+  });
+
+  it("still escalates a pinned project whose assistant is blocked", async () => {
+    projectState.projects = [{ ...assistantProjects[0]!, pinned: true }];
+
+    const result = await openWithStats({
+      ...idle,
+      assistantState: "waiting",
+      assistantWaitingReason: "error",
+    });
+
+    await waitFor(() => {
+      expect(asProject(result.current.results[0]).section).toBe("attention");
+    });
+  });
+
+  it("leaves the current project in its own band whatever its assistant is doing", async () => {
+    projectState.currentProject = { id: "project-1" };
+
+    const result = await openWithStats({
+      ...idle,
+      assistantState: "waiting",
+      assistantWaitingReason: "error",
+    });
+
+    await waitFor(() => {
+      expect(asProject(result.current.results[0]).section).toBe("current");
     });
   });
 });
