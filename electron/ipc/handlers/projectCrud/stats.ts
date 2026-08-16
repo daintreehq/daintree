@@ -267,6 +267,17 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
           ...(counts.nextSnoozeWakeAt !== null
             ? { nextSnoozeWakeAt: counts.nextSnoozeWakeAt }
             : {}),
+          // Assistant presence, projected exactly as the pushed status map
+          // does (#11806). A seed that omitted it would render an
+          // assistant-only project as dormant until the next push moved
+          // something else — the same seed-vs-push disagreement as #10989.
+          ...(counts.assistantState !== null ? { assistantState: counts.assistantState } : {}),
+          ...(counts.assistantWaitingReason !== null
+            ? { assistantWaitingReason: counts.assistantWaitingReason }
+            : {}),
+          ...(counts.assistantStateSince !== null
+            ? { assistantStateSince: counts.assistantStateSince }
+            : {}),
           terminalMemoryMB: hasMeasured ? Math.round(measured!.memoryKb / 1024) : undefined,
           topProcess: top
             ? { name: top.comm, memoryMB: Math.round(top.memoryKb / 1024) }

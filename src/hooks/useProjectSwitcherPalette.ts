@@ -14,7 +14,9 @@ import { closeAndAnnounce } from "@/lib/accessibility";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { logError } from "@/utils/logger";
 import type { Project, Scratch } from "@shared/types";
+import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { ProjectStatusMap } from "@shared/types/ipc/project";
+import { assistantNeedsAttention, classifyAssistantActivity } from "@/lib/projectAssistantActivity";
 import { decayFrecencyScore, FRECENCY_COLD_START } from "@shared/utils/frecency";
 import { projectClient, scratchClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -58,6 +60,28 @@ export interface WorkspaceRowStatusFields {
    */
   nextSnoozeWakeAt?: number;
   processCount: number;
+  /**
+   * What the live Daintree Assistant is doing, absent when there is no live
+   * assistant here (#11806). Raw state, not a verdict — `classifyAssistantActivity`
+   * is the one place that decides what it means, so the band, the ordering and
+   * the status line cannot disagree about it.
+   *
+   * Never a member of the counts above. The assistant is not a run the user
+   * launched, and folding it in would make every worker tally a lie.
+   */
+  assistantState?: AgentState;
+  /** Why the assistant is waiting; only ever set alongside a `waiting` state. */
+  assistantWaitingReason?: WaitingReason;
+  /** The assistant's transition into its current state, absent when unrecorded. */
+  assistantStateSince?: number;
+  /**
+   * When the user last had this workspace as their current one — stamped both
+   * on arrival and on departure, so it dates the last time they actually had
+   * it on screen. Shared by both kinds because both can host an assistant, and
+   * it is what decides whether a wait has gone unseen.
+   */
+  lastOpened: number;
+  isActive: boolean;
 }
 
 /** Lightweight searchable scratch view-model for the palette section. */
@@ -66,8 +90,6 @@ export interface SearchableScratch extends WorkspaceRowStatusFields {
   name: string;
   path: string;
   createdAt: number;
-  lastOpened: number;
-  isActive: boolean;
 }
 
 /**
@@ -157,7 +179,6 @@ export interface SearchableProject extends WorkspaceRowStatusFields {
   path: string;
   emoji: string;
   color?: string;
-  lastOpened: number;
   status: Project["status"];
   /** Set when the project was auto-closed by the background-idle sweep (#10830). */
   autoParkedAt?: number;
@@ -168,7 +189,6 @@ export interface SearchableProject extends WorkspaceRowStatusFields {
    * which is an answer.
    */
   resumableAgentCount?: number;
-  isActive: boolean;
   isBackground: boolean;
   isMissing: boolean;
   isPinned: boolean;
@@ -450,19 +470,28 @@ function resortOtherBand(
  *   stays in Pinned; its status line still says "Agent running".
  * - `running` requires live agents. Bare leftover processes are residency, not
  *   intent — those projects fall through to Pinned/Other.
+ *
+ * The assistant joins both ends of that without joining any tally (#11806). A
+ * working assistant is live activity, so it earns Running the same way a
+ * worker does; an assistant that is blocked or has been waiting since before
+ * the user last looked is someone waiting on nobody, so it earns attention. An
+ * assistant merely parked at its prompt earns neither — it still gets a status
+ * line where it lands, exactly as a project with only bare processes does.
  */
 function sectionForProject(project: SearchableProject): ProjectSectionKey {
   if (project.isActive) return "current";
   if (project.isMissing) return "unavailable";
+  const assistant = classifyAssistantActivity(project);
   if (
     project.waitingAgentCount > 0 ||
     project.blockedAgentCount > 0 ||
-    project.unacknowledgedCompletedAgentCount > 0
+    project.unacknowledgedCompletedAgentCount > 0 ||
+    assistantNeedsAttention(assistant)
   ) {
     return "attention";
   }
   if (project.isPinned) return "pinned";
-  if (project.activeAgentCount > 0) return "running";
+  if (project.activeAgentCount > 0 || assistant === "working") return "running";
   // Last stop before the residual band. Below `pinned` and `running` for the
   // same reason a pinned running project stays in Pinned: snooze withdraws a
   // demand, it does not override an explicit pin or the fact that something is
@@ -476,11 +505,58 @@ function sectionForProject(project: SearchableProject): ProjectSectionKey {
  * Severity tier inside the attention band: blocked outranks waiting outranks
  * ready-for-review. Blocked agents may not restart on input; waiting agents
  * are stalled on the user; completed agents are done and can wait their turn.
+ *
+ * An escalated assistant is tiered by the same rule rather than given one of
+ * its own: a blocked assistant is a blocked thing and an unseen wait is a
+ * wait. Without this a project escalated purely by its assistant would fall to
+ * the review tier and sort below completions it has nothing to do with.
+ *
+ * Consulted only once no worker is asking, because the status line resolves
+ * the same contest that way. A row tiered as blocked by its assistant while
+ * its line reads "Agent needs input" would be sorted by a reason it never
+ * states — the row would look mis-ranked, and the explanation would be
+ * invisible.
  */
 function attentionClass(project: SearchableProject): number {
   if (project.blockedAgentCount > 0) return 0;
   if (project.waitingAgentCount > 0) return 1;
+  const assistant = classifyAssistantActivity(project);
+  if (assistant === "blocked") return 0;
+  if (assistant === "waiting-unseen") return 1;
   return 2;
+}
+
+/**
+ * The transition that dates a row's wait, whichever kind of wait it has.
+ *
+ * Assistant-only rows have no `oldestWaitingSince`, so without this they would
+ * all tie at infinity and fall through to an ordering that has nothing to do
+ * with how long anyone has been stuck. A row with both falls to the worker's
+ * clock, matching the tier and the line it will actually show.
+ */
+function waitOrderingSince(project: SearchableProject): number {
+  // Gated on the counts, not on whether a timestamp arrived. A worker wait
+  // whose transition was never recorded is still a worker wait — it is what
+  // the tier and the line both name — so it has to keep the clock even though
+  // it cannot supply one. Reading the timestamp first let such a row borrow the
+  // assistant's, dating it by something it never mentions.
+  if (project.waitingAgentCount > 0 || project.blockedAgentCount > 0) {
+    return project.oldestWaitingSince ?? Number.POSITIVE_INFINITY;
+  }
+  if (!assistantNeedsAttention(classifyAssistantActivity(project))) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return project.assistantStateSince ?? Number.POSITIVE_INFINITY;
+}
+
+/**
+ * The transition that orders a row inside the Running band. Falls back to the
+ * assistant's own so assistant-only rows are ordered by how recently they came
+ * alive, rather than tying at zero and sorting on unrelated recency.
+ */
+function runningOrderingSince(project: SearchableProject): number {
+  if (project.latestWorkingSince !== undefined) return project.latestWorkingSince;
+  return classifyAssistantActivity(project) === "working" ? (project.assistantStateSince ?? 0) : 0;
 }
 
 /**
@@ -521,8 +597,8 @@ function compareWithinSection(
       if (a.blockedAgentCount !== b.blockedAgentCount) {
         return b.blockedAgentCount - a.blockedAgentCount;
       }
-      const aSince = a.oldestWaitingSince ?? Number.POSITIVE_INFINITY;
-      const bSince = b.oldestWaitingSince ?? Number.POSITIVE_INFINITY;
+      const aSince = waitOrderingSince(a);
+      const bSince = waitOrderingSince(b);
       if (aSince !== bSince) return aSince - bSince;
       if (a.waitingAgentCount !== b.waitingAgentCount) {
         return b.waitingAgentCount - a.waitingAgentCount;
@@ -539,8 +615,8 @@ function compareWithinSection(
     if (a.activeAgentCount !== b.activeAgentCount) {
       return b.activeAgentCount - a.activeAgentCount;
     }
-    const aWorking = a.latestWorkingSince ?? 0;
-    const bWorking = b.latestWorkingSince ?? 0;
+    const aWorking = runningOrderingSince(a);
+    const bWorking = runningOrderingSince(b);
     if (aWorking !== bWorking) return bWorking - aWorking;
   } else if (section === "other") {
     // `frecencyScore` is already read-time decayed here (see `searchableProjects`),
@@ -733,6 +809,15 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
               ...(entry.nextSnoozeWakeAt !== undefined
                 ? { nextSnoozeWakeAt: entry.nextSnoozeWakeAt }
                 : {}),
+              ...(entry.assistantState !== undefined
+                ? { assistantState: entry.assistantState }
+                : {}),
+              ...(entry.assistantWaitingReason !== undefined
+                ? { assistantWaitingReason: entry.assistantWaitingReason }
+                : {}),
+              ...(entry.assistantStateSince !== undefined
+                ? { assistantStateSince: entry.assistantStateSince }
+                : {}),
               processCount: entry.processCount,
             };
             changed = true;
@@ -805,6 +890,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         snoozedAgentCount: stats?.snoozedAgentCount ?? 0,
         nextSnoozeWakeAt: stats?.nextSnoozeWakeAt,
         processCount: stats?.processCount ?? 0,
+        assistantState: stats?.assistantState,
+        assistantWaitingReason: stats?.assistantWaitingReason,
+        assistantStateSince: stats?.assistantStateSince,
         displayPath: displayPathById.get(p.id) ?? p.path,
         section: "other",
       };
@@ -1069,6 +1157,12 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         snoozedAgentCount: stats?.snoozedAgentCount ?? 0,
         nextSnoozeWakeAt: stats?.nextSnoozeWakeAt,
         processCount: stats?.processCount ?? 0,
+        // A scratch can host an assistant too — the session is provisioned
+        // against an opaque workspace id — so it gets the same status line. It
+        // never gets a band: scratches live in the pinned section regardless.
+        assistantState: stats?.assistantState,
+        assistantWaitingReason: stats?.assistantWaitingReason,
+        assistantStateSince: stats?.assistantStateSince,
       };
     });
     list.sort((a, b) => b.lastOpened - a.lastOpened);

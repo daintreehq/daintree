@@ -3,11 +3,20 @@ import type {
   SearchableScratch,
   WorkspaceRowStatusFields,
 } from "@/hooks/useProjectSwitcherPalette";
+import { classifyAssistantActivity, type AssistantActivity } from "@/lib/projectAssistantActivity";
 import { formatTimeAgo } from "@/utils/timeAgo";
 
 /** Visual weight of a row's status line. Maps to status tokens, never the accent. */
 export type ProjectRowTone =
-  "blocked" | "waiting" | "review" | "working" | "running" | "snoozed" | "muted";
+  | "blocked"
+  | "waiting"
+  | "review"
+  | "working"
+  | "running"
+  | "snoozed"
+  | "muted"
+  | "assistant"
+  | "assistant-blocked";
 
 /**
  * Text colour for a status line, by tone.
@@ -32,6 +41,13 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   // be the loudest thing in the list on the way out.
   snoozed: "text-daintree-text/50",
   muted: "text-daintree-text/50",
+  // Machine-initiated work the user didn't launch, so it reads at the same
+  // weight as the settled states rather than competing with the runs they
+  // started (#11806).
+  assistant: "text-daintree-text/50",
+  // An assistant that failed says so in the danger hue — the severity is real
+  // — while its dot stays hollow, so it never reads as a worker run.
+  "assistant-blocked": "text-status-danger/80",
 };
 
 export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
@@ -51,6 +67,15 @@ export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
   // that mean something — dormant rows draw no dot at all now (#11692), so the
   // ring is back to marking the two muted states that earned a line.
   muted: "border border-daintree-text/20",
+  // Hollow, and that is the whole point: the filled dot means a run the user
+  // launched, and the assistant is the machine acting on its own. It is the
+  // convention for machine-initiated background work, and it leaves the worker
+  // dot meaning exactly what it meant before (#11806). Stronger than `muted`'s
+  // ring because this one marks something live rather than something finished.
+  assistant: "border border-daintree-text/40",
+  // Same hollow shape carrying the danger hue: still not a worker run, but a
+  // failure the row should not have to be read closely to notice.
+  "assistant-blocked": "border border-status-danger",
 };
 
 /**
@@ -137,6 +162,34 @@ export function formatWakeTime(wakeAtMs: number): string {
 type WorkspaceActivityStatus = Omit<ProjectRowStatus, "pathHint">;
 
 /**
+ * The assistant's line: it says what the assistant is, never a count (#11806).
+ *
+ * "Assistant working", not "1 agent running" — the assistant is one thing and
+ * always has been, so a number would be inventing a plural that cannot exist,
+ * and calling it an agent would claim a run the user never launched. Waits
+ * carry their age for the same reason worker waits do: one that started forty
+ * seconds ago and one that started forty minutes ago are different situations.
+ *
+ * A wait reads the same whether or not it has gone unseen. Escalation moves the
+ * row into "Needs attention", which is a louder statement than any adjective
+ * this line could add.
+ */
+function assistantStatus(
+  activity: Exclude<AssistantActivity, null>,
+  since: number | undefined,
+  nowMs: number
+): WorkspaceActivityStatus {
+  if (activity === "working") {
+    return { text: "Assistant working", tone: "assistant" };
+  }
+
+  const lead = activity === "blocked" ? "Assistant blocked" : "Assistant waiting";
+  const tone: ProjectRowTone = activity === "blocked" ? "assistant-blocked" : "assistant";
+  const age = since !== undefined ? formatWaitAge(since, nowMs) : null;
+  return { text: age ? `${lead} · ${age}` : lead, tone };
+}
+
+/**
  * The activity half of a row's status line — everything derived purely from
  * agent counts, and so identical for a project and a scratch.
  *
@@ -156,6 +209,14 @@ function getWorkspaceActivityStatus(
   project: WorkspaceRowStatusFields,
   nowMs: number
 ): WorkspaceActivityStatus | null {
+  // Classified once, consumed at three different heights below. Sharing the
+  // helper with `sectionForProject` is what keeps a row's band and its line
+  // telling the same story about the assistant. Not an absolute guarantee: the
+  // palette freezes band membership while it is open (#11071) and lets the
+  // facts stay live, so a state change mid-session can move this line under a
+  // heading chosen a moment earlier. That is the anti-jump policy working, and
+  // it resolves the next time the palette opens.
+  const assistant = classifyAssistantActivity(project);
   const age =
     project.oldestWaitingSince !== undefined
       ? formatWaitAge(project.oldestWaitingSince, nowMs)
@@ -208,6 +269,15 @@ function getWorkspaceActivityStatus(
     };
   }
 
+  // The two assistant states that put a row in the attention band, reported
+  // here so the band and the line agree about why it is there. Below the
+  // worker waits above — those are people stalled on a run they started, which
+  // outranks the assistant asking — and above review, because both of these
+  // are stuck and a finished agent is not.
+  if (assistant === "blocked" || assistant === "waiting-unseen") {
+    return assistantStatus(assistant, project.assistantStateSince, nowMs);
+  }
+
   // Finished work the user hasn't seen — the hand-back the attention band
   // exists for. States the action ("ready for review") and how fresh the
   // hand-back is, so a 3-minute-old completion and a 2-hour-old one stop
@@ -255,6 +325,13 @@ function getWorkspaceActivityStatus(
     };
   }
 
+  // A working assistant, above the snooze line because it is the reason the
+  // row is in Running at all when no worker is: a project whose assistant is
+  // working would otherwise announce "Agent snoozed" from the Running band.
+  if (assistant === "working") {
+    return assistantStatus(assistant, project.assistantStateSince, nowMs);
+  }
+
   // Everything here is snoozed and nothing is running. Below `active` on
   // purpose — a project with one snoozed agent and one working one is Running,
   // because something genuinely is. Above the completed/dormant lines because a
@@ -271,6 +348,14 @@ function getWorkspaceActivityStatus(
     // deliver.
     if (wakeAt === undefined) return { text: lead, tone: "snoozed" };
     return { text: `${lead} · until ${formatWakeTime(wakeAt)}`, tone: "snoozed" };
+  }
+
+  // An assistant parked at its prompt, already seen. Its resting state, so it
+  // sits below everything that is actually asking for something — but above
+  // the settled lines, because a live session is a better answer to "what is
+  // this project doing" than a completion that was reviewed hours ago.
+  if (assistant === "waiting") {
+    return assistantStatus(assistant, project.assistantStateSince, nowMs);
   }
 
   // Everything completed has been seen: drop the action phrase and mute. The

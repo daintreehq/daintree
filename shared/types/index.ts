@@ -180,6 +180,7 @@ export type {
   ProjectStats,
   BulkProjectStatsEntry,
   BulkProjectStats,
+  AssistantPresenceEntry,
   ProjectStatusEntry,
   ProjectStatusMap,
   ForgeRateLimitKind,

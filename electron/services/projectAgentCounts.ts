@@ -55,6 +55,27 @@ export interface ProjectAgentCounts {
    * subtract this from any process count they report (#10989).
    */
   helpTerminals: number;
+  /**
+   * What the live Daintree Assistant is doing, or null when this project has
+   * no live assistant PTY (#11806).
+   *
+   * Reported beside the tallies and never folded into them: the assistant is
+   * not a run the user launched, so it must not read as one. It is here at all
+   * because the `"help"` exclusion is what made a project whose assistant was
+   * working indistinguishable from a dormant one on every cross-project
+   * surface — the state was on the terminal record the whole time and simply
+   * went unread.
+   */
+  assistantState: AgentState | null;
+  /**
+   * Why the assistant is waiting. Null unless {@link assistantState} is
+   * `"waiting"` — a terminal record can carry a stale reason out of the state
+   * it belonged to, and a working assistant holding a leftover `"error"` would
+   * report as blocked.
+   */
+  assistantWaitingReason: WaitingReason | null;
+  /** The assistant's transition into {@link assistantState}, or null. */
+  assistantStateSince: number | null;
 }
 
 /**
@@ -77,15 +98,23 @@ export interface CountableTerminal {
   detectedAgentId?: string;
   launchAgentId?: string;
   everDetectedAgent?: boolean;
+  /**
+   * When this PTY was spawned. Read only to tell one assistant session from
+   * another during a displacement — `AgentStateService` already treats it as
+   * the live-session identity token, so it is the fact that says which of two
+   * overlapping records is the current one.
+   */
+  spawnedAt?: number;
 }
 
 /**
  * Why a terminal is not a countable agent run, or null when it is one.
  *
- * Exported as a reason rather than a boolean because one caller has to act on
+ * Exported as a reason rather than a boolean because callers have to act on
  * the distinction: `"help"` is the assistant PTY, which the host already
  * tallied into `terminalCount` and which therefore has to be netted back out
- * (#10989), while every other reason is simply "not an agent".
+ * (#10989), and whose state is reported separately as presence (#11806).
+ * Every other reason is simply "not an agent", with nothing left to say.
  */
 export type RunExclusionReason = "trashed" | "help" | "dev-preview" | "no-pty" | "not-an-agent";
 
@@ -105,8 +134,9 @@ export function classifyRun(
   if (terminal.isTrashed) return "trashed";
 
   // The assistant help terminal is a real PTY but tooling-internal: it never
-  // counts as an agent, and is reported here only so callers can net it out of
-  // a process count the host already included it in.
+  // counts as an agent. Named rather than silently dropped so callers can net
+  // it out of a process count the host already included it in, and so its
+  // state can be carried as presence instead of vanishing (#11806).
   if (terminal.id !== undefined && isHelpTerminal(terminal.id)) return "help";
 
   if (terminal.kind === "dev-preview") return "dev-preview";
@@ -138,7 +168,73 @@ function empty(): ProjectAgentCounts {
     snoozed: 0,
     nextSnoozeWakeAt: null,
     helpTerminals: 0,
+    assistantState: null,
+    assistantWaitingReason: null,
+    assistantStateSince: null,
   };
+}
+
+/**
+ * A timestamp that can be compared and reported, or 0 when it cannot be.
+ *
+ * Zero, negatives, `NaN` and the infinities are all rejected together. `NaN`
+ * in particular has to be screened before any comparison: every comparison
+ * against it is false, so it would silently make "which record is newer"
+ * depend on the order the host happened to list terminals in.
+ */
+function usableTimestamp(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/**
+ * Liveness rank for picking which assistant record speaks for a project.
+ * Lower wins: actively doing something, then waiting, then settled.
+ */
+function assistantLiveness(state: AgentState | undefined): number {
+  if (state === "working" || state === "directing") return 0;
+  if (state === "waiting") return 1;
+  return 2;
+}
+
+/**
+ * Whether `candidate` should replace `incumbent` as the project's reported
+ * assistant.
+ *
+ * `HelpSessionService` enforces at most one assistant PTY per project, so in
+ * steady state there is nothing to choose between. The window this exists for
+ * is displacement: a new backend is provisioned while the old one is still
+ * being killed, and for those moments two terminals answer to the same
+ * project.
+ *
+ * Spawn time decides it, because that is the fact that actually identifies the
+ * session — `AgentStateService` uses the same stamp to reject state updates
+ * from a superseded run. Liveness cannot lead here: a displaced PTY whose kill
+ * has not landed yet still reads `working`, so ranking activity first would let
+ * the corpse keep reporting over a new session that is genuinely blocked.
+ *
+ * The remaining tie-breaks only matter when spawn times are missing or equal,
+ * and terminal id closes the last gap, so the answer never depends on listing
+ * order.
+ */
+function beatsIncumbent(
+  candidate: CountableTerminal,
+  incumbent: CountableTerminal | null
+): boolean {
+  if (incumbent === null) return true;
+
+  const candidateSpawn = usableTimestamp(candidate.spawnedAt);
+  const incumbentSpawn = usableTimestamp(incumbent.spawnedAt);
+  if (candidateSpawn !== incumbentSpawn) return candidateSpawn > incumbentSpawn;
+
+  const candidateRank = assistantLiveness(candidate.agentState);
+  const incumbentRank = assistantLiveness(incumbent.agentState);
+  if (candidateRank !== incumbentRank) return candidateRank < incumbentRank;
+
+  const candidateSince = usableTimestamp(candidate.lastStateChange);
+  const incumbentSince = usableTimestamp(incumbent.lastStateChange);
+  if (candidateSince !== incumbentSince) return candidateSince > incumbentSince;
+
+  return (candidate.id ?? "") < (incumbent.id ?? "");
 }
 
 /**
@@ -179,6 +275,10 @@ export function computeProjectAgentCounts(
   for (const id of projectIds) counts.set(id, empty());
 
   const availability = getAgentAvailabilityStore();
+  // Which assistant terminal currently speaks for each project. Held aside
+  // rather than written straight into `counts` so the winner is decided by
+  // `beatsIncumbent` alone and never by which terminal happened to come first.
+  const assistantByProject = new Map<string, CountableTerminal>();
 
   for (const terminal of terminals) {
     if (!terminal.projectId) continue;
@@ -186,7 +286,15 @@ export function computeProjectAgentCounts(
     if (!entry) continue;
     const exclusion = classifyRun(terminal, (id) => availability.isHelpTerminal(id));
     if (exclusion === "help") {
-      if (terminal.hasPty !== false) entry.helpTerminals += 1;
+      // Same liveness gate the process-count netting uses: a help terminal
+      // with no PTY is a record, not a running assistant, and must neither be
+      // subtracted from the host's count nor speak for the project.
+      if (terminal.hasPty !== false) {
+        entry.helpTerminals += 1;
+        if (beatsIncumbent(terminal, assistantByProject.get(terminal.projectId) ?? null)) {
+          assistantByProject.set(terminal.projectId, terminal);
+        }
+      }
       continue;
     }
     if (exclusion !== null) continue;
@@ -261,6 +369,22 @@ export function computeProjectAgentCounts(
         }
       }
     }
+  }
+
+  // Assistant presence, written last so it can never be mistaken for a tally
+  // that accumulated alongside the worker states above.
+  for (const [projectId, assistant] of assistantByProject) {
+    const entry = counts.get(projectId);
+    if (!entry) continue;
+    entry.assistantState = assistant.agentState ?? null;
+    entry.assistantWaitingReason =
+      assistant.agentState === "waiting" ? (assistant.waitingReason ?? null) : null;
+    // Same screen the selection used, so an unusable stamp can neither pick the
+    // winner nor be reported as one. An infinite or wildly-future value would
+    // read as a wait that began after every possible observation, holding the
+    // row in the attention band while the age beside it rendered "just now".
+    const since = usableTimestamp(assistant.lastStateChange);
+    entry.assistantStateSince = since > 0 ? since : null;
   }
 
   return counts;

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import os from "os";
 
 const ipcMainMock = vi.hoisted(() => ({
@@ -142,6 +142,11 @@ import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
+import { getAgentAvailabilityStore } from "../../../services/AgentAvailabilityStore.js";
+import {
+  ASSISTANT_PROJECTION_PARITY,
+  PARITY_ASSISTANT_TERMINAL,
+} from "../../../services/__tests__/helpers/assistantProjectionParity.js";
 
 // Disposes the stats/fleet pollers after each test; see the helper for why
 // dropping the disposer is what produced this file's CI flake. Still returns
@@ -880,5 +885,81 @@ describe("bulk stats and acknowledgement for scratch workspaces", () => {
       lastCompletionSeenAt: 7_000,
     });
     expect(scratchStore.markCompletionSeen).not.toHaveBeenCalled();
+  });
+});
+
+describe("bulk stats assistant presence (#11806)", () => {
+  const PROJECT_ID = "b".repeat(64);
+  const HELP_TERMINAL_ID = "help-1";
+
+  function helpTerminal(over: Record<string, unknown> = {}) {
+    return {
+      id: HELP_TERMINAL_ID,
+      projectId: PROJECT_ID,
+      kind: "terminal",
+      launchAgentId: "daintree-assistant",
+      hasPty: true,
+      ...over,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The real availability store, because that is what decides `"help"` and
+    // this test exists to prove the seed reads the same verdict the push does.
+    getAgentAvailabilityStore().markAsHelp(HELP_TERMINAL_ID);
+  });
+
+  afterEach(() => {
+    // The store is a module singleton — a mark left behind would make every
+    // later test in this process treat that id as the assistant.
+    getAgentAvailabilityStore().unmarkAsHelp(HELP_TERMINAL_ID);
+  });
+
+  it("seeds the same assistant facts the pushed status map reports", async () => {
+    const ptyClient = makePtyClient({
+      getAllTerminalsAsync: vi.fn().mockResolvedValue([helpTerminal(PARITY_ASSISTANT_TERMINAL)]),
+      getProjectStats: vi.fn().mockResolvedValue({
+        terminalCount: 1,
+        terminalTypes: { terminal: 1 },
+        processIds: [100],
+      }),
+    });
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+
+    const result = (await getBulkStatsHandler()(fakeEvent, [PROJECT_ID])) as Record<
+      string,
+      Record<string, unknown>
+    >;
+
+    const entry = result[PROJECT_ID]!;
+    // The same expectation `ProjectStatsService.adversarial.test.ts` asserts
+    // against the push producer for the same terminal — a seed that let the
+    // assistant into the worker counts, or dropped a presence field the push
+    // keeps, is the seed-vs-push disagreement #10989 removed.
+    expect({
+      assistantState: entry.assistantState,
+      assistantWaitingReason: entry.assistantWaitingReason,
+      assistantStateSince: entry.assistantStateSince,
+      activeAgentCount: entry.activeAgentCount,
+      waitingAgentCount: entry.waitingAgentCount,
+      processCount: entry.processCount,
+    }).toEqual(ASSISTANT_PROJECTION_PARITY);
+  });
+
+  it("omits the assistant fields when the project has no live assistant", async () => {
+    const ptyClient = makePtyClient({
+      getAllTerminalsAsync: vi.fn().mockResolvedValue([]),
+    });
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+
+    const result = (await getBulkStatsHandler()(fakeEvent, [PROJECT_ID])) as Record<
+      string,
+      Record<string, unknown>
+    >;
+
+    expect(result[PROJECT_ID]).not.toHaveProperty("assistantState");
+    expect(result[PROJECT_ID]).not.toHaveProperty("assistantWaitingReason");
+    expect(result[PROJECT_ID]).not.toHaveProperty("assistantStateSince");
   });
 });
