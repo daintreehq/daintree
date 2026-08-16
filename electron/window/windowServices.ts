@@ -744,6 +744,9 @@ export async function setupWindowServices(
       case "load-failed":
         console.error("[MAIN] Failed to load worktrees:", outcome.error);
         break;
+      case "attach-failed":
+        console.error("[MAIN] Failed to attach the worktree port:", outcome.error);
+        break;
       case "port-failed":
         console.error("[MAIN] Worktree port not brokered:", outcome.reason);
         break;

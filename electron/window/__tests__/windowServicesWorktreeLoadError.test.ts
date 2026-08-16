@@ -207,11 +207,45 @@ describe("startup worktree port attach (#11818)", () => {
         overrides.target === undefined
           ? makeWebContents({ loadingMainFrame: false })
           : overrides.target,
-      host: overrides.host === undefined ? host : overrides.host,
+      getHost: () => (overrides.host === undefined ? host : overrides.host),
       attachDirectPort: overrides.attachDirectPort ?? (() => {}),
-      brokerPort: overrides.brokerPort === undefined ? () => true : overrides.brokerPort,
+      getBrokerPort: () => (overrides.brokerPort === undefined ? () => true : overrides.brokerPort),
     });
   }
+
+  it("looks nothing up until the target is validated and attached", () => {
+    // Order matters: the pre-extraction code resolved the host and broker only
+    // after a live target had taken the direct port.
+    const order: string[] = [];
+    attachStartupWorktreePort<HostType, FakeWebContents>({
+      target: makeWebContents({ loadingMainFrame: false }),
+      getHost: () => {
+        order.push("host");
+        return host;
+      },
+      attachDirectPort: () => order.push("attach"),
+      getBrokerPort: () => {
+        order.push("broker");
+        return () => true;
+      },
+    });
+
+    expect(order).toEqual(["attach", "host", "broker"]);
+  });
+
+  it("looks nothing up at all when the target is already gone", () => {
+    const getHost = vi.fn(() => host);
+    const getBrokerPort = vi.fn(() => () => true);
+    attachStartupWorktreePort<HostType, FakeWebContents>({
+      target: null,
+      getHost,
+      attachDirectPort: () => {},
+      getBrokerPort,
+    });
+
+    expect(getHost).not.toHaveBeenCalled();
+    expect(getBrokerPort).not.toHaveBeenCalled();
+  });
 
   it("reports success once the port is brokered", () => {
     const attachDirectPort = vi.fn();
@@ -344,6 +378,49 @@ describe("startup worktree load orchestration (#11818)", () => {
     expect(await outcome).toEqual({ status: "port-failed", reason });
     expect(report).toHaveBeenCalledOnce();
     expect((report.mock.calls[0]![0] as Error).message).toBe(describeStartupPortFailure(reason));
+  });
+
+  // A throw escaping here would reject setupWindowServices itself, which on a
+  // cold boot exits the app instead of surfacing a worktree failure.
+  it.each([
+    [
+      "attachDirectPort",
+      {
+        attachDirectPort: () => {
+          throw new Error("webContents went away");
+        },
+      },
+    ],
+    [
+      "the host lookup",
+      {
+        getHost: () => {
+          throw new Error("pool is gone");
+        },
+      },
+    ],
+    [
+      "the broker",
+      {
+        getBrokerPort: () => () => {
+          throw new Error("port channel closed");
+        },
+      },
+    ],
+  ])("reports rather than throwing when %s throws", async (_label, overrides) => {
+    const report = vi.fn();
+    const call = runStartupWorktreeLoad<HostType, FakeWebContents>({
+      loadProject: () => Promise.resolve(),
+      getPortTarget: () => makeWebContents({ loadingMainFrame: false }),
+      getHost: () => host,
+      attachDirectPort: () => {},
+      getBrokerPort: () => () => true,
+      ...overrides,
+      report,
+    });
+
+    await expect(call).resolves.toMatchObject({ status: "attach-failed" });
+    expect(report).toHaveBeenCalledOnce();
   });
 
   it("resolves the broker after the load rather than before it", async () => {

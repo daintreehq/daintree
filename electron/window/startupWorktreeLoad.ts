@@ -99,17 +99,22 @@ export type StartupPortAttachResult =
  */
 export function attachStartupWorktreePort<THost, TTarget extends { isDestroyed(): boolean }>(args: {
   target: TTarget | null | undefined;
-  host: THost | null | undefined;
+  // Resolved lazily, in the same order the pre-extraction code used: nothing is
+  // looked up until the target has been validated and the direct port attached.
+  getHost: () => THost | null | undefined;
   attachDirectPort: (target: TTarget) => void;
-  brokerPort: ((host: THost, target: TTarget) => boolean) | null | undefined;
+  getBrokerPort: () => ((host: THost, target: TTarget) => boolean) | null | undefined;
 }): StartupPortAttachResult {
-  const { target, host, attachDirectPort, brokerPort } = args;
+  const { target, getHost, attachDirectPort, getBrokerPort } = args;
 
   if (!target || target.isDestroyed()) return { ok: false, reason: "no-renderer-target" };
 
   attachDirectPort(target);
 
+  const host = getHost();
   if (!host) return { ok: false, reason: "no-host" };
+
+  const brokerPort = getBrokerPort();
   if (!brokerPort) return { ok: false, reason: "no-broker" };
   if (!brokerPort(host, target)) return { ok: false, reason: "broker-rejected" };
 
@@ -137,6 +142,7 @@ export type StartupWorktreeLoadOutcome =
   | { status: "loaded" }
   | { status: "no-client" }
   | { status: "load-failed"; error: unknown }
+  | { status: "attach-failed"; error: unknown }
   | { status: "port-failed"; reason: StartupPortFailureReason };
 
 /**
@@ -179,12 +185,22 @@ export async function runStartupWorktreeLoad<
     return { status: "load-failed", error };
   }
 
-  const attachResult = attachStartupWorktreePort({
-    target: getPortTarget(),
-    host: getHost(),
-    attachDirectPort,
-    brokerPort: getBrokerPort(),
-  });
+  // Attachment stays inside an error boundary alongside the load: before this
+  // flow was extracted, one `try` covered the load, the direct attach and the
+  // brokering together. A synchronous throw escaping here would reject window
+  // startup itself rather than surfacing as a worktree failure.
+  let attachResult: StartupPortAttachResult;
+  try {
+    attachResult = attachStartupWorktreePort({
+      target: getPortTarget(),
+      getHost,
+      attachDirectPort,
+      getBrokerPort,
+    });
+  } catch (error) {
+    report(error);
+    return { status: "attach-failed", error };
+  }
   if (attachResult.ok) return { status: "loaded" };
 
   // A resolved loadProject() is not enough — with no port the renderer sits in
