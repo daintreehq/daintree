@@ -429,11 +429,15 @@ function getOpenedStatus(lastOpened: number): WorkspaceActivityStatus {
   };
 }
 
-/** The one status line a project row has to show, if it shows one at all. */
-export function getProjectRowStatus(
-  project: SearchableProject,
-  nowMs: number = Date.now()
-): ProjectRowStatus {
+/**
+ * The one status line a project row has to show, if it shows one at all.
+ *
+ * The clock is required rather than defaulted. Every caller renders inside a
+ * row React Compiler auto-memoizes, where a `Date.now()` fallback taken in here
+ * is invisible to the cache key the call is stored under — the row keeps the
+ * reading from its first render and the age never advances (#11823).
+ */
+export function getProjectRowStatus(project: SearchableProject, nowMs: number): ProjectRowStatus {
   // Only surface the fragment when it actually disambiguates — a plain basename
   // is already the folder name shown beside it, so repeating it is noise.
   const pathHint = project.displayPath.includes("/") ? project.displayPath : undefined;
@@ -467,10 +471,9 @@ export function getProjectRowStatus(
  * (the folder is app-managed), no auto-parking (scratches are never swept into
  * a closed status), and no `pathHint`: scratch paths are UUIDs under the app's
  * own directory, so a fragment of one disambiguates nothing.
+ *
+ * Requires its clock for the same reason `getProjectRowStatus` does.
  */
-export function getScratchRowStatus(
-  scratch: SearchableScratch,
-  nowMs: number = Date.now()
-): ProjectRowStatus {
+export function getScratchRowStatus(scratch: SearchableScratch, nowMs: number): ProjectRowStatus {
   return getWorkspaceActivityStatus(scratch, nowMs) ?? getOpenedStatus(scratch.lastOpened);
 }
