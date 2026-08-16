@@ -34,6 +34,7 @@ import { TerminalAgentStateController } from "./TerminalAgentStateController";
 import { TerminalRestoreController } from "./TerminalRestoreController";
 import {
   TerminalReflowController,
+  attemptRendererUnpause,
   forceXtermReflow,
   forceXtermRendererUnpause,
   resetRendererUnpauseBreaker,
@@ -3004,12 +3005,20 @@ class TerminalInstanceService {
       } catch (error) {
         logWarn(`forceXtermReflow failed for ${id}`, { error });
       }
-      // Redraw is the user's explicit "this pane is broken" signal, so it re-arms
-      // the breaker before repairing: a latch accrued by autonomous sweeps must
-      // not make the manual escape hatch a no-op, and one user-initiated attempt
-      // can't recreate a retry loop.
-      resetRendererUnpauseBreaker(managed);
-      forceXtermRendererUnpause(managed.terminal);
+      if (options.force) {
+        // A PERSON asked for this — the same foreground gate #11638 uses below.
+        // Their explicit "this pane is broken" signal re-arms the breaker, so a
+        // latch accrued by autonomous sweeps can't make the manual escape hatch
+        // a no-op. One user-initiated attempt can't become a retry loop.
+        resetRendererUnpauseBreaker(managed);
+        forceXtermRendererUnpause(managed.terminal);
+      } else {
+        // Automatic callers — backend recovery, the project-switch reveal, and
+        // the post-drag repair — stay inside the shared cap. Re-arming for them
+        // would clear the latch on a timer and hand the periodic sweeps a fresh
+        // budget forever, which is the loop this whole change removes.
+        attemptRendererUnpause(managed);
+      }
       managed.lastReflowAt = 0;
     }
     return true;

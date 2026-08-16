@@ -719,6 +719,30 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(attemptLogs[0]?.[1]).toMatchObject({ repairIssued: false, attempt: 1 });
     });
 
+    it("does not accept a same-turn sibling write as recovery", () => {
+      // The reflow controller registers its visibilitychange listener first, so
+      // on that event its repair lands immediately before the watchdog's sweep.
+      // Treating that write as durable recovery would re-arm the breaker on a
+      // renderer nothing actually fixed — the loop would never terminate.
+      const managed = makeManaged();
+      setRenderPaused(managed, true);
+      instances.set("t1", managed);
+      watchdog = new TerminalReconciliationWatchdog(makeDeps(instances));
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(managed.rendererUnpauseAttempts).toBe(1);
+
+      // Stand in for the sibling: clear the flag, then sweep within the same
+      // interval the repair was issued in.
+      setRenderPaused(managed, false);
+      watchdog.tick();
+      expect(managed.rendererUnpauseAttempts).toBe(1);
+
+      // A full sweep later, the same `false` IS believable.
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(managed.rendererUnpauseAttempts).toBe(0);
+    });
+
     it("shares one attempt budget between the standalone branch and the reveal path", () => {
       // unpauseIfNeeded (reveal-pending / geometry) routes through the same cap.
       // Two independent budgets would let a stuck pane repaint twice as often.

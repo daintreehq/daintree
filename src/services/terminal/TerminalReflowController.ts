@@ -144,6 +144,7 @@ export function attemptRendererUnpause(managed: ManagedTerminal): RendererUnpaus
   }
 
   managed.rendererUnpauseAttempts = attempts + 1;
+  managed.rendererUnpauseAttemptedAt = Date.now();
   // A `false` still consumed an attempt: a drifted or throwing primitive is
   // precisely the case that must not retry forever.
   return forceXtermRendererUnpause(managed.terminal) ? "issued" : "failed";
@@ -160,6 +161,7 @@ export function resetRendererUnpauseBreaker(managed: ManagedTerminal): void {
   managed.rendererUnpauseGeneration = managed.attachGeneration;
   managed.rendererUnpauseAttempts = 0;
   managed.rendererUnpauseGaveUp = false;
+  managed.rendererUnpauseAttemptedAt = undefined;
 }
 
 // Throttle per-terminal repairs to bound repaint cost under write bursts while

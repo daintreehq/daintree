@@ -453,6 +453,43 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(managed.lastReflowAt).toBe(0);
   });
 
+  it("only a user-initiated Redraw re-arms the unpause breaker (#11800)", () => {
+    // resetRenderer has automatic callers too — backend recovery, the
+    // project-switch reveal, the post-drag repair. If they re-armed, they would
+    // clear the latch on a timer and hand the periodic sweeps a fresh budget
+    // forever. `force` is the same foreground gate #11638 uses.
+    vi.spyOn(service.resizeController, "fit").mockImplementation(() => null);
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+
+    const latch = (managed: ManagedTerminal): ManagedTerminal => {
+      // resetRenderer bails out below 50x50, so give the host a real box or
+      // both halves of this test would pass without reaching the code at all.
+      for (const [prop, value] of [
+        ["clientWidth", 200],
+        ["clientHeight", 200],
+      ] as const) {
+        Object.defineProperty(managed.hostElement, prop, { value, configurable: true });
+      }
+      pauseRenderer(managed);
+      managed.rendererUnpauseGaveUp = true;
+      managed.rendererUnpauseGeneration = managed.attachGeneration;
+      managed.rendererUnpauseAttempts = 3;
+      return managed;
+    };
+
+    const automatic = latch(makeManaged());
+    service.instances.set("auto", automatic);
+    expect(service.resetRenderer("auto")).toBe(true);
+    expect(automatic.rendererUnpauseGaveUp).toBe(true);
+    expect(unpauseCount(automatic)).toBe(0);
+
+    const manual = latch(makeManaged());
+    service.instances.set("manual", manual);
+    expect(service.resetRenderer("manual", { force: true })).toBe(true);
+    expect(manual.rendererUnpauseGaveUp).toBe(false);
+    expect(unpauseCount(manual)).toBe(1);
+  });
+
   it("resetRenderer uses the local WebGL repair and skips the fallback refresh when a pool entry is repaired", () => {
     const managed = makeManaged({ lastReflowAt: 99999 });
     Object.defineProperty(managed.hostElement, "clientWidth", { value: 200, configurable: true });

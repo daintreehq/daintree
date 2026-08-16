@@ -123,6 +123,13 @@ export interface ManagedTerminal {
   rendererUnpauseGaveUp?: boolean;
   // The attachGeneration the counter accrued under — mirrors geometryRepairGeneration.
   rendererUnpauseGeneration?: number;
+  // When the last unpause repair was issued. Recovery is only believable once
+  // real frames have had a chance since then: the reflow controller and the
+  // watchdog both listen for visibilitychange/reveal and run in the SAME event
+  // turn, so without this the watchdog would read its sibling's just-written
+  // `false` as durable recovery and re-arm the breaker on a renderer that
+  // nothing has actually fixed.
+  rendererUnpauseAttemptedAt?: number;
   // Geometry the PTY reported holding after its last resize (#11641). The only
   // view the renderer has of the backend grid — everything else here describes
   // xterm's side.

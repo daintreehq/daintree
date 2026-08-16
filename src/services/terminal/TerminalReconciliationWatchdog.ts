@@ -251,7 +251,7 @@ export class TerminalReconciliationWatchdog {
       // Before the cooldown gate on purpose: verifying a prior unpause repair is
       // a private-field read, and gating it behind the 6s cooldown would delay
       // re-arming the breaker past the sweep that can actually see the outcome.
-      this.observeRendererUnpauseOutcome(id, managed);
+      this.observeRendererUnpauseOutcome(id, managed, now);
       if (now - (managed.lastWatchdogRepairAt ?? 0) < WATCHDOG_REPAIR_COOLDOWN_MS) continue;
       heavyBudget -= this.reconcile(id, managed, now, heavyBudget, resizeTransitioning);
     }
@@ -740,9 +740,15 @@ export class TerminalReconciliationWatchdog {
    * missing private field as proof of recovery and wipe the accrued attempts,
    * turning the one signal that bounds the loop into a fail-open.
    */
-  private observeRendererUnpauseOutcome(id: string, managed: ManagedTerminal): void {
+  private observeRendererUnpauseOutcome(id: string, managed: ManagedTerminal, now: number): void {
     if (!managed.rendererUnpauseAttempts) return;
     if (managed.rendererUnpauseGeneration !== managed.attachGeneration) return;
+    // The reflow controller registers its visibilitychange/reveal listeners
+    // BEFORE this class does, so on those events its repair runs in the same
+    // event turn, immediately ahead of this read. Requiring a full sweep to have
+    // elapsed is what makes the observation about the renderer rather than about
+    // a sibling's just-landed write.
+    if (now - (managed.rendererUnpauseAttemptedAt ?? 0) < WATCHDOG_INTERVAL_MS) return;
     if (readXtermRenderPaused(managed.terminal) !== false) return;
     logDebug("[TerminalReconciliationWatchdog] xterm render pause no longer set after repair", {
       id,
