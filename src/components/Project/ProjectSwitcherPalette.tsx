@@ -201,7 +201,8 @@ interface ProjectListItemProps {
    * unchanged — an ambient `Date.now()` inside it would simply freeze. Ages and
    * the recency deadline both derive from this prop instead, so the tick that
    * changes it is what invalidates the row. `ScratchListItem` threads its clock
-   * the same way; `rowStatusClock.contract.test.ts` holds every row to it.
+   * the same way, and `rowStatusClock.contract.test.ts` holds both ranked rows
+   * to it — source-level, because vitest cannot see the freeze.
    */
   nowMs: number;
   onSelect: (row: ProjectSwitcherProjectRow) => void;

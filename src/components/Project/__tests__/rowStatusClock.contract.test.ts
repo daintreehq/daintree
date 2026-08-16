@@ -16,18 +16,38 @@ import ts from "typescript";
 // the age advances the way it never does in a build — a render-then-advance-
 // timers test passes identically with and without the bug.
 //
-// Two invariants, because the type checker only covers half of it. A required
-// clock parameter turns an omitted argument into a compile error, but it cannot
-// stop a caller passing `Date.now()` inline, which type checks and freezes just
-// the same. The palette contract covers that half by pinning where the clock
-// comes from.
+// The clock has to survive a whole chain to reach the screen, and the type
+// checker guards none of it: a reactive source, a prop carrying it down, and a
+// row that renders against that prop rather than a reading of its own. Breaking
+// any one link refreezes the age, so each link gets an assertion. Pinning only
+// the last one is what makes this contract look green while the parent quietly
+// swaps its `useGlobalMinuteClock()` for a `Date.now()`.
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
-const PALETTE_PATH = path.resolve(TEST_DIR, "../ProjectSwitcherPalette.tsx");
-const HELPERS_PATH = path.resolve(TEST_DIR, "../../../lib/projectRowStatus.ts");
+const SRC_ROOT = path.resolve(TEST_DIR, "../../..");
+const PALETTE_REL = "components/Project/ProjectSwitcherPalette.tsx";
+const HELPERS_REL = "lib/projectRowStatus.ts";
 
 /** The status-helper family: `getProjectRowStatus`, `getScratchRowStatus`, and any sibling. */
 const HELPER_PATTERN = /^get.+RowStatus$/;
+
+/** The module the family is declared in, however a consumer spells the path to it. */
+const HELPERS_MODULE = /(^|\/)projectRowStatus$/;
+
+/** The prop every row carries its clock on, so the chain can be followed by name. */
+const CLOCK_PROP = "nowMs";
+
+/** Hooks that return a clock React re-renders on. An ambient read is not one. */
+const REACTIVE_CLOCKS = new Set(["useGlobalMinuteClock"]);
+
+/**
+ * Rows that must stay under this contract.
+ *
+ * Named rather than counted because the walk is only as good as what it finds:
+ * moving a row into its own file, or renaming the helper family out of the
+ * pattern, would otherwise shrink the checked set to nothing and pass.
+ */
+const REQUIRED_ROWS = ["ProjectListItem", "ScratchListItem"];
 
 /**
  * Components whose clock is knowingly still ambient.
@@ -35,10 +55,10 @@ const HELPER_PATTERN = /^get.+RowStatus$/;
  * `ScratchSection` reads `Date.now()` in its own body. The palette holds a
  * per-minute tick for it, but that tick is state on the palette root and never
  * reaches here: the compiler caches the `<ScratchSection>` element on its props
- * alone, so the root re-runs and the cached child is reused. Threading a clock
- * into it is a separate fix from the ranked row #11823 reports, and listing it
- * here keeps the gap visible instead of letting a suffix-matched predicate
- * quietly skip it.
+ * alone, so the root re-runs and the cached child is reused. Its pinned rows and
+ * cleanup countdown go stale the same way the ranked row did — a separate fix
+ * from the one #11823 reports, listed here so the gap stays visible instead of
+ * being quietly skipped by a predicate that never looked.
  */
 const AMBIENT_CLOCK_ALLOWLIST = new Set(["ScratchSection"]);
 
@@ -57,28 +77,82 @@ function eachNode(node: ts.Node, visit: (node: ts.Node) => void): void {
   node.forEachChild((child) => eachNode(child, visit));
 }
 
-/**
- * Local binding names the status helpers were imported under, following aliases
- * so `import { getScratchRowStatus as read }` is still tracked.
- */
-function importedHelperNames(source: ts.SourceFile): Set<string> {
-  const names = new Set<string>();
+function walk(dir: string, out: string[] = []): string[] {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "__tests__" || entry.name === "node_modules") continue;
+      walk(full, out);
+    } else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+function relative(file: string): string {
+  return path.relative(SRC_ROOT, file).split(path.sep).join("/");
+}
+
+interface HelperBindings {
+  /** Local names the helpers are callable under, following `as` aliases. */
+  direct: Set<string>;
+  /** Namespace bindings, so `rowStatus.getScratchRowStatus(…)` is still seen. */
+  namespaces: Set<string>;
+}
+
+/** How this file can reach the helper family, if it can reach it at all. */
+function helperBindings(source: ts.SourceFile): HelperBindings {
+  const direct = new Set<string>();
+  const namespaces = new Set<string>();
+
   eachNode(source, (node) => {
     if (!ts.isImportDeclaration(node)) return;
+    if (!ts.isStringLiteral(node.moduleSpecifier)) return;
+    if (!HELPERS_MODULE.test(node.moduleSpecifier.text)) return;
+
     const bindings = node.importClause?.namedBindings;
-    if (!bindings || !ts.isNamedImports(bindings)) return;
+    if (!bindings) return;
+    if (ts.isNamespaceImport(bindings)) {
+      namespaces.add(bindings.name.text);
+      return;
+    }
     for (const element of bindings.elements) {
       const imported = element.propertyName?.text ?? element.name.text;
-      if (HELPER_PATTERN.test(imported)) names.add(element.name.text);
+      if (HELPER_PATTERN.test(imported)) direct.add(element.name.text);
     }
   });
-  return names;
+
+  // `const read = getScratchRowStatus` — a rename that keeps the call reachable
+  // under a name the import never mentioned.
+  eachNode(source, (node) => {
+    if (!ts.isVariableDeclaration(node) || !node.initializer) return;
+    if (!ts.isIdentifier(node.name) || !ts.isIdentifier(node.initializer)) return;
+    if (direct.has(node.initializer.text)) direct.add(node.name.text);
+  });
+
+  return { direct, namespaces };
+}
+
+/** The status helper this call resolves to, or undefined if it is not one. */
+function calledHelper(node: ts.CallExpression, bindings: HelperBindings): string | undefined {
+  const callee = node.expression;
+  if (ts.isIdentifier(callee)) {
+    return bindings.direct.has(callee.text) ? callee.text : undefined;
+  }
+  if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression)) {
+    const viaNamespace =
+      bindings.namespaces.has(callee.expression.text) && HELPER_PATTERN.test(callee.name.text);
+    return viaNamespace ? callee.name.text : undefined;
+  }
+  return undefined;
 }
 
 /**
  * The component a call sits in. Nearest enclosing function *declaration*, so a
  * call made from a nested `renderItem`-style arrow still resolves to the
- * component whose props hold the clock.
+ * component whose props hold the clock. A row written as an arrow assigned to a
+ * const resolves to nothing and is reported, rather than skipped.
  */
 function owningComponent(node: ts.Node): ts.FunctionDeclaration | undefined {
   let current: ts.Node | undefined = node.parent;
@@ -90,12 +164,16 @@ function owningComponent(node: ts.Node): ts.FunctionDeclaration | undefined {
 }
 
 /**
- * Whether `argument` is that component's own prop — a destructured binding with
- * no default of its own, or a member of a whole-props parameter. Anything else
- * (an ambient `Date.now()`, a module constant, a local re-binding) is invisible
- * to the compiler's cache key and cannot invalidate the row.
+ * Whether `argument` is this component's own `nowMs` prop.
+ *
+ * Deliberately narrow: a destructured binding of `nowMs` with no default of its
+ * own, or `props.nowMs`. The compiler would also track a plain local alias, but
+ * every shape this accepts is one a reader can confirm at a glance, and the
+ * rows all already spell it this way. Requiring the *original* property name
+ * rather than any prop is what ties this link to the one above it — a row handed
+ * some other stable number would otherwise satisfy it.
  */
-function comesFromProps(owner: ts.FunctionDeclaration, argument: ts.Expression): boolean {
+function isClockProp(owner: ts.FunctionDeclaration, argument: ts.Expression): boolean {
   const props = owner.parameters[0];
   if (!props) return false;
 
@@ -103,9 +181,11 @@ function comesFromProps(owner: ts.FunctionDeclaration, argument: ts.Expression):
     if (!ts.isIdentifier(argument)) return false;
     return props.name.elements.some(
       (element) =>
+        element.dotDotDotToken === undefined &&
+        element.initializer === undefined &&
         ts.isIdentifier(element.name) &&
         element.name.text === argument.text &&
-        element.initializer === undefined
+        (element.propertyName?.getText(owner.getSourceFile()) ?? element.name.text) === CLOCK_PROP
     );
   }
 
@@ -113,68 +193,193 @@ function comesFromProps(owner: ts.FunctionDeclaration, argument: ts.Expression):
     ts.isIdentifier(props.name) &&
     ts.isPropertyAccessExpression(argument) &&
     ts.isIdentifier(argument.expression) &&
-    argument.expression.text === props.name.text
+    argument.expression.text === props.name.text &&
+    argument.name.text === CLOCK_PROP
   );
 }
 
-const palette = parse(PALETTE_PATH);
-const helperNames = importedHelperNames(palette);
-
 interface HelperCall {
+  file: string;
   helper: string;
   owner: string;
+  ownerNode: ts.FunctionDeclaration | undefined;
   line: number;
   clock: ts.Expression | undefined;
-  ownerNode: ts.FunctionDeclaration | undefined;
 }
 
-const paletteCalls: HelperCall[] = [];
-eachNode(palette, (node) => {
-  if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) return;
-  if (!helperNames.has(node.expression.text)) return;
-  const ownerNode = owningComponent(node);
-  paletteCalls.push({
-    helper: node.expression.text,
-    owner: ownerNode?.name?.text ?? "<module>",
-    line: palette.getLineAndCharacterOfPosition(node.getStart(palette)).line + 1,
-    clock: node.arguments[1],
-    ownerNode,
+const sources = walk(SRC_ROOT).map((file) => ({ file, rel: relative(file), source: parse(file) }));
+
+const helperCalls: HelperCall[] = [];
+for (const { rel, source } of sources) {
+  const bindings = helperBindings(source);
+  if (bindings.direct.size === 0 && bindings.namespaces.size === 0) continue;
+
+  eachNode(source, (node) => {
+    if (!ts.isCallExpression(node)) return;
+    const helper = calledHelper(node, bindings);
+    if (!helper) return;
+    const ownerNode = owningComponent(node);
+    helperCalls.push({
+      file: rel,
+      helper,
+      owner: ownerNode?.name?.text ?? "<not a function declaration>",
+      ownerNode,
+      line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+      clock: node.arguments[1],
+    });
   });
-});
+}
+
+const palette = sources.find((entry) => entry.rel === PALETTE_REL);
+if (!palette) throw new Error(`Contract target no longer exists: src/${PALETTE_REL}`);
+
+/** Local names bound to a hook that re-renders on a new reading. */
+function reactiveClockBindings(source: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  eachNode(source, (node) => {
+    if (!ts.isVariableDeclaration(node) || !node.initializer) return;
+    if (!ts.isCallExpression(node.initializer)) return;
+    const callee = node.initializer.expression;
+    if (!ts.isIdentifier(callee) || !REACTIVE_CLOCKS.has(callee.text)) return;
+    if (ts.isIdentifier(node.name)) names.add(node.name.text);
+  });
+  return names;
+}
 
 describe("row status clocks (#11823)", () => {
-  it("renders every palette row against a clock handed to it, never one it reads itself", () => {
-    // Guards the walk itself: a rename or a moved import that stopped matching
-    // would otherwise leave an empty list quietly passing every assertion.
-    expect(helperNames.size).toBeGreaterThan(0);
-    expect(paletteCalls.length).toBeGreaterThan(0);
-
-    const offenders = paletteCalls
+  it("renders every row against a clock handed to it, never one it reads itself", () => {
+    const offenders = helperCalls
       .filter(({ owner }) => !AMBIENT_CLOCK_ALLOWLIST.has(owner))
-      .filter(({ ownerNode, clock }) => !ownerNode || !clock || !comesFromProps(ownerNode, clock))
+      .filter(({ ownerNode, clock }) => !ownerNode || !clock || !isClockProp(ownerNode, clock))
       .map(
-        ({ owner, helper, line, clock }) =>
-          `${owner}:${line} ${helper}(…, ${clock?.getText(palette) ?? "<no clock>"}) — the clock is not one of ${owner}'s props`
+        ({ file, owner, helper, line, clock }) =>
+          `src/${file}:${line} ${owner} calls ${helper}(…, ${
+            clock?.getText() ?? "<no clock>"
+          }) — not its own \`${CLOCK_PROP}\` prop`
       );
 
     expect(offenders).toEqual([]);
   });
 
-  it("leaves the status helpers no ambient clock to fall back to", () => {
-    const helpers = parse(HELPERS_PATH);
+  it("feeds every row clock from a hook that re-renders, not a one-off reading", () => {
+    const reactive = reactiveClockBindings(palette.source);
 
-    const declarations = helpers.statements
-      .filter(ts.isFunctionDeclaration)
-      .filter((fn) => fn.name !== undefined && HELPER_PATTERN.test(fn.name.text));
+    const offenders: string[] = [];
+    eachNode(palette.source, (node) => {
+      if (!ts.isJsxAttribute(node) || node.name.getText() !== CLOCK_PROP) return;
+      const line = palette.source.getLineAndCharacterOfPosition(node.getStart()).line + 1;
+      const value = node.initializer;
+      const passed =
+        value && ts.isJsxExpression(value) && value.expression && ts.isIdentifier(value.expression)
+          ? value.expression
+          : undefined;
+      if (!passed || !reactive.has(passed.text)) {
+        offenders.push(
+          `src/${PALETTE_REL}:${line} ${CLOCK_PROP}=${value?.getText() ?? "?"} does not come from ${[
+            ...REACTIVE_CLOCKS,
+          ].join("/")}`
+        );
+      }
+    });
 
-    expect(declarations.length).toBeGreaterThan(0);
+    // The rows have to be receiving a clock at all for the check above to mean
+    // anything — an attribute that vanished would otherwise pass by absence.
+    expect(offenders).toEqual([]);
+    expect(offenders.length + countClockAttributes(palette.source)).toBeGreaterThan(0);
+  });
 
-    const offenders = declarations
-      .filter((fn) => fn.parameters.some((parameter) => parameter.initializer !== undefined))
-      .map(
-        (fn) => `${fn.name?.text ?? "<anonymous>"} defaults a parameter instead of requiring it`
-      );
+  it("leaves the row-status helpers no ambient clock to fall back to", () => {
+    const helpers = sources.find((entry) => entry.rel === HELPERS_REL);
+    if (!helpers) throw new Error(`Contract target no longer exists: src/${HELPERS_REL}`);
+
+    const exported = exportedHelpers(helpers.source);
+    expect(exported.map(({ name }) => name).sort()).toEqual(
+      ["getProjectRowStatus", "getScratchRowStatus"].sort()
+    );
+
+    const offenders = exported
+      .filter(({ fn }) => !requiresClock(fn))
+      .map(({ name }) => `${name} does not require an explicit clock as its second parameter`);
 
     expect(offenders).toEqual([]);
+  });
+
+  it("keeps every row it names, and every exemption it grants, real", () => {
+    const owners = new Set(helperCalls.map(({ owner }) => owner));
+
+    const missing = REQUIRED_ROWS.filter((row) => !owners.has(row));
+    expect(missing).toEqual([]);
+
+    const dead = [...AMBIENT_CLOCK_ALLOWLIST].filter((name) => !owners.has(name));
+    expect(dead).toEqual([]);
   });
 });
+
+/** `nowMs={…}` attributes in the file, however they are spelled. */
+function countClockAttributes(source: ts.SourceFile): number {
+  let count = 0;
+  eachNode(source, (node) => {
+    if (ts.isJsxAttribute(node) && node.name.getText() === CLOCK_PROP) count += 1;
+  });
+  return count;
+}
+
+/**
+ * Exported members of the helper family, counting both declaration forms — an
+ * `export const get… = (row, nowMs = Date.now()) => …` reintroduces the default
+ * just as effectively as a function declaration does.
+ */
+function exportedHelpers(
+  source: ts.SourceFile
+): { name: string; fn: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression }[] {
+  const found: {
+    name: string;
+    fn: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression;
+  }[] = [];
+
+  const isExported = (node: ts.Node): boolean =>
+    ts.canHaveModifiers(node) &&
+    (ts.getModifiers(node) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+
+  for (const statement of source.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name && isExported(statement)) {
+      if (HELPER_PATTERN.test(statement.name.text)) {
+        found.push({ name: statement.name.text, fn: statement });
+      }
+      continue;
+    }
+    if (!ts.isVariableStatement(statement) || !isExported(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || !declaration.initializer) continue;
+      if (!HELPER_PATTERN.test(declaration.name.text)) continue;
+      if (
+        ts.isArrowFunction(declaration.initializer) ||
+        ts.isFunctionExpression(declaration.initializer)
+      ) {
+        found.push({ name: declaration.name.text, fn: declaration.initializer });
+      }
+    }
+  }
+
+  return found;
+}
+
+/**
+ * Whether the clock is genuinely required: present, not optional, not defaulted,
+ * and — when it arrives in an options object — carrying no defaulted member to
+ * hide an ambient read behind.
+ */
+function requiresClock(
+  fn: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression
+): boolean {
+  const clock = fn.parameters[1];
+  if (!clock) return false;
+  if (clock.questionToken !== undefined) return false;
+  if (clock.initializer !== undefined) return false;
+
+  let defaulted = false;
+  eachNode(clock, (node) => {
+    if (ts.isBindingElement(node) && node.initializer !== undefined) defaulted = true;
+  });
+  return !defaulted;
+}
