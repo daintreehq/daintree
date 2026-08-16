@@ -574,6 +574,40 @@ describe("openDb (integration)", () => {
     }
   });
 
+  it("drops the obsolete session-open checkpoint on upgrade (migration 0012)", async () => {
+    // Names the key on purpose, unlike the generic journal test above: that one
+    // derives its expectations from the migration's own SQL, so deleting the
+    // statement would delete the assertion with it. The checkpoint fed the
+    // switcher's old recency dot (#11794) and nothing reads it after #11801, so
+    // leaving the row behind would strand user state no code can reach.
+    const dbPath = path.join(tmpDir, "checkpoint-cleanup.db");
+
+    const Database = (await import("better-sqlite3")).default;
+    const seed = new Database(dbPath);
+    seed.exec(`
+      CREATE TABLE app_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+    const ins = seed.prepare("INSERT INTO app_state (key, value) VALUES (?, ?)");
+    ins.run("sessionOpenProjects", '{"v":1,"projectIds":["proj-1"],"atMs":123}');
+    ins.run("currentProjectId", "proj-1");
+    seed.close();
+
+    const { sqlite } = openDb(dbPath, migrationsFolder);
+    try {
+      const rows = sqlite.prepare("SELECT key FROM app_state").all() as { key: string }[];
+      const keys = rows.map((r) => r.key);
+      expect(keys).not.toContain("sessionOpenProjects");
+      // The neighbouring key is what proves the DELETE was scoped rather than
+      // a table-wide wipe that happened to satisfy the first assertion.
+      expect(keys).toContain("currentProjectId");
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("closes the underlying SQLite handle if migrate() throws", () => {
     const dbPath = path.join(tmpDir, "leak.db");
     const bogusFolder = path.join(tmpDir, "does-not-exist");

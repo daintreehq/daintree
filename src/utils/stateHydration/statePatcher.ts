@@ -27,6 +27,19 @@ import {
   resolveEffectiveInlineMode,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
+// Re-exported rather than defined here: main counts the agent panels a project
+// would restore (#11801) and has to resolve identity by the same rule this
+// respawn path does, so the rule lives somewhere both processes can reach.
+export {
+  resolveAgentId,
+  inferAgentIdFromTitle,
+  resolveRespawnAgentId,
+} from "@shared/utils/savedAgentIdentity";
+import {
+  resolveAgentId,
+  inferAgentIdFromTitle,
+  resolveRespawnAgentId,
+} from "@shared/utils/savedAgentIdentity";
 import { isAbsolute } from "@shared/utils/path";
 import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { getDeserializer } from "@/config/panelKindSerialisers";
@@ -249,40 +262,6 @@ interface AgentSettingsData {
   globalUseAltScreen?: boolean;
 }
 
-export function inferAgentIdFromTitle(
-  title: string | undefined,
-  kind: PanelKind | undefined,
-  existingAgentId: string | undefined,
-  _terminalId: string,
-  _logContext: string
-): string | undefined {
-  if (existingAgentId) return existingAgentId;
-  // Only recover agent identity from persisted state that was *itself* written
-  // as an agent panel — the legacy `kind: "agent"` marker. Plain terminals with
-  // incidental "claude" or "gemini" in their user-assigned title must not be
-  // silently promoted to agent terminals during respawn (that would regenerate
-  // a Claude launch command and take over the user's renamed shell).
-  if (kind !== "agent") return undefined;
-
-  const titleLower = (title ?? "").toLowerCase();
-  if (titleLower.includes("claude")) return "claude";
-  if (titleLower.includes("antigravity")) return "antigravity";
-  if (titleLower.includes("gemini")) return "gemini";
-  if (titleLower.includes("codex")) return "codex";
-  if (titleLower.includes("opencode")) return "opencode";
-
-  return undefined;
-}
-
-export function resolveAgentId(
-  primaryAgentId: string | undefined,
-  fallbackAgentId?: string | undefined
-): string | undefined {
-  if (primaryAgentId) return primaryAgentId;
-  if (fallbackAgentId) return fallbackAgentId;
-  return undefined;
-}
-
 export const inferKind: (saved: SavedTerminalData) => PanelKind = inferKindShared;
 
 function resolveSavedCwd(savedCwd: string | undefined, projectRoot: string): string {
@@ -466,28 +445,6 @@ export function buildArgsForReconnectedFallback(
     pluginId: saved.pluginId,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
   };
-}
-
-/**
- * Resolve the agent identity a respawn will actually launch under: the legacy
- * on-disk `agentId`/`type` migration plus the title-based recovery for snapshots
- * written under the old `kind: "agent"` marker. Shared with restore's
- * resume-latest election (#11461) so slot eligibility can never disagree with the
- * command the respawn goes on to build. Pure — safe to call in a pre-pass.
- */
-export function resolveRespawnAgentId(
-  saved: SavedTerminalData,
-  kind: PanelKind | undefined
-): string | undefined {
-  const savedLaunchAgentId =
-    saved.launchAgentId ?? (saved.type === "claude" ? "claude" : saved.agentId);
-  return inferAgentIdFromTitle(
-    saved.title,
-    kind,
-    resolveAgentId(savedLaunchAgentId),
-    saved.id,
-    "Respawn"
-  );
 }
 
 export interface BuildArgsForRespawnOptions {

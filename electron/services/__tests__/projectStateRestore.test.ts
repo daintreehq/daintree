@@ -135,6 +135,39 @@ describe("countResumableAgentPanels", () => {
     expect(count).toBe(0);
   });
 
+  it("counts legacy snapshots that name their agent the old ways", () => {
+    // The oldest rows are the ones the backfill exists for, and none of them
+    // spell the agent `launchAgentId`. Restore migrates `type`/`agentId` on the
+    // way in, so reading only the modern field would leave exactly those
+    // projects unmarked.
+    const count = countResumableAgentPanels(
+      [
+        snapshot({ id: "legacy-type", launchAgentId: undefined, type: "claude" }),
+        snapshot({ id: "legacy-agent-id", launchAgentId: undefined, agentId: "codex" }),
+      ],
+      CONTEXT
+    );
+    expect(count).toBe(2);
+  });
+
+  it("recovers an agent named only in a legacy agent panel's title", () => {
+    const count = countResumableAgentPanels(
+      [snapshot({ id: "titled", kind: "agent", launchAgentId: undefined, title: "Claude Code" })],
+      CONTEXT
+    );
+    expect(count).toBe(1);
+  });
+
+  it("does not promote a plain terminal that merely mentions an agent in its title", () => {
+    // A renamed shell called "claude notes" is not an agent panel, and restore
+    // refuses to regenerate a launch command for it.
+    const count = countResumableAgentPanels(
+      [snapshot({ id: "renamed", launchAgentId: undefined, title: "claude notes" })],
+      CONTEXT
+    );
+    expect(count).toBe(0);
+  });
+
   it("resolves kind the way restore does, not by reading the field", () => {
     // A snapshot with no `kind` is classified by the same inference restore
     // uses. With a cwd it is a terminal and counts; the mislabelled legacy
