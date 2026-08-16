@@ -18,6 +18,7 @@ import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
   McpBearerIdentity,
+  McpSessionOrigin,
   McpToolCallStartedPayload,
   McpToolCallSettledPayload,
   McpHelpDisplayImagePayload,
@@ -2996,6 +2997,7 @@ function buildElectronApi(): ElectronAPI {
           confirmed?: boolean;
           context?: ActionContext;
           callerInfo?: McpBearerIdentity;
+          sessionOrigin?: McpSessionOrigin;
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
 

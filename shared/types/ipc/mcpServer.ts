@@ -722,12 +722,43 @@ export interface HelpSessionBearerRecord {
 }
 
 /**
+ * How a session's bearer was authenticated, recorded explicitly at handshake
+ * (#11789). Before this, "which renderer owns this session" was inferred from
+ * presence in `sessionWebContentsMap` — but that map is simultaneously the
+ * routing table and the authorization gate for `issueGrant` / `setSessionTier`,
+ * so binding an external session to a workspace would have made it eligible for
+ * renderer-driven privilege elevation it must never have.
+ *
+ * Routing reads the WebContents / workspace maps. Authorization, notifications
+ * and external-client inventory read this. `external` covers api-key bearers,
+ * unauthenticated loopback, and generic pane tokens — everything that is not one
+ * of Daintree's own assistant surfaces.
+ *
+ * Lives here rather than in `electron/services/mcp-server/shared.ts` (which
+ * re-exports it) because it now crosses the contextBridge on every dispatch
+ * request, so the renderer can tell an assistant-launched run from an external
+ * one (#11808). Mirroring it renderer-side instead would leave two unions free
+ * to drift, silently reclassifying a surface as external the day they did.
+ *
+ * The same two Daintree-own surfaces this splits out are the ones
+ * {@link McpGrantActorType} names; that type classifies who a grant was issued
+ * to, this one classifies how the session itself authenticated.
+ */
+export type McpSessionOrigin = "help" | "assistant-pane" | "external";
+
+/**
  * Display-only provenance for the external bearer behind a `danger: "confirm"`
  * dispatch, threaded into the MCP confirm dialog so the user can see which
  * client is asking before approving (#9157). Carries only the non-sensitive
  * fields — the 4-char token suffix and the client user-agent. Absent for
  * pinned help-session dispatch (the assistant's own panel is the context), so
  * the dialog stays provenance-free there.
+ *
+ * Distinct from {@link McpSessionOrigin}, which rides the same payload: this
+ * names *which external client* is asking, for a pre-dispatch approval prompt;
+ * that records *which class of surface* the session is, for post-dispatch run
+ * provenance. An assistant session has no meaningful `callerInfo` and still has
+ * an origin.
  */
 export interface McpBearerIdentity {
   token4LastChars: string;

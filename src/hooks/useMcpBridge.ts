@@ -16,7 +16,8 @@ import {
   type WorktreeLocationArgs,
 } from "@/services/actions/definitions/locationArgs";
 import type { ActionContext, ActionDispatchResult, ActionId } from "@shared/types/actions";
-import type { McpConfirmationDecision } from "@shared/types/ipc/mcpServer";
+import type { McpConfirmationDecision, McpSessionOrigin } from "@shared/types/ipc/mcpServer";
+import type { TerminalSpawnSource } from "@shared/types/panel";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 
@@ -227,23 +228,50 @@ function withPreviewedGitCwd(args: unknown, target: McpConfirmPreviewTarget | un
 }
 
 /**
- * Stamp `spawnedBy: "mcp"` and `focusPolicy: "preserve"` onto actions that
- * can create panels. `spawnedBy` records provenance (MCP bridge is the
- * dispatch source); `focusPolicy` declares the caller's intent to keep focus
- * where it is (#6959). We override any caller-supplied values because the
- * dispatch source is authoritative — an MCP client cannot claim a different
- * origin or focus policy.
+ * Which spawn source a dispatch from this session should be stamped with
+ * (#11808).
+ *
+ * `help` and `assistant-pane` are both Daintree's own assistant surfaces — one
+ * is the assistant panel, the other a `daintree-assistant` CLI pane — so both
+ * read as `"assistant"`. Splitting them apart in the terminal's provenance
+ * would classify the implementation surface rather than the actor, and the user
+ * question this answers is "did I ask for this run, or did the assistant start
+ * it on its own?".
+ *
+ * Anything else, including an absent origin, is `"mcp"`. That mirrors
+ * `SessionStore.getOrigin`'s own fail-closed default: an unknown or torn-down
+ * session must never be promoted into one of Daintree's own surfaces, and the
+ * safe direction here is to under-claim assistant provenance rather than label
+ * an external client's spawn as ours.
+ */
+function spawnSourceForOrigin(sessionOrigin: McpSessionOrigin | undefined): TerminalSpawnSource {
+  return sessionOrigin === "help" || sessionOrigin === "assistant-pane" ? "assistant" : "mcp";
+}
+
+/**
+ * Stamp the dispatching session's spawn source and `focusPolicy: "preserve"`
+ * onto actions that can create panels. `spawnedBy` records provenance — which
+ * surface asked for this spawn; `focusPolicy` declares the caller's intent to
+ * keep focus where it is (#6959). We override any caller-supplied values
+ * because the dispatch source is authoritative — an MCP client cannot claim a
+ * different origin or focus policy, and in particular cannot claim to be the
+ * assistant.
  *
  * Exported for unit tests; importing modules should not call this directly —
  * the bridge is the only authoritative caller.
  */
-export function tagMcpSpawnSource(actionId: string, args: unknown): unknown {
+export function tagMcpSpawnSource(
+  actionId: string,
+  args: unknown,
+  sessionOrigin?: McpSessionOrigin
+): unknown {
   if (!shouldTagMcpSpawn(actionId)) return args;
+  const spawnedBy = spawnSourceForOrigin(sessionOrigin);
   if (args && typeof args === "object" && !Array.isArray(args)) {
-    return { ...(args as Record<string, unknown>), spawnedBy: "mcp", focusPolicy: "preserve" };
+    return { ...(args as Record<string, unknown>), spawnedBy, focusPolicy: "preserve" };
   }
   if (args === undefined || args === null) {
-    return { spawnedBy: "mcp", focusPolicy: "preserve" };
+    return { spawnedBy, focusPolicy: "preserve" };
   }
   return args;
 }
@@ -276,7 +304,7 @@ export function useMcpBridge(): void {
     });
 
     const cleanupDispatch = window.electron.mcpBridge.onDispatchActionRequest(
-      async ({ requestId, actionId, args, confirmed, context, callerInfo }) => {
+      async ({ requestId, actionId, args, confirmed, context, callerInfo, sessionOrigin }) => {
         let confirmationDecision: McpConfirmationDecision | undefined;
         // Declared outside the confirm block so the approved dispatch can pin
         // itself to the previewed cwd. Stays undefined for pre-granted
@@ -364,7 +392,8 @@ export function useMcpBridge(): void {
 
           const dispatchArgs = tagMcpSpawnSource(
             actionId,
-            withPreviewedGitCwd(args, previewTarget)
+            withPreviewedGitCwd(args, previewTarget),
+            sessionOrigin
           );
           const result = await runWithMcpSpawnFocusSuppressed(
             () =>

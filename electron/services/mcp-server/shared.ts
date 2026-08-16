@@ -249,19 +249,12 @@ export const PRE_AUTH_FAILED_CODE = "PRE_AUTH_FAILED";
 export const INVALID_URL_CODE = "INVALID_URL";
 
 /**
- * How a session's bearer was authenticated, recorded explicitly at handshake
- * (#11789). Before this, "which renderer owns this session" was inferred from
- * presence in `sessionWebContentsMap` — but that map is simultaneously the
- * routing table and the authorization gate for `issueGrant` / `setSessionTier`,
- * so binding an external session to a workspace would have made it eligible for
- * renderer-driven privilege elevation it must never have.
- *
- * Routing reads the WebContents / workspace maps. Authorization, notifications
- * and external-client inventory read this. `external` covers api-key bearers,
- * unauthenticated loopback, and generic pane tokens — everything that is not one
- * of Daintree's own assistant surfaces.
+ * Re-exported from its canonical home in `shared/types/ipc/mcpServer.ts`, which
+ * is where it had to move once the renderer needed it too (#11808). Kept
+ * exported from here so the main-process modules that have always imported it
+ * from this file keep working — one definition, two spellings of the path.
  */
-export type McpSessionOrigin = "help" | "assistant-pane" | "external";
+export type { McpSessionOrigin } from "../../../shared/types/ipc/mcpServer.js";
 
 /**
  * Lookup key for the workspace-selector header on an incoming request (#11789).

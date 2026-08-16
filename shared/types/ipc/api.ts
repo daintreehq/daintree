@@ -1921,6 +1921,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * provenance-free.
          */
         callerInfo?: import("./mcpServer.js").McpBearerIdentity;
+        /**
+         * How the dispatching session authenticated (#11808), resolved in main
+         * from the session store — never sent by the client. Lets the renderer
+         * stamp a spawn it creates as assistant-launched rather than lumping
+         * every MCP-borne spawn under one origin.
+         *
+         * Optional because nothing type-checks the `webContents.send` side of
+         * this channel: main always sends it, but the renderer cannot prove
+         * that, so the consumer treats an absent value as `external` rather
+         * than trusting the declaration. That fallback is the real guarantee.
+         */
+        sessionOrigin?: import("./mcpServer.js").McpSessionOrigin;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */

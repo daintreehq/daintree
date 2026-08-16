@@ -204,7 +204,14 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   const worktreeId = panel?.worktreeId ?? info?.worktreeId;
   const titleMode = panel?.titleMode ?? info?.titleMode;
   const spawnSource = panel?.spawnedBy;
-  const startedViaMcp = spawnSource === "mcp" ? "Yes" : spawnSource ? "No" : "Unknown";
+  // An assistant-launched run arrives over the MCP bridge like any other, so
+  // the transport answer stays "Yes" — what changed is that we can now say who
+  // was on the other end of it (#11808). Kept as two rows rather than one:
+  // folding the actor into the transport row would drop the fact that this is
+  // still an MCP dispatch, which is the useful half when debugging routing.
+  const startedByAssistant = spawnSource === "assistant";
+  const startedViaMcp =
+    spawnSource === "mcp" || startedByAssistant ? "Yes" : spawnSource ? "No" : "Unknown";
   const uiStartedAt = panel?.startedAt;
   const spawnStatus = panel?.spawnStatus;
   const location = panel?.location;
@@ -276,7 +283,7 @@ Session Metadata:
   CWD: ${info.cwd}
   Location: ${location ?? "N/A"}
   Spawn Source: ${spawnSource ?? "N/A"}
-  Started via MCP: ${startedViaMcp}
+${startedByAssistant ? "  Started By: Daintree Assistant\n" : ""}  Started via MCP: ${startedViaMcp}
   Spawn Status: ${spawnStatus ?? "N/A"}
   UI Created At: ${uiStartedAt != null ? formatTimestamp(uiStartedAt) : "N/A"}
 
@@ -359,6 +366,7 @@ Performance & Diagnostics:
               <InfoRow label="Current Directory" value={info.cwd} mono />
               <InfoRow label="Location" value={location} />
               <InfoRow label="Spawn Source" value={spawnSource} />
+              {startedByAssistant && <InfoRow label="Started By" value="Daintree Assistant" />}
               <InfoRow label="Started via MCP" value={startedViaMcp} />
               <InfoRow label="Spawn Status" value={spawnStatus} />
               {uiStartedAt != null && (

@@ -288,11 +288,64 @@ describe("TerminalInfoDialog", () => {
     expect(clipboardText).toContain("Location: dock");
     expect(clipboardText).toContain("Spawn Source: mcp");
     expect(clipboardText).toContain("Started via MCP: Yes");
+    // An external client gets no initiator line — there is no Daintree surface
+    // to name, and claiming one would be worse than saying nothing (#11808).
+    expect(clipboardText).not.toContain("Started By:");
     expect(clipboardText).toContain("Spawn Status: spawning");
     expect(clipboardText).toContain("Command: claude --model claude-sonnet-4-5");
     expect(clipboardText).toContain("Launch Agent: claude");
     expect(clipboardText).toContain("Preset Color: #123456");
     expect(clipboardText).toContain("Session ID: agent-session-1");
+  });
+
+  it("names the assistant as the initiator for assistant-launched runs (#11808)", async () => {
+    mockPanelsById = {
+      "test-id": { id: "test-id", spawnedBy: "assistant", location: "grid" },
+    };
+    dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
+
+    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Session Metadata")).toBeTruthy();
+    });
+
+    expect(screen.getByText("Started By:")).toBeTruthy();
+    expect(screen.getByText("Daintree Assistant")).toBeTruthy();
+    // Still an MCP dispatch — the actor is the new fact, not a replacement for
+    // the transport one.
+    expect(screen.getByText("Started via MCP:")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Copy to Clipboard"));
+    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
+    expect(clipboardText).toContain("Spawn Source: assistant");
+    expect(clipboardText).toContain("Started By: Daintree Assistant");
+    expect(clipboardText).toContain("Started via MCP: Yes");
+  });
+
+  it("omits the initiator row for external MCP and user-started runs (#11808)", async () => {
+    mockPanelsById = {
+      "test-id": { id: "test-id", spawnedBy: "quickrun", location: "grid" },
+    };
+    dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
+
+    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Session Metadata")).toBeTruthy();
+    });
+
+    expect(screen.queryByText("Started By:")).toBeNull();
+
+    fireEvent.click(screen.getByText("Copy to Clipboard"));
+    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
+    expect(clipboardText).toContain("Spawn Source: quickrun");
+    expect(clipboardText).not.toContain("Started By:");
+    expect(clipboardText).toContain("Started via MCP: No");
   });
 
   it("renders Launch Context and Live State sections for agent terminals", async () => {

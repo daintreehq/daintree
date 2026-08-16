@@ -82,7 +82,8 @@ export interface HttpLifecycleDeps {
     actionId: string,
     args: unknown,
     confirmed?: boolean,
-    callerInfo?: McpBearerIdentity
+    callerInfo?: McpBearerIdentity,
+    sessionOrigin?: McpSessionOrigin
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Pinned variants used for help-session bearers — route to the renderer
   // WebContents that minted the bearer at provision time (#7002). Optional
@@ -95,7 +96,8 @@ export interface HttpLifecycleDeps {
     actionId: string,
     args: unknown,
     confirmed?: boolean,
-    contextOverride?: import("../../../shared/types/actions.js").ActionContext
+    contextOverride?: import("../../../shared/types/actions.js").ActionContext,
+    sessionOrigin?: McpSessionOrigin
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Workspace-bound variants used for external sessions that named a workspace
   // at handshake (#11789). They resolve the workspace's current view per call,
@@ -109,7 +111,8 @@ export interface HttpLifecycleDeps {
     workspaceId: string,
     actionId: string,
     args: unknown,
-    confirmed?: boolean
+    confirmed?: boolean,
+    sessionOrigin?: McpSessionOrigin
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   getCachedManifestForWorkspace?: (
     workspaceId: string
@@ -1504,6 +1507,12 @@ export class HttpLifecycle {
     // per-WebContents cache, so a session torn down mid-call can never flip to
     // the shared cache and leak another window's tool surface (#7003 / #9887).
     const pinnedWebContentsId = this.deps.sessionStore.sessionWebContentsMap.get(sessionId) ?? null;
+    // Snapshotted for the same reason as the pin: `clearSessionBinding` deletes
+    // the origin entry on teardown, and `getOrigin` fails closed to `external`
+    // — so an in-flight dispatch settling after that would downgrade one of the
+    // assistant's own spawns to "an external client did this" (#11808). Read
+    // here, before the closure, never inside it.
+    const sessionOrigin = this.deps.sessionStore.getOrigin(sessionId);
 
     /**
      * A bound session whose workspace route is unwired must fail, never fall
@@ -1543,8 +1552,13 @@ export class HttpLifecycle {
         // No `callerInfo` either: it exists solely to name the requesting client
         // in the confirm dialog (#9157), and a bound session's surface excludes
         // every confirm-gated tool, so nothing could ever read it.
+        //
+        // `sessionOrigin` is threaded even though only `external` sessions may
+        // bind — a selector from a pinned bearer is refused at handshake — so
+        // the payload is built the same way on all three routes rather than one
+        // of them relying on a default that a later binding rule could falsify.
         return workspaceDispatch
-          ? workspaceDispatch(boundWorkspaceId, actionId, args, confirmed)
+          ? workspaceDispatch(boundWorkspaceId, actionId, args, confirmed, sessionOrigin)
           : Promise.reject(missingWorkspaceRoute());
       }
       const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
@@ -1555,14 +1569,14 @@ export class HttpLifecycle {
         // the model's turn (#8317). Absent for context-less sessions, in
         // which case pinned dispatch falls back to live renderer context.
         const boundContext = this.deps.sessionStore.sessionContextMap.get(sessionId);
-        return pinnedDispatch(id, actionId, args, confirmed, boundContext);
+        return pinnedDispatch(id, actionId, args, confirmed, boundContext, sessionOrigin);
       }
       // Unpinned external/api-key dispatch — surface the requesting bearer's
       // identity so the confirm dialog can name the client (#9157). Returns
       // null (→ undefined) for help-session bearers, so callerInfo never
       // reaches the renderer for the assistant's own dispatches.
       const callerInfo = this.getBearerInfoForSession(sessionId) ?? undefined;
-      return this.deps.dispatchAction(actionId, args, confirmed, callerInfo);
+      return this.deps.dispatchAction(actionId, args, confirmed, callerInfo, sessionOrigin);
     };
 
     const getCachedManifest: import("./sessionServer.js").SessionServerDeps["getCachedManifest"] =

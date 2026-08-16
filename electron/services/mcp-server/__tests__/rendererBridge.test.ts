@@ -238,6 +238,39 @@ describe("rendererBridge — per-session pinned dispatch (#7002)", () => {
     expect(sentPayload?.context).toBeUndefined();
   });
 
+  it("threads the session's authenticated origin into the dispatch IPC payload (#11808)", async () => {
+    const wc = makeWebContents(901);
+    mockWebContentsRegistry.set(901, wc);
+
+    const sentOrigins: unknown[] = [];
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      sentOrigins.push((payload as { sessionOrigin?: unknown }).sessionOrigin);
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: 901 } },
+          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
+        );
+      });
+    });
+
+    await bridge.dispatchActionForWebContents(
+      901,
+      "agent.launch",
+      {},
+      false,
+      undefined,
+      "assistant-pane"
+    );
+    // Omitted entirely — a WebContents route proves where to send, not who owns
+    // the session, so only HttpLifecycle can positively establish that this is
+    // one of Daintree's own surfaces. Everything else lands as external.
+    await bridge.dispatchActionForWebContents(901, "agent.launch", {}, false);
+
+    expect(sentOrigins).toEqual(["assistant-pane", "external"]);
+  });
+
   it("fails closed when the pinned view has been destroyed (#7002 — never silently re-routes)", async () => {
     // No entry for id=999 → webContents.fromId returns undefined.
     await expect(bridge.requestManifestForWebContents(999)).rejects.toBeInstanceOf(
@@ -592,6 +625,31 @@ describe("rendererBridge — requesting-bearer identity passthrough (#9157)", ()
 
     expect(sentPayload).toBeDefined();
     expect(sentPayload?.callerInfo).toBeUndefined();
+  });
+
+  it("defaults the unpinned dispatch payload to an external origin (#11808)", async () => {
+    const wc = makeWebContents(804);
+    const bridge = makeActiveBridge(wc);
+
+    let sentPayload: { requestId: string; sessionOrigin?: unknown } | undefined;
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel !== CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST) return;
+      sentPayload = payload as { requestId: string; sessionOrigin?: unknown };
+      queueMicrotask(() => {
+        mockIpcMain.emit(
+          CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+          { sender: { id: 804 } },
+          { requestId: payload.requestId, result: { ok: true, result: "ok" } }
+        );
+      });
+    });
+
+    // Unlike `callerInfo`, which is legitimately absent, origin is never
+    // absent — a caller that forgets it gets the least-privileged answer
+    // rather than an undefined the renderer would have to interpret.
+    await bridge.dispatchAction("actions.list", {}, false);
+
+    expect(sentPayload?.sessionOrigin).toBe("external");
   });
 
   it("the pinned dispatch path leaves callerInfo undefined (provenance-free)", async () => {

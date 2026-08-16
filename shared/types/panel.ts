@@ -172,8 +172,17 @@ export type PersistableFlowStatus = Exclude<TerminalFlowStatus, "data-loss" | Fu
  *  `FutureSABFlowStatus` set never appear here. */
 export type TerminalRuntimeStatus = PersistableFlowStatus | "background" | "exited" | "error";
 
-/** Origin that spawned a terminal */
-export type TerminalSpawnSource = "quickrun" | "recipe" | "agent" | "palette" | "mcp";
+/**
+ * Origin that spawned a terminal.
+ *
+ * `assistant` and `mcp` both arrive over the MCP bridge and are split apart by
+ * the session's authenticated origin, not by anything the caller sends (#11808).
+ * `assistant` is one of Daintree's own surfaces — the assistant panel or an
+ * assistant pane — starting work the user did not ask for directly; `mcp` is an
+ * arbitrary external client. Collapsing them left a terminal the user never
+ * started looking identical to one they did.
+ */
+export type TerminalSpawnSource = "quickrun" | "recipe" | "agent" | "palette" | "mcp" | "assistant";
 
 /** Focus policy for newly-created panels — orthogonal to provenance. */
 export type AddPanelFocusPolicy = "auto" | "preserve" | "take";
