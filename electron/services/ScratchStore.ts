@@ -1,6 +1,6 @@
 import fs from "fs/promises";
 import { randomUUID } from "crypto";
-import { eq, desc, and, isNull, isNotNull, lt, or } from "drizzle-orm";
+import { eq, desc, and, isNull, isNotNull, lt, or, sql } from "drizzle-orm";
 import type { Scratch } from "../../shared/types/scratch.js";
 import { getSharedDb } from "./persistence/db.js";
 import {
@@ -29,7 +29,19 @@ export async function removeScratchStateDir(scratchId: string): Promise<void> {
   }
 }
 
+/**
+ * A count only counts when it could have come from counting panels. A negative
+ * or fractional cell is corruption, not a claim, so it reads back as unknown —
+ * the same rule `ProjectStore` applies to its own persisted counts. Duplicated
+ * rather than imported: `ProjectStore` is a heavyweight singleton that builds
+ * itself at module eval, and this file keeps that import lazy on purpose.
+ */
+function readPersistedCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
 function rowToScratch(row: ScratchRow): Scratch {
+  const resumableAgentCount = readPersistedCount(row.resumableAgentCount);
   return {
     id: row.id,
     path: row.path,
@@ -39,6 +51,7 @@ function rowToScratch(row: ScratchRow): Scratch {
     ...(typeof row.lastCompletionSeenAt === "number"
       ? { lastCompletionSeenAt: row.lastCompletionSeenAt }
       : {}),
+    ...(resumableAgentCount !== null ? { resumableAgentCount } : {}),
   };
 }
 
@@ -226,6 +239,56 @@ export class ScratchStore {
     if (result.changes === 0) {
       throw new Error(`Scratch not found: ${scratchId}`);
     }
+  }
+
+  /**
+   * Bring a scratch row's resume count in line with a state read taken outside
+   * the write path — the deferred maintenance pass, which is how scratches that
+   * predate the field ever get one (#11821). Mirrors
+   * `ProjectStore.reconcileResumableAgentCount` against the other table.
+   *
+   * Compare-and-swap against the value read before that state load, because the
+   * two race: a save landing mid-scan is newer than anything the scan holds, and
+   * an unconditional write would replace a fresh count with a stale one.
+   *
+   * Passing `count: null` retracts the row's claim rather than replacing it —
+   * for a scratch whose state could not be read, where the honest answer is
+   * "unknown" and holding the old number would keep promising panels nothing
+   * can enumerate any more.
+   *
+   * Returns the updated scratch when the row actually changed, so the caller can
+   * broadcast exactly the rows a palette would need to redraw, and `null`
+   * otherwise. Tombstoned rows are excluded like every other write here: a
+   * scratch mid-deletion is already gone from every renderer-facing query.
+   */
+  reconcileResumableAgentCount(
+    scratchId: string,
+    previousCount: number | null,
+    count: number | null
+  ): Scratch | null {
+    if (previousCount === count) return null;
+    if (!isValidScratchId(scratchId)) return null;
+    const db = getSharedDb();
+    const result = db
+      .update(scratchesTable)
+      .set({ resumableAgentCount: count })
+      .where(
+        and(
+          eq(scratchesTable.id, scratchId),
+          isNull(scratchesTable.deletedAt),
+          previousCount === null
+            ? // "Unknown" is wider than SQL NULL. `readPersistedCount` also
+              // reports a negative or fractional cell as unknown, so matching
+              // NULL alone would leave a corrupt row permanently unrepairable:
+              // the reader keeps answering unknown, and the swap keeps missing
+              // the very value that made it answer that way.
+              sql`(${scratchesTable.resumableAgentCount} IS NULL OR ${scratchesTable.resumableAgentCount} < 0 OR ${scratchesTable.resumableAgentCount} <> CAST(${scratchesTable.resumableAgentCount} AS INTEGER))`
+            : eq(scratchesTable.resumableAgentCount, previousCount)
+        )
+      )
+      .run();
+    if (result.changes === 0) return null;
+    return this.getScratchById(scratchId);
   }
 
   /** Acknowledgement watermarks for live scratches, keyed by id. */

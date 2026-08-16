@@ -33,11 +33,24 @@ const CREATE_TABLES_SQL = `
     stats_last_updated INTEGER,
     git_backed INTEGER
   );
+  CREATE TABLE IF NOT EXISTS scratches (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_opened INTEGER NOT NULL,
+    deleted_at INTEGER,
+    last_completion_seen_at INTEGER,
+    resumable_agent_count INTEGER
+  );
   CREATE TABLE IF NOT EXISTS app_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
 `;
+
+/** A well-formed scratch id — the observer routes on the id's shape. */
+const SCRATCH_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
 
 let sqlite: Database.Database;
 let db: ReturnType<typeof drizzle<typeof schema>>;
@@ -122,6 +135,24 @@ describe("ProjectStore resumable agent count", () => {
   const storedCount = (id = projectId): number | null => {
     const row = db.select().from(schema.projects).where(eq(schema.projects.id, id)).get();
     return row?.resumableAgentCount ?? null;
+  };
+
+  const storedScratchCount = (id = SCRATCH_ID): number | null => {
+    const row = db.select().from(schema.scratches).where(eq(schema.scratches.id, id)).get();
+    return row?.resumableAgentCount ?? null;
+  };
+
+  const insertScratch = (overrides: { id?: string; deletedAt?: number } = {}) => {
+    db.insert(schema.scratches)
+      .values({
+        id: overrides.id ?? SCRATCH_ID,
+        path: `/tmp/scratches/${overrides.id ?? SCRATCH_ID}`,
+        name: "Scratch",
+        createdAt: Date.now(),
+        lastOpened: Date.now(),
+        ...(overrides.deletedAt !== undefined ? { deletedAt: overrides.deletedAt } : {}),
+      })
+      .run();
   };
 
   beforeEach(async () => {
@@ -226,11 +257,113 @@ describe("ProjectStore resumable agent count", () => {
       expect(storedCount()).toBe(1);
     });
 
-    it("survives state for an id that has no project row", () => {
-      // Scratch workspaces share the state manager but own no `projects` row.
+    it("writes nothing at all for an id belonging to neither table", () => {
+      // Not a 64-hex project id and not a scratch UUID. SQLite will happily
+      // hold such an id, so the rows below exist to prove the observer STOPS
+      // rather than merely missing: without the shape check it would run an
+      // UPDATE against `projects` for whatever id it was handed.
+      const malformed = "no-such-workspace";
+      db.insert(schema.projects)
+        .values({
+          id: malformed,
+          path: "/tmp/malformed",
+          name: "Malformed",
+          emoji: "🌲",
+          lastOpened: Date.now(),
+          resumableAgentCount: 42,
+        })
+        .run();
+      insertScratch({ id: malformed });
+      db.update(schema.scratches)
+        .set({ resumableAgentCount: 42 })
+        .where(eq(schema.scratches.id, malformed))
+        .run();
+
       expect(() =>
-        observerSlot.current?.("no-such-project", { terminals: [agentPanel("a")] })
+        observerSlot.current?.(malformed, { terminals: [agentPanel("a")] })
       ).not.toThrow();
+      expect(storedCount(malformed)).toBe(42);
+      expect(storedScratchCount(malformed)).toBe(42);
+    });
+  });
+
+  // Scratches persist their panel grid through the SAME state manager (#11484),
+  // so the one observer sees both kinds and the id's shape decides which table
+  // it writes (#11821).
+  describe("routing a scratch's state to the scratch row", () => {
+    beforeEach(() => insertScratch());
+
+    it("recounts a scratch's saved agents onto its own row", () => {
+      observerSlot.current?.(SCRATCH_ID, {
+        terminals: [
+          agentPanel("a"),
+          agentPanel("b"),
+          agentPanel("c", { launchAgentId: undefined }),
+        ],
+      });
+      expect(storedScratchCount()).toBe(2);
+    });
+
+    it("writes a known zero when a scratch's state is cleared away", () => {
+      observerSlot.current?.(SCRATCH_ID, { terminals: [agentPanel("a")] });
+      expect(storedScratchCount()).toBe(1);
+
+      observerSlot.current?.(SCRATCH_ID, null);
+      expect(storedScratchCount()).toBe(0);
+    });
+
+    it("leaves the project table untouched when a scratch saves", () => {
+      // The bug this replaces: the write targeted `projects` unconditionally,
+      // so a scratch save matched nothing. It must now match its own row and
+      // still not reach across into anyone else's.
+      observerSlot.current?.(SCRATCH_ID, { terminals: [agentPanel("a")] });
+      expect(storedScratchCount()).toBe(1);
+      expect(storedCount()).toBeNull();
+    });
+
+    it("leaves the scratch table untouched when a project saves", () => {
+      observerSlot.current?.(projectId, { terminals: [agentPanel("a"), agentPanel("b")] });
+      expect(storedCount()).toBe(2);
+      expect(storedScratchCount()).toBeNull();
+    });
+
+    it("stops at the tombstone for a scratch being deleted", () => {
+      const doomed = "8c6b1f22-1f3e-4a76-b1b0-2f9a7c4e51aa";
+      insertScratch({ id: doomed, deletedAt: Date.now() });
+      // Removal tombstones the row first and only reaps it once the directory
+      // is gone, so a debounced save already in flight can still land in that
+      // window. A row gone from every renderer-facing query takes no
+      // maintenance writes.
+      observerSlot.current?.(doomed, { terminals: [agentPanel("a")] });
+      expect(storedScratchCount(doomed)).toBeNull();
+    });
+
+    it("survives a scratch id with no row of its own", () => {
+      expect(() =>
+        observerSlot.current?.("11111111-2222-4333-8444-555555555555", {
+          terminals: [agentPanel("a")],
+        })
+      ).not.toThrow();
+    });
+
+    it("does not re-write a row whose count has not moved", () => {
+      // Layout, focus, size and draft edits all save state without touching the
+      // panel set. The value guard is what keeps those off SQLite and the WAL,
+      // so an unconditional UPDATE would be a real regression rather than a
+      // cosmetic one — count the writes, not the resulting value.
+      sqlite.exec(`
+        CREATE TABLE scratch_writes (n INTEGER);
+        CREATE TRIGGER count_scratch_writes AFTER UPDATE ON scratches
+        BEGIN INSERT INTO scratch_writes VALUES (1); END;
+      `);
+      const writes = () =>
+        (sqlite.prepare("SELECT COUNT(*) AS n FROM scratch_writes").get() as { n: number }).n;
+
+      observerSlot.current?.(SCRATCH_ID, { terminals: [agentPanel("a")] });
+      expect(writes()).toBe(1);
+
+      observerSlot.current?.(SCRATCH_ID, { terminals: [agentPanel("a")] });
+      expect(writes()).toBe(1);
     });
   });
 

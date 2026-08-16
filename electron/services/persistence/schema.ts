@@ -80,6 +80,12 @@ export const scratches = sqliteTable("scratches", {
   // all renderer-facing queries.
   deletedAt: integer("deleted_at"),
   lastCompletionSeenAt: integer("last_completion_seen_at"),
+  // How many saved agent panels this scratch would restore if opened (#11821)
+  // — the same switcher resume dot projects carry. Scratches persist their
+  // panel grid under the shared `projects/<id>/` layout, so the count is
+  // derived by the same write-through observer and reconciled by the same
+  // deferred sweep. Null means "not computed yet", distinct from a computed 0.
+  resumableAgentCount: integer("resumable_agent_count"),
 });
 
 export type ProjectRow = typeof projects.$inferSelect;

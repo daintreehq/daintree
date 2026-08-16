@@ -92,6 +92,13 @@
       "when": 1786861242046,
       "tag": "0012_replace_project_recency_with_resumable_agents",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1786880380226,
+      "tag": "0013_add_scratch_resumable_agent_count",
+      "breakpoints": true
     }
   ]
 }

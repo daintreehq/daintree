@@ -1512,3 +1512,152 @@ describe("ProjectSwitcherPalette resumable-agent dot", () => {
     }
   });
 });
+
+/**
+ * The same mark on scratch rows (#11821). Scratches are dormant far more often
+ * than projects are — they exist to be abandoned and come back to — so the row
+ * that most needs "opening this brings your agents back" was the one that never
+ * said it.
+ *
+ * Both surfaces are covered because they are genuinely separate renderers: the
+ * ranked row in the search listbox, and the pinned browse section's own button.
+ * A fix applied to one and not the other is the shape this bug already took.
+ */
+describe("ProjectSwitcherPalette scratch resumable-agent dot", () => {
+  function scratchRow(
+    overrides: Partial<ProjectSwitcherScratchRow> & { id: string; name: string }
+  ): ProjectSwitcherScratchRow {
+    return {
+      kind: "scratch",
+      path: `/userData/scratch/${overrides.id}`,
+      createdAt: 0,
+      // Long enough ago that the row falls back to dormant with nothing to say,
+      // which is the only state the mark is allowed to occupy.
+      lastOpened: 0,
+      isActive: false,
+      activeAgentCount: 0,
+      waitingAgentCount: 0,
+      blockedAgentCount: 0,
+      completedAgentCount: 0,
+      unacknowledgedCompletedAgentCount: 0,
+      snoozedAgentCount: 0,
+      processCount: 0,
+      ...overrides,
+    };
+  }
+
+  /** The ranked list — a scratch among projects while searching. */
+  function renderRanked(scratch: ProjectSwitcherScratchRow) {
+    return render(
+      <ProjectSwitcherPalette
+        {...dropdownProps}
+        query="spike"
+        results={[scratch]}
+        onCreateScratch={vi.fn()}
+        onSelectScratch={vi.fn()}
+      />
+    );
+  }
+
+  /** The pinned browse section — its own button, its own markup. */
+  function renderBrowse(scratch: ProjectSwitcherScratchRow) {
+    return render(
+      <ProjectSwitcherPalette
+        {...dropdownProps}
+        query=""
+        results={[]}
+        scratchResults={[scratch]}
+        onCreateScratch={vi.fn()}
+        onSelectScratch={vi.fn()}
+      />
+    );
+  }
+
+  describe.each([
+    ["ranked search row", renderRanked],
+    ["pinned browse row", renderBrowse],
+  ])("%s", (_label, renderScratch) => {
+    it("marks a quiet scratch that would bring agents back", () => {
+      renderScratch(scratchRow({ id: "s1", name: "Spike notes", resumableAgentCount: 3 }));
+      expect(screen.getByTestId("workspace-resume-dot")).toBeTruthy();
+    });
+
+    it("says the count rather than leaving it to the colour", () => {
+      // Part of the row's own name — the ranked row's "· Scratch" origin hint
+      // sits between the two, which is why this matches across it rather than
+      // pinning the phrase directly to the name.
+      renderScratch(scratchRow({ id: "s1", name: "Spike notes", resumableAgentCount: 3 }));
+      expect(
+        screen.getByRole("option", { name: /Spike notes.*3 agents will resume/i })
+      ).toBeTruthy();
+      expect(screen.getByTestId("workspace-resume-dot").getAttribute("aria-hidden")).toBe("true");
+    });
+
+    it("counts one agent in the singular", () => {
+      renderScratch(scratchRow({ id: "s1", name: "Solo", resumableAgentCount: 1 }));
+      expect(screen.getByRole("option", { name: /Solo.*1 agent will resume/i })).toBeTruthy();
+      expect(screen.queryByRole("option", { name: /1 agents will resume/i })).toBeNull();
+    });
+
+    it("leaves a scratch that restores no agents unmarked and unannounced", () => {
+      renderScratch(scratchRow({ id: "s1", name: "Spike notes", resumableAgentCount: 0 }));
+      expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+      expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
+    });
+
+    it("makes no claim for a scratch main has not counted yet", () => {
+      // Absent is not zero, but it is equally not a promise.
+      renderScratch(scratchRow({ id: "s1", name: "Spike notes" }));
+      expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+      expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
+    });
+
+    it("yields to a scratch that has a real status to report", () => {
+      // One dot in the one-dot slot: what it is doing now outranks what it
+      // would come back with.
+      renderScratch(
+        scratchRow({
+          id: "s1",
+          name: "Spike notes",
+          waitingAgentCount: 1,
+          resumableAgentCount: 2,
+        })
+      );
+      expect(screen.getByTestId("workspace-status-dot")).toBeTruthy();
+      expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+      // The phrase has to go with the dot. Suppressing only the dot would leave
+      // a reader hearing a promise the row no longer shows.
+      expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
+    });
+
+    it("says nothing on the scratch you are already standing in", () => {
+      // Its agents are on screen, not waiting to return — the row would
+      // otherwise read ", current, 4 agents will resume".
+      renderScratch(
+        scratchRow({ id: "s1", name: "Spike notes", isActive: true, resumableAgentCount: 4 })
+      );
+      expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+      expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
+    });
+  });
+
+  it("marks only the scratches that carry a count", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...dropdownProps}
+        query=""
+        results={[]}
+        scratchResults={[
+          scratchRow({ id: "s1", name: "Marked", resumableAgentCount: 2 }),
+          scratchRow({ id: "s2", name: "Unmarked", resumableAgentCount: 0 }),
+        ]}
+        onCreateScratch={vi.fn()}
+      />
+    );
+
+    const marked = screen.getByRole("option", { name: /Marked/ });
+    const unmarked = screen.getByRole("option", { name: /Unmarked/ });
+    expect(marked.querySelector("[data-testid='workspace-resume-dot']")).toBeTruthy();
+    expect(unmarked.querySelector("[data-testid='workspace-resume-dot']")).toBeNull();
+  });
+});

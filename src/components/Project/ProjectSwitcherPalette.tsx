@@ -263,30 +263,57 @@ function StatusDot({
 }
 
 /**
- * Whether the row should mark that opening this project brings agents back
- * (#11801).
+ * Whether the row should mark that opening this workspace brings agents back
+ * (#11801, extended to scratches in #11821).
  *
  * Gated on the status classifier's own answer because a live status always
- * outranks the promise: the coloured dot says what the project is doing now,
+ * outranks the promise: the coloured dot says what the workspace is doing now,
  * the grey one only says what it would come back with. So the mark lands on the
  * rows that have stopped — the dormant ones #11692 cleared, and the auto-parked
  * ones whose settled ring has less to say than the promise (#11822) — and never
  * displaces a mark that means more. Keyed off the count rather than which band
  * the row sorts into, so a pinned project keeps it too.
  *
- * An absent count means main has not resolved this project yet, which is not
+ * An absent count means main has not resolved this workspace yet, which is not
  * the same as resolving it to zero — an unresolved row makes no claim rather
  * than a wrong one. Zero is an answer and also draws nothing: there is nothing
  * to come back to.
  *
- * The current project is excluded outright. Its count is real, but you are
+ * The current workspace is excluded outright. Its count is real, but you are
  * already standing in it — those agents are on screen, not waiting to return.
  * Without this the row would read ", current, 3 agents will resume".
+ *
+ * Takes the two fields it reads rather than either view-model: projects and
+ * scratches deliberately do not share a shape, and a union parameter would make
+ * every project-only field type-reachable from the two scratch render paths.
  */
-function showResumableAgentMark(status: ProjectRowStatus, project: SearchableProject): boolean {
-  if (project.isActive) return false;
+function showResumableAgentMark(
+  status: ProjectRowStatus,
+  workspace: { isActive: boolean; resumableAgentCount?: number }
+): boolean {
+  if (workspace.isActive) return false;
   if (status.allowsResumeMark !== true) return false;
-  return project.resumableAgentCount !== undefined && project.resumableAgentCount > 0;
+  return workspace.resumableAgentCount !== undefined && workspace.resumableAgentCount > 0;
+}
+
+/**
+ * The grey dot's meaning, said rather than shown (#11801). The dot itself is
+ * `aria-hidden`, so without this the row would carry the fact in colour alone.
+ * Part of the accessible name, not a live region, so a list render doesn't
+ * announce every markable row.
+ *
+ * The count rather than the bare fact: the number is already here, and
+ * "3 agents will resume" answers the question the dot only raises.
+ *
+ * Shared by all three row renderers — the two scratch paths draw the same
+ * sentence the project rows do, so the phrasing cannot drift between them.
+ */
+function ResumableAgentsLabel({ count }: { count: number }) {
+  return (
+    <span className="sr-only">
+      , {count} {count === 1 ? "agent" : "agents"} will resume
+    </span>
+  );
 }
 
 /** Matches the resolution of the wait ages on screen — they change by the minute. */
@@ -429,22 +456,8 @@ function ProjectListItem({
            * attach itself to the wrong noun.
            */}
           {project.isActive && <span className="sr-only">, current</span>}
-          {/*
-           * The grey dot's meaning, said rather than shown (#11801). The dot
-           * itself is `aria-hidden`, so without this the row would carry the
-           * fact in colour alone. Same shape as `, current` above — part of the
-           * accessible name, not a live region, so a list render doesn't
-           * announce every markable row.
-           *
-           * The count rather than the bare fact: the number is already here,
-           * and "3 agents will resume" answers the question the dot only raises.
-           */}
-          {showResumeDot && (
-            <span className="sr-only">
-              , {project.resumableAgentCount}{" "}
-              {project.resumableAgentCount === 1 ? "agent" : "agents"} will resume
-            </span>
-          )}
+          {/* Same shape as `, current` above — see `ResumableAgentsLabel`. */}
+          {showResumeDot && <ResumableAgentsLabel count={project.resumableAgentCount ?? 0} />}
           {isProjectNotificationsMuted && (
             <>
               {/*
@@ -606,6 +619,7 @@ function ScratchListItem({
   onSelect: (row: ProjectSwitcherScratchRow) => void;
 }) {
   const status = getScratchRowStatus(scratch, nowMs);
+  const showResumeDot = showResumableAgentMark(status, scratch);
 
   return (
     <div
@@ -625,7 +639,7 @@ function ScratchListItem({
       )}
       onClick={() => onSelect(scratch)}
     >
-      <StatusDot status={status} />
+      <StatusDot status={status} showResumeDot={showResumeDot} />
 
       <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
         <FileText className="h-4 w-4" aria-hidden="true" />
@@ -643,6 +657,7 @@ function ScratchListItem({
           <span className="truncate text-sm font-semibold leading-tight">{scratch.name}</span>
           <span className="text-[11px] leading-none text-daintree-text/50 shrink-0">· Scratch</span>
           {scratch.isActive && <span className="sr-only">, current</span>}
+          {showResumeDot && <ResumableAgentsLabel count={scratch.resumableAgentCount ?? 0} />}
         </div>
         {!status.isDormantFallback && (
           <div
@@ -1255,6 +1270,7 @@ function ScratchSection({
 
                 const countdown = formatScratchCleanupCountdown(scratch.lastOpened, now);
                 const status = getScratchRowStatus(scratch, now);
+                const showResumeDot = showResumableAgentMark(status, scratch);
                 const hasContextActions = Boolean(onRequestDelete || onSaveAsProject || onRename);
                 return (
                   <ContextMenu key={scratch.id}>
@@ -1274,13 +1290,23 @@ function ScratchSection({
                         // would have a reader announce one state as two.
                         aria-selected={scratch.isActive}
                       >
-                        <StatusDot status={status} />
+                        <StatusDot status={status} showResumeDot={showResumeDot} />
                         <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
                           <FileText className="h-4 w-4" aria-hidden="true" />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium truncate leading-tight">
                             {scratch.name}
+                            {/*
+                             * Inside the name element, not after it: this row
+                             * has no `, current` span to follow (the section's
+                             * `aria-selected` carries that), so the phrase
+                             * attaches to the name the way it does on a
+                             * project row.
+                             */}
+                            {showResumeDot && (
+                              <ResumableAgentsLabel count={scratch.resumableAgentCount ?? 0} />
+                            )}
                           </div>
                           {/*
                            * No origin hint here — the section header already

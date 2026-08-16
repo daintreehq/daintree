@@ -171,6 +171,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   scratchState.scratches = [];
   scratchState.currentScratch = null;
+  // Shared across the whole file, so a spec that seeds stats would otherwise
+  // hand them to every spec that runs after it.
+  projectStatsState.stats = {};
   scratchState.createScratch.mockResolvedValue({ id: "scratch-1" });
   scratchState.switchScratch.mockResolvedValue(undefined);
   scratchState.renameScratch.mockResolvedValue(undefined);
@@ -1386,5 +1389,52 @@ describe("scratch agent-status join", () => {
 
     await waitFor(() => expect(scratchState.loadScratches).toHaveBeenCalled());
     expect(projectClient.getBulkStats).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The resume count is main's answer about what a dormant scratch would restore
+ * (#11821). The view-model's only job is to carry it without editing it —
+ * absent, zero and positive are three distinct states downstream, and the
+ * common regression is collapsing the first two with a `?? 0`.
+ */
+describe("resumable agent count passthrough", () => {
+  function seedScratchesWithCounts(counts: (number | undefined)[]): void {
+    scratchState.scratches = counts.map((resumableAgentCount, i) => ({
+      id: `scratch-${i + 1}`,
+      name: `Spike ${i + 1}`,
+      path: `/tmp/scratches/scratch-${i + 1}`,
+      createdAt: 1_000 + i,
+      lastOpened: 1_000 + i,
+      ...(resumableAgentCount !== undefined ? { resumableAgentCount } : {}),
+    }));
+    scratchState.currentScratch = null;
+  }
+
+  it("keeps absent, zero and positive counts distinct", () => {
+    // Sorted by lastOpened desc, so the seeded order comes back reversed.
+    seedScratchesWithCounts([undefined, 0, 3]);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    const byId = new Map(result.current.scratchResults.map((s) => [s.id, s.resumableAgentCount]));
+    expect(byId.get("scratch-1")).toBeUndefined();
+    expect(byId.get("scratch-2")).toBe(0);
+    expect(byId.get("scratch-3")).toBe(3);
+  });
+
+  it("reads the count off the scratch, not off its live agent stats", () => {
+    // The two answer different questions: the stats say what is running now,
+    // the count says what a closed workspace would bring back. A row with no
+    // live agents at all still carries whatever main last persisted.
+    seedScratchesWithCounts([2]);
+    // A live count deliberately different from the saved one, so a view-model
+    // that sourced the mark from stats would read 5 rather than 2.
+    projectStatsState.stats = {
+      "scratch-1": { activeAgentCount: 5, waitingAgentCount: 0, processCount: 5 },
+    };
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    expect(result.current.scratchResults[0]?.resumableAgentCount).toBe(2);
+    expect(result.current.scratchResults[0]?.activeAgentCount).toBe(5);
   });
 });
