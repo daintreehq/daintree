@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ManagedTerminal } from "../types";
+import { MAX_RENDERER_UNPAUSE_ATTEMPTS } from "../TerminalReflowController";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -488,6 +489,38 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(service.resetRenderer("manual", { force: true })).toBe(true);
     expect(manual.rendererUnpauseGaveUp).toBe(false);
     expect(unpauseCount(manual)).toBe(1);
+  });
+
+  it("automatic resetRenderer spends no unpause budget on a healthy renderer (#11800)", () => {
+    // The automatic branch has no pause check of its own — post-drag reparent,
+    // backend recovery and the project-switch clear all reach it on panes that
+    // are rendering fine. If those calls consumed the budget, a handful of them
+    // would latch the breaker and deny the repair a real pause needs later.
+    vi.spyOn(service.resizeController, "fit").mockImplementation(() => null);
+    vi.spyOn(service.webGLManager, "repairAtlasForReactivation").mockReturnValue(true);
+
+    const managed = makeManaged();
+    for (const [prop, value] of [
+      ["clientWidth", 200],
+      ["clientHeight", 200],
+    ] as const) {
+      Object.defineProperty(managed.hostElement, prop, { value, configurable: true });
+    }
+    service.instances.set("healthy", managed);
+
+    for (let call = 0; call <= MAX_RENDERER_UNPAUSE_ATTEMPTS; call += 1) {
+      expect(service.resetRenderer("healthy")).toBe(true);
+    }
+
+    expect(managed.rendererUnpauseAttempts ?? 0).toBe(0);
+    expect(managed.rendererUnpauseGaveUp).toBeFalsy();
+
+    // The consequence that matters: a genuine pause arriving afterwards is
+    // still repaired instead of being refused by a breaker those healthy calls
+    // had no business latching.
+    pauseRenderer(managed);
+    expect(service.resetRenderer("healthy")).toBe(true);
+    expect(unpauseCount(managed)).toBe(1);
   });
 
   it("resetRenderer uses the local WebGL repair and skips the fallback refresh when a pool entry is repaired", () => {

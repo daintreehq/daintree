@@ -143,10 +143,16 @@ export function attemptRendererUnpause(managed: ManagedTerminal): RendererUnpaus
     return "exhausted";
   }
 
+  // A healthy renderer has nothing to repair, so it must not spend budget:
+  // `resetRenderer`'s automatic branch calls this with no pause check, and three
+  // such calls would otherwise latch the breaker on a working pane and deny the
+  // repair a genuine pause needs later. Only a readable `false` is proof —
+  // `undefined` (API drift) and the throwing case still consume an attempt,
+  // because a drifted primitive is precisely what must not retry forever.
+  if (readXtermRenderPaused(managed.terminal) === false) return "failed";
+
   managed.rendererUnpauseAttempts = attempts + 1;
   managed.rendererUnpauseAttemptedAt = Date.now();
-  // A `false` still consumed an attempt: a drifted or throwing primitive is
-  // precisely the case that must not retry forever.
   return forceXtermRendererUnpause(managed.terminal) ? "issued" : "failed";
 }
 
