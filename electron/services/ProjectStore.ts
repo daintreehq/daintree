@@ -27,7 +27,7 @@ import {
   appState as appStateTable,
   type ProjectRow,
 } from "./persistence/schema.js";
-import { eq, desc, and, isNull } from "drizzle-orm";
+import { eq, desc, and, isNull, ne, or, sql } from "drizzle-orm";
 import { countResumableAgentPanels } from "./projectStateRestore.js";
 import {
   generateProjectId,
@@ -224,9 +224,21 @@ export class ProjectStore {
           // of one, so it is written rather than left unknown.
           0;
       const db = getSharedDb();
+      // Guarded on the value so the common case writes nothing. Layout, focus,
+      // size and draft edits all save state without touching the panel set, and
+      // an unconditional UPDATE would put every one of them through SQLite and
+      // the WAL on the main process for a number that did not move.
       db.update(projectsTable)
         .set({ resumableAgentCount: count })
-        .where(eq(projectsTable.id, projectId))
+        .where(
+          and(
+            eq(projectsTable.id, projectId),
+            or(
+              isNull(projectsTable.resumableAgentCount),
+              ne(projectsTable.resumableAgentCount, count)
+            )
+          )
+        )
         .run();
     } catch (error) {
       logError(`[ProjectStore] Failed to persist resume count for ${projectId}`, error);
@@ -241,9 +253,14 @@ export class ProjectStore {
    * Compare-and-swap against the value read before that state load, because the
    * two race: a save landing mid-scan is newer than anything the scan holds, and
    * an unconditional write would replace a fresh count with a stale one. The
-   * guard is the whole point of the method — `WHERE resumable_agent_count IS
-   * NULL` for a row that had no count, or equality with the observed value for
-   * one that did, so a row that moved on is left alone.
+   * guard is the whole point of the method — a row that had no count matches
+   * only while it still has none, and a row that had one matches only while it
+   * still holds that value, so a row that moved on is left alone.
+   *
+   * Passing `count: null` retracts the row's claim rather than replacing it —
+   * for a project whose state could not be read, where the honest answer is
+   * "unknown" and holding the old number would keep promising panels nothing
+   * can enumerate any more.
    *
    * Returns the updated project when the row actually changed, so the caller can
    * broadcast exactly the rows a palette would need to redraw, and `null`
@@ -252,7 +269,7 @@ export class ProjectStore {
   reconcileResumableAgentCount(
     projectId: string,
     previousCount: number | null,
-    count: number
+    count: number | null
   ): Project | null {
     if (previousCount === count) return null;
     const db = getSharedDb();
@@ -261,7 +278,15 @@ export class ProjectStore {
       .set({ resumableAgentCount: count })
       .where(
         previousCount === null
-          ? and(eq(projectsTable.id, projectId), isNull(projectsTable.resumableAgentCount))
+          ? and(
+              eq(projectsTable.id, projectId),
+              // "Unknown" is wider than SQL NULL. `readPersistedCount` also
+              // reports a negative or fractional cell as unknown, so matching
+              // NULL alone would leave a corrupt row permanently unrepairable:
+              // the reader keeps answering unknown, and the swap keeps missing
+              // the very value that made it answer that way.
+              sql`(${projectsTable.resumableAgentCount} IS NULL OR ${projectsTable.resumableAgentCount} < 0 OR ${projectsTable.resumableAgentCount} <> CAST(${projectsTable.resumableAgentCount} AS INTEGER))`
+            )
           : and(
               eq(projectsTable.id, projectId),
               eq(projectsTable.resumableAgentCount, previousCount)

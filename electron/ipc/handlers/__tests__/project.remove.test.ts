@@ -320,4 +320,26 @@ describe("project:update handler", () => {
 
     expect(projectStoreMock.updateProject).toHaveBeenCalledWith("proj-1", { name: "Renamed" });
   });
+
+  it("strips the resume count — a renderer can never promise agents it doesn't have", async () => {
+    projectStoreMock.updateProject.mockReturnValue({
+      id: "proj-1",
+      path: "/home/user/proj-1",
+      name: "Renamed",
+    });
+
+    const deps = { mainWindow: {} as unknown } as unknown as HandlerDependencies;
+    registerProjectCrudHandlers(deps);
+    const handler = getHandler(CHANNELS.PROJECT_UPDATE);
+
+    // The count is main-derived from persisted state (#11801) and rides the
+    // row's accessible name. A renderer that could set it could make any row
+    // announce "99 agents will resume" over a project holding none.
+    await handler(fakeEvent, "proj-1", {
+      name: "Renamed",
+      resumableAgentCount: 99,
+    });
+
+    expect(projectStoreMock.updateProject).toHaveBeenCalledWith("proj-1", { name: "Renamed" });
+  });
 });

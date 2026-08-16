@@ -123,17 +123,18 @@ import {
  */
 function reconcileResumableAgentCounts(projects: Project[], states: (ProjectState | null)[]): void {
   for (const [i, project] of projects.entries()) {
-    // Unreadable is not empty. A quarantined or unparseable state.json holds
-    // panels this build could not enumerate, so the row keeps whatever it had
-    // rather than being told it restores nothing.
-    if (projectStore.wasStateUnreadableThisSession(project.id)) continue;
-
     const state = states[i];
-    // A genuinely absent state.json is authoritative emptiness — the project
-    // restores nothing — which is a count of zero, not an unknown.
-    const count = state
-      ? countResumableAgentPanels(state.terminals, `resume-count-backfill(project:${project.id})`)
-      : 0;
+    // Unreadable is neither empty nor countable. A quarantined or unparseable
+    // state.json holds panels this build could not enumerate, so the row
+    // retracts its claim instead of keeping a number nothing can back up —
+    // holding the old count would keep promising agents that no longer restore.
+    // A genuinely absent state.json is different: that is authoritative
+    // emptiness, and a count of zero rather than an unknown.
+    const count = projectStore.wasStateUnreadableThisSession(project.id)
+      ? null
+      : state
+        ? countResumableAgentPanels(state.terminals, `resume-count-backfill(project:${project.id})`)
+        : 0;
 
     try {
       const updated = projectStore.reconcileResumableAgentCount(

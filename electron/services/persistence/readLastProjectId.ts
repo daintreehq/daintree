@@ -7,8 +7,7 @@
  * ProjectStore.initialize() (the shared DB is not open yet at this point in
  * boot, and opening it would run migrations on the loadURL-dispatch path).
  *
- * Read-only, with one exception: the session-open checkpoint is consumed rather
- * than merely read, and says so at its own definition.
+ * Read-only throughout.
  *
  * Returns null on first launch, corrupt DB, or any error (safe fallback).
  */
@@ -18,7 +17,6 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "path";
 import type { Project } from "../../../shared/types/project.js";
-import { tightenFilePermissionsSync } from "../../utils/fs.js";
 import {
   OPEN_WINDOWS_KEY,
   filterRestorableWindows,

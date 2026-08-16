@@ -1,6 +1,8 @@
 import type { z } from "zod";
 
 import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
+import { panelKindHasPty } from "../../shared/config/panelKindRegistry.js";
+import { inferKind } from "../../shared/utils/inferPanelKind.js";
 
 type TerminalSnapshot = z.infer<typeof TerminalSnapshotSchema>;
 
@@ -25,21 +27,32 @@ export function filterRestorableTerminalSnapshots(
 
 /**
  * How many agent panels a project would bring back with it (#11801) — the
- * restorable set narrowed to entries that carry a `launchAgentId`.
+ * restorable set narrowed to entries that come back as a running agent.
  *
- * `launchAgentId` is the whole test. A panel that has one is replayed through
- * the resume election in `panelRestorePhase`, which builds its resume command
- * from the persisted snapshot alone — so a panel whose agent has long since
- * exited still counts, because opening the project still brings it back. Live
- * process state is deliberately not consulted: it isn't what restores.
+ * A panel qualifies when it carries a `launchAgentId` AND its kind is one that
+ * restore actually respawns a PTY for. Both halves are load-bearing, because
+ * the count is a promise the row makes out loud:
  *
- * Kind is not re-tested either. `TerminalSnapshotSchema` already refuses a
- * PTY-backed kind without a `cwd`, and adding a second `panelKindHasPty` gate
- * here would be a filter the restore payload itself doesn't apply — the count
- * would then promise fewer panels than actually come back.
+ * - `launchAgentId` alone is not enough. The schema permits it on every kind,
+ *   so a browser or dev-preview panel can carry stale launch metadata, and a
+ *   legacy `assistant` snapshot is dropped by `panelRestorePhase` outright.
+ *   Counting those announces agents that never arrive.
+ * - Kind is resolved through the same {@link inferKind} the restore path uses,
+ *   rather than read off the field, so the two agree about a snapshot whose
+ *   `kind` is absent or written in a legacy spelling.
+ *
+ * Live process state is deliberately not consulted: it isn't what restores. The
+ * resume command is built from the persisted snapshot alone, so a panel whose
+ * agent exited long ago still counts — opening the project still brings it
+ * back.
  */
 export function countResumableAgentPanels(terminals: unknown, context: string): number {
-  return filterRestorableTerminalSnapshots(terminals, context).filter(
-    (t) => t.launchAgentId !== undefined
-  ).length;
+  return filterRestorableTerminalSnapshots(terminals, context).filter((t) => {
+    if (t.launchAgentId === undefined) return false;
+    const kind = inferKind(t);
+    // `assistant` is named explicitly rather than left to `panelKindHasPty`:
+    // restore skips it by name, so the count has to skip it by name too or the
+    // two drift the moment that kind's PTY-backing changes.
+    return kind !== "assistant" && panelKindHasPty(kind);
+  }).length;
 }

@@ -252,16 +252,24 @@ vi.mock("../windowRef.js", () => ({
   getProjectViewManager: vi.fn(),
 }));
 
+const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+vi.mock("../../ipc/utils.js", () => ({
+  broadcastToRenderer: broadcastToRendererMock,
+}));
+
 vi.mock("../../ipc/handlers/projectCrud/index.js", () => ({
   getProjectStatsService: vi.fn(),
 }));
 
 const projectStoreMock = vi.hoisted(() => ({
-  getAllProjects: vi.fn<() => { id: string }[]>(() => []),
-  getProjectState: vi.fn<(id: string) => Promise<{ terminals?: { id: string }[] } | null>>(
+  getAllProjects: vi.fn<() => { id: string; resumableAgentCount?: number }[]>(() => []),
+  getProjectState: vi.fn<(id: string) => Promise<{ terminals?: Record<string, unknown>[] } | null>>(
     async () => null
   ),
   wasStateUnreadableThisSession: vi.fn<(id: string) => boolean>(() => false),
+  reconcileResumableAgentCount: vi.fn<
+    (id: string, previous: number | null, count: number | null) => unknown
+  >(() => null),
 }));
 
 vi.mock("../../services/ProjectStore.js", () => ({
@@ -341,6 +349,9 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
     projectStoreMock.getProjectState.mockResolvedValue(null);
     projectStoreMock.wasStateUnreadableThisSession.mockReset();
     projectStoreMock.wasStateUnreadableThisSession.mockReturnValue(false);
+    projectStoreMock.reconcileResumableAgentCount.mockReset();
+    projectStoreMock.reconcileResumableAgentCount.mockReturnValue(null);
+    broadcastToRendererMock.mockReset();
   }
 
   beforeEach(resetSweepMocks);
@@ -405,6 +416,104 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
 
     expect(evictSessionFilesMock).toHaveBeenCalledTimes(1);
     expect(evictSessionFilesMock.mock.calls[0][0].knownIds).toBeUndefined();
+  });
+
+  /**
+   * The sweep also backfills the switcher's resume count (#11801), reusing the
+   * project states it already loaded. These cover the half that decides what a
+   * row is allowed to claim — the reconciler itself is tested against a real DB
+   * in ProjectStore.resumableAgentCount.test.ts.
+   */
+  describe("resume-count backfill", () => {
+    const agentPanel = (id: string, overrides: Record<string, unknown> = {}) => ({
+      id,
+      title: "Agent",
+      kind: "terminal",
+      cwd: "/repo",
+      location: "grid",
+      launchAgentId: "claude",
+      ...overrides,
+    });
+
+    it("counts the agent panels a readable state would restore", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }]);
+      projectStoreMock.getProjectState.mockResolvedValue({
+        terminals: [
+          agentPanel("t1"),
+          agentPanel("t2"),
+          agentPanel("t3", { launchAgentId: undefined }),
+        ],
+      });
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(projectStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith("proj-a", null, 2);
+    });
+
+    it("treats a project that never persisted state as a counted zero", async () => {
+      // Benign ENOENT: nothing to restore is an answer, not an unknown.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }]);
+      projectStoreMock.getProjectState.mockResolvedValue(null);
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(projectStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith("proj-a", null, 0);
+    });
+
+    it("retracts the claim for a project whose state could not be read", async () => {
+      // A corrupt or future-schema state.json enumerates nothing, so a row
+      // holding an old count must go back to making no claim — not to zero,
+      // which would assert something nobody established.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a", resumableAgentCount: 2 }]);
+      projectStoreMock.getProjectState.mockResolvedValue(null);
+      projectStoreMock.wasStateUnreadableThisSession.mockReturnValue(true);
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(projectStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith("proj-a", 2, null);
+    });
+
+    it("compares against the count each row already carried", async () => {
+      // The previous value is what makes the reconciler's compare-and-swap
+      // meaningful; passing null for a row that had a count would let a stale
+      // read clobber a fresher one.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a", resumableAgentCount: 0 }]);
+      projectStoreMock.getProjectState.mockResolvedValue({ terminals: [agentPanel("t1")] });
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(projectStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith("proj-a", 0, 1);
+    });
+
+    it("broadcasts only the rows that actually moved", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "moved" }, { id: "unchanged" }]);
+      projectStoreMock.getProjectState.mockResolvedValue({ terminals: [agentPanel("t1")] });
+      projectStoreMock.reconcileResumableAgentCount.mockImplementation((id: string) =>
+        id === "moved" ? { id: "moved", resumableAgentCount: 1 } : null
+      );
+
+      await __test__.evictStaleSessionFiles();
+
+      const projectUpdates = broadcastToRendererMock.mock.calls.filter(
+        ([channel]) => channel === "project:updated"
+      );
+      expect(projectUpdates).toHaveLength(1);
+      expect(projectUpdates[0][1]).toMatchObject({ id: "moved" });
+    });
+
+    it("still runs the orphan pass when a row's count cannot be written", async () => {
+      // The count is derived metadata riding a destructive sweep. A DB failure
+      // must not cost the eviction pass it is a passenger on.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }]);
+      projectStoreMock.getProjectState.mockResolvedValue({ terminals: [agentPanel("t1")] });
+      projectStoreMock.reconcileResumableAgentCount.mockImplementation(() => {
+        throw new Error("database is locked");
+      });
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(evictSessionFilesMock).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

@@ -819,3 +819,93 @@ describe("ProjectStateManager ENOENT race", () => {
     expect(entries.find((name) => name.includes(".corrupted."))).toBeUndefined();
   });
 });
+
+/**
+ * The post-write hook behind the switcher's resume count (#11801). What matters
+ * is that it reports exactly what reached disk, and never reports at all when a
+ * write failed — a count describing state that isn't there is worse than a
+ * stale one, because the row makes a promise nothing can keep.
+ */
+describe("ProjectStateManager state-persisted observer", () => {
+  let tempDir: string;
+  let manager: ProjectStateManager;
+  let projectId: string;
+  let seen: { projectId: string; state: ProjectState | null }[];
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-observer-"));
+    manager = new ProjectStateManager(tempDir);
+    projectId = generateProjectId("/test/observer");
+    await fs.mkdir(path.join(tempDir, projectId), { recursive: true });
+
+    seen = [];
+    manager.setStatePersistedObserver((id, state) => seen.push({ projectId: id, state }));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("reports the state a successful save actually wrote", async () => {
+    await manager.saveProjectState(projectId, makeState());
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].projectId).toBe(projectId);
+    expect(seen[0].state?.terminals.map((t) => t.id)).toEqual(["t1", "t2"]);
+  });
+
+  it("reports the validated state, not the caller's, so derived values match disk", async () => {
+    // An entry the snapshot schema rejects never lands on disk. An observer
+    // handed the caller's array would count a panel that will not restore.
+    const withJunk = makeState({
+      terminals: [
+        ...makeState().terminals,
+        { id: "", title: "Invalid", location: "grid", kind: "terminal" } as never,
+      ],
+    });
+
+    await manager.saveProjectState(projectId, withJunk);
+
+    const onDisk = await manager.getProjectState(projectId);
+    expect(seen[0].state?.terminals.map((t) => t.id)).toEqual(onDisk?.terminals.map((t) => t.id));
+  });
+
+  it("stays silent when the write fails", async () => {
+    // An invalid project id can't resolve a state path, so nothing is written.
+    await expect(manager.saveProjectState("../escape", makeState())).rejects.toThrow();
+    expect(seen).toHaveLength(0);
+  });
+
+  it("reports emptiness when the state is cleared away", async () => {
+    await manager.saveProjectState(projectId, makeState());
+    seen = [];
+
+    await manager.clearProjectState(projectId);
+
+    expect(seen).toEqual([{ projectId, state: null }]);
+  });
+
+  it("reports emptiness when there was nothing to clear", async () => {
+    // Already absent is the state the caller asked for, so it is just as
+    // authoritative as an unlink that did work.
+    await manager.clearProjectState(projectId);
+    expect(seen).toEqual([{ projectId, state: null }]);
+  });
+
+  it("does not let an observer failure fail the save", async () => {
+    manager.setStatePersistedObserver(() => {
+      throw new Error("derived metadata write failed");
+    });
+
+    // The file is committed before the hook runs; reporting the save as failed
+    // would make the caller retry a write that already succeeded.
+    await expect(manager.saveProjectState(projectId, makeState())).resolves.toBeUndefined();
+    expect(await manager.getProjectState(projectId)).not.toBeNull();
+  });
+
+  it("stops reporting once detached", async () => {
+    manager.setStatePersistedObserver(null);
+    await manager.saveProjectState(projectId, makeState());
+    expect(seen).toHaveLength(0);
+  });
+});

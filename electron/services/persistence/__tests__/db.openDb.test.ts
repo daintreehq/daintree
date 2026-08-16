@@ -459,6 +459,25 @@ describe("openDb (integration)", () => {
     // Everything except the most recent migration is "already applied".
     const applied = journal.slice(0, -1);
 
+    // Read the newest migration's own effect out of its SQL rather than naming
+    // columns here, so this stays a real assertion about migration application
+    // instead of a copy of whichever migration happens to be last today.
+    const finalTag = journal[journal.length - 1].tag;
+    const finalSql = fs.readFileSync(path.join(migrationsFolder, `${finalTag}.sql`), "utf8");
+    // Whichever table the newest migration happens to touch — naming one here
+    // would reintroduce exactly the copy-of-the-last-migration coupling this
+    // extraction exists to avoid.
+    const additions = [...finalSql.matchAll(/ALTER TABLE `([a-z_]+)` ADD `([a-z_]+)`/g)].map(
+      (m) => ({ table: m[1]!, column: m[2]! })
+    );
+    const removals = [...finalSql.matchAll(/ALTER TABLE `([a-z_]+)` DROP COLUMN `([a-z_]+)`/g)].map(
+      (m) => ({ table: m[1]!, column: m[2]! })
+    );
+    const deletedKeys = [
+      ...finalSql.matchAll(/DELETE FROM `app_state` WHERE `key` = '([^']+)'/g),
+    ].map((m) => m[1]!);
+    expect(additions.length).toBeGreaterThan(0);
+
     const Database = (await import("better-sqlite3")).default;
     const seed = new Database(dbPath);
     // Mirror drizzle's own bookkeeping table + a projects table for openDb's backfill.
@@ -494,21 +513,12 @@ describe("openDb (integration)", () => {
     const ins = seed.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)");
     for (const entry of applied) ins.run(entry.tag, entry.when);
 
-    // Read the newest migration's own effect out of its SQL rather than naming
-    // columns here, so this stays a real assertion about migration application
-    // instead of a copy of whichever migration happens to be last today.
-    const finalTag = journal[journal.length - 1].tag;
-    const finalSql = fs.readFileSync(path.join(migrationsFolder, `${finalTag}.sql`), "utf8");
-    // Whichever table the newest migration happens to touch — naming one here
-    // would reintroduce exactly the copy-of-the-last-migration coupling this
-    // extraction exists to avoid.
-    const additions = [...finalSql.matchAll(/ALTER TABLE `([a-z_]+)` ADD `([a-z_]+)`/g)].map(
-      (m) => ({ table: m[1]!, column: m[2]! })
-    );
-    const removals = [...finalSql.matchAll(/ALTER TABLE `([a-z_]+)` DROP COLUMN `([a-z_]+)`/g)].map(
-      (m) => ({ table: m[1]!, column: m[2]! })
-    );
-    expect(additions.length).toBeGreaterThan(0);
+    // Give any `DELETE FROM app_state` in the newest migration something to
+    // actually delete, plus a neighbour it must leave alone — without rows the
+    // statement could be removed entirely and this test would not notice.
+    const appStateIns = seed.prepare("INSERT INTO app_state (key, value) VALUES (?, ?)");
+    for (const key of deletedKeys) appStateIns.run(key, "seeded");
+    appStateIns.run("currentProjectId", "keep-me");
 
     // A migration can only drop a column the seeded schema actually has, and
     // the seed above is a minimal pre-history table. Add each dropped column
@@ -547,6 +557,14 @@ describe("openDb (integration)", () => {
         const columns = (sqlite.pragma(`table_info(${table})`) as ColInfo[]).map((c) => c.name);
         expect(columns).not.toContain(column);
       }
+
+      // Obsolete keys are gone and their neighbours are not — a DELETE without
+      // a WHERE, or one aimed at the wrong key, fails on the second assertion.
+      const remainingKeys = (
+        sqlite.prepare("SELECT key FROM app_state").all() as { key: string }[]
+      ).map((r) => r.key);
+      for (const key of deletedKeys) expect(remainingKeys).not.toContain(key);
+      expect(remainingKeys).toContain("currentProjectId");
 
       // The skipped migration is now recorded — total equals the full journal.
       const migrations = sqlite.prepare("SELECT id FROM __drizzle_migrations").all();

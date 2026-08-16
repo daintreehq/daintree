@@ -89,22 +89,69 @@ describe("countResumableAgentPanels", () => {
   it("counts an agent panel whose session has already ended", () => {
     // The resume command is built from the persisted snapshot, not from a live
     // process — so a panel whose agent exited still comes back, and still
-    // counts. Two panels differing only in whether a session id survived must
-    // therefore agree.
-    const withSession = countResumableAgentPanels(
-      [snapshot({ launchAgentId: "claude", agentSessionId: "sess-1" })],
-      CONTEXT
-    );
-    const withoutSession = countResumableAgentPanels(
-      [snapshot({ launchAgentId: "claude" })],
-      CONTEXT
-    );
-    expect(withoutSession).toBe(withSession);
+    // counts. Both spellings must land on 1; asserting only that they agree
+    // would also pass if the helper had stopped counting either.
+    expect(
+      countResumableAgentPanels(
+        [snapshot({ launchAgentId: "claude", agentSessionId: "sess-1" })],
+        CONTEXT
+      )
+    ).toBe(1);
+    expect(countResumableAgentPanels([snapshot({ launchAgentId: "claude" })], CONTEXT)).toBe(1);
   });
 
-  it("agrees with the restorable set it is derived from", () => {
-    // The count must never exceed what actually restores; that gap is the bug
-    // the shared helper exists to prevent.
+  it("does not count a legacy assistant panel, which restore drops outright", () => {
+    // The schema permits `launchAgentId` on every kind, but `panelRestorePhase`
+    // skips assistant snapshots by name — counting one announces an agent that
+    // never arrives.
+    const count = countResumableAgentPanels(
+      [snapshot({ id: "assistant", kind: "assistant", cwd: undefined, launchAgentId: "claude" })],
+      CONTEXT
+    );
+    expect(count).toBe(0);
+  });
+
+  it("does not count non-PTY panels carrying stale launch metadata", () => {
+    // A browser or dev-preview panel restores as itself, not as a running
+    // agent, however its snapshot happens to be labelled.
+    const count = countResumableAgentPanels(
+      [
+        snapshot({
+          id: "browser",
+          kind: "browser",
+          cwd: undefined,
+          browserUrl: "https://example.com",
+          launchAgentId: "claude",
+        }),
+        snapshot({
+          id: "preview",
+          kind: "dev-preview",
+          devCommand: "npm run dev",
+          launchAgentId: "codex",
+        }),
+      ],
+      CONTEXT
+    );
+    expect(count).toBe(0);
+  });
+
+  it("resolves kind the way restore does, not by reading the field", () => {
+    // A snapshot with no `kind` is classified by the same inference restore
+    // uses. With a cwd it is a terminal and counts; the mislabelled legacy
+    // "agent" spelling collapses to terminal and counts too.
+    const count = countResumableAgentPanels(
+      [
+        snapshot({ id: "inferred", kind: undefined, launchAgentId: "claude" }),
+        snapshot({ id: "legacy", kind: "agent", launchAgentId: "claude" }),
+      ],
+      CONTEXT
+    );
+    expect(count).toBe(2);
+  });
+
+  it("never promises more panels than the restorable set contains", () => {
+    // The count is a claim the switcher makes out loud, so the exact figure
+    // matters: of these four, only "a" is a restorable agent panel.
     const terminals = [
       snapshot({ id: "a", launchAgentId: "claude" }),
       snapshot({ id: "b" }),
@@ -112,6 +159,7 @@ describe("countResumableAgentPanels", () => {
       snapshot({ id: "d", cwd: undefined, launchAgentId: "claude" }),
     ];
     const restorable = filterRestorableTerminalSnapshots(terminals, CONTEXT);
-    expect(countResumableAgentPanels(terminals, CONTEXT)).toBeLessThanOrEqual(restorable.length);
+    expect(countResumableAgentPanels(terminals, CONTEXT)).toBe(1);
+    expect(restorable.map((t) => t.id)).toEqual(["a", "b"]);
   });
 });

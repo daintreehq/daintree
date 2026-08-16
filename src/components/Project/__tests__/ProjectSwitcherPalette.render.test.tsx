@@ -1292,7 +1292,7 @@ describe("ProjectSwitcherPalette resumable-agent dot", () => {
     expect(screen.getByTestId("workspace-resume-dot")).toBeTruthy();
   });
 
-  it("leaves a row that restores no agents unmarked", () => {
+  it("leaves a row that restores no agents unmarked and unannounced", () => {
     render(
       <ProjectSwitcherPalette
         {...baseProps}
@@ -1300,6 +1300,8 @@ describe("ProjectSwitcherPalette resumable-agent dot", () => {
       />
     );
     expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+    // "0 agents will resume" is a sentence nobody needs to hear.
+    expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
   });
 
   it("makes no claim for a row main has not counted yet", () => {
@@ -1343,8 +1345,9 @@ describe("ProjectSwitcherPalette resumable-agent dot", () => {
         results={[makeProject({ ...QUIET, name: "Marked", resumableAgentCount: 3 })]}
       />
     );
-    // Reachable by accessible name, so the fact survives without the hue.
-    expect(screen.getByRole("option", { name: /3 agents will resume/i })).toBeTruthy();
+    // Matched with the name attached, so a missing separator ("Marked3 agents")
+    // fails here rather than passing on the phrase alone.
+    expect(screen.getByRole("option", { name: /Marked, 3 agents will resume/i })).toBeTruthy();
     expect(screen.getByTestId("workspace-resume-dot").getAttribute("aria-hidden")).toBe("true");
   });
 
@@ -1355,9 +1358,25 @@ describe("ProjectSwitcherPalette resumable-agent dot", () => {
         results={[makeProject({ ...QUIET, name: "Solo", resumableAgentCount: 1 })]}
       />
     );
-    const row = screen.getByRole("option", { name: /Solo/ });
-    expect(row.textContent).toContain("1 agent will resume");
-    expect(row.textContent).not.toContain("1 agents");
+    // Through the accessible name, not textContent: a phrase that became
+    // aria-hidden would still read correctly in the DOM while saying nothing.
+    expect(screen.getByRole("option", { name: /Solo, 1 agent will resume/i })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /1 agents will resume/i })).toBeNull();
+  });
+
+  it("does not announce itself again on every render", () => {
+    // The mark is part of the row's name, not a live region — otherwise
+    // rendering the list would re-read every markable row aloud.
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ ...QUIET, name: "Quiet dot", resumableAgentCount: 2 })]}
+      />
+    );
+    const row = screen.getByRole("option", { name: /2 agents will resume/i });
+    expect(row.querySelector("[aria-live]")).toBeNull();
+    expect(row.querySelector("[role='status'], [role='alert']")).toBeNull();
+    expect(row.getAttribute("aria-live")).toBeNull();
   });
 
   it("does not widen the slot it shares with the status dot", () => {
@@ -1406,20 +1425,35 @@ describe("ProjectSwitcherPalette resumable-agent dot", () => {
     expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
   });
 
-  it("holds the mark steady while the palette's minute ticker runs", async () => {
+  it("holds the mark steady while the ticker it no longer depends on keeps running", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      // The predecessor mark decayed against this ticker. This one is a fact
-      // about saved state, so the same elapsed time must leave it standing.
-      const results = [makeProject({ ...QUIET, resumableAgentCount: 2 })];
+      // Two rows, because this has to prove two things at once: the predecessor
+      // mark decayed against the minute ticker, so the resume dot must survive
+      // it — but the ticker itself must still be running, or the test would
+      // also pass with the ticker deleted. The waiting row's age is the witness.
+      const results = [
+        makeProject({ ...QUIET, id: "dot", name: "Dot", resumableAgentCount: 2 }),
+        makeProject({
+          id: "waiting",
+          name: "Waiting",
+          waitingAgentCount: 1,
+          oldestWaitingSince: Date.now() - 60_000,
+        }),
+      ];
       render(<ProjectSwitcherPalette {...baseProps} results={results} />);
-      expect(screen.getByTestId("workspace-resume-dot")).toBeTruthy();
+
+      const dotRow = () => screen.getByRole("option", { name: /Dot/ });
+      expect(dotRow().querySelector("[data-testid='workspace-resume-dot']")).toBeTruthy();
+      const ageBefore = screen.getByRole("option", { name: /Waiting/ }).textContent;
 
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(120_000);
+        await vi.advanceTimersByTimeAsync(180_000);
       });
 
-      expect(screen.getByTestId("workspace-resume-dot")).toBeTruthy();
+      // The clock moved — the wait age says so — and the mark did not.
+      expect(screen.getByRole("option", { name: /Waiting/ }).textContent).not.toBe(ageBefore);
+      expect(dotRow().querySelector("[data-testid='workspace-resume-dot']")).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }

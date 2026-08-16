@@ -272,6 +272,20 @@ describe("ProjectStore resumable agent count", () => {
       expect(storedCount()).toBe(7);
     });
 
+    it("retracts the claim when the project's state can no longer be read", () => {
+      db.update(schema.projects)
+        .set({ resumableAgentCount: 3 })
+        .where(eq(schema.projects.id, projectId))
+        .run();
+
+      // A corrupt or future-schema state.json can't be enumerated, so the row
+      // must stop promising three agents rather than keep a number nothing can
+      // back up. Unknown, not zero — nobody established it restores nothing.
+      const updated = store.reconcileResumableAgentCount(projectId, 3, null);
+      expect(updated?.resumableAgentCount).toBeUndefined();
+      expect(storedCount()).toBeNull();
+    });
+
     it("leaves a row alone when its known count moved to a different one", () => {
       db.update(schema.projects)
         .set({ resumableAgentCount: 3 })

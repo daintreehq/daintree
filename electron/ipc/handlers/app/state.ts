@@ -4,11 +4,7 @@ import { app } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { store, type StoreSchema, consumePendingSettingsRecovery } from "../../../store.js";
 import { projectStore } from "../../../services/ProjectStore.js";
-import {
-  AppStateTerminalEntrySchema,
-  TerminalSnapshotSchema,
-  filterValidTerminalEntries,
-} from "../../../schemas/ipc.js";
+import { AppStateTerminalEntrySchema, filterValidTerminalEntries } from "../../../schemas/ipc.js";
 import { filterRestorableTerminalSnapshots } from "../../../services/projectStateRestore.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
 import { getDatabaseMaintenanceService } from "../../../services/DatabaseMaintenanceService.js";
