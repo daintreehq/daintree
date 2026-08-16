@@ -1,7 +1,8 @@
 import type { z } from "zod";
 
 import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
-import { panelKindHasPty, type PanelKind } from "../../shared/config/panelKindRegistry.js";
+import { panelKindHasPty } from "../../shared/config/panelKindRegistry.js";
+import type { PanelKind } from "../../shared/types/panel.js";
 import { inferKind } from "../../shared/utils/inferPanelKind.js";
 import { resolveRespawnAgentId } from "../../shared/utils/savedAgentIdentity.js";
 
@@ -19,7 +20,7 @@ type TerminalSnapshot = z.infer<typeof TerminalSnapshotSchema>;
  * lookalike that could drift away from it.
  */
 export function filterRestorableTerminalSnapshots(
-  terminals: unknown,
+  terminals: unknown[] | null | undefined,
   context: string
 ): TerminalSnapshot[] {
   const validated = filterValidTerminalEntries(terminals, TerminalSnapshotSchema, context);
@@ -53,7 +54,10 @@ export function filterRestorableTerminalSnapshots(
  * design rather than resurrect a phantom idle panel. That row is live, not
  * dormant, so the mark is gated away from it in the common case.
  */
-export function countResumableAgentPanels(terminals: unknown, context: string): number {
+export function countResumableAgentPanels(
+  terminals: unknown[] | null | undefined,
+  context: string
+): number {
   return filterRestorableTerminalSnapshots(terminals, context).filter((t) => {
     const kind = inferKind(t);
     // `assistant` is named explicitly rather than left to `panelKindHasPty`:

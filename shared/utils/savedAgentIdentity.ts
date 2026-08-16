@@ -1,4 +1,4 @@
-import type { PanelKind } from "../config/panelKindRegistry.js";
+import type { PanelKind } from "../types/panel.js";
 
 /** The persisted fields that can name the agent a panel was launched under. */
 export interface SavedAgentIdentityInput {

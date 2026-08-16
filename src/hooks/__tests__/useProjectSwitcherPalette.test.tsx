@@ -3016,7 +3016,9 @@ describe("useProjectSwitcherPalette", () => {
         expect(result.current.results).toHaveLength(3);
       });
 
-      const byId = new Map(result.current.results.map((r) => [r.id, r.resumableAgentCount]));
+      const byId = new Map(
+        result.current.results.map(asProject).map((r) => [r.id, r.resumableAgentCount])
+      );
       // A `?? 0` here would make the first two indistinguishable, and the row
       // would start claiming "restores nothing" about a project nobody counted.
       expect(byId.get("unknown")).toBeUndefined();
