@@ -278,6 +278,11 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({ ConfirmDialog: () => null }));
 vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
+import {
+  _resetForTests as resetTooltipDismissRegistry,
+  isTooltipFocusOpenSuppressed,
+  registerTooltipDismiss,
+} from "@/lib/tooltipDismissRegistry";
 
 // rAF mock so every deferred focus frame is driven explicitly. A flush runs only
 // the callbacks already queued, so HybridInputBar's nested frame needs a second
@@ -324,6 +329,7 @@ function anyFocusWriterCalled(): boolean {
 }
 
 beforeEach(() => {
+  resetTooltipDismissRegistry();
   rafQueue.clear();
   rafIdCounter = 0;
   hybridBarVisible = true;
@@ -733,6 +739,64 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       rerender(<HelpPanel width={380} />);
 
       expect(document.activeElement).toBe(foreignEditor);
+      opener.remove();
+    });
+
+    it("dismisses tooltips before handing focus back, not after", () => {
+      // Radix opens tooltips on focus, and the usual opener IS a tooltip
+      // trigger (the toolbar assistant button). Suppressing after the focus
+      // lands is inert, so the order is the whole fix.
+      const order: string[] = [];
+      const unregister = registerTooltipDismiss(() => order.push("dismiss"));
+      const opener = document.createElement("button");
+      opener.addEventListener("focus", () => order.push("focus"));
+      document.body.appendChild(opener);
+      opener.focus();
+      order.length = 0;
+
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      helpPanelState.isOpen = true;
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+
+      expect(isTooltipFocusOpenSuppressed()).toBe(false);
+
+      helpPanelState.isOpen = false;
+      rerender(<HelpPanel width={380} />);
+
+      // Arming is dismissAllTooltips()'s own contract, pinned in the registry
+      // suite — asserting it here too would only add a wall-clock race against
+      // the 250ms window.
+      expect(order).toEqual(["dismiss", "focus"]);
+      unregister();
+      opener.remove();
+    });
+
+    it("leaves tooltips alone when it declines to restore focus", () => {
+      // Guards against hoisting the call out of the restore predicate: no focus
+      // moves here, so there is nothing to suppress but plenty to swallow.
+      const dismissed = vi.fn();
+      const unregister = registerTooltipDismiss(dismissed);
+      const opener = document.createElement("button");
+      document.body.appendChild(opener);
+      opener.focus();
+
+      helpPanelState.isOpen = false;
+      const { rerender } = render(<HelpPanel width={380} />);
+      helpPanelState.isOpen = true;
+      rerender(<HelpPanel width={380} />);
+      act(() => flushFrame());
+      act(() => flushFrame());
+
+      focusForeignEditor();
+      helpPanelState.isOpen = false;
+      rerender(<HelpPanel width={380} />);
+
+      expect(dismissed).not.toHaveBeenCalled();
+      expect(isTooltipFocusOpenSuppressed()).toBe(false);
+      unregister();
       opener.remove();
     });
   });
