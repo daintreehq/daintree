@@ -45,6 +45,7 @@ import {
   minimumPermittingTier,
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
+  SESSION_GONE,
   INVALID_URL_CODE,
   buildToolError,
   buildMcpErrorPayload,
@@ -353,6 +354,30 @@ export interface SessionServerDeps {
   }) => void;
 }
 
+/**
+ * Refusal for a request whose session no longer exists (#11799). Static, and
+ * names the only recovery there is: nothing about this session can be retried,
+ * so a client must open a new one.
+ */
+const SESSION_GONE_MESSAGE =
+  "This MCP session is no longer active. Reconnect to start a new session before retrying.";
+
+/**
+ * The `McpError` form of {@link SESSION_GONE_MESSAGE}, for the request paths
+ * that signal failure by throwing (discovery and resources) rather than by
+ * returning an `isError` tool result. `InternalError` matches how the sibling
+ * structural failure `SESSION_BINDING_GONE` is already raised on `tools/list`,
+ * so a client reads one JSON-RPC shape for both — the `data.code` is what
+ * separates them.
+ */
+function sessionGoneError(): McpError {
+  return new McpError(
+    ErrorCode.InternalError,
+    SESSION_GONE_MESSAGE,
+    buildMcpErrorPayload({ code: SESSION_GONE, message: SESSION_GONE_MESSAGE })
+  );
+}
+
 export function createSessionServer(sessionId: string, deps: SessionServerDeps): Server {
   const {
     sessionStore,
@@ -484,8 +509,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const manifest = await resolveManifest("tools/list");
+    // Resolve the tier before fetching anything (#11799). Two reasons to gate
+    // here rather than after the await: a dead session should not cost a
+    // manifest fetch, and `resolveManifest` can itself throw
+    // SESSION_BINDING_GONE — which would answer "your workspace went away" to a
+    // caller whose actual problem is that its session did.
     const tier = sessionStore.getTier(sessionId);
+    // Throw rather than answer with an empty list: `{ tools: [] }` is a
+    // well-formed, cacheable "you have no tools", indistinguishable from a
+    // legitimately empty surface and carrying no hint that reconnecting is the
+    // fix.
+    if (tier === null) throw sessionGoneError();
+    const manifest = await resolveManifest("tools/list");
     const tools = manifest
       .filter((entry) => shouldExposeTool(entry, tier, sessionSurface))
       .map((entry) => {
@@ -510,6 +545,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const { args, requestKey } = parseToolArguments(request.params.arguments);
     const startedAt = Date.now();
     const tier = sessionStore.getTier(sessionId);
+    // Gate 0 (#11799): no live session, no authorization. The SDK's own
+    // transport await — body parse and JSON-RPC routing — sits between "the
+    // request arrived on a live session" and this handler, so an idle-timer
+    // expiry or an abuse trip on a concurrent call can revoke the session in
+    // between. Refusing here, before the tier gate, keeps a revoked external
+    // bearer off the workbench surface its own allowlist withholds.
+    //
+    // Returns before anything observable happens: no audit record (there is no
+    // honest tier to record it under), no denial counter, no tier-mismatch
+    // banner, no grant lookup, no dedup entry, and no dispatch.
+    if (tier === null) {
+      return buildToolError({ code: SESSION_GONE, message: SESSION_GONE_MESSAGE });
+    }
     // Snapshot the turn id once, at dispatch start, before any guard or await
     // can yield to an active→passive FSM transition that would clear it (#10067).
     // Every consumer below — the started/settled strip events and all audit
@@ -1047,16 +1095,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             const manifest = await resolveManifest(MCP_SURFACE_TOOL_ID);
             // Build against the tier captured at dispatch start — the one the
             // permission gate above actually authorized this call at — rather
-            // than re-reading after the await. Re-reading looks fresher but is
-            // not safe: `getTier` falls back to `workbench` once a revoked
-            // session's entry is gone, and workbench is a PEER of `external`,
-            // not a subset, so an external caller whose session was revoked
-            // mid-fetch would be handed a report naming workbench tools its own
-            // allowlist deliberately withholds. Using the gate's tier makes the
-            // report describe exactly what the caller was authorized against,
-            // and keeps it consistent with the audit record, which logs the
-            // same value. A tier that changes mid-call fires
-            // `notifications/tools/list_changed`, so a client re-reads anyway.
+            // than re-reading after the await. Authorization has one lifetime
+            // per call: revocation stops the *next* request, but does not
+            // rewrite a call already admitted, and an elevation or decay landing
+            // mid-fetch belongs to the next request too. Re-reading would make
+            // the report disagree with both the gate that admitted the call and
+            // the audit record, which logs this same value. A tier that changes
+            // mid-call fires `notifications/tools/list_changed`, so a client
+            // re-reads anyway.
             const result = buildSurfaceManifest(
               manifest,
               tier,
@@ -1540,22 +1586,31 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     return await dispatchPromise;
   });
 
+  // Each resource handler resolves the tier once at entry and threads it down
+  // (#11799). One capture per request: the listing helpers await dispatches
+  // mid-enumeration, and re-reading across those awaits would let one response
+  // mix two authorization lifetimes.
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
-    return { resources: await listConcreteResources(sessionId, deps) };
+    const tier = sessionStore.getTier(sessionId);
+    if (tier === null) throw sessionGoneError();
+    return { resources: await listConcreteResources(tier, deps) };
   });
 
   server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
-    return { resourceTemplates: listResourceTemplates(sessionId, deps) };
+    const tier = sessionStore.getTier(sessionId);
+    if (tier === null) throw sessionGoneError();
+    return { resourceTemplates: listResourceTemplates(tier) };
   });
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const tier = sessionStore.getTier(sessionId);
+    if (tier === null) throw sessionGoneError();
     const uri = request.params.uri;
     const parsed = parseResourceUri(uri);
     if (!parsed) {
       throw new McpError(ErrorCode.InvalidRequest, `Unknown resource URI: ${uri}`);
     }
-    if (!isResourcePermitted(sessionId, deps, parsed.kind)) {
-      const tier = sessionStore.getTier(sessionId);
+    if (!isResourcePermitted(tier, parsed.kind)) {
       const message = `Resource '${uri}' is not permitted for the '${tier}' tier.`;
       throw new McpError(
         ErrorCode.InvalidRequest,
@@ -1568,13 +1623,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   });
 
   server.setRequestHandler(SubscribeRequestSchema, async (request) => {
+    // Gated before `subscribeResource` can install an event listener, so a
+    // revoked session never leaves a subscription behind for a transport that
+    // is already gone.
+    const tier = sessionStore.getTier(sessionId);
+    if (tier === null) throw sessionGoneError();
     const uri = request.params.uri;
     const parsed = parseResourceUri(uri);
     if (!parsed) {
       throw new McpError(ErrorCode.InvalidRequest, `Unknown resource URI: ${uri}`);
     }
-    if (!isResourcePermitted(sessionId, deps, parsed.kind)) {
-      const tier = sessionStore.getTier(sessionId);
+    if (!isResourcePermitted(tier, parsed.kind)) {
       const message = `Resource '${uri}' is not permitted for the '${tier}' tier.`;
       throw new McpError(
         ErrorCode.InvalidRequest,
@@ -1654,12 +1713,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
 // --- Resource helpers ---
 
 async function listConcreteResources(
-  sessionId: string,
+  tier: McpTier,
   deps: SessionServerDeps
 ): Promise<Array<{ uri: string; name: string; mimeType: string; description?: string }>> {
   const resources: Array<{ uri: string; name: string; mimeType: string; description?: string }> =
     [];
-  if (isResourcePermitted(sessionId, deps, "issues")) {
+  if (isResourcePermitted(tier, "issues")) {
     resources.push({
       uri: "daintree://project/current/issues",
       name: "Current project — open issues",
@@ -1667,7 +1726,7 @@ async function listConcreteResources(
       description: "Open issues for the active project.",
     });
   }
-  if (isResourcePermitted(sessionId, deps, "pulse")) {
+  if (isResourcePermitted(tier, "pulse")) {
     const worktrees = await tryDispatchList("worktree.list", deps.dispatchAction);
     for (const wt of worktrees) {
       const id = readStringField(wt, ["id", "worktreeId"]);
@@ -1681,15 +1740,12 @@ async function listConcreteResources(
       });
     }
   }
-  if (
-    isResourcePermitted(sessionId, deps, "scrollback") ||
-    isResourcePermitted(sessionId, deps, "agentState")
-  ) {
+  if (isResourcePermitted(tier, "scrollback") || isResourcePermitted(tier, "agentState")) {
     const terminals = await tryDispatchList("terminal.list", deps.dispatchAction);
     for (const term of terminals) {
       const id = readStringField(term, ["id", "terminalId"]);
       const label = readStringField(term, ["title", "name"]) ?? id;
-      if (id && isResourcePermitted(sessionId, deps, "scrollback")) {
+      if (id && isResourcePermitted(tier, "scrollback")) {
         resources.push({
           uri: `daintree://terminal/${encodeURIComponent(id)}/scrollback`,
           name: `Terminal scrollback — ${label ?? id}`,
@@ -1698,7 +1754,7 @@ async function listConcreteResources(
         });
       }
       const agentId = readStringField(term, ["agentId"]);
-      if (agentId && isResourcePermitted(sessionId, deps, "agentState")) {
+      if (agentId && isResourcePermitted(tier, "agentState")) {
         resources.push({
           uri: `daintree://agent/${encodeURIComponent(agentId)}/state`,
           name: `Agent state — ${label ?? agentId}`,
@@ -1712,8 +1768,7 @@ async function listConcreteResources(
 }
 
 function listResourceTemplates(
-  sessionId: string,
-  deps: SessionServerDeps
+  tier: McpTier
 ): Array<{ uriTemplate: string; name: string; mimeType: string; description?: string }> {
   const templates: Array<{
     uriTemplate: string;
@@ -1721,7 +1776,7 @@ function listResourceTemplates(
     mimeType: string;
     description?: string;
   }> = [];
-  if (isResourcePermitted(sessionId, deps, "pulse")) {
+  if (isResourcePermitted(tier, "pulse")) {
     templates.push({
       uriTemplate: "daintree://worktree/{id}/pulse",
       name: "Worktree pulse",
@@ -1729,7 +1784,7 @@ function listResourceTemplates(
       description: "Git status summary, recent commits, and pull-request signal.",
     });
   }
-  if (isResourcePermitted(sessionId, deps, "scrollback")) {
+  if (isResourcePermitted(tier, "scrollback")) {
     templates.push({
       uriTemplate: "daintree://terminal/{id}/scrollback",
       name: "Terminal scrollback",
@@ -1737,7 +1792,7 @@ function listResourceTemplates(
       description: `Last ${RESOURCE_SCROLLBACK_TAIL_LINES} lines of terminal output.`,
     });
   }
-  if (isResourcePermitted(sessionId, deps, "agentState")) {
+  if (isResourcePermitted(tier, "agentState")) {
     templates.push({
       uriTemplate: "daintree://agent/{id}/state",
       name: "Agent state",
@@ -1825,8 +1880,14 @@ async function tryDispatchList(
   }
 }
 
-function isResourcePermitted(sessionId: string, deps: SessionServerDeps, kind: string): boolean {
-  const tier = deps.sessionStore.getTier(sessionId);
+/**
+ * Pure tier check — takes the tier its caller already resolved rather than
+ * reading the store again (#11799). The resource handlers resolve liveness once
+ * at entry, so this helper is only ever reached for a live session, and the
+ * twelve call sites across the two listing helpers share that one capture
+ * instead of racing the store twelve separate times.
+ */
+function isResourcePermitted(tier: McpTier, kind: string): boolean {
   return isTierPermitted(tier, (RESOURCE_BACKING_ACTIONS as Record<string, string>)[kind]);
 }
 

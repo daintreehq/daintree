@@ -232,6 +232,18 @@ export const CONFIRMATION_TIMEOUT_CODE = "CONFIRMATION_TIMEOUT";
 export const EXECUTION_ERROR_CODE = "EXECUTION_ERROR";
 export const BINDING_STALE = "BINDING_STALE";
 export const SESSION_BINDING_GONE = "SESSION_BINDING_GONE";
+/**
+ * The session itself no longer exists — revoked, idled out, or closed — so the
+ * request cannot be authorized against any tier (#11799).
+ *
+ * Distinct from {@link SESSION_BINDING_GONE}, which describes a session that is
+ * still live but can no longer reach the workspace it bound to at handshake.
+ * That one says "your target went away"; this one says "you went away". A
+ * client can recover from a binding failure by rebinding, but the only recovery
+ * from this is a new session, so conflating them would tell a client to retry a
+ * route it no longer has any session to route.
+ */
+export const SESSION_GONE = "SESSION_GONE";
 export const MCP_DEDUP_KEY_COLLISION_CODE = "MCP_DEDUP_KEY_COLLISION";
 export const PRE_AUTH_FAILED_CODE = "PRE_AUTH_FAILED";
 export const INVALID_URL_CODE = "INVALID_URL";
@@ -365,7 +377,11 @@ export function buildMcpErrorPayload(input: {
     message: input.message,
     retriable: RETRIABLE_ERROR_CODES.has(input.code),
   };
-  if (input.code === BINDING_STALE || input.code === SESSION_BINDING_GONE) {
+  if (
+    input.code === BINDING_STALE ||
+    input.code === SESSION_BINDING_GONE ||
+    input.code === SESSION_GONE
+  ) {
     payload.errorCategory = "business";
   }
   if (input.details !== undefined) {
