@@ -41,6 +41,10 @@ interface MockPanel {
 // `@/store/panelStore` while the coordinator reads `@/store`. Two separate
 // mocks would let the action see a trash that the coordinator never wrote.
 const store = vi.hoisted(() => {
+  // Lets a test swap in the real `trashPanel`'s other two outcomes: removing the
+  // record outright (remove-on-exit / dialog panels route to `removePanel`), and
+  // failing (the coordinator swallows a commit that throws).
+  const override = { trash: null as null | ((id: string) => void) };
   const state = {
     focusedId: null as string | null,
     panelIds: [] as string[],
@@ -52,11 +56,15 @@ const store = vi.hoisted(() => {
     // Mirrors the real `trashPanel`: the record survives, its location becomes
     // "trash", and `terminal.list` filters on exactly that.
     trashPanel: vi.fn((id: string) => {
+      if (override.trash) {
+        override.trash(id);
+        return;
+      }
       const panel = state.panelsById[id];
       if (panel) state.panelsById[id] = { ...panel, location: "trash" };
     }),
   };
-  return { state };
+  return { state, override };
 });
 
 vi.mock("@/store", () => ({ panelStoreApi: { getState: () => store.state } }));
@@ -101,6 +109,7 @@ import {
 const WORKTREE = "wt1";
 
 function seed(panels: MockPanel[], focusedId: string | null = null): void {
+  store.override.trash = null;
   store.state.panelIds = panels.map((p) => p.id);
   store.state.panelsById = {};
   for (const panel of panels) {
@@ -161,19 +170,27 @@ describe("terminal.close read-your-writes against the real coordinator (#11805)"
     expect(await listedIds(service)).toEqual(["b"]);
   });
 
-  it("still defers the teardown for a foreground close", async () => {
+  it("still defers the teardown for a foreground close, and names what it accepted", async () => {
     seed([
       { id: "a", kind: "terminal", location: "grid" },
       { id: "b", kind: "terminal", location: "grid" },
     ]);
     const service = buildService();
 
-    await service.dispatch("terminal.close", { terminalId: "a" }, { source: "keybinding" });
+    const closed = await service.dispatch<{ closedIds: string[] }>(
+      "terminal.close",
+      { terminalId: "a" },
+      { source: "keybinding" }
+    );
 
     // The paint-frame protection the optimistic path exists for is intact: the
-    // canonical trash has not run yet.
+    // canonical trash has not run yet. The result still names the panel, so a
+    // foreground caller is not told the close was a no-op.
+    expect(closed.ok && closed.result).toEqual({ closedIds: ["a"] });
     expect(await listedIds(service)).toEqual(["a", "b"]);
-    await vi.advanceTimersByTimeAsync(200);
+    // Advance to the queued commit rather than a literal delay — the coordinator
+    // owns the wait, and this asserts only that it eventually runs.
+    await vi.runOnlyPendingTimersAsync();
     expect(await listedIds(service)).toEqual(["b"]);
   });
 
@@ -184,9 +201,23 @@ describe("terminal.close read-your-writes against the real coordinator (#11805)"
     // ActionService defaults an omitted source to "user", so the in-app close
     // paths that pass no source keep the deferral rather than paying for a
     // synchronous teardown on every Cmd+W.
-    await service.dispatch("terminal.close", { terminalId: "a" });
+    const closed = await service.dispatch<{ closedIds: string[] }>("terminal.close", {
+      terminalId: "a",
+    });
 
+    expect(closed.ok && closed.result).toEqual({ closedIds: ["a"] });
     expect(await listedIds(service)).toEqual(["a"]);
+  });
+
+  it("closes synchronously for plugin dispatch too, not just agent", async () => {
+    seed([{ id: "a", kind: "terminal", location: "grid" }]);
+    const service = buildService();
+
+    // The gate is an allowlist of foreground sources, so "plugin" gets the same
+    // read-your-writes guarantee without being named anywhere.
+    await service.dispatch("terminal.close", { terminalId: "a" }, { source: "plugin" });
+
+    expect(await listedIds(service)).toEqual([]);
   });
 
   it("resolves truthfully when the panel is already mid-close", async () => {
@@ -207,6 +238,96 @@ describe("terminal.close read-your-writes against the real coordinator (#11805)"
     expect(commit).toHaveBeenCalledTimes(1);
     expect(closed.ok && closed.result).toEqual({ closedIds: ["a"] });
     expect(await listedIds(service)).toEqual([]);
+  });
+
+  it("reports a panel removed outright as closed", async () => {
+    seed([{ id: "a", kind: "terminal", location: "grid" }]);
+    // Remove-on-exit and dialog panels bypass trash: `trashPanel` routes them to
+    // `removePanel`, so the record is gone rather than relocated. Judging that by
+    // location alone would report the close as a no-op.
+    store.override.trash = (id) => {
+      delete store.state.panelsById[id];
+      store.state.panelIds = store.state.panelIds.filter((panelId) => panelId !== id);
+    };
+    const service = buildService();
+
+    const closed = await service.dispatch<{ closedIds: string[] }>(
+      "terminal.close",
+      { terminalId: "a" },
+      { source: "agent" }
+    );
+
+    expect(closed.ok && closed.result).toEqual({ closedIds: ["a"] });
+    expect(await listedIds(service)).toEqual([]);
+  });
+
+  it("reports nothing closed when the teardown fails", async () => {
+    seed([{ id: "a", kind: "terminal", location: "grid" }]);
+    // The coordinator catches a commit that throws so one failure cannot take
+    // out the rest of the batch. The panel is still open, so the ack must not
+    // claim otherwise.
+    store.override.trash = () => {
+      throw new Error("trash failed");
+    };
+    const service = buildService();
+
+    const closed = await service.dispatch<{ closedIds: string[] }>(
+      "terminal.close",
+      { terminalId: "a" },
+      { source: "agent" }
+    );
+
+    expect(closed.ok && closed.result).toEqual({ closedIds: [] });
+    expect(await listedIds(service)).toEqual(["a"]);
+  });
+
+  it("closes nothing when focus points at a panel that is gone", async () => {
+    seed([{ id: "a", kind: "terminal", location: "grid" }], "stale");
+    const service = buildService();
+
+    // No explicit id, so the target resolves from focus — which can outlive the
+    // panel it names. Reporting that as a close would be a false positive.
+    const closed = await service.dispatch<{ closedIds: string[] }>("terminal.close", undefined, {
+      source: "keybinding",
+    });
+
+    expect(closed.ok && closed.result).toEqual({ closedIds: [] });
+    expect(await listedIds(service)).toEqual(["a"]);
+  });
+
+  it.each(["constructor", "__proto__", "toString"])(
+    "rejects the inherited key %s rather than trashing it",
+    async (terminalId) => {
+      seed([{ id: "a", kind: "terminal", location: "grid" }]);
+      const service = buildService();
+
+      // `panelsById` is a plain object, so a truthiness check would resolve these
+      // off Object.prototype and run the whole trash flow on a panel that never
+      // existed.
+      const closed = await service.dispatch("terminal.close", { terminalId }, { source: "agent" });
+
+      expect(closed.ok).toBe(false);
+      expect(!closed.ok && closed.error.code).toBe("EXECUTION_ERROR");
+      expect(store.state.trashPanel).not.toHaveBeenCalled();
+      expect(await listedIds(service)).toEqual(["a"]);
+    }
+  );
+
+  it("closes a tracked panel that has not reached panelIds yet", async () => {
+    seed([]);
+    // Hydration commits `panelsById` before `panelIds`, so membership in the id
+    // list is not what makes a panel real. Gating the guard on `panelIds` would
+    // reject a genuinely tracked panel during that window.
+    store.state.panelsById = { a: { id: "a", kind: "terminal", location: "grid" } };
+    const service = buildService();
+
+    const closed = await service.dispatch<{ closedIds: string[] }>(
+      "terminal.close",
+      { terminalId: "a" },
+      { source: "agent" }
+    );
+
+    expect(closed.ok && closed.result).toEqual({ closedIds: ["a"] });
   });
 
   it("rejects an id that is not tracked instead of acking it", async () => {

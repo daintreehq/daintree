@@ -270,7 +270,6 @@ perfDescribe("Perf: agent-terminal launch latency", () => {
             { terminalId: id, confirmed: true },
             { source: "test" }
           );
-          await dispatch?.("terminal.close", { terminalId: id }, { source: "test" });
         }
       });
       await expect

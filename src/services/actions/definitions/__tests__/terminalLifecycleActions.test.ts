@@ -243,8 +243,11 @@ describe("terminal.close result contract (#11805)", () => {
     await expect(run("terminal.close")).resolves.toEqual({ closedIds: [] });
   });
 
-  it.each(["agent", "plugin", undefined] as const)(
-    "settles the close before resolving for %s dispatch",
+  // Routing only — the mocked coordinator settles nothing. That the panel is
+  // genuinely gone by the time the call resolves is proved against the real
+  // coordinator in terminalLifecycleActions.optimisticClose.test.ts.
+  it.each(["agent", "plugin"] as const)(
+    "routes %s dispatch through the synchronous flush",
     async (dispatchSource) => {
       setPanelState({ focusedId: "p1", panels: [{ id: "p1", location: "grid" }] });
       const run = setupActions();
@@ -262,8 +265,10 @@ describe("terminal.close result contract (#11805)", () => {
       const run = setupActions();
 
       // The paint-frame protection is the whole point of the optimistic path;
-      // a person is watching this one land.
-      await run("terminal.close", { terminalId: "p1" }, { dispatchSource });
+      // a person is watching this one land. The result still names the panel.
+      await expect(
+        run("terminal.close", { terminalId: "p1" }, { dispatchSource })
+      ).resolves.toEqual({ closedIds: ["p1"] });
 
       expect(optimisticPanelCloseMock.requestPanelClose).toHaveBeenCalled();
       expect(optimisticPanelCloseMock.flushOptimisticCloses).not.toHaveBeenCalled();
@@ -310,7 +315,11 @@ describe("terminal.closeAll result contract (#11805)", () => {
     optimisticPanelCloseMock.flushOptimisticCloses.mockClear();
     setPanelState({ panels: [{ id: "b", location: "grid", worktreeId: "wt1" }] });
 
-    await inWorktree("wt1")("terminal.closeAll", undefined, { dispatchSource: "keybinding" });
+    // Foreground keeps the deferral but still names what it accepted, so a
+    // keybinding caller is not told the close was a no-op.
+    await expect(
+      inWorktree("wt1")("terminal.closeAll", undefined, { dispatchSource: "keybinding" })
+    ).resolves.toEqual({ closedIds: ["b"] });
     expect(optimisticPanelCloseMock.flushOptimisticCloses).not.toHaveBeenCalled();
   });
 });

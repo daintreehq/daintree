@@ -48,8 +48,8 @@ const PanelCloseResultSchema = z.object({
 function closedPanelIds(ids: readonly string[]): string[] {
   const { panelsById } = usePanelStore.getState();
   return ids.filter((id) => {
-    const panel = panelsById[id];
-    return panel === undefined || panel.location === "trash";
+    if (!Object.hasOwn(panelsById, id)) return true;
+    return panelsById[id]?.location === "trash";
   });
 }
 
@@ -109,8 +109,11 @@ export function registerTerminalLifecycleActions(
       const state = usePanelStore.getState();
       // A named panel that isn't tracked is a caller mistake, not a no-op:
       // `trashPanel` ignores an unknown id silently, so without this the call
-      // reports success for a typo (#11805).
-      if (terminalId !== undefined && !state.panelsById[terminalId]) {
+      // reports success for a typo (#11805). `Object.hasOwn` rather than a
+      // truthiness check: `panelsById` is a plain object, so an id like
+      // "constructor" would otherwise resolve off the prototype and get trashed
+      // as if it were a real panel.
+      if (terminalId !== undefined && !Object.hasOwn(state.panelsById, terminalId)) {
         throw new Error(
           `terminal.close: no panel with id "${terminalId}" — pass an \`id\` from the terminal listing.`
         );
@@ -124,7 +127,9 @@ export function registerTerminalLifecycleActions(
             state.panelsById[id]?.location !== "background"
         );
       if (!targetId) return { closedIds: [] };
-      const target = state.panelsById[targetId];
+      const target = Object.hasOwn(state.panelsById, targetId)
+        ? state.panelsById[targetId]
+        : undefined;
       // A stale `focusedId`, or a panel already trashed. Re-trashing resets the
       // recovery TTL and rewrites the recorded restore location, so leave it be
       // and report that nothing closed.
