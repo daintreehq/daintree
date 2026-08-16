@@ -16,12 +16,13 @@ import ts from "typescript";
 // the age advances the way it never does in a build — a render-then-advance-
 // timers test passes identically with and without the bug.
 //
-// The clock has to survive a whole chain to reach the screen, and the type
-// checker guards none of it: a reactive source, a prop carrying it down, and a
-// row that renders against that prop rather than a reading of its own. Breaking
-// any one link refreezes the age, so each link gets an assertion. Pinning only
-// the last one is what makes this contract look green while the parent quietly
-// swaps its `useGlobalMinuteClock()` for a `Date.now()`.
+// The clock has to survive a whole chain to reach the screen: a reactive
+// source, a prop carrying it down, and a row that renders against that prop
+// rather than a reading of its own. Types enforce that the prop and the
+// argument are *present*; nothing in them can speak to where the value came
+// from or whether it still moves. Breaking any one link refreezes the age, so
+// each link gets an assertion — pinning only the last one is what would leave
+// this green while the parent quietly swapped its hook for a `Date.now()`.
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = path.resolve(TEST_DIR, "../../..");
@@ -31,7 +32,7 @@ const HELPERS_REL = "lib/projectRowStatus.ts";
 /** The status-helper family: `getProjectRowStatus`, `getScratchRowStatus`, and any sibling. */
 const HELPER_PATTERN = /^get.+RowStatus$/;
 
-/** The module the family is declared in, however a consumer spells the path to it. */
+/** The module the family is declared in, by alias or relative path. Barrels and extension-bearing specifiers are not followed. */
 const HELPERS_MODULE = /(^|\/)projectRowStatus$/;
 
 /** The prop every row carries its clock on, so the chain can be followed by name. */
@@ -63,12 +64,15 @@ const REQUIRED_ROWS = ["ProjectListItem", "ScratchListItem"];
 const AMBIENT_CLOCK_ALLOWLIST = new Set(["ScratchSection"]);
 
 function parse(file: string): ts.SourceFile {
+  // By extension, not TSX for everything: `.ts` parsed as TSX turns generic
+  // arrows and type assertions into recovered garbage, and a call read out of a
+  // mis-parsed tree is not evidence of anything.
   return ts.createSourceFile(
     file,
     fs.readFileSync(file, "utf8"),
     ts.ScriptTarget.Latest,
     true,
-    ts.ScriptKind.TSX
+    file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
   );
 }
 
@@ -83,7 +87,9 @@ function walk(dir: string, out: string[] = []): string[] {
     if (entry.isDirectory()) {
       if (entry.name === "__tests__" || entry.name === "node_modules") continue;
       walk(full, out);
-    } else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
+    } else if (/\.tsx?$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name)) {
+      // Colocated tests are excluded alongside `__tests__`: a row name only a
+      // fixture defines must not be what satisfies the coverage checks below.
       out.push(full);
     }
   }
@@ -207,10 +213,30 @@ interface HelperCall {
   clock: ts.Expression | undefined;
 }
 
-const sources = walk(SRC_ROOT).map((file) => ({ file, rel: relative(file), source: parse(file) }));
+/**
+ * Every source that could reach the helper family, parsed.
+ *
+ * Text-filtered before parsing: the renderer is ~1,500 files, and holding an
+ * AST for each one costs hundreds of megabytes for the handful that mention
+ * this module. The two contract targets are parsed unconditionally, since the
+ * module that declares the family need never name itself.
+ */
+function loadTarget(rel: string): { rel: string; source: ts.SourceFile } {
+  const full = path.join(SRC_ROOT, rel);
+  if (!fs.existsSync(full)) throw new Error(`Contract target no longer exists: src/${rel}`);
+  return { rel, source: parse(full) };
+}
+
+const palette = loadTarget(PALETTE_REL);
+const helpers = loadTarget(HELPERS_REL);
 
 const helperCalls: HelperCall[] = [];
-for (const { rel, source } of sources) {
+for (const file of walk(SRC_ROOT)) {
+  const rel = relative(file);
+  const preloaded = [palette, helpers].find((entry) => entry.rel === rel);
+  if (!preloaded && !fs.readFileSync(file, "utf8").includes("projectRowStatus")) continue;
+
+  const source = preloaded?.source ?? parse(file);
   const bindings = helperBindings(source);
   if (bindings.direct.size === 0 && bindings.namespaces.size === 0) continue;
 
@@ -229,9 +255,6 @@ for (const { rel, source } of sources) {
     });
   });
 }
-
-const palette = sources.find((entry) => entry.rel === PALETTE_REL);
-if (!palette) throw new Error(`Contract target no longer exists: src/${PALETTE_REL}`);
 
 /** Local names bound to a hook that re-renders on a new reading. */
 function reactiveClockBindings(source: ts.SourceFile): Set<string> {
@@ -282,22 +305,17 @@ describe("row status clocks (#11823)", () => {
       }
     });
 
-    // The rows have to be receiving a clock at all for the check above to mean
-    // anything — an attribute that vanished would otherwise pass by absence.
     expect(offenders).toEqual([]);
-    expect(offenders.length + countClockAttributes(palette.source)).toBeGreaterThan(0);
+
+    // Checked by name, not counted: an attribute deleted outright, or replaced
+    // by a `{...spread}` the walk above never sees, would otherwise pass this
+    // by absence — which is the shape the original bug had.
+    const clocked = new Set(rowsRenderedWithAReactiveClock(palette.source, reactive));
+    expect(REQUIRED_ROWS.filter((row) => !clocked.has(row))).toEqual([]);
   });
 
   it("leaves the row-status helpers no ambient clock to fall back to", () => {
-    const helpers = sources.find((entry) => entry.rel === HELPERS_REL);
-    if (!helpers) throw new Error(`Contract target no longer exists: src/${HELPERS_REL}`);
-
-    const exported = exportedHelpers(helpers.source);
-    expect(exported.map(({ name }) => name).sort()).toEqual(
-      ["getProjectRowStatus", "getScratchRowStatus"].sort()
-    );
-
-    const offenders = exported
+    const offenders = exportedHelpers(helpers.source)
       .filter(({ fn }) => !requiresClock(fn))
       .map(({ name }) => `${name} does not require an explicit clock as its second parameter`);
 
@@ -315,13 +333,24 @@ describe("row status clocks (#11823)", () => {
   });
 });
 
-/** `nowMs={…}` attributes in the file, however they are spelled. */
-function countClockAttributes(source: ts.SourceFile): number {
-  let count = 0;
+/** Row components rendered with a `nowMs` fed straight from a re-rendering hook. */
+function rowsRenderedWithAReactiveClock(source: ts.SourceFile, reactive: Set<string>): string[] {
+  const rows: string[] = [];
   eachNode(source, (node) => {
-    if (ts.isJsxAttribute(node) && node.name.getText() === CLOCK_PROP) count += 1;
+    if (!ts.isJsxSelfClosingElement(node) && !ts.isJsxOpeningElement(node)) return;
+    const clocked = node.attributes.properties.some(
+      (attribute) =>
+        ts.isJsxAttribute(attribute) &&
+        attribute.name.getText() === CLOCK_PROP &&
+        attribute.initializer !== undefined &&
+        ts.isJsxExpression(attribute.initializer) &&
+        attribute.initializer.expression !== undefined &&
+        ts.isIdentifier(attribute.initializer.expression) &&
+        reactive.has(attribute.initializer.expression.text)
+    );
+    if (clocked) rows.push(node.tagName.getText());
   });
-  return count;
+  return rows;
 }
 
 /**
@@ -376,6 +405,8 @@ function requiresClock(
   if (!clock) return false;
   if (clock.questionToken !== undefined) return false;
   if (clock.initializer !== undefined) return false;
+  // `...nowMs: number[]` is a required parameter the caller may still omit.
+  if (clock.dotDotDotToken !== undefined) return false;
 
   let defaulted = false;
   eachNode(clock, (node) => {
