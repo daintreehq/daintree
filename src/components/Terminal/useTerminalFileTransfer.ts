@@ -12,6 +12,7 @@ import {
   hasInternalFileDrag,
 } from "@/lib/fileDragPayload";
 import { formatAtFileTokenForCwd } from "./hybridInputParsing";
+import { usePanelStore } from "@/store/panelStore";
 
 /**
  * Image file extension pattern shared with HybridInputBar.
@@ -63,6 +64,15 @@ interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
   isInputLocked?: boolean;
   onInput?: (data: string) => void;
   /**
+   * Selects the panel that owns this terminal, invoked only once a drop has
+   * actually written something. The hook knows which *surface* was dropped on
+   * but not which panel owns it: `terminalId` is a PTY id, and the Assistant
+   * and the Dev Preview console both run one inside a panel they do not name.
+   * So panel selection is delegated to the caller and simply absent where
+   * there is no panel to select.
+   */
+  onDropSelect?: () => void;
+  /**
    * Reads the terminal's live cwd, called at gesture time so a `cd` between
    * mount and drop relativizes against where the terminal actually is.
    * Omitted (or empty) leaves every path absolute, which is what
@@ -108,6 +118,7 @@ export function useTerminalFileTransfer(
     terminalId,
     isInputLocked,
     onInput,
+    onDropSelect,
     cwdProvider,
     launchAgentId,
     detectedAgentId,
@@ -136,11 +147,16 @@ export function useTerminalFileTransfer(
   const isInputLockedRef = useRef(isInputLocked);
   const cwdProviderRef = useRef(cwdProvider);
   const isMountedRef = useRef(true);
+  // Rides the same ref as the rest: the owning pane rebuilds this callback on
+  // every render, and putting it in the listener effect's deps would tear down
+  // and re-register all five DOM listeners that often.
+  const onDropSelectRef = useRef(onDropSelect);
 
   useLayoutEffect(() => {
     identityRef.current = { launchAgentId, detectedAgentId, agentState };
     isInputLockedRef.current = isInputLocked;
     cwdProviderRef.current = cwdProvider;
+    onDropSelectRef.current = onDropSelect;
   });
 
   useLayoutEffect(() => {
@@ -263,6 +279,24 @@ export function useTerminalFileTransfer(
       // Trailing space terminates the last token and leaves the caret ready for
       // the next argument or prompt word, matching the hybrid input's drop.
       writeToTerminal(`${formatted.join(" ")} `, isAgent);
+
+      // The gesture already pointed at this terminal, so it ends the same way a
+      // click on it does: pane selected, keyboard here, ready to type about the
+      // paths that just landed (#11809). Once per accepted batch, and never for
+      // a drop the guards above discarded.
+      //
+      // Order matters. The preference is what `TerminalPane`'s focus effect
+      // reads to decide which sub-surface the newly selected pane hands the
+      // keyboard to, so leaving it on "hybridInput" would route the keyboard to
+      // the input bar even though the paths went to the PTY.
+      //
+      // xterm is focused directly rather than through the panel focus registry:
+      // the drop proves this wrapper is mounted, the target is unambiguously
+      // xterm, and the Assistant and Dev Preview consoles have no registry
+      // entry under their PTY id to route through in the first place.
+      usePanelStore.getState().setPreferredTerminalFocusTarget("xterm");
+      onDropSelectRef.current?.();
+      terminalInstanceService.focus(terminalId);
     };
 
     // Use capture phase for paste so we intercept before xterm's own handler

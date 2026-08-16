@@ -15,6 +15,7 @@ import { terminalInstanceService } from "../../services/TerminalInstanceService"
 import { TerminalRefreshTier } from "@/types";
 import type { DevPreviewStatus } from "@/hooks/useDevServer";
 import { useConsoleCaptureStore, ZERO_COUNTS } from "@/store/consoleCaptureStore";
+import { usePanelStore } from "@/store/panelStore";
 import { ConsolePanel } from "./ConsolePanel";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
 
@@ -425,6 +426,12 @@ export function ConsoleDrawer({
                   terminalId={terminalId}
                   getRefreshTier={getRefreshTier}
                   restoreOnAttach={true}
+                  // The console runs its own PTY inside this panel, so a drop
+                  // has to select the panel rather than the terminal it landed
+                  // in — `terminalId` names nothing the grid can select
+                  // (#11809). Without this the drop would move DOM focus here
+                  // while the selection stayed on whatever pane had it.
+                  onDropSelect={() => usePanelStore.getState().setFocused(paneId)}
                   className="!rounded-none !px-0 !pt-0 !pb-0"
                 />
               </Suspense>

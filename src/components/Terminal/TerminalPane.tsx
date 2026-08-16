@@ -1494,6 +1494,11 @@ function TerminalPaneComponent({
                     onReady={handleReady}
                     onExit={handleExit}
                     onInput={handleInput}
+                    // Same selection path as a click on the pane, minus the
+                    // event — which is exactly what leaves the shift/cmd fleet
+                    // gestures behind, since those only fire for a real click
+                    // that landed in pane chrome (#11809).
+                    onDropSelect={handleClick}
                     onAttached={handleAttached}
                     className="absolute inset-0"
                     getRefreshTier={getRefreshTierCallback}
