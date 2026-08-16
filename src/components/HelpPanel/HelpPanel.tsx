@@ -57,6 +57,7 @@ import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { actionService } from "@/services/ActionService";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
+import { dismissAllTooltips } from "@/lib/tooltipDismissRegistry";
 import { TerminalRefreshTier } from "@/types";
 import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
 import { isPtyPanel } from "@shared/types/panel";
@@ -866,6 +867,15 @@ export function HelpPanel({
       document.contains(el) &&
       !panelRef.current?.contains(el)
     ) {
+      // Radix opens tooltips on focus as well as hover, so handing focus back
+      // to a tooltip trigger — the toolbar assistant button is the usual opener
+      // — pops a tooltip nothing is hovering. Same failure the dialog
+      // primitives already arm against (#11030); the suppression window is
+      // honored by both the tooltip open path and useShortcutHintHover's focus
+      // branch, and any real pointerenter clears it, so genuine hovers still
+      // teach. Inside the guard on purpose: a restore we decline must not
+      // suppress a tooltip the user did ask for.
+      dismissAllTooltips();
       el.focus();
     }
     return undefined;
