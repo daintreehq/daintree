@@ -254,6 +254,12 @@ function seedLiveSession(
   tier: "workbench" | "action" | "system" | "external",
   transport: "sse" | "http" = "sse"
 ): void {
+  // Unref'd because the store's own `clearTimeout` is reachable only through
+  // the map entry: a test that drops the entry directly — to orphan a tier row,
+  // say — loses the only handle, and a referenced 1,000,000 ms timer then holds
+  // the Vitest worker open past the suite.
+  const idleTimer = setTimeout(() => {}, 1_000_000);
+  idleTimer.unref?.();
   const entry = {
     transport: {
       close: vi.fn().mockResolvedValue(undefined),
@@ -261,7 +267,7 @@ function seedLiveSession(
     server: {
       sendToolListChanged: vi.fn().mockResolvedValue(undefined),
     },
-    idleTimer: setTimeout(() => {}, 1_000_000),
+    idleTimer,
   } as unknown as NonNullable<ReturnType<RealSessionStore["sessions"]["get"]>>;
   if (transport === "sse") {
     store.sessions.set(sessionId, entry);
@@ -1280,6 +1286,7 @@ describe("CallTool idempotency dedup", () => {
 
     expect(realStore.dedupResultCache.size).toBe(0);
     expect(realStore.dedupInFlight.size).toBe(0);
+    realStore.grantCache.dispose();
   });
 
   it("rejects requestKey strings beyond the length cap (falls back to auto-hash)", async () => {
