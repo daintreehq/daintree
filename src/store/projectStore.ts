@@ -314,6 +314,22 @@ interface ProjectStoreListenerState {
 
 const PROJECT_STORE_LISTENER_STATE_KEY = "__daintreeProjectStoreListenerState";
 
+/**
+ * Projects this window is currently putting to sleep.
+ *
+ * Main broadcasts `project:slept` while the IPC is still in flight and every
+ * window listens, so the initiating window would otherwise handle its own
+ * request twice — once through the ordered path in `sleepProject` (flush →
+ * teardown → cancel) and once through the listener's bare drop — and would
+ * announce to the user something they just asked for.
+ */
+const selfInitiatedSleeps = new Set<string>();
+
+/** Whether THIS window asked for `projectId` to be slept (see the set above). */
+export function isSelfInitiatedSleep(projectId: string): boolean {
+  return selfInitiatedSleeps.has(projectId);
+}
+
 let projectTransitionRequestId = 0;
 let projectListRequestId = 0;
 let currentProjectRequestId = 0;
@@ -1057,6 +1073,12 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   sleepProject: async (projectId) => {
     const isActive = get().currentProject?.id === projectId;
 
+    // Main broadcasts `project:slept` while this call is still in flight, and
+    // every window listens. Mark the request as ours so THIS window transitions
+    // through the ordered path below (flush → teardown → cancel) instead of the
+    // listener's bare drop, and doesn't tell the user about something they just
+    // asked for.
+    selfInitiatedSleeps.add(projectId);
     try {
       if (isActive) {
         // Sleep's whole point is that main writes each captured agentSessionId
@@ -1088,6 +1110,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         details: { projectId, isActive },
       });
       throw error;
+    } finally {
+      selfInitiatedSleeps.delete(projectId);
     }
   },
 

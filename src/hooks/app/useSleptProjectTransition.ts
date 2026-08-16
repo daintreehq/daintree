@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { useProjectStore } from "@/store/projectStore";
+import { isSelfInitiatedSleep, useProjectStore } from "@/store/projectStore";
+import { notify } from "@/lib/notify";
 import { logDebug } from "@/utils/logger";
 
 /**
@@ -25,8 +26,23 @@ export function useSleptProjectTransition(): void {
       const state = useProjectStore.getState();
       if (state.currentProject?.id !== projectId) return;
 
+      // The window that asked runs the ordered teardown in `sleepProject`
+      // (flush → IPC → cancel) and needs no telling what it just did.
+      if (isSelfInitiatedSleep(projectId)) return;
+
+      const name = state.currentProject.name;
       logDebug("[useSleptProjectTransition] Current project was slept elsewhere", { projectId });
       state.dropToNoProject();
+
+      // The window emptying itself is visible; WHY is not, and nothing else in
+      // this window can say. Non-destructive and reversible, so it names the
+      // way back rather than offering a recovery action.
+      notify({
+        type: "info",
+        title: "Project slept",
+        message: `"${name}" was put to sleep in another window. Reopen it to pick up where you left off.`,
+        context: { eventKind: "host", projectId },
+      });
     });
   }, []);
 }

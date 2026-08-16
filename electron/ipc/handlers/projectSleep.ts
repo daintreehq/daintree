@@ -124,7 +124,7 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
               // worktree feed. Without this, sleeping the project on screen
               // would leave its workspace host resident and report
               // `workspaceEvicted: false`, defeating half the reclaim.
-              releaseWorkspaceRefsForProject(deps, projectId);
+              releaseWorkspaceRefsForProject(deps, projectId, project.path);
               workspaceEvicted = deps.worktreeService?.evictProject(project.path) ?? false;
             } catch (workspaceError) {
               console.warn(`[IPC] project:sleep: workspace eviction failed:`, workspaceError);
@@ -197,7 +197,11 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
  * Per-window and best-effort: a disposing window can throw, and one failure
  * must not skip the rest.
  */
-function releaseWorkspaceRefsForProject(deps: HandlerDependencies, projectId: string): void {
+function releaseWorkspaceRefsForProject(
+  deps: HandlerDependencies,
+  projectId: string,
+  projectPath: string
+): void {
   const worktreeService = deps.worktreeService;
   if (!worktreeService) return;
 
@@ -211,11 +215,15 @@ function releaseWorkspaceRefsForProject(deps: HandlerDependencies, projectId: st
 
   for (const manager of managers) {
     try {
-      // Only the windows actually bound to this project — releasing another
-      // window's mapping would sever a worktree feed still in use.
+      // Only windows bound to this project. Both halves are load-bearing: the
+      // view's active project narrows it to the right windows, and the
+      // path-guarded release is what makes it SAFE — during a cold switch the
+      // pool's window→project mapping can still name the outgoing project while
+      // the view already reports the incoming one, and an unguarded release
+      // would drop a different project's still-needed worktree feed.
       if (manager.getActiveProjectId() !== projectId) continue;
       if (manager.win.isDestroyed()) continue;
-      worktreeService.unregisterWindow(manager.win.id);
+      worktreeService.releaseWindowForProject(manager.win.id, projectPath);
     } catch (error) {
       logError("project-sleep-window-release-failed", error, { projectId });
     }

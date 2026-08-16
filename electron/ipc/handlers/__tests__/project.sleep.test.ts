@@ -79,7 +79,11 @@ function setup(
   } = {}
 ) {
   const evictProject = vi.fn(overrides.evictProject ?? (() => true));
-  const unregisterWindow = vi.fn();
+  // Guarded release: only drops the reference while the window is still mapped
+  // to the path passed in. Modelled here so a test can prove the guard is used.
+  const releaseWindowForProject = vi.fn(
+    (_windowId: number, projectPath: string) => projectPath === PROJECT.path
+  );
   const windows = (overrides.windowProjects ?? []).map((activeProjectId, index) => ({
     services: {
       projectViewManager: {
@@ -90,7 +94,7 @@ function setup(
   }));
   const deps = {
     ptyClient: {},
-    worktreeService: { evictProject, unregisterWindow },
+    worktreeService: { evictProject, releaseWindowForProject },
     windowRegistry: { all: () => windows },
   } as unknown as HandlerDependencies;
 
@@ -104,7 +108,7 @@ function setup(
   return {
     dispose,
     evictProject,
-    unregisterWindow,
+    releaseWindowForProject,
     invoke: (projectId: unknown) => handler({}, projectId),
   };
 }
@@ -225,16 +229,19 @@ describe("project:sleep", () => {
       // the project on screen holds one. Sleep leaves that window's VIEW alive
       // on purpose, so nothing else releases the reference — without this the
       // host survives sleeping the only project using it.
-      const { invoke, unregisterWindow, evictProject } = setup({
+      const { invoke, releaseWindowForProject, evictProject } = setup({
         windowProjects: ["proj-1", "other"],
       });
 
       await invoke("proj-1");
 
-      expect(unregisterWindow).toHaveBeenCalledTimes(1);
-      expect(unregisterWindow).toHaveBeenCalledWith(1);
+      expect(releaseWindowForProject).toHaveBeenCalledTimes(1);
+      // Path-guarded, not a bare windowId release: during a cold switch the
+      // pool can still map this window to the OUTGOING project, and dropping
+      // that reference would sever a different project's worktree feed.
+      expect(releaseWindowForProject).toHaveBeenCalledWith(1, PROJECT.path);
       // Released before the eviction is attempted, or the refCount still blocks.
-      expect(unregisterWindow.mock.invocationCallOrder[0]!).toBeLessThan(
+      expect(releaseWindowForProject.mock.invocationCallOrder[0]!).toBeLessThan(
         evictProject.mock.invocationCallOrder[0]!
       );
     });
@@ -242,11 +249,11 @@ describe("project:sleep", () => {
     it("leaves other projects' windows registered", async () => {
       // Releasing a window bound to a different project would sever a worktree
       // feed that is still in use.
-      const { invoke, unregisterWindow } = setup({ windowProjects: ["other", null] });
+      const { invoke, releaseWindowForProject } = setup({ windowProjects: ["other", null] });
 
       await invoke("proj-1");
 
-      expect(unregisterWindow).not.toHaveBeenCalled();
+      expect(releaseWindowForProject).not.toHaveBeenCalled();
     });
 
     it("still closes the project when reclamation throws", async () => {

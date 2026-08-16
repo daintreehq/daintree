@@ -1647,15 +1647,18 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       const hasProcesses =
         project.processCount > 0 || project.activeAgentCount > 0 || project.waitingAgentCount > 0;
 
-      // D1 (confirm) when live processes would be stopped, or when the project
-      // is on screen anywhere — that tears down what someone is looking at.
-      // `isActive` only knows about THIS window, so the row's own status covers
-      // the case where another window has it open (main's status is the only
-      // cross-window signal the palette has). D0 (immediate) is reserved for a
-      // background project with nothing running to interrupt. The snapshot
-      // freezes the counts the dialog previews.
-      const isOnScreenSomewhere = project.isActive || project.status === "active";
-      if (hasProcesses || isOnScreenSomewhere) {
+      // D1 (confirm) when live processes would be stopped, or when the target is
+      // the project on screen here — that tears down what the user is looking
+      // at. D0 (immediate) for a background project with nothing running to
+      // interrupt. The snapshot freezes the counts the dialog previews.
+      //
+      // `isActive` only covers THIS window, and no cross-window signal is
+      // available here: the persisted `status` is a singleton keyed to the
+      // last-switched project, so "active" doesn't mean "open in some window".
+      // A project open in ANOTHER window can therefore be slept without a
+      // confirm — bounded harm, since nothing is running in that case and the
+      // other window is told what happened (`useSleptProjectTransition`).
+      if (hasProcesses || project.isActive) {
         setSleepConfirmProject(project);
       } else {
         await doSleepProject(projectId);
