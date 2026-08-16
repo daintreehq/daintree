@@ -2,6 +2,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 
 export const MENU_METHOD_CHANNELS = {
   showContext: "menu:show-context",
+  showApplication: "menu:show-application",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof MENU_METHOD_CHANNELS;

@@ -115,6 +115,7 @@ import { useUIStore } from "@/store/uiStore";
 import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsToolbarButton";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
+import { AppMenuButton } from "./AppMenuButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
 import { ResumeSessionsToolbarButton } from "./ResumeSessionsToolbarButton";
@@ -2009,6 +2010,12 @@ export function Toolbar({
               )}
             />
           )}
+          {/* Fixed chrome, never part of buttonRegistry/overflow: this is the
+              recovery surface for the application menu itself, so it must not
+              be hideable or reorderable into an overflow popover (#11813). */}
+          <div className="app-no-drag">
+            <AppMenuButton />
+          </div>
           <div className="app-no-drag">{buttonRegistry["sidebar-toggle"]!.render()}</div>
 
           <div className={toolbarDividerClass} />

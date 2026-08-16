@@ -40,10 +40,13 @@ export function getPlatformWindowOptions(windowBg: string): PlatformWindowOption
         symbolColor: WINDOWS_CAPTION_SYMBOL_COLOR,
         height: WINDOWS_TITLEBAR_HEIGHT_PX,
       },
-      // Hide the native menu bar so the custom toolbar is the only chrome; Alt
-      // still reveals the menu. Must be set in the constructor — calling
-      // setAutoHideMenuBar after creation can cause Window Controls Overlay
-      // layout shifts.
+      // Hide the native menu bar so the custom toolbar is the only chrome.
+      // Alt does NOT reveal it here: titleBarStyle "hidden" removes the
+      // non-client frame region the menu bar would render into, so the menu is
+      // unreachable through native chrome entirely — the toolbar's
+      // AppMenuButton pops up the installed menu instead (#11813). Must be set
+      // in the constructor — calling setAutoHideMenuBar after creation can
+      // cause Window Controls Overlay layout shifts.
       autoHideMenuBar: true,
     };
   }

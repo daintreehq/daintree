@@ -881,6 +881,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { sessionId: string; tier: "action" | "workbench" | "system" }];
     result: { sessionId: string; tier: "action" | "workbench" | "system" };
   };
+  "menu:show-application": {
+    args: [payload?: import("../menu.js").ShowApplicationMenuPayload | undefined];
+    result: void;
+  };
   "menu:show-context": {
     args: [payload: import("../menu.js").ShowContextMenuPayload];
     result: string | null;
