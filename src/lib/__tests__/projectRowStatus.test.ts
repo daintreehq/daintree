@@ -431,24 +431,63 @@ describe("getProjectRowStatus", () => {
     expect(parked.isDormantFallback).toBeUndefined();
     expect(parked.text.length).toBeGreaterThan(0);
 
-    // Stated as open projects, because that is the only way these arise: a
-    // closed project has no live PTYs, so its counts are always zero. A row
-    // whose agents finished elsewhere is not waiting on disk for anyone.
+    // The hint is decorated onto the status afterwards, so it is the one path
+    // that could drop the flag while every other row kept it — and it would
+    // only show up on parked projects whose folder name collides.
+    expect(
+      getProjectRowStatus(
+        project({
+          status: "closed",
+          autoParkedAt: NOW - 1000,
+          displayPath: "payments/api",
+        }),
+        NOW
+      )
+    ).toMatchObject({ allowsResumeMark: true, pathHint: "payments/api" });
+
+    // Stated as open projects, which is where these settle: the counts are
+    // computed from live terminals, so a project that stays closed reports
+    // zero. A row whose agents finished in a window that is still open is not
+    // waiting on disk for anyone.
     const keepsItsMark = [
       project({ status: "background", isBackground: true, completedAgentCount: 1 }),
       project({ status: "background", isBackground: true, waitingAgentCount: 1 }),
       project({ status: "background", isBackground: true, activeAgentCount: 1 }),
       project({ status: "background", isBackground: true, snoozedAgentCount: 1 }),
       project({ status: "background", isBackground: true, processCount: 1 }),
-      project({ isMissing: true }),
+      project({ status: "missing", isMissing: true }),
     ];
     for (const row of keepsItsMark) {
       expect(getProjectRowStatus(row, NOW).allowsResumeMark).toBeUndefined();
     }
 
-    // The finished row is muted like the parked one, so the two are only ever
-    // told apart by this flag — a tone check here would light up both.
-    expect(getProjectRowStatus(keepsItsMark[0]!, NOW).tone).toBe("muted");
+    // The finished row is muted exactly like the parked one, so tone cannot be
+    // what separates them — asserted as the pair, since checking either alone
+    // would stay green while the premise stopped being true.
+    expect(getProjectRowStatus(keepsItsMark[0]!, NOW).tone).toBe(parked.tone);
+  });
+
+  // The sweep marks a project closed at once, while its counts arrive on a
+  // 200ms debounce — so a parked row briefly carries the activity it had a
+  // moment ago. It has to keep saying what it was doing until the counts
+  // settle: promising a resume while agents still read as running would be the
+  // wrong half of the story.
+  it("waits for the counts to settle before a parked row promises a resume", () => {
+    const midSweep = project({
+      status: "closed",
+      autoParkedAt: NOW - 50,
+      activeAgentCount: 1,
+      lastOpened: NOW - 5000,
+    });
+
+    const status = getProjectRowStatus(midSweep, NOW);
+    expect(status.allowsResumeMark).toBeUndefined();
+    expect(status.text).toContain("running");
+
+    // Once the counts catch up, the same row parks and offers its dot.
+    const settled = getProjectRowStatus({ ...midSweep, activeAgentCount: 0 }, NOW);
+    expect(settled.allowsResumeMark).toBe(true);
+    expect(settled.text).toBe("Suspended to free memory");
   });
 
   // The hint disambiguates two projects sharing a folder name, so it is part of
