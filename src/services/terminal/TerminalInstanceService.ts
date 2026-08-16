@@ -32,7 +32,13 @@ import { TerminalWebGLPolicy } from "./TerminalWebGLPolicy";
 import { TerminalRevealController } from "./TerminalRevealController";
 import { TerminalAgentStateController } from "./TerminalAgentStateController";
 import { TerminalRestoreController } from "./TerminalRestoreController";
-import { TerminalReflowController, forceXtermReflow } from "./TerminalReflowController";
+import {
+  TerminalReflowController,
+  attemptRendererUnpause,
+  forceXtermReflow,
+  forceXtermRendererUnpause,
+  resetRendererUnpauseBreaker,
+} from "./TerminalReflowController";
 import { TerminalReconciliationWatchdog } from "./TerminalReconciliationWatchdog";
 import { TerminalWriteController } from "./TerminalWriteController";
 import { TerminalSettleWaiterRegistry } from "./TerminalSettleWaiterRegistry";
@@ -332,7 +338,6 @@ class TerminalInstanceService {
       isWebGLActive: (id) => this.webGLManager.isActive(id),
       shouldHaveWebGL: (managed) => this.webGLPolicy.shouldHaveActiveWebGL(managed),
       ensureWebGL: (id, managed) => this.webGLManager.ensureContext(id, managed),
-      forceReflow: (element) => forceXtermReflow(element),
       reconcileRevealGeometry: (id) => this.reconcileRevealGeometry(id),
       isStoreBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
       isStoreHidden: (id) => usePanelStore.getState().panelsById[id]?.isVisible === false,
@@ -1809,6 +1814,12 @@ class TerminalInstanceService {
       }
       Object.assign(managed, addons);
       managed.terminal = terminal;
+      // A replacement Terminal brings a brand-new RenderService with its own
+      // pause state. attachGeneration doesn't move here, so without this the
+      // fresh renderer inherits the old one's give-up latch and — since it
+      // starts paused and only an observed unpause re-arms — would be denied
+      // its first repair forever (#11800).
+      resetRendererUnpauseBreaker(managed);
     } catch (error) {
       logError("[TIS] Failed to construct replacement terminal", error, { id });
       // The old instance is already disposed and `managed.terminal` may still
@@ -2981,17 +2992,32 @@ class TerminalInstanceService {
       logError(`resetRenderer failed for ${id}`, error);
     }
 
-    // Force IO re-evaluation so a DOM-renderer terminal that got stuck
-    // with _isPaused=true actually resumes drawing. Runs independently of
-    // the refresh/fit block so the user-invokable escape hatch works even
-    // when fit() throws. Clear the throttle so any follow-up automatic
-    // reflow (onWriteParsed, heartbeat, focus) fires immediately.
+    // Resume a renderer stuck at _isPaused=true so the pane actually redraws.
+    // Runs independently of the refresh/fit block so the user-invokable escape
+    // hatch works even when fit() throws. Clear the throttle so any follow-up
+    // automatic repair (onWriteParsed, heartbeat, focus) fires immediately.
     const termEl = managed.terminal.element;
     if (termEl) {
       try {
+        // The layout flush the reveal/wake sequences rely on. It cannot unpause
+        // anything on its own (#11800) — the real repair is below.
         forceXtermReflow(termEl);
       } catch (error) {
         logWarn(`forceXtermReflow failed for ${id}`, { error });
+      }
+      if (options.force) {
+        // A PERSON asked for this — the same foreground gate #11638 uses below.
+        // Their explicit "this pane is broken" signal re-arms the breaker, so a
+        // latch accrued by autonomous sweeps can't make the manual escape hatch
+        // a no-op. One user-initiated attempt can't become a retry loop.
+        resetRendererUnpauseBreaker(managed);
+        forceXtermRendererUnpause(managed.terminal);
+      } else {
+        // Automatic callers — backend recovery, the project-switch reveal, and
+        // the post-drag repair — stay inside the shared cap. Re-arming for them
+        // would clear the latch on a timer and hand the periodic sweeps a fresh
+        // budget forever, which is the loop this whole change removes.
+        attemptRendererUnpause(managed);
       }
       managed.lastReflowAt = 0;
     }

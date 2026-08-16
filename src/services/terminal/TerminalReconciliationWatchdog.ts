@@ -5,6 +5,12 @@ import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCa
 import { logDebug, logWarn } from "@/utils/logger";
 import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { hasStreamingWrites } from "./TerminalResizeController";
+import {
+  MAX_RENDERER_UNPAUSE_ATTEMPTS,
+  attemptRendererUnpause,
+  readXtermRenderPaused,
+  resetRendererUnpauseBreaker,
+} from "./TerminalReflowController";
 import type { ManagedTerminal } from "./types";
 
 // Sweep cadence. Matches the TerminalReflowController heartbeat — slow enough
@@ -77,7 +83,6 @@ export interface ReconciliationWatchdogDeps {
   isWebGLActive: (id: string) => boolean;
   shouldHaveWebGL: (managed: ManagedTerminal) => boolean;
   ensureWebGL: (id: string, managed: ManagedTerminal) => void;
-  forceReflow: (element: HTMLElement) => void;
   /**
    * Repair (#10632): alt-buffer-safe atomic reveal reconcile — a FRESH fit
    * (xterm + PTY resized together) plus a local WebGL-atlas repair, with NO
@@ -243,6 +248,10 @@ export class TerminalReconciliationWatchdog {
     for (const { id, managed } of onScreen) {
       const resizeTransitioning = this.deps.isResizeTransitioning(id);
       if (!resizeTransitioning) this.diagnoseGeometryDivergence(id, managed);
+      // Before the cooldown gate on purpose: verifying a prior unpause repair is
+      // a private-field read, and gating it behind the 6s cooldown would delay
+      // re-arming the breaker past the sweep that can actually see the outcome.
+      this.observeRendererUnpauseOutcome(id, managed, now);
       if (now - (managed.lastWatchdogRepairAt ?? 0) < WATCHDOG_REPAIR_COOLDOWN_MS) continue;
       heavyBudget -= this.reconcile(id, managed, now, heavyBudget, resizeTransitioning);
     }
@@ -499,7 +508,7 @@ export class TerminalReconciliationWatchdog {
           // a synchronized block, also unpause so convergence completes in one
           // tick (resetRenderer reflows too). Safe here — the synchronized guard
           // above is the only mid-block hazard.
-          this.unpauseIfNeeded(managed, element);
+          this.unpauseIfNeeded(id, managed, element, now);
           managed.revealPendingRepair = false;
           managed.revealPendingGeneration = undefined;
         }
@@ -602,7 +611,7 @@ export class TerminalReconciliationWatchdog {
                 }
               );
               if (this.deps.reconcileRevealGeometry(id)) {
-                this.unpauseIfNeeded(managed, element);
+                this.unpauseIfNeeded(id, managed, element, now);
               }
               return 1;
             }
@@ -611,27 +620,23 @@ export class TerminalReconciliationWatchdog {
       }
     }
 
-    // xterm render service paused on an on-screen terminal — force an IO
-    // re-evaluation so a renderer paused while the view was occluded resumes
-    // drawing. This now covers alt-buffer agent TUIs too (#10632): the old
-    // `!managed.isAltBuffer` exclusion was over-broad — the real hazard is
-    // interleaving a paint into an open DEC 2026 synchronized-output block, which
-    // `inSynchronizedBlock` already guards. A paused renderer repaints from
-    // NOTHING until unpaused, so excluding the very agent TUIs that break was the
-    // structural gap behind the recurring switch-back garble.
+    // xterm render service paused on an on-screen terminal — clear the pause so
+    // a renderer paused while the view was occluded resumes drawing. This covers
+    // alt-buffer agent TUIs too (#10632): the old `!managed.isAltBuffer`
+    // exclusion was over-broad — the real hazard is interleaving a paint into an
+    // open DEC 2026 synchronized-output block, which `inSynchronizedBlock`
+    // already guards. A paused renderer repaints from NOTHING until unpaused, so
+    // excluding the very agent TUIs that break was the structural gap behind the
+    // recurring switch-back garble.
     if (
       element &&
       element.isConnected &&
       !inSynchronizedBlock &&
       isXtermRenderPaused(managed.terminal)
     ) {
-      managed.lastWatchdogRepairAt = now;
-      logWarn(
-        "[TerminalReconciliationWatchdog] xterm render service paused for on-screen terminal — reflowing",
-        { id, isAltBuffer: managed.isAltBuffer === true }
-      );
-      this.deps.forceReflow(element);
-      return 0;
+      // Falls through to the WebGL layer when the breaker has latched — the
+      // breaker disables only this repair, not the rest of the chain.
+      if (this.repairRenderPause(id, managed, now)) return 0;
     }
 
     if (this.deps.shouldHaveWebGL(managed) && !this.deps.isWebGLActive(id)) {
@@ -652,15 +657,105 @@ export class TerminalReconciliationWatchdog {
    * Unpause a still-paused renderer right after a successful reveal reconcile
    * (#10632). Only called from the reveal-pending / geometry branches, which
    * have already established we are NOT inside a DEC 2026 synchronized-output
-   * block — so the reflow can't interleave a paint with a buffered range. This
-   * is what makes the watchdog's reveal recovery single-tick (geometry re-fit +
-   * unpause together), matching a manual Redraw rather than dribbling the two
-   * halves across separate cooldown windows.
+   * block — so the repaint can't interleave with a buffered range. This is what
+   * makes the watchdog's reveal recovery single-tick (geometry re-fit + unpause
+   * together), matching a manual Redraw rather than dribbling the two halves
+   * across separate cooldown windows.
+   *
+   * Shares the standalone branch's attempt counter (#11800). The geometry repair
+   * that just ran IS a real, frame-persisted change that may eventually drive a
+   * legitimate IO delivery — but waiting on one is exactly what left panes blank,
+   * and an escalation outside the cap would just be a second unbounded loop.
    */
-  private unpauseIfNeeded(managed: ManagedTerminal, element: HTMLElement | undefined): void {
+  private unpauseIfNeeded(
+    id: string,
+    managed: ManagedTerminal,
+    element: HTMLElement | undefined,
+    now: number
+  ): void {
     if (!element || !element.isConnected) return;
     if (!isXtermRenderPaused(managed.terminal)) return;
-    this.deps.forceReflow(element);
+    this.repairRenderPause(id, managed, now);
+  }
+
+  /**
+   * Bounded renderer-unpause repair (#11800). Returns whether this branch handled
+   * the tick; `false` means the breaker has latched and the caller should fall
+   * through to the cheaper layers below.
+   *
+   * Stays a LIGHT repair (the caller returns 0). It marks rows dirty and
+   * repaints, but triggers no wake/restore IPC, no WebGL context attach, no PTY
+   * resize and no scrollback re-wrap — the things the heavy budget exists to
+   * ration. Charging it heavy would cap recovery at two blank panes per tick and
+   * spend budget the WebGL layer needs; the cooldown and the attempt cap bound
+   * its cost on their own.
+   */
+  private repairRenderPause(id: string, managed: ManagedTerminal, now: number): boolean {
+    // Accounting lives in attemptRendererUnpause because the reflow controller's
+    // write/heartbeat/focus paths share this same cap — see its doc comment.
+    const outcome = attemptRendererUnpause(managed);
+    if (outcome === "capped") return false;
+    if (outcome === "exhausted") {
+      logWarn(
+        "[TerminalReconciliationWatchdog] xterm renderer still paused after repeated unpause repairs — giving up (circuit breaker)",
+        {
+          id,
+          limit: MAX_RENDERER_UNPAUSE_ATTEMPTS,
+          isAltBuffer: managed.isAltBuffer === true,
+        }
+      );
+      return false;
+    }
+
+    managed.lastWatchdogRepairAt = now;
+    logWarn(
+      "[TerminalReconciliationWatchdog] xterm render service paused for on-screen terminal — forcing unpause",
+      {
+        id,
+        attempt: managed.rendererUnpauseAttempts,
+        limit: MAX_RENDERER_UNPAUSE_ATTEMPTS,
+        // The real outcome, not an assertion of success: `false` means the
+        // private API drifted or the repaint threw.
+        repairIssued: outcome === "issued",
+        isAltBuffer: managed.isAltBuffer === true,
+      }
+    );
+    return true;
+  }
+
+  /**
+   * Closed-loop half of the renderer-unpause repair (#11800). Runs before the
+   * repair cooldown so recovery is observed on the very next 3s sweep instead of
+   * waiting out the 6s window.
+   *
+   * A same-tick re-read after the repair would only confirm our own write. A
+   * later sweep is the first point at which Chromium has had frames to render
+   * and xterm's observer a chance to re-pause, so it is the only honest signal
+   * available — and it proves the pause is no longer set, NOT that pixels
+   * appeared. The log says exactly that.
+   *
+   * Uses the THREE-state read deliberately. `isXtermRenderPaused` collapses API
+   * drift to `false` — correct for deciding whether to repair (skip the check,
+   * let the other layers reconcile) but catastrophic here: it would read a
+   * missing private field as proof of recovery and wipe the accrued attempts,
+   * turning the one signal that bounds the loop into a fail-open.
+   */
+  private observeRendererUnpauseOutcome(id: string, managed: ManagedTerminal, now: number): void {
+    if (!managed.rendererUnpauseAttempts) return;
+    if (managed.rendererUnpauseGeneration !== managed.attachGeneration) return;
+    // The reflow controller registers its visibilitychange/reveal listeners
+    // BEFORE this class does, so on those events its repair runs in the same
+    // event turn, immediately ahead of this read. Requiring a full sweep to have
+    // elapsed is what makes the observation about the renderer rather than about
+    // a sibling's just-landed write.
+    if (now - (managed.rendererUnpauseAttemptedAt ?? 0) < WATCHDOG_INTERVAL_MS) return;
+    if (readXtermRenderPaused(managed.terminal) !== false) return;
+    logDebug("[TerminalReconciliationWatchdog] xterm render pause no longer set after repair", {
+      id,
+      attempts: managed.rendererUnpauseAttempts,
+      gaveUp: managed.rendererUnpauseGaveUp === true,
+    });
+    resetRendererUnpauseBreaker(managed);
   }
 
   /**
