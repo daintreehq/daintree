@@ -32,6 +32,21 @@ import { actionService } from "@/services/ActionService";
 // genuinely stalls, per the CLAUDE.md runtime-signals promote-trigger.
 const TOPOLOGY_DARK_ESCALATION_MS = 30_000;
 
+// The first worktree fetch is triggered by the worktree port becoming ready,
+// and nothing bounds that wait: when main never brokers a port, `isLoading`
+// stays true and the sidebar renders its skeleton forever with no way to reach
+// the error banner (#11818). Main now reports every no-port outcome it can see,
+// but the report itself can still be lost (app view swapped mid-boot, renderer
+// listener not yet wired), so this is the renderer's own floor under the hang.
+// Longer than the 30s a single workspace-host command may take, so a slow but
+// healthy packaged-Windows cold start is never cut short.
+const INITIAL_PORT_READY_TIMEOUT_MS = 45_000;
+
+// Owned by this file so the ready-after-timeout path can tell its own message
+// apart from a newer one main pushed, and clear only the former.
+const INITIAL_PORT_TIMEOUT_MESSAGE =
+  "The workspace service didn't finish connecting, so worktrees couldn't load.";
+
 export const WorktreeStoreContext = createContext<WorktreeViewStoreApi | null>(null);
 
 interface WorktreeUpdateEvent {
@@ -746,10 +761,73 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     cleanups.push(clearTopologyEscalation);
 
     // Fetch on initial ready and on every port re-attach (host restart / re-broker)
-    if (worktreePort.isReady()) {
+    let initialPortReady = worktreePort.isReady();
+    let initialPortTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function clearInitialPortTimer() {
+      if (initialPortTimer !== null) {
+        clearTimeout(initialPortTimer);
+        initialPortTimer = null;
+      }
+    }
+
+    function armInitialPortTimer() {
+      if (initialPortTimer !== null || initialPortReady) return;
+      // Only a window bound to a project ever has a port brokered for it — an
+      // unbound picker view legitimately never sees one, so arming there would
+      // raise a banner for working software.
+      if (!useProjectStore.getState().currentProject) return;
+      initialPortTimer = setTimeout(() => {
+        initialPortTimer = null;
+        if (initialPortReady || worktreePort.isReady()) return;
+        // A report from main describes the failure better than we can.
+        if (useProjectStore.getState().worktreeLoadError !== null) return;
+        useProjectStore.getState().setWorktreeLoadError(INITIAL_PORT_TIMEOUT_MESSAGE);
+        // The banner renders *above* the skeleton, so the skeleton has to be
+        // settled too or Retry ends up stacked on a still-spinning sidebar.
+        store.getState().setLoading(false);
+      }, INITIAL_PORT_READY_TIMEOUT_MS);
+    }
+
+    function handleInitialPortReady() {
+      initialPortReady = true;
+      clearInitialPortTimer();
+      // Clear only the message this file owns: a newer error from main
+      // describes something the refetch below won't resolve.
+      if (useProjectStore.getState().worktreeLoadError === INITIAL_PORT_TIMEOUT_MESSAGE) {
+        useProjectStore.getState().setWorktreeLoadError(null);
+      }
       fetchInitialState();
     }
-    cleanups.push(worktreePort.onReady(fetchInitialState));
+
+    if (initialPortReady) {
+      fetchInitialState();
+    } else {
+      armInitialPortTimer();
+    }
+    cleanups.push(worktreePort.onReady(handleInitialPortReady));
+    cleanups.push(clearInitialPortTimer);
+
+    // `currentProject` can hydrate after this effect runs, so the arming
+    // decision is re-taken on change rather than only at mount. Scoped to the
+    // pre-ready window: once a port has arrived, the disconnect/fatal handlers
+    // below own the sidebar's state.
+    cleanups.push(
+      useProjectStore.subscribe((state, prev) => {
+        if (initialPortReady) return;
+        if (
+          state.worktreeLoadError !== prev.worktreeLoadError &&
+          state.worktreeLoadError !== null
+        ) {
+          // Main reported a failed load, so no port is coming for it — settle
+          // the skeleton rather than leaving the banner over a live spinner.
+          clearInitialPortTimer();
+          store.getState().setLoading(false);
+          return;
+        }
+        if (state.currentProject !== prev.currentProject) armInitialPortTimer();
+      })
+    );
 
     // Surface a "Reconnecting…" state the moment the workspace host dies, so
     // the UI doesn't appear frozen while we wait (up to 2–4s) for the
@@ -769,6 +847,10 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // fetch rather than a silent wake refresh.
     cleanups.push(
       worktreePort.onFatalDisconnect(() => {
+        // A confirmed fatal disconnect is a better description than the
+        // initial-connection watchdog's, so retire the watchdog rather than
+        // letting it overwrite this later.
+        clearInitialPortTimer();
         store
           .getState()
           .setFatalError(
