@@ -18,7 +18,7 @@
 // paint half here, with its grid owned by the app's SIGWINCH redraw and the
 // ResizeObserver-driven resize on reattach.
 //
-// The `reconcileRevealGeometry` / `forceUnpauseRenderer` deps mirror what the real
+// The `reconcileRevealGeometry` dep mirrors what the real
 // TerminalInstanceService does, INCLUDING the present-ordering guarantee:
 // reconcileGeometryFresh only succeeds against a foreground-renderable host
 // (checkVisibility + non-zero box), so a repaint is never issued into an
@@ -46,7 +46,6 @@ import {
   unlockSidebarHydration,
 } from "@/lib/layoutTransitionLock";
 import type { ManagedTerminal } from "../types";
-import { forceXtermRendererUnpause } from "../TerminalReflowController";
 
 vi.mock("@/utils/logger", () => ({
   logDebug: vi.fn(),
@@ -199,11 +198,6 @@ function buildDeps(
     isWebGLActive: vi.fn(() => true),
     shouldHaveWebGL: vi.fn(() => false),
     ensureWebGL: vi.fn(),
-    // The REAL primitive, not a stand-in: it is the half #11800 proved was a
-    // structural no-op, so driving it end-to-end here is the point.
-    forceUnpauseRenderer: vi.fn((terminal: ManagedTerminal["terminal"]) =>
-      forceXtermRendererUnpause(terminal)
-    ),
     // Mirror TerminalInstanceService.reconcileRevealGeometry +
     // TerminalResizeController.reconcileGeometryFresh: atomic xterm+PTY re-fit to
     // the FRESH container measurement plus a local atlas repair — but ONLY when
@@ -412,7 +406,7 @@ describe("#10632 switch-back redraw — closed-loop convergence", () => {
     vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
     // Deferred: a repaint now would interleave with the buffered range.
     expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
-    expect(deps.forceUnpauseRenderer).not.toHaveBeenCalled();
+    expect(agent.paused).toBe(true);
     expect(agent.cols).toBe(120);
 
     // Block closes — next tick converges.

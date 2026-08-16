@@ -5,6 +5,12 @@ import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCa
 import { logDebug, logWarn } from "@/utils/logger";
 import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { hasStreamingWrites } from "./TerminalResizeController";
+import {
+  MAX_RENDERER_UNPAUSE_ATTEMPTS,
+  attemptRendererUnpause,
+  readXtermRenderPaused,
+  resetRendererUnpauseBreaker,
+} from "./TerminalReflowController";
 import type { ManagedTerminal } from "./types";
 
 // Sweep cadence. Matches the TerminalReflowController heartbeat — slow enough
@@ -31,14 +37,6 @@ export const WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK = 2;
 // converge, stop repairing and log once, matching TerminalWebGLManager's
 // LOSS_THRESHOLD one-way-trip pattern. Reset on genuine convergence or re-attach.
 export const WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS = 3;
-
-// Renderer-unpause repairs allowed for one terminal before its breaker trips
-// (#11800). xterm's `_isPaused` is only ever written by its own
-// IntersectionObserver, so the repair forces the flag and repaints; if
-// something re-pauses the pane on every sweep, retrying forever just burns a
-// full-grid repaint each time and logs a repair that never took. Reset when a
-// later sweep observes the renderer unpaused, or on re-attach.
-export const WATCHDOG_MAX_RENDERER_UNPAUSE_ATTEMPTS = 3;
 
 /** Narrow structural type for the private xterm.js render-pause flag. */
 interface XtermCoreRenderPause {
@@ -85,13 +83,6 @@ export interface ReconciliationWatchdogDeps {
   isWebGLActive: (id: string) => boolean;
   shouldHaveWebGL: (managed: ManagedTerminal) => boolean;
   ensureWebGL: (id: string, managed: ManagedTerminal) => void;
-  /**
-   * Repair (#11800): clear xterm's IntersectionObserver-driven render pause and
-   * repaint. Returns whether the repair was ISSUED — a `false` (drifted private
-   * API, or a throwing refresh) still counts as an attempt so a dependency that
-   * can never succeed can't restart the unbounded retry loop this replaced.
-   */
-  forceUnpauseRenderer: (terminal: Terminal) => boolean;
   /**
    * Repair (#10632): alt-buffer-safe atomic reveal reconcile — a FRESH fit
    * (xterm + PTY resized together) plus a local WebGL-atlas repair, with NO
@@ -700,43 +691,32 @@ export class TerminalReconciliationWatchdog {
    * its cost on their own.
    */
   private repairRenderPause(id: string, managed: ManagedTerminal, now: number): boolean {
-    // A fresh incarnation reusing this id starts clean — a previous instance's
-    // give-up can't describe a renderer it never owned (mirrors the geometry
-    // breaker's generation guard).
-    if (managed.rendererUnpauseGeneration !== managed.attachGeneration) {
-      managed.rendererUnpauseGeneration = managed.attachGeneration;
-      managed.rendererUnpauseAttempts = 0;
-      managed.rendererUnpauseGaveUp = false;
-    }
-    if (managed.rendererUnpauseGaveUp) return false;
-
-    const attempts = managed.rendererUnpauseAttempts ?? 0;
-    if (attempts >= WATCHDOG_MAX_RENDERER_UNPAUSE_ATTEMPTS) {
-      managed.rendererUnpauseGaveUp = true;
+    // Accounting lives in attemptRendererUnpause because the reflow controller's
+    // write/heartbeat/focus paths share this same cap — see its doc comment.
+    const outcome = attemptRendererUnpause(managed);
+    if (outcome === "capped") return false;
+    if (outcome === "exhausted") {
       logWarn(
         "[TerminalReconciliationWatchdog] xterm renderer still paused after repeated unpause repairs — giving up (circuit breaker)",
         {
           id,
-          attempts,
-          limit: WATCHDOG_MAX_RENDERER_UNPAUSE_ATTEMPTS,
+          limit: MAX_RENDERER_UNPAUSE_ATTEMPTS,
           isAltBuffer: managed.isAltBuffer === true,
         }
       );
       return false;
     }
 
-    managed.rendererUnpauseAttempts = attempts + 1;
     managed.lastWatchdogRepairAt = now;
-    // Counted even when the repair reports it could not run: a drifted or
-    // throwing primitive is precisely the case that must not retry forever.
-    const repairIssued = this.deps.forceUnpauseRenderer(managed.terminal);
     logWarn(
       "[TerminalReconciliationWatchdog] xterm render service paused for on-screen terminal — forcing unpause",
       {
         id,
         attempt: managed.rendererUnpauseAttempts,
-        limit: WATCHDOG_MAX_RENDERER_UNPAUSE_ATTEMPTS,
-        repairIssued,
+        limit: MAX_RENDERER_UNPAUSE_ATTEMPTS,
+        // The real outcome, not an assertion of success: `false` means the
+        // private API drifted or the repaint threw.
+        repairIssued: outcome === "issued",
         isAltBuffer: managed.isAltBuffer === true,
       }
     );
@@ -753,18 +733,23 @@ export class TerminalReconciliationWatchdog {
    * and xterm's observer a chance to re-pause, so it is the only honest signal
    * available — and it proves the pause is no longer set, NOT that pixels
    * appeared. The log says exactly that.
+   *
+   * Uses the THREE-state read deliberately. `isXtermRenderPaused` collapses API
+   * drift to `false` — correct for deciding whether to repair (skip the check,
+   * let the other layers reconcile) but catastrophic here: it would read a
+   * missing private field as proof of recovery and wipe the accrued attempts,
+   * turning the one signal that bounds the loop into a fail-open.
    */
   private observeRendererUnpauseOutcome(id: string, managed: ManagedTerminal): void {
     if (!managed.rendererUnpauseAttempts) return;
     if (managed.rendererUnpauseGeneration !== managed.attachGeneration) return;
-    if (isXtermRenderPaused(managed.terminal)) return;
+    if (readXtermRenderPaused(managed.terminal) !== false) return;
     logDebug("[TerminalReconciliationWatchdog] xterm render pause no longer set after repair", {
       id,
       attempts: managed.rendererUnpauseAttempts,
       gaveUp: managed.rendererUnpauseGaveUp === true,
     });
-    managed.rendererUnpauseAttempts = 0;
-    managed.rendererUnpauseGaveUp = false;
+    resetRendererUnpauseBreaker(managed);
   }
 
   /**

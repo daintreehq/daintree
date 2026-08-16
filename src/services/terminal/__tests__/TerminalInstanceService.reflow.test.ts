@@ -141,10 +141,11 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
 
   // Count renderer-unpause repairs by watching the private pause flag clear —
   // the one effect every trigger path shares, and robust against tests that
-  // reassign `terminal.refresh`. Terminals start PAUSED because that is the
-  // only state in which a repair has anything to do.
+  // reassign `terminal.refresh`. Terminals start UNPAUSED (the healthy state
+  // this mixed fixture's resetRenderer tests need); repair tests call
+  // `pauseRenderer` so their guards are proven, not assumed.
   let unpauses = 0;
-  let paused = true;
+  let paused = false;
   const renderService = {
     get _isPaused(): boolean {
       return paused;
@@ -220,17 +221,30 @@ function paddingHistory(managed: ManagedTerminal): string[] {
   return el.__paddingTopHistory;
 }
 
+/**
+ * Assert a forced layout flush ran: forceXtermReflow writes a temporary padding
+ * value and writes the original back. Checks that invariant rather than the
+ * specific jitter literal, which would just restate the implementation.
+ */
+function expectLayoutFlush(managed: ManagedTerminal): void {
+  const history = paddingHistory(managed);
+  expect(history.length).toBeGreaterThanOrEqual(2);
+  const [temporary, restored] = history.slice(-2);
+  expect(temporary).not.toBe(restored);
+}
+
 /** Renderer-unpause repairs issued against this terminal. */
 function unpauseCount(managed: ManagedTerminal): number {
   return (managed.terminal.element as unknown as { __unpauses: () => number }).__unpauses();
 }
 
 /**
- * Re-arm the pause. A successful repair clears the flag, so without this a
- * follow-up trigger would skip because the renderer is already running rather
- * than for the reason under test.
+ * Put the renderer in the paused state — the only one in which a repair has
+ * anything to do. Also used to RE-ARM between calls: a successful repair clears
+ * the flag, so without it a follow-up trigger would skip because the renderer is
+ * already running rather than for the reason under test.
  */
-function repause(managed: ManagedTerminal): void {
+function pauseRenderer(managed: ManagedTerminal): void {
   (managed.terminal.element as unknown as { __repause: () => void }).__repause();
 }
 
@@ -277,6 +291,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
   it("unpauses a visible standard terminal and records lastReflowAt", () => {
     const managed = makeManaged();
+    pauseRenderer(managed);
     service.maybeReflowTerminal(managed);
 
     expect(unpauseCount(managed)).toBe(1);
@@ -285,11 +300,12 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
   it("throttles per-terminal repairs within 250ms", () => {
     const managed = makeManaged();
+    pauseRenderer(managed);
     service.maybeReflowTerminal(managed);
 
     // Re-arm: otherwise the second call would skip because the renderer is
     // already running, not because of the throttle.
-    repause(managed);
+    pauseRenderer(managed);
     service.maybeReflowTerminal(managed);
 
     expect(unpauseCount(managed)).toBe(1);
@@ -297,9 +313,10 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
   it("allows a repair again after the throttle window", () => {
     const managed = makeManaged();
+    pauseRenderer(managed);
     service.maybeReflowTerminal(managed);
 
-    repause(managed);
+    pauseRenderer(managed);
     // Simulate throttle window passing
     managed.lastReflowAt = (managed.lastReflowAt ?? 0) - 500;
     service.maybeReflowTerminal(managed);
@@ -309,6 +326,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
   it("unpauses agent terminals — the xterm pause gate is renderer-agnostic", () => {
     const managed = makeManaged({ kind: "terminal", launchAgentId: "claude" });
+    pauseRenderer(managed);
     expect(managed.runtimeAgentId).toBe("claude");
 
     service.maybeReflowTerminal(managed);
@@ -319,24 +337,28 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
   it("skips invisible terminals", () => {
     const managed = makeManaged({ isVisible: false });
+    pauseRenderer(managed);
     service.maybeReflowTerminal(managed);
     expect(unpauseCount(managed)).toBe(0);
   });
 
   it("skips alt-buffer (TUI) terminals", () => {
     const managed = makeManaged({ isAltBuffer: true });
+    pauseRenderer(managed);
     service.maybeReflowTerminal(managed);
     expect(unpauseCount(managed)).toBe(0);
   });
 
   it("skips terminals that are mid-attach", () => {
     const managed = makeManaged({ isAttaching: true });
+    pauseRenderer(managed);
     service.maybeReflowTerminal(managed);
     expect(unpauseCount(managed)).toBe(0);
   });
 
   it("skips when terminal has no rendered element yet", () => {
     const managed = makeManaged();
+    pauseRenderer(managed);
     (managed.terminal as unknown as { element: HTMLElement | undefined }).element = undefined;
     service.maybeReflowTerminal(managed);
     // lastReflowAt not set because we short-circuited on missing element
@@ -345,6 +367,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
   it("skips — and does not stamp throttle — when element is detached", () => {
     const managed = makeManaged();
+    pauseRenderer(managed);
     // Disconnect from document
     managed.hostElement.remove();
     expect((managed.terminal.element as HTMLElement).isConnected).toBe(false);
@@ -358,6 +381,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
   it("skips — and does not stamp throttle — when synchronized output mode is active", () => {
     const managed = makeManaged();
+    pauseRenderer(managed);
     setSyncMode(managed, true);
 
     service.maybeReflowTerminal(managed);
@@ -369,6 +393,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
   it("unpauses when synchronized output mode is false", () => {
     const managed = makeManaged();
+    pauseRenderer(managed);
     setSyncMode(managed, false);
 
     service.maybeReflowTerminal(managed);
@@ -378,6 +403,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
   it("does not throttle the post-ESU repair after a BSU skip", () => {
     const managed = makeManaged();
+    pauseRenderer(managed);
     setSyncMode(managed, true);
     service.maybeReflowTerminal(managed);
     expect(unpauseCount(managed)).toBe(0);
@@ -421,7 +447,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(repair).toHaveBeenCalledWith("t1");
     // DOM-renderer fallback still repaints the targeted pane.
     expect(term.refresh).toHaveBeenCalledWith(0, 23);
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expectLayoutFlush(managed);
     // Throttle is cleared so the next onWriteParsed/heartbeat tick
     // reflows immediately.
     expect(managed.lastReflowAt).toBe(0);
@@ -454,7 +480,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect(term.clearTextureAtlas).not.toHaveBeenCalled();
     expect(term.refresh).not.toHaveBeenCalled();
     // forceXtermReflow still fires and the throttle is still cleared.
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expectLayoutFlush(managed);
     expect(managed.lastReflowAt).toBe(0);
   });
 
@@ -479,7 +505,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
 
     expect(() => service.resetRenderer("t1")).not.toThrow();
     // The escape hatch — forceXtermReflow — must still run even if fit throws.
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expectLayoutFlush(managed);
     expect(managed.lastReflowAt).toBe(0);
     // Even on the error path, Redraw never flushes the shared atlas.
     expect(term.clearTextureAtlas).not.toHaveBeenCalled();
@@ -595,7 +621,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     // settled-strategy split.
     expect(fit).not.toHaveBeenCalled();
     // The escape hatch still runs so a paused renderer resumes drawing.
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expectLayoutFlush(managed);
   });
 
   it("forced resetRenderer still runs forceXtermReflow when the reconcile throws", () => {
@@ -615,7 +641,7 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     // either way rather than dropped.
     expect(managed.revealPendingRepair).toBe(true);
     expect(managed.revealPendingGeneration).toBe(managed.attachGeneration);
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expectLayoutFlush(managed);
     expect(managed.lastReflowAt).toBe(0);
   });
 
@@ -802,6 +828,7 @@ describe("TerminalInstanceService reflowHeartbeatTimer visibility gate", () => {
   it("skips repairs while document is hidden", () => {
     visibilityState = "hidden";
     const managed = makeManaged();
+    pauseRenderer(managed);
     service.instances.set("t1", managed);
 
     vi.advanceTimersByTime(3000);
@@ -811,6 +838,7 @@ describe("TerminalInstanceService reflowHeartbeatTimer visibility gate", () => {
 
   it("performs repairs on heartbeat when visible", () => {
     const managed = makeManaged();
+    pauseRenderer(managed);
     service.instances.set("t1", managed);
 
     vi.advanceTimersByTime(3000);
@@ -820,6 +848,7 @@ describe("TerminalInstanceService reflowHeartbeatTimer visibility gate", () => {
 
   it("heartbeat does not repair or stamp throttle while sync block is open", () => {
     const managed = makeManaged();
+    pauseRenderer(managed);
     setSyncMode(managed, true);
     service.instances.set("t1", managed);
 
@@ -833,6 +862,7 @@ describe("TerminalInstanceService reflowHeartbeatTimer visibility gate", () => {
   it("resumes repairs when visibility transitions hidden → visible", () => {
     visibilityState = "hidden";
     const managed = makeManaged();
+    pauseRenderer(managed);
     service.instances.set("t1", managed);
 
     vi.advanceTimersByTime(3000);

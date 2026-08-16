@@ -3,20 +3,32 @@ import type { ManagedTerminal } from "./types";
 import { logWarn } from "@/utils/logger";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 
-type XtermCoreRenderPause = {
-  _renderService?: {
-    _isPaused?: boolean;
-  };
+type XtermRenderServicePause = {
+  _isPaused?: boolean;
+  /** xterm's own resume transition — see forceXtermRendererUnpause. */
+  _handleIntersectionChange?: (entry: IntersectionObserverEntry) => void;
 };
+
+type XtermCoreRenderPause = {
+  _renderService?: XtermRenderServicePause;
+};
+
+// Automatic renderer-unpause repairs allowed for one terminal before the
+// breaker trips (#11800). xterm's `_isPaused` is written only by its own
+// IntersectionObserver, so the repair forces the resume; if something re-pauses
+// the pane every sweep, retrying forever just burns a full-grid repaint each
+// time. Mirrors WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS and
+// TerminalWebGLManager's LOSS_THRESHOLD one-way-trip pattern.
+export const MAX_RENDERER_UNPAUSE_ATTEMPTS = 3;
 
 /**
  * Three-state read of xterm's private IntersectionObserver pause flag (same
  * `_core` escape hatch as `getXtermCellDimensions` / `isXtermRenderPaused`).
- * Returns `undefined` when the field is missing (API drift) so callers can
- * fall back to the unconditional reflow path — unlike the watchdog's
- * boolean read, which treats drift as not-paused.
+ * Returns `undefined` when the field is missing (API drift), which callers must
+ * treat as "don't know" — unlike the watchdog's boolean read, which collapses
+ * drift to not-paused so the rest of the chain keeps reconciling.
  */
-function readXtermRenderPaused(terminal: Terminal): boolean | undefined {
+export function readXtermRenderPaused(terminal: Terminal): boolean | undefined {
   try {
     const isPaused = (terminal as Terminal & { _core?: XtermCoreRenderPause })._core?._renderService
       ?._isPaused;
@@ -62,20 +74,92 @@ export function forceXtermReflow(element: HTMLElement): void {
  * recovered, which only a later observation can establish.
  */
 export function forceXtermRendererUnpause(terminal: Terminal): boolean {
-  let renderService: { _isPaused?: boolean } | undefined;
+  let renderService: XtermRenderServicePause | undefined;
   try {
     renderService = (terminal as Terminal & { _core?: XtermCoreRenderPause })._core?._renderService;
     if (renderService?._isPaused !== true) return false;
-    renderService._isPaused = false;
+    // Prefer driving xterm's OWN resume transition. Clearing the flag and
+    // repainting is not equivalent: `_handleIntersectionChange` also notifies
+    // the renderer of visibility, measures char dimensions if they were never
+    // valid, and — the one that actually bites — flushes `_pausedResizeTask`,
+    // the renderer resize queued when `resize()` ran while paused. That is
+    // exactly the reveal case (geometry re-fit, then unpause), so skipping it
+    // would repaint at the old surface size.
+    const resume = renderService._handleIntersectionChange;
+    if (typeof resume === "function") {
+      resume.call(renderService, {
+        isIntersecting: true,
+        intersectionRatio: 1,
+      } as IntersectionObserverEntry);
+    } else {
+      renderService._isPaused = false;
+    }
+    // Belt and braces: the handler only repaints when `_needsFullRefresh` was
+    // set, and the fallback above repaints nothing at all.
     terminal.refresh(0, Math.max(0, terminal.rows - 1));
     return true;
   } catch (err) {
     // Leave the flag as we found it so the watchdog re-detects the pause and
-    // retries under its attempt cap, rather than believing this pane recovered.
-    if (renderService?._isPaused === false) renderService._isPaused = true;
+    // retries under the attempt cap, rather than believing this pane recovered.
+    // Read defensively — a throwing getter is how we got here in the first place.
+    try {
+      if (renderService?._isPaused === false) renderService._isPaused = true;
+    } catch {
+      // Nothing more to do; the breaker bounds the retries either way.
+    }
     logWarn("forceXtermRendererUnpause failed", { error: err });
     return false;
   }
+}
+
+/**
+ * Outcome of a bounded unpause attempt. `capped` means the breaker was already
+ * latched (silent); `exhausted` means THIS call tripped it.
+ */
+export type RendererUnpauseOutcome = "issued" | "failed" | "exhausted" | "capped";
+
+/**
+ * The single bounded entry point for every AUTOMATIC renderer-unpause repair —
+ * the watchdog sweep, the per-write path, the 3s heartbeat, and focus/visibility
+ * recovery (#11800).
+ *
+ * Accounting lives here rather than in any one caller because a cap only bounds
+ * the loop if every autonomous path goes through it. The reflow controller's
+ * heartbeat runs at the watchdog's own 3s cadence and its write path at 250ms,
+ * so an uncounted repair there would keep a pane that IO re-pauses in exactly
+ * the full-grid repaint loop this cap exists to stop.
+ */
+export function attemptRendererUnpause(managed: ManagedTerminal): RendererUnpauseOutcome {
+  // A fresh incarnation reusing this id starts clean — a previous instance's
+  // give-up can't describe a renderer it never owned.
+  if (managed.rendererUnpauseGeneration !== managed.attachGeneration) {
+    resetRendererUnpauseBreaker(managed);
+  }
+  if (managed.rendererUnpauseGaveUp === true) return "capped";
+
+  const attempts = managed.rendererUnpauseAttempts ?? 0;
+  if (attempts >= MAX_RENDERER_UNPAUSE_ATTEMPTS) {
+    managed.rendererUnpauseGaveUp = true;
+    return "exhausted";
+  }
+
+  managed.rendererUnpauseAttempts = attempts + 1;
+  // A `false` still consumed an attempt: a drifted or throwing primitive is
+  // precisely the case that must not retry forever.
+  return forceXtermRendererUnpause(managed.terminal) ? "issued" : "failed";
+}
+
+/**
+ * Re-arm the breaker. Called on an observed unpause, on re-attach, when the
+ * terminal instance is replaced (a new RenderService has its own pause state and
+ * must not inherit a latch), and on an explicit user Redraw — the events that
+ * genuinely change whether a repair could succeed. Deliberately NOT time-based:
+ * a periodic re-arm would just restore the slow repaint loop.
+ */
+export function resetRendererUnpauseBreaker(managed: ManagedTerminal): void {
+  managed.rendererUnpauseGeneration = managed.attachGeneration;
+  managed.rendererUnpauseAttempts = 0;
+  managed.rendererUnpauseGaveUp = false;
 }
 
 // Throttle per-terminal repairs to bound repaint cost under write bursts while
@@ -235,21 +319,21 @@ export class TerminalReflowController {
     // (`undefined`) leaves no flag to clear — falling through on drift, as the
     // reflow era did for #5092, would stamp the throttle for a guaranteed no-op.
     if (readXtermRenderPaused(managed.terminal) !== true) return;
-    // The watchdog owns the breaker because it's the layer that can observe
-    // whether a repair took (#11800). Honour its give-up so this path can't
-    // restart a retry loop it already bounded.
-    if (
-      managed.rendererUnpauseGaveUp === true &&
-      managed.rendererUnpauseGeneration === managed.attachGeneration
-    ) {
-      return;
-    }
 
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     if (now - (managed.lastReflowAt ?? 0) < REFLOW_THROTTLE_MS) return;
     managed.lastReflowAt = now;
 
-    forceXtermRendererUnpause(managed.terminal);
+    // Shares the watchdog's cap: this path fires far more often (every write,
+    // every 3s heartbeat, every focus), so leaving it uncounted would let a pane
+    // that IO keeps re-pausing repaint forever no matter what the watchdog
+    // decided (#11800).
+    if (attemptRendererUnpause(managed) === "exhausted") {
+      logWarn(
+        "[TerminalReflowController] xterm renderer still paused after repeated unpause repairs — giving up (circuit breaker)",
+        { id: managed.id, limit: MAX_RENDERER_UNPAUSE_ATTEMPTS }
+      );
+    }
   }
 
   dispose(): void {

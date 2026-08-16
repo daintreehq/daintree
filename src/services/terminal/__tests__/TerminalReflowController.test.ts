@@ -107,11 +107,41 @@ describe("forceXtermReflow", () => {
   // Retained only as coverage for the legacy layout primitive — the reveal and
   // wake paths still call it for its forced layout. It cannot unpause a
   // renderer (#11800); that is forceXtermRendererUnpause's job.
-  it("toggles paddingTop to 0.01px and restores it", () => {
+  it("writes a temporary padding value, forces layout, and restores the original", () => {
     const el = document.createElement("div");
     el.style.paddingTop = "5px";
+
+    const writes: string[] = [];
+    // Back the property with a local rather than delegating to the original
+    // accessor: paddingTop lives on CSSStyleDeclaration.prototype, so an
+    // own-property descriptor lookup returns undefined and the getter would
+    // always read "".
+    let current = el.style.paddingTop;
+    Object.defineProperty(el.style, "paddingTop", {
+      configurable: true,
+      get: (): string => current,
+      set(value: string): void {
+        writes.push(value);
+        current = value;
+      },
+    });
+    let layoutReads = 0;
+    Object.defineProperty(el, "offsetHeight", {
+      configurable: true,
+      get: () => {
+        layoutReads += 1;
+        return 0;
+      },
+    });
+
     forceXtermReflow(el);
-    // Restored to original after the read.
+
+    // Invariants, not the jitter literal: a value DIFFERENT from the original
+    // must land, layout must be forced while it is applied, and the original
+    // must come back. Asserting "0.01px" would just restate the implementation.
+    expect(writes).toHaveLength(2);
+    expect(writes[0]).not.toBe("5px");
+    expect(layoutReads).toBeGreaterThan(0);
     expect(el.style.paddingTop).toBe("5px");
   });
 });
@@ -319,8 +349,11 @@ describe("TerminalReflowController.maybeReflow", () => {
     controller.maybeReflow(managed);
     expect(unpauseCount(managed)).toBe(0);
 
-    // A give-up from a previous incarnation does not apply.
+    // A give-up from a previous incarnation does not apply. Clear the throttle
+    // too — the capped call above still stamped it, so without this the second
+    // call would be suppressed for the wrong reason.
     managed.rendererUnpauseGeneration = managed.attachGeneration - 1;
+    managed.lastReflowAt = 0;
     controller.maybeReflow(managed);
     expect(unpauseCount(managed)).toBe(1);
   });
