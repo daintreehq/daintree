@@ -4,6 +4,7 @@ import {
   REFLOW_HEARTBEAT_MS,
   TerminalReflowController,
   forceXtermReflow,
+  forceXtermRendererUnpause,
 } from "../TerminalReflowController";
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import type { ManagedTerminal } from "../types";
@@ -20,26 +21,15 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
   hostElement.appendChild(termEl);
   document.body.appendChild(hostElement);
 
-  // Track padding writes — the only observable effect of forceXtermReflow.
-  const paddingTopHistory: string[] = [];
-  const style = termEl.style;
-  const orig = Object.getOwnPropertyDescriptor(style, "paddingTop");
-  Object.defineProperty(style, "paddingTop", {
-    configurable: true,
-    get(): string {
-      return orig?.get?.call(style) ?? "";
-    },
-    set(value: string): void {
-      paddingTopHistory.push(value);
-      orig?.set?.call(style, value);
-    },
-  });
-  (termEl as HTMLDivElement & { __paddingTopHistory: string[] }).__paddingTopHistory =
-    paddingTopHistory;
-
   const managed = {
     terminal: {
       element: termEl,
+      rows: 24,
+      // The observable effect of a repair: the pause flag clears and xterm is
+      // told to repaint. Terminals start PAUSED because that is the only state
+      // in which the controller has anything to do.
+      refresh: vi.fn(),
+      _core: { _renderService: { _isPaused: true } },
       modes: { synchronizedOutputMode: false },
     } as unknown as ManagedTerminal["terminal"],
     kind: "terminal",
@@ -86,12 +76,37 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
   return managed;
 }
 
-function paddingHistory(managed: ManagedTerminal): string[] {
-  const el = managed.terminal.element as unknown as { __paddingTopHistory: string[] };
-  return el.__paddingTopHistory;
+/** Repairs issued against this terminal — one refresh per unpause. */
+function unpauseCount(managed: ManagedTerminal): number {
+  return (managed.terminal as unknown as { refresh: { mock: { calls: unknown[] } } }).refresh.mock
+    .calls.length;
+}
+
+function renderService(managed: ManagedTerminal): { _isPaused?: boolean } {
+  return (managed.terminal as unknown as { _core: { _renderService: { _isPaused?: boolean } } })
+    ._core._renderService;
+}
+
+/**
+ * Re-arm the pause. A successful repair clears the flag, so without this a
+ * follow-up call would skip because the renderer is already running — making
+ * throttle assertions pass for the wrong reason.
+ */
+function repause(managed: ManagedTerminal): void {
+  renderService(managed)._isPaused = true;
+}
+
+function setDocumentVisibility(state: "visible" | "hidden"): void {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => state,
+  });
 }
 
 describe("forceXtermReflow", () => {
+  // Retained only as coverage for the legacy layout primitive — the reveal and
+  // wake paths still call it for its forced layout. It cannot unpause a
+  // renderer (#11800); that is forceXtermRendererUnpause's job.
   it("toggles paddingTop to 0.01px and restores it", () => {
     const el = document.createElement("div");
     el.style.paddingTop = "5px";
@@ -101,12 +116,82 @@ describe("forceXtermReflow", () => {
   });
 });
 
+describe("forceXtermRendererUnpause", () => {
+  function makeTerminal(renderServiceValue: object | undefined, rows = 24) {
+    return {
+      rows,
+      refresh: vi.fn(),
+      ...(renderServiceValue === undefined
+        ? {}
+        : { _core: { _renderService: renderServiceValue } }),
+    } as unknown as ManagedTerminal["terminal"];
+  }
+
+  it("clears the pause flag and repaints every row", () => {
+    const svc = { _isPaused: true };
+    const terminal = makeTerminal(svc, 40);
+
+    expect(forceXtermRendererUnpause(terminal)).toBe(true);
+    expect(svc._isPaused).toBe(false);
+    expect(terminal.refresh).toHaveBeenCalledWith(0, 39);
+  });
+
+  it("no-ops on an already-running renderer", () => {
+    const svc = { _isPaused: false };
+    const terminal = makeTerminal(svc);
+
+    expect(forceXtermRendererUnpause(terminal)).toBe(false);
+    expect(terminal.refresh).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on API drift without synthesizing the flag", () => {
+    // A future xterm that renames or drops _isPaused must not get a new
+    // property written onto its render service.
+    const svc: { _isPaused?: boolean } = {};
+    const terminal = makeTerminal(svc);
+
+    expect(forceXtermRendererUnpause(terminal)).toBe(false);
+    expect("_isPaused" in svc).toBe(false);
+    expect(terminal.refresh).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the private core is absent entirely", () => {
+    const terminal = makeTerminal(undefined);
+    expect(forceXtermRendererUnpause(terminal)).toBe(false);
+    expect(terminal.refresh).not.toHaveBeenCalled();
+  });
+
+  it("restores the pause flag when the repaint throws", () => {
+    // Reporting success on a half-applied repair would stop the watchdog
+    // retrying a terminal that is still blank.
+    const svc = { _isPaused: true };
+    const terminal = makeTerminal(svc);
+    (terminal.refresh as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error("renderer gone");
+    });
+
+    expect(forceXtermRendererUnpause(terminal)).toBe(false);
+    expect(svc._isPaused).toBe(true);
+  });
+
+  it("clamps the repaint range for a zero-row terminal", () => {
+    const svc = { _isPaused: true };
+    const terminal = makeTerminal(svc, 0);
+
+    expect(forceXtermRendererUnpause(terminal)).toBe(true);
+    expect(terminal.refresh).toHaveBeenCalledWith(0, 0);
+  });
+});
+
 describe("TerminalReflowController.maybeReflow", () => {
   let controller: TerminalReflowController;
   let instances: ManagedTerminal[];
 
   beforeEach(() => {
     instances = [];
+    // Explicit, for the same reason the cached-view suite below stubs it: an
+    // inherited stub from another test would make these order-dependent.
+    setDocumentVisibility("visible");
     controller = new TerminalReflowController({
       getInstances: () => instances,
     });
@@ -117,59 +202,62 @@ describe("TerminalReflowController.maybeReflow", () => {
     document.body.innerHTML = "";
   });
 
-  it("reflows a visible standard terminal and stamps lastReflowAt", () => {
+  it("unpauses a visible standard terminal and stamps lastReflowAt", () => {
     const managed = makeManaged();
     controller.maybeReflow(managed);
 
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(unpauseCount(managed)).toBe(1);
+    expect(renderService(managed)._isPaused).toBe(false);
     expect(managed.lastReflowAt).toBeGreaterThan(0);
   });
 
-  it("throttles a second reflow inside the 250ms window", () => {
+  it("throttles a second repair inside the 250ms window", () => {
     const managed = makeManaged();
     controller.maybeReflow(managed);
-    const before = paddingHistory(managed).length;
 
+    // Re-arm: otherwise the second call would skip because the renderer is
+    // already running, not because of the throttle.
+    repause(managed);
     controller.maybeReflow(managed);
-    expect(paddingHistory(managed).length).toBe(before);
+    expect(unpauseCount(managed)).toBe(1);
   });
 
-  it("allows a reflow once the throttle window has passed", () => {
+  it("allows a repair once the throttle window has passed", () => {
     const managed = makeManaged();
     controller.maybeReflow(managed);
-    const before = paddingHistory(managed).length;
 
+    repause(managed);
     managed.lastReflowAt = (managed.lastReflowAt ?? 0) - 500;
     controller.maybeReflow(managed);
-    expect(paddingHistory(managed).length).toBeGreaterThan(before);
+    expect(unpauseCount(managed)).toBe(2);
   });
 
-  it("reflows agent terminals — the xterm pause gate is renderer-agnostic", () => {
+  it("unpauses agent terminals — the xterm pause gate is renderer-agnostic", () => {
     const managed = makeManaged({ launchAgentId: "claude" });
     expect(managed.runtimeAgentId).toBe("claude");
 
     controller.maybeReflow(managed);
 
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(unpauseCount(managed)).toBe(1);
     expect(managed.lastReflowAt).toBeGreaterThan(0);
   });
 
   it("skips invisible terminals", () => {
     const managed = makeManaged({ isVisible: false });
     controller.maybeReflow(managed);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
   });
 
   it("skips alt-buffer (TUI) terminals", () => {
     const managed = makeManaged({ isAltBuffer: true });
     controller.maybeReflow(managed);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
   });
 
   it("skips terminals that are mid-attach", () => {
     const managed = makeManaged({ isAttaching: true });
     controller.maybeReflow(managed);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
   });
 
   it("skips when terminal element is missing", () => {
@@ -186,40 +274,55 @@ describe("TerminalReflowController.maybeReflow", () => {
 
     controller.maybeReflow(managed);
     expect(managed.lastReflowAt).toBe(0);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
   });
 
   it("skips without stamping the throttle when the renderer is provably unpaused", () => {
     const managed = makeManaged();
-    (managed.terminal as unknown as { _core: object })._core = {
-      _renderService: { _isPaused: false },
-    };
+    renderService(managed)._isPaused = false;
 
     controller.maybeReflow(managed);
     expect(managed.lastReflowAt).toBe(0);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
   });
 
-  it("reflows when the renderer is paused", () => {
+  it("skips without stamping the throttle when the pause flag is missing (API drift)", () => {
+    // Inverted from the reflow era (#11800): the repair clears a flag, so with
+    // no readable flag there is nothing to clear. Falling through would stamp
+    // the throttle for a guaranteed no-op.
     const managed = makeManaged();
-    (managed.terminal as unknown as { _core: object })._core = {
-      _renderService: { _isPaused: true },
-    };
+    delete renderService(managed)._isPaused;
 
     controller.maybeReflow(managed);
-    expect(paddingHistory(managed)).toContain("0.01px");
-    expect(managed.lastReflowAt).toBeGreaterThan(0);
+    expect(managed.lastReflowAt).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
   });
 
-  it("reflows when the pause flag is missing (API drift)", () => {
+  it("skips while the document is hidden", () => {
+    // The per-write path reaches maybeReflow directly, so the heartbeat's own
+    // document check cannot cover it.
     const managed = makeManaged();
-    (managed.terminal as unknown as { _core: object })._core = {
-      _renderService: {},
-    };
+    setDocumentVisibility("hidden");
 
     controller.maybeReflow(managed);
-    expect(paddingHistory(managed)).toContain("0.01px");
-    expect(managed.lastReflowAt).toBeGreaterThan(0);
+    expect(managed.lastReflowAt).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
+  });
+
+  it("honours a latched watchdog give-up for the current generation", () => {
+    // The watchdog owns the breaker because it is the layer that can observe
+    // whether a repair took; this path must not restart a bounded retry loop.
+    const managed = makeManaged();
+    managed.rendererUnpauseGaveUp = true;
+    managed.rendererUnpauseGeneration = managed.attachGeneration;
+
+    controller.maybeReflow(managed);
+    expect(unpauseCount(managed)).toBe(0);
+
+    // A give-up from a previous incarnation does not apply.
+    managed.rendererUnpauseGeneration = managed.attachGeneration - 1;
+    controller.maybeReflow(managed);
+    expect(unpauseCount(managed)).toBe(1);
   });
 
   it("does not stamp the throttle while synchronized output mode is active", () => {
@@ -230,7 +333,7 @@ describe("TerminalReflowController.maybeReflow", () => {
 
     controller.maybeReflow(managed);
     expect(managed.lastReflowAt).toBe(0);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
   });
 });
 
@@ -268,34 +371,36 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
     winRemove.mockRestore();
   });
 
-  it("heartbeat fires every 3 s and reflows visible standard terminals", () => {
+  it("heartbeat fires every 3 s and unpauses visible standard terminals", () => {
     vi.useFakeTimers();
+    setDocumentVisibility("visible");
 
     const managed = makeManaged();
     instances = [managed];
     controller = new TerminalReflowController({ getInstances: () => instances });
 
     // Heartbeat hasn't fired yet.
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
 
     vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(unpauseCount(managed)).toBe(1);
 
     controller.dispose();
     vi.useRealTimers();
   });
 
-  it("heartbeat reflows agent terminals too", () => {
+  it("heartbeat unpauses agent terminals too", () => {
     vi.useFakeTimers();
+    setDocumentVisibility("visible");
 
     const managed = makeManaged({ launchAgentId: "claude" });
     instances = [managed];
     controller = new TerminalReflowController({ getInstances: () => instances });
 
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
 
     vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(unpauseCount(managed)).toBe(1);
 
     controller.dispose();
     vi.useRealTimers();
@@ -303,23 +408,25 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
 
   it("heartbeat stops firing after dispose", () => {
     vi.useFakeTimers();
+    setDocumentVisibility("visible");
 
     const managed = makeManaged();
     instances = [managed];
     controller = new TerminalReflowController({ getInstances: () => instances });
 
     vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
-    const reflowsAfterFirstTick = paddingHistory(managed).length;
-    expect(reflowsAfterFirstTick).toBeGreaterThan(0);
+    const afterFirstTick = unpauseCount(managed);
+    expect(afterFirstTick).toBeGreaterThan(0);
 
     controller.dispose();
 
-    // Reset the throttle so a second heartbeat would fire if the interval
-    // were still active.
+    // Re-arm the pause and reset the throttle so a second heartbeat would fire
+    // if the interval were still active.
+    repause(managed);
     managed.lastReflowAt = 0;
     vi.advanceTimersByTime(10_000);
 
-    expect(paddingHistory(managed).length).toBe(reflowsAfterFirstTick);
+    expect(unpauseCount(managed)).toBe(afterFirstTick);
     vi.useRealTimers();
   });
 
@@ -330,27 +437,22 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
     instances = [managed];
     controller = new TerminalReflowController({ getInstances: () => instances });
 
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      get: () => "hidden",
-    });
+    setDocumentVisibility("hidden");
     vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
 
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      get: () => "visible",
-    });
+    setDocumentVisibility("visible");
     // Reset throttle in case the visibilitychange listener fired one already.
     managed.lastReflowAt = 0;
     vi.advanceTimersByTime(REFLOW_HEARTBEAT_MS);
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(unpauseCount(managed)).toBeGreaterThan(0);
 
     controller.dispose();
     vi.useRealTimers();
   });
 
-  it("focus listener reflows every visible standard terminal", () => {
+  it("focus listener unpauses every visible standard terminal", () => {
+    setDocumentVisibility("visible");
     const a = makeManaged();
     const b = makeManaged();
     instances = [a, b];
@@ -358,20 +460,21 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
     controller = new TerminalReflowController({ getInstances: () => instances });
     window.dispatchEvent(new FocusEvent("focus"));
 
-    expect(paddingHistory(a)).toContain("0.01px");
-    expect(paddingHistory(b)).toContain("0.01px");
+    expect(unpauseCount(a)).toBe(1);
+    expect(unpauseCount(b)).toBe(1);
 
     controller.dispose();
   });
 
-  it("focus listener reflows agent terminals too", () => {
+  it("focus listener unpauses agent terminals too", () => {
+    setDocumentVisibility("visible");
     const managed = makeManaged({ launchAgentId: "claude" });
     instances = [managed];
 
     controller = new TerminalReflowController({ getInstances: () => instances });
     window.dispatchEvent(new FocusEvent("focus"));
 
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(unpauseCount(managed)).toBe(1);
 
     controller.dispose();
   });
@@ -382,38 +485,29 @@ describe("TerminalReflowController dispose / listener cleanup", () => {
 
     controller = new TerminalReflowController({ getInstances: () => instances });
 
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      get: () => "hidden",
-    });
+    setDocumentVisibility("hidden");
     document.dispatchEvent(new Event("visibilitychange"));
 
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
 
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      get: () => "visible",
-    });
+    setDocumentVisibility("visible");
     document.dispatchEvent(new Event("visibilitychange"));
 
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(unpauseCount(managed)).toBe(1);
 
     controller.dispose();
   });
 
-  it("visibilitychange listener reflows agent terminals too", () => {
+  it("visibilitychange listener unpauses agent terminals too", () => {
     const managed = makeManaged({ launchAgentId: "claude" });
     instances = [managed];
 
     controller = new TerminalReflowController({ getInstances: () => instances });
 
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      get: () => "visible",
-    });
+    setDocumentVisibility("visible");
     document.dispatchEvent(new Event("visibilitychange"));
 
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(unpauseCount(managed)).toBe(1);
 
     controller.dispose();
   });
@@ -426,10 +520,7 @@ describe("TerminalReflowController — cached project view (#11212)", () => {
   let controller: TerminalReflowController | undefined;
   let latchedCached = false;
 
-  function reflowCount(managed: ManagedTerminal): number {
-    // forceXtermReflow writes paddingTop twice per reflow (jitter + restore).
-    return paddingHistory(managed).length;
-  }
+  const reflowCount = unpauseCount;
 
   beforeEach(() => {
     latchedCached = false;

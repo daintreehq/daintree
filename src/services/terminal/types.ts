@@ -92,8 +92,8 @@ export interface ManagedTerminal {
   keyHandlerInstalled: boolean;
   lastAttachAt: number;
   lastDetachAt: number;
-  // Last time forceXtermReflow() ran for this terminal — used to throttle the
-  // IntersectionObserver unpause reflow across write/heartbeat/focus triggers.
+  // Last time TerminalReflowController issued a renderer-unpause repair for this
+  // terminal — throttles the repair across write/heartbeat/focus triggers.
   lastReflowAt?: number;
   // Last time the reconciliation watchdog issued a repair for this terminal —
   // per-terminal cooldown so a persistently-diverging layer never repair-loops.
@@ -112,6 +112,17 @@ export interface ManagedTerminal {
   // the same id must not inherit a prior instance's give-up state (mirrors the
   // revealPendingGeneration guard).
   geometryRepairGeneration?: number;
+  // Circuit breaker for the watchdog's renderer-unpause repair (#11800). xterm's
+  // `_isPaused` is written only by its own IntersectionObserver callback, so the
+  // repair has to force the flag and repaint; if something re-pauses the pane
+  // every sweep, these bound the retry instead of forcing a repaint forever.
+  rendererUnpauseAttempts?: number;
+  // Once tripped, the paused-renderer branch stops issuing repairs — the WebGL
+  // layer below it still reconciles. Cleared when a later sweep observes the
+  // renderer unpaused, or when the terminal re-attaches.
+  rendererUnpauseGaveUp?: boolean;
+  // The attachGeneration the counter accrued under — mirrors geometryRepairGeneration.
+  rendererUnpauseGeneration?: number;
   // Geometry the PTY reported holding after its last resize (#11641). The only
   // view the renderer has of the backend grid — everything else here describes
   // xterm's side.

@@ -13,6 +13,7 @@ import {
   WATCHDOG_INTERVAL_MS,
   WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS,
   WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK,
+  WATCHDOG_MAX_RENDERER_UNPAUSE_ATTEMPTS,
   WATCHDOG_REPAIR_COOLDOWN_MS,
   isXtermRenderPaused,
   type ReconciliationWatchdogDeps,
@@ -100,6 +101,22 @@ function setRenderPaused(managed: ManagedTerminal, paused: boolean): void {
 }
 
 /**
+ * A `forceUnpauseRenderer` that behaves like the real primitive: it clears the
+ * private pause flag. Recovery is only observable to the watchdog on a LATER
+ * sweep, so tests using this must advance at least one more interval before
+ * asserting the breaker re-armed.
+ */
+function unpauseWith(): ReconciliationWatchdogDeps["forceUnpauseRenderer"] {
+  return vi.fn((terminal: ManagedTerminal["terminal"]) => {
+    const svc = (terminal as unknown as { _core?: { _renderService?: { _isPaused?: boolean } } })
+      ._core?._renderService;
+    if (svc?._isPaused !== true) return false;
+    svc._isPaused = false;
+    return true;
+  });
+}
+
+/**
  * Wire the xterm grid and the fit-addon proposal so the watchdog's geometry
  * convergence check (#10632) has real numbers. A mismatch models the garbled
  * "wrong column wrapping" a pane shows after a warm switch-back.
@@ -135,7 +152,10 @@ function makeDeps(
     isWebGLActive: vi.fn(() => true),
     shouldHaveWebGL: vi.fn(() => false),
     ensureWebGL: vi.fn(),
-    forceReflow: vi.fn(),
+    // Models a pane that stays paused: the repair is issued but the flag does
+    // not clear, which is the #11800 production case. Tests that need a genuine
+    // recovery override this with `unpauseWith(instances)`.
+    forceUnpauseRenderer: vi.fn(() => true),
     reconcileRevealGeometry: vi.fn(() => true),
     isStoreBackgrounded: vi.fn(() => false),
     isStoreHidden: vi.fn(() => false),
@@ -485,7 +505,7 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.resumeFlush).not.toHaveBeenCalled();
     });
 
-    it("reflows a terminal whose xterm render service is paused", () => {
+    it("unpauses a terminal whose xterm render service is paused", () => {
       const managed = makeManaged();
       setRenderPaused(managed, true);
       instances.set("t1", managed);
@@ -493,10 +513,10 @@ describe("TerminalReconciliationWatchdog", () => {
       watchdog = new TerminalReconciliationWatchdog(deps);
 
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
-      expect(deps.forceReflow).toHaveBeenCalledWith(managed.terminal.element);
+      expect(deps.forceUnpauseRenderer).toHaveBeenCalledWith(managed.terminal);
     });
 
-    it("reflows a paused alt-buffer (agent TUI) terminal when no synchronized block is open (#10632)", () => {
+    it("unpauses a paused alt-buffer (agent TUI) terminal when no synchronized block is open (#10632)", () => {
       // Regression: the watchdog used to EXCLUDE alt-buffer agents from the
       // render-pause repair (`!managed.isAltBuffer`), so exactly the agent TUIs
       // that break on switch-back had no closed-loop recovery. The only real
@@ -508,10 +528,10 @@ describe("TerminalReconciliationWatchdog", () => {
       watchdog = new TerminalReconciliationWatchdog(deps);
 
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
-      expect(deps.forceReflow).toHaveBeenCalledWith(managed.terminal.element);
+      expect(deps.forceUnpauseRenderer).toHaveBeenCalledWith(managed.terminal);
     });
 
-    it("does not reflow while DEC 2026 synchronized output is active (alt-buffer included)", () => {
+    it("does not unpause while DEC 2026 synchronized output is active (alt-buffer included)", () => {
       const managed = makeManaged({ isAltBuffer: true });
       (
         managed.terminal as unknown as { modes: { synchronizedOutputMode: boolean } }
@@ -522,8 +542,114 @@ describe("TerminalReconciliationWatchdog", () => {
       watchdog = new TerminalReconciliationWatchdog(deps);
 
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
-      expect(deps.forceReflow).not.toHaveBeenCalled();
+      expect(deps.forceUnpauseRenderer).not.toHaveBeenCalled();
       expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+    });
+
+    it("stops repairing a renderer that stays paused, after a bounded number of attempts (#11800)", () => {
+      // The bug: the branch reissued the repair on every eligible tick forever,
+      // logging success each time while the pane stayed blank.
+      const managed = makeManaged();
+      setRenderPaused(managed, true);
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 20);
+
+      expect(deps.forceUnpauseRenderer).toHaveBeenCalledTimes(
+        WATCHDOG_MAX_RENDERER_UNPAUSE_ATTEMPTS
+      );
+      expect(managed.rendererUnpauseGaveUp).toBe(true);
+      const giveUps = vi
+        .mocked(logWarn)
+        .mock.calls.filter(([msg]) => typeof msg === "string" && msg.includes("giving up"));
+      expect(giveUps).toHaveLength(1);
+    });
+
+    it("keeps reconciling the WebGL layer after the unpause breaker trips", () => {
+      // The breaker disables one repair, not the whole chain.
+      const managed = makeManaged();
+      setRenderPaused(managed, true);
+      instances.set("t1", managed);
+      const deps = makeDeps(instances, {
+        shouldHaveWebGL: vi.fn(() => true),
+        isWebGLActive: vi.fn(() => false),
+      });
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 20);
+
+      expect(managed.rendererUnpauseGaveUp).toBe(true);
+      expect(deps.ensureWebGL).toHaveBeenCalledWith("t1", managed);
+    });
+
+    it("re-arms the breaker once a later sweep observes the renderer unpaused", () => {
+      // Recovery is only observable on a LATER sweep — re-reading the flag in the
+      // same tick would just confirm the repair's own write.
+      const managed = makeManaged();
+      setRenderPaused(managed, true);
+      instances.set("t1", managed);
+      const deps = makeDeps(instances, { forceUnpauseRenderer: unpauseWith() });
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.forceUnpauseRenderer).toHaveBeenCalledTimes(1);
+      expect(managed.rendererUnpauseAttempts).toBe(1);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(managed.rendererUnpauseAttempts).toBe(0);
+      expect(managed.rendererUnpauseGaveUp).toBe(false);
+      expect(vi.mocked(logDebug).mock.calls.some(([msg]) => msg.includes("no longer set"))).toBe(
+        true
+      );
+
+      // A fresh pause after recovery gets the full budget again.
+      setRenderPaused(managed, true);
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 4);
+      expect(deps.forceUnpauseRenderer).toHaveBeenCalledTimes(2);
+    });
+
+    it("re-arms a latched breaker when the terminal re-attaches", () => {
+      const managed = makeManaged();
+      setRenderPaused(managed, true);
+      instances.set("t1", managed);
+      const deps = makeDeps(instances);
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 20);
+      expect(managed.rendererUnpauseGaveUp).toBe(true);
+
+      // A new incarnation reusing this id must not inherit the give-up state.
+      managed.attachGeneration += 1;
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.forceUnpauseRenderer).toHaveBeenCalledTimes(
+        WATCHDOG_MAX_RENDERER_UNPAUSE_ATTEMPTS + 1
+      );
+      expect(managed.rendererUnpauseGaveUp).toBe(false);
+    });
+
+    it("counts an attempt even when the repair reports it could not run", () => {
+      // A drifted private API or a throwing refresh returns false. If those did
+      // not consume the budget, the unbounded retry loop would be back.
+      const managed = makeManaged();
+      setRenderPaused(managed, true);
+      instances.set("t1", managed);
+      const deps = makeDeps(instances, { forceUnpauseRenderer: vi.fn(() => false) });
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS * 20);
+
+      expect(deps.forceUnpauseRenderer).toHaveBeenCalledTimes(
+        WATCHDOG_MAX_RENDERER_UNPAUSE_ATTEMPTS
+      );
+      expect(managed.rendererUnpauseGaveUp).toBe(true);
+      const attemptLogs = vi
+        .mocked(logWarn)
+        .mock.calls.filter(([msg]) => typeof msg === "string" && msg.includes("forcing unpause"));
+      expect(attemptLogs).toHaveLength(WATCHDOG_MAX_RENDERER_UNPAUSE_ATTEMPTS);
+      // The log must report the real outcome, not assert success.
+      expect(attemptLogs[0]?.[1]).toMatchObject({ repairIssued: false, attempt: 1 });
     });
 
     it("reattaches a missing WebGL context for an eligible terminal", () => {
@@ -552,7 +678,7 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.applyRendererPolicy).not.toHaveBeenCalled();
       expect(deps.reassertActiveBackendTier).not.toHaveBeenCalled();
       expect(deps.resumeFlush).not.toHaveBeenCalled();
-      expect(deps.forceReflow).not.toHaveBeenCalled();
+      expect(deps.forceUnpauseRenderer).not.toHaveBeenCalled();
       expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
       expect(deps.ensureWebGL).not.toHaveBeenCalled();
       expect(managed.lastWatchdogRepairAt).toBeUndefined();
@@ -632,7 +758,7 @@ describe("TerminalReconciliationWatchdog", () => {
 
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
       expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
-      expect(deps.forceReflow).toHaveBeenCalledWith(managed.terminal.element);
+      expect(deps.forceUnpauseRenderer).toHaveBeenCalledWith(managed.terminal);
     });
 
     it("reconciles an on-screen terminal whose grid disagrees with the container (garbled wrapping)", () => {
@@ -901,7 +1027,7 @@ describe("TerminalReconciliationWatchdog", () => {
 
     it("falls through to the paused-render recovery on a streaming-deferred tick", () => {
       // Deferring the geometry repair must not starve the cheaper layers: a
-      // streaming pane whose renderer is paused still needs the unpause reflow.
+      // streaming pane whose renderer is paused still needs the unpause.
       const managed = makeManaged({ isAltBuffer: false });
       setRenderPaused(managed, true);
       setGrid(managed, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
@@ -912,7 +1038,7 @@ describe("TerminalReconciliationWatchdog", () => {
       managed.lastWriteAt = Date.now() + WATCHDOG_INTERVAL_MS;
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
       expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
-      expect(deps.forceReflow).toHaveBeenCalledWith(managed.terminal.element);
+      expect(deps.forceUnpauseRenderer).toHaveBeenCalledWith(managed.terminal);
     });
 
     it("still issues the reveal-pending repair for a streaming ALT-buffer pane (quiescence gate is main-buffer only)", () => {
@@ -1082,7 +1208,9 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(deps.setVisible).toHaveBeenCalledTimes(WATCHDOG_MAX_HEAVY_REPAIRS_PER_TICK + 1);
     });
 
-    it("does not count light repairs against the heavy budget", () => {
+    it("does not count renderer-unpause repairs against the heavy budget", () => {
+      // Three blank panes must all recover on the same tick. Charging the unpause
+      // heavy would fix two and leave the third blank for another 3s (#11800).
       const pausedA = makeManaged();
       const pausedB = makeManaged();
       const pausedC = makeManaged();
@@ -1096,7 +1224,7 @@ describe("TerminalReconciliationWatchdog", () => {
       watchdog = new TerminalReconciliationWatchdog(deps);
 
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
-      expect(deps.forceReflow).toHaveBeenCalledTimes(3);
+      expect(deps.forceUnpauseRenderer).toHaveBeenCalledTimes(3);
     });
   });
 

@@ -120,8 +120,9 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
   // attach to the document by default. Individual tests can detach the host
   // to assert the disconnected-short-circuit path.
   document.body.appendChild(hostElement);
-  // Force offsetHeight to be readable (jsdom returns 0, but the read still
-  // forces layout — we observe the side-effect via paddingTop jitter).
+  // Padding jitter is still the observable for the paths that legitimately call
+  // forceXtermReflow for its forced layout (resetRenderer, reveal, wake) — it
+  // just no longer unpauses anything (#11800).
   const paddingTopHistory: string[] = [];
   const style = termEl.style;
   const orig = Object.getOwnPropertyDescriptor(style, "paddingTop");
@@ -138,9 +139,36 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
   (termEl as HTMLDivElement & { __paddingTopHistory: string[] }).__paddingTopHistory =
     paddingTopHistory;
 
+  // Count renderer-unpause repairs by watching the private pause flag clear —
+  // the one effect every trigger path shares, and robust against tests that
+  // reassign `terminal.refresh`. Terminals start PAUSED because that is the
+  // only state in which a repair has anything to do.
+  let unpauses = 0;
+  let paused = true;
+  const renderService = {
+    get _isPaused(): boolean {
+      return paused;
+    },
+    set _isPaused(next: boolean) {
+      if (paused && !next) unpauses += 1;
+      paused = next;
+    },
+  };
+  const probe = termEl as HTMLDivElement & {
+    __unpauses: () => number;
+    __repause: () => void;
+  };
+  probe.__unpauses = () => unpauses;
+  probe.__repause = () => {
+    paused = true;
+  };
+
   const managed = {
     terminal: {
       element: termEl,
+      rows: 24,
+      refresh: vi.fn(),
+      _core: { _renderService: renderService },
       modes: { synchronizedOutputMode: false },
     } as unknown as ManagedTerminal["terminal"],
     type: "terminal",
@@ -192,6 +220,20 @@ function paddingHistory(managed: ManagedTerminal): string[] {
   return el.__paddingTopHistory;
 }
 
+/** Renderer-unpause repairs issued against this terminal. */
+function unpauseCount(managed: ManagedTerminal): number {
+  return (managed.terminal.element as unknown as { __unpauses: () => number }).__unpauses();
+}
+
+/**
+ * Re-arm the pause. A successful repair clears the flag, so without this a
+ * follow-up trigger would skip because the renderer is already running rather
+ * than for the reason under test.
+ */
+function repause(managed: ManagedTerminal): void {
+  (managed.terminal.element as unknown as { __repause: () => void }).__repause();
+}
+
 // Test-fixture mutation helpers. The terminal mock isn't a full xterm Terminal,
 // so these consolidate the partial-shape casts in one place.
 type MutableModes = { modes?: { synchronizedOutputMode: boolean } | undefined };
@@ -233,66 +275,64 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     document.body.innerHTML = "";
   });
 
-  it("reflows a visible standard terminal and records lastReflowAt", () => {
+  it("unpauses a visible standard terminal and records lastReflowAt", () => {
     const managed = makeManaged();
     service.maybeReflowTerminal(managed);
 
-    // paddingTop was set to "0.01px" then restored
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(unpauseCount(managed)).toBe(1);
     expect(managed.lastReflowAt).toBeGreaterThan(0);
   });
 
-  it("throttles per-terminal reflows within 250ms", () => {
+  it("throttles per-terminal repairs within 250ms", () => {
     const managed = makeManaged();
     service.maybeReflowTerminal(managed);
-    const history1 = paddingHistory(managed).length;
 
+    // Re-arm: otherwise the second call would skip because the renderer is
+    // already running, not because of the throttle.
+    repause(managed);
     service.maybeReflowTerminal(managed);
-    const history2 = paddingHistory(managed).length;
 
-    // Second call short-circuited — no additional jitter writes
-    expect(history2).toBe(history1);
+    expect(unpauseCount(managed)).toBe(1);
   });
 
-  it("allows reflow again after the throttle window", () => {
+  it("allows a repair again after the throttle window", () => {
     const managed = makeManaged();
     service.maybeReflowTerminal(managed);
-    const history1 = paddingHistory(managed).length;
 
+    repause(managed);
     // Simulate throttle window passing
     managed.lastReflowAt = (managed.lastReflowAt ?? 0) - 500;
     service.maybeReflowTerminal(managed);
-    const history2 = paddingHistory(managed).length;
 
-    expect(history2).toBeGreaterThan(history1);
+    expect(unpauseCount(managed)).toBe(2);
   });
 
-  it("reflows agent terminals — the xterm pause gate is renderer-agnostic", () => {
+  it("unpauses agent terminals — the xterm pause gate is renderer-agnostic", () => {
     const managed = makeManaged({ kind: "terminal", launchAgentId: "claude" });
     expect(managed.runtimeAgentId).toBe("claude");
 
     service.maybeReflowTerminal(managed);
 
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(unpauseCount(managed)).toBe(1);
     expect(managed.lastReflowAt).toBeGreaterThan(0);
   });
 
   it("skips invisible terminals", () => {
     const managed = makeManaged({ isVisible: false });
     service.maybeReflowTerminal(managed);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
   });
 
   it("skips alt-buffer (TUI) terminals", () => {
     const managed = makeManaged({ isAltBuffer: true });
     service.maybeReflowTerminal(managed);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
   });
 
   it("skips terminals that are mid-attach", () => {
     const managed = makeManaged({ isAttaching: true });
     service.maybeReflowTerminal(managed);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
   });
 
   it("skips when terminal has no rendered element yet", () => {
@@ -310,10 +350,10 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     expect((managed.terminal.element as HTMLElement).isConnected).toBe(false);
 
     service.maybeReflowTerminal(managed);
-    // Throttle must NOT be stamped — otherwise the next legitimate reflow
+    // Throttle must NOT be stamped — otherwise the next legitimate repair
     // after reattachment would be suppressed for 250ms.
     expect(managed.lastReflowAt).toBe(0);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
   });
 
   it("skips — and does not stamp throttle — when synchronized output mode is active", () => {
@@ -321,34 +361,34 @@ describe("TerminalInstanceService maybeReflowTerminal", () => {
     setSyncMode(managed, true);
 
     service.maybeReflowTerminal(managed);
-    // BSU is open — refreshing now would interleave with xterm's buffered
-    // range. Throttle must not stamp so we reflow on the next tick after ESU.
+    // BSU is open — repainting now would interleave with xterm's buffered
+    // range. Throttle must not stamp so we repair on the next tick after ESU.
     expect(managed.lastReflowAt).toBe(0);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
   });
 
-  it("reflows when synchronized output mode is false", () => {
+  it("unpauses when synchronized output mode is false", () => {
     const managed = makeManaged();
     setSyncMode(managed, false);
 
     service.maybeReflowTerminal(managed);
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(unpauseCount(managed)).toBe(1);
     expect(managed.lastReflowAt).toBeGreaterThan(0);
   });
 
-  it("does not throttle the post-ESU reflow after a BSU skip", () => {
+  it("does not throttle the post-ESU repair after a BSU skip", () => {
     const managed = makeManaged();
     setSyncMode(managed, true);
     service.maybeReflowTerminal(managed);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
     expect(managed.lastReflowAt).toBe(0);
 
-    // ESU closes — the next reflow must fire immediately, not be eaten by
+    // ESU closes — the next repair must fire immediately, not be eaten by
     // the 250ms throttle. This is the invariant that justifies the
     // no-stamp branch in the guard.
     setSyncMode(managed, false);
     service.maybeReflowTerminal(managed);
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(unpauseCount(managed)).toBe(1);
     expect(managed.lastReflowAt).toBeGreaterThan(0);
   });
 
@@ -759,47 +799,47 @@ describe("TerminalInstanceService reflowHeartbeatTimer visibility gate", () => {
     });
   });
 
-  it("skips reflows while document is hidden", () => {
+  it("skips repairs while document is hidden", () => {
     visibilityState = "hidden";
     const managed = makeManaged();
     service.instances.set("t1", managed);
 
     vi.advanceTimersByTime(3000);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
     expect(managed.lastReflowAt).toBe(0);
   });
 
-  it("performs reflows on heartbeat when visible", () => {
+  it("performs repairs on heartbeat when visible", () => {
     const managed = makeManaged();
     service.instances.set("t1", managed);
 
     vi.advanceTimersByTime(3000);
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(unpauseCount(managed)).toBe(1);
     expect(managed.lastReflowAt).toBeGreaterThan(0);
   });
 
-  it("heartbeat does not reflow or stamp throttle while sync block is open", () => {
+  it("heartbeat does not repair or stamp throttle while sync block is open", () => {
     const managed = makeManaged();
     setSyncMode(managed, true);
     service.instances.set("t1", managed);
 
     vi.advanceTimersByTime(3000);
     // Heartbeat tick fired but the sync-mode guard skipped without
-    // stamping — so the next post-ESU heartbeat will reflow immediately.
-    expect(paddingHistory(managed).length).toBe(0);
+    // stamping — so the next post-ESU heartbeat repairs immediately.
+    expect(unpauseCount(managed)).toBe(0);
     expect(managed.lastReflowAt).toBe(0);
   });
 
-  it("resumes reflows when visibility transitions hidden → visible", () => {
+  it("resumes repairs when visibility transitions hidden → visible", () => {
     visibilityState = "hidden";
     const managed = makeManaged();
     service.instances.set("t1", managed);
 
     vi.advanceTimersByTime(3000);
-    expect(paddingHistory(managed).length).toBe(0);
+    expect(unpauseCount(managed)).toBe(0);
 
     visibilityState = "visible";
     vi.advanceTimersByTime(3000);
-    expect(paddingHistory(managed)).toContain("0.01px");
+    expect(unpauseCount(managed)).toBe(1);
   });
 });

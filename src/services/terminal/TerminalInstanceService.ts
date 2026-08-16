@@ -32,7 +32,11 @@ import { TerminalWebGLPolicy } from "./TerminalWebGLPolicy";
 import { TerminalRevealController } from "./TerminalRevealController";
 import { TerminalAgentStateController } from "./TerminalAgentStateController";
 import { TerminalRestoreController } from "./TerminalRestoreController";
-import { TerminalReflowController, forceXtermReflow } from "./TerminalReflowController";
+import {
+  TerminalReflowController,
+  forceXtermReflow,
+  forceXtermRendererUnpause,
+} from "./TerminalReflowController";
 import { TerminalReconciliationWatchdog } from "./TerminalReconciliationWatchdog";
 import { TerminalWriteController } from "./TerminalWriteController";
 import { TerminalSettleWaiterRegistry } from "./TerminalSettleWaiterRegistry";
@@ -332,7 +336,7 @@ class TerminalInstanceService {
       isWebGLActive: (id) => this.webGLManager.isActive(id),
       shouldHaveWebGL: (managed) => this.webGLPolicy.shouldHaveActiveWebGL(managed),
       ensureWebGL: (id, managed) => this.webGLManager.ensureContext(id, managed),
-      forceReflow: (element) => forceXtermReflow(element),
+      forceUnpauseRenderer: (terminal) => forceXtermRendererUnpause(terminal),
       reconcileRevealGeometry: (id) => this.reconcileRevealGeometry(id),
       isStoreBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
       isStoreHidden: (id) => usePanelStore.getState().panelsById[id]?.isVisible === false,

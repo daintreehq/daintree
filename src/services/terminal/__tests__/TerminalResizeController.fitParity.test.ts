@@ -206,7 +206,7 @@ function makeWatchdogDeps(instances: Map<string, ManagedTerminal>): Reconciliati
     isWebGLActive: vi.fn(() => true),
     shouldHaveWebGL: vi.fn(() => false),
     ensureWebGL: vi.fn(),
-    forceReflow: vi.fn(),
+    forceUnpauseRenderer: vi.fn(() => true),
     reconcileRevealGeometry: vi.fn(() => true),
     isStoreBackgrounded: vi.fn(() => false),
     isStoreHidden: vi.fn(() => false),
