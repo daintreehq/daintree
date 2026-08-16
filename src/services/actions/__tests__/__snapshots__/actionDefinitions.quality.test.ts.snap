@@ -4177,7 +4177,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Close a panel, usually moving it to the trash where it stays briefly recoverable before its process is killed. Recovery is not universal — panels set to remove on exit, and dialog panels, are discarded outright. This is not limited to terminals. Identify the panel explicitly: an automated caller cannot see what the user has focused, and closing the wrong one discards their work.",
+    "description": "Close a panel, usually moving it to the trash where it stays briefly recoverable before its process is killed. Recovery is not universal — panels set to remove on exit, and dialog panels, are discarded outright. This is not limited to terminals. Name the panel you mean; closing the wrong one discards someone's work. An untracked panel is rejected rather than reported closed, and the result names what actually closed — already gone from the listing when an automated caller sees it.",
     "examples": undefined,
     "id": "terminal.close",
     "keywords": [
