@@ -8,9 +8,10 @@ const storeMock = vi.hoisted(() => ({
   }),
 }));
 
-// getProjectById is consulted TWICE per close: the pre-teardown re-check (must
-// see a still-eligible background project) and the post-close PROJECT_UPDATED
-// broadcast. Default it to a background project idle well past the threshold.
+// getProjectById is consulted THREE times per close: the pre-revoke re-check,
+// the post-revoke re-check (both must see a still-eligible background project),
+// and the post-close PROJECT_UPDATED broadcast. Default it to a background
+// project idle well past the threshold.
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProjectId: vi.fn<() => string | null>(() => null),
   getAllProjects: vi.fn<() => Array<Record<string, unknown>>>(() => []),
@@ -29,6 +30,9 @@ const ptyClientMock = vi.hoisted(() => ({
   gracefulKillByProject: vi.fn<
     (projectId: string, opts?: { preserveSession?: boolean }) => Promise<Array<{ id: string }>>
   >(async () => []),
+  // PtyClient's main-local spawn registry — the liveness half of the assistant
+  // floor, independent of the (truncatable) pty-host terminal snapshot.
+  hasTerminal: vi.fn<(id: string) => boolean>((id: string) => liveTerminalIds.has(id)),
 }));
 
 const workspaceClientMock = vi.hoisted(() => ({
@@ -46,7 +50,8 @@ const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const writeHibernatedMarkerMock = vi.hoisted(() => vi.fn());
 const evictProjectRendererMock = vi.hoisted(() => vi.fn<(id: string) => number>(() => 1));
 
-vi.mock("../../utils/logger.js", () => ({ logInfo: vi.fn(), logError: vi.fn() }));
+const logInfoMock = vi.hoisted(() => vi.fn());
+vi.mock("../../utils/logger.js", () => ({ logInfo: logInfoMock, logError: vi.fn() }));
 
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
@@ -76,22 +81,23 @@ vi.mock("../SystemSleepService.js", () => ({
   }),
 }));
 
-// The assistant help PTY never blocks auto-close; it's capture-revoked before
-// teardown. Terminal ids added to `helpTerminalIds` read as help terminals via
-// the availability store; `boundHelpTerminalIds` via main's session binding.
+// A live Daintree Assistant floors the reclaim (#11807). `assistantBackends`
+// maps a project to the terminal its help session bound; `liveTerminalIds` backs
+// PtyClient's spawn registry. A binding whose terminal is NOT in the live set
+// models an assistant that exited under its own steam — nothing drops the
+// binding, so only the liveness half distinguishes it from a running one.
+const assistantBackends = vi.hoisted(() => new Map<string, string>());
+const liveTerminalIds = vi.hoisted(() => new Set<string>());
+
 const helpSessionServiceMock = vi.hoisted(() => ({
   revokeByProjectId: vi.fn(async (_projectId: string) => {}),
-  isHelpTerminal: vi.fn((id: string) => boundHelpTerminalIds.has(id)),
-}));
-const helpTerminalIds = vi.hoisted(() => new Set<string>());
-const boundHelpTerminalIds = vi.hoisted(() => new Set<string>());
-
-vi.mock("../HelpSessionService.js", () => ({ helpSessionService: helpSessionServiceMock }));
-vi.mock("../AgentAvailabilityStore.js", () => ({
-  getAgentAvailabilityStore: () => ({
-    isHelpTerminal: (id: string) => helpTerminalIds.has(id),
+  getAssistantBackend: vi.fn((projectId: string) => {
+    const terminalId = assistantBackends.get(projectId);
+    return terminalId ? { terminalId, webContentsId: 42 } : null;
   }),
 }));
+
+vi.mock("../HelpSessionService.js", () => ({ helpSessionService: helpSessionServiceMock }));
 
 import { IdleBackgroundAutoCloseService } from "../IdleBackgroundAutoCloseService.js";
 import type { PtyClient } from "../PtyClient.js";
@@ -125,6 +131,23 @@ function makeTerminal(projectId: string, overrides: Record<string, unknown> = {}
   return { id: `t-${projectId}`, projectId, hasPty: true, ...overrides };
 }
 
+/** A bound assistant whose PTY is still running — floors the reclaim. */
+function liveAssistant(projectId: string, terminalId = `t-help-${projectId}`): string {
+  assistantBackends.set(projectId, terminalId);
+  liveTerminalIds.add(terminalId);
+  return terminalId;
+}
+
+/**
+ * A session binding whose PTY already exited. Nothing drops the binding on a
+ * self-exit, so this is the shape a quit assistant leaves behind — it must not
+ * block, and `closeProject` capture-revokes it on the way out.
+ */
+function staleAssistant(projectId: string, terminalId = `t-help-${projectId}`): string {
+  assistantBackends.set(projectId, terminalId);
+  return terminalId;
+}
+
 /** A ProjectViewManager mock whose active project is `activeId`. */
 function makePvm(activeId: string | null, outgoingId: string | null = null): ProjectViewManager {
   return {
@@ -154,8 +177,8 @@ describe("IdleBackgroundAutoCloseService", () => {
     ptyClientMock.gracefulKillByProject.mockResolvedValue([]);
     evictProjectRendererMock.mockReturnValue(1);
     workspaceClientMock.evictProject.mockReturnValue(true);
-    helpTerminalIds.clear();
-    boundHelpTerminalIds.clear();
+    assistantBackends.clear();
+    liveTerminalIds.clear();
   });
 
   afterEach(() => {
@@ -242,19 +265,87 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(broadcastToRendererMock).not.toHaveBeenCalled();
     });
 
-    it("closes a project whose only live PTY is the assistant, capture-revoking it first (#10989)", async () => {
+    it("a live assistant blocks the reclaim, and is never capture-revoked (#11807)", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
-      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([makeTerminal("proj-1")]);
-      helpTerminalIds.add("t-proj-1");
+      const helpId = liveAssistant("proj-1");
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
+        { id: helpId, projectId: "proj-1", hasPty: true },
+      ]);
       const service = makeService();
       await runCheck(service);
 
-      // The assistant PTY did not block the reclaim…
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(evictProjectRendererMock).not.toHaveBeenCalled();
+      expect(workspaceClientMock.evictProject).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it("blocks on an idle assistant — pending wakeups read as idle, so state is not consulted", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const helpId = liveAssistant("proj-1");
+      // An assistant that scheduled a wakeup an hour out sits at "idle" with no
+      // output. That is precisely the state #11807 must not reclaim.
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
+        { id: helpId, projectId: "proj-1", hasPty: true, agentState: "idle" },
+      ]);
+      const service = makeService();
+      await runCheck(service);
+
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+    });
+
+    it("floors on the session binding even when the terminal snapshot omits the help PTY", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      liveAssistant("proj-1");
+      // A truncated/stale pty-host snapshot never lists the assistant. The
+      // main-local spawn registry still knows it is alive.
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([]);
+      const service = makeService();
+      await runCheck(service);
+
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+    });
+
+    it("logs the projects held back by a live assistant, once per sweep", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([
+        makeIdleProject("proj-1"),
+        makeIdleProject("proj-2"),
+      ]);
+      liveAssistant("proj-1");
+      liveAssistant("proj-2");
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([]);
+      const service = makeService();
+      await runCheck(service);
+
+      const skipLogs = logInfoMock.mock.calls.filter(
+        ([event]) => event === "idle-background-auto-close-skip-live-assistant"
+      );
+      expect(skipLogs).toHaveLength(1);
+      expect(skipLogs[0]?.[1]).toEqual({ projectIds: ["proj-1", "proj-2"] });
+    });
+
+    it("a stale binding whose PTY already exited does not block, and is capture-revoked (#10989)", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      // Binding survives a self-exited assistant; `hasTerminal` is the half that
+      // knows it is gone.
+      staleAssistant("proj-1");
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([]);
+      const service = makeService();
+      await runCheck(service);
+
       expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
         autoParkedAt: expect.any(Number),
       });
-      // …and its session was capture-revoked (conversation preserved via the
+      // The leftover session is capture-revoked (conversation preserved via the
       // pending-hibernation entry) BEFORE the project-wide kill.
       expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
       const revokeOrder =
@@ -267,11 +358,11 @@ describe("IdleBackgroundAutoCloseService", () => {
     it("still skips when a real terminal coexists with the assistant help PTY", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      const helpId = liveAssistant("proj-1");
       ptyClientMock.getAllTerminalsAsync.mockResolvedValue([
         makeTerminal("proj-1"),
-        { id: "t-help", projectId: "proj-1", hasPty: true },
+        { id: helpId, projectId: "proj-1", hasPty: true },
       ]);
-      helpTerminalIds.add("t-help");
       const service = makeService();
       await runCheck(service);
 
@@ -279,33 +370,36 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
     });
 
-    it("recognizes the assistant via main's session binding when the renderer never marked it", async () => {
+    it("bails before the capture-revoke when an assistant appeared during the sweep", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
-      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([makeTerminal("proj-1")]);
-      // A parked renderer never sent help.markTerminal — only main's live
-      // session binding identifies the PTY as the assistant.
-      boundHelpTerminalIds.add("t-proj-1");
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([]);
+      liveTerminalIds.add("t-help-late");
+      // The sweep gate saw no binding; the panel opened before the pre-revoke
+      // re-check ran, so the second look finds one. Queued per-call rather than
+      // via a persistent mockImplementation, which `clearAllMocks` would not
+      // undo and would poison later tests.
+      helpSessionServiceMock.getAssistantBackend
+        .mockReturnValueOnce(null)
+        .mockReturnValueOnce({ terminalId: "t-help-late", webContentsId: 42 });
       const service = makeService();
       await runCheck(service);
 
-      expect(projectStoreMock.updateProjectStatus).toHaveBeenCalledWith("proj-1", "closed", {
-        autoParkedAt: expect.any(Number),
-      });
-      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
+      expect(helpSessionServiceMock.revokeByProjectId).not.toHaveBeenCalled();
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
 
     it("bails after the capture-revoke when a real terminal appeared during the await", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
-      helpTerminalIds.add("t-help");
-      const helpOnly = [{ id: "t-help", projectId: "proj-1", hasPty: true }];
-      // Sweep snapshot + pre-revoke recheck see only the assistant; the
-      // post-revoke recheck sees a real terminal spawned mid-await.
+      staleAssistant("proj-1");
+      // Sweep snapshot + pre-revoke recheck are clean; the post-revoke recheck
+      // sees a real terminal spawned mid-await.
       ptyClientMock.getAllTerminalsAsync
-        .mockResolvedValueOnce(helpOnly)
-        .mockResolvedValueOnce(helpOnly)
-        .mockResolvedValueOnce([...helpOnly, makeTerminal("proj-1")]);
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([makeTerminal("proj-1")]);
       const service = makeService();
       await runCheck(service);
 
@@ -316,11 +410,30 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
 
-    it("a failed assistant capture-revoke degrades gracefully and never blocks the reclaim", async () => {
+    it("bails after the capture-revoke when the assistant came back during the await", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
-      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([makeTerminal("proj-1")]);
-      helpTerminalIds.add("t-proj-1");
+      staleAssistant("proj-1", "t-help-returning");
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([]);
+      // The revoke settles the dead record; the user reopens the panel during
+      // the multi-second await, so the post-revoke recheck must see it live.
+      helpSessionServiceMock.revokeByProjectId.mockImplementationOnce(async () => {
+        liveTerminalIds.add("t-help-returning");
+      });
+      const service = makeService();
+      await runCheck(service);
+
+      expect(helpSessionServiceMock.revokeByProjectId).toHaveBeenCalledWith("proj-1");
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(evictProjectRendererMock).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("a failed capture-revoke of a dead session degrades gracefully and never blocks the reclaim", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      staleAssistant("proj-1");
+      ptyClientMock.getAllTerminalsAsync.mockResolvedValue([]);
       helpSessionServiceMock.revokeByProjectId.mockRejectedValueOnce(new Error("host gone"));
       const service = makeService();
       await runCheck(service);
