@@ -9,11 +9,9 @@ vi.mock("electron", () => ({
   },
 }));
 
-const getAppWebContents = vi.fn();
 const isCachedViewWebContents = vi.fn();
 
 vi.mock("../../../window/webContentsRegistry.js", () => ({
-  getAppWebContents: (...args: unknown[]) => getAppWebContents(...args),
   isCachedViewWebContents: (...args: unknown[]) => isCachedViewWebContents(...args),
 }));
 
@@ -41,19 +39,24 @@ function makeMenu(): MenuStub {
 function makeWindow(bounds = { x: 0, y: 0, width: 1000, height: 800 }) {
   return {
     isDestroyed: () => false,
+    isFocused: () => true,
     getContentBounds: () => bounds,
   };
 }
 
-function makeCtx(win: unknown, webContentsId = 7) {
-  return { event: {}, webContentsId, senderWindow: win, projectId: null };
+function makeCtx(win: unknown, webContentsId = 7, sender?: unknown) {
+  return {
+    event: { sender: sender ?? { isDestroyed: () => false, getZoomFactor: () => 1 } },
+    webContentsId,
+    senderWindow: win,
+    projectId: null,
+  };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   setPlatform("win32");
   isCachedViewWebContents.mockReturnValue(false);
-  getAppWebContents.mockReturnValue({ isDestroyed: () => false, getZoomFactor: () => 1 });
 });
 
 afterEach(() => {
@@ -135,12 +138,12 @@ describe("menu:show-application", () => {
     expect(second.popup).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards the zoom-corrected anchor to popup", async () => {
+  it("converts the anchor with the sending view's own zoom factor", async () => {
     const menu = makeMenu();
     getApplicationMenu.mockReturnValue(menu);
-    getAppWebContents.mockReturnValue({ isDestroyed: () => false, getZoomFactor: () => 2 });
+    const sender = { isDestroyed: () => false, getZoomFactor: () => 2 };
 
-    await showApplication(makeCtx(makeWindow()), { x: 30, y: 50 });
+    await showApplication(makeCtx(makeWindow(), 7, sender), { x: 30, y: 50 });
 
     expect(menu.popup.mock.calls[0]![0]).toMatchObject({ x: 60, y: 100 });
   });
@@ -148,11 +151,14 @@ describe("menu:show-application", () => {
   it("still opens the menu at the cursor when the anchor cannot be resolved", async () => {
     const menu = makeMenu();
     getApplicationMenu.mockReturnValue(menu);
-    getAppWebContents.mockImplementation(() => {
-      throw new Error("view detached");
-    });
+    const sender = {
+      isDestroyed: () => false,
+      getZoomFactor: () => {
+        throw new Error("view detached");
+      },
+    };
 
-    await showApplication(makeCtx(makeWindow()), { x: 30, y: 50 });
+    await showApplication(makeCtx(makeWindow(), 7, sender), { x: 30, y: 50 });
 
     expect(menu.popup).toHaveBeenCalledTimes(1);
     const options = menu.popup.mock.calls[0]![0] as Record<string, unknown>;
@@ -188,9 +194,35 @@ describe("menu:show-application", () => {
     expect(isCachedViewWebContents).toHaveBeenCalledWith(42);
   });
 
+  it("does nothing for an unfocused window, so a popup cannot be baited under the pointer", async () => {
+    const menu = makeMenu();
+    getApplicationMenu.mockReturnValue(menu);
+    const win = { ...makeWindow(), isFocused: () => false };
+
+    await showApplication(makeCtx(win), { x: 12, y: 48 });
+
+    expect(menu.popup).not.toHaveBeenCalled();
+  });
+
+  it("reports rather than rejects when the native popup fails during teardown", async () => {
+    const menu = makeMenu();
+    menu.popup.mockImplementation(() => {
+      throw new Error("window gone");
+    });
+    getApplicationMenu.mockReturnValue(menu);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(showApplication(makeCtx(makeWindow()), { x: 1, y: 1 })).resolves.toBeUndefined();
+    expect(consoleError).toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
   it.each([
     ["no owning window", null],
-    ["a destroyed window", { isDestroyed: () => true, getContentBounds: () => ({}) }],
+    [
+      "a destroyed window",
+      { isDestroyed: () => true, isFocused: () => true, getContentBounds: () => ({}) },
+    ],
   ])("does nothing when the sender has %s", async (_label, win) => {
     const menu = makeMenu();
     getApplicationMenu.mockReturnValue(menu);

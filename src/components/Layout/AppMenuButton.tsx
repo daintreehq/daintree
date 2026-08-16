@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Menu } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -25,40 +25,51 @@ const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative"
  */
 export function AppMenuButton() {
   const buttonRef = useRef<HTMLButtonElement | null>(null);
-  // The element focus should return to before the menu opens. The Edit menu's
+  // Where the caret was before the user reached for the menu. The Edit menu's
   // items act on `webContents.getFocusedWebContents()`, which resolves against
-  // whatever DOM node holds focus — letting this button take focus would point
-  // Cut/Copy/Paste/Select All at the button instead of the user's input.
-  const previousFocusRef = useRef<HTMLElement | null>(null);
+  // whatever DOM node holds focus — so Cut/Copy/Paste/Select All only work if
+  // focus is back on the user's editor when the popup opens.
+  const externalFocusRef = useRef<HTMLElement | null>(null);
 
-  // Pointer activation: keep focus where it already is. `preventDefault` on
-  // pointerdown stops the browser's focus-on-press, so nothing to restore.
+  // Tracked document-wide rather than from this button's own `relatedTarget`:
+  // the toolbar implements roving focus, so arrowing across it calls .focus()
+  // on each item in turn. `relatedTarget` would then be the neighbouring
+  // toolbar button, and restoring THAT would still leave Edit commands aimed
+  // at chrome. Ignoring everything inside the toolbar keeps the last genuine
+  // editing target instead, however the user travelled here.
+  useEffect(() => {
+    if (isMac()) return;
+
+    const handleFocusIn = (event: FocusEvent) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      if (target.closest('[role="toolbar"]')) return;
+      externalFocusRef.current = target;
+    };
+
+    document.addEventListener("focusin", handleFocusIn);
+    return () => document.removeEventListener("focusin", handleFocusIn);
+  }, []);
+
+  // Pointer activation: keep focus exactly where it is. `preventDefault` on
+  // pointerdown suppresses the browser's focus-on-press, so the common case
+  // never disturbs the caret at all and the restore below is a no-op.
   const handlePointerDown = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return;
-    previousFocusRef.current = null;
     event.preventDefault();
   }, []);
 
-  // Keyboard activation: focus genuinely moved here as the user tabbed in, so
-  // capture where it came from and hand it back before the menu opens.
-  const handleFocus = useCallback((event: React.FocusEvent<HTMLButtonElement>) => {
-    const from = event.relatedTarget;
-    previousFocusRef.current =
-      from instanceof HTMLElement && from !== event.currentTarget ? from : null;
-  }, []);
-
   const handleClick = useCallback(() => {
-    const button = buttonRef.current;
-
-    const restoreTo = previousFocusRef.current;
-    previousFocusRef.current = null;
+    // Keyboard activation genuinely moved focus onto this button, so hand it
+    // back before main reads the focused element.
+    const restoreTo = externalFocusRef.current;
     if (restoreTo?.isConnected) {
       restoreTo.focus({ preventScroll: true });
     }
 
     // Anchor the popup under the button. Omitting the rect is survivable —
     // main falls back to Electron's cursor default — so this never blocks.
-    const rect = button?.getBoundingClientRect();
+    const rect = buttonRef.current?.getBoundingClientRect();
     safeFireAndForget(
       window.electron.menu.showApplication(rect ? { x: rect.left, y: rect.bottom } : undefined),
       { context: "Failed to open the application menu" }
@@ -77,7 +88,6 @@ export function AppMenuButton() {
           data-toolbar-item=""
           data-app-menu-button=""
           onPointerDown={handlePointerDown}
-          onFocus={handleFocus}
           onClick={handleClick}
           className={toolbarIconButtonClass}
           aria-label={APP_MENU_LABEL}

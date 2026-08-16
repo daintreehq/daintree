@@ -7,7 +7,7 @@ import type {
 } from "../../../shared/types/menu.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { MENU_METHOD_CHANNELS } from "./menu.preload.js";
-import { getAppWebContents, isCachedViewWebContents } from "../../window/webContentsRegistry.js";
+import { isCachedViewWebContents } from "../../window/webContentsRegistry.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -151,6 +151,12 @@ export const menuNamespace = defineIpcNamespace({
         const win = ctx.senderWindow;
         if (!win || win.isDestroyed()) return;
 
+        // The only legitimate caller is a click on the toolbar button of the
+        // window the user is looking at. Refusing unfocused windows keeps a
+        // renderer from summoning the real application menu under the pointer
+        // and baiting a click onto a privileged item such as Exit.
+        if (!win.isFocused()) return;
+
         // A backgrounded project view can still hold a queued click; without
         // this it would surface a popup over whichever view is now visible.
         if (isCachedViewWebContents(ctx.webContentsId)) return;
@@ -160,12 +166,15 @@ export const menuNamespace = defineIpcNamespace({
 
         let anchor: { x: number; y: number } | null = null;
         try {
-          const wc = getAppWebContents(win);
-          if (!wc.isDestroyed()) {
+          // The sender's own zoom factor, not the window's app view: the rect
+          // was measured in the sender's CSS pixels, so only that view's zoom
+          // converts it back to device-independent window coordinates.
+          const sender = ctx.event.sender;
+          if (!sender.isDestroyed()) {
             anchor = resolveApplicationMenuAnchor(
               payload,
               win.getContentBounds(),
-              wc.getZoomFactor()
+              sender.getZoomFactor()
             );
           }
         } catch {
@@ -173,7 +182,13 @@ export const menuNamespace = defineIpcNamespace({
           // menu entirely — reachability matters more than placement.
         }
 
-        menu.popup({ window: win, ...(anchor ?? {}) });
+        try {
+          menu.popup({ window: win, ...(anchor ?? {}) });
+        } catch (err) {
+          // Losing the window mid-teardown is a benign race, but an unhandled
+          // rejection here would reach the renderer's global error reporter.
+          console.error("[MAIN] Failed to open the application menu:", err);
+        }
       },
       { withContext: true }
     ),

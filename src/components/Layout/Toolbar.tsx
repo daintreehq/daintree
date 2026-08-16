@@ -2012,10 +2012,14 @@ export function Toolbar({
           )}
           {/* Fixed chrome, never part of buttonRegistry/overflow: this is the
               recovery surface for the application menu itself, so it must not
-              be hideable or reorderable into an overflow popover (#11813). */}
-          <div className="app-no-drag">
-            <AppMenuButton />
-          </div>
+              be hideable or reorderable into an overflow popover (#11813).
+              Gated here as well as inside the component so macOS doesn't keep
+              an empty flex item, which would add a stray gap-1.5 column. */}
+          {!isMac() && (
+            <div className="app-no-drag">
+              <AppMenuButton />
+            </div>
+          )}
           <div className="app-no-drag">{buttonRegistry["sidebar-toggle"]!.render()}</div>
 
           <div className={toolbarDividerClass} />
