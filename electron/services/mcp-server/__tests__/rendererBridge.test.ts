@@ -1154,6 +1154,34 @@ describe("rendererBridge — workspace-bound routing (#11789)", () => {
     expect((mockWebContentsRegistry.get(202) as FakeWebContents).send).not.toHaveBeenCalled();
   });
 
+  it("forwards a supplied origin, and defaults to external without one (#11808)", async () => {
+    const wc = registerView("ws-a", 101);
+
+    // Workspace binding is refused for pinned bearers today, so this route only
+    // ever sees external sessions — but httpLifecycle threads origin here
+    // anyway rather than leaning on the default. That is a forward-compat
+    // claim, so it gets asserted rather than just commented.
+    const promiseOne = bridge.dispatchActionForWorkspace(
+      "ws-a",
+      "terminal.list",
+      {},
+      false,
+      "assistant-pane"
+    );
+    await settleDispatch();
+    await promiseOne;
+
+    const promiseTwo = bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false);
+    await settleDispatch();
+    await promiseTwo;
+
+    const origins = wc.send.mock.calls
+      .filter(([channel]) => channel === CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST)
+      .map(([, payload]) => (payload as { sessionOrigin?: unknown }).sessionOrigin);
+
+    expect(origins).toEqual(["assistant-pane", "external"]);
+  });
+
   it("keeps routing to its workspace after another workspace's view is registered", async () => {
     // The isolation the whole feature is for: nothing about workspace B
     // appearing (or being focused) may move workspace A's session.

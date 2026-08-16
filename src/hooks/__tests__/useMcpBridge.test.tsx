@@ -48,7 +48,9 @@ import {
   useMcpBridge,
   buildMcpConfirmPreview,
   resolveMcpConfirmPreviewTarget,
+  tagMcpSpawnSource,
 } from "../useMcpBridge";
+import { TerminalSpawnSourceSchema } from "@/services/actions/definitions/schemas";
 
 function safeManifestEntry(overrides: Partial<ActionManifestEntry> = {}): ActionManifestEntry {
   return {
@@ -540,20 +542,29 @@ describe("useMcpBridge", () => {
       }
     );
 
-    it("falls back to 'mcp' when the dispatch carries no origin at all", async () => {
+    it.each([
+      ["absent", undefined],
+      ["unrecognized", "assistant" as unknown],
+      ["garbage", "'; DROP TABLE" as unknown],
+    ])("falls back to 'mcp' when the origin is %s", async (_label, sessionOrigin) => {
       mocks.get.mockReturnValue(safeManifestEntry({ id: "agent.launch", danger: "safe" }));
       mocks.dispatch.mockResolvedValue({ ok: true, result: { terminalId: "t-no-origin" } });
 
       renderHook(() => useMcpBridge());
 
-      // Nothing type-checks the `webContents.send` side of this channel, so an
-      // origin-less payload has to resolve somewhere. It resolves away from
-      // assistant provenance: under-claiming is recoverable, mislabelling an
-      // external client's spawn as the user's own assistant is not.
+      // Nothing type-checks the `webContents.send` side of this channel, so a
+      // payload carrying no origin — or a value the union doesn't contain —
+      // has to resolve somewhere. It resolves away from assistant provenance:
+      // under-claiming is recoverable, mislabelling an external client's spawn
+      // as the user's own assistant is not. Note the "unrecognized" case sends
+      // the *terminal source* spelling rather than an origin, which is exactly
+      // the kind of near-miss that a substring or truthiness check would let
+      // through.
       await dispatchHandler?.({
-        requestId: "req-origin-absent",
+        requestId: "req-origin-fallback",
         actionId: "agent.launch",
         args: { agentId: "claude" },
+        sessionOrigin: sessionOrigin as never,
       });
 
       expect(mocks.dispatch).toHaveBeenCalledWith(
@@ -561,6 +572,47 @@ describe("useMcpBridge", () => {
         { agentId: "claude", spawnedBy: "mcp", focusPolicy: "preserve" },
         { source: "agent", confirmed: undefined }
       );
+    });
+
+    it("keeps the assistant's provenance across the confirm-gated await", async () => {
+      mocks.get.mockReturnValue(confirmManifestEntry({ id: "recipe.run", title: "Run Recipe" }));
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { terminalId: "t-confirm" } });
+
+      renderHook(() => useMcpBridge());
+
+      // A confirm-gated spawn parks on the approval modal for as long as the
+      // user takes. Origin is read once, up front, so nothing about that wait
+      // can relabel who asked — the risk being a later refactor that re-reads
+      // provenance after the await, when the session may be gone.
+      const dispatched = dispatchHandler?.({
+        requestId: "req-confirm-origin",
+        actionId: "recipe.run",
+        args: { recipeId: "recipe-1" },
+        sessionOrigin: "assistant-pane",
+      });
+
+      await Promise.resolve();
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      await dispatched;
+
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        "recipe.run",
+        { recipeId: "recipe-1", spawnedBy: "assistant", focusPolicy: "preserve" },
+        { source: "agent", confirmed: true }
+      );
+    });
+
+    it("stamps a spawnedBy the real action schema accepts", () => {
+      // The bridge writes this field; action argsSchemas validate it. Nothing
+      // in the tests above would notice them drifting apart, because they mock
+      // `actionService.dispatch` — and the production symptom of a drift is
+      // every assistant-launched spawn failing validation before it launches.
+      for (const origin of ["help", "assistant-pane", "external"] as const) {
+        const tagged = tagMcpSpawnSource("agent.launch", {}, origin) as { spawnedBy: unknown };
+        expect(TerminalSpawnSourceSchema.safeParse(tagged.spawnedBy).success).toBe(true);
+      }
     });
 
     it("leaves non-spawning actions untouched regardless of origin", async () => {

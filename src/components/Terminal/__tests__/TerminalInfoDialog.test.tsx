@@ -348,6 +348,29 @@ describe("TerminalInfoDialog", () => {
     expect(clipboardText).toContain("Started via MCP: No");
   });
 
+  it("reports unknown provenance for a panel with no spawn source (#11808)", async () => {
+    // `spawnedBy` is runtime-only and never serialized, so every panel restored
+    // across a restart lands here — this is the common case, not an edge one.
+    mockPanelsById = { "test-id": { id: "test-id", location: "grid" } };
+    dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
+
+    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Session Metadata")).toBeTruthy();
+    });
+
+    expect(screen.queryByText("Started By:")).toBeNull();
+
+    fireEvent.click(screen.getByText("Copy to Clipboard"));
+    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
+    expect(clipboardText).toContain("Spawn Source: N/A");
+    expect(clipboardText).toContain("Started via MCP: Unknown");
+    expect(clipboardText).not.toContain("Started By:");
+  });
+
   it("renders Launch Context and Live State sections for agent terminals", async () => {
     const payload = makePayload({
       kind: "terminal",
