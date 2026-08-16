@@ -627,6 +627,80 @@ describe("SessionStore dropBearerState wiring (#8778)", () => {
   });
 });
 
+describe("SessionStore.getTier liveness gate (#11799)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    store.drain();
+    vi.useRealTimers();
+  });
+
+  it("resolves the recorded tier while an SSE transport is live", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "external");
+
+    expect(store.getTier("s")).toBe("external");
+  });
+
+  it("resolves the recorded tier while a Streamable-HTTP transport is live", () => {
+    store.httpSessions.set("h", fakeHttpSession());
+    store.sessionTierMap.set("h", "external");
+
+    expect(store.getTier("h")).toBe("external");
+  });
+
+  it("returns null for a session id no transport map has ever seen", () => {
+    expect(store.getTier("never-connected")).toBeNull();
+  });
+
+  it("returns null when a tier row outlives both transports", () => {
+    // The precise shape of the bug: teardown removes the transport, and until
+    // the tier row goes too, a read would answer from a session that is gone.
+    // `external` makes the stakes explicit — the old default resolved this to
+    // `workbench`, a peer allowlist holding tools `external` withholds.
+    store.sessionTierMap.set("orphan", "external");
+
+    expect(store.getTier("orphan")).toBeNull();
+  });
+
+  it("returns null once revokeSession has torn the session down", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "external");
+    expect(store.getTier("s")).toBe("external");
+
+    store.revokeSession("s");
+
+    expect(store.getTier("s")).toBeNull();
+  });
+
+  it("returns null for every session after drain()", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "system");
+    store.httpSessions.set("h", fakeHttpSession());
+    store.sessionTierMap.set("h", "action");
+
+    store.drain();
+
+    expect(store.getTier("s")).toBeNull();
+    expect(store.getTier("h")).toBeNull();
+  });
+
+  it("keeps the workbench fallback for a live session with no tier row", () => {
+    // Liveness and tier are separate signals: a live transport whose tier row
+    // is missing is not the revocation case, and must not be answered with the
+    // refusal reserved for it.
+    store.sessions.set("s", fakeSseSession());
+
+    expect(store.getTier("s")).toBe("workbench");
+  });
+});
+
 describe("SessionStore tier-elevation decay (#8462)", () => {
   let store: SessionStore;
   let decayed: string[];

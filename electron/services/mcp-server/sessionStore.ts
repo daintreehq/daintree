@@ -615,7 +615,31 @@ export class SessionStore {
     this.tierElevationBaseline.delete(sessionId);
   }
 
-  getTier(sessionId: string): McpTier {
+  /**
+   * The tier a *live* session is authorized at, or `null` when no live
+   * transport owns `sessionId` (#11799).
+   *
+   * The liveness check comes first on purpose. `workbench` is not a floor:
+   * `TIER_ALLOWLISTS` gives `external` its own allowlist rather than a subset
+   * of `workbench`, so the two are peers. Returning the `workbench` default for
+   * a session that no longer exists therefore *widens* a revoked external
+   * bearer onto 46 tools its own allowlist withholds — `file.read`,
+   * `files.search`, `copyTree.generate` and `git.getFileDiff` among them —
+   * instead of refusing it. Revocation tears down `sessions`/`httpSessions`
+   * before it deletes the tier row, so transport membership is the signal that
+   * outlives nothing.
+   *
+   * `null` rather than a throw or a sentinel tier: there is no tier value that
+   * means "deny everything", and the nullable return makes the compiler
+   * enumerate every authorization site, so no caller can quietly inherit the
+   * old fail-open default. Callers fail closed — see `SESSION_GONE`.
+   *
+   * The `workbench` fallback survives only for a session that *is* live but has
+   * no tier row, which handshake ordering makes unreachable in production
+   * (every connect path stamps the tier before registering the transport).
+   */
+  getTier(sessionId: string): McpTier | null {
+    if (!this.sessions.has(sessionId) && !this.httpSessions.has(sessionId)) return null;
     return this.sessionTierMap.get(sessionId) ?? "workbench";
   }
 
@@ -662,9 +686,10 @@ export class SessionStore {
       }
       // The tier map can briefly outlive the transport during teardown; require
       // a live transport so a decaying session never reports as connected.
-      if (!this.sessions.has(transportSessionId) && !this.httpSessions.has(transportSessionId)) {
-        continue;
-      }
+      // `getTier` carries that liveness check itself (#11799), so its `null` is
+      // the same "no live transport" signal this scan used to test by hand.
+      const tier = this.getTier(transportSessionId);
+      if (tier === null) continue;
       // getActiveGrants is lazy-eviction only — a grant past expiresAt can
       // linger until the periodic sweep (~5min). Filter those out so the
       // snapshot never reports a logically-expired grant as active; the next
@@ -689,7 +714,7 @@ export class SessionStore {
         remainingUses: g.remainingUses,
       }));
       return {
-        tier: this.getTier(transportSessionId),
+        tier,
         activeGrants: [...activeGrants, ...nativeGrants],
       };
     }

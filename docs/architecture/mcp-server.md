@@ -265,10 +265,18 @@ Two distinct mechanisms widen what a session can do past its baseline:
 
 ## End-to-end `tools/call` flow (`sessionServer.ts`)
 
-The `CallTool` handler is a fixed-order gate chain. Each gate that denies writes an audit record and returns a structured tool-error (`buildToolError`) — never a silent skip.
+The `CallTool` handler is a fixed-order gate chain. Each gate that denies writes an audit record and returns a structured tool-error (`buildToolError`) — never a silent skip. Gate 0 is the exception: a request whose session is already gone is refused without an audit record, because there is no tier it could honestly be recorded under.
+
+**`getTier` returns `McpTier | null`, and `null` means "no live transport" (#11799).** `workbench` is not a floor — `TIER_ALLOWLISTS` gives `external` its own allowlist rather than a subset of `workbench`, so defaulting a vanished session to `workbench` _widened_ a revoked external bearer onto 46 tools its allowlist withholds. Every authorization path (`tools/list`, `tools/call`, and all four resource handlers) resolves the tier once at entry and fails closed on `null` with `SESSION_GONE`. Discovery throws rather than answering with an empty list, which would read as a legitimate empty surface.
+
+**Authorization has one lifetime per call.** The tier is captured once, at admission, and reused for the rest of the handler — through the manifest fetch, the native-grant charge, and dispatch. Revocation stops the _next_ request; it does not retroactively refuse a call the gate already admitted, and re-reading mid-handler would only make the response disagree with the gate and the audit record.
 
 ```
 tools/call(actionId, args)
+  │
+  ├─0 Session liveness: sessionStore.getTier(sessionId) → null?
+  │      └─ yes → return SESSION_GONE (business, do not retry) before any audit,
+  │               denial counter, grant lookup, dedup entry or dispatch
   │
   ├─1 Tier floor: isTierPermitted(tier, actionId)?
   │      └─ no → grantCache.check(sessionId, actionId)
