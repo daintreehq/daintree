@@ -6,7 +6,7 @@ import { getWebContentsForProject } from "../../window/webContentsRegistry.js";
 import { unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
 import type { WorkspaceViewLeaseRegistry } from "./workspaceViewLease.js";
 import type { ActionContext, ActionManifestEntry } from "../../../shared/types/actions.js";
-import type { McpBearerIdentity } from "../../../shared/types/ipc/mcpServer.js";
+import type { McpBearerIdentity, McpSessionOrigin } from "../../../shared/types/ipc/mcpServer.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import type {
   PendingRequest,
@@ -431,6 +431,7 @@ export function createRendererBridge(
     actionId: string,
     args: unknown,
     confirmed: boolean,
+    sessionOrigin: McpSessionOrigin,
     contextOverride?: ActionContext,
     callerInfo?: McpBearerIdentity,
     route?: BridgeRoute
@@ -506,6 +507,11 @@ export function createRendererBridge(
             // (#9157). Only the unpinned external path supplies it; absent for
             // pinned help-session dispatch so the dialog stays provenance-free.
             callerInfo,
+            // How the dispatching session authenticated (#11808), so the
+            // renderer can stamp a spawn it creates as assistant-launched
+            // rather than lumping every MCP-borne spawn under one origin.
+            // Always present: main resolves it, the caller never sends it.
+            sessionOrigin,
           });
         } catch (err) {
           clearTimeout(timer);
@@ -536,13 +542,15 @@ export function createRendererBridge(
     actionId: string,
     args: unknown,
     confirmed = false,
-    callerInfo?: McpBearerIdentity
+    callerInfo?: McpBearerIdentity,
+    sessionOrigin: McpSessionOrigin = "external"
   ): Promise<DispatchEnvelope> {
     return sendDispatchRequest(
       () => getActiveProjectWebContents(),
       actionId,
       args,
       confirmed,
+      sessionOrigin,
       undefined,
       callerInfo
     );
@@ -633,13 +641,15 @@ export function createRendererBridge(
     actionId: string,
     args: unknown,
     confirmed = false,
-    contextOverride?: ActionContext
+    contextOverride?: ActionContext,
+    sessionOrigin: McpSessionOrigin = "external"
   ): Promise<DispatchEnvelope> {
     return sendDispatchRequest(
       () => getPinnedWebContents(id),
       actionId,
       args,
       confirmed,
+      sessionOrigin,
       contextOverride,
       undefined,
       { kind: "pinned", webContentsId: id }
@@ -683,13 +693,15 @@ export function createRendererBridge(
     workspaceId: string,
     actionId: string,
     args: unknown,
-    confirmed = false
+    confirmed = false,
+    sessionOrigin: McpSessionOrigin = "external"
   ): Promise<DispatchEnvelope> {
     return sendDispatchRequest(
       () => getWorkspaceWebContents(workspaceId),
       actionId,
       args,
       confirmed,
+      sessionOrigin,
       undefined,
       undefined,
       { kind: "workspace", workspaceId }

@@ -1252,10 +1252,13 @@ describe("HttpLifecycle", () => {
 
       await sessionDeps.dispatchAction("terminal.kill", { id: "t-1" }, false);
 
-      expect(deps.dispatchAction).toHaveBeenCalledWith("terminal.kill", { id: "t-1" }, false, {
-        token4LastChars: "1234",
-        userAgent: "Claude Code",
-      });
+      expect(deps.dispatchAction).toHaveBeenCalledWith(
+        "terminal.kill",
+        { id: "t-1" },
+        false,
+        { token4LastChars: "1234", userAgent: "Claude Code" },
+        "external"
+      );
     });
 
     it("passes callerInfo: undefined when the session has no tracked bearer", async () => {
@@ -1272,7 +1275,96 @@ describe("HttpLifecycle", () => {
 
       await sessionDeps.dispatchAction("actions.list", {}, false);
 
-      expect(deps.dispatchAction).toHaveBeenCalledWith("actions.list", {}, false, undefined);
+      expect(deps.dispatchAction).toHaveBeenCalledWith(
+        "actions.list",
+        {},
+        false,
+        undefined,
+        "external"
+      );
+    });
+  });
+
+  describe("buildSessionServerDeps — spawn provenance origin (#11808)", () => {
+    type OriginHandle = {
+      buildSessionServerDeps: (
+        sessionId: string
+      ) => import("../sessionServer.js").SessionServerDeps;
+    };
+
+    /** Pinned-route fixture: `fakeDeps` leaves the pinned dispatcher unwired. */
+    function pinnedOriginDeps(): HttpLifecycleDeps {
+      return fakeDeps({
+        dispatchActionForWebContents: vi
+          .fn()
+          .mockResolvedValue({ result: { ok: true, result: null } }),
+      } as unknown as Partial<HttpLifecycleDeps>);
+    }
+
+    it.each(["help", "assistant-pane", "external"] as const)(
+      "forwards a %s session's origin on the pinned dispatch route",
+      async (origin) => {
+        const deps = pinnedOriginDeps();
+        const lc = new HttpLifecycle(deps);
+        deps.sessionStore.sessionOriginMap.set("sess-origin", origin);
+        deps.sessionStore.sessionWebContentsMap.set("sess-origin", 42);
+
+        const sessionDeps = (lc as unknown as OriginHandle).buildSessionServerDeps("sess-origin");
+        await sessionDeps.dispatchAction("agent.launch", {}, false);
+
+        expect(deps.dispatchActionForWebContents).toHaveBeenCalledWith(
+          42,
+          "agent.launch",
+          {},
+          false,
+          undefined,
+          origin
+        );
+      }
+    );
+
+    it("keeps the build-time origin after the session's binding is torn down", async () => {
+      const deps = pinnedOriginDeps();
+      const lc = new HttpLifecycle(deps);
+      deps.sessionStore.sessionOriginMap.set("sess-teardown", "assistant-pane");
+      deps.sessionStore.sessionWebContentsMap.set("sess-teardown", 7);
+
+      const sessionDeps = (lc as unknown as OriginHandle).buildSessionServerDeps("sess-teardown");
+
+      // `clearSessionBinding` runs on teardown while a dispatch can still be in
+      // flight, and `getOrigin` fails closed to "external" once the entry is
+      // gone. Reading origin inside the closure would therefore relabel the
+      // assistant's own spawn as an external client's the moment its session
+      // ended — the build-time snapshot is what stops that. The pin is cleared
+      // by the same call, so this asserts through the unpinned route.
+      deps.sessionStore.clearSessionBinding("sess-teardown");
+      await sessionDeps.dispatchAction("agent.launch", {}, false);
+
+      expect(deps.dispatchAction).toHaveBeenCalledWith(
+        "agent.launch",
+        {},
+        false,
+        undefined,
+        "assistant-pane"
+      );
+    });
+
+    it("falls back to external for a session that never recorded an origin", async () => {
+      const deps = pinnedOriginDeps();
+      const lc = new HttpLifecycle(deps);
+      deps.sessionStore.sessionWebContentsMap.set("sess-no-origin", 9);
+
+      const sessionDeps = (lc as unknown as OriginHandle).buildSessionServerDeps("sess-no-origin");
+      await sessionDeps.dispatchAction("agent.launch", {}, false);
+
+      expect(deps.dispatchActionForWebContents).toHaveBeenCalledWith(
+        9,
+        "agent.launch",
+        {},
+        false,
+        undefined,
+        "external"
+      );
     });
   });
 
@@ -1803,11 +1895,15 @@ describe("HttpLifecycle", () => {
         await sessionDeps.dispatchAction("terminal.list", {}, false);
 
         expect(deps.requestManifestForWorkspace).toHaveBeenCalledWith("ws-a");
+        // Only external sessions may bind a workspace — a selector from a
+        // pinned bearer is refused at handshake — so the origin threaded here
+        // is always "external" (#11808).
         expect(deps.dispatchActionForWorkspace).toHaveBeenCalledWith(
           "ws-a",
           "terminal.list",
           {},
-          false
+          false,
+          "external"
         );
         // Never the focus-following path — that is the retargeting this removes.
         expect(deps.dispatchAction).not.toHaveBeenCalled();

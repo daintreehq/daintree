@@ -933,6 +933,48 @@ describe("McpServerService", () => {
     expect(after.status).toBe(401);
   });
 
+  it("carries the assistant's session origin all the way to the renderer dispatch payload (#11808)", async () => {
+    // The unit tests either side of this one stop at a mock: HttpLifecycle is
+    // checked against a fake dispatcher, and the bridge is checked against a
+    // hand-passed origin. Neither covers the adapter lambdas in
+    // `McpServerService` that wire the two together — and because the bridge
+    // defaults a missing origin to "external", dropping the argument there
+    // would leave every one of those tests green while silently relabelling
+    // every assistant-launched run as an external client's. Only a real
+    // handshake through the whole chain catches that.
+    const win = createMockWindow({
+      getManifest: () => [
+        createManifestEntry({
+          id: "terminal.list",
+          title: "List Terminals",
+          description: "Read the terminal list",
+          kind: "query",
+        }),
+      ],
+      dispatchAction: () => ({ ok: true, result: "ok" }),
+    });
+    await service.start(win.window);
+    service.setHelpTokenValidator((token) => (token === "help-token" ? "action" : false));
+    service.setHelpSessionWebContentsResolver((token) =>
+      token === "help-token" ? win.webContents.id : null
+    );
+
+    const helped = await connectClient(service.currentPort!, {
+      Authorization: "Bearer help-token",
+    });
+    transports.push(helped.transport);
+    await helped.client.callTool({ name: "terminal.list", arguments: {} });
+
+    const dispatchPayloads = win.webContents.send.mock.calls
+      .filter(([channel]) => channel === CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST)
+      .map(([, payload]) => payload as { sessionOrigin?: string });
+
+    expect(dispatchPayloads).toHaveLength(1);
+    // "help", not the "external" default — the value had to survive the
+    // handshake, the build-time snapshot, and both adapter hops to get here.
+    expect(dispatchPayloads[0]!.sessionOrigin).toBe("help");
+  });
+
   it("pins each help-session bearer to its own renderer WebContents — tool calls never cross windows (#7002)", async () => {
     // Two windows, each with a distinct project-view WebContents. Two
     // help-session bearers — one minted from each. Without per-session

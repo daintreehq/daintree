@@ -205,15 +205,35 @@ export class McpServerService {
       turnOutcomeService: this.turnOutcomeService,
       abusePolicy,
       requestManifest: () => this.bridge.requestManifest(),
-      dispatchAction: (actionId, args, confirmed, callerInfo) =>
-        this.bridge.dispatchAction(actionId, args, confirmed, callerInfo),
+      dispatchAction: (actionId, args, confirmed, callerInfo, sessionOrigin) =>
+        this.bridge.dispatchAction(actionId, args, confirmed, callerInfo, sessionOrigin),
       requestManifestForWebContents: (id) => this.bridge.requestManifestForWebContents(id),
-      dispatchActionForWebContents: (id, actionId, args, confirmed, contextOverride) =>
-        this.bridge.dispatchActionForWebContents(id, actionId, args, confirmed, contextOverride),
+      dispatchActionForWebContents: (
+        id,
+        actionId,
+        args,
+        confirmed,
+        contextOverride,
+        sessionOrigin
+      ) =>
+        this.bridge.dispatchActionForWebContents(
+          id,
+          actionId,
+          args,
+          confirmed,
+          contextOverride,
+          sessionOrigin
+        ),
       requestManifestForWorkspace: (workspaceId) =>
         this.bridge.requestManifestForWorkspace(workspaceId),
-      dispatchActionForWorkspace: (workspaceId, actionId, args, confirmed) =>
-        this.bridge.dispatchActionForWorkspace(workspaceId, actionId, args, confirmed),
+      dispatchActionForWorkspace: (workspaceId, actionId, args, confirmed, sessionOrigin) =>
+        this.bridge.dispatchActionForWorkspace(
+          workspaceId,
+          actionId,
+          args,
+          confirmed,
+          sessionOrigin
+        ),
       resolveWorkspaceBinding: (workspaceId) => this.bridge.resolveWorkspaceBinding(workspaceId),
       handleWaitUntilIdle: (rawArgs, signal, options) =>
         handleWaitUntilIdle(rawArgs, signal, options),
