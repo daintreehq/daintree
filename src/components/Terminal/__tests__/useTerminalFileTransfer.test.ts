@@ -24,12 +24,21 @@ vi.mock("@/clients", () => ({
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     notifyUserInput: vi.fn(),
+    focus: vi.fn(),
     get: vi.fn(() =>
       instanceState.hasManagedInstance
         ? { terminal: { modes: { bracketedPasteMode: instanceState.bracketedPasteMode } } }
         : null
     ),
   },
+}));
+
+// The real store constructs the terminal-instance singleton and several
+// controllers at module scope. Only the focus-preference setter is exercised
+// here, so the mock stays that narrow — a wider fake would drift.
+const setPreferredTerminalFocusTarget = vi.hoisted(() => vi.fn<(target: string) => void>());
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget }) },
 }));
 
 import type { EditorView } from "@codemirror/view";
@@ -542,6 +551,7 @@ describe("useTerminalFileTransfer hook", () => {
       current: {
         state: { selection: { main: { head: 0 } } },
         dispatch,
+        focus: vi.fn(),
       } as unknown as EditorView,
     };
 
@@ -1156,5 +1166,131 @@ describe("useTerminalFileTransfer hook", () => {
     expect(over.defaultPrevented).toBe(false);
     expect(dataTransfer.dropEffect).toBe("copy");
     expect(terminalClient.write).not.toHaveBeenCalled();
+  });
+
+  // --- The drop leaves the pane selected and ready to type into (#11809) ---
+  describe("selection", () => {
+    it("records the surface, selects the pane, then focuses the xterm", () => {
+      const onDropSelect = vi.fn();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
+      dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+
+      // The order is load-bearing, not incidental: the pane's focus effect reads
+      // the preference to route the keyboard when selection lands, so leaving it
+      // on "hybridInput" would send focus to the input bar the paths bypassed.
+      expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("xterm");
+      expect(setPreferredTerminalFocusTarget.mock.invocationCallOrder[0]!).toBeLessThan(
+        onDropSelect.mock.invocationCallOrder[0]!
+      );
+      expect(onDropSelect.mock.invocationCallOrder[0]!).toBeLessThan(
+        vi.mocked(terminalInstanceService.focus).mock.invocationCallOrder[0]!
+      );
+      expect(terminalInstanceService.focus).toHaveBeenCalledWith("term-1");
+    });
+
+    // The gesture is one drop however many files rode on it, so the pane is
+    // selected once — not once per path, which would be invisible here but real
+    // in the wake and MRU stamping `setFocused` drives.
+    it("selects once per drop, not once per path", () => {
+      const onDropSelect = vi.fn();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
+      dropInternalPaths([`${CWD}/a.ts`, `${CWD}/b.ts`, `${CWD}/c.ts`]);
+
+      expect(terminalClient.write).toHaveBeenCalledTimes(1);
+      expect(onDropSelect).toHaveBeenCalledTimes(1);
+    });
+
+    it("selects the pane for an in-app drag exactly as it does for an OS drop", () => {
+      const onDropSelect = vi.fn();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
+      dropInternalPaths([`${CWD}/src/App.tsx`]);
+
+      expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("xterm");
+      expect(onDropSelect).toHaveBeenCalledTimes(1);
+      expect(terminalInstanceService.focus).toHaveBeenCalledWith("term-1");
+    });
+
+    /**
+     * Nothing about the pane moved. Each caller renders its own hook: the hook
+     * binds to the shared container, so two live at once would both answer the
+     * same drop.
+     */
+    function expectNothingSelected(onDropSelect: ReturnType<typeof vi.fn>) {
+      expect(terminalClient.write).not.toHaveBeenCalled();
+      expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
+      expect(onDropSelect).not.toHaveBeenCalled();
+      expect(terminalInstanceService.focus).not.toHaveBeenCalled();
+    }
+
+    // A terminal that took nothing has not been pointed at in any sense that
+    // should move the selection off whatever the user was already typing into.
+    it("selects nothing when the input is locked", () => {
+      const onDropSelect = vi.fn();
+      renderFileTransferHook({ isInputLocked: true, cwdProvider: () => CWD, onDropSelect });
+      dropFiles([fileAt("App.tsx", `${CWD}/src/App.tsx`)]);
+
+      expectNothingSelected(onDropSelect);
+    });
+
+    // The OS declined to resolve a path, so there is nothing referenceable.
+    it("selects nothing when no dropped file resolves to a path", () => {
+      const onDropSelect = vi.fn();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
+      dropFiles([fileAt("no-path.txt")]);
+
+      expectNothingSelected(onDropSelect);
+    });
+
+    // A relative path names nothing the agent could open, so the whole payload
+    // is rejected rather than partially delivered.
+    it("selects nothing when the in-app payload is rejected", () => {
+      const onDropSelect = vi.fn();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
+      dropInternalPaths(["relative/App.tsx"]);
+
+      expectNothingSelected(onDropSelect);
+    });
+
+    // Pasting an image writes the same kind of reference, but the pointer never
+    // pointed anywhere — the pane the user is typing into is already the target.
+    it("does not select the pane for an image paste", async () => {
+      const onDropSelect = vi.fn();
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect });
+      await pasteImage();
+
+      expect(terminalClient.write).toHaveBeenCalledTimes(1);
+      expect(onDropSelect).not.toHaveBeenCalled();
+      expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
+    });
+
+    // The owning pane rebuilds this callback every render. Reading it through a
+    // ref is what lets the listeners stay registered across those renders, so a
+    // stale capture would only ever show up after one.
+    it("calls the callback the latest render supplied", () => {
+      const stale = vi.fn();
+      const fresh = vi.fn();
+      const { rerender } = renderFileTransferHook({
+        detectedAgentId: "claude",
+        cwdProvider: () => CWD,
+        onDropSelect: stale,
+      });
+      rerender({ detectedAgentId: "claude", cwdProvider: () => CWD, onDropSelect: fresh });
+      dropInternalPaths([`${CWD}/src/App.tsx`]);
+
+      expect(stale).not.toHaveBeenCalled();
+      expect(fresh).toHaveBeenCalledTimes(1);
+    });
+
+    // The Assistant overlay and the Dev Preview console both run this hook over
+    // a PTY that owns no selectable pane, so they pass no callback. Their own
+    // surface still takes the keyboard; what they must never do is reach for a
+    // panel id they don't have.
+    it("still focuses the xterm when no pane owns the terminal", () => {
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      dropInternalPaths([`${CWD}/src/App.tsx`]);
+
+      expect(terminalClient.write).toHaveBeenCalledTimes(1);
+      expect(terminalInstanceService.focus).toHaveBeenCalledWith("term-1");
+    });
   });
 });

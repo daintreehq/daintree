@@ -272,8 +272,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       themeCompartmentRef,
     } = compartments;
 
+    // `onActivate` is the same pane-selection callback the pointer handlers
+    // below fire, so a drop lands the pane in exactly the state a click on the
+    // bar would (#11809). Called with no argument, which is what keeps the
+    // shift/cmd fleet gestures a click carries out of a drop. Absent for the
+    // Assistant, whose input bar owns no selectable pane.
     const { handleDragEnter, handleDragOver, handleDragLeave, handleDrop, isDragOverFiles } =
-      useDragDrop(editorViewRef, cwd);
+      useDragDrop(editorViewRef, cwd, onActivate);
 
     const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(cwd);
 

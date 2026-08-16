@@ -10,6 +10,7 @@ import {
 import { IMAGE_EXTENSIONS } from "../useTerminalFileTransfer";
 import { formatAtFileTokenForCwd } from "../hybridInputParsing";
 import { addImageChip, addFileDropChip } from "../inputEditorExtensions";
+import { usePanelStore } from "@/store/panelStore";
 
 /**
  * A dropped entry, normalized across the two provenances before anything is
@@ -23,7 +24,19 @@ interface DroppedEntry {
   fileSize: number | undefined;
 }
 
-export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>, cwd: string) {
+/**
+ * @param onDropSelect Selects the panel that owns this input, invoked only once
+ *   a drop has actually inserted something. The hook knows which *surface* was
+ *   dropped on but not which panel owns it — `terminalId` is a PTY id, and the
+ *   Assistant's input bar has one without being a selectable panel at all. So
+ *   panel selection is delegated to the caller and simply absent where there is
+ *   no panel to select.
+ */
+export function useDragDrop(
+  editorViewRef: React.RefObject<EditorView | null>,
+  cwd: string,
+  onDropSelect?: () => void
+) {
   const dragDepthRef = useRef(0);
   const [isDragOverFiles, setIsDragOverFiles] = useState(false);
 
@@ -132,6 +145,12 @@ export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>, c
 
       if (resolved.length === 0) return;
 
+      // A thumbnail await above can outlive the editor it started in: the pane
+      // can unmount or remount (`useEditorFactory` destroys the view and nulls
+      // the ref) while an image resolves. Inserting into a detached view was
+      // already inert, but selecting a panel off the back of one would not be.
+      if (editorViewRef.current !== view) return;
+
       try {
         const cursor = view.state.selection.main.head;
         const imageEffects: ReturnType<typeof addImageChip.of>[] = [];
@@ -173,11 +192,30 @@ export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>, c
           effects: [...imageEffects, ...fileEffects],
           selection: { anchor: cursor + insertText.length },
         });
+
+        // The gesture already pointed at this input, so it ends the same way a
+        // click on it does: pane selected, caret here, ready to type about the
+        // file that just landed (#11809). Only a drop that inserted something
+        // earns that — the early returns above leave selection alone.
+        //
+        // Order matters. The preference is what `TerminalPane`'s focus effect
+        // reads to decide which sub-surface the newly selected pane hands the
+        // keyboard to, so a stale "xterm" would yank focus straight back out.
+        //
+        // `view.focus()` rather than the panel focus registry: the registry
+        // routes to `focusWithCursorAtEnd`, which drags the caret to the end of
+        // the draft whenever the editor doesn't already hold focus — undoing
+        // the caret this dispatch just parked after the chip. Focusing directly
+        // keeps it, and makes the pane effect's own later call a no-op, since
+        // it preserves an editor that already owns DOM focus.
+        usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
+        onDropSelect?.();
+        view.focus();
       } catch {
         // Editor may have been destroyed
       }
     },
-    [editorViewRef, cwd]
+    [editorViewRef, cwd, onDropSelect]
   );
 
   return { handleDragEnter, handleDragOver, handleDragLeave, handleDrop, isDragOverFiles };
