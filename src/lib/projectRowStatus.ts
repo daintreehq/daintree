@@ -109,6 +109,22 @@ export interface ProjectRowStatus {
    * keeps — a tone check would silently delete them along with the timestamps.
    */
   isDormantFallback?: true;
+  /**
+   * Set when this status will yield its leading dot to the resumable-agent mark
+   * (#11801, #11822). Both of the rows that reach it have stopped: the
+   * opened-time fallback draws no dot at all, and an auto-parked project keeps
+   * its explanatory line but has only a settled ring to give up.
+   *
+   * Separate from `isDormantFallback` because the two answer different
+   * questions. That flag decides whether a row has a second line; this one
+   * decides which mark wins the slot, and auto-park needs to say yes to the
+   * second while still saying no to the first.
+   *
+   * Unset is the conservative answer: a status that says what a project is
+   * doing keeps its own dot, so a state added later cannot start promising a
+   * resume it was never classified for.
+   */
+  allowsResumeMark?: true;
 }
 
 /** Compact duration for a wait that is already minutes old. Sub-minute reads as "just now". */
@@ -398,9 +414,19 @@ function getWorkspaceActivityStatus(
  */
 function getOpenedStatus(lastOpened: number): WorkspaceActivityStatus {
   if (lastOpened > 0) {
-    return { text: `Opened ${formatTimeAgo(lastOpened)}`, tone: "muted", isDormantFallback: true };
+    return {
+      text: `Opened ${formatTimeAgo(lastOpened)}`,
+      tone: "muted",
+      isDormantFallback: true,
+      allowsResumeMark: true,
+    };
   }
-  return { text: "Not opened yet", tone: "muted", isDormantFallback: true };
+  return {
+    text: "Not opened yet",
+    tone: "muted",
+    isDormantFallback: true,
+    allowsResumeMark: true,
+  };
 }
 
 /** The one status line a project row has to show, if it shows one at all. */
@@ -422,9 +448,11 @@ export function getProjectRowStatus(
   if (activity) return withHint(activity);
 
   // Auto-closed by the background-idle sweep (#10830) — name the reason rather
-  // than showing a bare time-ago that makes the project look merely stale.
+  // than showing a bare time-ago that makes the project look merely stale. The
+  // reason is the row's own line; the ring beside it is only settled state, so
+  // it steps aside for a resume promise that has more to say (#11822).
   if (project.status === "closed" && project.autoParkedAt) {
-    return withHint({ text: "Suspended to free memory", tone: "muted" });
+    return withHint({ text: "Suspended to free memory", tone: "muted", allowsResumeMark: true });
   }
 
   return withHint(getOpenedStatus(project.lastOpened));

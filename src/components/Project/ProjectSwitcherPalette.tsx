@@ -234,24 +234,29 @@ function StatusDot({
   status: ProjectRowStatus;
   showResumeDot?: boolean;
 }) {
+  // One slot, one decision. Written as a single choice rather than two
+  // conditions so the slot cannot hold two dots at once: the resume mark only
+  // reaches here on a status that already agreed to yield, and an auto-parked
+  // row is the case where both would otherwise have drawn (#11822).
+  const dot = showResumeDot ? (
+    // Hidden from assistive tech, which hears the row's own "N agents will
+    // resume" phrase instead — a live region per row would re-announce the
+    // whole list on every render, and colour must not be the only carrier.
+    <div
+      className="w-1.5 h-1.5 rounded-full bg-text-secondary"
+      data-testid="workspace-resume-dot"
+      aria-hidden="true"
+    />
+  ) : status.isDormantFallback ? null : (
+    <div
+      className={cn("w-1.5 h-1.5 rounded-full", ROW_DOT_CLASS[status.tone])}
+      data-testid="workspace-status-dot"
+    />
+  );
+
   return (
     <div className="w-1.5 shrink-0" data-testid="workspace-status-slot">
-      {!status.isDormantFallback && (
-        <div
-          className={cn("w-1.5 h-1.5 rounded-full", ROW_DOT_CLASS[status.tone])}
-          data-testid="workspace-status-dot"
-        />
-      )}
-      {showResumeDot && (
-        // Hidden from assistive tech, which hears the row's own "N agents will
-        // resume" phrase instead — a live region per row would re-announce the
-        // whole list on every render, and colour must not be the only carrier.
-        <div
-          className="w-1.5 h-1.5 rounded-full bg-text-secondary"
-          data-testid="workspace-resume-dot"
-          aria-hidden="true"
-        />
-      )}
+      {dot}
     </div>
   );
 }
@@ -260,10 +265,11 @@ function StatusDot({
  * Whether the row should mark that opening this project brings agents back
  * (#11801).
  *
- * Gated on the dormant fallback because a live status always outranks the
- * promise: the coloured dot says what the project is doing now, the grey one
- * only says what it would come back with. So the mark lands exactly where the
- * slot was already empty — the dormant rows #11692 cleared — and never
+ * Gated on the status classifier's own answer because a live status always
+ * outranks the promise: the coloured dot says what the project is doing now,
+ * the grey one only says what it would come back with. So the mark lands on the
+ * rows that have stopped — the dormant ones #11692 cleared, and the auto-parked
+ * ones whose settled ring has less to say than the promise (#11822) — and never
  * displaces a mark that means more. Keyed off the count rather than which band
  * the row sorts into, so a pinned project keeps it too.
  *
@@ -278,7 +284,7 @@ function StatusDot({
  */
 function showResumableAgentMark(status: ProjectRowStatus, project: SearchableProject): boolean {
   if (project.isActive) return false;
-  if (status.isDormantFallback !== true) return false;
+  if (status.allowsResumeMark !== true) return false;
   return project.resumableAgentCount !== undefined && project.resumableAgentCount > 0;
 }
 
