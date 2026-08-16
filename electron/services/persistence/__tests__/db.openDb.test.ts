@@ -671,6 +671,18 @@ describe("openDb (integration)", () => {
 
     const { sqlite, db } = openDb(dbPath, migrationsFolder);
     try {
+      // Read before anything writes: pre-existing rows come out of the
+      // migration making no claim, not claiming zero. Asserted rather than
+      // assumed because a `NOT NULL DEFAULT 0` column would satisfy every
+      // other assertion here while handing the sweep a count nobody measured.
+      const backfilled = db
+        .select()
+        .from(schema.scratches)
+        .where(eq(schema.scratches.id, "11111111-2222-4333-8444-555555555555"))
+        .get();
+
+      expect(backfilled?.resumableAgentCount).toBeNull();
+
       // Round-tripped through the ORM rather than raw SQL: that is what binds
       // the migration's column name to the one `ScratchStore` actually reads.
       db.update(schema.scratches)
@@ -684,8 +696,8 @@ describe("openDb (integration)", () => {
         .get();
 
       expect(row?.resumableAgentCount).toBe(3);
-      // Pre-existing rows come out of the migration making no claim, not
-      // claiming zero.
+      // The row that predates the column is still the row the write landed on —
+      // the migration added a field to it rather than replacing it.
       expect(row?.name).toBe("Spike");
     } finally {
       sqlite.close();

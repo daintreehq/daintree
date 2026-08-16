@@ -685,8 +685,14 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
       }
       await sweep;
 
-      expect(peak).toBeGreaterThan(0);
-      expect(peak).toBeLessThan(80);
+      // Against the ceiling itself, not the item count. The queue above is
+      // deliberately far longer than the limit, so a bounded fan-out saturates
+      // and never exceeds: the observed peak IS the declared limit. Compared to
+      // the constant rather than restating its value, so retuning the ceiling
+      // retunes the test — and a fan-out that quietly went unbounded, or
+      // collapsed to serial, fails here instead of passing a range check that
+      // the item count would have satisfied at any limit.
+      expect(peak).toBe(__test__.STATE_READ_CONCURRENCY);
     });
 
     it("disables the orphan pass when a scratch's state was unreadable", async () => {

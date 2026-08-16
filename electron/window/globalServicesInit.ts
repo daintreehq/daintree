@@ -1305,4 +1305,7 @@ export async function initGlobalServices(
  * Exported only for unit tests so they can verify session eviction logic
  * without driving the full deferred queue. Not part of the public surface.
  */
-export const __test__ = { evictStaleSessionFiles };
+// `STATE_READ_CONCURRENCY` rides the test seam rather than becoming a module
+// export: nothing in production reads it, and the sweep's ceiling test has to
+// compare against the real value instead of restating a literal.
+export const __test__ = { evictStaleSessionFiles, STATE_READ_CONCURRENCY };
