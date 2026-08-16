@@ -360,6 +360,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["mcp-server:set-session-tier"]["result"]>;
   };
   menu: {
+    showApplication(
+      ...args: IpcInvokeMap["menu:show-application"]["args"]
+    ): Promise<IpcInvokeMap["menu:show-application"]["result"]>;
     showContext(
       ...args: IpcInvokeMap["menu:show-context"]["args"]
     ): Promise<IpcInvokeMap["menu:show-context"]["result"]>;
