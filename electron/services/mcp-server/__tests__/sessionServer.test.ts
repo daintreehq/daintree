@@ -251,9 +251,10 @@ async function initializeClient(server: ReturnType<typeof createSessionServer>) 
 function seedLiveSession(
   store: RealSessionStore,
   sessionId: string,
-  tier: "workbench" | "action" | "system" | "external"
+  tier: "workbench" | "action" | "system" | "external",
+  transport: "sse" | "http" = "sse"
 ): void {
-  store.sessions.set(sessionId, {
+  const entry = {
     transport: {
       close: vi.fn().mockResolvedValue(undefined),
     },
@@ -261,7 +262,12 @@ function seedLiveSession(
       sendToolListChanged: vi.fn().mockResolvedValue(undefined),
     },
     idleTimer: setTimeout(() => {}, 1_000_000),
-  } as unknown as NonNullable<ReturnType<RealSessionStore["sessions"]["get"]>>);
+  } as unknown as NonNullable<ReturnType<RealSessionStore["sessions"]["get"]>>;
+  if (transport === "sse") {
+    store.sessions.set(sessionId, entry);
+  } else {
+    store.httpSessions.set(sessionId, entry as never);
+  }
   store.sessionTierMap.set(sessionId, tier);
 }
 
@@ -4072,12 +4078,19 @@ describe("mcp.surface short-circuit (#11549)", () => {
     // no tier at all afterwards (#11799), and re-reading would either refuse a
     // call the gate already admitted or disagree with the audit record that
     // logs the admitted tier. The gate's tier is the only coherent answer.
+    // The witness has to be a tool `workbench` grants and `external` does not,
+    // or its absence proves nothing — a tool neither tier reaches is missing
+    // either way. Derived rather than named so it cannot rot into a tautology.
+    const workbenchOnly = [...TIER_ALLOWLISTS.workbench].find(
+      (id) => !TIER_ALLOWLISTS.external.has(id)
+    );
+    expect(workbenchOnly).toBeDefined();
     const sessionStore = fakeSessionStore("external");
     const deps = fakeDeps({
       sessionStore,
       requestManifest: vi.fn().mockImplementation(async () => {
         vi.mocked(sessionStore.getTier).mockReturnValue(null);
-        return surfaceManifest();
+        return [...surfaceManifest(), makeManifestEntry(workbenchOnly!)];
       }),
     });
     const server = createSessionServer("session-surface-revoked", deps);
@@ -4090,9 +4103,8 @@ describe("mcp.surface short-circuit (#11549)", () => {
     };
 
     expect(reported.tier).toBe("external");
-    // `git.commit` is workbench-unreachable but system-tier in-app, and is not
-    // on the external allowlist — the concrete tool the leak would have added.
-    expect(reported.tools.map((t) => t.id)).not.toContain("git.commit");
+    // The concrete tool a workbench re-read would have added to the report.
+    expect(reported.tools.map((t) => t.id)).not.toContain(workbenchOnly);
     // Resolved once, at the gate — the re-read this guards against would show
     // up here as a second call.
     expect(sessionStore.getTier).toHaveBeenCalledTimes(1);
@@ -4514,6 +4526,25 @@ describe("workspace-bound external sessions (#11789)", () => {
 });
 
 describe("session-liveness gate (#11799)", () => {
+  const liveStores: RealSessionStore[] = [];
+
+  function makeStore(): RealSessionStore {
+    const store = new RealSessionStore(() => {});
+    liveStores.push(store);
+    return store;
+  }
+
+  afterEach(() => {
+    // Teardown here, not at the end of each test body: a failing assertion
+    // throws past an inline dispose and leaks the seeded idle timer plus the
+    // grant cache's sweep interval into the rest of the file.
+    while (liveStores.length > 0) {
+      const store = liveStores.pop()!;
+      store.drain();
+      store.grantCache.dispose();
+    }
+  });
+
   function invoke(
     server: ReturnType<typeof createSessionServer>,
     method: string,
@@ -4543,73 +4574,99 @@ describe("session-liveness gate (#11799)", () => {
     return JSON.parse(block.text) as Record<string, unknown>;
   }
 
-  /** `file.read` is the issue's own example: workbench-permitted, external-withheld. */
-  const WORKBENCH_ONLY_TOOL = "file.read";
+  /**
+   * A tool `workbench` permits and `external` does not — derived, not named, so
+   * this cannot drift into restating the allowlist. Its existence IS the issue's
+   * premise: if the two tiers were a ladder there would be no such tool, and
+   * falling back to workbench would be a narrowing rather than an escalation.
+   */
+  const WORKBENCH_ONLY_TOOL = [...TIER_ALLOWLISTS.workbench].find(
+    (id) => !TIER_ALLOWLISTS.external.has(id)
+  );
 
-  it("puts file.read on the workbench surface but not the external one", () => {
-    // Pins the premise the widening depends on. If these two ever agree,
-    // falling back to workbench would stop being an escalation and the tests
-    // below would pass for the wrong reason.
-    expect(isTierPermitted("workbench", WORKBENCH_ONLY_TOOL)).toBe(true);
-    expect(isTierPermitted("external", WORKBENCH_ONLY_TOOL)).toBe(false);
+  it("has at least one tool workbench permits and external withholds", () => {
+    // Guards the derivation above rather than a literal: were this to come back
+    // undefined, every escalation test below would silently lose its teeth.
+    expect(WORKBENCH_ONLY_TOOL).toBeDefined();
   });
 
-  it("refuses a revoked external session's tools/call instead of dispatching it at workbench", async () => {
-    // The issue verbatim: an external bearer's session is revoked while its
-    // request is in flight, and the tier read that follows used to resolve to
-    // `workbench` — a peer allowlist that permits `file.read`.
-    const store = new RealSessionStore(() => {});
-    seedLiveSession(store, "revoked-external", "external");
-    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
-    const appendAuditRecord = vi.fn();
-    const notifyTierMismatch = vi.fn();
-    const deps = fakeDeps({ sessionStore: store, dispatchAction, appendAuditRecord });
-    const server = createSessionServer("revoked-external", deps);
+  it.each([["sse"], ["http"]] as const)(
+    "refuses a revoked external session's tools/call over %s instead of dispatching it at workbench",
+    async (transport) => {
+      // The issue verbatim: an external bearer's session is revoked while its
+      // request is in flight, and the tier read that follows used to resolve to
+      // `workbench` — a peer allowlist that permits this tool.
+      const store = makeStore();
+      seedLiveSession(store, "revoked-external", "external", transport);
+      const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+      const appendAuditRecord = vi.fn();
+      const notifyTierMismatch = vi.fn();
+      const recordDenial = vi.fn(() => ({ tripped: false }));
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction,
+        appendAuditRecord,
+        notifyTierMismatch,
+        recordDenial,
+      });
+      const server = createSessionServer("revoked-external", deps);
 
-    store.revokeSession("revoked-external");
+      store.revokeSession("revoked-external");
 
-    const result = await callTool(server, {
-      name: WORKBENCH_ONLY_TOOL,
-      arguments: { path: "/etc/passwd" },
-    });
+      const result = await callTool(server, {
+        name: WORKBENCH_ONLY_TOOL!,
+        arguments: { path: "/etc/passwd" },
+      });
 
-    expect((result as { isError?: boolean }).isError).toBe(true);
-    expect(parseToolErrorPayload(result)).toEqual({
-      code: "SESSION_GONE",
-      message: expect.stringContaining("no longer active"),
-      retriable: false,
-      errorCategory: "business",
-    });
-    // Refused before anything observable: no dispatch, and no audit row under a
-    // tier the caller never held.
-    expect(dispatchAction).not.toHaveBeenCalled();
-    expect(appendAuditRecord).not.toHaveBeenCalled();
-    expect(notifyTierMismatch).not.toHaveBeenCalled();
-    store.grantCache.dispose();
-  });
+      expect((result as { isError?: boolean }).isError).toBe(true);
+      expect(parseToolErrorPayload(result)).toEqual({
+        code: "SESSION_GONE",
+        message: expect.stringContaining("no longer active"),
+        retriable: false,
+        errorCategory: "business",
+      });
+      // Refused at the gate, before anything observable: no dispatch, no audit
+      // row under a tier the caller never held, no denial bookkeeping.
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(appendAuditRecord).not.toHaveBeenCalled();
+      expect(notifyTierMismatch).not.toHaveBeenCalled();
+      expect(recordDenial).not.toHaveBeenCalled();
+    }
+  );
 
   it("leaves no dedup bookkeeping behind for a session refused at the gate", async () => {
-    const store = new RealSessionStore(() => {});
+    // The tier row is left behind deliberately while the transport is removed.
+    // Revoking would delete both, and the un-gated read would then resolve to
+    // `workbench`, which does not permit `terminal.new` — the call would exit at
+    // the tier gate before dedup and this would pass without the fix. An orphan
+    // `system` row makes the un-gated path actually dispatch and populate dedup,
+    // so the assertion has something to catch.
+    const store = makeStore();
     seedLiveSession(store, "gone-dedup", "system");
-    const deps = fakeDeps({ sessionStore: store });
+    const dispatchAction = vi
+      .fn()
+      .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-1" } } });
+    const deps = fakeDeps({ sessionStore: store, dispatchAction });
     const server = createSessionServer("gone-dedup", deps);
 
-    store.revokeSession("gone-dedup");
-    await callTool(server, {
+    store.sessions.delete("gone-dedup");
+
+    const result = await callTool(server, {
       name: "terminal.new",
       arguments: { spawnedBy: { kind: "user" } },
     });
 
+    expect(parseToolErrorPayload(result).code).toBe("SESSION_GONE");
+    expect(dispatchAction).not.toHaveBeenCalled();
     expect(store.dedupInFlight.size).toBe(0);
     expect(store.dedupResultCache.size).toBe(0);
-    store.grantCache.dispose();
   });
 
   it("refuses tools/list before it costs a manifest fetch", async () => {
     // Gated ahead of `resolveManifest` on purpose: that fetch can throw
     // SESSION_BINDING_GONE, which would answer "your workspace went away" to a
     // caller whose session is what actually went away.
-    const store = new RealSessionStore(() => {});
+    const store = makeStore();
     seedLiveSession(store, "gone-list", "external");
     const requestManifest = vi.fn().mockResolvedValue([]);
     const getCachedManifest = vi.fn(() => null);
@@ -4618,36 +4675,38 @@ describe("session-liveness gate (#11799)", () => {
 
     store.revokeSession("gone-list");
 
-    await expect(listTools(server)).rejects.toThrow(McpError);
     await expect(listTools(server)).rejects.toMatchObject({
       data: { code: "SESSION_GONE", retriable: false, errorCategory: "business" },
     });
     expect(requestManifest).not.toHaveBeenCalled();
     expect(getCachedManifest).not.toHaveBeenCalled();
-    store.grantCache.dispose();
   });
 
   it("throws rather than answering discovery with an empty surface", async () => {
     // `{ tools: [] }` / `{ resources: [] }` are well-formed, cacheable answers
     // that read as "you legitimately have nothing" and carry no hint that
     // reconnecting is the fix.
-    const store = new RealSessionStore(() => {});
+    const store = makeStore();
     seedLiveSession(store, "gone-empty", "system");
     const deps = fakeDeps({ sessionStore: store });
     const server = createSessionServer("gone-empty", deps);
 
     store.revokeSession("gone-empty");
 
-    for (const method of ["tools/list", "resources/list", "resources/templates/list"]) {
+    for (const method of [
+      "tools/list",
+      "resources/list",
+      "resources/templates/list",
+      "prompts/list",
+    ]) {
       await expect(invoke(server, method)).rejects.toMatchObject({
         data: { code: "SESSION_GONE" },
       });
     }
-    store.grantCache.dispose();
   });
 
   it("refuses resources/read for a revoked session without dispatching the backing action", async () => {
-    const store = new RealSessionStore(() => {});
+    const store = makeStore();
     seedLiveSession(store, "gone-read", "system");
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
     const deps = fakeDeps({ sessionStore: store, dispatchAction });
@@ -4659,13 +4718,12 @@ describe("session-liveness gate (#11799)", () => {
       invoke(server, "resources/read", { uri: "daintree://worktree/wt-1/pulse" })
     ).rejects.toMatchObject({ data: { code: "SESSION_GONE" } });
     expect(dispatchAction).not.toHaveBeenCalled();
-    store.grantCache.dispose();
   });
 
   it("refuses resources/subscribe for a revoked session and installs no listener", async () => {
     // Subscribing a dead session would leave an event listener pushing updates
     // at a transport that is already gone.
-    const store = new RealSessionStore(() => {});
+    const store = makeStore();
     seedLiveSession(store, "gone-sub", "system");
     const deps = fakeDeps({ sessionStore: store });
     const server = createSessionServer("gone-sub", deps);
@@ -4676,14 +4734,76 @@ describe("session-liveness gate (#11799)", () => {
       invoke(server, "resources/subscribe", { uri: "daintree://worktree/wt-1/pulse" })
     ).rejects.toMatchObject({ data: { code: "SESSION_GONE" } });
     expect(store.resourceSubscriptions.get("gone-sub")).toBeUndefined();
-    store.grantCache.dispose();
+  });
+
+  it("refuses prompts/get for a revoked session without reading worktree or terminal state", async () => {
+    // Prompts render from live IDE state, so `collectPromptContext` dispatches
+    // `worktree.getCurrent` and `terminal.getOutput`. Ungated, that is the same
+    // leak as the tool path reached through the prompt surface.
+    const store = makeStore();
+    seedLiveSession(store, "gone-prompt", "external");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const deps = fakeDeps({ sessionStore: store, dispatchAction });
+    const server = createSessionServer("gone-prompt", deps);
+
+    store.revokeSession("gone-prompt");
+
+    await expect(
+      invoke(server, "prompts/get", {
+        name: "triage_failed_agent",
+        arguments: { terminal_id: "t-1" },
+      })
+    ).rejects.toMatchObject({ data: { code: "SESSION_GONE" } });
+    expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("refuses the next call after an abuse trip revokes the session mid-call", async () => {
+    // The one revocation source that fires from inside a tools/call. The
+    // triggering call still answers from its captured tier — it was admitted —
+    // but the session is gone by the time the next request arrives.
+    const store = makeStore();
+    seedLiveSession(store, "abuse", "external");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const appendAuditRecord = vi.fn();
+    const notifySessionRevoked = vi.fn();
+    const deps = fakeDeps({
+      sessionStore: store,
+      dispatchAction,
+      appendAuditRecord,
+      recordDenial: vi.fn(() => ({ tripped: true })),
+      notifySessionRevoked,
+      clearDenialState: vi.fn(),
+    });
+    const server = createSessionServer("abuse", deps);
+
+    const denied = await callTool(server, {
+      name: WORKBENCH_ONLY_TOOL!,
+      arguments: { path: "/etc/passwd" },
+    });
+
+    // Admitted, then denied on its own captured tier — not retroactively
+    // rewritten into SESSION_GONE by the revocation it just triggered.
+    expect(parseToolErrorPayload(denied)).toMatchObject({ code: TIER_NOT_PERMITTED_CODE });
+    expect(parseToolErrorPayload(denied).message).toContain("external");
+    expect(notifySessionRevoked).toHaveBeenCalledTimes(1);
+    expect(store.getTier("abuse")).toBeNull();
+
+    appendAuditRecord.mockClear();
+    const afterRevoke = await callTool(server, {
+      name: WORKBENCH_ONLY_TOOL!,
+      arguments: { path: "/etc/passwd" },
+    });
+
+    expect(parseToolErrorPayload(afterRevoke).code).toBe("SESSION_GONE");
+    expect(appendAuditRecord).not.toHaveBeenCalled();
+    expect(dispatchAction).not.toHaveBeenCalled();
   });
 
   it("lets an already-admitted call finish on its captured tier when revocation lands mid-dispatch", async () => {
     // The one-lifetime rule: revocation stops the NEXT request, it does not
     // rewrite a call the gate already admitted. The admitted call still must
     // not resurrect dedup state for the torn-down session.
-    const store = new RealSessionStore(() => {});
+    const store = makeStore();
     seedLiveSession(store, "admitted", "system");
     let resolveDispatch: ((envelope: unknown) => void) | undefined;
     const dispatchAction = vi.fn().mockImplementation(
@@ -4706,7 +4826,6 @@ describe("session-liveness gate (#11799)", () => {
     expect(store.dedupInFlight.get("admitted")?.size).toBe(1);
 
     store.revokeSession("admitted");
-    expect(store.getTier("admitted")).toBeNull();
 
     resolveDispatch!({ result: { ok: true, result: { terminalId: "t-admitted" } } });
     const result = await inFlight;
@@ -4717,6 +4836,5 @@ describe("session-liveness gate (#11799)", () => {
     // ...but writes nothing back into the torn-down session.
     expect(store.dedupInFlight.size).toBe(0);
     expect(store.dedupResultCache.size).toBe(0);
-    store.grantCache.dispose();
   });
 });

@@ -1651,6 +1651,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   });
 
   server.setRequestHandler(ListPromptsRequestSchema, async () => {
+    if (sessionStore.getTier(sessionId) === null) throw sessionGoneError();
     return {
       prompts: PROMPT_DEFINITIONS.map((def) => ({
         name: def.name,
@@ -1661,6 +1662,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   });
 
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    // Prompts render from live IDE state: `collectPromptContext` dispatches
+    // `worktree.getCurrent`, and `triage_failed_agent` also reads terminal
+    // output. That is a renderer dispatch on behalf of the session, so it
+    // belongs behind the same liveness gate as `tools/call` — otherwise a
+    // revoked bearer still reads worktree and terminal data through the prompt
+    // surface, which is the leak this issue is about wearing a different hat.
+    if (sessionStore.getTier(sessionId) === null) throw sessionGoneError();
     const name = request.params.name;
     const definition = PROMPT_DEFINITIONS.find((def) => def.name === name);
     if (!definition) {
