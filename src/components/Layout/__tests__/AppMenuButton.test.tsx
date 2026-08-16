@@ -1,7 +1,24 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
+
+// The rejection path ends in this reporter. Mocking it keeps the assertion on
+// the observable hand-off (and keeps the real reporter's store/Sentry writes
+// out of a component suite).
+vi.mock("@/utils/rendererGlobalErrorHandlers", () => ({
+  reportRendererGlobalError: vi.fn(),
+}));
+
+import { reportRendererGlobalError } from "@/utils/rendererGlobalErrorHandlers";
 import { AppMenuButton } from "../AppMenuButton";
+
+const mockedReport = vi.mocked(reportRendererGlobalError);
+
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 3; i += 1) {
+    await Promise.resolve();
+  }
+}
 
 const isMacMock = vi.fn(() => false);
 vi.mock("@/lib/platform", () => ({
@@ -209,23 +226,53 @@ describe("AppMenuButton", () => {
   });
 
   it("stops tracking focus once unmounted", () => {
-    const { button, unmount } = renderInToolbar();
-    const editor = addEditor();
-    editor.focus();
-    button!.focus();
-    unmount();
+    // A leaked focusin listener is silent — it just keeps writing into a ref
+    // belonging to a dead component — so the only observable evidence of the
+    // teardown is the listener registration itself.
+    const addSpy = vi.spyOn(document, "addEventListener");
+    const removeSpy = vi.spyOn(document, "removeEventListener");
 
-    // A focusin after teardown must not be recorded — if the listener leaked,
-    // it would keep writing into a ref belonging to a dead component.
-    const late = addEditor();
-    expect(() => late.focus()).not.toThrow();
+    try {
+      const { unmount } = renderInToolbar();
+      const added = addSpy.mock.calls
+        .filter(([type]) => type === "focusin")
+        .map(([, listener]) => listener);
+      // Guards the spy itself: without this, a component that never listened
+      // would satisfy the empty-vs-empty comparison below.
+      expect(added).toHaveLength(1);
+
+      unmount();
+
+      const removed = removeSpy.mock.calls
+        .filter(([type]) => type === "focusin")
+        .map(([, listener]) => listener);
+      expect(removed).toHaveLength(1);
+      // Identity, not just a matching count: removeEventListener silently does
+      // nothing unless the function reference matches the registered one.
+      expect(removed[0]).toBe(added[0]);
+    } finally {
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
+    }
   });
 
   it("consumes an IPC rejection instead of surfacing an unhandled rejection", async () => {
-    showApplication.mockRejectedValueOnce(new Error("window disposed"));
+    const failure = new Error("window disposed");
+    showApplication.mockRejectedValueOnce(failure);
     const { button } = renderInToolbar();
 
-    expect(() => fireEvent.click(button!)).not.toThrow();
-    await Promise.resolve();
+    fireEvent.click(button!);
+    await flushMicrotasks();
+
+    // A bare `void promise` would leave this rejection to escape as an
+    // unhandled rejection; routing it through safeFireAndForget lands it here.
+    expect(mockedReport).toHaveBeenCalledTimes(1);
+    const [kind, error, metadata] = mockedReport.mock.calls[0]!;
+    expect(kind).toBe("unhandledrejection");
+    expect(error).toBe(failure);
+    // The call site supplies its own context rather than letting the raw IPC
+    // rejection text stand in as the user-facing message.
+    expect(metadata.message).toBeTruthy();
+    expect(metadata.message).not.toBe(failure.message);
   });
 });
