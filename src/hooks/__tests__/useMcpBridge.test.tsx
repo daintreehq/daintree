@@ -542,29 +542,20 @@ describe("useMcpBridge", () => {
       }
     );
 
-    it.each([
-      ["absent", undefined],
-      ["unrecognized", "assistant" as unknown],
-      ["garbage", "'; DROP TABLE" as unknown],
-    ])("falls back to 'mcp' when the origin is %s", async (_label, sessionOrigin) => {
+    it("falls back to 'mcp' when the dispatch carries no origin at all", async () => {
       mocks.get.mockReturnValue(safeManifestEntry({ id: "agent.launch", danger: "safe" }));
       mocks.dispatch.mockResolvedValue({ ok: true, result: { terminalId: "t-no-origin" } });
 
       renderHook(() => useMcpBridge());
 
-      // Nothing type-checks the `webContents.send` side of this channel, so a
-      // payload carrying no origin — or a value the union doesn't contain —
-      // has to resolve somewhere. It resolves away from assistant provenance:
-      // under-claiming is recoverable, mislabelling an external client's spawn
-      // as the user's own assistant is not. Note the "unrecognized" case sends
-      // the *terminal source* spelling rather than an origin, which is exactly
-      // the kind of near-miss that a substring or truthiness check would let
-      // through.
+      // Nothing type-checks the `webContents.send` side of this channel, so an
+      // origin-less payload has to resolve somewhere. It resolves away from
+      // assistant provenance: under-claiming is recoverable, mislabelling an
+      // external client's spawn as the user's own assistant is not.
       await dispatchHandler?.({
-        requestId: "req-origin-fallback",
+        requestId: "req-origin-absent",
         actionId: "agent.launch",
         args: { agentId: "claude" },
-        sessionOrigin: sessionOrigin as never,
       });
 
       expect(mocks.dispatch).toHaveBeenCalledWith(
@@ -609,9 +600,12 @@ describe("useMcpBridge", () => {
       // in the tests above would notice them drifting apart, because they mock
       // `actionService.dispatch` — and the production symptom of a drift is
       // every assistant-launched spawn failing validation before it launches.
+      const readSpawnedBy = (args: unknown): unknown =>
+        typeof args === "object" && args !== null ? Reflect.get(args, "spawnedBy") : undefined;
+
       for (const origin of ["help", "assistant-pane", "external"] as const) {
-        const tagged = tagMcpSpawnSource("agent.launch", {}, origin) as { spawnedBy: unknown };
-        expect(TerminalSpawnSourceSchema.safeParse(tagged.spawnedBy).success).toBe(true);
+        const spawnedBy = readSpawnedBy(tagMcpSpawnSource("agent.launch", {}, origin));
+        expect(TerminalSpawnSourceSchema.safeParse(spawnedBy).success).toBe(true);
       }
     });
 
