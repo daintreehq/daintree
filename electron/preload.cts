@@ -1817,6 +1817,9 @@ function buildElectronApi(): ElectronAPI {
       onUpdated: (callback: (project: Project) => void) =>
         _typedOn(CHANNELS.PROJECT_UPDATED, callback),
 
+      onSlept: (callback: (projectId: string) => void) =>
+        _typedOn(CHANNELS.PROJECT_SLEPT, callback),
+
       onRemoved: (callback: (projectId: string) => void) =>
         _typedOn(CHANNELS.PROJECT_REMOVED, callback),
 
@@ -1834,7 +1837,7 @@ function buildElectronApi(): ElectronAPI {
       close: (projectId: string, options?: { killTerminals?: boolean }) =>
         _unwrappingInvoke(CHANNELS.PROJECT_CLOSE, projectId, options),
 
-      freeMemory: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_FREE_MEMORY, projectId),
+      sleepProject: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_SLEEP, projectId),
 
       reopen: (
         projectId: string,

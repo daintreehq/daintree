@@ -27,6 +27,7 @@ export { useOrchestrationMilestones } from "./useOrchestrationMilestones";
 export { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 export { useForgeEnableRecommendation } from "./useForgeEnableRecommendation";
 export { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
+export { useSleptProjectTransition } from "./useSleptProjectTransition";
 export { useBackgroundWindowResize } from "./useBackgroundWindowResize";
 export { useClearSwitchBusyStateOnReveal } from "./useClearSwitchBusyStateOnReveal";
 export { usePluginDeepLink } from "./usePluginDeepLink";

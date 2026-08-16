@@ -126,16 +126,22 @@ export interface ProjectCloseResult {
 }
 
 /**
- * Result from the project:free-memory operation. Reclaims a background
- * project's resident memory (renderer + PTYs + workspace host) while keeping
- * the project in the list as `closed` and preserving its layout for a
- * non-destructive reopen. Failures throw `AppError`.
+ * Result from the project:sleep operation. Shuts one project down the way
+ * quitting shuts them all down — session-preserving kill, captured agent
+ * session ids written back into the saved panel snapshots, a resume record
+ * journaled per agent — then reclaims what it can (renderer + PTYs + workspace
+ * host) and leaves the project in the list as `closed` with its layout intact
+ * for a non-destructive reopen. Failures throw `AppError`.
  */
-export interface ProjectFreeMemoryResult {
+export interface ProjectSleepResult {
   /** Number of terminals gracefully killed (sessions preserved for restore). */
   terminalsKilled: number;
-  /** True when a cached renderer WebContentsView was torn down. */
-  rendererEvicted: boolean;
+  /**
+   * How many windows had a CACHED view for this project torn down. A window
+   * with the project on screen is not counted: it keeps its view and drops to
+   * the no-project state in the renderer instead.
+   */
+  rendererViewsEvicted: number;
   /** True when the project's workspace-host process was evicted. */
   workspaceEvicted: boolean;
 }

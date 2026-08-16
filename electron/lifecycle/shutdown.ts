@@ -258,7 +258,13 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         projectIds.map((pid) => {
           let timer: ReturnType<typeof setTimeout> | undefined;
           return Promise.race([
-            ptyClient.gracefulKillByProject(pid),
+            // preserveSession: a terminal with no shutdown config (every plain
+            // shell) falls through `gracefulKill` to `PtyManager.kill`, which
+            // skips the final session persist and deletes the session file
+            // unless this is set. Without it a quit discarded plain-shell
+            // scrollback that a background "sleep" of the same project kept —
+            // and the next launch is supposed to restore the project as it was.
+            ptyClient.gracefulKillByProject(pid, { preserveSession: true }),
             new Promise<Array<{ id: string; agentSessionId: string | null }>>((resolve) => {
               timer = setTimeout(() => resolve([]), 4000);
             }),

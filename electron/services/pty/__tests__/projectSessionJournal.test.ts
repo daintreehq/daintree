@@ -12,6 +12,15 @@ vi.mock("../lifecycleLedger.js", () => ({
   getLifecycleLedger: () => ledgerMock,
 }));
 
+// The helper writes captured session ids back through the project store when
+// asked. Mocked wholesale: the real module opens the SQLite-backed store at
+// import time, which a node-environment unit suite has no business booting.
+const projectStoreMock = vi.hoisted(() => ({
+  enqueueProjectStateUpdate:
+    vi.fn<(id: string, updater: (state: unknown) => unknown) => Promise<void>>(),
+}));
+vi.mock("../../ProjectStore.js", () => ({ projectStore: projectStoreMock }));
+
 import { gracefulTeardownAndJournalProject } from "../projectSessionJournal.js";
 import type { PtyClient } from "../../PtyClient.js";
 import type { WorkspaceClient } from "../../WorkspaceClient.js";
@@ -59,6 +68,7 @@ describe("gracefulTeardownAndJournalProject", () => {
     vi.clearAllMocks();
     journalMock.journalAgentSession.mockResolvedValue(true);
     ledgerMock.currentGeneration.mockReturnValue(undefined);
+    projectStoreMock.enqueueProjectStateUpdate.mockResolvedValue(undefined);
   });
 
   it("journals only in-scope agent terminals with a captured session", async () => {
@@ -82,7 +92,7 @@ describe("gracefulTeardownAndJournalProject", () => {
 
     const result = await gracefulTeardownAndJournalProject("proj", client);
 
-    expect(result).toEqual({ confirmed: true, terminalsKilled: 3 });
+    expect(result).toMatchObject({ confirmed: true, terminalsKilled: 3 });
     expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
     const [record, ctx] = journalMock.journalAgentSession.mock.calls[0]!;
     expect(record).toMatchObject({ sessionId: "s1", agentId: "claude", projectId: "proj" });
@@ -231,7 +241,7 @@ describe("gracefulTeardownAndJournalProject", () => {
       },
     });
 
-    await expect(gracefulTeardownAndJournalProject("proj", client)).resolves.toEqual({
+    await expect(gracefulTeardownAndJournalProject("proj", client)).resolves.toMatchObject({
       confirmed: true,
       terminalsKilled: 2,
     });
@@ -267,7 +277,7 @@ describe("gracefulTeardownAndJournalProject", () => {
       const promise = gracefulTeardownAndJournalProject("proj", client, workspaceClient);
       await vi.advanceTimersByTimeAsync(250);
 
-      await expect(promise).resolves.toEqual({ confirmed: true, terminalsKilled: 1 });
+      await expect(promise).resolves.toMatchObject({ confirmed: true, terminalsKilled: 1 });
       const [record] = journalMock.journalAgentSession.mock.calls[0]!;
       expect((record as { branch?: string }).branch).toBeUndefined();
     } finally {
@@ -301,7 +311,7 @@ describe("gracefulTeardownAndJournalProject", () => {
     expect(settled).toBe(false);
 
     resolveJournal(true);
-    await expect(promise).resolves.toEqual({ confirmed: true, terminalsKilled: 1 });
+    await expect(promise).resolves.toMatchObject({ confirmed: true, terminalsKilled: 1 });
     expect(settled).toBe(true);
   });
 
@@ -315,7 +325,7 @@ describe("gracefulTeardownAndJournalProject", () => {
 
     const result = await gracefulTeardownAndJournalProject("proj", client);
 
-    expect(result).toEqual({ confirmed: false, terminalsKilled: 0 });
+    expect(result).toMatchObject({ confirmed: false, terminalsKilled: 0 });
     expect(journalMock.journalAgentSession).not.toHaveBeenCalled();
   });
 
@@ -329,7 +339,7 @@ describe("gracefulTeardownAndJournalProject", () => {
 
     const result = await gracefulTeardownAndJournalProject("proj", client);
 
-    expect(result).toEqual({ confirmed: true, terminalsKilled: 0 });
+    expect(result).toMatchObject({ confirmed: true, terminalsKilled: 0 });
     expect(journalMock.journalAgentSession).not.toHaveBeenCalled();
   });
 
@@ -342,7 +352,162 @@ describe("gracefulTeardownAndJournalProject", () => {
     const result = await gracefulTeardownAndJournalProject("proj", client);
 
     // Info is absent, so nothing is journaled — but the kill outcome is honored.
-    expect(result).toEqual({ confirmed: true, terminalsKilled: 1 });
+    expect(result).toMatchObject({ confirmed: true, terminalsKilled: 1 });
     expect(journalMock.journalAgentSession).not.toHaveBeenCalled();
+  });
+
+  describe("teardown options", () => {
+    function agentClient(sessions: Array<{ id: string; agentSessionId: string | null }>) {
+      return makePtyClient({
+        terminals: sessions.map((s) => ({
+          id: s.id,
+          projectId: "proj",
+          launchAgentId: "claude",
+          cwd: `/${s.id}`,
+          spawnedAt: 1,
+        })),
+        outcome: { confirmed: true, sessions },
+      });
+    }
+
+    it("leaves the kill unqualified when no preserveSession preference is given", async () => {
+      // Close/remove must keep deleting the session files they orphan; only an
+      // explicit opt-in may change what the host does with them.
+      const { client, gracefulKillByProjectConfirmed } = agentClient([
+        { id: "t1", agentSessionId: "s1" },
+      ]);
+
+      await gracefulTeardownAndJournalProject("proj", client);
+
+      expect(gracefulKillByProjectConfirmed).toHaveBeenCalledWith("proj", undefined);
+    });
+
+    it("threads preserveSession through to the kill", async () => {
+      const { client, gracefulKillByProjectConfirmed } = agentClient([
+        { id: "t1", agentSessionId: "s1" },
+      ]);
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        preserveSession: true,
+      });
+
+      expect(gracefulKillByProjectConfirmed).toHaveBeenCalledWith("proj", {
+        preserveSession: true,
+      });
+    });
+
+    it("returns the killed terminals so the caller can act per terminal", async () => {
+      // Sleep writes one hibernation marker per terminal off this list.
+      const sessions = [
+        { id: "t1", agentSessionId: "s1" },
+        { id: "t2", agentSessionId: null },
+      ];
+      const { client } = agentClient(sessions);
+
+      const result = await gracefulTeardownAndJournalProject("proj", client);
+
+      expect(result.sessions).toEqual(sessions);
+    });
+
+    it("does not touch saved state unless the writeback is requested", async () => {
+      const { client } = agentClient([{ id: "t1", agentSessionId: "s1" }]);
+
+      await gracefulTeardownAndJournalProject("proj", client);
+
+      expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+    });
+
+    it("writes captured ids into the matching saved snapshots only", async () => {
+      const { client } = agentClient([
+        { id: "t1", agentSessionId: "s1" },
+        // No id captured — must not blank an existing one.
+        { id: "t2", agentSessionId: null },
+      ]);
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+      });
+
+      expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalledTimes(1);
+      const [scopeId, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      expect(scopeId).toBe("proj");
+
+      const state = {
+        terminals: [
+          { id: "t1", agentSessionId: undefined },
+          { id: "t2", agentSessionId: "previous" },
+          { id: "unrelated", agentSessionId: "keep" },
+        ],
+      };
+      expect(updater(state)).toBe(state);
+      expect(state.terminals).toEqual([
+        { id: "t1", agentSessionId: "s1" },
+        { id: "t2", agentSessionId: "previous" },
+        { id: "unrelated", agentSessionId: "keep" },
+      ]);
+    });
+
+    it("skips the write entirely when nothing was captured", async () => {
+      const { client } = agentClient([{ id: "t1", agentSessionId: null }]);
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+      });
+
+      expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+    });
+
+    it("bails out of the updater when the scope has no saved terminals", async () => {
+      const { client } = agentClient([{ id: "t1", agentSessionId: "s1" }]);
+
+      await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+      });
+
+      const [, updater] = projectStoreMock.enqueueProjectStateUpdate.mock.calls[0]!;
+      expect(updater(null)).toBeNull();
+      expect(updater({})).toBeNull();
+    });
+
+    it("waits for the writeback to land before journaling", async () => {
+      // Comparing invocation order would still pass if the writeback were fired
+      // without being awaited, which is the bug worth catching: the snapshot and
+      // the journal are the two halves of a resume and must not interleave.
+      let releaseWriteback!: () => void;
+      projectStoreMock.enqueueProjectStateUpdate.mockReturnValue(
+        new Promise<void>((resolve) => {
+          releaseWriteback = resolve;
+        })
+      );
+      const { client } = agentClient([{ id: "t1", agentSessionId: "s1" }]);
+
+      const pending = gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalled();
+      expect(journalMock.journalAgentSession).not.toHaveBeenCalled();
+
+      releaseWriteback();
+      await pending;
+
+      expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("still journals when the writeback throws", async () => {
+      // Best-effort, exactly as shutdown behaves: losing the in-place resume
+      // must not also cost the picker's resume record.
+      projectStoreMock.enqueueProjectStateUpdate.mockRejectedValue(new Error("disk full"));
+      const { client } = agentClient([{ id: "t1", agentSessionId: "s1" }]);
+
+      const result = await gracefulTeardownAndJournalProject("proj", client, undefined, {
+        writeBackSessionIds: true,
+      });
+
+      expect(result.confirmed).toBe(true);
+      expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
+    });
   });
 });

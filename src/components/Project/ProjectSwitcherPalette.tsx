@@ -1,6 +1,5 @@
 import { useMemo, useEffect, useRef, useState, useCallback } from "react";
 import {
-  ArchiveX,
   BellOff,
   ChevronDown,
   ChevronRight,
@@ -21,6 +20,7 @@ import {
   X,
   AppWindow,
 } from "lucide-react";
+import { Moon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
@@ -113,7 +113,7 @@ export interface ProjectSwitcherPaletteProps {
   onCreateFolder?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
-  onFreeMemoryProject?: (projectId: string) => void;
+  onSleepProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
@@ -136,11 +136,11 @@ export interface ProjectSwitcherPaletteProps {
   onRemoveConfirmClose?: () => void;
   onConfirmRemove?: () => void;
   isRemovingProject?: boolean;
-  /** Frozen snapshot of the project pending a "Free memory" confirm, or null. */
-  freeMemoryConfirmProject?: SearchableProject | null;
-  onFreeMemoryConfirmClose?: () => void;
-  onConfirmFreeMemory?: () => void;
-  isFreeingMemory?: boolean;
+  /** Frozen snapshot of the project pending a Sleep confirm, or null. */
+  sleepConfirmProject?: SearchableProject | null;
+  onSleepConfirmClose?: () => void;
+  onConfirmSleep?: () => void;
+  isSleepingProject?: boolean;
   /** Scratch (one-off agent workspace) results — rendered in their own collapsible section. */
   /**
    * True while `results` is the ranked list carrying the scratches, so the
@@ -207,7 +207,7 @@ interface ProjectListItemProps {
   onSelect: (row: ProjectSwitcherProjectRow) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
-  onFreeMemoryProject?: (projectId: string) => void;
+  onSleepProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
@@ -306,6 +306,22 @@ function useWaitAgeTick(active: boolean): void {
   }, [active]);
 }
 
+/**
+ * Whether a project row offers "Sleep" — shutting that one project down the way
+ * quitting shuts them all down, then reopening it restored.
+ *
+ * Unlike the "Free memory" action it replaces, this DOES offer itself for the
+ * project on screen: that window drops to the picker and the layout survives.
+ * A missing project has nothing loaded to shut down, and an already-sleeping
+ * one would no-op, so neither is offered it.
+ *
+ * Exported for its own test — the row's context menu is stubbed out in the
+ * palette render suite, so the rule is only reachable in isolation.
+ */
+export function canSleepProject(project: { isMissing: boolean; status?: string }): boolean {
+  return !project.isMissing && project.status !== "closed";
+}
+
 function ProjectListItem({
   project,
   isSelected,
@@ -313,7 +329,7 @@ function ProjectListItem({
   onSelect,
   onStopProject,
   onCloseProject,
-  onFreeMemoryProject,
+  onSleepProject,
   onLocateProject,
   onMoveOrRenameProject,
   onTogglePinProject,
@@ -323,11 +339,7 @@ function ProjectListItem({
   onHoverProjectEnd,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0 && !project.isMissing;
-  // "Free memory" reclaims a backgrounded project's resident RAM. Only
-  // meaningful for non-active, non-missing projects that still hold resources
-  // (the active project owns the live renderer; a missing one has nothing
-  // loaded; an already-closed one was reclaimed, so the action would no-op).
-  const showFreeMemory = !project.isActive && !project.isMissing && project.status !== "closed";
+  const showSleep = canSleepProject(project);
 
   const notificationOverrides = useProjectSettingsStore(
     (state) => state.notificationOverridesByProjectId[project.id]
@@ -474,7 +486,7 @@ function ProjectListItem({
     onTogglePinProject ||
     onStopProject ||
     onCloseProject ||
-    onFreeMemoryProject ||
+    onSleepProject ||
     onCopyPath ||
     onSelectNewWindow ||
     onMoveOrRenameProject ||
@@ -519,17 +531,17 @@ function ProjectListItem({
           </ContextMenuItem>
         )}
         {(onTogglePinProject || onCopyPath) &&
-          (onStopProject || onFreeMemoryProject || onCloseProject) && <ContextMenuSeparator />}
+          (onStopProject || onSleepProject || onCloseProject) && <ContextMenuSeparator />}
         {showStop && onStopProject && (
           <ContextMenuItem destructive onSelect={() => onStopProject(project.id)}>
             <Square className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Stop all agents
           </ContextMenuItem>
         )}
-        {showFreeMemory && onFreeMemoryProject && (
-          <ContextMenuItem onSelect={() => onFreeMemoryProject(project.id)}>
-            <ArchiveX className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Free memory
+        {showSleep && onSleepProject && (
+          <ContextMenuItem onSelect={() => onSleepProject(project.id)}>
+            <Moon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Sleep project
           </ContextMenuItem>
         )}
         {onCloseProject && project.isActive && (
@@ -781,7 +793,7 @@ interface ProjectListContentProps {
   canAddProject: boolean;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
-  onFreeMemoryProject?: (projectId: string) => void;
+  onSleepProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
@@ -802,7 +814,7 @@ function ProjectListContent({
   canAddProject,
   onStopProject,
   onCloseProject,
-  onFreeMemoryProject,
+  onSleepProject,
   onLocateProject,
   onMoveOrRenameProject,
   onTogglePinProject,
@@ -872,7 +884,7 @@ function ProjectListContent({
             onSelect={onSelect}
             onStopProject={onStopProject}
             onCloseProject={onCloseProject}
-            onFreeMemoryProject={onFreeMemoryProject}
+            onSleepProject={onSleepProject}
             onLocateProject={onLocateProject}
             onMoveOrRenameProject={onMoveOrRenameProject}
             onTogglePinProject={onTogglePinProject}
@@ -1465,7 +1477,7 @@ interface ProjectPaletteInnerProps {
   onOpenProjectSettings?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
-  onFreeMemoryProject?: (projectId: string) => void;
+  onSleepProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
@@ -1506,7 +1518,7 @@ function ProjectPaletteInner({
   onOpenProjectSettings,
   onStopProject,
   onCloseProject,
-  onFreeMemoryProject,
+  onSleepProject,
   onLocateProject,
   onMoveOrRenameProject,
   onTogglePinProject,
@@ -1648,7 +1660,7 @@ function ProjectPaletteInner({
           canAddProject={Boolean(onAddProject)}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
-          onFreeMemoryProject={onFreeMemoryProject}
+          onSleepProject={onSleepProject}
           onLocateProject={onLocateProject}
           onMoveOrRenameProject={onMoveOrRenameProject}
           onTogglePinProject={onTogglePinProject}
@@ -1795,7 +1807,7 @@ function ModalContent({
         onOpenProjectSettings={innerProps.onOpenProjectSettings}
         onStopProject={innerProps.onStopProject}
         onCloseProject={innerProps.onCloseProject}
-        onFreeMemoryProject={innerProps.onFreeMemoryProject}
+        onSleepProject={innerProps.onSleepProject}
         onLocateProject={innerProps.onLocateProject}
         onMoveOrRenameProject={innerProps.onMoveOrRenameProject}
         onTogglePinProject={innerProps.onTogglePinProject}
@@ -1914,7 +1926,7 @@ function DropdownContent({
           onOpenProjectSettings={innerProps.onOpenProjectSettings}
           onStopProject={innerProps.onStopProject}
           onCloseProject={innerProps.onCloseProject}
-          onFreeMemoryProject={innerProps.onFreeMemoryProject}
+          onSleepProject={innerProps.onSleepProject}
           onLocateProject={innerProps.onLocateProject}
           onMoveOrRenameProject={innerProps.onMoveOrRenameProject}
           onTogglePinProject={innerProps.onTogglePinProject}
@@ -2037,7 +2049,7 @@ export function ProjectSwitcherPalette({
   onCreateFolder,
   onStopProject,
   onCloseProject,
-  onFreeMemoryProject,
+  onSleepProject,
   onLocateProject,
   onMoveOrRenameProject,
   onTogglePinProject,
@@ -2053,10 +2065,10 @@ export function ProjectSwitcherPalette({
   onRemoveConfirmClose,
   onConfirmRemove,
   isRemovingProject = false,
-  freeMemoryConfirmProject,
-  onFreeMemoryConfirmClose,
-  onConfirmFreeMemory,
-  isFreeingMemory = false,
+  sleepConfirmProject,
+  onSleepConfirmClose,
+  onConfirmSleep,
+  isSleepingProject = false,
   rankedSearch,
   scratchResults,
   onCreateScratch,
@@ -2105,7 +2117,7 @@ export function ProjectSwitcherPalette({
         onCreateFolder={onCreateFolder}
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
-        onFreeMemoryProject={onFreeMemoryProject}
+        onSleepProject={onSleepProject}
         onLocateProject={onLocateProject}
         onMoveOrRenameProject={onMoveOrRenameProject}
         onTogglePinProject={onTogglePinProject}
@@ -2145,7 +2157,7 @@ export function ProjectSwitcherPalette({
         onCreateFolder={onCreateFolder}
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
-        onFreeMemoryProject={onFreeMemoryProject}
+        onSleepProject={onSleepProject}
         onLocateProject={onLocateProject}
         onMoveOrRenameProject={onMoveOrRenameProject}
         onTogglePinProject={onTogglePinProject}
@@ -2230,45 +2242,51 @@ export function ProjectSwitcherPalette({
           </div>
         </ConfirmDialog>
       )}
-      {freeMemoryConfirmProject && onFreeMemoryConfirmClose && onConfirmFreeMemory && (
+      {sleepConfirmProject && onSleepConfirmClose && onConfirmSleep && (
         <ConfirmDialog
           isOpen={true}
-          onClose={isFreeingMemory ? undefined : onFreeMemoryConfirmClose}
-          title={`Free memory for '${freeMemoryConfirmProject.name}'?`}
+          onClose={isSleepingProject ? undefined : onSleepConfirmClose}
+          title={`Sleep '${sleepConfirmProject.name}'?`}
           zIndex="nested"
-          confirmLabel="Free memory"
+          confirmLabel="Sleep project"
           cancelLabel="Cancel"
-          onConfirm={onConfirmFreeMemory}
-          isConfirmLoading={isFreeingMemory}
+          onConfirm={onConfirmSleep}
+          isConfirmLoading={isSleepingProject}
           variant="default"
         >
           <div className="space-y-3">
             <div>
-              <div className="font-medium text-sm">{freeMemoryConfirmProject.name}</div>
+              <div className="font-medium text-sm">{sleepConfirmProject.name}</div>
               <div className="text-xs text-daintree-text/50 font-mono mt-1">
-                {freeMemoryConfirmProject.path}
+                {sleepConfirmProject.path}
               </div>
             </div>
-            {(freeMemoryConfirmProject.processCount > 0 ||
-              freeMemoryConfirmProject.activeAgentCount > 0 ||
-              freeMemoryConfirmProject.waitingAgentCount > 0) && (
+            {(sleepConfirmProject.processCount > 0 ||
+              sleepConfirmProject.activeAgentCount > 0 ||
+              sleepConfirmProject.waitingAgentCount > 0) && (
               <div className="rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20 px-3 py-2 text-xs text-status-warning">
                 <div className="font-medium">Running processes will be stopped</div>
                 <div className="mt-1 text-status-warning/80">
-                  {freeMemoryConfirmProject.processCount > 0 && (
-                    <div>• {freeMemoryConfirmProject.processCount} running process(es)</div>
+                  {sleepConfirmProject.processCount > 0 && (
+                    <div>• {sleepConfirmProject.processCount} running process(es)</div>
                   )}
-                  {freeMemoryConfirmProject.activeAgentCount > 0 && (
-                    <div>• {freeMemoryConfirmProject.activeAgentCount} active agent(s)</div>
+                  {sleepConfirmProject.activeAgentCount > 0 && (
+                    <div>• {sleepConfirmProject.activeAgentCount} active agent(s)</div>
                   )}
-                  {freeMemoryConfirmProject.waitingAgentCount > 0 && (
-                    <div>• {freeMemoryConfirmProject.waitingAgentCount} waiting agent(s)</div>
+                  {sleepConfirmProject.waitingAgentCount > 0 && (
+                    <div>• {sleepConfirmProject.waitingAgentCount} waiting agent(s)</div>
                   )}
                 </div>
               </div>
             )}
+            {sleepConfirmProject.isActive && (
+              <div className="text-xs text-daintree-text/60">
+                This window returns to the project picker
+              </div>
+            )}
             <div className="text-xs text-daintree-text/60">
-              Sessions are preserved and restored when you reopen the project.
+              The layout, terminal scrollback, and agent sessions come back when you reopen the
+              project.
             </div>
           </div>
         </ConfirmDialog>

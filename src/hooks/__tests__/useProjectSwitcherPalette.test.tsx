@@ -23,7 +23,7 @@ type ProjectFixture = {
 
 const {
   getBulkStatsMock,
-  freeMemoryMock,
+  sleepProjectMock,
   setStatsMock,
   useProjectStoreMock,
   useProjectStatsStoreMock,
@@ -33,7 +33,7 @@ const {
   projectStatsState,
 } = vi.hoisted(() => {
   const getBulkStatsMock = vi.fn();
-  const freeMemoryMock = vi.fn();
+  const sleepProjectMock = vi.fn();
   const copyMock = vi.fn().mockResolvedValue(true);
 
   const projectStatsState = {
@@ -88,6 +88,7 @@ const {
     addProject: vi.fn().mockResolvedValue(undefined),
     closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
     closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
+    sleepProject: sleepProjectMock,
     removeProject: vi.fn().mockResolvedValue(undefined),
     locateProject: vi.fn().mockResolvedValue(undefined),
   };
@@ -121,7 +122,7 @@ const {
 
   return {
     getBulkStatsMock,
-    freeMemoryMock,
+    sleepProjectMock,
     setStatsMock,
     useProjectStoreMock,
     useProjectStatsStoreMock,
@@ -135,7 +136,6 @@ const {
 vi.mock("@/clients", () => ({
   projectClient: {
     getBulkStats: getBulkStatsMock,
-    freeMemory: freeMemoryMock,
   },
 }));
 
@@ -237,9 +237,9 @@ describe("useProjectSwitcherPalette", () => {
     projectState.currentProject = null;
     projectStatsState.stats = {};
     getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
-    freeMemoryMock.mockResolvedValue({
+    sleepProjectMock.mockResolvedValue({
       terminalsKilled: 0,
-      rendererEvicted: false,
+      rendererViewsEvicted: 0,
       workspaceEvicted: false,
     });
     setStatsMock.mockImplementation((stats: typeof projectStatsState.stats) => {
@@ -777,7 +777,7 @@ describe("useProjectSwitcherPalette", () => {
     });
   });
 
-  describe("free memory", () => {
+  describe("sleep", () => {
     beforeEach(() => {
       // Pin a single, non-active project so ordering with describes that mutate
       // the shared projects array can't change result counts.
@@ -810,104 +810,121 @@ describe("useProjectSwitcherPalette", () => {
       },
     });
 
-    it("D0: a project with no live processes frees immediately, no confirm dialog", async () => {
-      getBulkStatsMock.mockResolvedValue(bulkStats());
-
+    async function openPalette() {
       const { result } = renderHook(() => useProjectSwitcherPalette());
-
       act(() => {
         result.current.open();
       });
-
       await waitFor(() => {
         expect(result.current.results).toHaveLength(1);
       });
+      return result;
+    }
+
+    it("D0: a background project with nothing running sleeps immediately", async () => {
+      getBulkStatsMock.mockResolvedValue(bulkStats());
+
+      const result = await openPalette();
 
       await act(async () => {
-        await result.current.freeMemoryProject("project-1");
+        await result.current.sleepProject("project-1");
       });
 
-      expect(freeMemoryMock).toHaveBeenCalledWith("project-1");
-      expect(result.current.freeMemoryConfirmProject).toBeNull();
+      expect(sleepProjectMock).toHaveBeenCalledWith("project-1");
+      expect(result.current.sleepConfirmProject).toBeNull();
     });
 
-    it("D1: a project with live processes opens a confirm dialog before freeing", async () => {
+    it("D1: live processes open a confirm dialog before sleeping", async () => {
       getBulkStatsMock.mockResolvedValue(bulkStats({ processCount: 2, activeAgentCount: 1 }));
 
-      const { result } = renderHook(() => useProjectSwitcherPalette());
-
-      act(() => {
-        result.current.open();
-      });
-
+      const result = await openPalette();
       await waitFor(() => {
         expect(asProject(result.current.results[0]).processCount).toBe(2);
       });
 
       await act(async () => {
-        await result.current.freeMemoryProject("project-1");
+        await result.current.sleepProject("project-1");
       });
 
-      // Snapshot captured, nothing freed yet.
-      expect(result.current.freeMemoryConfirmProject?.id).toBe("project-1");
-      expect(result.current.freeMemoryConfirmProject?.processCount).toBe(2);
-      expect(freeMemoryMock).not.toHaveBeenCalled();
+      // Snapshot captured, nothing slept yet.
+      expect(result.current.sleepConfirmProject?.id).toBe("project-1");
+      expect(result.current.sleepConfirmProject?.processCount).toBe(2);
+      expect(sleepProjectMock).not.toHaveBeenCalled();
 
       await act(async () => {
-        await result.current.confirmFreeMemory();
+        await result.current.confirmSleep();
       });
 
-      expect(freeMemoryMock).toHaveBeenCalledWith("project-1");
-      expect(result.current.freeMemoryConfirmProject).toBeNull();
+      expect(sleepProjectMock).toHaveBeenCalledWith("project-1");
+      expect(result.current.sleepConfirmProject).toBeNull();
     });
 
-    it("refuses to free the active project and surfaces guidance instead", async () => {
+    it("D1: the project on screen confirms even with nothing running", async () => {
+      // Sleeping the active project tears down what the user is looking at and
+      // drops the window to the picker — worth a confirm on its own, where the
+      // "Free memory" action this replaces refused the active project outright.
       projectState.currentProject = { id: "project-1" };
       getBulkStatsMock.mockResolvedValue(bulkStats());
 
-      const { result } = renderHook(() => useProjectSwitcherPalette());
-
-      act(() => {
-        result.current.open();
-      });
-
-      await waitFor(() => {
-        expect(result.current.results).toHaveLength(1);
-      });
+      const result = await openPalette();
 
       await act(async () => {
-        await result.current.freeMemoryProject("project-1");
+        await result.current.sleepProject("project-1");
       });
 
-      expect(freeMemoryMock).not.toHaveBeenCalled();
-      expect(result.current.freeMemoryConfirmProject).toBeNull();
+      expect(sleepProjectMock).not.toHaveBeenCalled();
+      expect(result.current.sleepConfirmProject?.id).toBe("project-1");
+
+      await act(async () => {
+        await result.current.confirmSleep();
+      });
+
+      expect(sleepProjectMock).toHaveBeenCalledWith("project-1");
+    });
+
+    it("shows an error notification when sleeping fails", async () => {
+      notifyMock.mockClear();
+      sleepProjectMock.mockRejectedValueOnce(new Error("sleep failed"));
+      getBulkStatsMock.mockResolvedValue(bulkStats());
+
+      const result = await openPalette();
+
+      await act(async () => {
+        await result.current.sleepProject("project-1");
+      });
+
       expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Switch away first" })
+        expect.objectContaining({ type: "error", title: "Couldn't sleep project" })
       );
     });
 
-    it("shows an error notification when freeing fails", async () => {
+    it("closes the dialog on failure and routes recovery through the error toast", async () => {
+      // The confirm dialog is not the retry surface: doSleepProject swallows the
+      // rejection and raises a toast carrying "Try again", so the dialog must
+      // not stay up holding a stale frozen snapshot.
       notifyMock.mockClear();
-      freeMemoryMock.mockRejectedValueOnce(new Error("free failed"));
-      getBulkStatsMock.mockResolvedValue(bulkStats());
+      sleepProjectMock.mockRejectedValue(new Error("sleep failed"));
+      getBulkStatsMock.mockResolvedValue(bulkStats({ processCount: 1 }));
 
-      const { result } = renderHook(() => useProjectSwitcherPalette());
-
-      act(() => {
-        result.current.open();
-      });
-
-      await waitFor(() => {
-        expect(result.current.results).toHaveLength(1);
-      });
+      const result = await openPalette();
 
       await act(async () => {
-        await result.current.freeMemoryProject("project-1");
+        await result.current.sleepProject("project-1");
+      });
+      expect(result.current.sleepConfirmProject?.id).toBe("project-1");
+
+      await act(async () => {
+        await result.current.confirmSleep();
       });
 
-      expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ type: "error", title: "Couldn't free memory" })
+      expect(result.current.sleepConfirmProject).toBeNull();
+      expect(result.current.isSleepingProject).toBe(false);
+      const errorCall = notifyMock.mock.calls.find(
+        ([arg]) => (arg as { title?: string })?.title === "Couldn't sleep project"
       );
+      expect(errorCall).toBeDefined();
+      const actions = (errorCall![0] as { actions?: Array<{ label: string }> }).actions ?? [];
+      expect(actions.map((action) => action.label)).toContain("Try again");
     });
   });
 

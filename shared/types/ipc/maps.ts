@@ -1655,6 +1655,17 @@ export interface IpcEventMap {
   "project:stats-updated": ProjectStatusMap;
   "fleet:snapshot-updated": FleetSnapshot;
   "project:updated": Project;
+  /**
+   * A project was put to sleep. Carries the project id so a window showing it
+   * drops to the no-project state — its view is deliberately left alive (the
+   * window's renderer IS that project's WebContentsView), so nothing else tells
+   * a SECOND window its project's terminals are gone. Deliberately its own
+   * event rather than an inference from `project:updated` reaching `closed`:
+   * relocation, project adoption, the idle sweep and a plain metadata write all
+   * reach that status too, and blanking a visible window on any of them is
+   * wrong.
+   */
+  "project:slept": string;
   "project:removed": string;
   // Main asks the renderer to open the guided git-init dialog for a folder the
   // user tried to open that isn't a repository yet (Dock drop, Cmd+O, Recent

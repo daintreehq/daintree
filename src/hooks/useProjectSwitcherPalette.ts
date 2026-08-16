@@ -218,7 +218,7 @@ export interface SearchableProject extends WorkspaceRowStatusFields {
  *
  * Scratches are NOT synthesized into a `SearchableProject` with a flag. Sharing
  * the shape would make every project-only path — the status line, "Pin project",
- * "Free memory", ⌘⌫ remove — type-reachable with a scratch id behind it.
+ * Sleep, ⌘⌫ remove — type-reachable with a scratch id behind it.
  */
 export type ProjectSwitcherProjectRow = { kind: "project" } & SearchableProject;
 export type ProjectSwitcherScratchRow = { kind: "scratch" } & SearchableScratch;
@@ -299,7 +299,7 @@ export interface UseProjectSwitcherPaletteReturn {
    * reopen. Shows a confirm dialog when the project has live processes, runs
    * silently otherwise. No-op (with a toast) for the active project.
    */
-  freeMemoryProject: (projectId: string) => Promise<void>;
+  sleepProject: (projectId: string) => Promise<void>;
   /** Missing-project recovery: open the relocation dialog in reattach mode. */
   locateProject: (projectId: string) => void;
   /** Healthy-project "Move or rename": open the relocation dialog in move mode. */
@@ -320,15 +320,15 @@ export interface UseProjectSwitcherPaletteReturn {
   confirmRemoveProject: () => Promise<void>;
   isRemovingProject: boolean;
   /**
-   * Frozen snapshot of the project pending a "Free memory" confirmation —
+   * Frozen snapshot of the project pending a Sleep confirmation —
    * captured at menu-select time so the dialog's process/agent counts don't
    * drift if agents finish while the dialog is open (lesson #8725). Null when
    * no confirm is pending (D0 path runs without it).
    */
-  freeMemoryConfirmProject: SearchableProject | null;
-  setFreeMemoryConfirmProject: (project: SearchableProject | null) => void;
-  confirmFreeMemory: () => Promise<void>;
-  isFreeingMemory: boolean;
+  sleepConfirmProject: SearchableProject | null;
+  setSleepConfirmProject: (project: SearchableProject | null) => void;
+  confirmSleep: () => Promise<void>;
+  isSleepingProject: boolean;
   backgroundWaitingCount: number;
   /**
    * Agent totals across every non-active project, uncapped and independent of
@@ -701,9 +701,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const [isStoppingProject, setIsStoppingProject] = useState(false);
   const [removeConfirmProject, setRemoveConfirmProject] = useState<SearchableProject | null>(null);
   const [isRemovingProject, setIsRemovingProject] = useState(false);
-  const [freeMemoryConfirmProject, setFreeMemoryConfirmProject] =
-    useState<SearchableProject | null>(null);
-  const [isFreeingMemory, setIsFreeingMemory] = useState(false);
+  const [sleepConfirmProject, setSleepConfirmProject] = useState<SearchableProject | null>(null);
+  const [isSleepingProject, setIsSleepingProject] = useState(false);
   const [saveAsProjectConfirm, setSaveAsProjectConfirm] = useState<{
     scratch: SearchableScratch;
     project: Project;
@@ -731,6 +730,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const addProjectFn = useProjectStore((state) => state.addProject);
   const closeActiveProject = useProjectStore((state) => state.closeActiveProject);
+  const sleepProjectAction = useProjectStore((state) => state.sleepProject);
   const closeProject = useProjectStore((state) => state.closeProject);
   const removeProject = useProjectStore((state) => state.removeProject);
   const openRelocation = useProjectRelocationStore((state) => state.open);
@@ -1230,12 +1230,12 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   }, [removeConfirmProject, searchableProjects]);
 
   useEffect(() => {
-    if (!freeMemoryConfirmProject) return;
-    const stillExists = searchableProjects.some((p) => p.id === freeMemoryConfirmProject.id);
+    if (!sleepConfirmProject) return;
+    const stillExists = searchableProjects.some((p) => p.id === sleepConfirmProject.id);
     if (!stillExists) {
-      setFreeMemoryConfirmProject(null);
+      setSleepConfirmProject(null);
     }
-  }, [freeMemoryConfirmProject, searchableProjects]);
+  }, [sleepConfirmProject, searchableProjects]);
 
   const open = useCallback(
     (nextMode: ProjectSwitcherMode = "modal") => {
@@ -1603,9 +1603,12 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     [searchableProjects, removeConfirmProject]
   );
 
-  const doFreeMemory = useCallback(
+  const doSleepProject = useCallback(
     async (projectId: string) => {
-      const run = () => projectClient.freeMemory(projectId).then(() => loadProjects());
+      // Through the store, not projectClient: sleeping the ACTIVE project also
+      // has to flush pending panel saves before the teardown and drop the window
+      // to the no-project state after it.
+      const run = () => sleepProjectAction(projectId);
       try {
         await run();
       } catch (error) {
@@ -1615,8 +1618,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
           } catch (retryError) {
             notify({
               type: "error",
-              title: "Couldn't free memory",
-              message: formatErrorMessage(retryError, "Couldn't free the project's memory"),
+              title: "Couldn't sleep project",
+              message: formatErrorMessage(retryError, "Couldn't put the project to sleep"),
               actions: [{ label: "Try again", variant: "primary", onClick: retry }],
               context: { eventKind: "uiFeedback" },
             });
@@ -1624,60 +1627,57 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         };
         notify({
           type: "error",
-          title: "Couldn't free memory",
-          message: formatErrorMessage(error, "Couldn't free the project's memory"),
+          title: "Couldn't sleep project",
+          message: formatErrorMessage(error, "Couldn't put the project to sleep"),
           actions: [{ label: "Try again", variant: "primary", onClick: retry }],
           context: { eventKind: "uiFeedback" },
         });
       }
     },
-    [loadProjects]
+    [sleepProjectAction]
   );
 
-  const freeMemoryProject = useCallback(
+  const sleepProject = useCallback(
     async (projectId: string) => {
       const project = searchableProjects.find((p) => p.id === projectId);
       if (!project) return;
-
-      // The active project can't free its own renderer/host — surface the
-      // same guidance the backend guard enforces instead of a silent no-op.
-      if (project.isActive) {
-        notify({
-          type: "info",
-          title: "Switch away first",
-          message: "Switch to another project to free this one's memory.",
-          context: { eventKind: "uiFeedback" },
-        });
-        return;
-      }
 
       close();
 
       const hasProcesses =
         project.processCount > 0 || project.activeAgentCount > 0 || project.waitingAgentCount > 0;
 
-      // D1 (confirm) when live processes would be stopped; D0 (immediate) when
-      // there's nothing running to interrupt. The snapshot freezes the counts.
-      if (hasProcesses) {
-        setFreeMemoryConfirmProject(project);
+      // D1 (confirm) when live processes would be stopped, or when the target is
+      // the project on screen here — that tears down what the user is looking
+      // at. D0 (immediate) for a background project with nothing running to
+      // interrupt. The snapshot freezes the counts the dialog previews.
+      //
+      // `isActive` only covers THIS window, and no cross-window signal is
+      // available here: the persisted `status` is a singleton keyed to the
+      // last-switched project, so "active" doesn't mean "open in some window".
+      // A project open in ANOTHER window can therefore be slept without a
+      // confirm — bounded harm, since nothing is running in that case and the
+      // other window is told what happened (`useSleptProjectTransition`).
+      if (hasProcesses || project.isActive) {
+        setSleepConfirmProject(project);
       } else {
-        await doFreeMemory(projectId);
+        await doSleepProject(projectId);
       }
     },
-    [searchableProjects, close, doFreeMemory]
+    [searchableProjects, close, doSleepProject]
   );
 
-  const confirmFreeMemory = useCallback(async () => {
-    if (!freeMemoryConfirmProject || isFreeingMemory) return;
-    setIsFreeingMemory(true);
-    const capturedId = freeMemoryConfirmProject.id;
+  const confirmSleep = useCallback(async () => {
+    if (!sleepConfirmProject || isSleepingProject) return;
+    setIsSleepingProject(true);
+    const capturedId = sleepConfirmProject.id;
     try {
-      await doFreeMemory(capturedId);
-      setFreeMemoryConfirmProject(null);
+      await doSleepProject(capturedId);
+      setSleepConfirmProject(null);
     } finally {
-      setIsFreeingMemory(false);
+      setIsSleepingProject(false);
     }
-  }, [freeMemoryConfirmProject, isFreeingMemory, doFreeMemory]);
+  }, [sleepConfirmProject, isSleepingProject, doSleepProject]);
 
   const createScratch = useCallback(
     async (name?: string) => {
@@ -2092,7 +2092,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     cloneRepo,
     stopProject,
     removeProject: removeProjectFromList,
-    freeMemoryProject,
+    sleepProject,
     locateProject,
     moveOrRenameProject,
     togglePinProject,
@@ -2105,10 +2105,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     setRemoveConfirmProject,
     confirmRemoveProject,
     isRemovingProject,
-    freeMemoryConfirmProject,
-    setFreeMemoryConfirmProject,
-    confirmFreeMemory,
-    isFreeingMemory,
+    sleepConfirmProject,
+    setSleepConfirmProject,
+    confirmSleep,
+    isSleepingProject,
     backgroundWaitingCount,
     nonActiveAgentCounts,
     scratchResults,

@@ -26,13 +26,13 @@ import { T_LONG, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 
 const CHURN_COUNT = 20;
 const WARMUP_CYCLES = 3;
-// More than one so the freeMemory teardown must kill every project PTY, not just
+// More than one so the sleep teardown must kill every project PTY, not just
 // the first — a single terminal wouldn't surface an early-exiting kill loop.
 const PROJECT_A_TERMINALS = 3;
 
 // Scheduled hibernation currently kills no PTYs: HibernationService.ts pins
 // `EXPERIMENT_HIBERNATION_DISABLED = true`, so the scheduled-kill branch is dead
-// code and a test for it would be vacuous. The "project.freeMemory" test below
+// code and a test for it would be vacuous. The "project.sleepProject" test below
 // covers the real background-project PTY-teardown path (gracefulKillByProject),
 // which bypasses the experiment flag. Flip this to true and add a scheduled-kill
 // assertion when EXPERIMENT_HIBERNATION_DISABLED is removed (#10829).
@@ -127,7 +127,7 @@ test.describe.serial("Nightly: PTY process leak — terminal churn", () => {
   });
 });
 
-test.describe.serial("Nightly: PTY process leak — project.freeMemory teardown", () => {
+test.describe.serial("Nightly: PTY process leak — project.sleepProject teardown", () => {
   let ctx: AppContext;
   let fixtureCleanups: Array<() => void> = [];
   let projectAId: string;
@@ -160,9 +160,11 @@ test.describe.serial("Nightly: PTY process leak — project.freeMemory teardown"
       .poll(() => getLivePtyCount(ctx.window, projectAId), { timeout: T_LONG })
       .toBe(PROJECT_A_TERMINALS);
 
-    // Register and switch to project B — freeMemory refuses the active project
-    // (it owns the visible renderer), so A must be backgrounded first. The
-    // WebContentsView swap returns a fresh Page; the old reference goes stale.
+    // Register and switch to project B so A is backgrounded: this test measures
+    // the background-project teardown specifically, and sleeping the ACTIVE
+    // project also drops the window to the picker, which would invalidate the
+    // page this test keeps polling. The WebContentsView swap returns a fresh
+    // Page; the old reference goes stale.
     ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, fixtures[1].dir, "PTY Free B");
   });
 
@@ -171,20 +173,20 @@ test.describe.serial("Nightly: PTY process leak — project.freeMemory teardown"
     for (const cleanup of fixtureCleanups) cleanup();
   });
 
-  test("background project's PTYs are torn down by project.freeMemory", async () => {
+  test("background project's PTYs are torn down by project.sleepProject", async () => {
     test.setTimeout(600_000);
 
     // Sanity: backgrounding project A keeps all its PTYs alive (no teardown yet).
     const before = await getLivePtyCount(ctx.window, projectAId);
-    console.log(`[pty-leak] project A live PTYs before freeMemory: ${before}`);
+    console.log(`[pty-leak] project A live PTYs before sleep: ${before}`);
     expect(before).toBe(PROJECT_A_TERMINALS);
 
     await ctx.window.evaluate(async (pid) => {
       await (
         window as unknown as {
-          electron: { project: { freeMemory: (id: string) => Promise<unknown> } };
+          electron: { project: { sleepProject: (id: string) => Promise<unknown> } };
         }
-      ).electron.project.freeMemory(pid);
+      ).electron.project.sleepProject(pid);
     }, projectAId);
 
     // gracefulKillByProject sets wasKilled=true on every project-A PTY, so the

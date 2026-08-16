@@ -1249,7 +1249,10 @@ describe("registerShutdownHandler", () => {
       await beforeQuitCb(makeEvent());
       await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
 
-      expect(gracefulKillByProject).toHaveBeenCalledWith("proj-1");
+      // preserveSession keeps a plain shell's session file: without it the
+      // fallback path in PtyManager.kill deletes it, so a quit discarded
+      // scrollback that sleeping the same project preserved (#11802).
+      expect(gracefulKillByProject).toHaveBeenCalledWith("proj-1", { preserveSession: true });
       expect(projectStoreMock.enqueueProjectStateUpdate).toHaveBeenCalled();
       expect(persistAgentSessionMock).toHaveBeenCalledTimes(1);
       expect((persistAgentSessionMock.mock.calls[0][0] as Record<string, unknown>).sessionId).toBe(

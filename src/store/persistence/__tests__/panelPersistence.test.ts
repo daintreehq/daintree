@@ -31,9 +31,9 @@ const createMockProjectClient = () => ({
   saveSettings: vi.fn().mockResolvedValue(undefined),
   detectRunners: vi.fn().mockResolvedValue([]),
   close: vi.fn().mockResolvedValue({ success: true }),
-  freeMemory: vi
+  sleepProject: vi
     .fn()
-    .mockResolvedValue({ terminalsKilled: 0, rendererEvicted: false, workspaceEvicted: false }),
+    .mockResolvedValue({ terminalsKilled: 0, rendererViewsEvicted: 0, workspaceEvicted: false }),
   reopen: vi.fn().mockResolvedValue({}),
   getStats: vi.fn().mockResolvedValue({}),
   getBulkStats: vi.fn().mockResolvedValue({}),

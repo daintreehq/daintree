@@ -805,9 +805,9 @@ export function Toolbar({
     [projectSwitcher]
   );
 
-  const handleFreeMemoryProject = useCallback(
+  const handleSleepProject = useCallback(
     (projectId: string) => {
-      void projectSwitcher.freeMemoryProject(projectId);
+      void projectSwitcher.sleepProject(projectId);
     },
     [projectSwitcher]
   );
@@ -2059,7 +2059,7 @@ export function Toolbar({
                     onCloneRepo={projectSwitcher.cloneRepo}
                     onStopProject={handleStopProject}
                     onCloseProject={handleCloseProject}
-                    onFreeMemoryProject={handleFreeMemoryProject}
+                    onSleepProject={handleSleepProject}
                     onLocateProject={handleLocateProject}
                     onMoveOrRenameProject={handleMoveOrRenameProject}
                     onTogglePinProject={projectSwitcher.togglePinProject}
@@ -2071,12 +2071,10 @@ export function Toolbar({
                     onRemoveConfirmClose={handleRemoveConfirmClose}
                     onConfirmRemove={projectSwitcher.confirmRemoveProject}
                     isRemovingProject={projectSwitcher.isRemovingProject}
-                    freeMemoryConfirmProject={projectSwitcher.freeMemoryConfirmProject}
-                    onFreeMemoryConfirmClose={() =>
-                      projectSwitcher.setFreeMemoryConfirmProject(null)
-                    }
-                    onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
-                    isFreeingMemory={projectSwitcher.isFreeingMemory}
+                    sleepConfirmProject={projectSwitcher.sleepConfirmProject}
+                    onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
+                    onConfirmSleep={projectSwitcher.confirmSleep}
+                    isSleepingProject={projectSwitcher.isSleepingProject}
                     rankedSearch={projectSwitcher.isRankedSearch}
                     scratchResults={projectSwitcher.scratchResults}
                     onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
