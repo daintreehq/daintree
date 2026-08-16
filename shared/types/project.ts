@@ -99,26 +99,21 @@ export interface Project {
    */
   autoParkedAt?: number;
   /**
-   * Timestamp (ms) this project stopped being active — stamped on the
-   * transition to `closed`, cleared the moment it goes active or background
-   * again (#11791). Anchored to the END of an interaction rather than
-   * `lastOpened`: a project worked in for three hours and then stopped would
-   * otherwise carry no recency at the moment that recency is most useful.
-   */
-  recentlyClosedAt?: number;
-  /**
-   * Epoch ms until which this project counts as recently active, or absent when
-   * it doesn't (#11791). Main owns the arithmetic so the renderer holds an
-   * absolute deadline it can compare against its own clock, rather than a
-   * duration it would have to re-base every render.
+   * How many saved agent panels this project would bring back if you opened it
+   * (#11801) — the switcher's grey dot, and the fact behind it.
    *
-   * Two populations feed it, on deliberately different clocks: a project the
-   * user closed runs from {@link Project.recentlyClosedAt}, while one still open
-   * at the previous shutdown runs from app launch — the app went away, not the
-   * project, so anchoring it to shutdown would show nothing the next morning,
-   * which is the case the mark exists for.
+   * Absent and zero mean different things, and the difference is load-bearing.
+   * Absent is "not computed yet": every row predates the field until its state
+   * is next written or the deferred maintenance pass reconciles it, and a row
+   * that has never been resolved must make no claim rather than claim none.
+   * Zero is an answer — the project's state was read and holds no agent panels.
+   * Collapsing the two would light up the switcher with false negatives on the
+   * first launch after upgrade.
+   *
+   * Main owns the write. The count is derived from the persisted state at the
+   * moment it is saved, so the renderer never reads `state.json` to draw a row.
    */
-  recentlyActiveUntil?: number;
+  resumableAgentCount?: number;
   /**
    * Last-known repository counts, persisted so switch-back seeds the toolbar
    * immediately instead of shifting its pill widths (issue #11078). Main owns

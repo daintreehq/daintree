@@ -162,11 +162,12 @@ export interface SearchableProject extends WorkspaceRowStatusFields {
   /** Set when the project was auto-closed by the background-idle sweep (#10830). */
   autoParkedAt?: number;
   /**
-   * Epoch ms until which this project reads as recently active (#11791). Main
-   * resolves which clock applies and hands down an absolute deadline, so the
-   * row only ever compares it against the current time.
+   * How many saved agent panels this project would restore if opened (#11801).
+   * Main derives it from the persisted state, so the row draws its dot without
+   * reading anything. Absent means not yet computed — distinct from a known 0,
+   * which is an answer.
    */
-  recentlyActiveUntil?: number;
+  resumableAgentCount?: number;
   isActive: boolean;
   isBackground: boolean;
   isMissing: boolean;
@@ -778,7 +779,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         lastOpened: p.lastOpened ?? 0,
         status: p.status,
         autoParkedAt: p.autoParkedAt,
-        recentlyActiveUntil: p.recentlyActiveUntil,
+        // Passed through as-is. Coercing an absent count to 0 here would turn
+        // "not computed yet" into "restores nothing" — the one distinction the
+        // dot depends on.
+        resumableAgentCount: p.resumableAgentCount,
         isActive,
         isBackground,
         isMissing,

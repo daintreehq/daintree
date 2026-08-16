@@ -27,11 +27,12 @@ export const projects = sqliteTable(
     // "Suspended to free memory" label in the project switcher. Cleared when the
     // project is reopened (`setCurrentProject`).
     autoParkedAt: integer("auto_parked_at"),
-    // Timestamp (ms) this project stopped being active, stamped on the
-    // transition to `closed` and cleared when it goes active/background again
-    // (#11791). Drives the switcher's decaying "recently active" dot. Null for
-    // a project still open and for every row predating the field.
-    recentlyClosedAt: integer("recently_closed_at"),
+    // How many saved agent panels this project would restore if opened (#11801)
+    // — the switcher's resume dot. Derived from the persisted project state
+    // whenever it is written, and reconciled for older rows by the deferred
+    // session-maintenance pass. Null means "not computed yet" and is distinct
+    // from a computed 0: a row that has never been resolved makes no claim.
+    resumableAgentCount: integer("resumable_agent_count"),
     // False for a folder adopted without git (issue #11405). Null for every
     // legacy row and every repository-backed project — absence means
     // git-backed, so no backfill is needed.

@@ -486,10 +486,13 @@ describe("openDb (integration)", () => {
         last_opened INTEGER NOT NULL,
         deleted_at INTEGER
       );
+      CREATE TABLE app_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
     `);
     const ins = seed.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)");
     for (const entry of applied) ins.run(entry.tag, entry.when);
-    seed.close();
 
     // Read the newest migration's own effect out of its SQL rather than naming
     // columns here, so this stays a real assertion about migration application
@@ -502,7 +505,19 @@ describe("openDb (integration)", () => {
     const additions = [...finalSql.matchAll(/ALTER TABLE `([a-z_]+)` ADD `([a-z_]+)`/g)].map(
       (m) => ({ table: m[1]!, column: m[2]! })
     );
+    const removals = [...finalSql.matchAll(/ALTER TABLE `([a-z_]+)` DROP COLUMN `([a-z_]+)`/g)].map(
+      (m) => ({ table: m[1]!, column: m[2]! })
+    );
     expect(additions.length).toBeGreaterThan(0);
+
+    // A migration can only drop a column the seeded schema actually has, and
+    // the seed above is a minimal pre-history table. Add each dropped column
+    // back so the DROP has something to act on — derived from the SQL for the
+    // same reason the additions are.
+    for (const { table, column } of removals) {
+      seed.exec(`ALTER TABLE ${table} ADD COLUMN ${column} INTEGER`);
+    }
+    seed.close();
 
     // Those columns must be absent before the upgrade for the test to mean
     // anything — the seed tables were created without them.
@@ -513,6 +528,13 @@ describe("openDb (integration)", () => {
       ).map((c) => c.name);
       expect(seededColumns).not.toContain(column);
     }
+    // And the dropped ones must be present, or the DROP would prove nothing.
+    for (const { table, column } of removals) {
+      const seededColumns = (
+        preCheck.prepare(`PRAGMA table_info(${table})`).all() as ColInfo[]
+      ).map((c) => c.name);
+      expect(seededColumns).toContain(column);
+    }
     preCheck.close();
 
     const { sqlite } = openDb(dbPath, migrationsFolder);
@@ -520,6 +542,10 @@ describe("openDb (integration)", () => {
       for (const { table, column } of additions) {
         const columns = (sqlite.pragma(`table_info(${table})`) as ColInfo[]).map((c) => c.name);
         expect(columns).toContain(column);
+      }
+      for (const { table, column } of removals) {
+        const columns = (sqlite.pragma(`table_info(${table})`) as ColInfo[]).map((c) => c.name);
+        expect(columns).not.toContain(column);
       }
 
       // The skipped migration is now recorded — total equals the full journal.

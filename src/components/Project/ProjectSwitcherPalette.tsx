@@ -229,10 +229,10 @@ interface ProjectListItemProps {
  */
 function StatusDot({
   status,
-  showRecentDot = false,
+  showResumeDot = false,
 }: {
   status: ProjectRowStatus;
-  showRecentDot?: boolean;
+  showResumeDot?: boolean;
 }) {
   return (
     <div className="w-1.5 shrink-0" data-testid="workspace-status-slot">
@@ -242,13 +242,13 @@ function StatusDot({
           data-testid="workspace-status-dot"
         />
       )}
-      {showRecentDot && (
-        // Hidden from assistive tech, which hears the row's own "recently
-        // active" phrase instead — a live region per row would re-announce the
+      {showResumeDot && (
+        // Hidden from assistive tech, which hears the row's own "N agents will
+        // resume" phrase instead — a live region per row would re-announce the
         // whole list on every render, and colour must not be the only carrier.
         <div
           className="w-1.5 h-1.5 rounded-full bg-text-secondary"
-          data-testid="workspace-recent-dot"
+          data-testid="workspace-resume-dot"
           aria-hidden="true"
         />
       )}
@@ -257,29 +257,29 @@ function StatusDot({
 }
 
 /**
- * Whether the row should carry the decaying "recently active" mark (#11791).
+ * Whether the row should mark that opening this project brings agents back
+ * (#11801).
  *
- * Gated on the dormant fallback because a live status always outranks a recency
- * hint: the coloured dot says what the project is doing now, the grey one only
- * says someone was here lately. So the mark lands exactly where the slot was
- * already empty — the dormant rows #11692 cleared — and never displaces a mark
- * that means more. Keyed off the deadline rather than which band the row sorts
- * into, so a pinned project keeps it too.
+ * Gated on the dormant fallback because a live status always outranks the
+ * promise: the coloured dot says what the project is doing now, the grey one
+ * only says what it would come back with. So the mark lands exactly where the
+ * slot was already empty — the dormant rows #11692 cleared — and never
+ * displaces a mark that means more. Keyed off the count rather than which band
+ * the row sorts into, so a pinned project keeps it too.
  *
- * The current project is excluded outright. Its deadline is real — it was open
- * at the last shutdown, so main hands it the launch clock — but an idle current
- * row falls through to the same dormant fallback as any other quiet row, and
- * "recently" is the wrong word for where you are standing. Without this the row
- * would read ", current, recently active".
+ * An absent count means main has not resolved this project yet, which is not
+ * the same as resolving it to zero — an unresolved row makes no claim rather
+ * than a wrong one. Zero is an answer and also draws nothing: there is nothing
+ * to come back to.
+ *
+ * The current project is excluded outright. Its count is real, but you are
+ * already standing in it — those agents are on screen, not waiting to return.
+ * Without this the row would read ", current, 3 agents will resume".
  */
-function showRecentlyActiveMark(
-  status: ProjectRowStatus,
-  project: SearchableProject,
-  nowMs: number
-): boolean {
+function showResumableAgentMark(status: ProjectRowStatus, project: SearchableProject): boolean {
   if (project.isActive) return false;
   if (status.isDormantFallback !== true) return false;
-  return project.recentlyActiveUntil !== undefined && nowMs < project.recentlyActiveUntil;
+  return project.resumableAgentCount !== undefined && project.resumableAgentCount > 0;
 }
 
 /** Matches the resolution of the wait ages on screen — they change by the minute. */
@@ -335,7 +335,7 @@ function ProjectListItem({
   const isProjectNotificationsMuted = areProjectNotificationsMuted(notificationOverrides);
 
   const status = getProjectRowStatus(project, nowMs);
-  const showRecentDot = showRecentlyActiveMark(status, project, nowMs);
+  const showResumeDot = showResumableAgentMark(status, project);
 
   const row = (
     <div
@@ -371,7 +371,7 @@ function ProjectListItem({
       onPointerEnter={onHoverProject ? (e) => onHoverProject(project.id, e.pointerType) : undefined}
       onPointerLeave={onHoverProjectEnd ? (e) => onHoverProjectEnd(e.pointerType) : undefined}
     >
-      <StatusDot status={status} showRecentDot={showRecentDot} />
+      <StatusDot status={status} showResumeDot={showResumeDot} />
 
       <div
         className={cn(
@@ -411,13 +411,21 @@ function ProjectListItem({
            */}
           {project.isActive && <span className="sr-only">, current</span>}
           {/*
-           * The grey dot's meaning, said rather than shown (#11791). The dot
+           * The grey dot's meaning, said rather than shown (#11801). The dot
            * itself is `aria-hidden`, so without this the row would carry the
            * fact in colour alone. Same shape as `, current` above — part of the
            * accessible name, not a live region, so a list render doesn't
-           * announce every recently-active row.
+           * announce every markable row.
+           *
+           * The count rather than the bare fact: the number is already here,
+           * and "3 agents will resume" answers the question the dot only raises.
            */}
-          {showRecentDot && <span className="sr-only">, recently active</span>}
+          {showResumeDot && (
+            <span className="sr-only">
+              , {project.resumableAgentCount}{" "}
+              {project.resumableAgentCount === 1 ? "agent" : "agents"} will resume
+            </span>
+          )}
           {isProjectNotificationsMuted && (
             <>
               {/*

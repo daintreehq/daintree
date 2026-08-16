@@ -85,6 +85,13 @@
       "when": 1786786208480,
       "tag": "0011_add_project_recently_closed_at",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1787990400000,
+      "tag": "0012_replace_project_recency_with_resumable_agents",
+      "breakpoints": true
     }
   ]
 }

@@ -9,6 +9,7 @@ import {
   TerminalSnapshotSchema,
   filterValidTerminalEntries,
 } from "../../../schemas/ipc.js";
+import { filterRestorableTerminalSnapshots } from "../../../services/projectStateRestore.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
 import { getDatabaseMaintenanceService } from "../../../services/DatabaseMaintenanceService.js";
 import { USAGE_WINDOW_MS, MAX_USES_PER_ENTRY } from "../../../../shared/utils/actionUsage.js";
@@ -273,20 +274,16 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       }
       // Per-project state exists (even if empty) - use it as authoritative
       if (!hasCrashRestoreTerminals && projectState?.terminals !== undefined) {
-        // Use per-project terminals, excluding trashed and normalizing location
-        const validatedTerminals = filterValidTerminalEntries(
+        // Use per-project terminals, excluding trashed, inferring missing kind
+        // and normalizing location.
+        terminalsToUse = filterRestorableTerminalSnapshots(
           projectState.terminals,
-          TerminalSnapshotSchema,
           `app:hydrate(project:${workspaceId})`
-        );
-        // Filter out trashed terminals, infer missing kind, and normalize location
-        terminalsToUse = validatedTerminals
-          .filter((t) => t.location !== "trash")
-          .map((t) => ({
-            ...t,
-            kind: inferKind(t),
-            location: t.location as "grid" | "dock",
-          }));
+        ).map((t) => ({
+          ...t,
+          kind: inferKind(t),
+          location: t.location as "grid" | "dock",
+        }));
         terminalsSource = "per-project";
 
         // Use per-project active worktree if it has been set

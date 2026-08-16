@@ -26,11 +26,6 @@ import {
   parseOpenWindowsManifest,
   type OpenWindowRecord,
 } from "./windowManifest.js";
-import {
-  SESSION_OPEN_PROJECTS_KEY,
-  parseSessionOpenProjects,
-  serializeSessionOpenProjects,
-} from "./sessionOpenProjects.js";
 
 export function readLastActiveProjectIdSync(): string | null {
   try {
@@ -171,79 +166,5 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
   } catch {
     // Any error (corrupt DB, missing table, etc.) — restore a single window.
     return NO_MANIFEST;
-  }
-}
-
-/**
- * Take the session-open checkpoint off disk (#11794) — the projects that were
- * open when the app last ran, which the switcher's recently-active dot marks.
- *
- * Reads on the same throwaway connection idiom as its siblings above, and for a
- * sharper reason than they have: the restore fan-out writes into this same key
- * as each window comes up, so the previous session's set has to be captured
- * before any window exists. Read it lazily on the first DB query instead and a
- * project opened fresh this session — a CLI-targeted launch, a restore that
- * fell back to the last-active project — would leak into the set that is
- * supposed to be frozen from last time.
- *
- * `clear` hands over the row as well as reading it: the value belongs to the
- * session that just ended, and this one starts with nothing open. Clearing here
- * rather than on the way out is what makes a session that opens nothing —
- * picker window, then quit or crash — leave an empty set behind instead of the
- * previous session's, which would otherwise light its projects up a second
- * time. It writes on the same throwaway connection deliberately: routing it
- * through `getSharedDb()` would force the shared database (and its drizzle
- * migrations) open ahead of the first window, which is the cost this whole
- * idiom exists to avoid.
- *
- * Recovery launches pass `clear: false`. Safe mode opens one window on purpose,
- * and consuming the checkpoint there would throw away the set the user actually
- * had — the same reason the window manifest goes read-only on that path.
- *
- * Missing DB, missing row, corrupt JSON, or an unreadable version all report an
- * empty set, which costs one launch's dots rather than marking projects the
- * user never had open. There is deliberately no fallback to project `status`:
- * inferring the set from `active`/`background` rows IS #11794. A failed clear
- * is swallowed for the same reason — a stale checkpoint costs one launch's
- * accuracy, never the launch.
- */
-export function readSessionOpenProjectsSync(opts: { clear: boolean }): string[] {
-  try {
-    const dbPath = path.join(app.getPath("userData"), "daintree.db");
-
-    if (!fs.existsSync(dbPath)) {
-      return []; // First launch — no database yet
-    }
-
-    // Before opening writable, never after: bundled SQLite derives the
-    // -wal/-shm sidecar mode from the main file's, so a legacy 0o644 database
-    // would otherwise get world-readable sidecars created here — ahead of the
-    // chmod `openDb()` performs for exactly this reason. Best-effort and
-    // POSIX-gated, like its counterpart there.
-    if (opts.clear) tightenFilePermissionsSync(dbPath);
-
-    const sqlite = new Database(dbPath, { readonly: !opts.clear });
-    try {
-      const row = sqlite
-        .prepare("SELECT value FROM app_state WHERE key = ?")
-        .get(SESSION_OPEN_PROJECTS_KEY) as { value: string } | undefined;
-      const projectIds = parseSessionOpenProjects(row?.value ?? null);
-
-      if (opts.clear) {
-        sqlite
-          .prepare(
-            "INSERT INTO app_state (key, value) VALUES (?, ?) " +
-              "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-          )
-          .run(SESSION_OPEN_PROJECTS_KEY, serializeSessionOpenProjects([]));
-      }
-
-      return projectIds;
-    } finally {
-      sqlite.close();
-    }
-  } catch {
-    // Any error (corrupt DB, missing table, etc.) — no dots for one session.
-    return [];
   }
 }
