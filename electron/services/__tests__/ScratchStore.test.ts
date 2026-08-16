@@ -331,10 +331,25 @@ describe("ScratchStore resumable agent count (#11821)", () => {
     });
 
     it("treats a corrupt count as never counted rather than as a claim", () => {
+      // Both read paths, because the palette's browse list comes from
+      // `getAllScratches` while a single row lookup comes from `getScratchById`
+      // — a guard applied to one only would leave the other making the claim.
       for (const corrupt of [-1, 1.5]) {
         setStoredCount(corrupt);
         expect(store.getScratchById(scratchId)?.resumableAgentCount).toBeUndefined();
+        expect(store.getAllScratches()[0]?.resumableAgentCount).toBeUndefined();
       }
+    });
+
+    it("treats a non-numeric cell as never counted", () => {
+      // SQLite's INTEGER affinity keeps a non-coercible TEXT as TEXT, so the
+      // reader has to reject by type rather than assume the column's declared
+      // one. Written through raw SQL: the typed builder would refuse it.
+      sqlite
+        .prepare("UPDATE scratches SET resumable_agent_count = 'lots' WHERE id = ?")
+        .run(scratchId);
+      expect(store.getScratchById(scratchId)?.resumableAgentCount).toBeUndefined();
+      expect(store.getAllScratches()[0]?.resumableAgentCount).toBeUndefined();
     });
   });
 
@@ -376,11 +391,15 @@ describe("ScratchStore resumable agent count (#11821)", () => {
       expect(storedCount()).toBeNull();
     });
 
-    it("repairs a corrupt cell that reads back as unknown", () => {
-      // `readPersistedCount` reports -1 as unknown, so the sweep arrives with
-      // previousCount null. Matching SQL NULL alone would never match this row
-      // and it would stay corrupt forever.
-      setStoredCount(-1);
+    it.each([
+      ["negative", -1],
+      ["fractional", 1.5],
+    ])("repairs a %s cell that reads back as unknown", (_label, corrupt) => {
+      // `readPersistedCount` reports both as unknown, so the sweep arrives with
+      // previousCount null. Matching SQL NULL alone would never match these rows
+      // and they would stay corrupt forever — the fractional case is the one the
+      // `<> CAST(... AS INTEGER)` arm exists for.
+      setStoredCount(corrupt);
       expect(store.reconcileResumableAgentCount(scratchId, null, 2)?.resumableAgentCount).toBe(2);
       expect(storedCount()).toBe(2);
     });
@@ -394,10 +413,24 @@ describe("ScratchStore resumable agent count (#11821)", () => {
       expect(storedCount()).toBeNull();
     });
 
-    it("rejects a malformed id instead of addressing the whole table", () => {
-      setStoredCount(1);
-      expect(store.reconcileResumableAgentCount("not-a-uuid", null, 6)).toBeNull();
-      expect(storedCount()).toBe(1);
+    it("rejects a malformed id instead of addressing the row it names", () => {
+      // The row genuinely exists under that id — SQLite holds any TEXT primary
+      // key — so this fails if the guard stops running. Pointed at a row with
+      // some other id the UPDATE would miss anyway and prove nothing.
+      const malformed = "not-a-uuid";
+      db.insert(schema.scratches)
+        .values({
+          id: malformed,
+          path: "/tmp/daintree-scratch-test/malformed",
+          name: "Malformed",
+          createdAt: 1_000,
+          lastOpened: 2_000,
+          resumableAgentCount: 1,
+        })
+        .run();
+
+      expect(store.reconcileResumableAgentCount(malformed, 1, 6)).toBeNull();
+      expect(storedCount(malformed)).toBe(1);
     });
   });
 

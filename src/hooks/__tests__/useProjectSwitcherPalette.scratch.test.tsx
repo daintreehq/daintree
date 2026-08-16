@@ -171,6 +171,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   scratchState.scratches = [];
   scratchState.currentScratch = null;
+  // Shared across the whole file, so a spec that seeds stats would otherwise
+  // hand them to every spec that runs after it.
+  projectStatsState.stats = {};
   scratchState.createScratch.mockResolvedValue({ id: "scratch-1" });
   scratchState.switchScratch.mockResolvedValue(undefined);
   scratchState.renameScratch.mockResolvedValue(undefined);
@@ -1424,12 +1427,14 @@ describe("resumable agent count passthrough", () => {
     // the count says what a closed workspace would bring back. A row with no
     // live agents at all still carries whatever main last persisted.
     seedScratchesWithCounts([2]);
+    // A live count deliberately different from the saved one, so a view-model
+    // that sourced the mark from stats would read 5 rather than 2.
     projectStatsState.stats = {
-      "scratch-1": { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+      "scratch-1": { activeAgentCount: 5, waitingAgentCount: 0, processCount: 5 },
     };
     const { result } = renderHook(() => useProjectSwitcherPalette());
 
     expect(result.current.scratchResults[0]?.resumableAgentCount).toBe(2);
-    expect(result.current.scratchResults[0]?.activeAgentCount).toBe(0);
+    expect(result.current.scratchResults[0]?.activeAgentCount).toBe(5);
   });
 });

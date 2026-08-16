@@ -13,6 +13,8 @@ vi.mock("electron", () => ({
 }));
 
 import { openDb } from "../db.js";
+import { eq } from "drizzle-orm";
+import * as schema from "../schema.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../migrations");
@@ -603,6 +605,88 @@ describe("openDb (integration)", () => {
       // The neighbouring key is what proves the DELETE was scoped rather than
       // a table-wide wipe that happened to satisfy the first assertion.
       expect(keys).toContain("currentProjectId");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("gives an existing scratch a column the Drizzle schema can address (migration 0013)", async () => {
+    // Names the column on purpose, for the same reason the 0012 test does: the
+    // generic journal test derives its expectations from the migration's own
+    // SQL, so a column misspelled in BOTH would satisfy it, and every store
+    // suite hand-creates the table rather than migrating into it. This is the
+    // only place the shipped SQL and `schema.ts` have to agree — which matters
+    // because 0013 was hand-trimmed from a generated draft (#11821).
+    const dbPath = path.join(tmpDir, "scratch-resume-count.db");
+
+    const journal = JSON.parse(
+      fs.readFileSync(path.join(migrationsFolder, "meta", "_journal.json"), "utf8")
+    ).entries as Array<{ when: number; tag: string }>;
+
+    const Database = (await import("better-sqlite3")).default;
+    const seed = new Database(dbPath);
+    // Everything up to 0013 already applied, so only the migration under test
+    // runs against a `scratches` table at its pre-0013 shape — holding a scratch
+    // that predates the field, which is the population it exists to backfill.
+    seed.exec(`
+      CREATE TABLE __drizzle_migrations (
+        id SERIAL PRIMARY KEY,
+        hash text NOT NULL,
+        created_at numeric
+      );
+      CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        last_opened INTEGER NOT NULL,
+        pinned INTEGER NOT NULL DEFAULT 0,
+        frecency_score REAL NOT NULL DEFAULT 3.0,
+        last_accessed_at INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE scratches (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_opened INTEGER NOT NULL,
+        deleted_at INTEGER,
+        last_completion_seen_at INTEGER
+      );
+      CREATE TABLE app_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+    const applied = seed.prepare(
+      "INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)"
+    );
+    for (const entry of journal.slice(0, -1)) applied.run(entry.tag, entry.when);
+    seed
+      .prepare(
+        "INSERT INTO scratches (id, path, name, created_at, last_opened) VALUES (?, ?, ?, ?, ?)"
+      )
+      .run("11111111-2222-4333-8444-555555555555", "/tmp/s", "Spike", 1, 2);
+    seed.close();
+
+    const { sqlite, db } = openDb(dbPath, migrationsFolder);
+    try {
+      // Round-tripped through the ORM rather than raw SQL: that is what binds
+      // the migration's column name to the one `ScratchStore` actually reads.
+      db.update(schema.scratches)
+        .set({ resumableAgentCount: 3 })
+        .where(eq(schema.scratches.id, "11111111-2222-4333-8444-555555555555"))
+        .run();
+      const row = db
+        .select()
+        .from(schema.scratches)
+        .where(eq(schema.scratches.id, "11111111-2222-4333-8444-555555555555"))
+        .get();
+
+      expect(row?.resumableAgentCount).toBe(3);
+      // Pre-existing rows come out of the migration making no claim, not
+      // claiming zero.
+      expect(row?.name).toBe("Spike");
     } finally {
       sqlite.close();
     }

@@ -596,21 +596,27 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
     });
 
     it("broadcasts moved scratches on the scratch channel, not the project one", async () => {
+      // The reconciler's OWN return value is what must go out — it is the
+      // freshly-read row. Broadcasting the input scratch instead would push the
+      // pre-backfill count and leave the palette drawing the old dot.
+      const reconciled = { id: "moved", resumableAgentCount: 1 };
       scratchStoreMock.getAllScratches.mockReturnValue([{ id: "moved" }, { id: "unchanged" }]);
       projectStoreMock.getProjectState.mockResolvedValue({ terminals: [agentPanel("t1")] });
       scratchStoreMock.reconcileResumableAgentCount.mockImplementation((id: string) =>
-        id === "moved" ? { id: "moved", resumableAgentCount: 1 } : null
+        id === "moved" ? reconciled : null
       );
 
       await __test__.evictStaleSessionFiles();
 
       const scratchUpdates = broadcastToRendererMock.mock.calls.filter(
-        ([channel]) => channel === "scratch:updated"
+        ([channel]) => channel === CHANNELS.SCRATCH_UPDATED
       );
       expect(scratchUpdates).toHaveLength(1);
-      expect(scratchUpdates[0][1]).toMatchObject({ id: "moved" });
+      expect(scratchUpdates[0][1]).toBe(reconciled);
       expect(
-        broadcastToRendererMock.mock.calls.filter(([channel]) => channel === "project:updated")
+        broadcastToRendererMock.mock.calls.filter(
+          ([channel]) => channel === CHANNELS.PROJECT_UPDATED
+        )
       ).toHaveLength(0);
     });
 
@@ -644,6 +650,43 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
 
       const arg = evictSessionFilesMock.mock.calls[0][0];
       expect([...(arg.knownIds ?? [])].sort()).toEqual(["term-p1", "term-s1"]);
+    });
+
+    it("reads workspace states with a bounded fan-out", async () => {
+      // Not a style preference: `ProjectStateManager` cannot tell an EMFILE from
+      // a corrupt file, so a descriptor exhaustion here marks a workspace
+      // unreadable AND renames its healthy state.json to `.corrupted.*`. An
+      // unbounded read over every project and scratch would make the sweep the
+      // thing that destroys the state it exists to preserve.
+      projectStoreMock.getAllProjects.mockReturnValue(
+        Array.from({ length: 40 }, (_, i) => ({ id: `proj-${i}` }))
+      );
+      scratchStoreMock.getAllScratches.mockReturnValue(
+        Array.from({ length: 40 }, (_, i) => ({ id: `scratch-${i}` }))
+      );
+
+      let inFlight = 0;
+      let peak = 0;
+      const release: (() => void)[] = [];
+      projectStoreMock.getProjectState.mockImplementation(async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise<void>((resolve) => release.push(resolve));
+        inFlight -= 1;
+        return null;
+      });
+
+      const sweep = __test__.evictStaleSessionFiles();
+      // Drain in waves: each release lets the next queued read start, so `peak`
+      // records the real ceiling rather than the first batch's size.
+      while (release.length > 0) {
+        release.shift()!();
+        await Promise.resolve();
+      }
+      await sweep;
+
+      expect(peak).toBeGreaterThan(0);
+      expect(peak).toBeLessThan(80);
     });
 
     it("disables the orphan pass when a scratch's state was unreadable", async () => {

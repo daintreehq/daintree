@@ -195,16 +195,60 @@ function reconcileScratchResumableAgentCounts(
   }
 }
 
+/**
+ * How many workspace states the sweep reads at once.
+ *
+ * Bounded rather than a bare `Promise.all` over every workspace, because the
+ * failure mode is not a slow sweep — it is lost state. `ProjectStateManager`
+ * cannot tell a descriptor exhaustion from a corrupt file: an `EMFILE` lands in
+ * the same catch as a parse error, which marks the workspace unreadable AND
+ * renames its perfectly healthy `state.json` to `.corrupted.<ts>`. A sweep that
+ * exists to reclaim disk must not be the thing that destroys restorable panels,
+ * and adding scratches to it (#11821) roughly doubled the fan-out that gets
+ * there.
+ */
+const STATE_READ_CONCURRENCY = 8;
+
+/**
+ * `Promise.all`-shaped map with a concurrency ceiling, preserving input order so
+ * callers can keep reading results index-aligned with what they passed in.
+ *
+ * Still a barrier: it settles only once every read has finished, which is what
+ * makes consulting `wasStateUnreadableThisSession` afterwards meaningful — that
+ * flag is set as a side effect of the reads themselves.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (let index = cursor++; index < items.length; index = cursor++) {
+      results[index] = await fn(items[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 async function evictStaleSessionFiles(): Promise<void> {
   try {
     const allProjects = projectStore.getAllProjects();
     const allScratches = scratchStore.getAllScratches();
     const knownIds = new Set<string>();
 
-    const [states, scratchStates] = await Promise.all([
-      Promise.all(allProjects.map((p) => projectStore.getProjectState(p.id))),
-      Promise.all(allScratches.map((s) => projectStore.getProjectState(s.id))),
-    ]);
+    // One queue over both kinds, so the ceiling bounds the sweep as a whole
+    // rather than each half separately. Split back apart by the boundary the
+    // ids were concatenated at — both halves stay index-aligned with their
+    // own list, which is what the compare-and-swap below depends on.
+    const workspaceIds = [...allProjects.map((p) => p.id), ...allScratches.map((s) => s.id)];
+    const allStates = await mapWithConcurrency(workspaceIds, STATE_READ_CONCURRENCY, (id) =>
+      projectStore.getProjectState(id)
+    );
+    const states = allStates.slice(0, allProjects.length);
+    const scratchStates = allStates.slice(allProjects.length);
     // Scratch terminals belong to the same `.restore` pool as project ones, so
     // they have to be declared known here or the orphan pass below would read a
     // live scratch's scrollback as unattributed and delete it.

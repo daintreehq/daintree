@@ -257,12 +257,33 @@ describe("ProjectStore resumable agent count", () => {
       expect(storedCount()).toBe(1);
     });
 
-    it("survives state for an id belonging to neither table", () => {
-      // Not a 64-hex project id and not a scratch UUID, so it addresses no row
-      // in either table and the observer has nothing to write.
+    it("writes nothing at all for an id belonging to neither table", () => {
+      // Not a 64-hex project id and not a scratch UUID. SQLite will happily
+      // hold such an id, so the rows below exist to prove the observer STOPS
+      // rather than merely missing: without the shape check it would run an
+      // UPDATE against `projects` for whatever id it was handed.
+      const malformed = "no-such-workspace";
+      db.insert(schema.projects)
+        .values({
+          id: malformed,
+          path: "/tmp/malformed",
+          name: "Malformed",
+          emoji: "🌲",
+          lastOpened: Date.now(),
+          resumableAgentCount: 42,
+        })
+        .run();
+      insertScratch({ id: malformed });
+      db.update(schema.scratches)
+        .set({ resumableAgentCount: 42 })
+        .where(eq(schema.scratches.id, malformed))
+        .run();
+
       expect(() =>
-        observerSlot.current?.("no-such-workspace", { terminals: [agentPanel("a")] })
+        observerSlot.current?.(malformed, { terminals: [agentPanel("a")] })
       ).not.toThrow();
+      expect(storedCount(malformed)).toBe(42);
+      expect(storedScratchCount(malformed)).toBe(42);
     });
   });
 
@@ -309,9 +330,10 @@ describe("ProjectStore resumable agent count", () => {
     it("stops at the tombstone for a scratch being deleted", () => {
       const doomed = "8c6b1f22-1f3e-4a76-b1b0-2f9a7c4e51aa";
       insertScratch({ id: doomed, deletedAt: Date.now() });
-      // Removal tombstones the row, then tears the state directory down — which
-      // saves through this observer. A row already gone from every
-      // renderer-facing query takes no maintenance writes.
+      // Removal tombstones the row first and only reaps it once the directory
+      // is gone, so a debounced save already in flight can still land in that
+      // window. A row gone from every renderer-facing query takes no
+      // maintenance writes.
       observerSlot.current?.(doomed, { terminals: [agentPanel("a")] });
       expect(storedScratchCount(doomed)).toBeNull();
     });
@@ -322,6 +344,26 @@ describe("ProjectStore resumable agent count", () => {
           terminals: [agentPanel("a")],
         })
       ).not.toThrow();
+    });
+
+    it("does not re-write a row whose count has not moved", () => {
+      // Layout, focus, size and draft edits all save state without touching the
+      // panel set. The value guard is what keeps those off SQLite and the WAL,
+      // so an unconditional UPDATE would be a real regression rather than a
+      // cosmetic one — count the writes, not the resulting value.
+      sqlite.exec(`
+        CREATE TABLE scratch_writes (n INTEGER);
+        CREATE TRIGGER count_scratch_writes AFTER UPDATE ON scratches
+        BEGIN INSERT INTO scratch_writes VALUES (1); END;
+      `);
+      const writes = () =>
+        (sqlite.prepare("SELECT COUNT(*) AS n FROM scratch_writes").get() as { n: number }).n;
+
+      observerSlot.current?.(SCRATCH_ID, { terminals: [agentPanel("a")] });
+      expect(writes()).toBe(1);
+
+      observerSlot.current?.(SCRATCH_ID, { terminals: [agentPanel("a")] });
+      expect(writes()).toBe(1);
     });
   });
 

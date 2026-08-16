@@ -1625,6 +1625,9 @@ describe("ProjectSwitcherPalette scratch resumable-agent dot", () => {
       );
       expect(screen.getByTestId("workspace-status-dot")).toBeTruthy();
       expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+      // The phrase has to go with the dot. Suppressing only the dot would leave
+      // a reader hearing a promise the row no longer shows.
+      expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
     });
 
     it("says nothing on the scratch you are already standing in", () => {
