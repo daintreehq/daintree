@@ -1834,7 +1834,7 @@ function buildElectronApi(): ElectronAPI {
       close: (projectId: string, options?: { killTerminals?: boolean }) =>
         _unwrappingInvoke(CHANNELS.PROJECT_CLOSE, projectId, options),
 
-      freeMemory: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_FREE_MEMORY, projectId),
+      sleepProject: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_SLEEP, projectId),
 
       reopen: (
         projectId: string,

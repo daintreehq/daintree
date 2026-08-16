@@ -4,6 +4,7 @@ import type {
   Project,
   ProjectAddOptions,
   ProjectCloseResult,
+  ProjectSleepResult,
   ProjectCreationIdentity,
 } from "@shared/types";
 import { projectClient, worktreeClient } from "@/clients";
@@ -257,6 +258,19 @@ interface ProjectState {
     options?: { killTerminals?: boolean }
   ) => Promise<ProjectCloseResult>;
   closeActiveProject: (projectId: string) => Promise<ProjectCloseResult>;
+  /**
+   * Put a project to sleep — the terminals stop with their sessions preserved
+   * and the layout survives, so reopening restores it like a relaunch. When the
+   * project is the one on screen this also drops the window to the no-project
+   * state, the way {@link closeActiveProject} does but without wiping state.
+   */
+  sleepProject: (projectId: string) => Promise<ProjectSleepResult>;
+  /**
+   * Drop this window to the no-project state without touching main — the local
+   * half of {@link sleepProject}, reused when another window slept the project
+   * this one is showing.
+   */
+  dropToNoProject: () => void;
   reopenProject: (projectId: string) => Promise<void>;
   checkMissingProjects: () => Promise<void>;
   locateProject: (projectId: string) => Promise<void>;
@@ -1020,6 +1034,59 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         void get().loadProjects();
       }
 
+      throw error;
+    }
+  },
+
+  dropToNoProject: () => {
+    // The ids main just captured are written into the saved snapshots; from
+    // here any further renderer save would overwrite them with a snapshot taken
+    // before the kill.
+    panelPersistence.cancel();
+    cancelProjectReadRequests();
+
+    // The window's WebContentsView IS this project's renderer, so dropping
+    // currentProject re-renders it to the welcome screen. Main deliberately
+    // leaves that view alive — destroying it would blank the window, since the
+    // unbound first-run welcome view is closed for good once a project paints.
+    clearFleetArmingThroughAccessor();
+    set({ currentProject: null, worktreeLoadError: null });
+    clearPanelStoreForSwitchThroughAccessor();
+  },
+
+  sleepProject: async (projectId) => {
+    const isActive = get().currentProject?.id === projectId;
+
+    try {
+      if (isActive) {
+        // Sleep's whole point is that main writes each captured agentSessionId
+        // back into the SAVED panel snapshots. A debounced renderer save still
+        // in flight would land after that write and clobber the ids, so push
+        // the pending layout now and wait for main to acknowledge it BEFORE
+        // asking for the teardown. (Close cancels instead — it deletes the
+        // state either way.)
+        panelPersistence.flush();
+        await panelPersistence.whenIdle();
+      }
+
+      const result = await projectClient.sleepProject(projectId);
+
+      if (isActive) {
+        logDebug("[ProjectStore] Slept active project, transitioning to no-project state", {
+          projectId,
+        });
+        get().dropToNoProject();
+      }
+
+      await get().loadProjects();
+
+      return result;
+    } catch (error) {
+      logErrorWithContext(error, {
+        operation: "sleep_project",
+        component: "projectStore",
+        details: { projectId, isActive },
+      });
       throw error;
     }
   },

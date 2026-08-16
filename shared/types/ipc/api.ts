@@ -122,7 +122,7 @@ import type { RetryAction, ErrorRecord, RetryProgressPayload } from "./errors.js
 import type { EventRecord } from "./events.js";
 import type {
   ProjectCloseResult,
-  ProjectFreeMemoryResult,
+  ProjectSleepResult,
   ProjectStats,
   ProjectStatusMap,
   BulkProjectStats,
@@ -624,13 +624,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     close(projectId: string, options?: { killTerminals?: boolean }): Promise<ProjectCloseResult>;
     /**
-     * Reclaim a background project's resident memory — tears down its cached
-     * renderer, gracefully kills its PTYs (sessions preserved), and evicts its
-     * workspace host — while keeping the project in the list as `closed` and
-     * preserving its layout for a non-destructive reopen. Rejects if the
-     * project is currently active (switch away first).
+     * Put one project to sleep the way quitting puts them all to sleep —
+     * gracefully kills its PTYs preserving their sessions, writes each captured
+     * agent session id back into the saved panel snapshots, journals a resume
+     * record per agent, then reclaims its cached renderer views and workspace
+     * host. Keeps the project in the list as `closed` with its layout intact for
+     * a non-destructive reopen. Accepts the project that is on screen: that
+     * window keeps its view and drops to the no-project state in the renderer.
      */
-    freeMemory(projectId: string): Promise<ProjectFreeMemoryResult>;
+    sleepProject(projectId: string): Promise<ProjectSleepResult>;
     /**
      * Reopen a background project, making it the active project.
      * Terminals that were running in the background will be reconnected.

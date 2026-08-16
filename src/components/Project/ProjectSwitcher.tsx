@@ -103,7 +103,7 @@ export function ProjectSwitcher() {
 
   const handleFreeMemoryProject = useCallback(
     (projectId: string) => {
-      void projectSwitcher.freeMemoryProject(projectId);
+      void projectSwitcher.sleepProject(projectId);
     },
     [projectSwitcher]
   );
@@ -216,7 +216,7 @@ export function ProjectSwitcher() {
             onCreateFolder={handleCreateFolder}
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
-            onFreeMemoryProject={handleFreeMemoryProject}
+            onSleepProject={handleFreeMemoryProject}
             onLocateProject={handleLocateProject}
             onMoveOrRenameProject={handleMoveOrRenameProject}
             onTogglePinProject={handleTogglePinProject}
@@ -228,10 +228,10 @@ export function ProjectSwitcher() {
             onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
             onConfirmRemove={projectSwitcher.confirmRemoveProject}
             isRemovingProject={projectSwitcher.isRemovingProject}
-            freeMemoryConfirmProject={projectSwitcher.freeMemoryConfirmProject}
-            onFreeMemoryConfirmClose={() => projectSwitcher.setFreeMemoryConfirmProject(null)}
-            onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
-            isFreeingMemory={projectSwitcher.isFreeingMemory}
+            sleepConfirmProject={projectSwitcher.sleepConfirmProject}
+            onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
+            onConfirmSleep={projectSwitcher.confirmSleep}
+            isSleepingProject={projectSwitcher.isSleepingProject}
             rankedSearch={projectSwitcher.isRankedSearch}
             scratchResults={projectSwitcher.scratchResults}
             onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
@@ -303,7 +303,7 @@ export function ProjectSwitcher() {
         onCreateFolder={handleCreateFolder}
         onStopProject={handleStopProject}
         onCloseProject={handleCloseProject}
-        onFreeMemoryProject={handleFreeMemoryProject}
+        onSleepProject={handleFreeMemoryProject}
         onLocateProject={handleLocateProject}
         onMoveOrRenameProject={handleMoveOrRenameProject}
         onTogglePinProject={handleTogglePinProject}
@@ -315,10 +315,10 @@ export function ProjectSwitcher() {
         onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
         onConfirmRemove={projectSwitcher.confirmRemoveProject}
         isRemovingProject={projectSwitcher.isRemovingProject}
-        freeMemoryConfirmProject={projectSwitcher.freeMemoryConfirmProject}
-        onFreeMemoryConfirmClose={() => projectSwitcher.setFreeMemoryConfirmProject(null)}
-        onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
-        isFreeingMemory={projectSwitcher.isFreeingMemory}
+        sleepConfirmProject={projectSwitcher.sleepConfirmProject}
+        onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
+        onConfirmSleep={projectSwitcher.confirmSleep}
+        isSleepingProject={projectSwitcher.isSleepingProject}
         rankedSearch={projectSwitcher.isRankedSearch}
         scratchResults={projectSwitcher.scratchResults}
         onCreateScratch={(name) => void projectSwitcher.createScratch(name)}

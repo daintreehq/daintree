@@ -236,7 +236,7 @@ export const CHANNELS = {
   PROJECT_DETECT_RUNNERS: "project:detect-runners",
   PROJECT_LIST_REMOTES: "project:list-remotes",
   PROJECT_CLOSE: "project:close",
-  PROJECT_FREE_MEMORY: "project:free-memory",
+  PROJECT_SLEEP: "project:sleep",
   PROJECT_REOPEN: "project:reopen",
   PROJECT_GET_STATS: "project:get-stats",
   PROJECT_GET_BULK_STATS: "project:get-bulk-stats",

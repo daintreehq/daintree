@@ -400,9 +400,13 @@ export function restoreSessionFromFile(
     const wasHibernated = readAndDeleteHibernatedMarker(terminalId);
     let label: string;
     if (wasHibernated) {
+      // Neutral wording: the marker is a bare flag with no room for a reason, and
+      // the same one is written by the idle sweep, by memory pressure, and by a
+      // user asking to sleep the project. "Auto-hibernated" read as a lie for
+      // the deliberate case, so the copy names the outcome, not the trigger.
       label = wasInAlternateScreen
-        ? `─── Restored · ${ts} · session was auto-hibernated to save resources ───`
-        : `─── Session hibernated · ${ts} · auto-suspended to save resources ───`;
+        ? `─── Restored · ${ts} · session was preserved while the project was asleep ───`
+        : `─── Session restored · ${ts} · preserved while the project was asleep ───`;
     } else {
       label = wasInAlternateScreen
         ? `─── Restored · ${ts} · previous session was in a full-screen app ───`

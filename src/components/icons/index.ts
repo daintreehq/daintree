@@ -29,6 +29,7 @@ export {
   History, // resume closed session / session history
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)
+  Moon, // sleep a project — shut it down the way quitting does, restored on reopen
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   Plug, // agent (integration that plugs into the host system)
   Plus, // the toolbar launcher — "make me a new thing" (agent, panel)
