@@ -614,6 +614,11 @@ describe("computeProjectAgentCounts — assistant presence (#11806)", () => {
     const forward = computeProjectAgentCounts(["p1"], [a, b]).get("p1")!;
     const reverse = computeProjectAgentCounts(["p1"], [b, a]).get("p1")!;
 
+    // The control: without it, two builds reporting nothing at all would also
+    // agree, and this would pass with the feature removed.
+    expect(forward.assistantState).toBe("waiting");
+    expect(["prompt", "error"]).toContain(forward.assistantWaitingReason);
+
     expect(forward.assistantWaitingReason).toBe(reverse.assistantWaitingReason);
     expect(forward.assistantState).toBe(reverse.assistantState);
     expect(forward.assistantStateSince).toBe(reverse.assistantStateSince);

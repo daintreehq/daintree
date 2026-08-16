@@ -3336,6 +3336,29 @@ describe("assistant presence banding (#11806)", () => {
       expect(result.current.results.map((r) => r.id)).toEqual(["p-b", "p-c", "p-a"]);
     });
 
+    it("keeps the clock on an undated worker wait rather than borrowing the assistant's", async () => {
+      // A worker wait with no recorded transition is still what the tier and
+      // the line name. Bravo would jump to the front on the assistant's very
+      // old stamp if the clock fell through to it.
+      const result = await openWithMany({
+        "p-a": { ...idle, waitingAgentCount: 1, oldestWaitingSince: LAST_OPENED + 50_000 },
+        "p-b": {
+          ...idle,
+          waitingAgentCount: 1,
+          assistantState: "waiting",
+          assistantWaitingReason: "error",
+          assistantStateSince: 1,
+        },
+        "p-c": { ...idle, waitingAgentCount: 1, oldestWaitingSince: LAST_OPENED + 20_000 },
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+      // Dated waits first, oldest-first; the undated one sorts last.
+      expect(result.current.results.map((r) => r.id)).toEqual(["p-c", "p-a", "p-b"]);
+    });
+
     it("orders an attention row by its worker's wait when it has both", async () => {
       // The line and the tier both resolve to the worker, so the clock must too
       // — dating the row by the assistant would sort it by a reason it never

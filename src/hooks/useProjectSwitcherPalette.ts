@@ -535,7 +535,14 @@ function attentionClass(project: SearchableProject): number {
  * clock, matching the tier and the line it will actually show.
  */
 function waitOrderingSince(project: SearchableProject): number {
-  if (project.oldestWaitingSince !== undefined) return project.oldestWaitingSince;
+  // Gated on the counts, not on whether a timestamp arrived. A worker wait
+  // whose transition was never recorded is still a worker wait — it is what
+  // the tier and the line both name — so it has to keep the clock even though
+  // it cannot supply one. Reading the timestamp first let such a row borrow the
+  // assistant's, dating it by something it never mentions.
+  if (project.waitingAgentCount > 0 || project.blockedAgentCount > 0) {
+    return project.oldestWaitingSince ?? Number.POSITIVE_INFINITY;
+  }
   if (!assistantNeedsAttention(classifyAssistantActivity(project))) {
     return Number.POSITIVE_INFINITY;
   }
