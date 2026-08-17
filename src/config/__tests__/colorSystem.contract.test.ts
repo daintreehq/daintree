@@ -147,8 +147,11 @@ describe("color system contract", () => {
       ".assistant-focused",
       ".terminal-focused",
     ]) {
+      // Anchored to line start so the match binds to the top-level rule and
+      // never to an indented override of the same selector nested inside one
+      // of the media blocks further down the file.
       const block = indexCss.match(
-        new RegExp(`${selector.replace(/[.[\]]/g, "\\$&")}\\s*\\{[^}]+\\}`)
+        new RegExp(`^${selector.replace(/[.[\]]/g, "\\$&")}\\s*\\{[^}]+\\}`, "m")
       )?.[0];
       expect(block, `${selector} rule exists`).toBeTruthy();
       expect(block, `${selector} themeable border with fallback`).toMatch(
@@ -165,14 +168,44 @@ describe("color system contract", () => {
     // what made an always-lit lone pane too heavy in #7544. If a later edit
     // gives it a background it stops being a distinct rung and the revert
     // that motivated this design gets re-litigated.
-    const quiet = indexCss.match(/\.terminal-selected-quiet\s*\{[^}]+\}/)?.[0];
+    const quiet = indexCss.match(/^\.terminal-selected-quiet\s*\{[^}]+\}/m)?.[0];
     expect(quiet, ".terminal-selected-quiet rule exists").toBeTruthy();
     expect(quiet).not.toMatch(/background/);
     // The full-strength sibling is the one that carries the fill — proves the
     // two rungs are actually different rather than both being fill-free.
-    expect(indexCss.match(/\.terminal-selected\s*\{[^}]+\}/)?.[0]).toMatch(
+    expect(indexCss.match(/^\.terminal-selected\s*\{[^}]+\}/m)?.[0]).toMatch(
       /background-color:\s*var\(\s*--panel-selected-bg/
     );
+  });
+
+  it("keeps the lone-pane quiet cue readable under states that own the same properties", () => {
+    // #11837: the quiet cue paints ONLY border-color and box-shadow, so any
+    // single-class rule setting both replaces it outright — and with no fill
+    // to fall back on the pane goes back to looking identical focused and
+    // unfocused. `.terminal-selected` is immune because its fill survives.
+    // Every state class that can land on the same pane needs a paired rule
+    // re-asserting the focus ring, so adding a new one without pairing it
+    // silently reintroduces the bug this issue was filed for.
+    const statesOwningBothProperties = [
+      "panel-voice-dictation-locked",
+      "panel-state-compiling",
+      "panel-state-working",
+      "panel-state-waiting",
+      "panel-state-hibernated",
+    ].filter((state) => {
+      const rule = indexCss.match(new RegExp(`^\\.${state}\\s*\\{[^}]+\\}`, "m"))?.[0];
+      return Boolean(rule && /border-color:/.test(rule) && /box-shadow:/.test(rule));
+    });
+    expect(statesOwningBothProperties.length).toBeGreaterThan(0);
+
+    for (const state of statesOwningBothProperties) {
+      expect(indexCss, `.terminal-selected-quiet is paired with .${state}`).toMatch(
+        new RegExp(`\\.terminal-selected-quiet\\.${state}[^{}]*\\{`)
+      );
+    }
+    // The paired rule has to restore the ring, not merely exist.
+    const paired = indexCss.match(/\.terminal-selected-quiet\.[\s\S]*?\{[^}]+\}/)?.[0];
+    expect(paired).toMatch(/box-shadow:\s*var\(\s*--panel-focus-shadow,/);
   });
 
   it("gives the lone-pane quiet cue the same accessibility parity as its siblings", () => {
@@ -181,15 +214,21 @@ describe("color system contract", () => {
     // none of which fail loudly when a selector is missing.
     expect(indexCss).toMatch(/body\[data-performance-mode="true"\]\s+\.terminal-selected-quiet/);
 
-    const forcedColors = indexCss.match(/@media \(forced-colors: active\)\s*\{[\s\S]*?\n\}/)?.[0];
-    expect(forcedColors, "forced-colors block exists").toBeTruthy();
+    // Both media conditions appear more than once in the file, so select the
+    // block that actually covers the class rather than whichever comes first.
+    const forcedColors = indexCss
+      .match(/@media \(forced-colors: active\)\s*\{[\s\S]*?\n\}/g)
+      ?.find((block) => block.includes(".terminal-selected-quiet"));
+    expect(forcedColors, "a forced-colors block covers the quiet cue").toBeTruthy();
     expect(forcedColors).toMatch(/\.terminal-selected-quiet\s*\{[^}]*Highlight/);
 
-    const increasedContrast = indexCss.match(
-      /@media \(prefers-contrast: more\)\s*\{[\s\S]*?\n\}/
-    )?.[0];
-    expect(increasedContrast, "prefers-contrast block exists").toBeTruthy();
-    expect(increasedContrast).toMatch(/\.terminal-selected-quiet/);
+    const increasedContrast = indexCss
+      .match(/@media \(prefers-contrast: more\)\s*\{[\s\S]*?\n\}/g)
+      ?.find((block) => block.includes(".terminal-selected-quiet"));
+    expect(increasedContrast, "a prefers-contrast block covers the quiet cue").toBeTruthy();
+    // Participation in the border-width rule, not mere presence in the block —
+    // the selector could otherwise sit in an unrelated rule and still pass.
+    expect(increasedContrast).toMatch(/\.terminal-selected-quiet[^{}]*\{[^}]*border-width:\s*2px/);
   });
 
   it("wires :root --background to --theme-surface-canvas", () => {

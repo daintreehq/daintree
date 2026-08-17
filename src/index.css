@@ -1971,6 +1971,27 @@ body,
     0 0 0 1px color-mix(in oklab, var(--color-category-amber) 10%, transparent);
 }
 
+/* Lone-pane focus cue meeting a state that owns the same two properties.
+   `terminal-selected-quiet` paints only border-color and box-shadow, so the
+   rules above replace it outright and a locked or compiling lone pane loses
+   its focus signal entirely — the exact ambiguity #11837 set out to remove.
+   The full-strength `.terminal-selected` never hits this because its fill
+   survives. Re-assert the focus rings here and leave each state's border ink
+   alone, so the two signals read together the way the dictation-lock comment
+   above already promises. Two class tokens outrank the single-class rules
+   regardless of source order. */
+.terminal-selected-quiet.panel-voice-dictation-locked,
+.terminal-selected-quiet.panel-state-compiling,
+.terminal-selected-quiet.panel-state-working,
+.terminal-selected-quiet.panel-state-waiting,
+.terminal-selected-quiet.panel-state-hibernated {
+  box-shadow: var(
+    --panel-focus-shadow,
+    inset 0 0 0 1px var(--theme-overlay-soft),
+    0 0 0 1px var(--theme-overlay-strong)
+  );
+}
+
 /* Arming state — pre-audio confirmation window (~200ms). User pressed the
  * dictation hotkey; this border paints synchronously so the target panel is
  * unambiguous before the mic goes hot. Uses the accent token because the
