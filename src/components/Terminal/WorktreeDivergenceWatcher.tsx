@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
-import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useWorktreesOptional } from "@/hooks/useWorktreesOptional";
 import { isPtyPanel } from "@shared/types/panel";
 import { deriveWorktreeDivergence } from "@/utils/worktreeAlignment";
 import { notify } from "@/lib/notify";
@@ -33,7 +33,7 @@ export function __resetAnnouncedDrift(): void {
  */
 export function WorktreeDivergenceWatcher(): null {
   const panelsById = usePanelStore((s) => s.panelsById);
-  const worktrees = useWorktreeStore((s) => s.worktrees);
+  const worktrees = useWorktreesOptional();
 
   useEffect(() => {
     const known = [...worktrees.values()].map((w) => ({

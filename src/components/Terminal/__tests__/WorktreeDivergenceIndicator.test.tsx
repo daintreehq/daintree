@@ -13,9 +13,8 @@ class ResizeObserverStub implements ResizeObserver {
 globalThis.ResizeObserver ??= ResizeObserverStub;
 
 const worktrees = new Map<string, unknown>();
-vi.mock("@/hooks/useWorktreeStore", () => ({
-  useWorktreeStore: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
-    selector({ worktrees }),
+vi.mock("@/hooks/useWorktreesOptional", () => ({
+  useWorktreesOptional: () => worktrees,
 }));
 
 vi.mock("@/store/persistence/panelPersistence", () => ({

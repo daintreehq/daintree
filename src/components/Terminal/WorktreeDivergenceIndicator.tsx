@@ -2,7 +2,7 @@ import { useMemo, type ReactElement } from "react";
 import { Unlink } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelStore } from "@/store/panelStore";
-import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useWorktreesOptional } from "@/hooks/useWorktreesOptional";
 import { isPtyPanel } from "@shared/types/panel";
 import { deriveWorktreeDivergence } from "@/utils/worktreeAlignment";
 
@@ -22,7 +22,7 @@ import { deriveWorktreeDivergence } from "@/utils/worktreeAlignment";
  */
 export function WorktreeDivergenceIndicator({ panelId }: { panelId: string }): ReactElement | null {
   const panel = usePanelStore((s) => s.panelsById[panelId]);
-  const worktrees = useWorktreeStore((s) => s.worktrees);
+  const worktrees = useWorktreesOptional();
 
   const divergence = useMemo(() => {
     if (!panel || !isPtyPanel(panel)) return { kind: "none" as const };
