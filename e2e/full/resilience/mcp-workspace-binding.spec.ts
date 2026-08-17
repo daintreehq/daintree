@@ -310,7 +310,13 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
       .toBeTruthy();
 
     const ready = await pageA.evaluate(() => (window as any).electron.mcpServer.getStatus());
-    endpoint = { port: ready.port, apiKey: ready.apiKey ?? status.apiKey };
+    // `||`, not `??`: getStatus reports `this.apiKey ?? ""`, so a server that
+    // hasn't minted its key yet returns an empty string rather than a nullish
+    // value. Nullish-coalescing would carry that through and every request
+    // would send a bare `Bearer `, surfacing as an opaque 401 at the handshake.
+    const apiKey = ready.apiKey || status?.apiKey;
+    expect(apiKey, "MCP server reported no API key after being enabled").toBeTruthy();
+    endpoint = { port: ready.port, apiKey };
   });
 
   test.afterAll(async () => {
