@@ -392,7 +392,7 @@ AppPaletteDialog.Header = function AppPaletteHeader({
          * asked for metadata — this way the shortcut-only row stays the row it
          * has always been.
          */}
-        {trailing ? (
+        {trailing != null ? (
           <span className="flex items-center gap-2 min-w-0">
             <span className="truncate">{trailing}</span>
             {shortcut ? <KbdChord shortcut={shortcut} /> : null}

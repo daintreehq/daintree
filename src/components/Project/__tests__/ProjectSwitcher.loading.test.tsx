@@ -412,8 +412,12 @@ describe("ProjectSwitcher background-agent badge", () => {
       waitingProjectCount: 2,
     };
     const { getByRole, queryByTestId } = render(<ProjectSwitcher />);
-    expect(getByRole("status").getAttribute("aria-label")).toContain("2 projects waiting");
+    const badge = getByRole("status");
+    expect(badge.getAttribute("aria-label")).toContain("2 projects waiting");
     expect(queryByTestId("project-switcher-badge-arc")).toBeNull();
+    // A closed mark is actually drawn — "no arc" would also be satisfied by a
+    // badge that had quietly stopped rendering anything at all.
+    expect(badge.querySelector("span")).toBeTruthy();
   });
 
   it("falls back to working agents when none are waiting", () => {

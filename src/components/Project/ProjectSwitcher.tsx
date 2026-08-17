@@ -413,8 +413,14 @@ export function ProjectSwitcher() {
                   className="absolute top-0.5 right-0.5 flex h-3 w-3 items-center justify-center"
                 >
                   {badgeStatus.isLive ? (
+                    // Sized inline rather than by class. `Button` sizes every
+                    // SVG under it with a descendant rule (`[&_svg]:size-4`),
+                    // which outranks a utility class on the glyph itself — so a
+                    // classed 10px arc would silently render at 16px and spill
+                    // out of the badge's box.
                     <SpinnerCircle
-                      className={cn("h-2.5 w-2.5", badgeStatus.arc)}
+                      className={badgeStatus.arc}
+                      style={{ width: "0.625rem", height: "0.625rem" }}
                       data-testid="project-switcher-badge-arc"
                     />
                   ) : (

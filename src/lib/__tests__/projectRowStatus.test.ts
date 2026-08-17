@@ -992,7 +992,6 @@ describe("row status liveness", () => {
     // and "1 running" would enrol it in a tally it is excluded from everywhere
     // else.
     expect(hidden.livenessDetail).toBe("Assistant working");
-    expect(hidden.livenessDetail).not.toMatch(/\d/);
   });
 
   it("reports the workers when both they and the assistant are going", () => {
@@ -1048,8 +1047,9 @@ describe("row status liveness", () => {
 
   it("carries the clause under every demand tier that can hide a run", () => {
     // One matrix rather than a case each: the property is that no tier above
-    // `running` may swallow it, and enumerating them is what catches a tier
-    // added later that forgets.
+    // `running` may swallow it. A fixed list cannot catch a tier added later —
+    // `withLiveness` running on every exit is what does that — so this pins the
+    // tiers that exist today rather than claiming to police future ones.
     const hiding = [
       project({ waitingAgentCount: 1 }),
       project({ waitingAgentCount: 2, blockedAgentCount: 1 }),
@@ -1114,10 +1114,11 @@ describe("formatFleetLiveness", () => {
     const both = formatFleetLiveness({ runningAgentCount: 3, workingAssistantCount: 2 });
 
     // Never summed: an assistant is not a run the user launched, so one number
-    // covering both would answer neither question it is asked.
+    // covering both would answer neither question it is asked. Matched as whole
+    // phrases — a bare `toContain("3")` also passes on "32 running".
     expect(both).not.toContain("5");
-    expect(both).toContain("3");
-    expect(both).toContain("2");
+    expect(both).toMatch(/\b3 running\b/);
+    expect(both).toMatch(/\b2 assistants working\b/);
   });
 
   it("drops the half that is idle rather than printing a zero", () => {

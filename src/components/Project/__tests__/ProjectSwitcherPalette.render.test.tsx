@@ -377,10 +377,11 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
 });
 
 /**
- * The leading dot marks rows that have something to say. It used to sit on
+ * The leading mark flags rows that have something to say. It used to sit on
  * every row as a hollow ring, which made the most common mark in the list the
  * one carrying no information — and left it competing with the filled dots that
- * do (#11692).
+ * do (#11692). Its shape is a second signal now (#11832); these cases cover
+ * only whether a mark is drawn at all.
  */
 describe("ProjectSwitcherPalette status dot", () => {
   it("marks a row with something to report and leaves a quiet one unmarked", () => {
@@ -400,7 +401,8 @@ describe("ProjectSwitcherPalette status dot", () => {
 
   /*
    * Structural only — jsdom does no layout, so this pins that the slot element
-   * survives on a quiet row, not that it still measures 6px. What it rules out
+   * survives on a quiet row, not that it still measures its nominal width. What
+   * it rules out
    * is the tempting simplification: dropping the whole slot instead of just its
    * dot, which would pull every quiet row's tile left of the busy ones.
    */
@@ -460,10 +462,14 @@ describe("ProjectSwitcherPalette liveness axis", () => {
   it("draws an open mark for a row still executing and a closed one for a row at rest", () => {
     const { stalled, churning } = renderPair(2);
 
-    // Topology, read off the element itself rather than a class name: the
-    // closed mark is a painted box, the open one is stroked geometry with a
-    // gap in it. Asserting the utility class would only restate the source.
-    expect(markIn(churning)?.querySelector("circle")).toBeTruthy();
+    // Topology, read off the geometry rather than a class name: the live mark
+    // is a stroked circle with a gap in it, which is what "open" means. A dash
+    // pattern is the only thing that puts the gap there — swapping in a plain
+    // ring would still be an SVG circle, and asserting merely "is an SVG"
+    // would call that a pass. The dash VALUES stay unasserted: those belong to
+    // the glyph, and pinning them here would just restate its source.
+    const liveCircle = markIn(churning)?.querySelector("circle");
+    expect(liveCircle?.getAttribute("stroke-dasharray")).toBeTruthy();
     expect(markIn(stalled)?.querySelector("circle")).toBeNull();
   });
 
@@ -495,13 +501,17 @@ describe("ProjectSwitcherPalette liveness axis", () => {
   });
 
   it("reaches assistive tech as words, not as a shape", () => {
-    const { churning } = renderPair(3);
+    renderPair(3);
 
-    // The mark is `aria-hidden`, so the clause is the only carrier left. It
+    // Queried by accessible NAME, not by text content: the mark is
+    // `aria-hidden`, so the clause is the only carrier left, and a clause that
+    // was itself hidden from the accessibility tree would still sit in the DOM
+    // for `textContent` to find while leaving shape as the sole encoding. It
     // rides the row's own name rather than a live region — one per row would
     // re-announce the whole list on every tick.
-    expect(churning.textContent).toContain("3 running");
-    expect(markIn(churning)?.getAttribute("aria-hidden")).toBe("true");
+    const spoken = screen.getByRole("option", { name: /Churning.*3 running/s });
+    expect(spoken).toBeTruthy();
+    expect(markIn(spoken)?.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("says nothing extra on a row whose sentence already names the run", () => {
@@ -541,6 +551,41 @@ describe("ProjectSwitcherPalette liveness axis", () => {
     expect(screen.getByText("Agent needs input")).toBeTruthy();
     expect(screen.getByText(/2 running/)).toBeTruthy();
   });
+
+  it("carries both axes on a scratch in the ranked list too", () => {
+    // A third renderer: a searched scratch is drawn by `ScratchListItem`, not by
+    // the pinned section above, and the two used to format their status lines
+    // independently of each other and of the project row.
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        query="spike"
+        results={[
+          {
+            kind: "scratch",
+            id: "s2",
+            name: "Spike",
+            path: "/userData/scratch/s2",
+            createdAt: 0,
+            lastOpened: 0,
+            isActive: false,
+            activeAgentCount: 2,
+            waitingAgentCount: 1,
+            blockedAgentCount: 0,
+            completedAgentCount: 0,
+            unacknowledgedCompletedAgentCount: 0,
+            snoozedAgentCount: 0,
+            processCount: 0,
+          },
+        ]}
+      />
+    );
+
+    const row = screen.getByRole("option", { name: /Spike/ });
+    expect(within(row).getByText("Agent needs input")).toBeTruthy();
+    expect(within(row).getByText(/2 running/)).toBeTruthy();
+    expect(markIn(row)?.querySelector("circle")?.getAttribute("stroke-dasharray")).toBeTruthy();
+  });
 });
 
 describe("ProjectSwitcherPalette fleet summary", () => {
@@ -575,12 +620,28 @@ describe("ProjectSwitcherPalette fleet summary", () => {
 
     expect(screen.queryByTestId("fleet-liveness-summary")).toBeNull();
   });
+
+  it("reaches the header through the modal path too", () => {
+    // The palette has two hosts and the outer component re-lists every prop by
+    // hand into each. Covering only the dropdown left the modal's chain free to
+    // drop the summary silently — which is exactly how it shipped broken the
+    // first time.
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        fleetLiveness={{ runningAgentCount: 4, workingAssistantCount: 0 }}
+        results={[makeProject()]}
+      />
+    );
+
+    expect(screen.getByTestId("fleet-liveness-summary").textContent).toContain("4");
+  });
 });
 
 describe("ProjectSwitcherPalette status conveyance", () => {
-  // The dot repeats the status line's tone and nothing else. It carries no
-  // accessible name of its own, so status is never announced twice and never
-  // depends on telling two hues apart.
+  // The mark carries no accessible name of its own, so status is never
+  // announced twice and never depends on telling two hues — or two shapes —
+  // apart. Everything it shows is also stated in the sentence beside it.
   it("conveys status as text rather than a labelled dot", () => {
     render(
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ waitingAgentCount: 2 })]} />
