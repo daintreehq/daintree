@@ -29,7 +29,12 @@ import { getAgentConfig } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isPtyPanel, type PanelInstance, type PanelTitleMode } from "@shared/types/panel";
+import {
+  isPtyPanel,
+  type PanelInstance,
+  type PanelTitleMode,
+  type PtyPanelData,
+} from "@shared/types/panel";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
@@ -1059,20 +1064,21 @@ export const createRestartActions = (
       // spawns fresh instead of attempting a broken session resume
       set((state) => {
         const t = state.panelsById[id];
-        if (!t) return state;
-        const newById: Record<string, PanelInstance> = {
-          ...state.panelsById,
-          [id]: {
-            ...t,
-            cwd: resolvedCwd,
-            worktreeId,
-            agentSessionId: undefined,
-            restartError: undefined,
-            // The process is being re-anchored to the destination, so any
-            // recorded divergence consent no longer describes anything.
-            worktreeMoveOptOut: undefined,
-          } as PanelInstance,
+        // Re-narrowed rather than asserted: the guard above ran before the
+        // await, and narrowing here keeps the spread's result a real
+        // `PtyPanelData` instead of needing a cast to get back to one.
+        if (!t || !isPtyPanel(t)) return state;
+        const updated: PtyPanelData = {
+          ...t,
+          cwd: resolvedCwd,
+          worktreeId,
+          agentSessionId: undefined,
+          restartError: undefined,
+          // The process is being re-anchored to the destination, so any
+          // recorded divergence consent no longer describes anything.
+          worktreeMoveOptOut: undefined,
         };
+        const newById = { ...state.panelsById, [id]: updated };
         const newIndex = transferBetweenWorktreeIndex(
           state.panelIdsByWorktreeId,
           t.worktreeId,
