@@ -40,6 +40,57 @@ function getLoadingBar(): HTMLElement | null {
   return document.querySelector<HTMLElement>(".palette-loading-bar");
 }
 
+describe("AppPaletteDialog.Header trailing metadata", () => {
+  it("shows the metadata alongside the label, the shortcut and the input", () => {
+    render(
+      <AppPaletteDialog.Header
+        label="Switch project"
+        shortcut="Cmd+P"
+        trailing={<span>3 running</span>}
+      >
+        <input aria-label="Search" />
+      </AppPaletteDialog.Header>
+    );
+
+    expect(screen.getByText("Switch project")).toBeTruthy();
+    expect(screen.getByText("3 running")).toBeTruthy();
+    expect(screen.getByTestId("kbd-chord")).toBeTruthy();
+    expect(screen.getByLabelText("Search")).toBeTruthy();
+  });
+
+  it("leaves a header without metadata exactly as it was", () => {
+    // The label row spaces its children apart, so grouping the chord into a
+    // wrapper unconditionally would shift it on every palette that never asked
+    // for a trailing slot. Without metadata the chord stays the label's own
+    // sibling.
+    const { container } = render(
+      <AppPaletteDialog.Header label="Quick switch" shortcut="Cmd+K">
+        <input aria-label="Search" />
+      </AppPaletteDialog.Header>
+    );
+    const chord = container.querySelector("[data-testid='kbd-chord']");
+
+    expect(chord?.previousElementSibling?.textContent).toBe("Quick switch");
+  });
+
+  it("groups the chord with the metadata when there is metadata to group", () => {
+    const { container } = render(
+      <AppPaletteDialog.Header
+        label="Switch project"
+        shortcut="Cmd+P"
+        trailing={<span>3 running</span>}
+      >
+        <input aria-label="Search" />
+      </AppPaletteDialog.Header>
+    );
+    const chord = container.querySelector("[data-testid='kbd-chord']");
+
+    // Now they travel together at the row's far end, so the metadata does not
+    // land marooned in the middle of a spaced-apart row.
+    expect(chord?.previousElementSibling?.textContent).toBe("3 running");
+  });
+});
+
 describe("AppPaletteDialog.Header loading bar", () => {
   it("renders the loading bar element so it can fade in/out", () => {
     render(

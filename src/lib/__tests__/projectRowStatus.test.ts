@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { getProjectRowStatus, getScratchRowStatus, formatWaitAge } from "../projectRowStatus";
+import {
+  formatFleetLiveness,
+  formatWaitAge,
+  getProjectRowStatus,
+  getScratchRowStatus,
+} from "../projectRowStatus";
 import type { SearchableProject, SearchableScratch } from "@/hooks/useProjectSwitcherPalette";
 
 const NOW = 1_700_000_000_000;
@@ -891,5 +896,238 @@ describe("assistant presence status lines (#11806)", () => {
     // and an undatable wait must not render as an epoch-old one.
     expect(status.text).toBe("Assistant waiting");
     expect(status.text).not.toContain("·");
+  });
+});
+
+/**
+ * Liveness is the second axis (#11832): demand says what the row wants, this
+ * says whether it will change on its own. The cases below are written as
+ * comparisons between two computed statuses rather than assertions about
+ * particular strings, because the property under test is that one axis moves
+ * while the other does not.
+ */
+describe("row status liveness", () => {
+  const RUNNING = 2;
+
+  it("separates a waiting row that is still churning from one that has stalled", () => {
+    // The bug: the cascade picks the wait and drops everything under it, so
+    // these two rendered identically while only one of them was still moving.
+    const stalled = getProjectRowStatus(
+      project({ waitingAgentCount: 1, oldestWaitingSince: NOW - 17 * 60_000 }),
+      NOW
+    );
+    const churning = getProjectRowStatus(
+      project({
+        waitingAgentCount: 1,
+        oldestWaitingSince: NOW - 17 * 60_000,
+        activeAgentCount: RUNNING,
+      }),
+      NOW
+    );
+
+    // Demand is untouched — the whole point is that this is additive.
+    expect(churning.text).toBe(stalled.text);
+    expect(churning.tone).toBe(stalled.tone);
+
+    expect(stalled.isLive).toBe(false);
+    expect(churning.isLive).toBe(true);
+    expect(stalled.livenessDetail).toBeUndefined();
+    expect(churning.livenessDetail).toBe(`${RUNNING} running`);
+  });
+
+  it("says nothing extra on the line that already names the running agents", () => {
+    // "2 agents running · 2 running" would state one fact twice.
+    const status = getProjectRowStatus(project({ activeAgentCount: RUNNING }), NOW);
+
+    expect(status.isLive).toBe(true);
+    expect(status.livenessDetail).toBeUndefined();
+  });
+
+  it("singularises the clause the way the sentences above it do", () => {
+    const status = getProjectRowStatus(project({ waitingAgentCount: 1, activeAgentCount: 1 }), NOW);
+
+    expect(status.livenessDetail).toBe("1 running");
+  });
+
+  it("keeps the clause off a row where nothing is executing", () => {
+    // Every settled tone at once: a completion, a snooze and a bare process
+    // count are all reachable only after the cascade established that no agent
+    // is running, so none of them may claim otherwise.
+    const settled = [
+      project({ completedAgentCount: 1, latestCompletionAt: NOW - 60_000 }),
+      project({ snoozedAgentCount: 1 }),
+      project({ processCount: 4 }),
+      project({ lastOpened: NOW - 3600_000 }),
+      project({ status: "closed", autoParkedAt: NOW - 60_000 }),
+    ].map((row) => getProjectRowStatus(row, NOW));
+
+    for (const status of settled) {
+      expect(status.isLive).toBe(false);
+      expect(status.livenessDetail).toBeUndefined();
+    }
+  });
+
+  it("does not take a process count for a running agent", () => {
+    // `processCount` nets out the assistant's own PTY and trails the truth by a
+    // poll interval, so a row keyed off it would claim to be moving after its
+    // last agent stopped.
+    const byProcess = getProjectRowStatus(project({ waitingAgentCount: 1, processCount: 5 }), NOW);
+    const byAgent = getProjectRowStatus(
+      project({ waitingAgentCount: 1, activeAgentCount: 1 }),
+      NOW
+    );
+
+    expect(byProcess.isLive).toBe(false);
+    expect(byAgent.isLive).toBe(true);
+  });
+
+  it("counts a working assistant as live without inventing an agent for it", () => {
+    const hidden = getProjectRowStatus(
+      project({ waitingAgentCount: 1, assistantState: "working" }),
+      NOW
+    );
+
+    expect(hidden.isLive).toBe(true);
+    // Named, not numbered: the assistant is one thing the user never launched,
+    // and "1 running" would enrol it in a tally it is excluded from everywhere
+    // else.
+    expect(hidden.livenessDetail).toBe("Assistant working");
+  });
+
+  it("reports the workers when both they and the assistant are going", () => {
+    const status = getProjectRowStatus(
+      project({ waitingAgentCount: 1, activeAgentCount: RUNNING, assistantState: "working" }),
+      NOW
+    );
+
+    expect(status.livenessDetail).toBe(`${RUNNING} running`);
+  });
+
+  it("leaves the assistant's own line without a clause about itself", () => {
+    const status = getProjectRowStatus(project({ assistantState: "working" }), NOW);
+
+    expect(status.isLive).toBe(true);
+    expect(status.livenessDetail).toBeUndefined();
+  });
+
+  it("treats a directing assistant as executing, the way the classifier does", () => {
+    const directing = getProjectRowStatus(project({ assistantState: "directing" }), NOW);
+    const idle = getProjectRowStatus(project({ assistantState: "idle" }), NOW);
+
+    expect(directing.isLive).toBe(true);
+    expect(idle.isLive).toBe(false);
+  });
+
+  it("needs no union with the snooze count to see a snoozed run still working", () => {
+    // Snoozing withholds a row from the demanding tallies; it does not stop the
+    // run, so a still-working snoozed agent is already inside `activeAgentCount`.
+    const status = getProjectRowStatus(
+      project({ snoozedAgentCount: 1, activeAgentCount: 1, waitingAgentCount: 1 }),
+      NOW
+    );
+
+    expect(status.isLive).toBe(true);
+    expect(status.livenessDetail).toBe("1 running");
+  });
+
+  it("keeps reporting the run when the folder underneath it has gone", () => {
+    // `isMissing` pre-empts the activity cascade outright, so without this the
+    // one row whose agents are most likely orphaned says the least about them.
+    const missing = getProjectRowStatus(
+      project({ isMissing: true, activeAgentCount: RUNNING }),
+      NOW
+    );
+    const found = getProjectRowStatus(project({ isMissing: true }), NOW);
+
+    expect(missing.text).toBe(found.text);
+    expect(missing.tone).toBe(found.tone);
+    expect(missing.livenessDetail).toBe(`${RUNNING} running`);
+    expect(found.livenessDetail).toBeUndefined();
+  });
+
+  it("carries the clause under every demand tier that can hide a run", () => {
+    // One matrix rather than a case each: the property is that no tier above
+    // `running` may swallow it. A fixed list cannot catch a tier added later —
+    // `withLiveness` running on every exit is what does that — so this pins the
+    // tiers that exist today rather than claiming to police future ones.
+    const hiding = [
+      project({ waitingAgentCount: 1 }),
+      project({ waitingAgentCount: 2, blockedAgentCount: 1 }),
+      project({ blockedAgentCount: 1 }),
+      project({ unacknowledgedCompletedAgentCount: 1, completedAgentCount: 1 }),
+      project({ assistantState: "waiting", assistantWaitingReason: "error" }),
+    ];
+
+    for (const row of hiding) {
+      const stalled = getProjectRowStatus(row, NOW);
+      const churning = getProjectRowStatus({ ...row, activeAgentCount: RUNNING }, NOW);
+
+      expect(churning.text).toBe(stalled.text);
+      expect(churning.tone).toBe(stalled.tone);
+      expect(stalled.livenessDetail).toBeUndefined();
+      expect(churning.livenessDetail).toBe(`${RUNNING} running`);
+    }
+  });
+
+  it("gives a scratch the same two axes a project gets", () => {
+    const stalled = getScratchRowStatus(scratch({ waitingAgentCount: 1 }), NOW);
+    const churning = getScratchRowStatus(
+      scratch({ waitingAgentCount: 1, activeAgentCount: RUNNING }),
+      NOW
+    );
+
+    expect(churning.text).toBe(stalled.text);
+    expect(stalled.isLive).toBe(false);
+    expect(churning.isLive).toBe(true);
+    expect(churning.livenessDetail).toBe(`${RUNNING} running`);
+  });
+
+  it("never carries a detail without the liveness that justifies it", () => {
+    // The two fields answer different questions and a renderer trusts both, so
+    // a status claiming hidden work while reporting itself at rest would draw a
+    // closed mark beside a sentence about a running agent.
+    const rows = [
+      project({ waitingAgentCount: 1 }),
+      project({ waitingAgentCount: 1, activeAgentCount: 3 }),
+      project({ activeAgentCount: 1 }),
+      project({ assistantState: "working" }),
+      project({ processCount: 2 }),
+      project({ isMissing: true, activeAgentCount: 1 }),
+      project({ lastOpened: NOW - 3600_000 }),
+    ];
+
+    for (const row of rows) {
+      const status = getProjectRowStatus(row, NOW);
+      if (!status.isLive) expect(status.livenessDetail).toBeUndefined();
+    }
+  });
+});
+
+describe("formatFleetLiveness", () => {
+  it("says nothing at all when the fleet has gone quiet", () => {
+    // Absence is the signal. A standing "0 running" would make the reader parse
+    // a number to learn there is nothing to learn.
+    expect(formatFleetLiveness({ runningAgentCount: 0, workingAssistantCount: 0 })).toBeNull();
+  });
+
+  it("reports agents and assistants as separate tallies", () => {
+    const both = formatFleetLiveness({ runningAgentCount: 3, workingAssistantCount: 2 });
+
+    // Never summed: an assistant is not a run the user launched, so one number
+    // covering both would answer neither question it is asked. Matched as whole
+    // phrases — a bare `toContain("3")` also passes on "32 running".
+    expect(both).not.toContain("5");
+    expect(both).toMatch(/\b3 running\b/);
+    expect(both).toMatch(/\b2 assistants working\b/);
+  });
+
+  it("drops the half that is idle rather than printing a zero", () => {
+    const agentsOnly = formatFleetLiveness({ runningAgentCount: 4, workingAssistantCount: 0 });
+    const assistantsOnly = formatFleetLiveness({ runningAgentCount: 0, workingAssistantCount: 1 });
+
+    expect(agentsOnly).not.toContain("assistant");
+    expect(agentsOnly).not.toContain("0");
+    expect(assistantsOnly).not.toContain("0");
+    expect(assistantsOnly).toContain("assistant");
   });
 });

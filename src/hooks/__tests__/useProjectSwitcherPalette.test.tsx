@@ -248,6 +248,117 @@ describe("useProjectSwitcherPalette", () => {
     usePaletteStore.setState({ activePaletteId: null });
   });
 
+  // The header's "is it safe to look away?" total, tested against raw projects
+  // plus pushed stats rather than through the palette — a component fixture
+  // that injected already-summed totals would go on passing while this
+  // aggregation drifted.
+  describe("fleetLiveness", () => {
+    const fixture = (id: string, extra: Partial<ProjectFixture> = {}): ProjectFixture => ({
+      id,
+      name: id,
+      path: `/repo/${id}`,
+      emoji: "🌲",
+      lastOpened: 100,
+      frecencyScore: 3.0,
+      status: "background",
+      ...extra,
+    });
+
+    const originalProjects = projectState.projects;
+    afterEach(() => {
+      projectState.projects = originalProjects;
+    });
+
+    it("sums the running agents across projects and leaves the rest out", async () => {
+      // Distinct sentinels rather than repeated values: a memo that read one
+      // project and multiplied, or that summed the wrong field, would still
+      // land on the right total with uniform fixtures.
+      projectState.projects = [fixture("project-1"), fixture("project-2")];
+      projectStatsState.stats = {
+        "project-1": { activeAgentCount: 3, waitingAgentCount: 7, processCount: 9 },
+        "project-2": { activeAgentCount: 4, waitingAgentCount: 0, processCount: 0 },
+      };
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      await waitFor(() => {
+        expect(result.current.fleetLiveness.runningAgentCount).toBe(7);
+      });
+      // Neither the waits nor the process counts are executing agents, so a
+      // total that picked either up would be answering a different question.
+      expect(result.current.fleetLiveness.runningAgentCount).not.toBe(14);
+      expect(result.current.fleetLiveness.workingAssistantCount).toBe(0);
+    });
+
+    it("counts working assistants as their own tally, never as agents", () => {
+      projectState.projects = [fixture("project-1"), fixture("project-2")];
+      projectStatsState.stats = {
+        "project-1": {
+          activeAgentCount: 2,
+          waitingAgentCount: 0,
+          processCount: 0,
+          assistantState: "working",
+        },
+        // `directing` is the assistant's other executing state — the classifier
+        // treats both as working, so the tally has to as well.
+        "project-2": {
+          activeAgentCount: 0,
+          waitingAgentCount: 0,
+          processCount: 0,
+          assistantState: "directing",
+        },
+      };
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      expect(result.current.fleetLiveness.runningAgentCount).toBe(2);
+      expect(result.current.fleetLiveness.workingAssistantCount).toBe(2);
+    });
+
+    it("ignores an assistant that is merely parked at its prompt", () => {
+      projectState.projects = [fixture("project-1")];
+      projectStatsState.stats = {
+        "project-1": {
+          activeAgentCount: 0,
+          waitingAgentCount: 0,
+          processCount: 0,
+          assistantState: "waiting",
+        },
+      };
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      // Resting, not executing — a fleet that is only waiting IS safe to look
+      // away from, which is the whole question the summary answers.
+      expect(result.current.fleetLiveness.workingAssistantCount).toBe(0);
+    });
+
+    it("does not shrink when a query filters the visible rows", async () => {
+      projectState.projects = [
+        fixture("project-1", { name: "Alpha" }),
+        fixture("project-2", { name: "Beta" }),
+      ];
+      projectStatsState.stats = {
+        "project-1": { activeAgentCount: 3, waitingAgentCount: 0, processCount: 0 },
+        "project-2": { activeAgentCount: 5, waitingAgentCount: 0, processCount: 0 },
+      };
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open();
+      });
+      act(() => {
+        result.current.setQuery("Alpha");
+      });
+
+      // Derived from the unfiltered rows on purpose: searching for one project
+      // must not report the fleet as quieter than it is.
+      await waitFor(() => {
+        expect(result.current.fleetLiveness.runningAgentCount).toBe(8);
+      });
+    });
+  });
+
   it("reads project stats from the push-based store", async () => {
     projectStatsState.stats = {
       "project-1": { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },

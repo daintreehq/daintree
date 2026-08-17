@@ -43,12 +43,13 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ArrowDownAZ, ChartNoAxesColumn, Clock } from "@/components/icons";
+import { ArrowDownAZ, ChartNoAxesColumn, Clock, SpinnerCircle } from "@/components/icons";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
+  formatFleetLiveness,
   getProjectRowStatus,
   getScratchRowStatus,
-  ROW_DOT_CLASS,
+  ROW_MARK_CLASS,
   ROW_TONE_CLASS,
   type ProjectRowStatus,
 } from "@/lib/projectRowStatus";
@@ -124,6 +125,16 @@ export interface ProjectSwitcherPaletteProps {
   /** Pointer-leave callback used to cancel a pending hover prefetch. */
   onHoverProjectEnd?: (pointerType: string) => void;
   onOpenProjectSettings?: () => void;
+  /**
+   * What is executing across every workspace, for the header's one-line answer
+   * to "is it safe to look away?" (#11832).
+   *
+   * Deliberately not derived from `results`, which is filtered and reordered for
+   * presentation — a search for one project would otherwise report the fleet as
+   * quiet. Optional because it is a summary: a caller without the totals shows
+   * no line, which is the same thing an idle fleet shows.
+   */
+  fleetLiveness?: { runningAgentCount: number; workingAssistantCount: number };
   dropdownAlign?: "start" | "center" | "end";
   /**
    * Fired when the dropdown's Popover restores focus to its trigger on close.
@@ -219,14 +230,21 @@ interface ProjectListItemProps {
 }
 
 /**
- * The dot repeats the status line's tone rather than encoding anything on its
- * own — status must never be colour-only, and the sentence beside it already
- * carries the meaning for anyone who can't separate these hues.
+ * The mark takes its hue from the status line's tone and its shape from whether
+ * the row is still executing (#11832) — two independent facts on one glyph.
+ * Neither is ever the only carrier: status must not be colour-only, and the
+ * sentence beside it says both in words.
  *
- * A row with nothing to report draws no dot, only the slot that reserves its
+ * A row with nothing to report draws no mark, only the slot that reserves its
  * width (#11692). The slot is what keeps the tiles and names in one column: an
- * omitted dot would pull every quiet row 14px left of the busy ones, and a list
- * that is mostly quiet would read as the ragged edge rather than the tidy one.
+ * omitted mark would pull every quiet row left of the busy ones, and a list that
+ * is mostly quiet would read as the ragged edge rather than the tidy one.
+ *
+ * The slot is sized for the arc rather than the dot. At the old 6px the arc's
+ * gap was about a pixel and a half of stroke, which anti-aliasing turns into a
+ * smudge — the shape has to be legible at 1x or it isn't a carrier at all. The
+ * closed marks keep their 6px so a quiet list is no louder than before; the slot
+ * centres whichever one draws, so the column stays put either way.
  */
 function StatusDot({
   status,
@@ -235,10 +253,11 @@ function StatusDot({
   status: ProjectRowStatus;
   showResumeDot?: boolean;
 }) {
-  // One slot, one decision. Written as a single choice rather than two
-  // conditions so the slot cannot hold two dots at once: the resume mark only
+  // One slot, one decision. Written as a single choice rather than separate
+  // conditions so the slot cannot hold two marks at once: the resume mark only
   // reaches here on a status that already agreed to yield, and an auto-parked
-  // row is the case where both would otherwise have drawn (#11822).
+  // row is the case where both would otherwise have drawn (#11822). Liveness
+  // never contends for the slot — every status that yields has stopped.
   const dot = showResumeDot ? (
     // Hidden from assistive tech, which hears the row's own "N agents will
     // resume" phrase instead — a live region per row would re-announce the
@@ -248,16 +267,70 @@ function StatusDot({
       data-testid="workspace-resume-dot"
       aria-hidden="true"
     />
-  ) : status.isDormantFallback ? null : (
+  ) : status.isDormantFallback ? null : status.isLive ? (
+    // Static: the open gap is the fact, and it survives reduced motion, a
+    // paused frame and a screenshot. Twenty rows spinning would also turn the
+    // list into a field of movement, which is the opposite of scannable.
+    <SpinnerCircle
+      className={cn("w-2.5 h-2.5", ROW_MARK_CLASS[status.tone].arc)}
+      data-testid="workspace-status-dot"
+    />
+  ) : (
     <div
-      className={cn("w-1.5 h-1.5 rounded-full", ROW_DOT_CLASS[status.tone])}
+      className={cn("w-1.5 h-1.5 rounded-full", ROW_MARK_CLASS[status.tone].dot)}
       data-testid="workspace-status-dot"
     />
   );
 
   return (
-    <div className="w-1.5 shrink-0" data-testid="workspace-status-slot">
+    <div
+      className="flex w-2.5 h-2.5 shrink-0 items-center justify-center"
+      data-testid="workspace-status-slot"
+    >
       {dot}
+    </div>
+  );
+}
+
+/**
+ * A row's second line: what it wants, then what is still moving, then which
+ * project it is.
+ *
+ * Shared by all three row renderers so the clause cannot appear on one kind of
+ * workspace and not another — the two scratch paths drew a single toned element
+ * before this, which left them structurally unable to carry a second fragment.
+ *
+ * Exactly one token is coloured. The demand tone is the row's loudest statement
+ * and stays that way; the running clause is muted because it reports something
+ * that needs nothing from the user, and a second hue here would make every busy
+ * row argue with itself. Both are ordinary text, so a reader hears the whole
+ * line whether or not they can resolve the mark's shape.
+ */
+function RowStatusLine({ status }: { status: ProjectRowStatus }) {
+  if (status.isDormantFallback && !status.pathHint) return null;
+
+  return (
+    <div className="flex items-center gap-1 min-w-0 mt-0.5">
+      {!status.isDormantFallback && (
+        <span className={cn("truncate text-[11px] leading-none", ROW_TONE_CLASS[status.tone])}>
+          {status.text}
+        </span>
+      )}
+      {/*
+       * `shrink-0` where the path hint takes `shrink`: the hint answers which
+       * project this is, which the name above already mostly does, while this
+       * is the only place the hidden run is stated at all.
+       */}
+      {status.livenessDetail && (
+        <span className="text-[11px] leading-none text-daintree-text/50 shrink-0">
+          · {status.livenessDetail}
+        </span>
+      )}
+      {status.pathHint && (
+        <span className="truncate text-[11px] leading-none text-daintree-text/50 shrink">
+          {status.isDormantFallback ? status.pathHint : `· ${status.pathHint}`}
+        </span>
+      )}
     </div>
   );
 }
@@ -482,22 +555,7 @@ function ProjectListItem({
          * same folder name, so it belongs to identity rather than status and
          * survives on its own.
          */}
-        {(!status.isDormantFallback || status.pathHint) && (
-          <div className="flex items-center gap-1 min-w-0 mt-0.5">
-            {!status.isDormantFallback && (
-              <span
-                className={cn("truncate text-[11px] leading-none", ROW_TONE_CLASS[status.tone])}
-              >
-                {status.text}
-              </span>
-            )}
-            {status.pathHint && (
-              <span className="truncate text-[11px] leading-none text-daintree-text/50 shrink">
-                {status.isDormantFallback ? status.pathHint : `· ${status.pathHint}`}
-              </span>
-            )}
-          </div>
-        )}
+        <RowStatusLine status={status} />
       </div>
     </div>
   );
@@ -659,13 +717,7 @@ function ScratchListItem({
           {scratch.isActive && <span className="sr-only">, current</span>}
           {showResumeDot && <ResumableAgentsLabel count={scratch.resumableAgentCount ?? 0} />}
         </div>
-        {!status.isDormantFallback && (
-          <div
-            className={cn("truncate text-[11px] leading-none mt-0.5", ROW_TONE_CLASS[status.tone])}
-          >
-            {status.text}
-          </div>
-        )}
+        <RowStatusLine status={status} />
       </div>
     </div>
   );
@@ -1319,16 +1371,7 @@ function ScratchSection({
                            * be deleted is exactly the row that has something to
                            * report even when nothing is running.
                            */}
-                          {!status.isDormantFallback && (
-                            <div
-                              className={cn(
-                                "text-[11px] leading-none truncate mt-0.5",
-                                ROW_TONE_CLASS[status.tone]
-                              )}
-                            >
-                              {status.text}
-                            </div>
-                          )}
+                          <RowStatusLine status={status} />
                           {countdown && (
                             <div
                               className="text-[11px] leading-none text-daintree-text/40 mt-0.5 truncate"
@@ -1538,6 +1581,7 @@ interface ProjectPaletteInnerProps {
   onRequestDeleteAllScratches?: () => void;
   onRenameScratch?: (scratchId: string, name: string) => void;
   onSaveAsProject?: (scratchId: string) => void;
+  fleetLiveness?: { runningAgentCount: number; workingAssistantCount: number };
 }
 
 function ProjectPaletteInner({
@@ -1574,8 +1618,10 @@ function ProjectPaletteInner({
   onRequestDeleteAllScratches,
   onRenameScratch,
   onSaveAsProject,
+  fleetLiveness,
 }: ProjectPaletteInnerProps) {
   const projectSwitcherShortcut = useEffectiveCombo("project.switcherPalette");
+  const fleetSummary = fleetLiveness ? formatFleetLiveness(fleetLiveness) : null;
 
   useEffect(() => {
     if (listRef.current && selectedIndex >= 0 && selectedIndex < results.length) {
@@ -1670,7 +1716,18 @@ function ProjectPaletteInner({
 
   return (
     <>
-      <AppPaletteDialog.Header label="Switch project" shortcut={projectSwitcherShortcut}>
+      <AppPaletteDialog.Header
+        label="Switch project"
+        shortcut={projectSwitcherShortcut}
+        // Absent, not zeroed, when the fleet is idle: "is anything running?" is
+        // answered by the line being there at all, and a standing "0 running"
+        // would make the reader parse a number to learn nothing.
+        trailing={
+          fleetSummary ? (
+            <span data-testid="fleet-liveness-summary">{fleetSummary}</span>
+          ) : undefined
+        }
+      >
         <AppPaletteDialog.Input
           inputRef={inputRef}
           value={query}
@@ -1864,6 +1921,7 @@ function ModalContent({
         onRequestDeleteAllScratches={innerProps.onRequestDeleteAllScratches}
         onRenameScratch={innerProps.onRenameScratch}
         onSaveAsProject={innerProps.onSaveAsProject}
+        fleetLiveness={innerProps.fleetLiveness}
       />
     </AppPaletteDialog>
   );
@@ -1983,6 +2041,7 @@ function DropdownContent({
           onRequestDeleteAllScratches={innerProps.onRequestDeleteAllScratches}
           onRenameScratch={innerProps.onRenameScratch}
           onSaveAsProject={innerProps.onSaveAsProject}
+          fleetLiveness={innerProps.fleetLiveness}
         />
       </AppPalettePopover.Content>
     </AppPalettePopover>
@@ -2130,6 +2189,7 @@ export function ProjectSwitcherPalette({
   onDismissSaveAsProjectConfirm,
   onConfirmDeleteOriginalScratch,
   isDeletingOriginalScratch = false,
+  fleetLiveness,
 }: ProjectSwitcherPaletteProps) {
   const paletteInputRef = useRef<HTMLInputElement>(null);
 
@@ -2177,6 +2237,7 @@ export function ProjectSwitcherPalette({
         onRequestDeleteAllScratches={onRequestDeleteAllScratches}
         onRenameScratch={onRenameScratch}
         onSaveAsProject={onSaveAsProject}
+        fleetLiveness={fleetLiveness}
       >
         {children}
       </DropdownContent>
@@ -2215,6 +2276,7 @@ export function ProjectSwitcherPalette({
         onRequestDeleteAllScratches={onRequestDeleteAllScratches}
         onRenameScratch={onRenameScratch}
         onSaveAsProject={onSaveAsProject}
+        fleetLiveness={fleetLiveness}
       />
     );
 

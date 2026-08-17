@@ -355,6 +355,17 @@ export interface UseProjectSwitcherPaletteReturn {
      */
     waitingProjectCount: number;
   };
+  /**
+   * What is still executing across EVERY workspace — projects and scratches,
+   * the current one included — for the palette header's "is it safe to look
+   * away?" line (#11832). Unfiltered by the search query on purpose.
+   */
+  fleetLiveness: {
+    /** Agents the user launched, across all workspaces. Assistants never counted here. */
+    runningAgentCount: number;
+    /** Workspaces whose assistant is mid-task — a separate tally, not an agent. */
+    workingAssistantCount: number;
+  };
   /** Scratch (one-off agent workspace) view-models, sorted by lastOpened desc. */
   scratchResults: SearchableScratch[];
   /**
@@ -1178,6 +1189,29 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     list.sort((a, b) => b.lastOpened - a.lastOpened);
     return list;
   }, [scratches, currentScratch?.id, projectStats]);
+
+  /**
+   * What is executing across every workspace, for the palette header (#11832).
+   *
+   * Broader than `nonActiveAgentCounts` above in both directions, because the
+   * two answer different questions. That one is the trigger's badge — "is
+   * somewhere else asking for me?" — so it excludes the project on screen. This
+   * one is "is it safe to look away?", which the work in front of you counts
+   * toward as much as the work behind you, and scratches host agents too.
+   *
+   * Assistants are counted, separately. They are not runs the user launched, so
+   * folding them into the agent tally would misreport it — but an assistant
+   * mid-task is a reason the app is not finished with itself.
+   */
+  const fleetLiveness = useMemo(() => {
+    let runningAgentCount = 0;
+    let workingAssistantCount = 0;
+    for (const workspace of [...searchableProjects, ...scratchResults]) {
+      runningAgentCount += workspace.activeAgentCount;
+      if (classifyAssistantActivity(workspace) === "working") workingAssistantCount += 1;
+    }
+    return { runningAgentCount, workingAssistantCount };
+  }, [searchableProjects, scratchResults]);
 
   // Clearing the box reverts to browse immediately rather than holding the
   // deferred ranking for a commit — otherwise browse would flash the stale
@@ -2121,6 +2155,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     isSleepingProject,
     backgroundWaitingCount,
     nonActiveAgentCounts,
+    fleetLiveness,
     scratchResults,
     createScratch,
     selectScratch,

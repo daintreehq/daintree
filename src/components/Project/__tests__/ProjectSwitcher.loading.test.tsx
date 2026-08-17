@@ -386,16 +386,38 @@ describe("ProjectSwitcher background-agent badge", () => {
     expect(label).not.toContain("8");
   });
 
-  it("prefers waiting projects over working agents", () => {
+  it("reports the wait and the work still in flight together", () => {
+    // These used to contend for one carrier, so a fleet that was both asking
+    // for input AND still churning looked exactly like one that had stalled
+    // (#11832). Demand still leads — it is the half that needs the user.
     paletteState.nonActiveAgentCounts = {
       activeAgentCount: 5,
       waitingAgentCount: 1,
       waitingProjectCount: 1,
     };
-    const { getByRole } = render(<ProjectSwitcher />);
+    const { getByRole, getByTestId } = render(<ProjectSwitcher />);
     const label = getByRole("status").getAttribute("aria-label");
     expect(label).toContain("1 project waiting for input");
-    expect(label).not.toContain("working");
+    expect(label).toContain("5 background agents working");
+    expect(label?.indexOf("waiting")).toBeLessThan(label?.indexOf("working") ?? -1);
+    // Hue carries the demand, shape carries the liveness — so the mark is the
+    // open glyph even though the colour still says "waiting".
+    expect(getByTestId("project-switcher-badge-arc")).toBeTruthy();
+  });
+
+  it("closes the badge's shape when the fleet is only waiting", () => {
+    paletteState.nonActiveAgentCounts = {
+      activeAgentCount: 0,
+      waitingAgentCount: 2,
+      waitingProjectCount: 2,
+    };
+    const { getByRole, queryByTestId } = render(<ProjectSwitcher />);
+    const badge = getByRole("status");
+    expect(badge.getAttribute("aria-label")).toContain("2 projects waiting");
+    expect(queryByTestId("project-switcher-badge-arc")).toBeNull();
+    // A closed mark is actually drawn — "no arc" would also be satisfied by a
+    // badge that had quietly stopped rendering anything at all.
+    expect(badge.querySelector("span")).toBeTruthy();
   });
 
   it("falls back to working agents when none are waiting", () => {

@@ -1438,3 +1438,43 @@ describe("resumable agent count passthrough", () => {
     expect(result.current.scratchResults[0]?.activeAgentCount).toBe(5);
   });
 });
+
+describe("fleetLiveness", () => {
+  it("counts the agents running inside scratches, not only those in projects", () => {
+    // The header answers "is it safe to look away?", and a scratch hosts real
+    // agents — a tally that walked projects alone would call the fleet quiet
+    // while a scratch was mid-run.
+    seedScratches(2);
+    projectStatsState.stats = {
+      "scratch-1": { activeAgentCount: 3, waitingAgentCount: 0, processCount: 3 },
+      "scratch-2": { activeAgentCount: 4, waitingAgentCount: 0, processCount: 4 },
+    };
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    // Includes `scratch-1`, which `seedScratches` makes the current workspace:
+    // the work in front of you counts toward "still going" as much as the work
+    // behind you does. That is the deliberate difference from the trigger
+    // badge, which asks the narrower "is somewhere ELSE asking for me?".
+    expect(result.current.fleetLiveness.runningAgentCount).toBe(7);
+  });
+
+  it("tallies a scratch's working assistant apart from its agents", () => {
+    seedScratches(1);
+    projectStatsState.stats = {
+      "scratch-1": {
+        activeAgentCount: 2,
+        waitingAgentCount: 0,
+        processCount: 2,
+        assistantState: "working",
+      },
+    };
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    // Never summed into the agent count: the assistant is not a run the user
+    // launched, and folding it in would make the worker tally a lie.
+    expect(result.current.fleetLiveness.runningAgentCount).toBe(2);
+    expect(result.current.fleetLiveness.workingAssistantCount).toBe(1);
+  });
+});
