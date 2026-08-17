@@ -968,6 +968,7 @@ export async function getWorktreeChangesWithStats(
         deletions: totalDeletions,
         latestFileMtime,
         lastUpdated: Date.now(),
+        headOid: headOid || undefined,
         lastCommitMessage,
         lastCommitTimestampMs,
         lastCommitAuthor,

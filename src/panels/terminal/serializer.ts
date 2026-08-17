@@ -28,6 +28,7 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
     ...(t.agentPresetId && { agentPresetId: t.agentPresetId }),
     ...(t.agentPresetColor && { agentPresetColor: t.agentPresetColor }),
     ...(t.originalPresetId && { originalPresetId: t.originalPresetId }),
+    ...(t.worktreeMoveOptOut && { worktreeMoveOptOut: t.worktreeMoveOptOut }),
     ...(t.isUsingFallback && { isUsingFallback: true }),
     ...(typeof t.fallbackChainIndex === "number" && { fallbackChainIndex: t.fallbackChainIndex }),
     // sessionLostOnRestore intentionally omitted — it's a transient restore-time

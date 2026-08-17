@@ -9,14 +9,17 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
-import { deriveRuntimeStatus, dissolvePanelFromGroup } from "./helpers";
+import {
+  deriveRuntimeStatus,
+  dissolvePanelFromGroup,
+  recordExplicitWorktreeAttribution,
+} from "./helpers";
 import {
   buildWorktreeIndex,
   NO_WORKTREE,
   panelMatchesWorktreeScope,
   transferBetweenWorktreeIndex,
 } from "./worktreeIndex";
-import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 
 type Set = PanelRegistryStoreApi["setState"];
@@ -474,15 +477,7 @@ export const createTabGroupActions = (
     // so later cwd-based inference can never silently re-home the panels.
     if (adoptedWorktreeId !== null) {
       for (const pid of backfilledPanelIds) {
-        const ledgerGeneration = agentLifecycleLedger.currentGeneration(pid);
-        if (ledgerGeneration !== undefined) {
-          agentLifecycleLedger.recordWorktreeAttribution(
-            pid,
-            ledgerGeneration,
-            adoptedWorktreeId,
-            "explicit"
-          );
-        }
+        recordExplicitWorktreeAttribution(pid, adoptedWorktreeId);
       }
     }
 
@@ -560,19 +555,22 @@ export const createTabGroupActions = (
       return { panelsById: newById, panelIdsByWorktreeId: newIndex, tabGroups: newTabGroups };
     });
 
+    // A grouped move is explicit worktree attribution for every member, exactly
+    // as a single-panel move is. `moveTerminalToWorktree` used to hand grouped
+    // panels off to this function and return before writing anything, so one
+    // drag could re-file several agents with no attribution at all (#11840).
+    // Recorded here rather than at that call site so every caller is covered.
     for (const panelId of group.panelIds) {
       const terminal = get().panelsById[panelId];
-      if (
-        terminal &&
-        terminal.location !== "trash" &&
-        !get().trashedTerminals.has(panelId) &&
-        panelKindHasPty(terminal.kind ?? "terminal")
-      ) {
-        if (targetLocation === "dock") {
-          optimizeForDock(panelId);
-        } else {
-          terminalInstanceService.applyRendererPolicy(panelId, TerminalRefreshTier.VISIBLE);
-        }
+      if (!terminal || terminal.location === "trash" || get().trashedTerminals.has(panelId)) {
+        continue;
+      }
+      recordExplicitWorktreeAttribution(panelId, worktreeId);
+      if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
+      if (targetLocation === "dock") {
+        optimizeForDock(panelId);
+      } else {
+        terminalInstanceService.applyRendererPolicy(panelId, TerminalRefreshTier.VISIBLE);
       }
     }
 

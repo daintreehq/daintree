@@ -12,6 +12,7 @@ import { PortalDock, PortalVisibilityController } from "../Portal";
 import { ThemeBrowser } from "../ThemeBrowser";
 import { FleetArmingRibbon } from "@/components/Fleet";
 import { TerminalDestructiveActionConfirmDialog } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
+import { WorktreeMoveDecisionDialog } from "@/components/Terminal/WorktreeMoveDecisionDialog";
 import { PortalCloseConfirmDialog } from "@/components/Portal/PortalCloseConfirmDialog";
 import { MoveOrRenameProjectDialog } from "@/components/Project/MoveOrRenameProjectDialog";
 import { ChordIndicator } from "./ChordIndicator";
@@ -860,6 +861,7 @@ export function AppLayout({
         <FleetArmingRibbon />
       </div>
       <TerminalDestructiveActionConfirmDialog />
+      <WorktreeMoveDecisionDialog />
       <PortalCloseConfirmDialog />
       <MoveOrRenameProjectDialog />
       <div

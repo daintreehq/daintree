@@ -16,6 +16,8 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     wake: vi.fn(),
     wakeForFocus: vi.fn(),
     getInstance: vi.fn(),
+    setInputLocked: vi.fn(),
+    captureBufferText: vi.fn().mockReturnValue(""),
   },
 }));
 
@@ -40,6 +42,12 @@ const { usePanelStore } = await import("@/store/panelStore");
 const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
 const { moveTerminalToWorktreeAndFollowRescue } = await import("../crossWorktreeMove");
 
+/**
+ * An exited terminal. The launch-root decision only engages for a live process
+ * (#11840), so this keeps the rescue-follow suite testing selection semantics
+ * rather than the decision gate. Live-panel behaviour has its own suite in
+ * `worktreeMoveDecision.test.ts`.
+ */
 function panel(id: string, worktreeId: string, location: PanelLocation = "grid"): PtyPanelData {
   return {
     id,
@@ -51,6 +59,7 @@ function panel(id: string, worktreeId: string, location: PanelLocation = "grid")
     worktreeId,
     location,
     isVisible: location === "grid",
+    runtimeStatus: "exited",
   };
 }
 

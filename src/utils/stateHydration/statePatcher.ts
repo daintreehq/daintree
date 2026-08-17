@@ -9,6 +9,7 @@ import type {
   FileBrowserTreeSnapshot,
   PanelExitBehavior,
   PanelTitleMode,
+  PanelWorktreeMoveOptOut,
 } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
@@ -116,6 +117,7 @@ export interface SavedTerminalData {
   location?: string;
   command?: string;
   isInputLocked?: boolean;
+  worktreeMoveOptOut?: PanelWorktreeMoveOptOut;
   browserUrl?: string;
   browserHistory?: BrowserHistory;
   browserZoom?: number;
@@ -703,6 +705,12 @@ export function buildArgsForRespawn(
     requestedId: mintFreshTerminalId ? undefined : saved.id,
     command: isAgentPanel ? command : saved.command?.trim() || undefined,
     isInputLocked: saved.isInputLocked,
+    // Consent is keyed to the cwd it was given for, so it only survives a
+    // restore that relaunches at that same launch root (#11840).
+    worktreeMoveOptOut:
+      saved.worktreeMoveOptOut && saved.worktreeMoveOptOut.acknowledgedCwd === saved.cwd
+        ? saved.worktreeMoveOptOut
+        : undefined,
     devCommand: isDevPreview ? command : undefined,
     browserUrl: isDevPreview ? saved.browserUrl : undefined,
     browserHistory: isDevPreview ? saved.browserHistory : undefined,

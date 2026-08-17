@@ -102,6 +102,10 @@ const PTY_FIELD_CLASSIFICATION = {
   runtimeStatus: false,
   flowStatusTimestamp: false,
   isInputLocked: false,
+  // "Move panel only" consent for a cross-worktree move (#11840) — persisted:
+  // restore relaunches at the saved cwd, so the divergence it acknowledges
+  // outlives the session that recorded it.
+  worktreeMoveOptOut: true,
   browserUrl: false,
   browserHistory: false,
   browserZoom: false,
@@ -403,6 +407,13 @@ const terminalFixture: PtySerializeInput = {
   fallbackChainIndex: 1,
   agentState: "idle",
   lastStateChange: 1_700_000_000_000,
+  worktreeMoveOptOut: {
+    acknowledgedCwd: "/home/project",
+    acknowledgedWorktreeId: "wt-feature",
+    launchWorktreeId: "wt-main",
+    sourceHeadOid: "abc123",
+    at: 1_700_000_000_000,
+  },
   createdAt: 1_700_000_000_000,
   lastActiveAt: 1_700_000_000_001,
 };

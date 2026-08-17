@@ -13,7 +13,7 @@ import type {
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
-import type { TerminalSpawnSource, AddPanelFocusPolicy } from "./panel.js";
+import type { TerminalSpawnSource, AddPanelFocusPolicy, PanelWorktreeMoveOptOut } from "./panel.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { ActionContext } from "./actions.js";
 import type { TerminalGeometry } from "./terminal.js";
@@ -119,6 +119,8 @@ export interface AddPanelOptionsBase {
   skipCommandExecution?: boolean;
   /** Restore input lock state (read-only monitor mode) */
   isInputLocked?: boolean;
+  /** Restore recorded "move panel only" consent for a cross-worktree move (#11840) */
+  worktreeMoveOptOut?: PanelWorktreeMoveOptOut;
   /** Environment variables to set for this terminal */
   env?: Record<string, string>;
   /** Behavior when terminal exits */

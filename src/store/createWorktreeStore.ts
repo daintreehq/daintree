@@ -1823,6 +1823,9 @@ function worktreeChangesEqual(
     a.totalInsertions === b.totalInsertions &&
     a.totalDeletions === b.totalDeletions &&
     a.latestFileMtime === b.latestFileMtime &&
+    // The divergence backstop reads `headOid` off this snapshot, so a HEAD that
+    // moves without changing any other field here still has to churn identity.
+    a.headOid === b.headOid &&
     a.lastCommitMessage === b.lastCommitMessage &&
     a.lastCommitTimestampMs === b.lastCommitTimestampMs &&
     a.lastCommitAuthor?.name === b.lastCommitAuthor?.name &&

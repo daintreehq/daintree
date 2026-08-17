@@ -33,6 +33,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "terminal.restart",
   "terminal.restartAll",
   "terminal.arm",
+  "terminal.moveToWorktree",
   "worktree.delete",
   "worktree.sessions.endAll",
   "worktree.sessions.trashAll",
@@ -102,6 +103,7 @@ const BYPASS_WIRED = new Set([
   "git.pullRebase", // IPC bypass in ReviewHubContent.tsx; ConfirmDialog wired but ID not co-located
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located
   "terminal.arm", // agent/MCP-only confirm gate (#11346); palette-hidden, user arming goes through the fleet ribbon (not ActionService), so no user-side ConfirmDialog to co-locate
+  "terminal.moveToWorktree", // three-way decision via WorktreeMoveDecisionDialog, not a ConfirmDialog (#11840)
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)
   "artifact.applyPatch", // ConfirmDialog in ArtifactOverlay.tsx; dispatch in useArtifacts.ts (ID not co-located)
   "agentSettings.reset", // agent/MCP-only; palette-hidden, configured from Settings via client (danger:"confirm" gates agent dispatch only)
