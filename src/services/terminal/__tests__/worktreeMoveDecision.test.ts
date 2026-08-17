@@ -368,6 +368,24 @@ describe("cross-worktree move decision", () => {
     expect(useWorktreeMoveDecisionStore.getState().pending?.members[0]?.panelId).toBe("t2");
   });
 
+  it("keeps the newer gesture's hold when the same panel is dragged twice", async () => {
+    // Both gestures move t1, so superseding the first re-locks that same panel
+    // for the second transaction. When the first one's classification finally
+    // returns it must not release a hold it no longer owns — the second
+    // decision's dialog is up, and its panel would be typeable behind it.
+    seedPanels([livePanel("t1", "wt-main", MAIN)]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-feature");
+    // Deliberately unsettled: the second drop lands inside the first gesture's
+    // classification window, which is the only place the overlap exists.
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-other");
+    await settleDecision();
+
+    expect(useWorktreeMoveDecisionStore.getState().pending?.destinationWorktreeId).toBe("wt-other");
+    expect(useWorktreeMoveDecisionStore.getState().lockedPanelIds.has("t1")).toBe(true);
+    expect(setInputLocked).toHaveBeenLastCalledWith("t1", true);
+  });
+
   it("marks divergence it could not pin down rather than letting it go quiet", async () => {
     // `unknown` is the case where we could not resolve the launch root at all.
     // Recording nothing would leave the user consenting to an invisible

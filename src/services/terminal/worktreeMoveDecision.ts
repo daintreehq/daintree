@@ -162,6 +162,23 @@ function setDecisionInputLock(panelIds: readonly string[], locked: boolean): voi
 }
 
 /**
+ * Release a transaction's locks, minus the panels the live transaction holds.
+ *
+ * A superseded gesture still owns the panels only the *newer* one didn't claim:
+ * `releaseSupersededDecision` re-locks any shared panel for the newer
+ * transaction, and dragging the same panel twice inside the `terminal.getInfo`
+ * window is enough to overlap them. A blind unlock here would drop the input
+ * hold while the newer decision's dialog is still up.
+ */
+function releaseLocksTheLiveTransactionDoesNotHold(panelIds: readonly string[]): void {
+  const stillHeld = new Set(activeTransaction?.lockedPanelIds ?? []);
+  setDecisionInputLock(
+    panelIds.filter((panelId) => !stillHeld.has(panelId)),
+    false
+  );
+}
+
+/**
  * Make the destination the active worktree so the decision is actually on
  * screen. The rescue path follows conditionally; this one has to follow every
  * time — a dialog about a panel the user isn't looking at is the same failure
@@ -249,7 +266,7 @@ async function resolveDecisionOrRelease(
     // A newer gesture claimed the slot while we were in IPC. Publishing now
     // would overwrite its request and strand its panels; release ours instead.
     if (activeTransaction?.id !== transactionId) {
-      setDecisionInputLock(panelIds, false);
+      releaseLocksTheLiveTransactionDoesNotHold(panelIds);
       return;
     }
     const members = described.filter((m): m is WorktreeMoveDecisionMember => m !== null);
@@ -288,7 +305,9 @@ async function resolveDecisionOrRelease(
       error,
     });
     if (activeTransaction?.id === transactionId) activeTransaction = null;
-    setDecisionInputLock(panelIds, false);
+    // Same panel-blindness applies here: a throw on an already-superseded
+    // transaction must not unlock the panels the newer one is holding.
+    releaseLocksTheLiveTransactionDoesNotHold(panelIds);
   }
 }
 
