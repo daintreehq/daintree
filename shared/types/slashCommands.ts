@@ -91,6 +91,7 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     id: "mcp",
     label: "/mcp",
     description: "Manage Model Context Protocol servers",
+    descriptions: { codex: "List configured MCP tools; use /mcp verbose for details" },
     supportedAgents: ["claude", "gemini", "codex"],
   },
   {
