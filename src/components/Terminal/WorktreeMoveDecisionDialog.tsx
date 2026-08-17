@@ -28,7 +28,12 @@ export function WorktreeMoveDecisionDialog(): ReactElement | null {
     (outcome: WorktreeMoveOutcome) => {
       if (pending === null || resolving !== null) return;
       setResolving(outcome);
-      void resolveWorktreeMoveDecision(pending, outcome).finally(() => setResolving(null));
+      // `.catch` before `.finally`: a rejected transfer would otherwise surface
+      // as an unhandled rejection. The resolver has already released the input
+      // lock and marked the divergence by then.
+      void resolveWorktreeMoveDecision(pending, outcome)
+        .catch(() => undefined)
+        .finally(() => setResolving(null));
     },
     [pending, resolving]
   );

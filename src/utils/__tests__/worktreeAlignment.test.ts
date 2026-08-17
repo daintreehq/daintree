@@ -110,6 +110,8 @@ describe("deriveWorktreeDivergence", () => {
   const optOut = {
     acknowledgedCwd: "/repo",
     acknowledgedWorktreeId: "wt-feature",
+    acknowledgedAlignment: "launch-root-mismatch" as const,
+    launchCwd: "/repo",
     launchWorktreeId: "wt-main",
     sourceHeadOid: "aaa",
     at: 1,
@@ -120,7 +122,12 @@ describe("deriveWorktreeDivergence", () => {
       { cwd: "/repo", worktreeId: "wt-feature", worktreeMoveOptOut: optOut },
       divergedWorktrees
     );
-    expect(result).toEqual({ kind: "diverged", launchLabel: "main", headDrifted: false });
+    expect(result).toEqual({
+      kind: "diverged",
+      launchLabel: "main",
+      launchResolved: true,
+      headDrifted: false,
+    });
   });
 
   it("reports nothing without recorded consent", () => {
@@ -144,13 +151,42 @@ describe("deriveWorktreeDivergence", () => {
     ).toBe("none");
   });
 
-  it("drops consent when the panel is filed somewhere it was not consented for", () => {
+  it("clears once the panel is filed under the worktree it actually runs in", () => {
     expect(
       deriveWorktreeDivergence(
         { cwd: "/repo", worktreeId: "wt-main", worktreeMoveOptOut: optOut },
         divergedWorktrees
       ).kind
     ).toBe("none");
+  });
+
+  it("shows nothing for a panel with no worktree of its own", () => {
+    expect(
+      deriveWorktreeDivergence(
+        { cwd: "/repo", worktreeId: undefined, worktreeMoveOptOut: optOut },
+        divergedWorktrees
+      ).kind
+    ).toBe("none");
+  });
+
+  it("keeps the marker when the launch worktree has since been deleted", () => {
+    // The process is still committing there; losing the marker would restore the
+    // silence this issue exists to end.
+    const result = deriveWorktreeDivergence(
+      { cwd: "/repo", worktreeId: "wt-feature", worktreeMoveOptOut: optOut },
+      [divergedWorktrees[1]!]
+    );
+    expect(result).toMatchObject({ kind: "diverged", launchResolved: false });
+  });
+
+  it("matches the acknowledged cwd across separator and trailing-slash variants", () => {
+    // Hydration can hand back a normalized variant of the same directory.
+    expect(
+      deriveWorktreeDivergence(
+        { cwd: "/repo/", worktreeId: "wt-feature", worktreeMoveOptOut: optOut },
+        divergedWorktrees
+      ).kind
+    ).toBe("diverged");
   });
 
   it("flags drift once the launch root's HEAD moves past the recorded baseline", () => {
@@ -179,7 +215,10 @@ describe("deriveWorktreeDivergence", () => {
     expect(noBaseline.kind === "diverged" && noBaseline.headDrifted).toBe(false);
   });
 
-  it("falls back to the launch cwd when the launch root maps to no worktree", () => {
+  it("marks an acknowledged divergence it could never pin down", () => {
+    // "/tmp/scratch" is under no worktree, so alignment is `unknown`. The user
+    // still consented to a real divergence — treating "can't prove it" as "it's
+    // fine" is the original bug.
     const result = deriveWorktreeDivergence(
       {
         cwd: "/tmp/scratch",
@@ -187,14 +226,18 @@ describe("deriveWorktreeDivergence", () => {
         worktreeMoveOptOut: {
           ...optOut,
           acknowledgedCwd: "/tmp/scratch",
+          acknowledgedAlignment: "unknown",
+          launchCwd: "/tmp/scratch",
           launchWorktreeId: undefined,
           sourceHeadOid: undefined,
         },
       },
       divergedWorktrees
     );
-    // "/tmp/scratch" is under no worktree, so alignment is `unknown`, not a
-    // mismatch — nothing to mark.
-    expect(result.kind).toBe("none");
+    expect(result).toMatchObject({
+      kind: "diverged",
+      launchLabel: "/tmp/scratch",
+      launchResolved: false,
+    });
   });
 });

@@ -71,6 +71,8 @@ export type WorktreeDivergence =
       kind: "diverged";
       /** Where the process actually runs, named if it maps to a worktree. */
       launchLabel: string;
+      /** False when the launch root maps to no live worktree — say so, don't guess. */
+      launchResolved: boolean;
       /** The launch root's HEAD has moved since consent was given. */
       headDrifted: boolean;
     };
@@ -96,22 +98,41 @@ export function deriveWorktreeDivergence(
 ): WorktreeDivergence {
   const optOut = panel.worktreeMoveOptOut;
   if (!optOut) return { kind: "none" };
-  if (!panel.cwd || optOut.acknowledgedCwd !== panel.cwd) return { kind: "none" };
-  if (optOut.acknowledgedWorktreeId !== panel.worktreeId) return { kind: "none" };
-  if (
-    classifyLaunchRootAlignment(panel.cwd, worktrees, panel.worktreeId) !== "launch-root-mismatch"
-  )
+  if (!panel.worktreeId) return { kind: "none" };
+  // Normalized, not `===`: hydration can hand back a separator- or
+  // trailing-slash variant of the same directory, and losing the marker over
+  // punctuation would hide a live divergence.
+  if (!panel.cwd) return { kind: "none" };
+  if (normalizeForComparison(optOut.acknowledgedCwd) !== normalizeForComparison(panel.cwd)) {
     return { kind: "none" };
+  }
+
+  // Only proven alignment clears the marker, and only when the consent wasn't
+  // recorded against an unresolvable launch root in the first place. `unknown`
+  // means the renderer's cwd and the backend's disagreed, or the cwd sat under
+  // no worktree at all — so a cwd that now *looks* aligned proves nothing, and
+  // treating "can't prove it" as "it's fine" is the original bug. This is also
+  // what keeps the marker alive once the launch worktree has been deleted.
+  if (
+    optOut.acknowledgedAlignment !== "unknown" &&
+    classifyLaunchRootAlignment(panel.cwd, worktrees, panel.worktreeId) === "aligned"
+  ) {
+    return { kind: "none" };
+  }
 
   const launchWorktree = optOut.launchWorktreeId
     ? worktrees?.find((w) => w.id === optOut.launchWorktreeId)
     : undefined;
+  const launchResolved = launchWorktree !== undefined;
 
   return {
     kind: "diverged",
-    launchLabel: launchWorktree?.name ?? launchWorktree?.path ?? panel.cwd,
-    // Only a positive comparison counts as drift. A missing baseline or a
-    // worktree that hasn't been polled yet is "don't know", not "moved".
+    launchLabel: launchWorktree?.name ?? launchWorktree?.path ?? optOut.launchCwd ?? panel.cwd,
+    launchResolved,
+    // Only a positive comparison counts as drift. An unknown baseline, or a
+    // worktree that hasn't been polled yet, is "don't know", not "moved" —
+    // but a `null` baseline is a known-unborn HEAD, so the launch root's first
+    // commit is real drift.
     headDrifted:
       optOut.sourceHeadOid !== undefined &&
       launchWorktree?.headOid !== undefined &&

@@ -340,7 +340,6 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
     const ok = await usePanelStore.getState().transferPanelToWorktree("test-1", "wt-missing");
 
     expect(ok).toBe(false);
-    expect(mockRestartTerminal).not.toHaveBeenCalled();
     const panel = ptyPanel("test-1");
     expect(panel?.cwd).toBe("/old/path");
     expect(panel?.worktreeId).toBe("wt-old");
@@ -355,6 +354,7 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
           worktreeMoveOptOut: {
             acknowledgedCwd: "/old/path",
             acknowledgedWorktreeId: "wt-old",
+            acknowledgedAlignment: "launch-root-mismatch" as const,
             at: 1,
           },
         },

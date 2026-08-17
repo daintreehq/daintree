@@ -340,14 +340,28 @@ interface BasePanelData {
  * that doesn't keeps it.
  */
 export interface PanelWorktreeMoveOptOut {
-  /** Launch root the consent was given for. Must still equal `cwd` to apply. */
+  /** Launch root the consent was given for. Must still match `cwd` to apply. */
   acknowledgedCwd: string;
-  /** Worktree the panel was filed under when consent was given. */
+  /** Worktree the panel was filed under when consent was given. Diagnostic. */
   acknowledgedWorktreeId: string;
-  /** Worktree the process actually runs in, when the cwd resolves to one. */
+  /**
+   * What the classifier concluded at the time. `"unknown"` is recorded as
+   * faithfully as a mismatch: the user consented to a divergence we could not
+   * pin down, and dropping that record would hide it entirely — the exact
+   * silence this issue exists to end.
+   */
+  acknowledgedAlignment: "launch-root-mismatch" | "unknown";
+  /** Launch root as it was resolved at the time, for the marker's label. */
+  launchCwd?: string;
+  /** Worktree the process actually runs in, when the cwd resolved to one. */
   launchWorktreeId?: string;
-  /** `launchWorktreeId`'s HEAD at move time — the drift backstop's baseline. */
-  sourceHeadOid?: string;
+  /**
+   * `launchWorktreeId`'s HEAD at move time — the drift backstop's baseline.
+   * `null` means the worktree was known to have an unborn HEAD, so the first
+   * commit there still counts as drift; `undefined` means HEAD was unknown and
+   * no comparison can be made.
+   */
+  sourceHeadOid?: string | null;
   /** Epoch ms the consent was given. */
   at: number;
 }

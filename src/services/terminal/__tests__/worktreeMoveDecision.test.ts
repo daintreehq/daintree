@@ -42,7 +42,8 @@ const { usePanelStore } = await import("@/store/panelStore");
 const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
 const { useWorktreeMoveDecisionStore } = await import("@/store/worktreeMoveDecisionStore");
 const { moveTerminalToWorktreeAndFollowRescue } = await import("../crossWorktreeMove");
-const { resolveWorktreeMoveDecision, isPanelProcessLive } = await import("../worktreeMoveDecision");
+const { resolveWorktreeMoveDecision, isPanelProcessLive, __resetWorktreeMoveDecisionState } =
+  await import("../worktreeMoveDecision");
 
 const MAIN = "/repo";
 const FEATURE = "/repo/.worktrees/feature";
@@ -90,6 +91,14 @@ async function settleDecision(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * Count decisions actually raised. Reading the store's single `pending` slot
+ * can't tell one request from two — a second would overwrite the first and
+ * still leave exactly one pending — so count the null → request transitions.
+ */
+let decisionsRaised = 0;
+let unsubscribeDecisions: (() => void) | undefined;
+
 /** Narrow the panel union — every fixture here is a PTY panel. */
 function ptyPanel(id: string): PtyPanelData | undefined {
   const panel = usePanelStore.getState().panelsById[id];
@@ -111,15 +120,26 @@ beforeEach(async () => {
   });
   useWorktreeSelectionStore.getState().reset();
   useWorktreeMoveDecisionStore.getState().clear();
+  useWorktreeMoveDecisionStore
+    .getState()
+    .unlock([...useWorktreeMoveDecisionStore.getState().lockedPanelIds]);
+  __resetWorktreeMoveDecisionState();
   setWorktrees([
     { id: "wt-main", path: MAIN, name: "main" },
     { id: "wt-feature", path: FEATURE, name: "feature" },
+    { id: "wt-other", path: "/repo/.worktrees/other", name: "other" },
   ]);
   setInputLocked.mockClear();
   vi.clearAllMocks();
+  decisionsRaised = 0;
+  unsubscribeDecisions = useWorktreeMoveDecisionStore.subscribe((state, prev) => {
+    if (state.pending !== null && state.pending !== prev.pending) decisionsRaised += 1;
+  });
 });
 
 afterEach(() => {
+  unsubscribeDecisions?.();
+  unsubscribeDecisions = undefined;
   useWorktreeMoveDecisionStore.getState().clear();
 });
 
@@ -250,8 +270,10 @@ describe("cross-worktree move decision", () => {
     const pending = useWorktreeMoveDecisionStore.getState().pending;
     expect(pending?.groupId).toBe("g1");
     expect(pending?.members.map((m) => m.panelId).sort()).toEqual(["t1", "t2"]);
-    // One decision, not one per member.
-    expect(setInputLocked.mock.calls.filter(([, locked]) => locked === true)).toHaveLength(2);
+    // One decision covering both members — counted, not inferred from lock calls,
+    // because a second request would overwrite the single store slot and still
+    // leave exactly one pending.
+    expect(decisionsRaised).toBe(1);
   });
 
   it("records consent and the drift baseline when the user keeps the process put", async () => {
@@ -296,23 +318,198 @@ describe("cross-worktree move decision", () => {
     expect(setInputLocked).toHaveBeenLastCalledWith("t1", false);
   });
 
-  it("releases the lock even when the outcome handler throws", async () => {
+  it("releases the lock for aligned group members it does not otherwise touch", async () => {
+    // t2 launched inside the destination, so it needs no decision — but the
+    // gesture locked it, and unlocking only the decided members would leave it
+    // permanently unusable.
+    seedPanels([livePanel("t1", "wt-main", MAIN), livePanel("t2", "wt-main", `${FEATURE}/pkg`)]);
+    usePanelStore.setState({
+      tabGroups: new Map([
+        [
+          "g1",
+          {
+            id: "g1",
+            location: "grid" as const,
+            worktreeId: "wt-main",
+            activeTabId: "t1",
+            panelIds: ["t1", "t2"],
+          },
+        ],
+      ]),
+    });
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-feature");
+    await settleDecision();
+
+    const pending = useWorktreeMoveDecisionStore.getState().pending!;
+    expect(pending.members.map((m) => m.panelId)).toEqual(["t1"]);
+    expect(pending.lockedPanelIds.sort()).toEqual(["t1", "t2"]);
+
+    await resolveWorktreeMoveDecision(pending, "move-only");
+
+    expect(setInputLocked).toHaveBeenCalledWith("t2", false);
+    // The aligned member is not the decision's subject, so it records no consent.
+    expect(ptyPanel("t2")?.worktreeMoveOptOut).toBeUndefined();
+  });
+
+  it("releases the previous decision's locks when a second gesture overtakes it", async () => {
+    // The store holds one pending request. Overwriting it without unlocking
+    // would strand the first gesture's panels with no dialog left to free them.
+    seedPanels([livePanel("t1", "wt-main", MAIN), livePanel("t2", "wt-main", MAIN)]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-feature");
+    await settleDecision();
+    expect(useWorktreeMoveDecisionStore.getState().pending?.members[0]?.panelId).toBe("t1");
+
+    moveTerminalToWorktreeAndFollowRescue("t2", "wt-feature");
+    await settleDecision();
+
+    expect(setInputLocked).toHaveBeenCalledWith("t1", false);
+    expect(useWorktreeMoveDecisionStore.getState().pending?.members[0]?.panelId).toBe("t2");
+  });
+
+  it("marks divergence it could not pin down rather than letting it go quiet", async () => {
+    // `unknown` is the case where we could not resolve the launch root at all.
+    // Recording nothing would leave the user consenting to an invisible
+    // divergence — the original bug wearing a dialog.
+    seedPanels([livePanel("t1", "wt-main", "/tmp/scratch")]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-feature");
+    await settleDecision();
+    const pending = useWorktreeMoveDecisionStore.getState().pending!;
+    await resolveWorktreeMoveDecision(pending, "move-only");
+
+    expect(ptyPanel("t1")?.worktreeMoveOptOut).toMatchObject({
+      acknowledgedCwd: "/tmp/scratch",
+      acknowledgedAlignment: "unknown",
+    });
+  });
+
+  it("aligns an exited group member's next launch alongside a live member's decision", async () => {
+    // A mixed group moves as a unit. The exited pane needs no decision, but its
+    // next restart would otherwise reuse the old cwd and reproduce the bug.
+    seedPanels([
+      livePanel("t1", "wt-main", MAIN),
+      { ...livePanel("t2", "wt-main", MAIN), runtimeStatus: "exited" },
+    ]);
+    usePanelStore.setState({
+      tabGroups: new Map([
+        [
+          "g1",
+          {
+            id: "g1",
+            location: "grid" as const,
+            worktreeId: "wt-main",
+            activeTabId: "t1",
+            panelIds: ["t1", "t2"],
+          },
+        ],
+      ]),
+    });
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-feature");
+    await settleDecision();
+
+    const pending = useWorktreeMoveDecisionStore.getState().pending!;
+    expect(pending.members.map((m) => m.panelId)).toEqual(["t1"]);
+    expect(pending.alignOnlyPanelIds).toEqual(["t2"]);
+
+    await resolveWorktreeMoveDecision(pending, "move-only");
+
+    expect(ptyPanel("t2")?.cwd).toBe(FEATURE);
+  });
+
+  it("marks the divergence when a transfer fails instead of reporting success", async () => {
+    // A failed transfer leaves the panel relabelled with its process still in
+    // the source directory — exactly the state this issue is about.
     seedPanels([livePanel("t1", "wt-main", MAIN)]);
     moveTerminalToWorktreeAndFollowRescue("t1", "wt-feature");
     await settleDecision();
 
     const pending = useWorktreeMoveDecisionStore.getState().pending!;
-    const store = usePanelStore.getState();
-    const original = store.transferPanelToWorktree;
+    usePanelStore.setState({ transferPanelToWorktree: () => Promise.resolve(false) });
+
+    await resolveWorktreeMoveDecision(pending, "transfer");
+
+    expect(ptyPanel("t1")?.worktreeMoveOptOut).toMatchObject({ acknowledgedCwd: MAIN });
+  });
+
+  it("restores the consent the panel carried before the cancelled gesture", async () => {
+    // Cancel must undo THIS gesture, not erase a marker an earlier, already
+    // answered move legitimately left behind.
+    seedPanels([livePanel("t1", "wt-main", MAIN)]);
+    const { useLayoutUndoStore } = await import("@/store/layoutUndoStore");
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-feature");
+    await settleDecision();
+    await resolveWorktreeMoveDecision(
+      useWorktreeMoveDecisionStore.getState().pending!,
+      "move-only"
+    );
+    const earned = ptyPanel("t1")?.worktreeMoveOptOut;
+    expect(earned).toBeDefined();
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-other");
+    await settleDecision();
+    await resolveWorktreeMoveDecision(useWorktreeMoveDecisionStore.getState().pending!, "cancel");
+
+    expect(ptyPanel("t1")?.worktreeMoveOptOut).toEqual(earned);
+    expect(ptyPanel("t1")?.worktreeId).toBe("wt-feature");
+  });
+
+  it("leaves no marker behind when cancelling a move on a panel that had none", async () => {
+    seedPanels([livePanel("t1", "wt-main", MAIN)]);
+    const { useLayoutUndoStore } = await import("@/store/layoutUndoStore");
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-feature");
+    await settleDecision();
+    await resolveWorktreeMoveDecision(useWorktreeMoveDecisionStore.getState().pending!, "cancel");
+
+    expect(ptyPanel("t1")?.worktreeMoveOptOut).toBeUndefined();
+    expect(ptyPanel("t1")?.worktreeId).toBe("wt-main");
+  });
+
+  it("contains a throwing transfer instead of abandoning the rest of the group", async () => {
+    // A panel left locked forever is worse than a failed transfer, and one
+    // member blowing up must not strand its siblings mid-decision.
+    seedPanels([livePanel("t1", "wt-main", MAIN), livePanel("t2", "wt-main", MAIN)]);
     usePanelStore.setState({
-      transferPanelToWorktree: () => Promise.reject(new Error("boom")),
+      tabGroups: new Map([
+        [
+          "g1",
+          {
+            id: "g1",
+            location: "grid" as const,
+            worktreeId: "wt-main",
+            activeTabId: "t1",
+            panelIds: ["t1", "t2"],
+          },
+        ],
+      ]),
+    });
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-feature");
+    await settleDecision();
+
+    const pending = useWorktreeMoveDecisionStore.getState().pending!;
+    const attempted: string[] = [];
+    usePanelStore.setState({
+      transferPanelToWorktree: (panelId: string) => {
+        attempted.push(panelId);
+        return Promise.reject(new Error("boom"));
+      },
     });
 
-    await expect(resolveWorktreeMoveDecision(pending, "transfer")).rejects.toThrow("boom");
+    await expect(resolveWorktreeMoveDecision(pending, "transfer")).resolves.toBeUndefined();
 
-    // A panel left locked forever is worse than a failed transfer.
-    expect(setInputLocked).toHaveBeenLastCalledWith("t1", false);
+    expect(attempted.sort()).toEqual(["t1", "t2"]);
+    expect(setInputLocked).toHaveBeenCalledWith("t1", false);
+    expect(setInputLocked).toHaveBeenCalledWith("t2", false);
     expect(useWorktreeMoveDecisionStore.getState().pending).toBeNull();
-    usePanelStore.setState({ transferPanelToWorktree: original });
+    // Failure must stay visible, not fall back to silence.
+    expect(ptyPanel("t1")?.worktreeMoveOptOut).toBeDefined();
+    expect(ptyPanel("t2")?.worktreeMoveOptOut).toBeDefined();
   });
 });

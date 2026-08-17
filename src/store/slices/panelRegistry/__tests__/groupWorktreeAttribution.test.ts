@@ -44,8 +44,12 @@ function panel(id: string, worktreeId: string): PtyPanelData {
   };
 }
 
-beforeEach(() => {
-  usePanelStore.getState().reset();
+beforeEach(async () => {
+  // `reset()` is async; leaving it unawaited lets it land mid-test.
+  await usePanelStore.getState().reset();
+  // The ledger is a module singleton shared across suites — stale entries for
+  // these ids would let a missing attribution write look like a passing one.
+  agentLifecycleLedger.clear();
   usePanelStore.setState({
     panelsById: {},
     panelIds: [],

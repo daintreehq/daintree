@@ -410,6 +410,8 @@ const terminalFixture: PtySerializeInput = {
   worktreeMoveOptOut: {
     acknowledgedCwd: "/home/project",
     acknowledgedWorktreeId: "wt-feature",
+    acknowledgedAlignment: "launch-root-mismatch",
+    launchCwd: "/home/project",
     launchWorktreeId: "wt-main",
     sourceHeadOid: "abc123",
     at: 1_700_000_000_000,

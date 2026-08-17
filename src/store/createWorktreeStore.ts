@@ -1816,7 +1816,12 @@ function worktreeChangesEqual(
 ): boolean {
   if (a === b) return true;
   if (a == null || b == null) return false;
-  if (a.lastUpdated !== undefined && a.lastUpdated === b.lastUpdated) return true;
+  // The timestamp shortcut has to yield to `headOid`: two polls landing in the
+  // same millisecond with different HEADs would otherwise keep the stale
+  // identity, and the divergence backstop reads HEAD off this snapshot.
+  if (a.lastUpdated !== undefined && a.lastUpdated === b.lastUpdated && a.headOid === b.headOid) {
+    return true;
+  }
   return (
     a.changedFileCount === b.changedFileCount &&
     a.changes.length === b.changes.length &&

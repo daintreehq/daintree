@@ -30,9 +30,12 @@ beforeEach(() => {
 
 function stageSingle(): void {
   useWorktreeMoveDecisionStore.getState().request({
+    transactionId: 1,
     destinationWorktreeId: "wt-feature",
     destinationWorktreeLabel: "feature",
     sourceWorktreeId: "wt-main",
+    lockedPanelIds: ["t1"],
+    alignOnlyPanelIds: [],
     members: [
       {
         panelId: "t1",
@@ -49,9 +52,12 @@ function stageSingle(): void {
 
 function stageGroup(): void {
   useWorktreeMoveDecisionStore.getState().request({
+    transactionId: 2,
     destinationWorktreeId: "wt-feature",
     destinationWorktreeLabel: "feature",
     sourceWorktreeId: "wt-main",
+    lockedPanelIds: ["t1", "t2"],
+    alignOnlyPanelIds: [],
     groupId: "g1",
     members: [
       {
