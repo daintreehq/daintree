@@ -1432,7 +1432,10 @@ describe("McpServerService", () => {
       for (const wcId of registeredViews) unregisterProjectView(wcId);
       registeredViews.length = 0;
       // The runtime-enable test below points the process-global manager at a
-      // specific window to stand in for the "last created view" fallback.
+      // specific window to stand in for the "last created view" fallback. Its
+      // `setWindowRegistry` counterpart takes no null, so the registry stays set
+      // for anything added after it — keep that test last, or give a new one its
+      // own registry rather than inheriting this one.
       setProjectViewManager(null);
     });
 
