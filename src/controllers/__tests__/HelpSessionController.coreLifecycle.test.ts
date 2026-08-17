@@ -565,7 +565,7 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
     syncWorkspaceInputs(ctrl, workspace);
   }
 
-  it("tears the bound session down without relaunching", () => {
+  it("tears the bound session down without relaunching, then closes the panel", () => {
     const ctrl = new HelpSessionController();
     ctrl["_patch"]({ phase: "live" });
     bindLiveSession(ctrl);
@@ -581,9 +581,9 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
     // No fresh terminal is reserved — unlike newSession(), stop does not relaunch.
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    // The Stop button leaves the panel open on its empty state (D0 inverse) —
-    // only the terminal self-exit path slides the sidebar out.
-    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
+    // #11833: Stop slides the sidebar out rather than lingering on the empty
+    // state — the same close the self-exit paths already perform.
+    expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
     expect(ctrl.getSnapshot().phase).toBe("idle");
   });
 
@@ -663,8 +663,9 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
 
     // clearTerminal ran — the store now reports no bound terminal.
     helpPanelState.terminalId = null;
-    // The panel is still open with auto-launch consented; without the guard this
-    // would immediately respawn the assistant the user just stopped.
+    // Stop closes the panel, but a sync still carrying the pre-close `isOpen`
+    // can land after it. Without the budget guard that stale-open sync would
+    // immediately respawn the assistant the user just stopped.
     ctrl.syncInputs({
       isOpen: true,
       isReadyToLaunch: true,
@@ -816,7 +817,7 @@ describe("HelpSessionController — handleAgentExited (agent /exit inside a live
     expect(panelStoreState.removePanel).toHaveBeenCalledWith("term-1");
     expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-bound");
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
-    // Full stop, and the sidebar slides out (unlike the Stop button).
+    // Full stop, and the sidebar slides out — same as the Stop button (#11833).
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1");
     expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
     expect(ctrl["_hasAutoLaunched"]).toBe(true);

@@ -600,12 +600,16 @@ export class HelpSessionController {
    * User-facing "Stop assistant" — actually end the running assistant terminal
    * rather than merely hiding the panel (`handleClose` only flips `isOpen`,
    * leaving the agent running). Unlike `newSession()` this does NOT relaunch:
-   * it tears the bound session down and leaves the panel open on its empty /
-   * start state so restarting is one click away (D0 inverse). Idempotent — a
-   * no-op when nothing is running and no launch is in flight.
+   * it tears the bound session down and slides the sidebar out (#11833), so
+   * every way a session ends — Stop, agent self-exit, PTY exit — leaves the
+   * panel closed rather than lingering on the empty state. Stop discards the
+   * conversation instead of pausing it, which is why the UI gates it behind a
+   * confirm whenever there is live work or an engaged conversation to lose;
+   * reopening starts fresh through the normal launch / auto-launch flow.
+   * Idempotent — a no-op when nothing is running and no launch is in flight.
    */
   endSession(): void {
-    this._stopBoundSession({ close: false });
+    this._stopBoundSession();
   }
 
   /**
@@ -613,10 +617,9 @@ export class HelpSessionController {
    * user typed `/exit`, or the agent quit — surfaced as `agentState: "exited"`.
    * Most assistant agents run inside a shell, so the agent exiting does NOT
    * exit the PTY (`handleTerminalPanelMissing` never fires and the sidebar
-   * would otherwise linger on a dead shell). Treat it like the Stop button but
-   * also slide the sidebar out: the user ended the session from the terminal,
-   * so hide the panel rather than leave it open on the empty state. No
-   * confirmation — the exit already happened.
+   * would otherwise linger on a dead shell). Treat it exactly like the Stop
+   * button — same teardown, same slide-out. No confirmation — the exit already
+   * happened.
    *
    * Guards keep a stale or racing signal from tearing down the wrong session:
    * skip while a hibernate owns the teardown, and only act when `terminalId`
@@ -632,13 +635,15 @@ export class HelpSessionController {
   }
 
   /**
-   * Shared stop core for the Stop button (`endSession`, keeps the panel open)
-   * and the terminal self-exit (`handleAgentExited`, slides the sidebar out).
-   * Aborts any in-flight launch first (mirrors `cancelLaunch`) so a
-   * late-settling provision can't bind a fresh terminal after the stop, tears
-   * the bound session down (revoke-before-kill), then makes the stop stick.
+   * Shared stop core for the Stop button (`endSession`) and the terminal
+   * self-exit (`handleAgentExited`). Aborts any in-flight launch first (mirrors
+   * `cancelLaunch`) so a late-settling provision can't bind a fresh terminal
+   * after the stop, tears the bound session down (revoke-before-kill), makes
+   * the stop stick, then slides the sidebar out. The close is unconditional:
+   * both callers end the session outright, so neither leaves the panel behind
+   * on its empty state.
    */
-  private _stopBoundSession(opts: { close: boolean }): void {
+  private _stopBoundSession(): void {
     this._launchGen++;
     this._isLaunching = false;
     this._clearLaunchWatchdog();
@@ -658,9 +663,7 @@ export class HelpSessionController {
 
     this._applyStopSuppression();
 
-    if (opts.close) {
-      useHelpPanelStore.getState().setOpen(false);
-    }
+    useHelpPanelStore.getState().setOpen(false);
   }
 
   /**
@@ -670,11 +673,15 @@ export class HelpSessionController {
    * can't resume on next open, disarm any pending hibernate timer, consume this
    * open cycle's auto-launch budget so a consented auto-launch
    * (`_maybeAutoLaunch`) can't immediately respawn the assistant that was just
-   * stopped (reopening the panel resets this in `_syncInputs`, so the next open
-   * still auto-launches as before), then clear session-scoped banners and drop
-   * the phase to idle so the panel lands on a clean empty / start state. Shared
-   * by `_stopBoundSession` (Stop button + agent self-exit) and the PTY-exit
-   * path (`handleTerminalPanelMissing`).
+   * stopped, then clear session-scoped banners and drop the phase to idle so
+   * the panel lands on a clean empty / start state. Shared by
+   * `_stopBoundSession` (Stop button + agent self-exit) and the PTY-exit path
+   * (`handleTerminalPanelMissing`).
+   *
+   * Every caller also closes the panel, and `_maybeAutoLaunch` hard-gates on
+   * `isOpen`, so the budget consumption is the belt against a sync still
+   * carrying the pre-close `isOpen` landing after the stop. `syncInputs` clears
+   * it once the close is observed, leaving the next open free to auto-launch.
    */
   private _applyStopSuppression(): void {
     // Read the workspace from the synced inputs, not the project store: in a
