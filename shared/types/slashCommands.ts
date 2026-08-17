@@ -45,24 +45,25 @@ export interface BuiltinSlashCommandEntry {
   supportedAgents: readonly BuiltInAgentId[];
 }
 
+// Entries are grouped by the agents that support them and kept alphabetical
+// within each group: `rankSlashCommands` returns the list untouched for an
+// empty query, so array order is the order the menu shows on a bare `/`.
 const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
   // Shared by all three agents (claude, gemini, codex)
   {
-    id: "bug",
-    label: "/bug",
-    description: "File an issue report",
+    id: "clear",
+    label: "/clear",
+    description: "Clear the terminal display",
+    descriptions: {
+      claude: "Reset display and attention buffer",
+      codex: "Clear the terminal and start a new chat",
+    },
     supportedAgents: ["claude", "gemini", "codex"],
   },
   {
     id: "copy",
     label: "/copy",
     description: "Copy last response to clipboard",
-    supportedAgents: ["claude", "gemini", "codex"],
-  },
-  {
-    id: "cost",
-    label: "/cost",
-    description: "Show estimated costs (alias for /stats)",
     supportedAgents: ["claude", "gemini", "codex"],
   },
   {
@@ -77,13 +78,6 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     label: "/exit",
     description: "Exit the session",
     descriptions: { claude: "Terminate session & cleanup" },
-    supportedAgents: ["claude", "gemini", "codex"],
-  },
-  {
-    id: "help",
-    label: "/help",
-    description: "Show available commands",
-    descriptions: { gemini: "Show help for available commands" },
     supportedAgents: ["claude", "gemini", "codex"],
   },
   {
@@ -125,46 +119,60 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     descriptions: { codex: "Run a code review pass" },
     supportedAgents: ["claude", "gemini", "codex"],
   },
+
+  // Shared by claude + gemini.
+  // None of these exist in Codex 0.147.0 (verified against the installed
+  // binary's command table), so codex is deliberately absent here.
+  {
+    id: "bug",
+    label: "/bug",
+    description: "File an issue report",
+    supportedAgents: ["claude", "gemini"],
+  },
+  {
+    id: "cost",
+    label: "/cost",
+    description: "Show estimated costs (alias for /stats)",
+    supportedAgents: ["claude", "gemini"],
+  },
+  {
+    id: "help",
+    label: "/help",
+    description: "Show available commands",
+    descriptions: { gemini: "Show help for available commands" },
+    supportedAgents: ["claude", "gemini"],
+  },
   {
     id: "security-review",
     label: "/security-review",
     description: "Security-focused code review",
-    supportedAgents: ["claude", "gemini", "codex"],
+    supportedAgents: ["claude", "gemini"],
   },
   {
     id: "settings",
     label: "/settings",
     description: "Open settings configuration",
     descriptions: { gemini: "Edit settings configuration" },
-    supportedAgents: ["claude", "gemini", "codex"],
+    supportedAgents: ["claude", "gemini"],
   },
   {
     id: "stats",
     label: "/stats",
     description: "Show token usage and session statistics",
     descriptions: { gemini: "Show session statistics (tokens, latency)" },
-    supportedAgents: ["claude", "gemini", "codex"],
+    supportedAgents: ["claude", "gemini"],
   },
   {
     id: "tools",
     label: "/tools",
     description: "List available tools and capabilities",
     descriptions: { gemini: "List enabled tools/capabilities" },
-    supportedAgents: ["claude", "gemini", "codex"],
+    supportedAgents: ["claude", "gemini"],
   },
   {
     id: "undo",
     label: "/undo",
     description: "Revert the last conversation turn",
-    supportedAgents: ["claude", "gemini", "codex"],
-  },
-
-  // Shared by claude + gemini
-  {
-    id: "clear",
-    label: "/clear",
-    description: "Clear the terminal display",
-    descriptions: { claude: "Reset display and attention buffer" },
     supportedAgents: ["claude", "gemini"],
   },
 
@@ -181,6 +189,50 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     description: "Set a goal that must be met before stopping",
     descriptions: { codex: "Manage the session goal (edit, pause, resume, clear)" },
     supportedAgents: ["claude", "codex"],
+  },
+  {
+    id: "hooks",
+    label: "/hooks",
+    description: "Manage execution event hooks",
+    descriptions: { codex: "View and manage lifecycle hooks" },
+    supportedAgents: ["claude", "codex"],
+  },
+  {
+    id: "resume",
+    label: "/resume",
+    description: "Rehydrate previous session context",
+    descriptions: { codex: "Resume a saved chat" },
+    supportedAgents: ["claude", "codex"],
+  },
+  {
+    id: "statusline",
+    label: "/statusline",
+    description: "Customize UI status bar",
+    descriptions: { codex: "Configure which items appear in the status line" },
+    supportedAgents: ["claude", "codex"],
+  },
+  {
+    id: "usage",
+    label: "/usage",
+    description: "Show plan usage limits",
+    descriptions: { codex: "View account usage or use a usage limit reset" },
+    supportedAgents: ["claude", "codex"],
+  },
+
+  // Shared by gemini + codex
+  {
+    id: "theme",
+    label: "/theme",
+    description: "Customize CLI visual theme",
+    descriptions: { codex: "Choose a syntax highlighting theme" },
+    supportedAgents: ["gemini", "codex"],
+  },
+  {
+    id: "vim",
+    label: "/vim",
+    description: "Toggle Vim input mode",
+    descriptions: { codex: "Toggle Vim mode for the composer" },
+    supportedAgents: ["gemini", "codex"],
   },
 
   // Claude-only
@@ -221,18 +273,6 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     supportedAgents: ["claude"],
   },
   {
-    id: "hooks",
-    label: "/hooks",
-    description: "Manage execution event hooks",
-    supportedAgents: ["claude"],
-  },
-  {
-    id: "resume",
-    label: "/resume",
-    description: "Rehydrate previous session context",
-    supportedAgents: ["claude"],
-  },
-  {
     id: "rewind",
     label: "/rewind",
     description: "Undo last turn(s) to fix hallucinations",
@@ -245,12 +285,6 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     supportedAgents: ["claude"],
   },
   {
-    id: "statusline",
-    label: "/statusline",
-    description: "Customize UI status bar",
-    supportedAgents: ["claude"],
-  },
-  {
     id: "terminal-setup",
     label: "/terminal-setup",
     description: "Configure keybindings",
@@ -260,12 +294,6 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     id: "todos",
     label: "/todos",
     description: "Inspect agent task queue",
-    supportedAgents: ["claude"],
-  },
-  {
-    id: "usage",
-    label: "/usage",
-    description: "Show plan usage limits",
     supportedAgents: ["claude"],
   },
 
@@ -312,24 +340,88 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     description: "Undo recent file changes",
     supportedAgents: ["gemini"],
   },
-  {
-    id: "theme",
-    label: "/theme",
-    description: "Customize CLI visual theme",
-    supportedAgents: ["gemini"],
-  },
-  {
-    id: "vim",
-    label: "/vim",
-    description: "Toggle Vim input mode",
-    supportedAgents: ["gemini"],
-  },
 
   // Codex-only.
-  // Refreshed against installed Codex v0.144.1: `/approvals` is a deprecated
-  // alias of the already-shared `/permissions`, so it is dropped here; `/mention`
-  // and `/logout` remain (both present in the installed binary). Skills/apps/
-  // plugins and the newer session controls were added below.
+  // Refreshed against installed Codex v0.147.0 (#11843). The catalog mirrors
+  // the command set Codex's own `/` popup lists: to re-verify after a Codex
+  // upgrade, open the CLI, type `/`, and diff the popup against these entries.
+  // Deliberately excluded: `/apps`, `/sandbox-add-read-dir` and
+  // `/setup-default-sandbox` exist in the binary but are context-gated and
+  // unreachable in a normal session; `/btw` and `/quit` are aliases Codex
+  // hides from its own list; `/debug-config`, `/rollout`, `/test-approval`,
+  // `/debug-m-drop` and `/debug-m-update` are internal debug commands.
+  {
+    id: "agent",
+    label: "/agent",
+    description: "Switch the active agent thread",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "app",
+    label: "/app",
+    description: "Continue this session in the desktop app",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "approve",
+    label: "/approve",
+    description: "Approve one retry of a recent auto-review denial",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "archive",
+    label: "/archive",
+    description: "Archive this session and exit",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "delete",
+    label: "/delete",
+    description: "Permanently delete this session and exit",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "experimental",
+    label: "/experimental",
+    description: "Toggle experimental features",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "fast",
+    label: "/fast",
+    description: "1.5x speed, increased usage",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "feedback",
+    label: "/feedback",
+    description: "Send logs to maintainers",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "fork",
+    label: "/fork",
+    description: "Fork the current chat",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "ide",
+    label: "/ide",
+    description: "Include selection, open files, and context from your IDE",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "import",
+    label: "/import",
+    description: "Import setup, this project, and recent chats from Claude Code",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "keymap",
+    label: "/keymap",
+    description: "Remap TUI shortcuts",
+    supportedAgents: ["codex"],
+  },
   {
     id: "logout",
     label: "/logout",
@@ -337,45 +429,15 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     supportedAgents: ["codex"],
   },
   {
+    id: "memories",
+    label: "/memories",
+    description: "Configure memory use and generation",
+    supportedAgents: ["codex"],
+  },
+  {
     id: "mention",
     label: "/mention",
-    description: "Add file/symbol to context window",
-    supportedAgents: ["codex"],
-  },
-  {
-    id: "status",
-    label: "/status",
-    description: "Show active config and usage",
-    supportedAgents: ["codex"],
-  },
-  {
-    id: "apps",
-    label: "/apps",
-    description: "Manage connectors and integrations",
-    supportedAgents: ["codex"],
-  },
-  {
-    id: "plugins",
-    label: "/plugins",
-    description: "Manage installed plugins",
-    supportedAgents: ["codex"],
-  },
-  {
-    id: "skills",
-    label: "/skills",
-    description: "Browse and manage skills",
-    supportedAgents: ["codex"],
-  },
-  {
-    id: "fast",
-    label: "/fast",
-    description: "Toggle fast response mode",
-    supportedAgents: ["codex"],
-  },
-  {
-    id: "plan",
-    label: "/plan",
-    description: "Draft a plan before acting",
+    description: "Mention a file",
     supportedAgents: ["codex"],
   },
   {
@@ -385,45 +447,75 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     supportedAgents: ["codex"],
   },
   {
-    id: "memories",
-    label: "/memories",
-    description: "Manage saved memories",
+    id: "pets",
+    label: "/pets",
+    description: "Choose or hide the terminal pet",
     supportedAgents: ["codex"],
   },
   {
-    id: "agent",
-    label: "/agent",
-    description: "Configure agent behavior",
+    id: "plan",
+    label: "/plan",
+    description: "Switch to Plan mode",
     supportedAgents: ["codex"],
   },
   {
-    id: "feedback",
-    label: "/feedback",
-    description: "Send feedback to OpenAI",
+    id: "plugins",
+    label: "/plugins",
+    description: "Manage installed plugins",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "ps",
+    label: "/ps",
+    description: "List background terminals",
     supportedAgents: ["codex"],
   },
   {
     id: "raw",
     label: "/raw",
-    description: "Toggle raw output mode",
+    description: "Toggle raw scrollback mode for copy-friendly selection",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "rename",
+    label: "/rename",
+    description: "Rename the current thread",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "side",
+    label: "/side",
+    description: "Start a side conversation in an ephemeral fork",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "skills",
+    label: "/skills",
+    description: "Browse and manage skills",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "status",
+    label: "/status",
+    description: "Show active config and usage",
     supportedAgents: ["codex"],
   },
   {
     id: "stop",
     label: "/stop",
-    description: "Stop the current task",
+    description: "Stop all background terminals",
     supportedAgents: ["codex"],
   },
   {
-    id: "approve",
-    label: "/approve",
-    description: "Approve the pending action",
+    id: "subagents",
+    label: "/subagents",
+    description: "Switch the active agent thread",
     supportedAgents: ["codex"],
   },
   {
-    id: "sandbox-add-read-dir",
-    label: "/sandbox-add-read-dir",
-    description: "Grant read access to a directory",
+    id: "title",
+    label: "/title",
+    description: "Configure which items appear in the terminal title",
     supportedAgents: ["codex"],
   },
 ];
