@@ -12,7 +12,7 @@ import type {
   BrowserHistory,
   AddPanelOptions,
 } from "@/types";
-import type { PanelInstance } from "@shared/types/panel";
+import type { PanelInstance, PanelWorktreeMoveOptOut } from "@shared/types/panel";
 
 export type { AddPanelOptions };
 
@@ -211,6 +211,23 @@ export interface PanelRegistrySlice {
   updateTerminalCwd: (id: string, cwd: string) => void;
   moveTerminalToWorktree: (id: string, worktreeId: string) => void;
   moveToNewWorktreeAndTransfer: (id: string) => void;
+  /**
+   * Re-anchor a panel's process to an existing worktree: capture the buffer,
+   * repoint cwd, restart the PTY there, re-inject the captured history as a
+   * first prompt. Resolves `true` only when the restart actually landed.
+   * Fails closed when the destination worktree can't be resolved to a path.
+   *
+   * `preCapturedHistory` is for callers that must snapshot the buffer earlier
+   * than this — see `moveToNewWorktreeAndTransfer`, whose create-worktree dialog
+   * can unmount the pane before the transfer starts.
+   */
+  transferPanelToWorktree: (
+    id: string,
+    worktreeId: string,
+    preCapturedHistory?: string
+  ) => Promise<boolean>;
+  /** Record or clear "move panel only" consent for a cross-worktree move (#11840). */
+  setWorktreeMoveOptOut: (id: string, optOut: PanelWorktreeMoveOptOut | undefined) => void;
   updateFlowStatus: (id: string, status: PersistableFlowStatus, timestamp: number) => void;
   setRuntimeStatus: (id: string, status: TerminalRuntimeStatus) => void;
   setInputLocked: (id: string, locked: boolean) => void;

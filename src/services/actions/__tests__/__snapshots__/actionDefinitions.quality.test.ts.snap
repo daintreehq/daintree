@@ -4743,9 +4743,9 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "terminal",
-    "danger": "safe",
-    "dangerRationale": undefined,
-    "description": "Move terminal to a different worktree",
+    "danger": "confirm",
+    "dangerRationale": "Relabelling a panel does not move its process. A live agent keeps running — and committing — in the directory it launched from, under a worktree it was never in.",
+    "description": "Move terminal to a different worktree. A terminal with a live process still running outside the destination raises a decision — transfer the session, move the panel only, or cancel — including for agent and plugin callers, which cannot move a running session silently.",
     "examples": undefined,
     "id": "terminal.moveToWorktree",
     "keywords": undefined,

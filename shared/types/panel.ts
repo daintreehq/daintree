@@ -327,6 +327,45 @@ interface BasePanelData {
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 
+/**
+ * Consent recorded when the user picks "Move panel only" on a cross-worktree
+ * move (#11840): the panel is filed under one worktree while its process keeps
+ * running in another, and its commands and commits keep landing there.
+ *
+ * Keyed to the cwd it was given for rather than to a PTY generation counter.
+ * `restartKey` is not persisted, so a generation key would drop the record on
+ * every app restart — but restore relaunches at the saved cwd, so the divergence
+ * is still live and still needs its marker. Matching on cwd gets both halves
+ * right: a restart that re-anchors the launch root drops the consent, a restart
+ * that doesn't keeps it.
+ */
+export interface PanelWorktreeMoveOptOut {
+  /** Launch root the consent was given for. Must still match `cwd` to apply. */
+  acknowledgedCwd: string;
+  /** Worktree the panel was filed under when consent was given. Diagnostic. */
+  acknowledgedWorktreeId: string;
+  /**
+   * What the classifier concluded at the time. `"unknown"` is recorded as
+   * faithfully as a mismatch: the user consented to a divergence we could not
+   * pin down, and dropping that record would hide it entirely — the exact
+   * silence this issue exists to end.
+   */
+  acknowledgedAlignment: "launch-root-mismatch" | "unknown";
+  /** Launch root as it was resolved at the time, for the marker's label. */
+  launchCwd?: string;
+  /** Worktree the process actually runs in, when the cwd resolved to one. */
+  launchWorktreeId?: string;
+  /**
+   * `launchWorktreeId`'s HEAD at move time — the drift backstop's baseline.
+   * `null` means the worktree was known to have an unborn HEAD, so the first
+   * commit there still counts as drift; `undefined` means HEAD was unknown and
+   * no comparison can be made.
+   */
+  sourceHeadOid?: string | null;
+  /** Epoch ms the consent was given. */
+  at: number;
+}
+
 export interface PtyPanelData extends BasePanelData {
   kind: "terminal";
   /**
@@ -418,6 +457,8 @@ export interface PtyPanelData extends BasePanelData {
   flowStatusTimestamp?: number;
   /** Whether user input is locked (read-only monitor mode) */
   isInputLocked?: boolean;
+  /** Recorded "move panel only" consent for a cross-worktree move (#11840). */
+  worktreeMoveOptOut?: PanelWorktreeMoveOptOut;
   /**
    * Held duration gauge for currently-paused terminals, sampled by the
    * `pause-duration-gauge` reliability metric (2s tick). Distinct from
@@ -1003,6 +1044,7 @@ export interface TerminalInstance {
   runtimeStatus?: TerminalRuntimeStatus;
   flowStatusTimestamp?: number;
   isInputLocked?: boolean;
+  worktreeMoveOptOut?: PanelWorktreeMoveOptOut;
   browserUrl?: string;
   browserHistory?: BrowserHistory;
   browserZoom?: number;

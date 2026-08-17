@@ -510,6 +510,7 @@ export const createAddPanelActions = (
       isVisible: location === "grid" ? true : false,
       runtimeStatus,
       isInputLocked: options.isInputLocked,
+      worktreeMoveOptOut: options.worktreeMoveOptOut,
       exitBehavior: options.exitBehavior,
       agentSessionId: options.agentSessionId,
       agentLaunchFlags: options.agentLaunchFlags,

@@ -1,6 +1,7 @@
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
+import { beginWorktreeMoveDecision } from "@/services/terminal/worktreeMoveDecision";
 
 /**
  * Cross-worktree move that follows the terminal when the gesture rescues the
@@ -17,6 +18,13 @@ import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
  * own rule and it covers grouped moves (which relocate the whole tab group)
  * for free. Every other row-death route — closed, trashed, dismissed,
  * auto-cleanup — never reaches here and keeps falling back to main.
+ *
+ * This is also where the launch-root decision is gated (#11840). All three move
+ * gestures funnel through here — both drags and the `terminal.moveToWorktree`
+ * action — so gating here is what keeps the context-menu path from drifting away
+ * from the drag paths. A rescue is deliberately exempt: dragging a stranded
+ * terminal off a dead row is the escape hatch and must not grow a dialog
+ * (#11232).
  */
 export function moveTerminalToWorktreeAndFollowRescue(
   terminalId: string,
@@ -27,13 +35,22 @@ export function moveTerminalToWorktreeAndFollowRescue(
 
   const sourceWorktreeId = panel.worktreeId;
   const before = useWorktreeSelectionStore.getState();
-  const wasRescuingActiveDeletedRow =
-    sourceWorktreeId != null &&
-    before.activeWorktreeId === sourceWorktreeId &&
-    before.deletedWorktrees.has(sourceWorktreeId);
+  const isRescue = sourceWorktreeId != null && before.deletedWorktrees.has(sourceWorktreeId);
+  const wasRescuingActiveDeletedRow = isRescue && before.activeWorktreeId === sourceWorktreeId;
 
-  usePanelStore.getState().moveTerminalToWorktree(terminalId, targetWorktreeId);
-  usePanelStore.getState().setFocused(null);
+  const applyMove = () => {
+    usePanelStore.getState().moveTerminalToWorktree(terminalId, targetWorktreeId);
+    usePanelStore.getState().setFocused(null);
+  };
+
+  if (isRescue) {
+    applyMove();
+  } else if (beginWorktreeMoveDecision(terminalId, targetWorktreeId, applyMove)) {
+    // Decision pending: it has already moved the panels and followed the
+    // destination itself. Classification reads the pre-move worktree, which is
+    // why the move is handed in rather than run before the call.
+    return;
+  }
 
   if (!wasRescuingActiveDeletedRow) return;
 

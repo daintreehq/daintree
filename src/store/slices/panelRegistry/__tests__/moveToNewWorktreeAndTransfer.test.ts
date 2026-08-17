@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 
 const mockSubmit = vi.fn().mockResolvedValue(undefined);
 const mockGracefulKill = vi.fn().mockResolvedValue(null);
@@ -125,6 +125,12 @@ vi.mock("@/store/ccrPresetsStore", () => ({
 }));
 
 const { usePanelStore } = await import("../../../panelStore");
+
+/** Narrow the panel union — every fixture here is a PTY panel. */
+function ptyPanel(id: string): PtyPanelData | undefined {
+  const panel = usePanelStore.getState().panelsById[id];
+  return panel && isPtyPanel(panel) ? panel : undefined;
+}
 
 const agentTerminal = {
   id: "test-1",
@@ -316,5 +322,50 @@ describe("moveToNewWorktreeAndTransfer (#4773)", () => {
     }
 
     expect(buildResumeLatestCommand).not.toHaveBeenCalled();
+  });
+
+  it("fails closed instead of restarting in the old cwd when the destination cannot be resolved", async () => {
+    // The pre-#11840 code fell back to the panel's existing cwd here and carried
+    // on, which restarted the agent in exactly the directory the transfer
+    // existed to leave. A silent fallback default on a destructive path (#7880).
+    const { worktreeClient } = await import("@/clients");
+    (worktreeClient.getAll as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { id: "wt-somewhere-else", path: "/other" },
+    ]);
+    usePanelStore.setState({
+      panelsById: { [agentTerminal.id]: agentTerminal },
+      panelIds: [agentTerminal.id],
+    });
+
+    const ok = await usePanelStore.getState().transferPanelToWorktree("test-1", "wt-missing");
+
+    expect(ok).toBe(false);
+    const panel = ptyPanel("test-1");
+    expect(panel?.cwd).toBe("/old/path");
+    expect(panel?.worktreeId).toBe("wt-old");
+    expect(panel?.restartError?.recoverable).toBe(false);
+  });
+
+  it("clears recorded divergence consent once the process is re-anchored", async () => {
+    usePanelStore.setState({
+      panelsById: {
+        [agentTerminal.id]: {
+          ...agentTerminal,
+          worktreeMoveOptOut: {
+            acknowledgedCwd: "/old/path",
+            acknowledgedWorktreeId: "wt-old",
+            acknowledgedAlignment: "launch-root-mismatch" as const,
+            at: 1,
+          },
+        },
+      },
+      panelIds: [agentTerminal.id],
+    });
+
+    await usePanelStore.getState().transferPanelToWorktree("test-1", "wt-new");
+
+    const panel = ptyPanel("test-1");
+    expect(panel?.cwd).toBe("/new/worktree");
+    expect(panel?.worktreeMoveOptOut).toBeUndefined();
   });
 });

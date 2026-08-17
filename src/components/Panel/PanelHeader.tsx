@@ -52,6 +52,7 @@ import { cn } from "@/lib/utils";
 import { formatShortcutForTooltip } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { WorktreeDivergenceIndicator } from "@/components/Terminal/WorktreeDivergenceIndicator";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
 import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
@@ -912,6 +913,10 @@ function PanelHeaderComponent({
               <span className="truncate">{worktreeBranch}</span>
             </span>
           )}
+
+          {/* Process runs somewhere other than the worktree this panel is filed
+              under, by the user's own choice (#11840). */}
+          <WorktreeDivergenceIndicator panelId={id} />
         </div>
       )}
 

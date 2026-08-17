@@ -12,6 +12,7 @@ import type {
   FileBrowserSortDirection,
   FileBrowserSortKey,
   FileBrowserTreeSnapshot,
+  PanelWorktreeMoveOptOut,
 } from "./panel.js";
 import type { CommandOverride } from "./commands.js";
 import type { GitignoreTemplateId } from "../config/gitignoreTemplates.js";
@@ -198,6 +199,12 @@ export interface PanelSnapshot {
   worktreeGitDir?: string;
   /** Location in the UI - grid or dock */
   location: PanelLocation;
+  /**
+   * Recorded "move panel only" consent for a cross-worktree move (#11840).
+   * Persisted because restore relaunches at the saved cwd, so the divergence it
+   * acknowledges outlives the session that created it.
+   */
+  worktreeMoveOptOut?: PanelWorktreeMoveOptOut;
   /** Command to execute after shell starts (e.g., 'claude --model sonnet-4' for AI agents) */
   command?: string;
   /** Current URL for browser/dev-preview panes */

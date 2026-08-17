@@ -8,7 +8,23 @@ import { ABSOLUTE_MAX_GRID_TERMINALS } from "@/lib/terminalLayout";
 import { deriveTerminalChrome, type TerminalChromeInput } from "@/utils/terminalChrome";
 import { logError } from "@/utils/logger";
 import { isPtyPanel } from "@shared/types/panel";
+import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { getNarrowPanel } from "./selectors";
+
+/**
+ * Record a deliberate, user-initiated worktree filing on the lifecycle ledger.
+ * No-ops when the panel has no live generation — the ledger validates writes
+ * against the current generation and would reject a stale or absent one anyway.
+ *
+ * Lives here rather than beside either caller: both the single-panel move
+ * (`restart.ts`) and the grouped move (`tabGroups.ts`) need it, and importing
+ * one from the other would close a cycle.
+ */
+export function recordExplicitWorktreeAttribution(id: string, worktreeId: string): void {
+  const generation = agentLifecycleLedger.currentGeneration(id);
+  if (generation === undefined) return;
+  agentLifecycleLedger.recordWorktreeAttribution(id, generation, worktreeId, "explicit");
+}
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 

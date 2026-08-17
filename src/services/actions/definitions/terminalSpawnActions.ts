@@ -244,10 +244,20 @@ export function registerTerminalSpawnActions(
   actions.set("terminal.moveToWorktree", () => ({
     id: "terminal.moveToWorktree",
     title: "Move to Worktree",
-    description: "Move terminal to a different worktree",
+    description:
+      "Move terminal to a different worktree. A terminal with a live process still running " +
+      "outside the destination raises a decision — transfer the session, move the panel only, " +
+      "or cancel — including for agent and plugin callers, which cannot move a running session " +
+      "silently.",
     category: "terminal",
     kind: "command",
-    danger: "safe",
+    // Relabelling a panel is reversible, but doing it to a live agent changes
+    // where that agent's commits land without changing anything visible
+    // (#11840). The decision surface is a three-way dialog rather than a
+    // ConfirmDialog, so this sits in BYPASS_WIRED.
+    danger: "confirm",
+    dangerRationale:
+      "Relabelling a panel does not move its process. A live agent keeps running — and committing — in the directory it launched from, under a worktree it was never in.",
     scope: "renderer",
     argsSchema: z.object({
       terminalId: z.string().optional(),
