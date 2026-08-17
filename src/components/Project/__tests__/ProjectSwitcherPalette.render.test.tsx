@@ -50,8 +50,20 @@ vi.mock("@/store/uiStore", () => ({
 }));
 
 vi.mock("@/components/ui/AppPaletteDialog", () => {
-  const Header = ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="palette-header">{children}</div>
+  // `trailing` is rendered, not dropped: it is a slot the palette puts real
+  // content in, and a mock that swallows it would let the header's summary
+  // regress to nothing while this suite stayed green.
+  const Header = ({
+    children,
+    trailing,
+  }: {
+    children: React.ReactNode;
+    trailing?: React.ReactNode;
+  }) => (
+    <div data-testid="palette-header">
+      {trailing}
+      {children}
+    </div>
   );
   const Input = ({
     inputRef,
@@ -411,6 +423,157 @@ describe("ProjectSwitcherPalette status dot", () => {
     expect(slotIn(quiet)).toBeTruthy();
     expect(slotIn(busy)!.querySelector("[data-testid='workspace-status-dot']")).toBeTruthy();
     expect(slotIn(quiet)!.querySelector("[data-testid='workspace-status-dot']")).toBeNull();
+  });
+});
+
+/**
+ * Two facts, two carriers (#11832). The row's hue and sentence say what it wants
+ * from the user; its shape and a muted clause say whether anything is still
+ * executing. The tests below always compare two rows that differ in exactly one
+ * of those, so a change that collapsed them back onto one carrier fails here
+ * rather than passing by matching a string.
+ */
+describe("ProjectSwitcherPalette liveness axis", () => {
+  const markIn = (row: HTMLElement) => row.querySelector("[data-testid='workspace-status-dot']");
+
+  function renderPair(runningCount: number) {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({ id: "stalled", name: "Stalled", waitingAgentCount: 1 }),
+          makeProject({
+            id: "churning",
+            name: "Churning",
+            waitingAgentCount: 1,
+            activeAgentCount: runningCount,
+          }),
+        ]}
+      />
+    );
+    return {
+      stalled: screen.getByRole("option", { name: /Stalled/ }),
+      churning: screen.getByRole("option", { name: /Churning/ }),
+    };
+  }
+
+  it("draws an open mark for a row still executing and a closed one for a row at rest", () => {
+    const { stalled, churning } = renderPair(2);
+
+    // Topology, read off the element itself rather than a class name: the
+    // closed mark is a painted box, the open one is stroked geometry with a
+    // gap in it. Asserting the utility class would only restate the source.
+    expect(markIn(churning)?.querySelector("circle")).toBeTruthy();
+    expect(markIn(stalled)?.querySelector("circle")).toBeNull();
+  });
+
+  it("leaves the demand sentence identical on both", () => {
+    const { stalled, churning } = renderPair(2);
+
+    // Purely additive: the tier that won the line is unchanged, so a row that
+    // gained the clause did not lose anything to it.
+    const demand = (row: HTMLElement) => within(row).getByText("Agent needs input");
+    expect(demand(churning).textContent).toBe(demand(stalled).textContent);
+    expect(demand(churning).className).toBe(demand(stalled).className);
+  });
+
+  it("trails the hidden count on the churning row only", () => {
+    const { stalled, churning } = renderPair(2);
+
+    expect(within(churning).getByText(/2 running/)).toBeTruthy();
+    expect(within(stalled).queryByText(/running/)).toBeNull();
+  });
+
+  it("keeps the clause out of the coloured token", () => {
+    const { churning } = renderPair(2);
+
+    // The demand tone is the row's one coloured word. A clause folded into that
+    // element would inherit the hue and read as part of the ask.
+    const demand = within(churning).getByText("Agent needs input");
+    expect(demand.textContent).not.toContain("running");
+    expect(within(churning).getByText(/2 running/)).not.toBe(demand);
+  });
+
+  it("reaches assistive tech as words, not as a shape", () => {
+    const { churning } = renderPair(3);
+
+    // The mark is `aria-hidden`, so the clause is the only carrier left. It
+    // rides the row's own name rather than a live region — one per row would
+    // re-announce the whole list on every tick.
+    expect(churning.textContent).toContain("3 running");
+    expect(markIn(churning)?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("says nothing extra on a row whose sentence already names the run", () => {
+    render(
+      <ProjectSwitcherPalette {...baseProps} results={[makeProject({ activeAgentCount: 2 })]} />
+    );
+
+    const row = screen.getByRole("option", { name: /Test Project/ });
+    expect(within(row).getByText("2 agents running")).toBeTruthy();
+    // Open mark, one sentence: "2 agents running · 2 running" says it twice.
+    expect(markIn(row)?.querySelector("circle")).toBeTruthy();
+    expect(row.textContent).not.toContain("· 2 running");
+  });
+
+  it("carries both axes on a scratch row too", () => {
+    // The pinned section is its own render path and used to draw the status
+    // line as a single toned element, which left it structurally unable to hold
+    // a second fragment at all.
+    const busyScratch: SearchableScratch = {
+      id: "s1",
+      name: "Spike",
+      path: "/userData/scratch/s1",
+      createdAt: 0,
+      lastOpened: 0,
+      isActive: false,
+      activeAgentCount: 2,
+      waitingAgentCount: 1,
+      blockedAgentCount: 0,
+      completedAgentCount: 0,
+      unacknowledgedCompletedAgentCount: 0,
+      snoozedAgentCount: 0,
+      processCount: 0,
+    };
+
+    render(<ProjectSwitcherPalette {...baseProps} results={[]} scratchResults={[busyScratch]} />);
+
+    expect(screen.getByText("Agent needs input")).toBeTruthy();
+    expect(screen.getByText(/2 running/)).toBeTruthy();
+  });
+});
+
+describe("ProjectSwitcherPalette fleet summary", () => {
+  it("reports what is running across every workspace", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        fleetLiveness={{ runningAgentCount: 4, workingAssistantCount: 0 }}
+        results={[makeProject()]}
+      />
+    );
+
+    expect(screen.getByTestId("fleet-liveness-summary").textContent).toContain("4");
+  });
+
+  it("disappears when nothing is executing anywhere", () => {
+    // Its absence is the answer to "is it safe to look away?" — a standing zero
+    // would make the reader parse a number to learn there is nothing to learn.
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        fleetLiveness={{ runningAgentCount: 0, workingAssistantCount: 0 }}
+        results={[makeProject()]}
+      />
+    );
+
+    expect(screen.queryByTestId("fleet-liveness-summary")).toBeNull();
+  });
+
+  it("stays silent for a caller that has no totals to give", () => {
+    render(<ProjectSwitcherPalette {...baseProps} results={[makeProject()]} />);
+
+    expect(screen.queryByTestId("fleet-liveness-summary")).toBeNull();
   });
 });
 

@@ -50,32 +50,63 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   "assistant-blocked": "text-status-danger/80",
 };
 
-export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
-  blocked: "bg-status-danger",
-  waiting: "bg-status-warning",
-  review: "bg-activity-completed",
-  working: "bg-activity-active animate-activity-pulse",
-  running: "bg-status-success",
+/**
+ * The two shapes a row's leading mark can take, in one tone's hue.
+ *
+ * Co-located rather than kept as two parallel maps so a tone added later cannot
+ * compile until it has answered both questions. They are different class
+ * families on purpose: the closed mark is a `div` that needs a background or a
+ * border, and the open arc is an SVG stroking `currentColor`, so it needs a text
+ * colour.
+ */
+export interface RowMarkStyle {
+  /** Closed topology — the row is at rest. Filled for a run the user launched, a ring for the settled states. */
+  dot: string;
+  /** Open topology — something on the row is still executing. */
+  arc: string;
+}
+
+/**
+ * Hue says what the row wants from the user; shape says whether it is still
+ * moving (#11832). The two are independent, so every tone has to name both:
+ * "wants input, still churning" and "wants input, and everything else is done"
+ * are the two situations the old single-shape dot rendered identically.
+ *
+ * Three tones can never draw their arc today — `running`, `snoozed` and `muted`
+ * are all reached only after the cascade has established that nothing is
+ * executing. They still carry one, because the map's whole job is that a tone
+ * cannot ship without a shape for each axis.
+ */
+export const ROW_MARK_CLASS: Record<ProjectRowTone, RowMarkStyle> = {
+  blocked: { dot: "bg-status-danger", arc: "text-status-danger" },
+  waiting: { dot: "bg-status-warning", arc: "text-status-warning" },
+  review: { dot: "bg-activity-completed", arc: "text-activity-completed" },
+  // No pulse on either shape any more. A working row is live by definition, so
+  // it always draws the arc — and the open gap says "still moving" without
+  // asking a reader to notice a fade, which reduced motion switches off anyway.
+  working: { dot: "bg-activity-active", arc: "text-activity-active" },
+  running: { dot: "bg-status-success", arc: "text-status-success" },
   // Dashed rather than solid, because "snoozed" and "settled" are different
   // facts and the switcher's greys already carry the settled ones. Colour alone
   // could not separate them — a dashed ring reads as temporarily suspended at a
   // glance, and survives both high-contrast modes and a colour-blind reader.
-  snoozed: "border border-dashed border-daintree-text/40",
+  snoozed: { dot: "border border-dashed border-daintree-text/40", arc: "text-daintree-text/40" },
   // Hollow, because "finished" and "suspended" are settled states rather than
   // live ones. It used to sit on every dormant row too, which made a ring the
   // most common mark in the list and left it competing with the filled dots
   // that mean something — dormant rows draw no dot at all now (#11692), so the
   // ring is back to marking the two muted states that earned a line.
-  muted: "border border-daintree-text/20",
+  muted: { dot: "border border-daintree-text/20", arc: "text-daintree-text/20" },
   // Hollow, and that is the whole point: the filled dot means a run the user
   // launched, and the assistant is the machine acting on its own. It is the
   // convention for machine-initiated background work, and it leaves the worker
-  // dot meaning exactly what it meant before (#11806). Stronger than `muted`'s
-  // ring because this one marks something live rather than something finished.
-  assistant: "border border-daintree-text/40",
+  // dot meaning exactly what it meant before (#11806). The arc beside it is a
+  // different question — a closed ring for an assistant that is mid-task would
+  // say "at rest" about something that is demonstrably not.
+  assistant: { dot: "border border-daintree-text/40", arc: "text-daintree-text/40" },
   // Same hollow shape carrying the danger hue: still not a worker run, but a
   // failure the row should not have to be read closely to notice.
-  "assistant-blocked": "border border-status-danger",
+  "assistant-blocked": { dot: "border border-status-danger", arc: "text-status-danger" },
 };
 
 /**
@@ -90,6 +121,31 @@ export interface ProjectRowStatus {
   /** Status sentence, or the fallback "Opened …" line when nothing is running. */
   text: string;
   tone: ProjectRowTone;
+  /**
+   * Whether anything on this row is still executing — the second axis (#11832).
+   *
+   * Independent of `tone`, which answers what the row wants from the user. The
+   * cascade below picks one demand tier and drops the rest, so before this
+   * existed a project with a waiting agent and a running one rendered exactly
+   * like a project where everything had stopped. It drives the mark's shape:
+   * open means the row will change on its own, closed means it will not.
+   *
+   * Required rather than optional so a status constructed later cannot quietly
+   * default to "at rest" — every line has to answer, and the answer is derived
+   * in one place from the counts rather than read off the tone.
+   */
+  isLive: boolean;
+  /**
+   * The running work this row's sentence does not mention, phrased for a
+   * trailing clause: "2 running", or "Assistant working" when the assistant is
+   * the only thing executing.
+   *
+   * Absent when nothing is running, and absent when the sentence already names
+   * it — "2 agents running · 2 running" would say the same thing twice. It is
+   * the non-visual carrier for the shape: the mark is `aria-hidden`, so without
+   * a word for it liveness would exist in topology alone.
+   */
+  livenessDetail?: string;
   /**
    * Disambiguating path fragment, present only when this project's folder name
    * collides with another registered project's, so identical-looking monorepo
@@ -175,7 +231,58 @@ export function formatWakeTime(wakeAtMs: number): string {
   });
 }
 
-type WorkspaceActivityStatus = Omit<ProjectRowStatus, "pathHint">;
+/**
+ * A status line before the liveness axis is attached.
+ *
+ * The cascade below answers only "what does this row want?", and every one of
+ * its branches would otherwise have to remember to answer the second question
+ * too. Leaving liveness off the shape entirely, and deriving it once in
+ * `withLiveness`, is what makes a branch added later live-aware for free.
+ */
+type ActivityLine = Omit<ProjectRowStatus, "pathHint" | "isLive" | "livenessDetail"> & {
+  /**
+   * Set by the two branches whose own sentence already names the running work,
+   * so the trailing clause doesn't repeat it. A flag rather than a tone check:
+   * `working` happens to be one of them today, but the fact belongs to the
+   * sentence, and a tone is not a promise about wording.
+   */
+  namesLiveWork?: true;
+};
+
+/**
+ * Attaches the liveness axis to a finished status line.
+ *
+ * Worker runs come from `activeAgentCount`, which is already exactly the right
+ * set: it counts the agents actually executing, and a snoozed run that is still
+ * working is inside it — snoozing withholds a row from the demanding tallies, it
+ * does not stop the run. `processCount` is deliberately not consulted: it nets
+ * out the assistant's own PTY and lags the truth by a poll interval, so a row
+ * would claim to be moving after its last agent stopped.
+ *
+ * A working assistant counts. It is excluded from every worker tally on purpose
+ * (#11806) and stays excluded from the count in the clause — inventing an agent
+ * the user never launched is the thing that exclusion exists to prevent — but
+ * "is anything still executing" is a different question from "how many of my
+ * runs", and answering it "no" while the assistant works would make the open
+ * shape a lie.
+ */
+function withLiveness(
+  line: ActivityLine,
+  workspace: WorkspaceRowStatusFields
+): Omit<ProjectRowStatus, "pathHint"> {
+  const { namesLiveWork, ...status } = line;
+  const running = workspace.activeAgentCount;
+  const isLive = running > 0 || classifyAssistantActivity(workspace) === "working";
+
+  if (!isLive || namesLiveWork) return { ...status, isLive };
+
+  return {
+    ...status,
+    isLive,
+    livenessDetail:
+      running > 0 ? pluralAgents(running, "1 running", "running") : "Assistant working",
+  };
+}
 
 /**
  * The assistant's line: it says what the assistant is, never a count (#11806).
@@ -194,9 +301,10 @@ function assistantStatus(
   activity: Exclude<AssistantActivity, null>,
   since: number | undefined,
   nowMs: number
-): WorkspaceActivityStatus {
+): ActivityLine {
   if (activity === "working") {
-    return { text: "Assistant working", tone: "assistant" };
+    // Names the live work itself, so it never also trails "· Assistant working".
+    return { text: "Assistant working", tone: "assistant", namesLiveWork: true };
   }
 
   const lead = activity === "blocked" ? "Assistant blocked" : "Assistant waiting";
@@ -220,11 +328,15 @@ function assistantStatus(
  * Returns null when nothing is running, leaving the caller to supply the
  * dormant line its own kind understands (a project can be auto-parked; a
  * scratch only ever has an opened time).
+ *
+ * Answers the demand axis only. Liveness is attached afterwards by
+ * `withLiveness`, which is why a branch here can drop a running agent from its
+ * sentence without the row losing the fact (#11832).
  */
-function getWorkspaceActivityStatus(
+function classifyWorkspaceActivity(
   project: WorkspaceRowStatusFields,
   nowMs: number
-): WorkspaceActivityStatus | null {
+): ActivityLine | null {
   // Classified once, consumed at three different heights below. Sharing the
   // helper with `sectionForProject` is what keeps a row's band and its line
   // telling the same story about the assistant. Not an absolute guarantee: the
@@ -338,6 +450,8 @@ function getWorkspaceActivityStatus(
     return {
       text: pluralAgents(project.activeAgentCount, "Agent running", "agents running"),
       tone: "working",
+      // The count is the sentence here; a trailing clause would repeat it.
+      namesLiveWork: true,
     };
   }
 
@@ -412,7 +526,7 @@ function getWorkspaceActivityStatus(
  * takes the flag and shows nothing (#11692). The text stays here because a
  * surface with room for it should still say it the same way.
  */
-function getOpenedStatus(lastOpened: number): WorkspaceActivityStatus {
+function getOpenedStatus(lastOpened: number): ActivityLine {
   if (lastOpened > 0) {
     return {
       text: `Opened ${formatTimeAgo(lastOpened)}`,
@@ -441,25 +555,32 @@ export function getProjectRowStatus(project: SearchableProject, nowMs: number): 
   // Only surface the fragment when it actually disambiguates — a plain basename
   // is already the folder name shown beside it, so repeating it is noise.
   const pathHint = project.displayPath.includes("/") ? project.displayPath : undefined;
-  const withHint = (status: WorkspaceActivityStatus): ProjectRowStatus =>
-    pathHint ? { ...status, pathHint } : status;
+  // Every branch leaves through here, so none of them can return a line that
+  // never answered the liveness question.
+  const finish = (line: ActivityLine): ProjectRowStatus => {
+    const status = withLiveness(line, project);
+    return pathHint ? { ...status, pathHint } : status;
+  };
 
+  // A folder that has gone missing still gets the clause: its agents were
+  // spawned before it vanished and may well still be running, and this is the
+  // one branch that pre-empts the activity cascade outright.
   if (project.isMissing) {
-    return withHint({ text: "Directory not found", tone: "blocked" });
+    return finish({ text: "Directory not found", tone: "blocked" });
   }
 
-  const activity = getWorkspaceActivityStatus(project, nowMs);
-  if (activity) return withHint(activity);
+  const activity = classifyWorkspaceActivity(project, nowMs);
+  if (activity) return finish(activity);
 
   // Auto-closed by the background-idle sweep (#10830) — name the reason rather
   // than showing a bare time-ago that makes the project look merely stale. The
   // reason is the row's own line; the ring beside it is only settled state, so
   // it steps aside for a resume promise that has more to say (#11822).
   if (project.status === "closed" && project.autoParkedAt) {
-    return withHint({ text: "Suspended to free memory", tone: "muted", allowsResumeMark: true });
+    return finish({ text: "Suspended to free memory", tone: "muted", allowsResumeMark: true });
   }
 
-  return withHint(getOpenedStatus(project.lastOpened));
+  return finish(getOpenedStatus(project.lastOpened));
 }
 
 /**
@@ -475,5 +596,35 @@ export function getProjectRowStatus(project: SearchableProject, nowMs: number): 
  * Requires its clock for the same reason `getProjectRowStatus` does.
  */
 export function getScratchRowStatus(scratch: SearchableScratch, nowMs: number): ProjectRowStatus {
-  return getWorkspaceActivityStatus(scratch, nowMs) ?? getOpenedStatus(scratch.lastOpened);
+  return withLiveness(
+    classifyWorkspaceActivity(scratch, nowMs) ?? getOpenedStatus(scratch.lastOpened),
+    scratch
+  );
+}
+
+/**
+ * The palette header's one-line answer to "is it safe to look away?" (#11832).
+ *
+ * Null when nothing is executing anywhere, which is the whole point — the line
+ * appears while the fleet is busy and disappears when it goes quiet, so its
+ * absence is as readable as its content.
+ *
+ * Assistants are tallied separately rather than added in. They are not runs the
+ * user launched, and one number covering both would answer neither "how much of
+ * my work is still going" nor "is the machine doing something on its own".
+ */
+export function formatFleetLiveness(counts: {
+  runningAgentCount: number;
+  workingAssistantCount: number;
+}): string | null {
+  const parts: string[] = [];
+  if (counts.runningAgentCount > 0) {
+    parts.push(pluralAgents(counts.runningAgentCount, "1 running", "running"));
+  }
+  if (counts.workingAssistantCount > 0) {
+    parts.push(
+      pluralAgents(counts.workingAssistantCount, "1 assistant working", "assistants working")
+    );
+  }
+  return parts.length > 0 ? parts.join(" · ") : null;
 }

@@ -468,6 +468,7 @@ export function ModalHostLayer({
               onSelect={projectSwitcherPalette.selectRow}
               onHoverProject={projectSwitcherPalette.onHoverProject}
               onHoverProjectEnd={projectSwitcherPalette.onHoverProjectEnd}
+              fleetLiveness={projectSwitcherPalette.fleetLiveness}
               onClose={projectSwitcherPalette.close}
               onStopProject={(projectId) => void projectSwitcherPalette.stopProject(projectId)}
               onCloseProject={(projectId) => void projectSwitcherPalette.removeProject(projectId)}
