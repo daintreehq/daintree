@@ -92,6 +92,9 @@ export class FleetSnapshotService {
     // even though no agent state moved.
     subscribe("terminal:park-changed");
     subscribe("terminal:snooze-changed");
+    // A rename moves no agent state, so without this the row would carry the
+    // old title until the next aligned poll (#11830).
+    subscribe("terminal:title-changed");
   }
 
   updatePollInterval(ms: number): void {

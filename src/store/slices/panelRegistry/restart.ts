@@ -1342,6 +1342,10 @@ export const createRestartActions = (
         kind: "terminal",
         launchAgentId: terminal.launchAgentId,
         title: terminal.title,
+        // Carried with the title, never without it: a title that arrives
+        // unaccompanied re-stamps as "default" and the next detection sweep
+        // overwrites the user's rename (#10794).
+        titleMode: terminal.titleMode,
         command: commandToRun,
         restore: false,
         env: restartEnv,

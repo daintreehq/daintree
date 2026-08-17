@@ -16,7 +16,7 @@ import type { PtyHostActivityTier } from "../../../../shared/types/pty-host.js";
 import { normalizeTerminalGridDimension } from "../../../../shared/types/terminal.js";
 import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.js";
 import { isPanelTitleMode, type PanelTitleMode } from "../../../../shared/types/panel.js";
-import { getFleetSnapshotService } from "../projectCrud/stats.js";
+import { events } from "../../../services/events.js";
 import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
@@ -306,9 +306,9 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       if (typeof title !== "string") return;
       if (!isPanelTitleMode(titleMode)) return;
       ptyClient.updateTitle(id, title, titleMode);
-      // The snapshot poll is 5s-aligned and no fleet event fires for a rename,
-      // so without this the overview lags a hand rename by up to a full cycle.
-      getFleetSnapshotService()?.refresh();
+      // The snapshot poll is 5s-aligned and nothing else reports a rename, so
+      // without this the overview lags a hand rename by up to a full cycle.
+      events.emit("terminal:title-changed", { id, timestamp: Date.now() });
     } catch (error) {
       console.error("[IPC] Error handling title update:", error);
     }

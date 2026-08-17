@@ -479,7 +479,11 @@ describe("FleetSnapshotService", () => {
     // Suppression compares projected rows, so if it ignored the title fields a
     // renamed run would keep broadcasting its launch title until some unrelated
     // state moved.
-    const client = makePtyClient([terminal({ title: "Document GSC access method" })]);
+    // Only the title moves — the mode is held constant so a passing run cannot
+    // be explained by the mode comparison alone.
+    const client = makePtyClient([
+      terminal({ title: "Document GSC access method", titleMode: "user" }),
+    ]);
     const service = new FleetSnapshotService(client as never);
 
     service.refresh();
@@ -564,6 +568,25 @@ describe("FleetSnapshotService", () => {
 
     expect(broadcastMock).toHaveBeenCalledTimes(2);
     expect(lastSnapshot().runs[0].agentState).toBe("waiting");
+    service.stop();
+  });
+
+  it("recomputes on a rename, which moves no agent state of its own", async () => {
+    // Nothing else in the fleet feed reports a rename, so if this event were
+    // not subscribed the overview would hold the old title for a full poll.
+    const client = makePtyClient([terminal({ title: "Document GSC access method" })]);
+    const service = new FleetSnapshotService(client as never);
+    service.start();
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    broadcastMock.mockClear();
+
+    client.setFleet([terminal({ title: "Add Website Valuation tool", titleMode: "user" })]);
+    eventEmitter.emit("terminal:title-changed", { id: "t1", timestamp: NOW });
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+    expect(lastSnapshot().runs[0]?.title).toBe("Add Website Valuation tool");
     service.stop();
   });
 
