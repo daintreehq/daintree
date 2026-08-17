@@ -40,6 +40,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     })),
     markChecked: vi.fn(),
     updateObservedTitle: vi.fn(),
+    updateTitle: vi.fn(),
     transitionState: vi.fn(() => true),
     trimScrollback: vi.fn(),
     setActivityMonitorTier: vi.fn(),
@@ -113,6 +114,29 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
 function termInfo(pid?: number) {
   return { ptyProcess: { pid } };
 }
+
+describe("lifecycle update-title handler", () => {
+  it("forwards the mode alongside the title so the lock survives the hop", () => {
+    // A rename that arrived without its mode would land as `"default"` and the
+    // next agent-detection sweep would overwrite it (#10794/#11830).
+    const ctx = makeCtx();
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "update-title", id: "t1", title: "Add valuation tool", titleMode: "user" });
+
+    expect(ctx.ptyManager.updateTitle).toHaveBeenCalledWith("t1", "Add valuation tool", "user");
+  });
+
+  it("routes a rename separately from an observed OSC title", () => {
+    const ctx = makeCtx();
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "update-observed-title", id: "t1", title: "agent task" });
+
+    expect(ctx.ptyManager.updateObservedTitle).toHaveBeenCalledWith("t1", "agent task");
+    expect(ctx.ptyManager.updateTitle).not.toHaveBeenCalled();
+  });
+});
 
 describe("lifecycle kill handlers — trackKilledPid", () => {
   beforeEach(() => {

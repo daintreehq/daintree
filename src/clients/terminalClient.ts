@@ -17,6 +17,7 @@ import type {
   TerminalReliabilityMetricPayload,
   TerminalResizeResult,
 } from "@shared/types/pty-host";
+import type { PanelTitleMode } from "@shared/types/panel";
 import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
@@ -368,6 +369,16 @@ export const terminalClient = {
    */
   sendKey: (id: string, key: string): void => {
     window.electron.terminal.sendKey(id, key);
+  },
+
+  /**
+   * Mirror a panel rename onto the pty-host's terminal record. The renderer
+   * store is the display source, but the fleet overview, session journal and
+   * shutdown records all read the pty-host copy — without this they keep
+   * naming the run by its launch title (#11830).
+   */
+  updateTitle: (id: string, title: string, titleMode: PanelTitleMode): void => {
+    window.electron.terminal.updateTitle(id, title, titleMode);
   },
 
   /**

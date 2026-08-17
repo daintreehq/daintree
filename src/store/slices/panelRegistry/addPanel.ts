@@ -957,8 +957,12 @@ export const createAddPanelActions = (
             command: commandToExecute,
             kind,
             launchAgentId,
-            title,
-            titleMode: options.titleMode,
+            // Read off the live panel, not the values captured before the
+            // queue wait: a rename landing while the spawn was queued reaches
+            // a pty-host that has no record yet and is dropped, so the spawn
+            // itself has to carry it or it is lost (#11830).
+            title: _p1.title,
+            titleMode: _p1.titleMode,
             env: mergedEnv,
             restore: options.restore,
             spawnBatchId: options.spawnBatchId,

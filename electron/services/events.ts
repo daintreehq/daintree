@@ -282,6 +282,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "A run was parked or unparked (user intent, not agent state)",
   },
+  "terminal:title-changed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A panel was renamed and the authoritative record now agrees",
+  },
   "terminal:park-released": {
     category: "agent",
     requiresContext: false,
@@ -799,6 +805,17 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * A rename reached the authoritative terminal record. The fleet projection
+   * subscribes because the row's title changed; nothing else about the run
+   * moved, so no other feed would report it and the 5s poll would otherwise
+   * own the latency of a hand rename (#11830).
+   */
+  "terminal:title-changed": {
+    id: string;
+    timestamp: number;
+  };
+
+  /**
    * Emitted whenever a run's snooze record is created, replaced or removed —
    * by the user, or automatically when they typed at the run. Both attention
    * projections subscribe: `ProjectStatsService` because a snooze changes the
@@ -994,6 +1011,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "terminal:restored",
   "terminal:park-changed",
   "terminal:park-released",
+  "terminal:title-changed",
   "terminal:snooze-changed",
   "agent-session:captured",
   "agent-session:recorded",

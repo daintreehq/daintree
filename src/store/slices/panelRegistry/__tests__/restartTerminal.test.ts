@@ -18,6 +18,7 @@ vi.mock("@/clients", () => ({
     onData: vi.fn(),
     onExit: vi.fn(),
     onAgentStateChanged: vi.fn(),
+    updateTitle: vi.fn(),
     gracefulKill: mockGracefulKill,
     submit: vi.fn().mockResolvedValue(undefined),
     acknowledgeData: vi.fn(),
@@ -1122,5 +1123,81 @@ describe("restartTerminal input lock + parallel IPC (#9164)", () => {
     await restartPromise;
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * A restart captures the panel, then awaits settings, presets and a kill before
+ * it respawns. Renaming stays enabled throughout, and the kill drops the cached
+ * spawn options, so the respawn payload is the only thing that can carry a
+ * rename made in that window (#11830).
+ */
+describe("restartTerminal carries a rename that lands mid-restart", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    // Restored explicitly: `clearAllMocks` drops recorded calls but keeps an
+    // implementation, so a rename hook set by one case would otherwise fire in
+    // the next and quietly make the control case assert the wrong thing.
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockReset();
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  /** Rename at an await point the restart passes after capturing the panel. */
+  async function renameDuringRestart(title: string, source?: "user" | "automation") {
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      usePanelStore.getState().updateTitle("test-1", title, source);
+      return {};
+    });
+  }
+
+  it("respawns under the new name, not the one captured before the awaits", async () => {
+    const active = { ...agentPanelBase, agentState: "working" as const };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+    await renameDuringRestart("Renamed mid-restart");
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.title).toBe("Renamed mid-restart");
+    expect(payload.titleMode).toBe("user");
+  });
+
+  it("keeps the captured title when nothing renamed the panel", async () => {
+    const active = { ...agentPanelBase, agentState: "working" as const };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.title).toBe(agentPanelBase.title);
+  });
+
+  it("carries the automation rung across the restart too", async () => {
+    const active = { ...agentPanelBase, agentState: "working" as const };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+    await renameDuringRestart("Renamed by MCP", "automation");
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.title).toBe("Renamed by MCP");
+    expect(payload.titleMode).toBe("custom");
   });
 });

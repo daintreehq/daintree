@@ -221,7 +221,13 @@ export interface TerminalRuntimeIdentity {
  *
  * Absent defaults to `"default"` for hydration compatibility.
  */
-export type PanelTitleMode = "default" | "custom" | "user";
+export const PANEL_TITLE_MODES = ["default", "custom", "user"] as const;
+
+export type PanelTitleMode = (typeof PANEL_TITLE_MODES)[number];
+
+export function isPanelTitleMode(value: unknown): value is PanelTitleMode {
+  return PANEL_TITLE_MODES.includes(value as PanelTitleMode);
+}
 
 /** Structured error state for terminal restart failures */
 export interface TerminalRestartError {

@@ -14,6 +14,7 @@ import { isTrustedRendererUrl, isRecoveryPageUrl } from "../shared/utils/trusted
 import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
 import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
+import type { PanelTitleMode } from "../shared/types/panel.js";
 import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
@@ -1343,6 +1344,9 @@ function buildElectronApi(): ElectronAPI {
 
       updateObservedTitle: (id: string, title: string) =>
         ipcRenderer.send(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id, title }),
+
+      updateTitle: (id: string, title: string, titleMode: PanelTitleMode) =>
+        ipcRenderer.send(CHANNELS.TERMINAL_UPDATE_TITLE, { id, title, titleMode }),
 
       onSpawnResult: (callback: (id: string, result: SpawnResultPayload) => void): (() => void) =>
         _eventBusOn("terminal:spawn-result", (payload) => {

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -21,6 +21,7 @@ vi.mock("@/clients", () => ({
     onData: vi.fn(),
     onExit: vi.fn(),
     onAgentStateChanged: vi.fn(),
+    updateTitle: vi.fn(),
   },
   appClient: {
     setState: vi.fn().mockResolvedValue(undefined),
@@ -59,6 +60,11 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     waitForAttachSettled: vi.fn().mockResolvedValue(undefined),
   },
 }));
+
+vi.mock("@/utils/logger", async () => {
+  const actual = await vi.importActual<typeof import("@/utils/logger")>("@/utils/logger");
+  return { ...actual, logWarn: vi.fn(), logError: vi.fn() };
+});
 
 vi.mock("../persistence", async () => {
   const actual = await vi.importActual<typeof import("../persistence")>("../persistence");
@@ -105,6 +111,9 @@ describe("updateTitle ownership ladder", () => {
       cwd: "/",
       bypassLimits: true,
     });
+
+    // Cleared after the spawn so each test counts only its own renames.
+    vi.mocked(terminalClient.updateTitle).mockClear();
   });
 
   it("defaults to the user rung and locks the title", () => {
@@ -151,5 +160,148 @@ describe("updateTitle ownership ladder", () => {
     const panel = getPtyPanel("t1");
     expect(panel?.title).toBe("Mine");
     expect(panel?.titleMode).toBe("user");
+  });
+});
+
+/**
+ * The renderer store drives the panel header, but the fleet overview, session
+ * journal and shutdown records read the pty-host's own terminal record. Without
+ * this sync that record keeps its launch title and every `titleMode === "user"`
+ * branch in main is unreachable for a hand rename (#11830).
+ */
+describe("updateTitle pty-host sync", () => {
+  async function client() {
+    const { terminalClient } = await import("@/clients");
+    return vi.mocked(terminalClient.updateTitle);
+  }
+
+  beforeEach(async () => {
+    const { reset } = usePanelStore.getState();
+    await reset();
+
+    const { terminalClient } = await import("@/clients");
+    vi.mocked(terminalClient.spawn).mockReset();
+    vi.mocked(terminalClient.spawn).mockImplementation(
+      async ({ id }: { id?: string }) => id ?? "spawn-id"
+    );
+
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      requestedId: "t1",
+      cwd: "/",
+      bypassLimits: true,
+    });
+
+    vi.mocked(terminalClient.updateTitle).mockClear();
+  });
+
+  it("sends the committed title and its mode together, once", async () => {
+    // Padded input: what rides the wire is the committed value, not the raw
+    // argument, so this cannot pass by echoing the input back.
+    usePanelStore.getState().updateTitle("t1", "  Add valuation tool  ");
+
+    const panel = getPtyPanel("t1");
+    expect(await client()).toHaveBeenCalledExactlyOnceWith("t1", panel?.title, panel?.titleMode);
+    expect(panel?.title).toBe("Add valuation tool");
+  });
+
+  it("sends the automation rung's own mode, not the user rung's", async () => {
+    usePanelStore.getState().updateTitle("t1", "Auth worker", "automation");
+
+    const mode = getPtyPanel("t1")?.titleMode;
+    // The rung actually moved — "default" would mean the ladder never ran.
+    expect(mode).toBe("custom");
+    expect(await client()).toHaveBeenCalledExactlyOnceWith("t1", "Auth worker", mode);
+  });
+
+  it("sends the unlock when an empty rename resets to the default", async () => {
+    usePanelStore.getState().updateTitle("t1", "Mine", "user");
+    (await client()).mockClear();
+
+    usePanelStore.getState().updateTitle("t1", "", "user");
+
+    const panel = getPtyPanel("t1");
+    expect(panel?.title).not.toBe("");
+    expect(await client()).toHaveBeenCalledExactlyOnceWith("t1", panel?.title, "default");
+  });
+
+  it("sends again when only the mode moves and the title stands still", async () => {
+    usePanelStore.getState().updateTitle("t1", "Deploy runner", "automation");
+    (await client()).mockClear();
+
+    usePanelStore.getState().updateTitle("t1", "Deploy runner", "user");
+
+    // Same string, higher rung: the lock is the whole point of the message, so
+    // a title-only change check would wrongly swallow this.
+    expect(getPtyPanel("t1")?.titleMode).toBe("user");
+    expect(await client()).toHaveBeenCalledExactlyOnceWith("t1", "Deploy runner", "user");
+  });
+
+  it("sends nothing when the rename bounces off a user lock", async () => {
+    usePanelStore.getState().updateTitle("t1", "Mine", "user");
+    const locked = getPtyPanel("t1");
+    expect(locked?.titleMode).toBe("user");
+    (await client()).mockClear();
+
+    usePanelStore.getState().updateTitle("t1", "Overwritten by MCP", "automation");
+
+    // The panel object is untouched, which is what the sync guard keys off.
+    expect(getPtyPanel("t1")).toBe(locked);
+    expect(await client()).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing when the rename changes neither title nor mode", async () => {
+    usePanelStore.getState().updateTitle("t1", "Mine", "user");
+    const committed = getPtyPanel("t1");
+    expect(committed).toBeDefined();
+    (await client()).mockClear();
+
+    usePanelStore.getState().updateTitle("t1", "Mine", "user");
+
+    expect(getPtyPanel("t1")).toBe(committed);
+    expect(await client()).not.toHaveBeenCalled();
+  });
+
+  it("treats an unknown panel as a clean no-op, not a swallowed throw", async () => {
+    const { logWarn } = await import("@/utils/logger");
+    vi.mocked(logWarn).mockClear();
+
+    usePanelStore.getState().updateTitle("nope", "Ghost");
+
+    expect(await client()).not.toHaveBeenCalled();
+    // Without the missing-panel guard this path throws into the catch below,
+    // which would leave the mock uncalled for entirely the wrong reason.
+    expect(vi.mocked(logWarn)).not.toHaveBeenCalled();
+  });
+
+  it("keeps the local rename when the bridge call throws", async () => {
+    const { logWarn } = await import("@/utils/logger");
+    vi.mocked(logWarn).mockClear();
+    (await client()).mockImplementationOnce(() => {
+      throw new Error("no bridge");
+    });
+
+    usePanelStore.getState().updateTitle("t1", "Offline rename");
+
+    expect(getPtyPanel("t1")?.title).toBe("Offline rename");
+    expect(getPtyPanel("t1")?.titleMode).toBe("user");
+    expect(vi.mocked(logWarn)).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends nothing for a panel with no pty behind it", async () => {
+    usePanelStore.setState({
+      panelsById: {
+        b1: { id: "b1", kind: "browser", title: "Docs", location: "grid" } as PanelInstance,
+      },
+      panelIds: ["b1"],
+    });
+    (await client()).mockClear();
+
+    usePanelStore.getState().updateTitle("b1", "Renamed tab");
+
+    expect(usePanelStore.getState().panelsById.b1?.title).toBe("Renamed tab");
+    expect(await client()).not.toHaveBeenCalled();
   });
 });

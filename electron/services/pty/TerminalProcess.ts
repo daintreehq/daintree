@@ -9,6 +9,7 @@ const { SerializeAddon } = serialize;
 import unicode11 from "@xterm/addon-unicode11";
 const { Unicode11Addon } = unicode11;
 import type { TerminalResizeResult } from "../../../shared/types/pty-host.js";
+import type { PanelTitleMode } from "../../../shared/types/panel.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { applyXtermReflowFastpath } from "../../../shared/utils/xtermReflowFastpath.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -1190,6 +1191,16 @@ export class TerminalProcess {
 
   setObservedTitle(title: string): void {
     this.terminalInfo.lastObservedTitle = title;
+  }
+
+  /**
+   * Mirror a renderer-side rename onto the authoritative record. `title` and
+   * `titleMode` move together: a title without its mode would still read as
+   * `"default"` and be overwritten by the next agent-detection sweep (#10794).
+   */
+  setTitle(title: string, titleMode: PanelTitleMode): void {
+    this.terminalInfo.title = title;
+    this.terminalInfo.titleMode = titleMode;
   }
 
   acknowledgeData(_byteCount: number): void {

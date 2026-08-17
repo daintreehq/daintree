@@ -29,7 +29,7 @@ import { getAgentConfig } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance, type PanelTitleMode } from "@shared/types/panel";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
@@ -66,6 +66,23 @@ type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
 
 const INJECTION_TIMEOUT_MS = 30_000;
+
+/**
+ * The panel's title as of the spawn call rather than as of the capture several
+ * awaits earlier. Renaming stays enabled while a terminal restarts, so a rename
+ * landing mid-restart would otherwise be overwritten by the respawn, and the
+ * pty-host cache rewrite cannot save it — the kill already dropped that entry
+ * (#11830). Falls back to the captured panel if this one has since gone.
+ */
+function titleAtSpawn(
+  get: Get,
+  id: string,
+  captured: { title: string; titleMode?: PanelTitleMode }
+): { title: string; titleMode?: PanelTitleMode } {
+  const panel = get().panelsById[id];
+  const source = panel && isPtyPanel(panel) ? panel : captured;
+  return { title: source.title, titleMode: source.titleMode };
+}
 
 interface LoadedAgentRuntimeSettings {
   entry: AgentSettingsEntry;
@@ -811,10 +828,9 @@ export const createRestartActions = (
         // IPC handler does not treat them as agent spawns (issue #5764).
         kind: "terminal",
         launchAgentId: isAgent ? currentTerminal.launchAgentId : undefined,
-        title: currentTerminal.title,
         // Keep the ownership rung across restart so the backend's own
         // default-title rewrites stay gated for pinned/user titles.
-        titleMode: currentTerminal.titleMode,
+        ...titleAtSpawn(get, id, currentTerminal),
         command: isAgent ? spawnCommand : undefined,
         restore: false,
         env: restartEnv,
@@ -1341,7 +1357,10 @@ export const createRestartActions = (
         rows: spawnRows,
         kind: "terminal",
         launchAgentId: terminal.launchAgentId,
-        title: terminal.title,
+        // Carried with the title, never without it: a title that arrives
+        // unaccompanied re-stamps as "default" and the next detection sweep
+        // overwrites the user's rename (#10794).
+        ...titleAtSpawn(get, id, terminal),
         command: commandToRun,
         restore: false,
         env: restartEnv,

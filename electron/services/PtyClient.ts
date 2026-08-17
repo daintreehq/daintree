@@ -2380,6 +2380,16 @@ export class PtyClient extends EventEmitter {
     this.shardForTerminal(id).send({ type: "update-observed-title", id, title });
   }
 
+  updateTitle(id: string, title: string, titleMode: PanelTitleMode): void {
+    // Keep the cached spawn options in step. `respawnPendingForShard` replays
+    // them verbatim after a pty-host crash and `TerminalProcess` re-stamps the
+    // title from them, so a stale entry would quietly restore the launch title
+    // over the rename the user just made.
+    const pending = this.pendingSpawns.get(id);
+    if (pending) this.pendingSpawns.set(id, { ...pending, title, titleMode });
+    this.shardForTerminal(id).send({ type: "update-title", id, title, titleMode });
+  }
+
   async transitionState(
     id: string,
     event: { type: string; [key: string]: unknown },

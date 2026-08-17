@@ -61,6 +61,7 @@ export const CHANNELS = {
   TERMINAL_BROADCAST_WRITE_RESULT: "terminal:broadcast-write-result",
   TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
   TERMINAL_UPDATE_OBSERVED_TITLE: "terminal:update-observed-title",
+  TERMINAL_UPDATE_TITLE: "terminal:update-title",
   TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",
   TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
   TERMINAL_RESTART_SERVICE: "terminal:restart-service",
