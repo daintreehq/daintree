@@ -112,6 +112,7 @@
     "check": "npm run typecheck && npm run check:channels && npm run check:crash-loop-constants && npm run check:node-version && npm run check:ipc && npm run check:ipc-renderer && npm run check:ipc-handwritten && npm run check:help && npm run check:confirm-wiring && npm run check:keybindings && npm run check:plugin-manifests && npm run check:process-tools && npm run check:api-surface && npm run lint:ratchet && npm run format:check",
     "fix": "npm run format && npm run lint:fix",
     "test:smoke": "node scripts/run-smoke.mjs",
+    "test:freeze-harness": "node scripts/run-freeze-harness.mjs",
     "test:smoke:packaged": "node scripts/run-packaged-smoke.mjs",
     "test:e2e": "npx playwright test",
     "test:e2e:core": "npx playwright test --project=core",

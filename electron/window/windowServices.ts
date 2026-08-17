@@ -16,6 +16,7 @@ import { scratchStore } from "../services/ScratchStore.js";
 import { initializeAgentAvailabilityStore } from "../services/AgentAvailabilityStore.js";
 import { initializePowerSaveBlockerService } from "../services/PowerSaveBlockerService.js";
 import { runSmokeFunctionalChecks } from "../services/smokeTest.js";
+import { runFreezeHarness } from "../services/freezeHarness.js";
 import { markPerformance } from "../utils/performance.js";
 import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
@@ -37,7 +38,7 @@ import {
   queuePendingOpenDirPath,
 } from "../setup/environment.js";
 import { shouldDeferRendererLoadForE2E } from "./earlyRenderer.js";
-import { isE2EFaultMode } from "../setup/runtimeFlags.js";
+import { isE2EFaultMode, isFreezeHarness } from "../setup/runtimeFlags.js";
 import {
   extractCliPath,
   hasCliPathFlag,
@@ -792,6 +793,31 @@ export async function setupWindowServices(
       /* ignore */
     }
     app.exit(allPassed ? 0 : 1);
+    return "exit-requested";
+  }
+
+  // Freeze harness (#11846). Runs after the normal boot — unlike the smoke
+  // path it does not defer the renderer load, because the point is to measure
+  // the freeze a real user's cached view gets.
+  if (isFreezeHarness) {
+    if (!opts.projectViewManager) {
+      console.error("[FREEZE-HARNESS] FAILED — window has no ProjectViewManager");
+      app.exit(1);
+      return "exit-requested";
+    }
+    const passed = await runFreezeHarness(opts.projectViewManager);
+    if (win && !win.isDestroyed()) win.destroy();
+    try {
+      getWorkspaceClientRef()?.dispose();
+    } catch {
+      /* ignore */
+    }
+    try {
+      getPtyClient()?.dispose();
+    } catch {
+      /* ignore */
+    }
+    app.exit(passed ? 0 : 1);
     return "exit-requested";
   }
 

@@ -209,6 +209,25 @@ Two distinct smoke checks run at different points in the pipeline:
 
 `npm run test:e2e:core` runs the 5 Playwright specs in `e2e/core/` against the Electron app. These are deterministic release-gate tests that gate every OS publish.
 
+## `test:freeze-harness` — why it can't be a Playwright spec
+
+`npm run test:freeze-harness` (`scripts/run-freeze-harness.mjs` + `electron/services/freezeHarness.ts`) measures whether a cached project view's renderer genuinely stops executing tasks when the efficiency-freeze path freezes it, and resumes when it is thawed.
+
+**Do not port this to Playwright.** Playwright sends `Emulation.setFocusEmulationEnabled` to every page target it attaches to. That handler takes out a `WebContents` capturer with `stay_hidden=false`, which permanently tells the renderer it is user-visible. `Page.setWebLifecycleState(frozen)` calls `WasHidden()` internally, so on a forced-visible page it no-ops — while still returning success. A freeze assertion written in Playwright passes whether or not freeze works, in every project view, always (#11846). A second CDP session can't undo it either: `capture_handle_` and `focus_emulation_enabled_` are per-session handler state.
+
+The harness therefore boots the real app with no Playwright and no debugger client of its own — attaching one would collide with the `ensureAttached` inside `freezeWebContents`, land in `EXPECTED_CDP_ERRORS`, and be swallowed. The renderer counts its own `MessageChannel` tasks into wall-clock buckets; `webContents.executeJavaScript` (Blink script execution, not CDP) reads the timeline out **after** the thaw, because a frozen renderer cannot answer while frozen. Three legs are measured at equal width — cached-unfrozen, frozen, thawed — and the assertions are **ratios**, not timing bounds, because a bound goes red on a loaded box.
+
+`MessageChannel` rather than a timer is deliberate: timers are subject to background throttling, which would confound "frozen" with "merely throttled".
+
+```bash
+npm run build && npm run test:freeze-harness
+FREEZE_HARNESS_RUNS=5 npm run test:freeze-harness   # variance
+```
+
+Reference numbers (macOS, Electron 42, 3s windows): control ~54,000 ticks, frozen **0**, recovered ~52,000. With `freezeWebContents` neutered the same run reads control 54,026 / frozen 53,875 — a ratio of 1.0x against 54,000x, so the harness is discriminating by a wide margin.
+
+**Measured on macOS only.** The mechanism is Chromium/CDP semantics and should be platform-independent, but that is an inference; Windows is unverified and is the platform most likely to differ. The harness is not wired into any workflow yet — run it on demand.
+
 ## Smoke Audit Cadence
 
 The `core` Playwright project is the release-gate smoke — 5 specs that gate every OS publish. To ensure these 5 specs stay calibrated against real regressions, run a quarterly "kill rate" audit:
