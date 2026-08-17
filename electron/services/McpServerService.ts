@@ -370,6 +370,11 @@ export class McpServerService {
     } else if (enabled && !this.isRunning) {
       const registry = getWindowRegistry();
       if (registry) {
+        // Capture it, don't just hand it to the lifecycle. `this._registry` is
+        // what the renderer bridge reads, and a null one silently degrades every
+        // registry-aware path — focus-order routing and the resolved-workspace
+        // stamp both fall back to the process-global (last-created) view manager.
+        this._registry = registry;
         await this.httpLifecycle.start(registry);
       } else if (wasEnabled !== enabled) {
         this.emitRuntimeStateChange();
