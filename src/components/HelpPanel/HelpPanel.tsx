@@ -1128,6 +1128,19 @@ export function HelpPanel({
     preferredAgentId ??
     (supportedInstalledAgentIds.length === 1 ? (supportedInstalledAgentIds[0] ?? null) : null);
 
+  // Each empty-state CTA wears the mark of the agent it would actually launch,
+  // so the button says what's about to start. Rendered bare: the Button variant
+  // sizes descendant svgs and no brandColor is passed, so the glyph inherits the
+  // accent fill's foreground rather than painting itself the brand hue. Falls
+  // back to the generic mark when an id outlives its config (agent uninstalled
+  // mid-session), mirroring the droppedPreferredAgentId name lookup below.
+  const StartAssistantIcon = launchableAgentId
+    ? (getAgentConfig(launchableAgentId)?.icon ?? Sparkles)
+    : Sparkles;
+  const ResumeAssistantIcon = resumableAgentId
+    ? (getAgentConfig(resumableAgentId)?.icon ?? Sparkles)
+    : Sparkles;
+
   // Explicit, billed start (#10699). Records consent so future opens may
   // auto-launch, then launches directly — relying on syncInputs re-evaluation
   // would leave a render-cycle gap. An optional starter prompt seeds the first
@@ -1439,7 +1452,7 @@ export function HelpPanel({
                     onClick={handleResumeAssistant}
                     data-testid="help-resume-assistant"
                   >
-                    <Sparkles />
+                    <ResumeAssistantIcon />
                     Resume assistant
                   </Button>
                 </div>
@@ -1453,7 +1466,7 @@ export function HelpPanel({
                     onClick={() => handleStartAssistant()}
                     data-testid="help-start-assistant"
                   >
-                    <Sparkles />
+                    <StartAssistantIcon />
                     Start assistant
                   </Button>
                   {!hasEverLaunchedAgent && (

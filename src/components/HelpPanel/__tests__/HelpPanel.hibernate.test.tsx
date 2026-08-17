@@ -18,6 +18,7 @@ const {
   mockBuildResumeCommand,
   mockBuildResumeLatestCommand,
   mockGetAssistantSupportedAgentIds,
+  mockGetAgentConfig,
   mockGetHelpAssistantSettings,
   mockSystemSleepGetMetrics,
   mockSystemSleepOnSuspend,
@@ -50,6 +51,8 @@ const {
   mockBuildResumeCommand: vi.fn(),
   mockBuildResumeLatestCommand: vi.fn(),
   mockGetAssistantSupportedAgentIds: vi.fn(() => ["claude"]),
+  // Implementation is installed in resetState() so per-test overrides can't leak.
+  mockGetAgentConfig: vi.fn(),
   mockGetHelpAssistantSettings: vi.fn().mockResolvedValue({
     docSearch: true,
     daintreeControl: true,
@@ -215,7 +218,7 @@ vi.mock("@/config/agents", () => ({
   AGENT_REGISTRY: {
     claude: { name: "Claude", iconId: "claude", color: "#000", icon: () => null },
   },
-  getAgentConfig: () => ({ name: "Claude", icon: () => null, models: [] }),
+  getAgentConfig: (id: string) => mockGetAgentConfig(id),
   getAssistantSupportedAgentIds: () => mockGetAssistantSupportedAgentIds(),
   getAgentIds: () => ["claude"],
 }));
@@ -386,6 +389,25 @@ async function flushAsyncWork() {
   });
 }
 
+// Per-agent icon stand-ins for the empty-state CTA coverage. `getAgentConfig`
+// hands back a fresh config object on every call, so the icon *component*
+// reference is what has to stay stable — minting one per lookup would remount
+// the glyph each render. `data-agent-icon` is a test-only handle rather than a
+// copy of any production name, and `data-brand-color` records whether the CTA
+// passed a brandColor (it must not: the glyph inherits the button foreground).
+function makeAgentIconStub(agentId: string) {
+  return function AgentIconStub({ brandColor }: { brandColor?: string }) {
+    return <svg data-agent-icon={agentId} data-brand-color={brandColor ?? "inherit"} />;
+  };
+}
+const CLAUDE_ICON_STUB = makeAgentIconStub("claude");
+const CODEX_ICON_STUB = makeAgentIconStub("codex");
+const NULL_ICON_STUB = () => null;
+
+function agentIconMarkerIn(container: Element | null): string | null {
+  return container?.querySelector("[data-agent-icon]")?.getAttribute("data-agent-icon") ?? null;
+}
+
 function resetState() {
   helpPanelState.isOpen = true;
   helpPanelState.width = 380;
@@ -452,6 +474,14 @@ function resetState() {
   mockBuildResumeLatestCommand.mockReset();
   mockGetAssistantSupportedAgentIds.mockReset();
   mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
+  // Any-id-resolves-to-Claude with a glyph that renders nothing: the pre-#11834
+  // default, so the suite's other cases see exactly what they always did.
+  mockGetAgentConfig.mockReset();
+  mockGetAgentConfig.mockImplementation(() => ({
+    name: "Claude",
+    icon: NULL_ICON_STUB,
+    models: [],
+  }));
   mockGetHelpAssistantSettings.mockReset();
   mockGetHelpAssistantSettings.mockResolvedValue({
     docSearch: true,
@@ -896,6 +926,71 @@ describe("HelpPanel — Resume affordance for eviction-captured sessions", () =>
 
     expect(await findByTestId("help-start-assistant")).toBeTruthy();
     expect(queryByTestId("help-resume-assistant")).toBeNull();
+  });
+});
+
+describe("HelpPanel — empty-state CTA wears the launching agent's mark (#11834)", () => {
+  // A generic glyph on both CTAs said nothing about what was about to start.
+  // Each button now carries the mark of the agent it would actually launch,
+  // and the two buttons read different ids — Start follows the launch
+  // preference, Resume follows whichever agent's conversation was captured.
+  it("Start assistant wears the mark of the agent it would launch", async () => {
+    helpPanelState.autoLaunchEnabled = false; // default user — empty state stays visible
+    helpPanelState.preferredAgentId = "codex";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetAgentConfig.mockImplementation((id: string) =>
+      id === "codex" ? { name: "Codex", icon: CODEX_ICON_STUB, models: [] } : undefined
+    );
+
+    const { findByTestId } = await act(async () => render(<HelpPanel width={380} />));
+    const startButton = await findByTestId("help-start-assistant");
+
+    expect(agentIconMarkerIn(startButton)).toBe("codex");
+    // No brandColor reaches the glyph, so it inherits the button's own
+    // foreground instead of painting itself the agent's brand hue.
+    expect(startButton.querySelector("[data-agent-icon]")?.getAttribute("data-brand-color")).toBe(
+      "inherit"
+    );
+  });
+
+  it("Resume assistant wears the captured agent's mark, not the launch preference's", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    // The preference points at codex while the stranded conversation belongs to
+    // claude. Resume relaunches the captured agent, so it must promise claude —
+    // this is what proves the two CTAs read different ids rather than sharing one.
+    helpPanelState.preferredAgentId = "codex";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockBuildResumeLatestCommand.mockReturnValue("claude resume --last");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+    });
+    mockGetAgentConfig.mockImplementation((id: string) => {
+      if (id === "claude") return { name: "Claude", icon: CLAUDE_ICON_STUB, models: [] };
+      if (id === "codex") return { name: "Codex", icon: CODEX_ICON_STUB, models: [] };
+      return undefined;
+    });
+
+    const { findByTestId } = await act(async () => render(<HelpPanel width={380} />));
+    const resumeButton = await findByTestId("help-resume-assistant");
+
+    expect(agentIconMarkerIn(resumeButton)).toBe("claude");
+  });
+
+  it("falls back to a generic mark when the launchable agent's config is gone", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    // A preferred id outlives the agent that was uninstalled under it. The CTA
+    // still needs a glyph rather than an empty slot beside its label.
+    helpPanelState.preferredAgentId = "ghost-agent";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetAgentConfig.mockImplementation(() => undefined);
+
+    const { findByTestId } = await act(async () => render(<HelpPanel width={380} />));
+    const startButton = await findByTestId("help-start-assistant");
+
+    expect(agentIconMarkerIn(startButton)).toBeNull();
+    expect(startButton.querySelector("svg")).toBeTruthy();
   });
 });
 
