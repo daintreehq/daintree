@@ -168,8 +168,10 @@ export const EXTENSION_KEY_REGISTRY = {
   // Panel focus chrome — the focused/selected pane's border ink
   // (panel-focus-border), double-ring glow stack (panel-focus-shadow), and
   // fill (panel-selected-bg). Consumed by .terminal-selected /
-  // .assistant-focused / .terminal-focused in src/index.css with today's
-  // color-mix recipes as fallbacks. Values are full CSS expressions, so no
+  // .terminal-selected-quiet / .assistant-focused / .terminal-focused in
+  // src/index.css with today's color-mix recipes as fallbacks. The quiet
+  // variant reads the border and shadow keys but never the fill, by design.
+  // Values are full CSS expressions, so no
   // perceptibility guard applies. Accent budget: focus IS the load-bearing
   // signal per focus region, so accent-family ink here is legitimate — but a
   // theme inking focus chrome from its accent family must NOT also carry

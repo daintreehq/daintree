@@ -141,7 +141,12 @@ describe("color system contract", () => {
     // because every consumer carries the pre-extension recipe as its var()
     // fallback — a theme that authors none of them must render identically.
     // Guard the fallback's presence (not its literal value) at each site.
-    for (const selector of [".terminal-selected", ".assistant-focused", ".terminal-focused"]) {
+    for (const selector of [
+      ".terminal-selected",
+      ".terminal-selected-quiet",
+      ".assistant-focused",
+      ".terminal-focused",
+    ]) {
       const block = indexCss.match(
         new RegExp(`${selector.replace(/[.[\]]/g, "\\$&")}\\s*\\{[^}]+\\}`)
       )?.[0];
@@ -153,6 +158,38 @@ describe("color system contract", () => {
         /var\(\s*--panel-focus-shadow,\s*inset /
       );
     }
+  });
+
+  it("keeps the lone-pane quiet cue fill-free so it stays lighter than terminal-selected", () => {
+    // #11837: the quiet cue exists precisely because the surface-lift fill is
+    // what made an always-lit lone pane too heavy in #7544. If a later edit
+    // gives it a background it stops being a distinct rung and the revert
+    // that motivated this design gets re-litigated.
+    const quiet = indexCss.match(/\.terminal-selected-quiet\s*\{[^}]+\}/)?.[0];
+    expect(quiet, ".terminal-selected-quiet rule exists").toBeTruthy();
+    expect(quiet).not.toMatch(/background/);
+    // The full-strength sibling is the one that carries the fill — proves the
+    // two rungs are actually different rather than both being fill-free.
+    expect(indexCss.match(/\.terminal-selected\s*\{[^}]+\}/)?.[0]).toMatch(
+      /background-color:\s*var\(\s*--panel-selected-bg/
+    );
+  });
+
+  it("gives the lone-pane quiet cue the same accessibility parity as its siblings", () => {
+    // A new focus class silently loses performance-mode / forced-colors /
+    // increased-contrast handling unless it is added to all three blocks —
+    // none of which fail loudly when a selector is missing.
+    expect(indexCss).toMatch(/body\[data-performance-mode="true"\]\s+\.terminal-selected-quiet/);
+
+    const forcedColors = indexCss.match(/@media \(forced-colors: active\)\s*\{[\s\S]*?\n\}/)?.[0];
+    expect(forcedColors, "forced-colors block exists").toBeTruthy();
+    expect(forcedColors).toMatch(/\.terminal-selected-quiet\s*\{[^}]*Highlight/);
+
+    const increasedContrast = indexCss.match(
+      /@media \(prefers-contrast: more\)\s*\{[\s\S]*?\n\}/
+    )?.[0];
+    expect(increasedContrast, "prefers-contrast block exists").toBeTruthy();
+    expect(increasedContrast).toMatch(/\.terminal-selected-quiet/);
   });
 
   it("wires :root --background to --theme-surface-canvas", () => {

@@ -1879,6 +1879,27 @@ body,
   border-bottom-color: var(--border-overlay);
 }
 
+/* Lone-pane focus state (#11837) — a single-pane grid has no sibling to
+   contrast against, so it carries no selection chrome at all and reads the
+   same whether the pane or the Daintree Assistant owns the keystrokes. This
+   is the perimeter half of `.terminal-selected` (same themeable border ink
+   and ring stack) with the surface-lift fill deliberately dropped: the fill
+   is what made an always-lit lone pane too heavy when the guard was removed
+   outright in #7544, and it is the one ingredient a lone pane never needs
+   since there is no neighbour to be lifted above. Applied only while the
+   Assistant is open, so the bare lone pane stays the default otherwise. */
+.terminal-selected-quiet {
+  border-color: var(
+    --panel-focus-border,
+    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+  );
+  box-shadow: var(
+    --panel-focus-shadow,
+    inset 0 0 0 1px var(--theme-overlay-soft),
+    0 0 0 1px var(--theme-overlay-strong)
+  );
+}
+
 /* Daintree Assistant focus state — anchors the active-surface affordance on
    the aside edge (border-left + 1px rings) while the surface-lift fill lives
    on the header only (`HelpPanelHeader` uses `bg-overlay-subtle` when
@@ -2498,6 +2519,7 @@ body[data-performance-mode="true"] .settings-section-header {
 
 /* Disable terminal glow in performance mode */
 body[data-performance-mode="true"] .terminal-selected,
+body[data-performance-mode="true"] .terminal-selected-quiet,
 body[data-performance-mode="true"] .terminal-focused,
 body[data-performance-mode="true"] .assistant-focused {
   box-shadow: inset 0 0 0 1px var(--theme-overlay-medium) !important;
@@ -2532,6 +2554,12 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 
   .terminal-selected {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+    border-color: Highlight;
+  }
+
+  .terminal-selected-quiet {
     outline: 2px solid Highlight;
     outline-offset: -2px;
     border-color: Highlight;
@@ -2732,6 +2760,7 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
  * system-color repaint). */
 @media (prefers-contrast: more) {
   .terminal-selected,
+  .terminal-selected-quiet,
   .terminal-focused {
     border-width: 2px;
   }

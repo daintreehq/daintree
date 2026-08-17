@@ -216,6 +216,9 @@ export const GridPanel = React.memo(function GridPanel({
         isFocused={isFocused}
         isMaximized={isMaximized}
         location="grid"
+        // Without this the prop defaults to `true`, so an unavailable plugin
+        // pane claims multi-pane chrome even when it is the only pane.
+        isMultiPanelGrid={isMultiPanelGrid}
         ambientAgentState={ambientAgentState}
         onFocus={handleFocus}
         onClose={handleClose}
