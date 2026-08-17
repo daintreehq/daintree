@@ -61,6 +61,13 @@ describe("afterPack", () => {
     mockStatSync.mockReturnValue({ size: 40 * 1024 * 1024 });
     mockGetRawHeader.mockReturnValue(asarHeader());
 
+    // clearAllMocks only clears call history — implementations and queued
+    // `once` values survive it, so a test that makes unlinkSync throw would
+    // otherwise poison every later test that deletes anything. Reset the two
+    // mocks the prune drives before installing their defaults.
+    mockReaddirSync.mockReset();
+    mockUnlinkSync.mockReset();
+
     // Default: every directory reads as empty. The foreign-prebuild prune
     // (#11829) enumerates better-sqlite3/prebuilds on every package, so without
     // a default it would iterate undefined in every unrelated test. Empty is
@@ -498,12 +505,18 @@ describe("afterPack", () => {
 
     const unlinked = () => mockUnlinkSync.mock.calls.map((c) => String(c[0]));
 
+    // Every single-arch target the build actually ships (electron-builder.config.cjs:
+    // mac dmg/zip x64 + arm64, win nsis x64 + arm64, linux x64). appx x64 shares
+    // the nsis x64 pack — app-builder-lib packs once per arch, then builds both
+    // distributables from that tree — so it needs no row of its own.
     it.each([
-      ["darwin", "/build/mac", Arch.arm64, "darwin-arm64.node", "darwin-x64.node"],
+      ["darwin", "/build/mac-arm64", Arch.arm64, "darwin-arm64.node", "darwin-x64.node"],
+      ["darwin", "/build/mac", Arch.x64, "darwin-x64.node", "darwin-arm64.node"],
       ["win32", "/build/win", Arch.x64, "win32-x64.node", "win32-arm64.node"],
+      ["win32", "/build/win-arm64", Arch.arm64, "win32-arm64.node", "win32-x64.node"],
       ["linux", "/build/linux", Arch.x64, "linux-x64.node", "linux-arm64.node"],
     ] as const)(
-      "removes the other CPU arch's prebuild from a standalone %s package",
+      "removes the other CPU arch's prebuild from a standalone %s package at %s",
       async (platform, outDir, arch, keep, drop) => {
         mockExistsSync.mockReturnValue(true);
         const present = seedPrebuilds([keep, drop]);
@@ -554,20 +567,53 @@ describe("afterPack", () => {
     it.each([
       ["/build/mac-x64-temp", Arch.x64],
       ["/build/mac-arm64-temp", Arch.arm64],
+      ["/build/mac", Arch.universal],
     ] as const)(
-      "keeps both darwin prebuilds in the universal intermediate %s",
+      "keeps both darwin prebuilds while still pruning, for the universal target at %s",
       async (outDir, arch) => {
         // @electron/universal aborts the merge when the two trees hold different
         // sets of Mach-O files, and it does so before x64ArchFiles is consulted.
         // Each intermediate reports the same arch a standalone pack does, so the
         // -<arch>-temp suffix is the only thing keeping the prune off them.
+        //
+        // The riscv sentinel is what makes this more than "nothing happened":
+        // an implementation that simply switched the prune off for universal
+        // targets would keep both darwin files too and pass on that assertion
+        // alone. Removing exactly the sentinel proves the prune ran and spared
+        // the pair the merge depends on.
         mockExistsSync.mockReturnValue(true);
-        const present = seedPrebuilds(["darwin-arm64.node", "darwin-x64.node"]);
+        const present = seedPrebuilds([
+          "darwin-arm64.node",
+          "darwin-x64.node",
+          "darwin-riscv64.node",
+        ]);
 
         await afterPack(createContext("darwin", outDir, "Daintree", arch));
 
-        expect(unlinked()).toEqual([]);
+        expect(unlinked()).toEqual([
+          path.join(prebuildsDir("darwin", outDir), "darwin-riscv64.node"),
+        ]);
         expect([...present].sort()).toEqual(["darwin-arm64.node", "darwin-x64.node"]);
+      }
+    );
+
+    it.each([
+      ["/build/mac-x64-temp", Arch.x64],
+      ["/build/mac", Arch.universal],
+    ] as const)(
+      "still rejects a foreign-platform prebuild on the universal target at %s",
+      async (outDir, arch) => {
+        // The guard has to stay armed on the path that legitimately keeps both
+        // arches, or a broken `files` exclusion ships unnoticed in exactly the
+        // artifact that runs on every Mac.
+        mockExistsSync.mockReturnValue(true);
+        seedPrebuilds(["darwin-arm64.node", "darwin-x64.node", "linux-x64.node"]);
+
+        await expect(afterPack(createContext("darwin", outDir, "Daintree", arch))).rejects.toThrow(
+          /prebuilds for another platform or arch survived packing/
+        );
+
+        expect(unlinked()).toEqual([]);
       }
     );
 
@@ -583,16 +629,6 @@ describe("afterPack", () => {
       expect(unlinked()).toEqual([
         path.join(prebuildsDir("darwin", "/build/mac-x64-temp-backup"), "darwin-x64.node"),
       ]);
-    });
-
-    it("keeps both darwin prebuilds in the merged universal package", async () => {
-      mockExistsSync.mockReturnValue(true);
-      const present = seedPrebuilds(["darwin-arm64.node", "darwin-x64.node"]);
-
-      await afterPack(createContext("darwin", "/build/mac", "Daintree", Arch.universal));
-
-      expect(unlinked()).toEqual([]);
-      expect([...present].sort()).toEqual(["darwin-arm64.node", "darwin-x64.node"]);
     });
 
     it("fails the pack when a prune silently does nothing", async () => {
@@ -664,7 +700,7 @@ describe("afterPack", () => {
       ).rejects.toThrow(/prebuilds directory could not be read/);
     });
 
-    it("skips the prune when electron-builder reports an unrecognized arch", async () => {
+    it("skips the prune when electron-builder passes no arch at all", async () => {
       // The expected arch would be a guess from the runner, and deleting
       // against a guess could remove the binary the package actually needs.
       // Shipping the extra prebuild is the pre-#11829 status quo, so this
@@ -678,6 +714,25 @@ describe("afterPack", () => {
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining("Skipping better-sqlite3 foreign-arch prune")
       );
+    });
+
+    it("fails the pack on an arch value it does not recognise", async () => {
+      // The opposite polarity to the no-arch case above, and deliberately so:
+      // electron-builder named a target and this file failed to understand it,
+      // which means builder-util grew an enum entry. Falling back to the runner
+      // here would validate the runner's own prebuild and call a package green
+      // whose database cannot work — better-sqlite3 ships x64 and arm64 only,
+      // so a genuinely new arch has no prebuild to find.
+      mockExistsSync.mockReturnValue(true);
+      const unknownArch =
+        Math.max(...Object.values(Arch).filter((v): v is number => typeof v === "number")) + 1;
+      seedPrebuilds([`linux-${process.arch}.node`]);
+
+      await expect(
+        afterPack(createContext("linux", "/build/linux", "Daintree", unknownArch))
+      ).rejects.toThrow(/reported an arch this hook does not recognise/);
+
+      expect(unlinked()).toEqual([]);
     });
   });
 
@@ -857,11 +912,18 @@ describe("afterPack", () => {
       // Skipping reduces validation, so it has to be a decision about a
       // known-foreign slice. A future builder-util enum value must not silently
       // disable the probe.
+      //
+      // The hook now rejects that same unknown arch further down, when it can
+      // no longer name the better-sqlite3 prebuild the package needs (#11829).
+      // The probe still has to have run first — asserting only the rejection
+      // would pass even if the exec check had been skipped.
       mockExistsSync.mockReturnValue(true);
       const unknownArch =
         Math.max(...Object.values(Arch).filter((v): v is number => typeof v === "number")) + 1;
 
-      await afterPack(createContext("linux", "/build/linux", "Daintree", unknownArch));
+      await expect(
+        afterPack(createContext("linux", "/build/linux", "Daintree", unknownArch))
+      ).rejects.toThrow(/does not recognise/);
 
       expect(mockSpawnSync).toHaveBeenCalled();
     });

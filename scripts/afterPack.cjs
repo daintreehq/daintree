@@ -45,15 +45,23 @@ function isMacUniversalIntermediate(appOutDir, electronPlatformName) {
  * `@electron/universal` aborts the merge when the trees hold different sets of
  * Mach-O files. Every other target carries exactly its own arch.
  *
- * `exact: false` means electron-builder reported an arch this file does not
- * recognise, so the set is a guess from the runner rather than the target.
- * Validation still runs against the guess (that is the long-standing
- * behaviour, and it is what lets tests omit an arch), but the prune and the
- * foreign-binary guard are skipped: deleting against a guessed arch could
- * remove the binary the package actually needs. Unlike isRunnerExecutableArch,
- * where skipping loses validation, skipping here only forgoes ~2MB of
- * shrinkage — the same bytes that shipped before #11829 — so degrading is
- * strictly better than failing a release build on an unknown enum value.
+ * How the arch is unknown decides what happens, because the two cases mean
+ * different things:
+ *
+ * A value this file does not recognise means electron-builder named the target
+ * and we failed to understand it — builder-util grew an enum entry. That fails
+ * the pack. Guessing would validate the runner's own prebuild instead of the
+ * target's and report a green build for a package whose database cannot work:
+ * better-sqlite3 ships x64 and arm64 only, so a genuinely new arch has no
+ * prebuild to find. Same reasoning as isRunnerExecutableArch — an unrecognised
+ * arch must never quietly reduce what gets validated.
+ *
+ * No arch at all is the long-standing fallback that lets callers omit it, and
+ * electron-builder always supplies one for a real pack. It keeps validating
+ * against the runner (`exact: false`), but the prune and the foreign-binary
+ * guard are skipped: deleting against a guessed target could remove the binary
+ * the package needs, and skipping only forgoes ~2MB of shrinkage — the bytes
+ * that shipped before #11829 anyway.
  */
 function resolveBetterSqlitePrebuildTarget(contextArch, electronPlatformName, appOutDir) {
   if (
@@ -63,8 +71,17 @@ function resolveBetterSqlitePrebuildTarget(contextArch, electronPlatformName, ap
     return { arches: ["x64", "arm64"], exact: true };
   }
   const name = ARCH_ENUM_NAMES[contextArch];
-  if (name === undefined) return { arches: [process.arch], exact: false };
-  return { arches: [name], exact: true };
+  if (name !== undefined) return { arches: [name], exact: true };
+  if (contextArch !== undefined) {
+    throw new Error(
+      `[afterPack] CRITICAL: electron-builder reported an arch this hook does not recognise ` +
+        `(${String(contextArch)}). The better-sqlite3 prebuild this package needs cannot be ` +
+        "identified, so validating it would only confirm the runner's own binary and the " +
+        "database would fail at runtime. Add the value to ARCH_ENUM_NAMES from builder-util's " +
+        "Arch enum."
+    );
+  }
+  return { arches: [process.arch], exact: false };
 }
 
 const prebuildFileName = (electronPlatformName, arch) => `${electronPlatformName}-${arch}.node`;
@@ -149,10 +166,13 @@ function pruneForeignBetterSqlitePrebuilds(prebuildsPath, electronPlatformName, 
  * stopped shedding another OS or the musl variants, a prebuild naming shape
  * the prune's prefix no longer matches, or a delete that silently did nothing.
  *
- * Filenames only. A binary carrying the wrong Mach-O/ELF/PE header under the
- * right name still passes, and this says nothing about any other dependency —
- * catching those needs a generic native-binary header scan, which is a
- * different change.
+ * Filenames only, and only the top level. A binary carrying the wrong
+ * Mach-O/ELF/PE header under the right name still passes, a nested
+ * `prebuilds/<dir>/*.node` is not seen, and this says nothing about any other
+ * dependency — catching those needs a generic native-binary header scan, which
+ * is a different change. The flat layout is better-sqlite3 v13's contract; if
+ * it ever nests, validateBetterSqlitePrebuilds fails first on the prebuild it
+ * can no longer find, which is the loud signal to revisit this.
  */
 function validateNoForeignBetterSqlitePrebuilds(
   prebuildsPath,
@@ -691,9 +711,9 @@ exports.default = async function afterPack(context) {
     );
   } else {
     console.warn(
-      `[afterPack] Skipping better-sqlite3 foreign-arch prune: electron-builder reported an ` +
-        `unrecognized arch (${String(context.arch)}), so the target arch is a guess from the ` +
-        `${process.arch} runner and is not safe to delete against.`
+      "[afterPack] Skipping better-sqlite3 foreign-arch prune and foreign-binary guard: " +
+        `electron-builder passed no arch, so the target is a guess from the ${process.arch} ` +
+        "runner and is not safe to delete against. The package keeps the other arch's prebuild."
     );
   }
 
