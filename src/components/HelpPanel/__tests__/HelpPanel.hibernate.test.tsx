@@ -978,15 +978,45 @@ describe("HelpPanel — empty-state CTA wears the launching agent's mark (#11834
     expect(agentIconMarkerIn(resumeButton)).toBe("claude");
   });
 
-  it("falls back to a generic mark when the launchable agent's config is gone", async () => {
+  it("infers the mark from the sole supported agent when no preference is set", async () => {
     helpPanelState.autoLaunchEnabled = false;
-    // A preferred id outlives the agent that was uninstalled under it. The CTA
-    // still needs a glyph rather than an empty slot beside its label.
-    helpPanelState.preferredAgentId = "ghost-agent";
+    // No stored preference, so the launch target is inferred from the single
+    // installed supported backend. The mark has to follow that inference rather
+    // than reading the (absent) preference straight off the store.
+    helpPanelState.preferredAgentId = null;
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
-    mockGetAgentConfig.mockImplementation(() => undefined);
+    mockGetAgentConfig.mockImplementation((id: string) =>
+      id === "claude" ? { name: "Claude", icon: CLAUDE_ICON_STUB, models: [] } : undefined
+    );
 
     const { findByTestId } = await act(async () => render(<HelpPanel width={380} />));
+
+    expect(agentIconMarkerIn(await findByTestId("help-start-assistant"))).toBe("claude");
+  });
+
+  it("swaps back to a generic mark when the launchable agent's config disappears", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "codex";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    // Flipped between renders rather than via mockImplementationOnce: the config
+    // is resolved more than once per render, so a one-shot override would fall
+    // through mid-render and prove nothing.
+    let codexConfigResolves = true;
+    mockGetAgentConfig.mockImplementation((id: string) =>
+      id === "codex" && codexConfigResolves
+        ? { name: "Codex", icon: CODEX_ICON_STUB, models: [] }
+        : undefined
+    );
+
+    const { findByTestId, rerender } = await act(async () => render(<HelpPanel width={380} />));
+    expect(agentIconMarkerIn(await findByTestId("help-start-assistant"))).toBe("codex");
+
+    // The id now outlives its registry entry. The CTA has to keep a glyph rather
+    // than leave an empty slot beside its label.
+    codexConfigResolves = false;
+    await act(async () => {
+      rerender(<HelpPanel width={380} />);
+    });
     const startButton = await findByTestId("help-start-assistant");
 
     expect(agentIconMarkerIn(startButton)).toBeNull();
