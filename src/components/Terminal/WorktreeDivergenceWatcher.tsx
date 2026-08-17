@@ -75,6 +75,12 @@ export function WorktreeDivergenceWatcher(): null {
         // exists for — so the signal has to come from outside it.
         placement: "grid-bar",
         supersedeKey: `worktree-divergence-drift:${panel.id}`,
+        context: {
+          eventKind: "git",
+          ...(panel.worktreeMoveOptOut.launchWorktreeId && {
+            worktreeId: panel.worktreeMoveOptOut.launchWorktreeId,
+          }),
+        },
         action: {
           label: "Show session",
           // Selecting the worktree first is the whole point: this fires while
