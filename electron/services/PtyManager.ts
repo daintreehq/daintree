@@ -8,6 +8,7 @@ import type { ProcessTreeCache } from "./ProcessTreeCache.js";
 import type { DetectionResult } from "./ProcessDetector.js";
 import type { ImagePathProbe } from "./pty/ImagePathProbe.js";
 import type { AnalysisWorkerPool } from "./pty/analysis/AnalysisWorkerPool.js";
+import type { PanelTitleMode } from "../../shared/types/panel.js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("pty-host:PtyManager");
@@ -935,6 +936,18 @@ export class PtyManager extends EventEmitter {
     const terminal = this.registry.get(id);
     if (!terminal) return;
     terminal.setObservedTitle(title);
+  }
+
+  /**
+   * Apply a renderer-side rename to the authoritative record so the fleet
+   * snapshot, session journal and shutdown records all name the run the way
+   * the user does. A rename for a terminal that has already gone is a no-op —
+   * the renderer store keeps the title either way.
+   */
+  updateTitle(id: string, title: string, titleMode: PanelTitleMode): void {
+    const terminal = this.registry.get(id);
+    if (!terminal) return;
+    terminal.setTitle(title, titleMode);
   }
 
   /**

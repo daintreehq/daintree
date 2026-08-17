@@ -272,6 +272,7 @@ export type PtyHostRequest =
   | { type: "get-all-snapshots"; requestId: string }
   | { type: "mark-checked"; id: string }
   | { type: "update-observed-title"; id: string; title: string }
+  | { type: "update-title"; id: string; title: string; titleMode: PanelTitleMode }
   | {
       type: "transition-state";
       id: string;

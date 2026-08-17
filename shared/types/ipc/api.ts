@@ -2,7 +2,7 @@ import type { PushProgressEvent } from "./gitPush.js";
 import type { IdArrayFieldEdit } from "../../utils/layoutMerge.js";
 import type { GitStatus, StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
-import type { TabGroup } from "../panel.js";
+import type { TabGroup, PanelTitleMode } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
 import type {
   Project,
@@ -344,6 +344,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onBroadcastWriteResult(callback: (data: BroadcastWriteResultPayload) => void): () => void;
     reportTitleState(id: string, state: "working" | "waiting"): void;
     updateObservedTitle(id: string, title: string): void;
+    updateTitle(id: string, title: string, titleMode: PanelTitleMode): void;
     onSpawnResult(callback: (id: string, result: SpawnResult) => void): () => void;
     onReduceScrollback(
       callback: (data: { terminalIds: string[]; targetLines: number }) => void

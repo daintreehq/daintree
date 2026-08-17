@@ -2380,6 +2380,10 @@ export class PtyClient extends EventEmitter {
     this.shardForTerminal(id).send({ type: "update-observed-title", id, title });
   }
 
+  updateTitle(id: string, title: string, titleMode: PanelTitleMode): void {
+    this.shardForTerminal(id).send({ type: "update-title", id, title, titleMode });
+  }
+
   async transitionState(
     id: string,
     event: { type: string; [key: string]: unknown },
