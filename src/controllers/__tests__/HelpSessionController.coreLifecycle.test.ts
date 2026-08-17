@@ -663,9 +663,10 @@ describe("HelpSessionController — endSession (Stop assistant, #10989)", () => 
 
     // clearTerminal ran — the store now reports no bound terminal.
     helpPanelState.terminalId = null;
-    // Stop closes the panel, but a sync still carrying the pre-close `isOpen`
-    // can land after it. Without the budget guard that stale-open sync would
-    // immediately respawn the assistant the user just stopped.
+    // A synthetic still-open sync with the terminal already cleared. The real
+    // Stop path can't commit this pair — `isOpen` and `terminalId` clear in the
+    // same batch — but splitting them isolates the auto-launch budget from the
+    // `isOpen` gate, so a regression in the budget guard alone stays visible.
     ctrl.syncInputs({
       isOpen: true,
       isReadyToLaunch: true,
@@ -758,7 +759,8 @@ describe("HelpSessionController — terminal PTY exit slides the sidebar out (#1
 
     ctrl.handleTerminalPanelMissing({ terminalId: "term-1", terminalExists: false });
 
-    // Minimal cleanup still runs, but the hibernate flow owns the slot + close.
+    // Minimal cleanup still runs; the hibernate flow owns the slot and phase,
+    // and this path must not touch panel visibility.
     expect(window.electron.help.revokeSession).toHaveBeenCalledWith("sess-bound");
     expect(helpPanelState.clearTerminal).toHaveBeenCalled();
     expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalled();

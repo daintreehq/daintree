@@ -600,13 +600,16 @@ export class HelpSessionController {
    * User-facing "Stop assistant" — actually end the running assistant terminal
    * rather than merely hiding the panel (`handleClose` only flips `isOpen`,
    * leaving the agent running). Unlike `newSession()` this does NOT relaunch:
-   * it tears the bound session down and slides the sidebar out (#11833), so
-   * every way a session ends — Stop, agent self-exit, PTY exit — leaves the
-   * panel closed rather than lingering on the empty state. Stop discards the
-   * conversation instead of pausing it, which is why the UI gates it behind a
-   * confirm whenever there is live work or an engaged conversation to lose;
-   * reopening starts fresh through the normal launch / auto-launch flow.
-   * Idempotent — a no-op when nothing is running and no launch is in flight.
+   * it tears the bound session down and slides the sidebar out (#11833) rather
+   * than lingering on the empty state, matching the agent self-exit and PTY-exit
+   * paths once their identity/hibernation guards pass. (The replacing flows —
+   * `newSession`, `runAnyway`, agent switch — also tear down, but keep the panel
+   * open because they immediately launch again.) Stop discards the conversation
+   * instead of pausing it, which is why the UI gates it behind a confirm
+   * whenever there is live work or an engaged conversation to lose; reopening
+   * starts fresh through the normal launch / auto-launch flow. Safe to call
+   * repeatedly: with nothing bound it skips the teardown but still invalidates
+   * any in-flight launch and closes, converging on the same stopped state.
    */
   endSession(): void {
     this._stopBoundSession();
@@ -617,9 +620,9 @@ export class HelpSessionController {
    * user typed `/exit`, or the agent quit — surfaced as `agentState: "exited"`.
    * Most assistant agents run inside a shell, so the agent exiting does NOT
    * exit the PTY (`handleTerminalPanelMissing` never fires and the sidebar
-   * would otherwise linger on a dead shell). Treat it exactly like the Stop
-   * button — same teardown, same slide-out. No confirmation — the exit already
-   * happened.
+   * would otherwise linger on a dead shell). Once the hibernation and
+   * current-terminal guards below pass, reuse the Stop button's teardown and
+   * slide-out. No confirmation — the exit already happened.
    *
    * Guards keep a stale or racing signal from tearing down the wrong session:
    * skip while a hibernate owns the teardown, and only act when `terminalId`
@@ -631,7 +634,7 @@ export class HelpSessionController {
   handleAgentExited(terminalId: string): void {
     if (this._snapshot.phase === "hibernating") return;
     if (useHelpPanelStore.getState().terminalId !== terminalId) return;
-    this._stopBoundSession({ close: true });
+    this._stopBoundSession();
   }
 
   /**
@@ -678,10 +681,13 @@ export class HelpSessionController {
    * `_stopBoundSession` (Stop button + agent self-exit) and the PTY-exit path
    * (`handleTerminalPanelMissing`).
    *
-   * Every caller also closes the panel, and `_maybeAutoLaunch` hard-gates on
-   * `isOpen`, so the budget consumption is the belt against a sync still
-   * carrying the pre-close `isOpen` landing after the stop. `syncInputs` clears
-   * it once the close is observed, leaving the next open free to auto-launch.
+   * Closing the panel is what actually prevents the relaunch — every caller
+   * closes, and `_maybeAutoLaunch` hard-gates on `isOpen`. The budget write is
+   * a cheap belt on this shared tail, not the load-bearing guard: a pre-close
+   * render snapshot can reach `syncInputs` late, but it carries that render's
+   * still-bound `terminalId`, so the terminal gate already turns it away.
+   * `syncInputs` clears the flag once the close is observed, leaving the next
+   * open free to auto-launch.
    */
   private _applyStopSuppression(): void {
     // Read the workspace from the synced inputs, not the project store: in a

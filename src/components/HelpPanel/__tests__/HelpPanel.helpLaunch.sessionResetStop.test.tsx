@@ -1064,8 +1064,7 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
       expect.anything(),
       expect.anything()
     );
-    // Confirmed stop closes the panel too — the confirm gates the teardown, not
-    // the slide-out (#11833).
+    // The same confirmation gates both the teardown and the slide-out (#11833).
     expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
   });
 
