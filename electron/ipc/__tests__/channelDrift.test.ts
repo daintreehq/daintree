@@ -133,6 +133,14 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   "terminal:set-focused",
   "terminal:update-observed-title",
 
+  // fire-and-forget — renderer→main panel rename, mirrored onto the pty-host
+  // terminal record so the fleet overview and the session journal name a run
+  // the way the user does (#11830). Not high-frequency like the group above,
+  // but send-only for the same reason as its `update-observed-title` sibling:
+  // the renderer store is already authoritative for display, so there is no
+  // result worth awaiting.
+  "terminal:update-title",
+
   // fire-and-forget — high-frequency renderer→main streaming audio chunks
   // for voice input. Same rationale as the terminal input channels.
   "voice-input:audio-chunk",
