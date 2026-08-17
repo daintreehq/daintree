@@ -390,7 +390,13 @@ export class McpServerService {
     } else if (enabled && !this.isRunning) {
       const registry = getWindowRegistry();
       if (registry) {
-        await this.httpLifecycle.start(registry);
+        // Through `start()`, so the capture lives in exactly one place. Handing
+        // the registry to `httpLifecycle.start()` directly left `this._registry`
+        // null, and that field is what the renderer bridge reads — a null one
+        // silently degrades every registry-aware path, so focus-order routing
+        // and the resolved-workspace stamp both fall back to the process-global
+        // (last-created) view manager.
+        await this.start(registry);
       } else if (wasEnabled !== enabled) {
         this.emitRuntimeStateChange();
       }
