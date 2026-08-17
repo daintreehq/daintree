@@ -161,28 +161,41 @@ function resolvedWorkspaceId(toolResponse: any): string | null {
   return toolResponse?.result?._meta?.[RESOLVED_WORKSPACE_META]?.workspaceId ?? null;
 }
 
+/** One workspace's two identities: its id, and the fixture basename its paths carry. */
+interface WorkspaceIdentity {
+  workspaceId: string;
+  basename: string;
+}
+
 /**
- * The workspace a call actually landed in, read out of the payload itself
- * rather than the server's label — `actions.getContext` names its project, and
- * every path in `worktree.list` sits under one project's fixture directory.
+ * Reads the workspace a call actually landed in out of the payload itself
+ * rather than the server's own label — `actions.getContext` names its project,
+ * and every path in `worktree.list` sits under one project's fixture directory.
  * Returns null for identity-free payloads (`terminal.list` on an idle project).
+ *
+ * Built as a factory taking its identities explicitly: closing over the suite's
+ * module-scoped fixture state would make the helper silently dependent on
+ * `describe.serial` ordering, and it would break the day someone extracts it to
+ * a shared helper file.
  */
-function payloadWorkspaceId(toolResponse: any): string | null {
-  const text = toolResponse?.result?.content?.[0]?.text;
-  if (typeof text !== "string") return null;
+function makePayloadWorkspaceReader(identities: readonly WorkspaceIdentity[]) {
+  return function payloadWorkspaceId(toolResponse: any): string | null {
+    const text = toolResponse?.result?.content?.[0]?.text;
+    if (typeof text !== "string") return null;
 
-  try {
-    const parsed = JSON.parse(text);
-    if (typeof parsed?.projectId === "string") return parsed.projectId;
-  } catch {
-    // Not JSON — fall through to the path match below.
-  }
+    try {
+      const parsed = JSON.parse(text);
+      if (typeof parsed?.projectId === "string") return parsed.projectId;
+    } catch {
+      // Not JSON — fall through to the path match below.
+    }
 
-  const hitsA = basenameA && text.includes(basenameA);
-  const hitsB = basenameB && text.includes(basenameB);
-  if (hitsA && !hitsB) return workspaceA;
-  if (hitsB && !hitsA) return workspaceB;
-  return null;
+    // Exactly one fixture may match. Fixture basenames carry a random suffix, so
+    // an ambiguous hit means the payload spans workspaces — report "unknown"
+    // rather than guessing, which would silently weaken every caller.
+    const hits = identities.filter((identity) => text.includes(identity.basename));
+    return hits.length === 1 ? hits[0].workspaceId : null;
+  };
 }
 
 /** The BrowserWindow the OS currently considers focused, or null. */
@@ -239,7 +252,8 @@ let basenameB: string;
 let repoC: string;
 let endpoint: McpEndpoint;
 let fixtureCleanups: Array<() => void> = [];
-let canaryTrace: Array<{ focused: number | null; landedIn: string | null }> = [];
+/** Bound once the fixtures and workspace ids are known — see beforeAll. */
+let payloadWorkspaceId: (toolResponse: any) => string | null;
 
 test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () => {
   test.beforeAll(async () => {
@@ -272,6 +286,10 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
 
     workspaceA = (await readWorkspaceId(pageA))!;
     workspaceB = (await readWorkspaceId(pageB))!;
+    payloadWorkspaceId = makePayloadWorkspaceReader([
+      { workspaceId: workspaceA, basename: basenameA },
+      { workspaceId: workspaceB, basename: basenameB },
+    ]);
     expect(workspaceA).not.toBe(workspaceB);
 
     const status = await pageA.evaluate(() => (window as any).electron.mcpServer.setEnabled(true));
@@ -303,11 +321,10 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
     expect(bindingA?.workspaceId).toBe(workspaceA);
     expect(bindingB?.workspaceId).toBe(workspaceB);
 
-    // An unbound session runs alongside as a canary. It follows focus by design,
-    // so its answers are the evidence that focus-based routing genuinely moved
-    // during this run — without it, "bound sessions held still" could just mean
-    // nothing ever moved. It doubles as the regression guard on the documented
-    // pre-binding behaviour.
+    // An unbound session runs alongside so the bound pair is exercised under
+    // concurrent focus-following traffic rather than in isolation — the shape a
+    // real multi-agent setup has. Its own correctness is asserted separately, by
+    // the focus-following test, which owns its trace end to end.
     const canary = await initializeSession(endpoint, { clientName: "legacy-unbound" });
     expect(
       canary.init.body?.result?.capabilities?.experimental?.[BINDING_CAPABILITY]
@@ -320,15 +337,22 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
       landedIn: string | null;
     }> = [];
 
-    for (const focusTarget of [windowIdB, windowIdA, windowIdB, windowIdA]) {
+    const focusSweep = [windowIdB, windowIdA, windowIdB, windowIdA];
+    const tools = ["actions.getContext", "terminal.list", "worktree.list"];
+    const sessions = [
+      ["A", a.sessionId],
+      ["B", b.sessionId],
+      ["canary", canary.sessionId],
+    ] as const;
+    // `terminal.list` is the one identity-free payload (both projects are idle),
+    // so it is the only tool that contributes no landing evidence.
+    const identityBearingTools = tools.length - 1;
+
+    for (const focusTarget of focusSweep) {
       await focusWindow(ctx.app, focusTarget, focusTarget === windowIdA ? pageA : pageB);
       const focused = await focusedWindowId(ctx.app);
-      for (const tool of ["actions.getContext", "terminal.list", "worktree.list"]) {
-        for (const [session, sessionId] of [
-          ["A", a.sessionId],
-          ["B", b.sessionId],
-          ["canary", canary.sessionId],
-        ] as const) {
+      for (const tool of tools) {
+        for (const [session, sessionId] of sessions) {
           const response = await callTool(endpoint, sessionId, tool);
           observed.push({ session, tool, focused, landedIn: payloadWorkspaceId(response) });
         }
@@ -363,14 +387,14 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
       "focus never moved between windows, so this run never exercised a focus change"
     ).toEqual([windowIdA, windowIdB].sort());
 
-    // Every identity-bearing call produced an identity. Only terminal.list is
-    // identity-free (both projects report zero terminals).
-    expect(observed.filter((o) => o.landedIn !== null).length).toBe(24);
-    expect(observed.length).toBe(36);
-
-    canaryTrace = observed
-      .filter((o) => o.session === "canary" && o.landedIn !== null)
-      .map((o) => ({ focused: o.focused, landedIn: o.landedIn }));
+    // Guards against the loop silently shrinking (a dropped tool or session
+    // would otherwise leave the stray-filters trivially empty). Derived from the
+    // loop inputs rather than hardcoded, so adding a tool doesn't mean editing a
+    // magic number.
+    expect(observed.length).toBe(focusSweep.length * tools.length * sessions.length);
+    expect(observed.filter((o) => o.landedIn !== null).length).toBe(
+      focusSweep.length * identityBearingTools * sessions.length
+    );
   });
 
   test("driving a background workspace changes nothing the user can see", async () => {
@@ -458,18 +482,31 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
   });
 
   test("an unbound session follows focus (documented legacy behaviour)", async () => {
-    // Replays what the unbound canary saw during the interleave above: with OS
-    // focus verifiably alternating between the two windows, an unbound session
-    // is supposed to track it (#11564 — focus order, not registration order).
+    // #11564 made an unbound session route by focus order rather than
+    // registration order. Asserted per observation, not as a set: a session that
+    // merely visited both workspaces in some order — or tracked something other
+    // than focus — has to fail this, which a "both ids appeared" check would
+    // have passed.
+    const unbound = await initializeSession(endpoint, { clientName: "follows-focus" });
+    const expected = new Map([
+      [windowIdA, workspaceA],
+      [windowIdB, workspaceB],
+    ]);
 
-    console.log(
-      "[probe] canary",
-      JSON.stringify({ workspaceA, workspaceB, windowIdA, windowIdB, canaryTrace }, null, 2)
-    );
+    const trace: Array<{ focused: number | null; landedIn: string | null; wanted: string }> = [];
+    for (const target of [windowIdB, windowIdA, windowIdB, windowIdA]) {
+      await focusWindow(ctx.app, target, target === windowIdA ? pageA : pageB);
+      const focused = await focusedWindowId(ctx.app);
+      const landedIn = payloadWorkspaceId(
+        await callTool(endpoint, unbound.sessionId, "actions.getContext")
+      );
+      trace.push({ focused, landedIn, wanted: expected.get(focused ?? -1) ?? "unknown-window" });
+    }
 
-    const targets = new Set(canaryTrace.map((entry) => entry.landedIn));
-    expect(canaryTrace.length).toBeGreaterThan(0);
-    expect([...targets].sort()).toEqual([workspaceA, workspaceB].sort());
+    // Premise: OS focus really did alternate. Without this the correlation below
+    // could hold trivially by nothing ever moving.
+    expect([...new Set(trace.map((t) => t.focused))].sort()).toEqual([windowIdA, windowIdB].sort());
+    expect(trace.map((t) => t.landedIn)).toEqual(trace.map((t) => t.wanted));
   });
 
   test("every bound result carries the resolved-workspace stamp", async () => {
@@ -515,48 +552,52 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
     };
 
     const handleC = await openSecondWindow(ctx.app, pageA, { projectPath: repoC });
-    const pageC = await getWindowPage(ctx.app, handleC.windowId);
-    const workspaceC = await pageC.evaluate(
-      () => (window as any).__DAINTREE_INITIAL_PROJECT__?.id ?? null
-    );
+    try {
+      const pageC = await getWindowPage(ctx.app, handleC.windowId);
+      const workspaceC = await pageC.evaluate(
+        () => (window as any).__DAINTREE_INITIAL_PROJECT__?.id ?? null
+      );
 
-    const after = {
-      A: resolvedWorkspaceId(
-        await callTool(
-          endpoint,
-          (await initializeSession(endpoint, { workspaceId: workspaceA, clientName: "ord-A2" }))
-            .sessionId,
-          "actions.getContext"
-        )
-      ),
-      B: resolvedWorkspaceId(
-        await callTool(
-          endpoint,
-          (await initializeSession(endpoint, { workspaceId: workspaceB, clientName: "ord-B2" }))
-            .sessionId,
-          "actions.getContext"
-        )
-      ),
-      C: resolvedWorkspaceId(
-        await callTool(
-          endpoint,
-          (await initializeSession(endpoint, { workspaceId: workspaceC, clientName: "ord-C" }))
-            .sessionId,
-          "actions.getContext"
-        )
-      ),
-    };
+      const after = {
+        A: resolvedWorkspaceId(
+          await callTool(
+            endpoint,
+            (await initializeSession(endpoint, { workspaceId: workspaceA, clientName: "ord-A2" }))
+              .sessionId,
+            "actions.getContext"
+          )
+        ),
+        B: resolvedWorkspaceId(
+          await callTool(
+            endpoint,
+            (await initializeSession(endpoint, { workspaceId: workspaceB, clientName: "ord-B2" }))
+              .sessionId,
+            "actions.getContext"
+          )
+        ),
+        C: resolvedWorkspaceId(
+          await callTool(
+            endpoint,
+            (await initializeSession(endpoint, { workspaceId: workspaceC, clientName: "ord-C" }))
+              .sessionId,
+            "actions.getContext"
+          )
+        ),
+      };
 
-    console.log(
-      "[probe] stamp-vs-window-order",
-      JSON.stringify({ workspaceA, workspaceB, workspaceC, before, after }, null, 2)
-    );
+      console.log(
+        "[probe] stamp-vs-window-order",
+        JSON.stringify({ workspaceA, workspaceB, workspaceC, before, after }, null, 2)
+      );
 
-    await closeWindow(ctx.app, handleC.windowId);
-    await focusWindow(ctx.app, windowIdA, pageA);
-
-    expect(after).toEqual({ A: workspaceA, B: workspaceB, C: workspaceC });
-    expect(before).toEqual({ A: workspaceA, B: workspaceB });
+      expect(after).toEqual({ A: workspaceA, B: workspaceB, C: workspaceC });
+      expect(before).toEqual({ A: workspaceA, B: workspaceB });
+    } finally {
+      // Window C must not outlive this test even when an assertion above throws —
+      // the teardown test that follows counts on A and B being the only windows.
+      await closeWindow(ctx.app, handleC.windowId).catch(() => {});
+      await focusWindow(ctx.app, windowIdA, pageA);
+    }
   });
 
   test("losing the bound view fails that session closed and leaves the other running", async () => {
@@ -576,29 +617,35 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
     await focusWindow(ctx.app, windowIdA, pageA);
     await closeWindow(ctx.app, windowIdB);
 
-    const afterClose = await callTool(endpoint, b.sessionId, "actions.getContext");
-    const payload = JSON.stringify(afterClose);
+    // Polled: the binding resolves against live views, and the renderer teardown
+    // that follows `closeWindow` is not instantaneous, so a single synchronous
+    // call here could read the pre-teardown state on a slow machine.
+    let afterClose: any;
+    await expect
+      .poll(
+        async () => {
+          afterClose = await callTool(endpoint, b.sessionId, "actions.getContext");
+          return JSON.stringify(afterClose);
+        },
+        { timeout: T_LONG, intervals: [200, 400, 800] }
+      )
+      .toMatch(/SESSION_BINDING_GONE|No live Daintree view is open/);
 
     // The whole point: it fails, and it does NOT quietly answer with A's state.
     expect(payloadWorkspaceId(afterClose)).not.toBe(workspaceA);
-    expect(payload).toMatch(/SESSION_BINDING_GONE|No live Daintree view is open/);
 
-    // Discriminator for the canary finding below. Window B is gone, so window A
-    // is the only window left holding the only live project view. An unbound
-    // session has exactly one place it can go. If it still can't reach A, the
-    // problem is that A's view is invisible to focus-order routing — not that
-    // focus tracking is lagging.
+    // Window B is gone, so window A holds the only live project view and an
+    // unbound session has exactly one place it can go. Reaching A proves focus
+    // routing can see a view opened into an existing window; failing here means
+    // it cannot, which is the shape of the bug this PR fixes.
     const orphan = await initializeSession(endpoint, { clientName: "unbound-after-close" });
     const orphanResponse = await callTool(endpoint, orphan.sessionId, "actions.getContext");
-
-    console.log(
-      "[probe] unbound-with-one-window-left",
-      JSON.stringify({
-        workspaceA,
-        landedIn: payloadWorkspaceId(orphanResponse),
-        body: JSON.stringify(orphanResponse).slice(0, 400),
-      })
-    );
+    expect(
+      payloadWorkspaceId(orphanResponse),
+      `an unbound session could not reach the only remaining window: ${JSON.stringify(
+        orphanResponse
+      ).slice(0, 400)}`
+    ).toBe(workspaceA);
 
     // A is untouched by B's collapse.
     expect(payloadWorkspaceId(await callTool(endpoint, a.sessionId, "actions.getContext"))).toBe(
