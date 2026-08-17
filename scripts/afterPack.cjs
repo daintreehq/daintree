@@ -14,15 +14,166 @@ const ARCH_ENUM_NAMES = { 0: "ia32", 1: "x64", 2: "armv7l", 3: "arm64" };
 const UNIVERSAL_ARCH = 4;
 
 /**
- * The prebuild arches a package must carry. A macOS universal package merges
- * both slices, so both darwin prebuilds must be present; otherwise the single
- * target arch (falling back to the runner arch when electron-builder passes
- * no arch, e.g. in tests).
+ * Whether `appOutDir` is one of the two intermediate trees a macOS universal
+ * build merges, rather than a package that ships as-is.
+ *
+ * `doUniversalPack` (app-builder-lib macPackager.js) packs x64 and arm64 into
+ * `${appOutDir}-x64-temp` / `${appOutDir}-arm64-temp`, hands both to
+ * `@electron/universal`, then removes them — so afterPack fires three times on
+ * a universal build. Crucially, each intermediate reports the same
+ * `context.arch` a genuine standalone single-arch pack does (x64=1, arm64=3),
+ * so the arch alone cannot tell the two apart. The basename suffix is the only
+ * signal, which is why the prune below is keyed off it.
+ *
+ * The suffix must match exactly: an output directory that merely contains
+ * "-x64-temp" (say `mac-x64-temp-backup`) is a real package and must be pruned.
+ * The inverse mistake is the safe one — misreading a standalone pack as an
+ * intermediate keeps a prebuild that today ships anyway.
  */
-function getBetterSqlitePrebuildArches(contextArch) {
-  if (contextArch === UNIVERSAL_ARCH) return ["x64", "arm64"];
+function isMacUniversalIntermediate(appOutDir, electronPlatformName) {
+  if (electronPlatformName !== "darwin" || typeof appOutDir !== "string") return false;
+  const base = path.basename(appOutDir);
+  return base.endsWith("-x64-temp") || base.endsWith("-arm64-temp");
+}
+
+/**
+ * The prebuild arches a package must carry, and whether that set is certain
+ * enough to delete against.
+ *
+ * Both darwin prebuilds are required for a universal build — for the merged
+ * output because it runs on either arch, and for the two intermediates because
+ * `@electron/universal` aborts the merge when the trees hold different sets of
+ * Mach-O files. Every other target carries exactly its own arch.
+ *
+ * `exact: false` means electron-builder reported an arch this file does not
+ * recognise, so the set is a guess from the runner rather than the target.
+ * Validation still runs against the guess (that is the long-standing
+ * behaviour, and it is what lets tests omit an arch), but the prune and the
+ * foreign-binary guard are skipped: deleting against a guessed arch could
+ * remove the binary the package actually needs. Unlike isRunnerExecutableArch,
+ * where skipping loses validation, skipping here only forgoes ~2MB of
+ * shrinkage — the same bytes that shipped before #11829 — so degrading is
+ * strictly better than failing a release build on an unknown enum value.
+ */
+function resolveBetterSqlitePrebuildTarget(contextArch, electronPlatformName, appOutDir) {
+  if (
+    contextArch === UNIVERSAL_ARCH ||
+    isMacUniversalIntermediate(appOutDir, electronPlatformName)
+  ) {
+    return { arches: ["x64", "arm64"], exact: true };
+  }
   const name = ARCH_ENUM_NAMES[contextArch];
-  return [name || process.arch];
+  if (name === undefined) return { arches: [process.arch], exact: false };
+  return { arches: [name], exact: true };
+}
+
+const prebuildFileName = (electronPlatformName, arch) => `${electronPlatformName}-${arch}.node`;
+
+/**
+ * List `prebuilds/`, or null when the directory is absent.
+ *
+ * A missing directory is left to validateBetterSqlitePrebuilds, which names the
+ * exact prebuild it wanted; duplicating that error here would only bury it. Any
+ * other read failure is real and surfaces immediately — the prune cannot report
+ * what it did not read.
+ */
+function listBetterSqlitePrebuilds(prebuildsPath) {
+  try {
+    // Copied before sorting: readdirSync's result is the caller's to keep, and
+    // both the prune and the guard read this directory on the same package.
+    return [...fs.readdirSync(prebuildsPath)].sort();
+  } catch (err) {
+    if (err && err.code === "ENOENT") return null;
+    const msg = err && err.message ? err.message : String(err);
+    throw new Error(
+      `[afterPack] CRITICAL: better-sqlite3 prebuilds directory could not be read at ${prebuildsPath}: ${msg}. ` +
+        "Foreign-arch prebuilds can neither be removed nor verified. Check the packaged " +
+        "directory's permissions and the files/asarUnpack configuration."
+    );
+  }
+}
+
+/**
+ * Delete the prebuilds this target does not need (#11829).
+ *
+ * better-sqlite3 v13 ships every platform/arch pair in one package. The
+ * platform `files` overrides shed the foreign *platforms*, but no `files`
+ * pattern can shed the foreign *arch*: the pattern is compiled once per
+ * platform, and the two universal intermediates are indistinguishable from a
+ * standalone pack at that point (see isMacUniversalIntermediate). So a single
+ * arch package shipped the other arch's ~2MB binary — never loaded, just dead
+ * weight. Removing it here is safe: the prebuilds are asarUnpack'd loose files,
+ * so there is no archive to repack, and afterPack runs before fuses, signing
+ * and blockmap generation.
+ *
+ * Only this platform's own prebuilds are considered, matched on the
+ * `<platform>-` prefix rather than `<platform>` alone — `linuxmusl-x64.node`
+ * starts with "linux" but belongs to a different platform, and shedding it is
+ * the `files` override's job. A foreign-platform file that reaches here is a
+ * config regression, and validateNoForeignBetterSqlitePrebuilds reports it
+ * instead of quietly deleting the evidence.
+ *
+ * The arch is not parsed, so a prebuild for an arch this file has never heard
+ * of (a future `darwin-riscv64.node`) is still recognised as unwanted.
+ */
+function pruneForeignBetterSqlitePrebuilds(prebuildsPath, electronPlatformName, expectedArches) {
+  const entries = listBetterSqlitePrebuilds(prebuildsPath);
+  if (entries === null) return;
+
+  const keep = new Set(expectedArches.map((arch) => prebuildFileName(electronPlatformName, arch)));
+  for (const entry of entries) {
+    if (!entry.startsWith(`${electronPlatformName}-`) || !entry.endsWith(".node")) continue;
+    if (keep.has(entry)) continue;
+
+    const prebuildPath = path.join(prebuildsPath, entry);
+    try {
+      fs.unlinkSync(prebuildPath);
+    } catch (err) {
+      const msg = err && err.message ? err.message : String(err);
+      throw new Error(
+        `[afterPack] CRITICAL: foreign better-sqlite3 prebuild could not be removed at ${prebuildPath}: ${msg}. ` +
+          "The package would ship a native binary for an arch it never loads. Check the " +
+          "packaged file's permissions."
+      );
+    }
+    console.log(`[afterPack] Removed foreign better-sqlite3 prebuild: ${prebuildPath}`);
+  }
+}
+
+/**
+ * Fail the pack when a prebuild for another platform or arch survives.
+ *
+ * Not a restatement of the prune: the prune only touches this platform's own
+ * prebuilds, while this asserts the *complete* remaining set, so it catches
+ * what the prune deliberately does not — a platform `files` override that
+ * stopped shedding another OS or the musl variants, a prebuild naming shape
+ * the prune's prefix no longer matches, or a delete that silently did nothing.
+ *
+ * Filenames only. A binary carrying the wrong Mach-O/ELF/PE header under the
+ * right name still passes, and this says nothing about any other dependency —
+ * catching those needs a generic native-binary header scan, which is a
+ * different change.
+ */
+function validateNoForeignBetterSqlitePrebuilds(
+  prebuildsPath,
+  electronPlatformName,
+  expectedArches
+) {
+  const entries = listBetterSqlitePrebuilds(prebuildsPath);
+  if (entries === null) return;
+
+  const expected = new Set(
+    expectedArches.map((arch) => prebuildFileName(electronPlatformName, arch))
+  );
+  const foreign = entries.filter((entry) => entry.endsWith(".node") && !expected.has(entry));
+  if (foreign.length > 0) {
+    throw new Error(
+      `[afterPack] CRITICAL: better-sqlite3 prebuilds for another platform or arch survived packing ` +
+        `in ${prebuildsPath}: ${foreign.join(", ")}. Expected only ${[...expected].join(", ")}. ` +
+        "The package would ship native binaries it never loads. Check the platform `files` " +
+        "exclusions in electron-builder.config.cjs and the afterPack prune above."
+    );
+  }
 }
 
 /**
@@ -148,13 +299,17 @@ function validateAppAsar(asarPath) {
  * validateWinJobObjectAbi, and the OPPOSITE of the pre-v13 raw-V8 ABI probe
  * this replaces. The load probe only runs when the prebuild targets the
  * runner's own platform and arch; cross-target packages get a presence check.
+ *
+ * Takes the expected arches rather than deriving them, so this and the prune
+ * that runs before it cannot disagree about what the package is supposed to
+ * carry — a disagreement would fail the two legitimate universal intermediates.
  */
-function validateBetterSqlitePrebuilds(betterSqlitePath, electronPlatformName, contextArch) {
-  for (const arch of getBetterSqlitePrebuildArches(contextArch)) {
+function validateBetterSqlitePrebuilds(betterSqlitePath, electronPlatformName, expectedArches) {
+  for (const arch of expectedArches) {
     const prebuildPath = path.join(
       betterSqlitePath,
       "prebuilds",
-      `${electronPlatformName}-${arch}.node`
+      prebuildFileName(electronPlatformName, arch)
     );
     if (!fs.existsSync(prebuildPath)) {
       throw new Error(
@@ -518,7 +673,31 @@ exports.default = async function afterPack(context) {
     );
   }
 
-  validateBetterSqlitePrebuilds(betterSqlitePath, electronPlatformName, context.arch);
+  // One expected-arch set drives all three steps below. Deriving it twice is
+  // the trap here: a prune and a guard that disagree would fail the two
+  // universal intermediates, which legitimately carry both darwin prebuilds.
+  const prebuildsPath = path.join(betterSqlitePath, "prebuilds");
+  const prebuildTarget = resolveBetterSqlitePrebuildTarget(
+    context.arch,
+    electronPlatformName,
+    appOutDir
+  );
+  if (prebuildTarget.exact) {
+    pruneForeignBetterSqlitePrebuilds(prebuildsPath, electronPlatformName, prebuildTarget.arches);
+    validateNoForeignBetterSqlitePrebuilds(
+      prebuildsPath,
+      electronPlatformName,
+      prebuildTarget.arches
+    );
+  } else {
+    console.warn(
+      `[afterPack] Skipping better-sqlite3 foreign-arch prune: electron-builder reported an ` +
+        `unrecognized arch (${String(context.arch)}), so the target arch is a guess from the ` +
+        `${process.arch} runner and is not safe to delete against.`
+    );
+  }
+
+  validateBetterSqlitePrebuilds(betterSqlitePath, electronPlatformName, prebuildTarget.arches);
 
   console.log(`[afterPack] better-sqlite3 verified: ${betterSqlitePath}`);
 

@@ -221,6 +221,15 @@ module.exports = async function () {
       // the foreign-platform binaries (~12MB). Both darwin arches stay — the
       // universal build merges x64 and arm64 app trees, and the identical
       // Mach-O prebuilds present in both are allowlisted via x64ArchFiles.
+      //
+      // The foreign *arch* cannot be dropped here (#11829). This pattern is
+      // compiled once per platform, and the two trees the universal merge
+      // consumes are packed with the same arch a standalone single-arch pack
+      // reports — so an arch-keyed pattern would strip a prebuild from both
+      // merge inputs and @electron/universal would abort on the resulting
+      // Mach-O file-set mismatch. afterPack.cjs prunes the foreign arch
+      // instead, where the -x64-temp/-arm64-temp output dir distinguishes a
+      // merge input from a package that ships.
       files: [...baseFiles(), "!node_modules/better-sqlite3/prebuilds/{linux,linuxmusl,win32}-*.node"],
       x64ArchFiles:
         "Contents/Resources/app.asar.unpacked/node_modules/{node-pty/build/Release/**,better-sqlite3/prebuilds/darwin-*.node,win-job-object/bin/**,posix-pty-reaper/build/Release/**,onnxruntime-node/bin/**,@parcel/watcher-darwin-*/watcher.node,@parcel/watcher/bin/darwin-*/watcher.node}",
@@ -307,6 +316,7 @@ module.exports = async function () {
     win: {
       icon: "build/icon.ico",
       // Foreign-platform better-sqlite3 prebuilds — see the mac.files note.
+      // The other Windows arch is pruned in afterPack.cjs (#11829).
       files: [...baseFiles(), "!node_modules/better-sqlite3/prebuilds/{darwin,linux,linuxmusl}-*.node"],
       artifactName: "${productName}-${version}-${arch}-setup.${ext}",
       target: [
@@ -354,6 +364,7 @@ module.exports = async function () {
       icon: "build/icon.png",
       // Foreign-platform better-sqlite3 prebuilds — see the mac.files note.
       // Electron only runs on glibc, so the linuxmusl variants go too.
+      // The other glibc arch is pruned in afterPack.cjs (#11829).
       files: [...baseFiles(), "!node_modules/better-sqlite3/prebuilds/{darwin,win32,linuxmusl}-*.node"],
       executableName: "daintree",
       target: ["AppImage", "deb"],
