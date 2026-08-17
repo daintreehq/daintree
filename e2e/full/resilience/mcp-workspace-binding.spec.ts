@@ -66,6 +66,10 @@ async function post(
   extraHeaders: Record<string, string> = {},
   query = ""
 ): Promise<JsonRpcResponse> {
+  // A deadline of its own: a stalled call would otherwise outlive the
+  // `expect.poll` deadlines that wrap these, because a callback that never
+  // returns is never re-polled — the run hangs to the suite timeout instead of
+  // failing where the stall happened.
   const res = await fetch(`http://127.0.0.1:${endpoint.port}/mcp${query}`, {
     method: "POST",
     headers: {
@@ -75,6 +79,7 @@ async function post(
       ...extraHeaders,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(T_LONG),
   });
   const raw = await res.text();
   return {
@@ -403,12 +408,22 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
     const before = await captureVisibleState(ctx.app, { pageA, pageB });
 
     const b = await initializeSession(endpoint, { workspaceId: workspaceB, clientName: "bg-B" });
-    for (let i = 0; i < 5; i++) {
-      for (const tool of ["actions.getContext", "worktree.list", "terminal.list"]) {
+    const rounds = 5;
+    const tools = ["actions.getContext", "worktree.list", "terminal.list"];
+    // `terminal.list` is the one identity-free payload (both projects are idle),
+    // so it is the only tool that contributes no landing evidence.
+    const identityBearingTools = tools.length - 1;
+    const landings: Array<string | null> = [];
+    for (let i = 0; i < rounds; i++) {
+      for (const tool of tools) {
         const landedIn = payloadWorkspaceId(await callTool(endpoint, b.sessionId, tool));
         expect(landedIn === null || landedIn === workspaceB).toBe(true);
+        landings.push(landedIn);
       }
     }
+    // Without this, a run where every call errored out would land `null` across
+    // the board and sail through the assertion above having proved nothing.
+    expect(landings.filter((id) => id !== null).length).toBe(rounds * identityBearingTools);
 
     const after = await captureVisibleState(ctx.app, { pageA, pageB });
     expect(after).toEqual(before);
@@ -557,6 +572,9 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
       const workspaceC = await pageC.evaluate(
         () => (window as any).__DAINTREE_INITIAL_PROJECT__?.id ?? null
       );
+      // A null id would silently omit the binding header below, turning the
+      // bound case into an unbound one that passes for the wrong reason.
+      expect(workspaceC, "third window never reported a workspace id").not.toBeNull();
 
       const after = {
         A: resolvedWorkspaceId(

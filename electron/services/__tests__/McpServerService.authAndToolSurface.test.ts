@@ -6,6 +6,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { registerProjectView, unregisterProjectView } from "../../window/webContentsRegistry.js";
+import { setProjectViewManager, setWindowRegistry } from "../../window/windowRef.js";
 import {
   ElicitRequestSchema,
   type ElicitResult,
@@ -1430,6 +1431,9 @@ describe("McpServerService", () => {
     afterEach(() => {
       for (const wcId of registeredViews) unregisterProjectView(wcId);
       registeredViews.length = 0;
+      // The runtime-enable test below points the process-global manager at a
+      // specific window to stand in for the "last created view" fallback.
+      setProjectViewManager(null);
     });
 
     function boundManifest() {
@@ -1607,6 +1611,49 @@ describe("McpServerService", () => {
         getTextResult(await client.callTool({ name: "terminal.list", arguments: {} })).content[0]
           .text
       ).toBe('"from-window-A"');
+    });
+
+    it("still follows focus when the server was enabled at runtime, not at boot", async () => {
+      // Enabling mid-session used to hand the registry straight to
+      // `httpLifecycle.start()`, so `this._registry` stayed null for the rest
+      // of the process. The bridge reads that field, so every registry-aware
+      // path silently degraded to the process-global view manager. Starting
+      // through `start()` is what this asserts, via the one consequence that
+      // is visible from outside: routing that tracks focus.
+      storeState.mcpServer = { ...storeState.mcpServer, enabled: false, port: 0 };
+      const winA = boundWindow(REF_A, "from-window-A");
+      const winB = boundWindow(REF_B, "from-window-B");
+      const { registry, focus } = twoWindowRegistry(winA, winB);
+
+      // The registry and the process-global fallback deliberately disagree: B
+      // stands in for the "last created" view a null registry resolves to,
+      // while focus says A. Only a captured registry can tell them apart, so
+      // the first call is what inverts if the capture regresses.
+      setWindowRegistry(registry);
+      setProjectViewManager(winB.projectViewManager as never);
+      focus.current = [winA.windowContext, winB.windowContext];
+
+      await service.setEnabled(true);
+
+      const client = await connectBound(service.currentPort!);
+      const onA = await client.callTool({ name: "terminal.list", arguments: {} });
+
+      focus.current = [winB.windowContext, winA.windowContext];
+      const onB = await client.callTool({ name: "terminal.list", arguments: {} });
+
+      expect([
+        {
+          text: getTextResult(onA).content[0].text,
+          workspace: onA._meta?.["org.daintree/resolved-workspace"],
+        },
+        {
+          text: getTextResult(onB).content[0].text,
+          workspace: onB._meta?.["org.daintree/resolved-workspace"],
+        },
+      ]).toEqual([
+        { text: '"from-window-A"', workspace: REF_A },
+        { text: '"from-window-B"', workspace: REF_B },
+      ]);
     });
   });
 });
