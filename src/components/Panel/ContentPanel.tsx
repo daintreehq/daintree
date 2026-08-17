@@ -150,7 +150,7 @@ export interface ContentPanelProps extends BasePanelProps {
 interface GridChromeInputs {
   /** Multi-pane grid gate — every ambient state below needs a sibling to contrast against. */
   showGridAttention: boolean;
-  /** Lone-pane focus cue (#11837): single pane, Assistant open, keystrokes land here. */
+  /** Lone-pane focus cue (#11837): single pane, Assistant open, pane focused or armed. */
   showLonePaneFocusCue: boolean;
   showSelectedChrome: boolean;
   showGridAgentHighlights: boolean;

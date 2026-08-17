@@ -313,6 +313,19 @@ describe("ContentPanel grid chrome priority (#11837 extraction guard)", () => {
     expect(chromeOf(container)).toBe("none");
   });
 
+  it("ranks working above hibernation", () => {
+    // The adjacent pair the waiting-vs-hibernated case below does not reach —
+    // without this, swapping the working and hibernated branches passes.
+    mockState.showGridAgentHighlights = true;
+    const { container } = renderPanel({
+      isMultiPanelGrid: true,
+      isFocused: false,
+      isHibernated: true,
+      agentState: "working",
+    });
+    expect(chromeOf(container)).toBe("working");
+  });
+
   it("ranks hibernation below the agent states but above bare", () => {
     mockState.showGridAgentHighlights = true;
     const { container } = renderPanel({

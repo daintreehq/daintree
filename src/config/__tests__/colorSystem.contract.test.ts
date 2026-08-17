@@ -141,6 +141,9 @@ describe("color system contract", () => {
     // because every consumer carries the pre-extension recipe as its var()
     // fallback — a theme that authors none of them must render identically.
     // Guard the fallback's presence (not its literal value) at each site.
+    // `.terminal-selected-quiet` reads the border key but deliberately owns no
+    // box-shadow (see the uncontested-property contract below), so it is held
+    // to the border half only.
     for (const selector of [
       ".terminal-selected",
       ".terminal-selected-quiet",
@@ -157,6 +160,7 @@ describe("color system contract", () => {
       expect(block, `${selector} themeable border with fallback`).toMatch(
         /var\(\s*--panel-focus-border,\s*color-mix\(/
       );
+      if (selector === ".terminal-selected-quiet") continue;
       expect(block, `${selector} themeable shadow with fallback`).toMatch(
         /var\(\s*--panel-focus-shadow,\s*inset /
       );
@@ -178,50 +182,109 @@ describe("color system contract", () => {
     );
   });
 
-  it("keeps the lone-pane quiet cue readable under states that own the same properties", () => {
-    // #11837: the quiet cue paints ONLY border-color and box-shadow, so any
-    // single-class rule setting both replaces it outright — and with no fill
-    // to fall back on the pane goes back to looking identical focused and
-    // unfocused. `.terminal-selected` is immune because its fill survives.
-    // Every state class that can land on the same pane needs a paired rule
-    // re-asserting the focus ring, so adding a new one without pairing it
-    // silently reintroduces the bug this issue was filed for.
-    const statesOwningBothProperties = [
+  it("anchors the lone-pane quiet cue on a property no competing pane state claims", () => {
+    // #11837, and the reason the cue is not simply a lighter `.terminal-
+    // selected`: a lone pane can carry an agent-state border or the dictation
+    // lock at the same time, and those are single-class rules that land later
+    // in this file — including their `.light` overrides. Whatever property
+    // they set, they replace outright. `.terminal-selected` survives that on
+    // its surface-lift fill; this cue has none by design, so it must own at
+    // least one property none of them touch or it silently becomes invisible
+    // exactly when a state is active. Adding a state class that claims that
+    // property has to fail here rather than in someone's eyes.
+    const COMPETING_STATES = [
       "panel-voice-dictation-locked",
       "panel-state-compiling",
       "panel-state-working",
       "panel-state-waiting",
       "panel-state-hibernated",
-    ].filter((state) => {
-      const rule = indexCss.match(new RegExp(`^\\.${state}\\s*\\{[^}]+\\}`, "m"))?.[0];
-      return Boolean(rule && /border-color:/.test(rule) && /box-shadow:/.test(rule));
-    });
-    expect(statesOwningBothProperties.length).toBeGreaterThan(0);
+    ];
 
-    for (const state of statesOwningBothProperties) {
-      expect(indexCss, `.terminal-selected-quiet is paired with .${state}`).toMatch(
-        new RegExp(`\\.terminal-selected-quiet\\.${state}[^{}]*\\{`)
-      );
+    /**
+     * Property names declared by every TOP-LEVEL rule whose selector carries
+     * `className`. Scoped to the unnested cascade — which includes the `.light`
+     * overrides — because the forced-colors block deliberately converges these
+     * classes onto a shared system outline, and the distinguishability that
+     * mode needs is a different problem with its own contract below. Nested
+     * rules are indented in this file; top-level selectors start at column 0.
+     */
+    function propertiesSetFor(className: string) {
+      const properties = new Set<string>();
+      const names = new RegExp(`\\.${className}(?![\\w-])`);
+      for (const [, selector, body] of indexCss.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
+        if (!selector || !body) continue;
+        // A rule that also names the cue is a deliberate pairing, not a rival.
+        if (selector.includes("terminal-selected-quiet")) continue;
+        const declaresAtTopLevel = selector
+          .split("\n")
+          .some((line) => names.test(line) && !/^\s/.test(line));
+        if (!declaresAtTopLevel) continue;
+        for (const [, property] of body.matchAll(/(?:^|;)\s*([a-z-]+)\s*:/g)) {
+          if (property) properties.add(property);
+        }
+      }
+      return properties;
     }
-    // The paired rule has to restore the ring, not merely exist.
-    const paired = indexCss.match(/\.terminal-selected-quiet\.[\s\S]*?\{[^}]+\}/)?.[0];
-    expect(paired).toMatch(/box-shadow:\s*var\(\s*--panel-focus-shadow,/);
+
+    const contested = new Set<string>();
+    for (const state of COMPETING_STATES) {
+      const properties = propertiesSetFor(state);
+      // Guards the guard — a renamed state class would otherwise contribute
+      // nothing and make the survivor check trivially pass.
+      expect(properties.size, `.${state} has styling rules`).toBeGreaterThan(0);
+      properties.forEach((property) => contested.add(property));
+    }
+
+    const quiet = indexCss.match(/^\.terminal-selected-quiet\s*\{([^}]+)\}/m)?.[1];
+    expect(quiet, ".terminal-selected-quiet rule exists").toBeTruthy();
+    const quietProperties = [...(quiet ?? "").matchAll(/(?:^|;)\s*([a-z-]+)\s*:/g)].map(
+      ([, property]) => property
+    );
+    const uncontested = quietProperties.filter((property) => !contested.has(property ?? ""));
+
+    expect(
+      uncontested,
+      `every property of the cue [${quietProperties.join(", ")}] is also set by a pane state`
+    ).not.toEqual([]);
   });
 
-  it("gives the lone-pane quiet cue the same accessibility parity as its siblings", () => {
-    // A new focus class silently loses performance-mode / forced-colors /
-    // increased-contrast handling unless it is added to all three blocks —
-    // none of which fail loudly when a selector is missing.
-    expect(indexCss).toMatch(/body\[data-performance-mode="true"\]\s+\.terminal-selected-quiet/);
-
-    // Both media conditions appear more than once in the file, so select the
-    // block that actually covers the class rather than whichever comes first.
+  it("keeps the lone-pane quiet cue distinguishable under forced colors", () => {
+    // Forced colors collapses the palette to a few system colors and drops
+    // box-shadow, so several pane rules converge on the same solid Highlight
+    // outline. A lone focused pane that is ALSO locked or waiting would then
+    // be pixel-identical to the same pane with the Assistant focused — the
+    // #11837 ambiguity, reintroduced in the one mode that can least afford it.
+    // Stroke style is the differentiator the UA leaves alone.
     const forcedColors = indexCss
       .match(/@media \(forced-colors: active\)\s*\{[\s\S]*?\n\}/g)
       ?.find((block) => block.includes(".terminal-selected-quiet"));
     expect(forcedColors, "a forced-colors block covers the quiet cue").toBeTruthy();
-    expect(forcedColors).toMatch(/\.terminal-selected-quiet\s*\{[^}]*Highlight/);
+    const block = forcedColors ?? "";
 
+    const quietOutline = block.match(/\.terminal-selected-quiet\s*\{[^}]*outline:\s*([^;]+);/)?.[1];
+    expect(quietOutline, "the cue outlines the pane").toBeTruthy();
+    expect(quietOutline).toContain("dashed");
+
+    // Every other pane rule in the block that outlines must differ from it,
+    // otherwise whichever lands later wins and the two states converge again.
+    const rivals = [...block.matchAll(/(\.[^{}]*)\{([^}]*outline:\s*([^;]+);[^}]*)\}/g)].filter(
+      ([, selector]) => selector && !selector.includes("terminal-selected-quiet")
+    );
+    expect(rivals.length, "other pane rules outline in forced colors").toBeGreaterThan(0);
+    for (const [, selector, , outline] of rivals) {
+      expect(outline?.trim(), `${selector?.trim()} differs from the focus cue`).not.toBe(
+        quietOutline?.trim()
+      );
+    }
+
+    // Equal specificity, so the cue must also come last to win when a pane is
+    // focused AND locked at the same time.
+    expect(block.indexOf(".terminal-selected-quiet")).toBeGreaterThan(
+      block.indexOf(".panel-voice-dictation-locked")
+    );
+  });
+
+  it("scales the lone-pane quiet cue with the increased-contrast border", () => {
     const increasedContrast = indexCss
       .match(/@media \(prefers-contrast: more\)\s*\{[\s\S]*?\n\}/g)
       ?.find((block) => block.includes(".terminal-selected-quiet"));
@@ -229,6 +292,9 @@ describe("color system contract", () => {
     // Participation in the border-width rule, not mere presence in the block —
     // the selector could otherwise sit in an unrelated rule and still pass.
     expect(increasedContrast).toMatch(/\.terminal-selected-quiet[^{}]*\{[^}]*border-width:\s*2px/);
+    // The cue sits inside the border, so widening one without the other paints
+    // the hairline on top of the border instead of within it.
+    expect(increasedContrast).toMatch(/\.terminal-selected-quiet\s*\{[^}]*outline-offset:\s*-2px/);
   });
 
   it("wires :root --background to --theme-surface-canvas", () => {

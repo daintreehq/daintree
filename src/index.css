@@ -1881,23 +1881,33 @@ body,
 
 /* Lone-pane focus state (#11837) — a single-pane grid has no sibling to
    contrast against, so it carries no selection chrome at all and reads the
-   same whether the pane or the Daintree Assistant owns the keystrokes. This
-   is the perimeter half of `.terminal-selected` (same themeable border ink
-   and ring stack) with the surface-lift fill deliberately dropped: the fill
-   is what made an always-lit lone pane too heavy when the guard was removed
-   outright in #7544, and it is the one ingredient a lone pane never needs
-   since there is no neighbour to be lifted above. Applied only while the
-   Assistant is open, so the bare lone pane stays the default otherwise. */
+   same whether the pane or the Daintree Assistant owns the keystrokes.
+
+   Deliberately NOT built from the same properties as `.terminal-selected`.
+   A pane root's border-color and box-shadow are already spoken for by the
+   agent-state borders, their `.light` overrides further down, and the
+   dictation lock — all single-class rules that land later and replace both
+   outright. `.terminal-selected` survives that because its surface-lift fill
+   remains, but this cue has no fill by design (the fill is what made an
+   always-lit lone pane too heavy when the guard was removed outright in
+   #7544). So the cue is anchored on `outline`, which nothing else on the
+   pane claims: it composes with whatever state owns the border instead of
+   fighting it, and a negative offset keeps it inside the border box so no
+   ancestor's paint containment can clip it. The border ink is still set for
+   the common uncontested case, where the two read as one 2px focus edge.
+   Applied only while the Assistant is open, so a bare lone pane stays the
+   default otherwise. */
 .terminal-selected-quiet {
   border-color: var(
     --panel-focus-border,
     color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
   );
-  box-shadow: var(
-    --panel-focus-shadow,
-    inset 0 0 0 1px var(--theme-overlay-soft),
-    0 0 0 1px var(--theme-overlay-strong)
-  );
+  outline: 1px solid
+    var(
+      --panel-focus-border,
+      color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+    );
+  outline-offset: -1px;
 }
 
 /* Daintree Assistant focus state — anchors the active-surface affordance on
@@ -1969,27 +1979,6 @@ body,
   box-shadow:
     inset 0 0 0 1px color-mix(in oklab, var(--color-category-amber) 15%, transparent),
     0 0 0 1px color-mix(in oklab, var(--color-category-amber) 10%, transparent);
-}
-
-/* Lone-pane focus cue meeting a state that owns the same two properties.
-   `terminal-selected-quiet` paints only border-color and box-shadow, so the
-   rules above replace it outright and a locked or compiling lone pane loses
-   its focus signal entirely — the exact ambiguity #11837 set out to remove.
-   The full-strength `.terminal-selected` never hits this because its fill
-   survives. Re-assert the focus rings here and leave each state's border ink
-   alone, so the two signals read together the way the dictation-lock comment
-   above already promises. Two class tokens outrank the single-class rules
-   regardless of source order. */
-.terminal-selected-quiet.panel-voice-dictation-locked,
-.terminal-selected-quiet.panel-state-compiling,
-.terminal-selected-quiet.panel-state-working,
-.terminal-selected-quiet.panel-state-waiting,
-.terminal-selected-quiet.panel-state-hibernated {
-  box-shadow: var(
-    --panel-focus-shadow,
-    inset 0 0 0 1px var(--theme-overlay-soft),
-    0 0 0 1px var(--theme-overlay-strong)
-  );
 }
 
 /* Arming state — pre-audio confirmation window (~200ms). User pressed the
@@ -2539,8 +2528,9 @@ body[data-performance-mode="true"] .settings-section-header {
 }
 
 /* Disable terminal glow in performance mode */
+/* `.terminal-selected-quiet` is absent on purpose: it carries no box-shadow
+   to simplify, and its outline is a 1px hairline with no glow to strip. */
 body[data-performance-mode="true"] .terminal-selected,
-body[data-performance-mode="true"] .terminal-selected-quiet,
 body[data-performance-mode="true"] .terminal-focused,
 body[data-performance-mode="true"] .assistant-focused {
   box-shadow: inset 0 0 0 1px var(--theme-overlay-medium) !important;
@@ -2575,12 +2565,6 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 
   .terminal-selected {
-    outline: 2px solid Highlight;
-    outline-offset: -2px;
-    border-color: Highlight;
-  }
-
-  .terminal-selected-quiet {
     outline: 2px solid Highlight;
     outline-offset: -2px;
     border-color: Highlight;
@@ -2622,6 +2606,19 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-color: Highlight;
     outline: 2px solid Highlight;
     outline-offset: -2px;
+  }
+
+  /* Must come after every rule above that also outlines the pane. Forced
+     colors collapses this palette to a handful of system colors, so a lone
+     focused pane that is also locked or waiting would otherwise carry the
+     identical solid Highlight outline as the same pane with the Assistant
+     focused. Stroke style is one of the few things the UA leaves alone, so
+     the focus cue is dashed and the states stay solid — the distinction
+     survives where colour cannot carry it. */
+  .terminal-selected-quiet {
+    outline: 2px dashed Highlight;
+    outline-offset: -2px;
+    border-color: Highlight;
   }
 
   .terminal-pane {
@@ -2784,6 +2781,13 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   .terminal-selected-quiet,
   .terminal-focused {
     border-width: 2px;
+  }
+
+  /* Track the widened border so the cue's hairline stays inside it rather
+     than painting on top of it. */
+  .terminal-selected-quiet {
+    outline-width: 2px;
+    outline-offset: -2px;
   }
 
   .assistant-focused {

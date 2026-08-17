@@ -33,12 +33,16 @@ function contentPanelElements(source: ts.SourceFile) {
   return found;
 }
 
-/** True when the element passes the prop by name or could via a spread. */
+/**
+ * The prop must be named explicitly. A spread is not accepted as satisfying
+ * this: its contents are not visible here, so allowing one would let a future
+ * refactor drop the explicit prop and keep the contract green.
+ */
 function suppliesMultiPanelGrid(element: ts.JsxOpeningLikeElement, source: ts.SourceFile) {
-  return element.attributes.properties.some((attribute) => {
-    if (ts.isJsxSpreadAttribute(attribute)) return true;
-    return attribute.name?.getText(source) === "isMultiPanelGrid";
-  });
+  return element.attributes.properties.some(
+    (attribute) =>
+      ts.isJsxAttribute(attribute) && attribute.name.getText(source) === "isMultiPanelGrid"
+  );
 }
 
 describe("grid hosts propagate isMultiPanelGrid to ContentPanel (#11837)", () => {
