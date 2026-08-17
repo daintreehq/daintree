@@ -147,6 +147,47 @@ export interface ContentPanelProps extends BasePanelProps {
   onTabReorder?: (newOrder: string[]) => void;
 }
 
+interface GridChromeInputs {
+  /** Multi-pane grid gate — every ambient state below needs a sibling to contrast against. */
+  showGridAttention: boolean;
+  /** Lone-pane focus cue (#11837): single pane, Assistant open, pane focused or armed. */
+  showLonePaneFocusCue: boolean;
+  showSelectedChrome: boolean;
+  showGridAgentHighlights: boolean;
+  isVoiceArming: boolean;
+  isWaiting: boolean;
+  isWorkingState: boolean;
+  isHibernated: boolean;
+}
+
+/**
+ * Resolves the grid pane's container chrome to exactly one class.
+ *
+ * Ordered highest-priority first; the multi-pane branches are the historical
+ * ternary chain unchanged. `showLonePaneFocusCue` sits last because every
+ * branch above it is gated on `showGridAttention`, which a single-pane grid
+ * never satisfies — so the two groups are mutually exclusive in practice and
+ * a lone pane only ever picks between the quiet cue and the bare fallback.
+ */
+function resolveGridPanelChromeClass({
+  showGridAttention,
+  showLonePaneFocusCue,
+  showSelectedChrome,
+  showGridAgentHighlights,
+  isVoiceArming,
+  isWaiting,
+  isWorkingState,
+  isHibernated,
+}: GridChromeInputs): string {
+  if (showGridAttention && isVoiceArming) return "panel-state-arming";
+  if (showGridAttention && showSelectedChrome) return "terminal-selected";
+  if (showGridAttention && showGridAgentHighlights && isWaiting) return "panel-state-waiting";
+  if (showGridAttention && showGridAgentHighlights && isWorkingState) return "panel-state-working";
+  if (showGridAttention && isHibernated) return "panel-state-hibernated";
+  if (showLonePaneFocusCue) return "terminal-selected-quiet";
+  return "border-overlay hover:border-tint/[0.08]";
+}
+
 const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function ContentPanelInner(
   {
     id,
@@ -314,6 +355,22 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // releases. Ambient agent-state borders (`panel-state-*`) still render.
   const isAssistantActive = useMacroFocusStore((s) => s.focusedRegion === "assistant");
   const showSelectedChrome = (isFocused || isSelected) && !isAssistantActive;
+  // #11837: a lone grid pane has no sibling to contrast against, so it skips
+  // `showGridAttention` entirely and renders bare in every state — including
+  // while the Assistant holds the keystrokes. That leaves the two states
+  // indistinguishable exactly when telling them apart matters. Light the pane
+  // with the fill-free `terminal-selected-quiet` perimeter when it owns focus
+  // AND the Assistant is on screen to compete for it. Gating on visibility (a
+  // separate selector so the boolean stays primitive) keeps the bare lone pane
+  // the default whenever the Assistant is closed, which is the outcome #7544's
+  // fix lost by dropping the guard outright.
+  const isAssistantVisible = useMacroFocusStore((s) => s.visibility.assistant);
+  const showLonePaneFocusCue =
+    location === "grid" &&
+    !isMaximized &&
+    !isMultiPanelGrid &&
+    isAssistantVisible &&
+    showSelectedChrome;
   // Voice-dictation lock indicator: persistent amber border on the pinned
   // target. Selector returns a boolean for stable equality across unrelated
   // store updates (transcript deltas, audio levels). Renders independently of
@@ -524,17 +581,16 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",
         location === "grid" &&
           !isMaximized &&
-          (showGridAttention && isVoiceArming
-            ? "panel-state-arming"
-            : showSelectedChrome && showGridAttention
-              ? "terminal-selected"
-              : showGridAttention && showGridAgentHighlights && blockedState === "waiting"
-                ? "panel-state-waiting"
-                : showGridAttention && showGridAgentHighlights && isWorkingState
-                  ? "panel-state-working"
-                  : showGridAttention && isHibernated
-                    ? "panel-state-hibernated"
-                    : "border-overlay hover:border-tint/[0.08]"),
+          resolveGridPanelChromeClass({
+            showGridAttention,
+            showLonePaneFocusCue,
+            showSelectedChrome,
+            showGridAgentHighlights,
+            isVoiceArming,
+            isWaiting: blockedState === "waiting",
+            isWorkingState,
+            isHibernated,
+          }),
         location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
         // Voice-dictation lock border overrides ambient state colours so the
         // pinned target stays unambiguously visible. Applied after the state
