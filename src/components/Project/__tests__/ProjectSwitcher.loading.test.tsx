@@ -389,35 +389,51 @@ describe("ProjectSwitcher background-agent badge", () => {
   it("reports the wait and the work still in flight together", () => {
     // These used to contend for one carrier, so a fleet that was both asking
     // for input AND still churning looked exactly like one that had stalled
-    // (#11832). Demand still leads — it is the half that needs the user.
+    // (#11832). Both are in the label now; demand leads, because it is the half
+    // that needs the user.
     paletteState.nonActiveAgentCounts = {
       activeAgentCount: 5,
       waitingAgentCount: 1,
       waitingProjectCount: 1,
     };
-    const { getByRole, getByTestId } = render(<ProjectSwitcher />);
+    const { getByRole } = render(<ProjectSwitcher />);
     const label = getByRole("status").getAttribute("aria-label");
     expect(label).toContain("1 project waiting for input");
     expect(label).toContain("5 background agents working");
     expect(label?.indexOf("waiting")).toBeLessThan(label?.indexOf("working") ?? -1);
-    // Hue carries the demand, shape carries the liveness — so the mark is the
-    // open glyph even though the colour still says "waiting".
-    expect(getByTestId("project-switcher-badge-arc")).toBeTruthy();
   });
 
-  it("closes the badge's shape when the fleet is only waiting", () => {
-    paletteState.nonActiveAgentCounts = {
+  it("keeps the badge's hue on demand even while the fleet is working", () => {
+    // Compared across the three fleets rather than against a token name: what
+    // has to hold is that a fleet doing both marks itself the way a waiting one
+    // does and not the way a working one does. Naming the class would make
+    // renaming it a test edit while proving nothing about the choice.
+    const markFor = (counts: {
+      activeAgentCount: number;
+      waitingAgentCount: number;
+      waitingProjectCount: number;
+    }) => {
+      paletteState.nonActiveAgentCounts = counts;
+      const view = render(<ProjectSwitcher />);
+      const className = view.getByTestId("project-switcher-badge-dot").className;
+      view.unmount();
+      return className;
+    };
+
+    const waitingOnly = markFor({
       activeAgentCount: 0,
       waitingAgentCount: 2,
       waitingProjectCount: 2,
-    };
-    const { getByRole, queryByTestId } = render(<ProjectSwitcher />);
-    const badge = getByRole("status");
-    expect(badge.getAttribute("aria-label")).toContain("2 projects waiting");
-    expect(queryByTestId("project-switcher-badge-arc")).toBeNull();
-    // A closed mark is actually drawn — "no arc" would also be satisfied by a
-    // badge that had quietly stopped rendering anything at all.
-    expect(badge.querySelector("span")).toBeTruthy();
+    });
+    const workingOnly = markFor({
+      activeAgentCount: 3,
+      waitingAgentCount: 0,
+      waitingProjectCount: 0,
+    });
+    const both = markFor({ activeAgentCount: 5, waitingAgentCount: 1, waitingProjectCount: 1 });
+
+    expect(both).toBe(waitingOnly);
+    expect(both).not.toBe(workingOnly);
   });
 
   it("falls back to working agents when none are waiting", () => {

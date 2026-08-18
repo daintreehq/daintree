@@ -2706,6 +2706,24 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     background-color: CanvasText !important;
   }
 
+  /* Project-switcher row marks. The solid states are a CSS background, which
+     forced colors pushes toward Canvas, so the whole 8px slot would read as
+     empty. Repaint them as a CanvasText disc: hue is gone here either way, and
+     the row's own line states both counts in words, so all this has to preserve
+     is that the row is marked at all. */
+  div.workspace-mark {
+    background-color: CanvasText !important;
+    border-color: CanvasText;
+  }
+
+  /* The two-tone mark is an SVG, so it needs its fills forced rather than its
+     background. Both slices collapse to CanvasText: the split cannot survive a
+     palette with no second colour to carry it, and only the notch between them
+     is left to say the mark had two halves. */
+  svg.workspace-mark path {
+    fill: CanvasText;
+  }
+
   /* SettingsSwitch (Radix Switch). The track's unchecked border is already
      covered by the global button/[role="button"] rule above. Add the checked
      fill plus thumb contrast so on/off is distinguishable beyond thumb position.

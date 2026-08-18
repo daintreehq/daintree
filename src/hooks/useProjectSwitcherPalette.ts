@@ -156,7 +156,7 @@ export type ProjectSectionKey = (typeof PROJECT_SECTION_ORDER)[number];
  * completions alike — so any label naming a sort order would be a lie the row
  * contents immediately expose. "Running" requires live agents; projects with
  * only bare processes fall through to Pinned/Other, where their status line
- * still says "Process running".
+ * still reports the processes.
  */
 export const PROJECT_SECTION_LABELS: Record<ProjectSectionKey, string> = {
   current: "Current project",
@@ -485,7 +485,7 @@ function resortOtherBand(
  *   to the user, which outranks agents that are merely running.
  * - `pinned` sits above `running`: an explicit pin is a stronger signal than
  *   the operational fact that something is executing. A pinned running project
- *   stays in Pinned; its status line still says "Agent running".
+ *   stays in Pinned; its row still prints its running count.
  * - `running` requires live agents. Bare leftover processes are residency, not
  *   intent — those projects fall through to Pinned/Other.
  *

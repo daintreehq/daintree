@@ -1,4 +1,5 @@
-import { useMemo, useEffect, useRef, useState, useCallback } from "react";
+import { Fragment, useMemo, useEffect, useRef, useState, useCallback } from "react";
+import type { JSX } from "react";
 import {
   BellOff,
   ChevronDown,
@@ -43,13 +44,16 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ArrowDownAZ, ChartNoAxesColumn, Clock, SpinnerCircle } from "@/components/icons";
+import { ArrowDownAZ, ChartNoAxesColumn, Clock } from "@/components/icons";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   formatFleetLiveness,
   getProjectRowStatus,
   getScratchRowStatus,
-  ROW_MARK_CLASS,
+  ROW_DOT_CLASS,
+  ROW_MARK_COLOR,
+  runningShare,
+  type ProjectRowTone,
   ROW_TONE_CLASS,
   type ProjectRowStatus,
 } from "@/lib/projectRowStatus";
@@ -230,21 +234,32 @@ interface ProjectListItemProps {
 }
 
 /**
- * The mark takes its hue from the status line's tone and its shape from whether
- * the row is still executing (#11832) — two independent facts on one glyph.
- * Neither is ever the only carrier: status must not be colour-only, and the
- * sentence beside it says both in words.
+ * The row's leading mark: one 8px shape that weighs the row's running agents
+ * against the ones asking for something (#11832).
+ *
+ * Two colours in one mark, as a quarter-snapped pie: green for the runs still
+ * going, the demand hue for the agents stopped on the user. A project that is
+ * half waiting and half working is the state the switcher exists to surface,
+ * and a single-hue dot could only ever report one half of it — which is the
+ * original bug, one carrier for two facts.
+ *
+ * A pie rather than the open arc #11836 tried. That arc failed for a reason
+ * worth recording: it is the app's `working` glyph everywhere else
+ * (`terminalStateConfig`), it was the one place that glyph did not spin, and
+ * hollowing the mark out spread the demand hue over a sub-pixel stroke that
+ * reads grey. This keeps the solid disc — the hue has its full area back — and
+ * puts the second fact in the one channel a disc has left.
+ *
+ * Angle is a weak channel at 8px, so the share is snapped to quarters and
+ * floored (see `runningShare`): the mark makes one of five statements — all
+ * green, mostly green, even, mostly demand, all demand — rather than a
+ * proportion nobody can measure at this size. The exact figures lead the line
+ * beside it, which is where anyone who needs them reads them anyway.
  *
  * A row with nothing to report draws no mark, only the slot that reserves its
  * width (#11692). The slot is what keeps the tiles and names in one column: an
  * omitted mark would pull every quiet row left of the busy ones, and a list that
  * is mostly quiet would read as the ragged edge rather than the tidy one.
- *
- * The slot is sized for the arc rather than the dot. At the old 6px the arc's
- * gap was about a pixel and a half of stroke, which anti-aliasing turns into a
- * smudge — the shape has to be legible at 1x or it isn't a carrier at all. The
- * closed marks keep their 6px so a quiet list is no louder than before; the slot
- * centres whichever one draws, so the column stays put either way.
  */
 function StatusDot({
   status,
@@ -256,35 +271,20 @@ function StatusDot({
   // One slot, one decision. Written as a single choice rather than separate
   // conditions so the slot cannot hold two marks at once: the resume mark only
   // reaches here on a status that already agreed to yield, and an auto-parked
-  // row is the case where both would otherwise have drawn (#11822). Liveness
-  // never contends for the slot — every status that yields has stopped.
+  // row is the case where both would otherwise have drawn (#11822).
   const dot = showResumeDot ? (
-    // Hidden from assistive tech, which hears the row's own "N agents will
-    // resume" phrase instead — a live region per row would re-announce the
-    // whole list on every render, and colour must not be the only carrier.
     <div
-      className="w-1.5 h-1.5 rounded-full bg-text-secondary"
+      className="workspace-mark w-2 h-2 rounded-full bg-text-secondary"
       data-testid="workspace-resume-dot"
       aria-hidden="true"
     />
-  ) : status.isDormantFallback ? null : status.isLive ? (
-    // Static: the open gap is the fact, and it survives reduced motion, a
-    // paused frame and a screenshot. Twenty rows spinning would also turn the
-    // list into a field of movement, which is the opposite of scannable.
-    <SpinnerCircle
-      className={cn("w-2.5 h-2.5", ROW_MARK_CLASS[status.tone].arc)}
-      data-testid="workspace-status-dot"
-    />
-  ) : (
-    <div
-      className={cn("w-1.5 h-1.5 rounded-full", ROW_MARK_CLASS[status.tone].dot)}
-      data-testid="workspace-status-dot"
-    />
+  ) : status.markTone === null ? null : (
+    <AgentMixDot tone={status.markTone} mix={status.agentMix} />
   );
 
   return (
     <div
-      className="flex w-2.5 h-2.5 shrink-0 items-center justify-center"
+      className="flex w-2 h-2 shrink-0 items-center justify-center"
       data-testid="workspace-status-slot"
     >
       {dot}
@@ -293,44 +293,181 @@ function StatusDot({
 }
 
 /**
- * A row's second line: what it wants, then what is still moving, then which
+ * Half the width of the notch cut at each boundary of a two-tone mark, in
+ * turns. At 8px it lands a little under a pixel at the rim — enough to read as
+ * a division rather than as a seam, and small enough that the wedge it eats
+ * cannot move the mark across one of the quarters `runningShare` snaps to.
+ */
+const MARK_GAP_TURNS = 0.025;
+
+/**
+ * One slice of the mark, from `startTurn` to `endTurn` clockwise from 12
+ * o'clock.
+ *
+ * Both halves are drawn this way rather than laying a wedge over a full-bleed
+ * circle. Inset by `MARK_GAP_TURNS` at each end, the two slices leave a
+ * transparent notch at both boundaries and the row shows through — which is
+ * what makes the split survive two hues that sit close together, as `review`
+ * and `working` do in most palettes (both are greens, `activity-completed`
+ * falling back to `status-success`). Meeting on a shared edge those two read as
+ * one solid disc, which is exactly the single-hue mark the split exists to
+ * replace. Transparent rather than a drawn separator, so it is right in every
+ * theme without anything here having to know which one is active.
+ */
+function wedgePath(startTurn: number, endTurn: number): string {
+  const point = (turn: number) => {
+    const angle = turn * 2 * Math.PI;
+    return `${(8 + 8 * Math.sin(angle)).toFixed(3)} ${(8 - 8 * Math.cos(angle)).toFixed(3)}`;
+  };
+  const largeArc = endTurn - startTurn > 0.5 ? 1 : 0;
+  return `M 8 8 L ${point(startTurn)} A 8 8 0 ${largeArc} 1 ${point(endTurn)} Z`;
+}
+
+/**
+ * The mark itself: a solid disc when the row leans entirely one way, a two-tone
+ * pie when it has both kinds of agent at once.
+ *
+ * Solid is the common case and stays a plain background class, so a row with
+ * only waits or only runs draws exactly what it drew before this existed and
+ * the ring tones keep their borders. The pie is reached only by a row that
+ * genuinely has something to divide.
+ *
+ * `aria-hidden`, like every mark in this list: the row's own line states both
+ * counts in words, and a mark that also announced itself would have a reader
+ * hear the same fact twice.
+ */
+function AgentMixDot({ tone, mix }: { tone: ProjectRowTone; mix: ProjectRowStatus["agentMix"] }) {
+  const share = mix ? runningShare(mix) : 0;
+
+  if (share === 0 || share === 1) {
+    return (
+      <div
+        className={cn("workspace-mark w-2 h-2 rounded-full", ROW_DOT_CLASS[tone])}
+        data-testid="workspace-status-dot"
+        aria-hidden="true"
+      />
+    );
+  }
+
+  // SVG rather than a `conic-gradient` on a rounded div. The gradient version
+  // needed the div's `border-radius` to clip it into a circle, and at 8px that
+  // clip's own antialiasing read as a thin dark rim around the whole mark. Two
+  // filled shapes in one viewBox have no clip and no stroke, so the disc's edge
+  // and the boundary between the counts are both drawn once.
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className="workspace-mark w-2 h-2"
+      data-testid="workspace-status-dot"
+      data-running-share={share}
+      aria-hidden="true"
+    >
+      {/* Running leads from 12 o'clock and demand takes the rest. Neither
+          reaches the other: the notch between them is the separator. */}
+      <path d={wedgePath(MARK_GAP_TURNS, share - MARK_GAP_TURNS)} fill={ROW_MARK_COLOR.working} />
+      <path d={wedgePath(share + MARK_GAP_TURNS, 1 - MARK_GAP_TURNS)} fill={ROW_MARK_COLOR[tone]} />
+    </svg>
+  );
+}
+
+/**
+ * A row's second line: what is still running, then what it wants, then which
  * project it is.
  *
- * Shared by all three row renderers so the clause cannot appear on one kind of
- * workspace and not another — the two scratch paths drew a single toned element
- * before this, which left them structurally unable to carry a second fragment.
+ * Running leads. It is the figure this surface gets opened for — "are my agents
+ * still going, and how many" — and it used to be the one fact the row could not
+ * state at all, because the sentence after it is chosen by a cascade that only
+ * ever prints its loudest tier. Trailing it instead put it at a different
+ * x-position on every row, behind a sentence whose length changes with the
+ * state, which is the opposite of scannable.
  *
- * Exactly one token is coloured. The demand tone is the row's loudest statement
- * and stays that way; the running clause is muted because it reports something
- * that needs nothing from the user, and a second hue here would make every busy
- * row argue with itself. Both are ordinary text, so a reader hears the whole
- * line whether or not they can resolve the mark's shape.
+ * Two coloured tokens now, and deliberately: a run is green everywhere else in
+ * this app, and greying it here to hold the row to one hue made the number read
+ * as an afterthought rather than as the answer. The two never compete for a
+ * meaning — green is always the work still moving, the demand tone is always
+ * the work stopped on the user.
+ *
+ * Shared by all three row renderers so a fragment cannot appear on one kind of
+ * workspace and not another — the two scratch paths drew a single toned element
+ * before this, which left them structurally unable to carry a second one.
  */
 function RowStatusLine({ status }: { status: ProjectRowStatus }) {
-  if (status.isDormantFallback && !status.pathHint) return null;
+  // The dormant fallback is the row saying it has nothing to report, and
+  // #11692 takes it at its word. Everything else earned its line.
+  const sentence = status.isDormantFallback ? null : status.text;
+
+  // The hue follows what this slot is actually reporting, because two different
+  // facts arrive in it. A count of runs the user launched is green, the way a
+  // run is green everywhere else in this app. "Assistant working" is
+  // machine-initiated presence, and reads at settled weight (#11806) — green
+  // there would both claim a run nobody started and paint the same fact a
+  // different colour from the assistant-only row, where it lands in the demand
+  // sentence instead. `withLiveness` only ever reaches the assistant phrase
+  // with no agents running, so the count is the fact itself, not a proxy.
+  const livenessTone =
+    (status.agentMix?.running ?? 0) > 0 ? ROW_TONE_CLASS.working : ROW_TONE_CLASS.assistant;
+
+  const parts = [
+    status.livenessDetail !== undefined && (
+      <span
+        key="running"
+        className={cn("shrink-0", livenessTone)}
+        data-testid="workspace-running-count"
+      >
+        {status.livenessDetail}
+      </span>
+    ),
+    sentence !== null && (
+      <span key="demand" className={cn("shrink-0", ROW_TONE_CLASS[status.tone])}>
+        {sentence}
+      </span>
+    ),
+    status.ageDetail !== undefined && (
+      // Muted, and never in the demand tone. The age is the one fragment here
+      // that asks for nothing, and colouring it made the coloured run long
+      // enough to outweigh the count leading the line.
+      <span key="age" className="truncate text-daintree-text/50">
+        {status.ageDetail}
+      </span>
+    ),
+    status.pathHint !== undefined && (
+      // `shrink` where the count takes `shrink-0`: the hint answers which
+      // project this is, which the name above already mostly does, while the
+      // count is the row's headline figure.
+      <span key="path" className="truncate shrink text-daintree-text/50">
+        {status.pathHint}
+      </span>
+    ),
+  ].filter((part): part is JSX.Element => part !== false);
+
+  if (parts.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-1 min-w-0 mt-0.5">
-      {!status.isDormantFallback && (
-        <span className={cn("truncate text-[11px] leading-none", ROW_TONE_CLASS[status.tone])}>
-          {status.text}
-        </span>
-      )}
-      {/*
-       * `shrink-0` where the path hint takes `shrink`: the hint answers which
-       * project this is, which the name above already mostly does, while this
-       * is the only place the hidden run is stated at all.
-       */}
-      {status.livenessDetail && (
-        <span className="text-[11px] leading-none text-daintree-text/50 shrink-0">
-          · {status.livenessDetail}
-        </span>
-      )}
-      {status.pathHint && (
-        <span className="truncate text-[11px] leading-none text-daintree-text/50 shrink">
-          {status.isDormantFallback ? status.pathHint : `· ${status.pathHint}`}
-        </span>
-      )}
+    <div className="flex items-center gap-1 min-w-0 mt-0.5 text-[11px] leading-none">
+      {parts.map((part, index) => (
+        <Fragment key={part.key}>
+          {/*
+           * The separator is its own element rather than a prefix on the token
+           * after it. Folded into a token it would inherit that token's hue,
+           * and it would land inside the text a reader — or a test — matches
+           * the token by.
+           *
+           * The visible dot is hidden from assistive tech and a comma stands in
+           * for it, because the tokens are adjacent inline elements with no
+           * whitespace between them: without this the row's accessible name
+           * runs together as "2 agents running1 needs inputwaiting 10m".
+           */}
+          {index > 0 && (
+            <>
+              <span className="sr-only">, </span>
+              <span className="shrink-0 text-daintree-text/40" aria-hidden="true">
+                ·
+              </span>
+            </>
+          )}
+          {part}
+        </Fragment>
+      ))}
     </div>
   );
 }
