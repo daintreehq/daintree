@@ -9,7 +9,6 @@ import type {
   FileBrowserTreeSnapshot,
   PanelExitBehavior,
   PanelTitleMode,
-  PanelWorktreeMoveOptOut,
 } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
@@ -117,7 +116,6 @@ export interface SavedTerminalData {
   location?: string;
   command?: string;
   isInputLocked?: boolean;
-  worktreeMoveOptOut?: PanelWorktreeMoveOptOut;
   browserUrl?: string;
   browserHistory?: BrowserHistory;
   browserZoom?: number;
@@ -191,28 +189,6 @@ export interface SavedTerminalData {
    * pre-#9933 behavior the issue was meant to fix.
    */
   lastActiveAt?: number;
-}
-
-/**
- * Carry "move panel only" consent (#11840) across a restore.
- *
- * Keyed to the launch root it was given for, compared against the cwd the panel
- * will actually come back on — not the raw saved value, which can be empty and
- * fall back to the project root. Normalized, because a separator or trailing
- * slash difference is not a different directory, and losing the record over
- * punctuation would silently hide a live divergence.
- *
- * Every builder that restores from a saved snapshot must call this. A panel that
- * reconnects to its still-running PTY is exactly the case the marker exists for.
- */
-function restoredWorktreeMoveOptOut(
-  saved: SavedTerminalData,
-  effectiveCwd: string
-): PanelWorktreeMoveOptOut | undefined {
-  const optOut = saved.worktreeMoveOptOut;
-  if (!optOut || !effectiveCwd) return undefined;
-  const normalize = (p: string): string => p.replace(/\\/g, "/").replace(/\/+$/, "");
-  return normalize(optOut.acknowledgedCwd) === normalize(effectiveCwd) ? optOut : undefined;
 }
 
 function readPresetId(saved: SavedTerminalData): string | undefined {
@@ -351,7 +327,6 @@ export function buildArgsForBackendTerminal(
     titleMode: saved.titleMode ?? backendTerminal.titleMode,
     cwd,
     worktreeId: saved.worktreeId,
-    worktreeMoveOptOut: restoredWorktreeMoveOptOut(saved, cwd),
     location,
     existingId: backendTerminal.id,
     agentState: coerceAgentState(backendTerminal.agentState),
@@ -428,7 +403,6 @@ export function buildArgsForReconnectedFallback(
     titleMode: saved.titleMode ?? reconnectedTerminal.titleMode,
     cwd,
     worktreeId: saved.worktreeId,
-    worktreeMoveOptOut: restoredWorktreeMoveOptOut(saved, cwd),
     location,
     existingId: reconnectedTerminal.id,
     agentState: coerceAgentState(reconnectedTerminal.agentState),
@@ -729,7 +703,6 @@ export function buildArgsForRespawn(
     requestedId: mintFreshTerminalId ? undefined : saved.id,
     command: isAgentPanel ? command : saved.command?.trim() || undefined,
     isInputLocked: saved.isInputLocked,
-    worktreeMoveOptOut: restoredWorktreeMoveOptOut(saved, saved.cwd || projectRoot || ""),
     devCommand: isDevPreview ? command : undefined,
     browserUrl: isDevPreview ? saved.browserUrl : undefined,
     browserHistory: isDevPreview ? saved.browserHistory : undefined,

@@ -29,12 +29,7 @@ import { getAgentConfig } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import {
-  isPtyPanel,
-  type PanelInstance,
-  type PanelTitleMode,
-  type PtyPanelData,
-} from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance, type PanelTitleMode } from "@shared/types/panel";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
@@ -69,8 +64,6 @@ async function resolveProjectStore() {
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
-
-const INJECTION_TIMEOUT_MS = 30_000;
 
 /**
  * The panel's title as of the spawn call rather than as of the capture several
@@ -138,39 +131,6 @@ async function buildRestartEnv(
   return mergeSpawnEnv(globalEnv, projectEnv, runtimeEnv);
 }
 
-function scheduleHistoryInjection(id: string, history: string, worktreePath: string): void {
-  const prompt = [
-    "Here is the conversation history from your previous session in a different worktree:\n",
-    "<previous-session-history>",
-    history,
-    "</previous-session-history>\n",
-    `You have been moved to a new git worktree at ${worktreePath}. Continue where you left off.`,
-  ].join("\n");
-
-  let injected = false;
-  let unsub: () => void = () => {};
-
-  const inject = () => {
-    if (injected) return;
-    injected = true;
-    unsub();
-    terminalClient.submit(id, prompt).catch((err) => {
-      logWarn("[TerminalStore] Failed to inject history prompt", { error: err });
-    });
-  };
-
-  const timeout = setTimeout(() => {
-    inject();
-  }, INJECTION_TIMEOUT_MS);
-
-  unsub = terminalInstanceService.addAgentStateListener(id, (state: AgentState) => {
-    if (state === "idle" || state === "waiting") {
-      clearTimeout(timeout);
-      inject();
-    }
-  });
-}
-
 // Helper to update a single terminal field in the normalized store
 function updateTerminal(
   state: PanelRegistrySlice,
@@ -191,9 +151,8 @@ export const createRestartActions = (
   | "clearTerminalError"
   | "updateTerminalCwd"
   | "moveTerminalToWorktree"
-  | "moveToNewWorktreeAndTransfer"
-  | "transferPanelToWorktree"
-  | "setWorktreeMoveOptOut"
+  | "moveToNewWorktree"
+  | "setWorktreeMoveNotice"
   | "updateFlowStatus"
   | "setRuntimeStatus"
   | "setInputLocked"
@@ -694,12 +653,11 @@ export const createRestartActions = (
         //     (detected), so a pane whose detected identity diverged from its
         //     launch identity (e.g. a Claude pane hosting a hand-started
         //     Codex) would otherwise build `claude --resume <codex-id>`.
-        //   - fresh intent: `allowResumeLatest: false` (the worktree-move
-        //     flow) discards the capture too — it re-seeds context by
-        //     injecting the old buffer, and resuming would make that
-        //     injection land in an already-loaded conversation. A stored id
-        //     still resumes in that case (pre-existing contract the
-        //     update-cwd flow relies on).
+        //   - fresh intent: `allowResumeLatest: false` (the update-cwd flow)
+        //     discards the capture too — the directory under the panel has
+        //     changed, and resuming a session scoped to the old one would mask
+        //     that. A stored id still resumes in that case (pre-existing
+        //     contract the update-cwd flow relies on).
         const captureTrusted =
           allowResumeLatest &&
           (currentTerminal.detectedAgentId === undefined ||
@@ -1029,124 +987,45 @@ export const createRestartActions = (
     terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
   },
 
-  transferPanelToWorktree: async (id, worktreeId, preCapturedHistory) => {
-    const terminal = get().panelsById[id];
-    if (!terminal || terminal.location === "trash") return false;
-    if (!isPtyPanel(terminal)) return false;
-    if (terminal.isRestarting) return false;
-
-    const isAgent = !!terminal.launchAgentId;
-    // Capture the buffer BEFORE any teardown — the xterm instance is still alive
-    // here, and `restartTerminal` below destroys it. `moveToNewWorktreeAndTransfer`
-    // passes its own capture instead: it opens the create-worktree dialog first,
-    // and creating a worktree can switch the active one, which unmounts the pane
-    // and takes the xterm instance with it before this ever runs.
-    const capturedHistory =
-      preCapturedHistory ?? (isAgent ? terminalInstanceService.captureBufferText(id, 20000) : "");
-
-    let newCwd: string | undefined;
-    try {
-      const { worktreeClient } = await import("@/clients");
-      const worktrees = await worktreeClient.getAll();
-      const newWorktree = worktrees.find((w) => w.id === worktreeId);
-      // Fail closed. The previous inline version fell back to the panel's old
-      // cwd here and carried on, which restarted the agent in exactly the
-      // directory the transfer existed to leave — a silent fallback default on a
-      // destructive path (#7880). An unresolvable destination is an error, not a
-      // default.
-      if (!newWorktree?.path) {
-        throw new Error(`Worktree ${worktreeId} could not be resolved to a path`);
-      }
-      const resolvedCwd: string = newWorktree.path;
-      newCwd = resolvedCwd;
-
-      // Update cwd, worktreeId, and clear agentSessionId so restartTerminal
-      // spawns fresh instead of attempting a broken session resume
-      set((state) => {
-        const t = state.panelsById[id];
-        // Re-narrowed rather than asserted: the guard above ran before the
-        // await, and narrowing here keeps the spread's result a real
-        // `PtyPanelData` instead of needing a cast to get back to one.
-        if (!t || !isPtyPanel(t)) return state;
-        const updated: PtyPanelData = {
-          ...t,
-          cwd: resolvedCwd,
-          worktreeId,
-          agentSessionId: undefined,
-          restartError: undefined,
-          // The process is being re-anchored to the destination, so any
-          // recorded divergence consent no longer describes anything.
-          worktreeMoveOptOut: undefined,
-        };
-        const newById = { ...state.panelsById, [id]: updated };
-        const newIndex = transferBetweenWorktreeIndex(
-          state.panelIdsByWorktreeId,
-          t.worktreeId,
-          worktreeId,
-          id
-        );
-        saveNormalized(newById, state.panelIds);
-        return { panelsById: newById, panelIdsByWorktreeId: newIndex };
-      });
-
-      recordExplicitWorktreeAttribution(id, worktreeId);
-
-      // Suppress resume-latest: the CWD has changed; we want a fresh
-      // launch + buffer-injected context, not a stale CWD-scoped session.
-      await get().restartTerminal(id, { allowResumeLatest: false });
-
-      // After restart, inject captured history as a first prompt for agent terminals
-      const restarted = get().panelsById[id];
-      const restartedPty = restarted && isPtyPanel(restarted) ? restarted : undefined;
-      if (restartedPty?.restartError) return false;
-      if (isAgent && capturedHistory.trim().length > 0) {
-        scheduleHistoryInjection(id, capturedHistory, newCwd);
-      }
-      return true;
-    } catch (err) {
-      logError("[TerminalStore] transferPanelToWorktree failed", err);
-      set((state) =>
-        updateTerminal(state, id, (t) => ({
-          ...t,
-          isRestarting: false,
-          restartError: {
-            message: formatErrorMessage(err, "Failed to move terminal to worktree"),
-            timestamp: Date.now(),
-            recoverable: false,
-            context: {
-              failedCwd: newCwd ?? terminal.cwd,
-              phase: "move-to-new-worktree",
-            },
-          },
-        }))
-      );
-      return false;
-    }
-  },
-
-  moveToNewWorktreeAndTransfer: (id) => {
+  // No transfer, no capture, no restart: creating the worktree and filing the
+  // panel under it is the whole gesture (#11853). Routed through the same
+  // choke point as every other cross-worktree move so the create path cannot
+  // drift from the drag paths — that is also what raises the pane's banner.
+  moveToNewWorktree: (id) => {
     const terminal = get().panelsById[id];
     if (!terminal || terminal.location === "trash") return;
     if (!isPtyPanel(terminal)) return;
+    // A restart captures its spawn cwd before awaiting teardown, so a move
+    // landing inside that window would file the panel under a worktree the
+    // in-flight process is not going to start in.
     if (terminal.isRestarting) return;
 
-    // Captured now, not in `onCreated`: creating the worktree can switch the
-    // active one, which unmounts this pane and destroys the xterm instance the
-    // buffer lives in.
-    const capturedHistory = terminal.launchAgentId
-      ? terminalInstanceService.captureBufferText(id, 20000)
-      : "";
-
-    void import("@/store/worktreeStore")
-      .then(({ useWorktreeSelectionStore }) => {
+    void Promise.all([
+      import("@/store/worktreeStore"),
+      import("@/services/terminal/crossWorktreeMove"),
+    ])
+      .then(([{ useWorktreeSelectionStore }, { moveTerminalToWorktreeAndFollowRescue }]) => {
         useWorktreeSelectionStore.getState().openCreateDialog(null, {
-          onCreated: async (worktreeId) => {
-            await get().transferPanelToWorktree(id, worktreeId, capturedHistory);
+          onCreated: (worktreeId) => {
+            // Revalidated, not trusted: the dialog stays open for as long as
+            // the user takes, and moving a panel that was trashed meanwhile
+            // would file it back onto the grid.
+            const current = get().panelsById[id];
+            if (!current || current.location === "trash" || !isPtyPanel(current)) return;
+            if (current.isRestarting) return;
+            // Isolated from the dialog's own creation transaction: `onCreated`
+            // runs inside it, so a throw here would surface as "Couldn't create
+            // worktree" for a worktree that was created successfully.
+            try {
+              moveTerminalToWorktreeAndFollowRescue(id, worktreeId);
+            } catch (error) {
+              logError("[TerminalStore] Failed to move the panel to the new worktree", error);
+            }
           },
         });
       })
       .catch((err) => {
-        logError("[TerminalStore] Failed to load worktreeStore", err);
+        logError("[TerminalStore] Failed to open the create-worktree dialog", err);
       });
   },
 
@@ -1190,19 +1069,25 @@ export const createRestartActions = (
     });
   },
 
-  setWorktreeMoveOptOut: (id, optOut) => {
+  // Never `saveNormalized`, unlike the consent record this replaces: the notice
+  // is a prompt to act on now, so it must not come back after a quit. Living in
+  // `panelsById` is still what makes it survive the unmount a worktree switch
+  // causes — the same split `sessionLostOnRestore` makes (#11589).
+  setWorktreeMoveNotice: (id, notice) => {
     set((state) => {
       const terminal = state.panelsById[id];
-      if (!terminal) return state;
-      if (!isPtyPanel(terminal)) return state;
-      if (terminal.worktreeMoveOptOut === optOut) return state;
-
-      const newById = {
-        ...state.panelsById,
-        [id]: { ...terminal, worktreeMoveOptOut: optOut },
+      if (!terminal || !isPtyPanel(terminal)) return state;
+      // Clearing an already-clear notice, or re-raising the same destination,
+      // keeps the same state object so repeat writes don't wake subscribers.
+      if (terminal.worktreeMoveNotice?.destinationWorktreeId === notice?.destinationWorktreeId) {
+        return state;
+      }
+      return {
+        panelsById: {
+          ...state.panelsById,
+          [id]: { ...terminal, worktreeMoveNotice: notice },
+        },
       };
-      saveNormalized(newById, state.panelIds);
-      return { panelsById: newById };
     });
   },
 

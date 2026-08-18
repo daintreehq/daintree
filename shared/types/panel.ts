@@ -328,42 +328,23 @@ interface BasePanelData {
 }
 
 /**
- * Consent recorded when the user picks "Move panel only" on a cross-worktree
- * move (#11840): the panel is filed under one worktree while its process keeps
- * running in another, and its commands and commits keep landing there.
+ * A cross-worktree move that left this panel's live agent running somewhere
+ * else (#11853).
  *
- * Keyed to the cwd it was given for rather than to a PTY generation counter.
- * `restartKey` is not persisted, so a generation key would drop the record on
- * every app restart — but restore relaunches at the saved cwd, so the divergence
- * is still live and still needs its marker. Matching on cwd gets both halves
- * right: a restart that re-anchors the launch root drops the consent, a restart
- * that doesn't keeps it.
+ * Relabelling a panel does not relocate its process: the agent keeps working —
+ * and committing — in the directory it launched from. The notice is what offers
+ * the user the one-sentence fix, and it carries the destination *id* rather than
+ * a path so delivery resolves the path fresh (a worktree can be physically moved
+ * between the drop and the click).
+ *
+ * Deliberately transient. It is a prompt to act on now, not durable consent:
+ * `sessionLostOnRestore` is the same shape and the same reasoning — it lives in
+ * `panelsById` so it survives the unmount a worktree switch causes, and it is
+ * never serialized, so it does not come back after a quit.
  */
-export interface PanelWorktreeMoveOptOut {
-  /** Launch root the consent was given for. Must still match `cwd` to apply. */
-  acknowledgedCwd: string;
-  /** Worktree the panel was filed under when consent was given. Diagnostic. */
-  acknowledgedWorktreeId: string;
-  /**
-   * What the classifier concluded at the time. `"unknown"` is recorded as
-   * faithfully as a mismatch: the user consented to a divergence we could not
-   * pin down, and dropping that record would hide it entirely — the exact
-   * silence this issue exists to end.
-   */
-  acknowledgedAlignment: "launch-root-mismatch" | "unknown";
-  /** Launch root as it was resolved at the time, for the marker's label. */
-  launchCwd?: string;
-  /** Worktree the process actually runs in, when the cwd resolved to one. */
-  launchWorktreeId?: string;
-  /**
-   * `launchWorktreeId`'s HEAD at move time — the drift backstop's baseline.
-   * `null` means the worktree was known to have an unborn HEAD, so the first
-   * commit there still counts as drift; `undefined` means HEAD was unknown and
-   * no comparison can be made.
-   */
-  sourceHeadOid?: string | null;
-  /** Epoch ms the consent was given. */
-  at: number;
+export interface PanelWorktreeMoveNotice {
+  /** Worktree the panel was filed under by the move that raised this notice. */
+  destinationWorktreeId: string;
 }
 
 export interface PtyPanelData extends BasePanelData {
@@ -457,8 +438,13 @@ export interface PtyPanelData extends BasePanelData {
   flowStatusTimestamp?: number;
   /** Whether user input is locked (read-only monitor mode) */
   isInputLocked?: boolean;
-  /** Recorded "move panel only" consent for a cross-worktree move (#11840). */
-  worktreeMoveOptOut?: PanelWorktreeMoveOptOut;
+  /**
+   * Pending "your agent is still in the old worktree" prompt for this pane
+   * (#11853). Set by a cross-worktree move that left a live agent off its
+   * launch root; cleared by telling the agent or dismissing. Never serialized —
+   * see `serializePtyPanel`.
+   */
+  worktreeMoveNotice?: PanelWorktreeMoveNotice;
   /**
    * Held duration gauge for currently-paused terminals, sampled by the
    * `pause-duration-gauge` reliability metric (2s tick). Distinct from
@@ -1044,7 +1030,7 @@ export interface TerminalInstance {
   runtimeStatus?: TerminalRuntimeStatus;
   flowStatusTimestamp?: number;
   isInputLocked?: boolean;
-  worktreeMoveOptOut?: PanelWorktreeMoveOptOut;
+  worktreeMoveNotice?: PanelWorktreeMoveNotice;
   browserUrl?: string;
   browserHistory?: BrowserHistory;
   browserZoom?: number;

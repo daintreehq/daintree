@@ -257,19 +257,16 @@ export function registerTerminalSpawnActions(
     id: "terminal.moveToWorktree",
     title: "Move to Worktree",
     description:
-      "Move terminal to a different worktree. A terminal with a live process still running " +
-      "outside the destination raises a decision — transfer the session, move the panel only, " +
-      "or cancel — including for agent and plugin callers, which cannot move a running session " +
-      "silently.",
+      "Move a terminal panel to a different worktree. The process is never restarted: a live " +
+      "agent keeps running in the directory it launched from, and its pane offers to tell it " +
+      "to continue in the destination.",
     category: "terminal",
     kind: "command",
-    // Relabelling a panel is reversible, but doing it to a live agent changes
-    // where that agent's commits land without changing anything visible
-    // (#11840). The decision surface is a three-way dialog rather than a
-    // ConfirmDialog, so this sits in BYPASS_WIRED.
-    danger: "confirm",
-    dangerRationale:
-      "Relabelling a panel does not move its process. A live agent keeps running — and committing — in the directory it launched from, under a worktree it was never in.",
+    // Relabelling a panel is reversible — drag it back — and nothing here
+    // touches the running process, so there is no confirmation (#11853). The
+    // pane's own banner is what surfaces the launch-root mismatch, and telling
+    // the agent takes a second, explicit click.
+    danger: "safe",
     scope: "renderer",
     argsSchema: z.object({
       terminalId: z.string().optional(),
@@ -294,7 +291,7 @@ export function registerTerminalSpawnActions(
   actions.set("terminal.moveToNewWorktree", () => ({
     id: "terminal.moveToNewWorktree",
     title: "Move to New Worktree…",
-    description: "Create a new worktree and transfer the agent session there",
+    description: "Create a new worktree and move this terminal panel to it",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -305,7 +302,7 @@ export function registerTerminalSpawnActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
-      state.moveToNewWorktreeAndTransfer(targetId);
+      state.moveToNewWorktree(targetId);
     },
   }));
 }
