@@ -342,6 +342,19 @@ test.describe.serial("MCP: external sessions bound to a workspace (#11788)", () 
       canary.init.body?.result?.capabilities?.experimental?.[BINDING_CAPABILITY]
     ).toBeUndefined();
 
+    // The second window can report its project id before its worktree store has
+    // received the initial snapshot, especially on Windows CI. Establish that
+    // both identity-bearing payloads are ready before the routing sweep begins.
+    await expect
+      .poll(
+        async () => [
+          payloadWorkspaceId(await callTool(endpoint, a.sessionId, "worktree.list")),
+          payloadWorkspaceId(await callTool(endpoint, b.sessionId, "worktree.list")),
+        ],
+        { timeout: T_LONG, intervals: [200, 400, 800] }
+      )
+      .toEqual([workspaceA, workspaceB]);
+
     const observed: Array<{
       session: string;
       tool: string;
