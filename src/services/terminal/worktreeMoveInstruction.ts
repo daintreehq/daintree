@@ -32,6 +32,21 @@ interface PendingInstruction {
  */
 const pending = new Map<string, PendingInstruction>();
 let nextToken = 1;
+let teardownWatch: (() => void) | null = null;
+
+/**
+ * Drop a panel's job when its renderer instance is torn down.
+ *
+ * `destroy()` clears the exit subscribers instead of firing them, so a restart,
+ * a close, or a store reset would otherwise leave the entry in `pending`
+ * forever — holding disposer closures over the dead instance. Subscribed lazily
+ * so importing this module costs nothing until something is actually queued.
+ */
+function ensureTeardownWatch(): void {
+  teardownWatch ??= terminalInstanceService.addInstanceDestroyedListener((id) => {
+    cancelWorktreeMoveInstruction(id);
+  });
+}
 
 /** The destination's path as it is *now* — never as it was when clicked. */
 function readWorktreePath(worktreeId: string): string | undefined {
@@ -59,6 +74,8 @@ export function cancelWorktreeMoveInstruction(panelId: string, token?: number): 
 export function __resetWorktreeMoveInstructions(): void {
   for (const job of pending.values()) job.dispose();
   pending.clear();
+  teardownWatch?.();
+  teardownWatch = null;
 }
 
 function submit(panelId: string, destinationWorktreeId: string): void {
@@ -103,10 +120,22 @@ export function queueWorktreeMoveInstruction(
   destinationWorktreeId: string
 ): boolean {
   if (!readWorktreePath(destinationWorktreeId)) return false;
+  // Without an instance there is nothing to listen to: `addAgentStateListener`
+  // hands back a no-op disposer for an unknown id, so the job would sit in
+  // `pending` forever while the banner disappeared — swallowing the user's one
+  // click. Say so instead, and let the bar stay up.
+  if (!terminalInstanceService.get(panelId)) return false;
+
+  ensureTeardownWatch();
+
+  // Before anything new registers. Overwriting the map entry alone would orphan
+  // the previous job with its listeners still live on the service, and both
+  // would fire on the next idle — delivering a second sentence naming the
+  // destination the user has already moved on from.
+  cancelWorktreeMoveInstruction(panelId);
 
   const state = terminalInstanceService.getAgentState(panelId);
   if (state === "idle" || state === "waiting") {
-    cancelWorktreeMoveInstruction(panelId);
     submit(panelId, destinationWorktreeId);
     return true;
   }

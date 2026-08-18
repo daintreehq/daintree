@@ -964,6 +964,18 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     return this.readAgentState(this.owningSurface(id), id);
   }
 
+  // Fan-out, not per-terminal routing: the listener is id-agnostic and any
+  // surface can be the one that tears an instance down, so it subscribes to
+  // every plane and the composite disposer releases all of them. Deliberately
+  // not deduplicated — a single instance lives on exactly one surface, so one
+  // teardown produces exactly one notification.
+  addInstanceDestroyedListener(cb: (id: string) => void): () => void {
+    const unsubs = this.planes().map((plane) => plane.addInstanceDestroyedListener(cb));
+    return () => {
+      for (const unsub of unsubs) unsub();
+    };
+  }
+
   addAgentStateListener(id: string, callback: AgentStateCallback): () => void {
     return this.trackSubscription(id, "agentState", (plane) =>
       plane.addAgentStateListener(id, callback)

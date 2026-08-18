@@ -3,8 +3,12 @@ import type { AgentState } from "@/types";
 
 const mockSubmit = vi.fn().mockResolvedValue(undefined);
 const mockGetAgentState = vi.fn<(id: string) => AgentState | undefined>();
-const stateListeners = new Map<string, (state: AgentState) => void>();
-const exitListeners = new Map<string, (code: number) => void>();
+// A SET per panel, mirroring `managed.agentStateSubscribers` in the real
+// service. Keying by panel id alone would let a re-registration silently
+// replace the previous listener, which is exactly how a leaked job stayed
+// invisible: the real service keeps both, and both fire.
+const stateListeners = new Map<string, Set<(state: AgentState) => void>>();
+const exitListeners = new Map<string, Set<(code: number) => void>>();
 const disposedState: string[] = [];
 const disposedExit: string[] = [];
 
@@ -15,22 +19,37 @@ const disposedExit: string[] = [];
  */
 let fireImmediatelyWith: AgentState | undefined;
 
+let destroyedListener: ((id: string) => void) | null = null;
+/** Panels the service has an instance for. Liveness is now part of the contract. */
+const liveInstances = new Set<string>();
+
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
+    get: (id: string) => (liveInstances.has(id) ? { id } : null),
+    addInstanceDestroyedListener: (cb: (id: string) => void) => {
+      destroyedListener = cb;
+      return () => {
+        destroyedListener = null;
+      };
+    },
     getAgentState: (id: string) => mockGetAgentState(id),
     addAgentStateListener: (id: string, cb: (state: AgentState) => void) => {
-      stateListeners.set(id, cb);
+      const set = stateListeners.get(id) ?? new Set();
+      set.add(cb);
+      stateListeners.set(id, set);
       if (fireImmediatelyWith !== undefined) cb(fireImmediatelyWith);
       return () => {
         disposedState.push(id);
-        stateListeners.delete(id);
+        set.delete(cb);
       };
     },
     addExitListener: (id: string, cb: (code: number) => void) => {
-      exitListeners.set(id, cb);
+      const set = exitListeners.get(id) ?? new Set();
+      set.add(cb);
+      exitListeners.set(id, set);
       return () => {
         disposedExit.push(id);
-        exitListeners.delete(id);
+        set.delete(cb);
       };
     },
   },
@@ -44,6 +63,25 @@ const worktrees = new Map<string, { id: string; path: string }>();
 vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStoreOrNull: () => ({ getState: () => ({ worktrees }) }),
 }));
+
+/** Notify every live subscriber, the way the real service's Set does. */
+function fireState(id: string, state: AgentState): void {
+  for (const cb of [...(stateListeners.get(id) ?? [])]) cb(state);
+}
+
+function fireExit(id: string, code = 0): void {
+  for (const cb of [...(exitListeners.get(id) ?? [])]) cb(code);
+}
+
+/** How many state listeners are still registered for a panel. */
+function liveStateListeners(id: string): number {
+  return stateListeners.get(id)?.size ?? 0;
+}
+
+/** How many exit listeners are still registered for a panel. */
+function liveExitListeners(id: string): number {
+  return exitListeners.get(id)?.size ?? 0;
+}
 
 const {
   queueWorktreeMoveInstruction,
@@ -62,6 +100,10 @@ beforeEach(() => {
   fireImmediatelyWith = undefined;
   worktrees.clear();
   worktrees.set("wt-b", { id: "wt-b", path: "/repo/wt-b" });
+  liveInstances.clear();
+  liveInstances.add("p1");
+  liveInstances.add("p2");
+  destroyedListener = null;
   mockGetAgentState.mockReturnValue("working");
 });
 
@@ -97,7 +139,7 @@ describe("queueWorktreeMoveInstruction", () => {
   it("delivers once the agent reports idle", () => {
     queueWorktreeMoveInstruction("p1", "wt-b");
 
-    stateListeners.get("p1")?.("idle");
+    fireState("p1", "idle");
 
     expect(mockSubmit).toHaveBeenCalledWith("p1", "Please continue in the directory /repo/wt-b");
     expect(hasPendingWorktreeMoveInstruction("p1")).toBe(false);
@@ -106,9 +148,9 @@ describe("queueWorktreeMoveInstruction", () => {
   it("stays queued through states that are not idle or waiting", () => {
     queueWorktreeMoveInstruction("p1", "wt-b");
 
-    stateListeners.get("p1")?.("working");
-    stateListeners.get("p1")?.("directing");
-    stateListeners.get("p1")?.("completed");
+    fireState("p1", "working");
+    fireState("p1", "directing");
+    fireState("p1", "completed");
 
     expect(mockSubmit).not.toHaveBeenCalled();
     expect(hasPendingWorktreeMoveInstruction("p1")).toBe(true);
@@ -117,10 +159,9 @@ describe("queueWorktreeMoveInstruction", () => {
   it("delivers exactly once even if idle is reported repeatedly", () => {
     queueWorktreeMoveInstruction("p1", "wt-b");
 
-    const listener = stateListeners.get("p1");
-    listener?.("idle");
-    listener?.("waiting");
-    listener?.("idle");
+    fireState("p1", "idle");
+    fireState("p1", "waiting");
+    fireState("p1", "idle");
 
     expect(mockSubmit).toHaveBeenCalledTimes(1);
   });
@@ -131,9 +172,10 @@ describe("queueWorktreeMoveInstruction", () => {
     vi.useFakeTimers();
     try {
       queueWorktreeMoveInstruction("p1", "wt-b");
+      // Stronger than advancing a fixed span: no timer exists to fire, so no
+      // fallback delay however long, rather than "longer than the one we tried".
+      expect(vi.getTimerCount()).toBe(0);
       vi.advanceTimersByTime(30_000);
-      expect(mockSubmit).not.toHaveBeenCalled();
-      vi.advanceTimersByTime(60 * 60_000);
       expect(mockSubmit).not.toHaveBeenCalled();
       expect(hasPendingWorktreeMoveInstruction("p1")).toBe(true);
     } finally {
@@ -150,8 +192,19 @@ describe("queueWorktreeMoveInstruction", () => {
 
     expect(mockSubmit).toHaveBeenCalledTimes(1);
     expect(disposedState).toContain("p1");
-    expect(stateListeners.has("p1")).toBe(false);
+    expect(liveStateListeners("p1")).toBe(0);
     expect(hasPendingWorktreeMoveInstruction("p1")).toBe(false);
+  });
+
+  it("refuses to queue against a panel with no renderer instance", () => {
+    // Returning `true` here would hide the banner while nothing was listening.
+    liveInstances.delete("p1");
+
+    expect(queueWorktreeMoveInstruction("p1", "wt-b")).toBe(false);
+
+    expect(mockSubmit).not.toHaveBeenCalled();
+    expect(hasPendingWorktreeMoveInstruction("p1")).toBe(false);
+    expect(liveStateListeners("p1")).toBe(0);
   });
 
   it("refuses to queue against a destination that cannot be resolved", () => {
@@ -162,20 +215,33 @@ describe("queueWorktreeMoveInstruction", () => {
   });
 
   it("resolves the destination path at delivery, not at queue time", () => {
-    // A worktree can be physically relocated while the agent finishes its turn.
+    // The path can be corrected under a stable id (a rename the host re-reports).
     queueWorktreeMoveInstruction("p1", "wt-b");
     worktrees.set("wt-b", { id: "wt-b", path: "/moved/wt-b" });
 
-    stateListeners.get("p1")?.("idle");
+    fireState("p1", "idle");
 
     expect(mockSubmit).toHaveBeenCalledWith("p1", "Please continue in the directory /moved/wt-b");
+  });
+
+  it("sends nothing when a physical worktree move replaces the destination id", () => {
+    // Worktree ids are normalized absolute paths, so `git worktree move` retires
+    // the old id and introduces a new one rather than editing a path in place.
+    // Failing closed is the point: no fallback, no guessed path, no message.
+    queueWorktreeMoveInstruction("p1", "wt-b");
+    worktrees.delete("wt-b");
+    worktrees.set("/repo/wt-b-renamed", { id: "/repo/wt-b-renamed", path: "/repo/wt-b-renamed" });
+
+    fireState("p1", "idle");
+
+    expect(mockSubmit).not.toHaveBeenCalled();
   });
 
   it("sends nothing when the destination vanishes before the agent frees up", () => {
     queueWorktreeMoveInstruction("p1", "wt-b");
     worktrees.delete("wt-b");
 
-    stateListeners.get("p1")?.("idle");
+    fireState("p1", "idle");
 
     expect(mockSubmit).not.toHaveBeenCalled();
   });
@@ -183,7 +249,7 @@ describe("queueWorktreeMoveInstruction", () => {
   it("drops the instruction when the process exits first", () => {
     queueWorktreeMoveInstruction("p1", "wt-b");
 
-    exitListeners.get("p1")?.(0);
+    fireExit("p1");
 
     expect(mockSubmit).not.toHaveBeenCalled();
     expect(hasPendingWorktreeMoveInstruction("p1")).toBe(false);
@@ -191,14 +257,43 @@ describe("queueWorktreeMoveInstruction", () => {
   });
 
   it("replaces an earlier instruction for the same panel", () => {
+    // Regression: the replacement used to overwrite the map entry while the
+    // first job's listeners stayed live on the service, so a single idle
+    // delivered BOTH sentences — the second naming a directory the user had
+    // already moved on from.
     worktrees.set("wt-c", { id: "wt-c", path: "/repo/wt-c" });
     queueWorktreeMoveInstruction("p1", "wt-b");
     queueWorktreeMoveInstruction("p1", "wt-c");
 
-    stateListeners.get("p1")?.("idle");
+    // The superseded job must be gone from the service, not merely unreachable.
+    expect(liveStateListeners("p1")).toBe(1);
+
+    fireState("p1", "idle");
 
     expect(mockSubmit).toHaveBeenCalledTimes(1);
     expect(mockSubmit).toHaveBeenCalledWith("p1", "Please continue in the directory /repo/wt-c");
+  });
+
+  it("leaves no listener behind once an instruction has been delivered", () => {
+    queueWorktreeMoveInstruction("p1", "wt-b");
+    expect(liveStateListeners("p1")).toBe(1);
+
+    fireState("p1", "idle");
+
+    expect(liveStateListeners("p1")).toBe(0);
+  });
+
+  it("deregisters the superseded job's exit listener too", () => {
+    // Counting is what makes this real: firing every listener would pass
+    // whether or not the stale one survived, because the replacement's own
+    // listener clears `pending` anyway.
+    worktrees.set("wt-c", { id: "wt-c", path: "/repo/wt-c" });
+    queueWorktreeMoveInstruction("p1", "wt-b");
+    expect(liveExitListeners("p1")).toBe(1);
+
+    queueWorktreeMoveInstruction("p1", "wt-c");
+
+    expect(liveExitListeners("p1")).toBe(1);
   });
 
   it("keeps instructions for different panels independent", () => {
@@ -220,6 +315,31 @@ describe("queueWorktreeMoveInstruction", () => {
 
     expect(mockSubmit).toHaveBeenCalledTimes(1);
     expect(hasPendingWorktreeMoveInstruction("p1")).toBe(false);
+  });
+});
+
+describe("instance teardown", () => {
+  it("drops the instruction when the renderer instance is destroyed", () => {
+    // `destroy()` clears the exit subscribers instead of firing them, so a
+    // restart or a close gives the scheduler no signal from the exit path.
+    queueWorktreeMoveInstruction("p1", "wt-b");
+    expect(hasPendingWorktreeMoveInstruction("p1")).toBe(true);
+
+    destroyedListener?.("p1");
+
+    expect(hasPendingWorktreeMoveInstruction("p1")).toBe(false);
+    expect(liveStateListeners("p1")).toBe(0);
+    expect(liveExitListeners("p1")).toBe(0);
+    expect(mockSubmit).not.toHaveBeenCalled();
+  });
+
+  it("leaves other panels' instructions alone on teardown", () => {
+    queueWorktreeMoveInstruction("p1", "wt-b");
+    queueWorktreeMoveInstruction("p2", "wt-b");
+
+    destroyedListener?.("p1");
+
+    expect(hasPendingWorktreeMoveInstruction("p2")).toBe(true);
   });
 });
 
@@ -250,9 +370,19 @@ describe("cancelWorktreeMoveInstruction", () => {
 });
 
 describe("buildWorktreeMoveInstruction", () => {
-  it("is a single plain sentence naming the directory", () => {
-    expect(buildWorktreeMoveInstruction("/repo/wt-b")).toBe(
-      "Please continue in the directory /repo/wt-b"
-    );
+  it("names the directory exactly once, on one line", () => {
+    // The invariant, not the literal: a copied string would only re-assert the
+    // implementation. What matters is that the agent gets one unambiguous
+    // instruction carrying the path verbatim.
+    const path = "/repo/wt-b";
+    const message = buildWorktreeMoveInstruction(path);
+
+    expect(message.split(path)).toHaveLength(2);
+    expect(message.includes("\n")).toBe(false);
+    expect(message.trim()).toBe(message);
+  });
+
+  it("does not leak a different destination's path", () => {
+    expect(buildWorktreeMoveInstruction("/repo/wt-c")).not.toContain("/repo/wt-b");
   });
 });

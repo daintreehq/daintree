@@ -104,6 +104,13 @@ function canAutoInitializeTerminalIngest(): boolean {
 
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
+
+  /**
+   * Consumers holding work against any live instance, notified on teardown.
+   * Not per-id: these outlive individual instances by design. See
+   * `addInstanceDestroyedListener`.
+   */
+  private instanceDestroyedSubscribers = new Set<(id: string) => void>();
   // In-flight creations keyed by id: concurrent getOrCreate(id) share ONE build
   // so a single id can never wire two terminalClient.onData subscriptions (see
   // getOrCreate).
@@ -3217,6 +3224,23 @@ class TerminalInstanceService {
     }
   }
 
+  /**
+   * Observe renderer-instance teardown for any panel.
+   *
+   * Distinct from `addExitListener`, and deliberately so: `destroy` *clears*
+   * the exit subscribers rather than firing them, so a consumer holding work
+   * against a live instance gets no signal from the exit path when the panel is
+   * restarted, closed, or reset. This is the one funnel all seven destruction
+   * call sites reach, which is why the notification belongs here rather than
+   * hand-wired at each of them.
+   *
+   * Registered by id-agnostic consumers, so the callback receives the id.
+   */
+  addInstanceDestroyedListener(cb: (id: string) => void): () => void {
+    this.instanceDestroyedSubscribers.add(cb);
+    return () => this.instanceDestroyedSubscribers.delete(cb);
+  }
+
   addExitListener(id: string, cb: (exitCode: number) => void): () => void {
     const managed = this.instances.get(id);
     if (!managed) return () => {};
@@ -3246,6 +3270,16 @@ class TerminalInstanceService {
     // aborts. Marked regardless of the `instances` presence check below.
     if (this.creating.has(id)) {
       this.cancelledCreations.add(id);
+    }
+
+    // Before the `!managed` bail: an id whose creation was cancelled above still
+    // has consumers holding work against it, and they need releasing too.
+    for (const cb of [...this.instanceDestroyedSubscribers]) {
+      try {
+        cb(id);
+      } catch (error) {
+        logError("Instance-destroyed listener error", error);
+      }
     }
 
     const managed = this.instances.get(id);

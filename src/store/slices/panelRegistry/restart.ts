@@ -995,6 +995,10 @@ export const createRestartActions = (
     const terminal = get().panelsById[id];
     if (!terminal || terminal.location === "trash") return;
     if (!isPtyPanel(terminal)) return;
+    // A restart captures its spawn cwd before awaiting teardown, so a move
+    // landing inside that window would file the panel under a worktree the
+    // in-flight process is not going to start in.
+    if (terminal.isRestarting) return;
 
     void Promise.all([
       import("@/store/worktreeStore"),
@@ -1003,7 +1007,20 @@ export const createRestartActions = (
       .then(([{ useWorktreeSelectionStore }, { moveTerminalToWorktreeAndFollowRescue }]) => {
         useWorktreeSelectionStore.getState().openCreateDialog(null, {
           onCreated: (worktreeId) => {
-            moveTerminalToWorktreeAndFollowRescue(id, worktreeId);
+            // Revalidated, not trusted: the dialog stays open for as long as
+            // the user takes, and moving a panel that was trashed meanwhile
+            // would file it back onto the grid.
+            const current = get().panelsById[id];
+            if (!current || current.location === "trash" || !isPtyPanel(current)) return;
+            if (current.isRestarting) return;
+            // Isolated from the dialog's own creation transaction: `onCreated`
+            // runs inside it, so a throw here would surface as "Couldn't create
+            // worktree" for a worktree that was created successfully.
+            try {
+              moveTerminalToWorktreeAndFollowRescue(id, worktreeId);
+            } catch (error) {
+              logError("[TerminalStore] Failed to move the panel to the new worktree", error);
+            }
           },
         });
       })

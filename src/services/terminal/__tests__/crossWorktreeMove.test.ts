@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import type { PanelLocation, PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PanelLocation, type PtyPanelData } from "@shared/types/panel";
 import type { DeletedWorktree } from "@/store/worktreeStore";
 
 vi.mock("@/clients", () => ({
@@ -41,9 +41,12 @@ vi.mock("@/store/createWorktreeStore", async (importOriginal) => ({
   getCurrentViewStoreOrNull: () => ({ getState: () => ({ worktrees: liveWorktrees }) }),
 }));
 
+const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const { terminalClient } = await import("@/clients");
 const { usePanelStore } = await import("@/store/panelStore");
 const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
-const { moveTerminalToWorktreeAndFollowRescue } = await import("../crossWorktreeMove");
+const { moveTerminalToWorktreeAndFollowRescue, isPanelProcessLive } =
+  await import("../crossWorktreeMove");
 
 /**
  * An exited terminal. A dead panel never raises the move notice, so this keeps
@@ -111,6 +114,11 @@ function agentPanel(id: string, worktreeId: string, cwd: string): PtyPanelData {
     agentState: "working",
     launchAgentId: "claude",
   };
+}
+
+function cwdOf(id: string): string | undefined {
+  const p = usePanelStore.getState().panelsById[id];
+  return p && isPtyPanel(p) ? p.cwd : undefined;
 }
 
 function noticeOf(id: string): string | undefined {
@@ -374,6 +382,40 @@ describe("moveTerminalToWorktreeAndFollowRescue", () => {
   });
 });
 
+describe("isPanelProcessLive", () => {
+  // Relocated from the deleted decision suite. Each of these is a distinct
+  // signal that the process can no longer write anything, and each one
+  // independently means "no banner, realign the next launch instead".
+  const live = (overrides: Partial<PtyPanelData>): PtyPanelData => ({
+    ...agentPanel("t1", "wt-a", "/repo/wt-a"),
+    ...overrides,
+  });
+
+  it("accepts a running pane", () => {
+    expect(isPanelProcessLive(live({}))).toBe(true);
+  });
+
+  it("rejects a missing pane", () => {
+    expect(isPanelProcessLive(undefined)).toBe(false);
+  });
+
+  it("rejects a non-PTY pane", () => {
+    const browser = { id: "b1", kind: "browser", title: "b1", location: "grid" };
+    expect(isPanelProcessLive(browser as unknown as PtyPanelData)).toBe(false);
+  });
+
+  it.each([
+    ["a trashed pane", { location: "trash" as const }],
+    ["an exited agent", { agentState: "exited" as const }],
+    ["an exited runtime", { runtimeStatus: "exited" as const }],
+    ["an errored runtime", { runtimeStatus: "error" as const }],
+    ["a pane carrying an exit code", { exitCode: 0 }],
+    ["a pane carrying a non-zero exit code", { exitCode: 137 }],
+  ])("rejects %s", (_label, overrides) => {
+    expect(isPanelProcessLive(live(overrides))).toBe(false);
+  });
+});
+
 describe("moveTerminalToWorktreeAndFollowRescue — move notice (#11853)", () => {
   const WORKTREES = [
     { id: "wt-a", path: "/repo/wt-a" },
@@ -427,7 +469,7 @@ describe("moveTerminalToWorktreeAndFollowRescue — move notice (#11853)", () =>
     moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
 
     expect(noticeOf("t1")).toBeUndefined();
-    expect(usePanelStore.getState().panelsById["t1"]?.cwd).toBe("/repo/wt-b");
+    expect(cwdOf("t1")).toBe("/repo/wt-b");
   });
 
   it("leaves an exited pane's custom cwd alone when it maps to no worktree", () => {
@@ -437,7 +479,7 @@ describe("moveTerminalToWorktreeAndFollowRescue — move notice (#11853)", () =>
 
     moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
 
-    expect(usePanelStore.getState().panelsById["t1"]?.cwd).toBe("/somewhere/else");
+    expect(cwdOf("t1")).toBe("/somewhere/else");
   });
 
   it("retargets the notice when a second move lands before the first is answered", () => {
@@ -506,17 +548,31 @@ describe("moveTerminalToWorktreeAndFollowRescue — move notice (#11853)", () =>
 
     expect(noticeOf("t1")).toBe("wt-b");
     expect(noticeOf("t2")).toBeUndefined();
-    expect(usePanelStore.getState().panelsById["t2"]?.cwd).toBe("/repo/wt-b");
+    expect(cwdOf("t2")).toBe("/repo/wt-b");
   });
 
   it("never locks input or changes the active worktree on an ordinary move", () => {
-    // The whole point of #11853: the gesture stays instant.
+    // The whole point of #11853: the gesture stays instant. Asserted against
+    // the real seam — the removed lock went through the instance service, not
+    // through the panel's own `isInputLocked` field, so checking that field
+    // would have proved nothing.
     seedPanels([agentPanel("t1", "wt-a", "/repo/wt-a")]);
     useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-a" });
 
     moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
 
-    expect(usePanelStore.getState().panelsById["t1"]?.isInputLocked).toBeFalsy();
+    expect(terminalInstanceService.setInputLocked).not.toHaveBeenCalled();
     expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-a");
+  });
+
+  it("writes nothing into the live session on the move itself", () => {
+    // Nothing reaches a running conversation without the banner's own click.
+    seedPanels([agentPanel("t1", "wt-a", "/repo/wt-a")]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(terminalClient.submit).not.toHaveBeenCalled();
+    expect(terminalInstanceService.addAgentStateListener).not.toHaveBeenCalled();
+    expect(terminalInstanceService.captureBufferText).not.toHaveBeenCalled();
   });
 });

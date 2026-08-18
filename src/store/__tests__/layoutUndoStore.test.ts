@@ -27,6 +27,11 @@ vi.mock("@/controllers", () => ({
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
+    get: vi.fn().mockReturnValue(null),
+    getAgentState: vi.fn(),
+    addAgentStateListener: vi.fn(() => vi.fn()),
+    addExitListener: vi.fn(() => vi.fn()),
+    addInstanceDestroyedListener: vi.fn(() => vi.fn()),
     destroy: vi.fn(),
     applyRendererPolicy: vi.fn(),
     onPanelBackgrounded: vi.fn(),
@@ -733,5 +738,75 @@ describe("layoutUndoStore", () => {
       expect(state.panelsById["ga"]?.worktreeId).toBe("wt-active");
       expect(state.panelsById["gb"]?.worktreeId).toBe("wt-active");
     });
+  });
+});
+
+/**
+ * An undo restores `worktreeId` with a raw `setState`, so it never passes
+ * through the move choke point that owns the cross-worktree banner. Without a
+ * reconcile pass the pane comes back where it started still carrying the
+ * banner for the destination it just left, and "Tell the agent" would send it
+ * to a worktree the user has undone (#11853).
+ */
+describe("layoutUndoStore — cross-worktree move notice", () => {
+  beforeEach(() => {
+    useLayoutUndoStore.setState({
+      undoStack: [],
+      redoStack: [],
+      canUndo: false,
+      canRedo: false,
+    });
+    usePanelStore.setState({ panelsById: {}, panelIds: [], tabGroups: new Map() });
+  });
+
+  function noticeOf(id: string): string | undefined {
+    const panel = usePanelStore.getState().panelsById[id] as PtyPanelData | undefined;
+    return panel?.worktreeMoveNotice?.destinationWorktreeId;
+  }
+
+  it("clears a stale notice when the move that raised it is undone", () => {
+    const agent = makeTerminal({
+      id: "t-move",
+      worktreeId: "wt-a",
+      cwd: "/repo/wt-a",
+      launchAgentId: "claude",
+      runtimeStatus: "running",
+    });
+    seedTerminals([agent]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    usePanelStore.setState({
+      panelsById: {
+        "t-move": {
+          ...agent,
+          worktreeId: "wt-b",
+          worktreeMoveNotice: { destinationWorktreeId: "wt-b" },
+        },
+      },
+    });
+    expect(noticeOf("t-move")).toBe("wt-b");
+
+    useLayoutUndoStore.getState().undo();
+
+    // Back in wt-a, so a bar still naming wt-b would misdirect the agent.
+    expect(usePanelStore.getState().panelsById["t-move"]?.worktreeId).toBe("wt-a");
+    expect(noticeOf("t-move")).not.toBe("wt-b");
+  });
+
+  it("leaves a panel whose worktree did not change untouched", () => {
+    const agent = makeTerminal({
+      id: "t-still",
+      worktreeId: "wt-a",
+      cwd: "/repo/wt-a",
+      launchAgentId: "claude",
+      runtimeStatus: "running",
+    });
+    seedTerminals([agent]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    usePanelStore.setState({ maximizedId: "t-still" });
+    useLayoutUndoStore.getState().undo();
+
+    expect(noticeOf("t-still")).toBeUndefined();
   });
 });

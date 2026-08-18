@@ -3,6 +3,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { classifyLaunchRootAlignment } from "@/utils/worktreeAlignment";
 import { cancelWorktreeMoveInstruction } from "@/services/terminal/worktreeMoveInstruction";
+import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 
 /**
@@ -87,7 +88,7 @@ export function alignDeadPanelCwd(panelId: string, worktreeId: string): void {
  * treating "can't prove it" as "it's fine" is the silence #11840 existed to end
  * — but a dismissible bar is the honest cost of asking, where a modal was not.
  */
-function reconcileMovedPanel(panelId: string, destinationWorktreeId: string): void {
+export function reconcileMovedPanel(panelId: string, destinationWorktreeId: string): void {
   const store = usePanelStore.getState();
   const panel = store.panelsById[panelId];
   if (!panel || !isPtyPanel(panel)) return;
@@ -108,7 +109,10 @@ function reconcileMovedPanel(panelId: string, destinationWorktreeId: string): vo
     readWorktreePaths(),
     destinationWorktreeId
   );
-  const needsNotice = !!panel.launchAgentId && alignment !== "aligned";
+  // `isRuntimeAgentTerminal`, not `launchAgentId`: a plain pane the user
+  // started an agent in by hand is just as addressable, and a demoted ex-agent
+  // is not. Launch affinity alone would have missed both.
+  const needsNotice = isRuntimeAgentTerminal(panel) && alignment !== "aligned";
   // Clearing on the aligned branch is what makes dragging a panel back to the
   // worktree it launched in put the bar away, rather than leaving a stale one
   // pointing at a destination the panel has left.

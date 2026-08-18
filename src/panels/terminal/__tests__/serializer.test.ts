@@ -202,6 +202,17 @@ describe("serializePtyPanel — sessionLostOnRestore is never persisted", () => 
   });
 });
 
+// `worktreeMoveNotice` (#11853) asks the user to say something to a running
+// agent. Persisting it would put the bar back in front of a process that no
+// longer exists, offering to redirect a session the restart already replaced.
+describe("serializePtyPanel — worktreeMoveNotice is never persisted", () => {
+  it("omits worktreeMoveNotice even when the panel currently carries it", () => {
+    const panel = makePanel({ worktreeMoveNotice: { destinationWorktreeId: "wt-b" } });
+    const snapshot = serializePtyPanel(panel) as Record<string, unknown>;
+    expect("worktreeMoveNotice" in snapshot).toBe(false);
+  });
+});
+
 // A session-id-assigning flag is spent the moment the CLI accepts it (#11782).
 // Persisting it would hand a rejected launch to any restore that replays the
 // stored command, so the command is persisted without it while the id itself
