@@ -52,12 +52,43 @@ const FAILURE_MARKER = "[FREEZE-HARNESS] FAILED";
 
 /** Grace between the graceful kill and the hard one, and again before we stop waiting. */
 const CHILD_KILL_GRACE_MS = 5_000;
+/** How long the stdio pipes get to drain after the root exits before we settle anyway. */
+const OUTPUT_DRAIN_MS = 2_000;
+/** Cap on how long settlement waits for the user-data dir to be removed. */
+const CLEANUP_DEADLINE_MS = 5_000;
+/** Cap on the failure dump, so one write cannot outrun the flush before exit. */
+const MAX_DUMP_CHARS = 64_000;
 /** Backstop for a pipe whose write callback never fires. See `exitAfterFlush`. */
 const FLUSH_TIMEOUT_MS = 5_000;
 
-export function parsePositiveInt(value, fallback) {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+/**
+ * Node clamps an out-of-range `setTimeout` delay to 1ms, so an oversized
+ * timeout is not a long timeout — it is an instant one. Anything above this
+ * falls back rather than silently inverting what the caller asked for.
+ */
+const MAX_TIMER_MS = 2_147_483_647;
+
+export function parsePositiveInt(value, fallback, max = MAX_TIMER_MS) {
+  const raw = String(value ?? "").trim();
+  // Number.parseInt("5junk") is 5 and parseInt("1.5") is 1; neither is what the
+  // caller wrote, and silently reinterpreting an env var is how you debug the
+  // wrong run for an hour.
+  if (!/^\d+$/.test(raw)) return fallback;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= max ? parsed : fallback;
+}
+
+/**
+ * Last `maxChars` of the child's output, prefixed with how much was dropped.
+ * The dump is a single write racing `exitAfterFlush`'s bail timer, so it has to
+ * be a predictable size — a chatty 180s child can otherwise produce a string
+ * large enough that the flush is cut off and the diagnostic is lost entirely.
+ */
+export function boundedTail(text, maxChars) {
+  const value = String(text ?? "");
+  if (value.length <= maxChars) return value;
+  const dropped = value.length - maxChars;
+  return `[... ${dropped} earlier characters omitted ...]\n${value.slice(-maxChars)}`;
 }
 
 /**
@@ -83,11 +114,13 @@ export function describeTreeKill(platform, pid, { force = false } = {}) {
     // `/t` walks the tree as it stands right now, so anything already orphaned
     // by the root's own exit is out of reach — which is why the caller escalates
     // rather than trusting one call.
-    return {
-      kind: "taskkill",
-      command: "taskkill",
-      args: ["/pid", String(pid), "/t", "/f"],
-    };
+    // `/f` only on escalation. Without it taskkill asks the tree to close, which
+    // is the graceful half of the same escalation the POSIX branch expresses as
+    // SIGTERM-then-SIGKILL; forcing on the first call would make the second one
+    // a duplicate rather than a step up.
+    const args = ["/pid", String(pid), "/t"];
+    if (force) args.push("/f");
+    return { kind: "taskkill", command: "taskkill", args };
   }
   // Valid only because the child is spawned `detached` on POSIX, which makes it
   // a process-group leader with pgid === pid. Never negate a pid that was not.
@@ -99,11 +132,18 @@ export function shouldDetach(platform) {
   return platform !== "win32";
 }
 
-function runTreeKill(child, { force }) {
+function runTreeKill(child, { force, rootExited }) {
+  // Once the root has exited its pid is meaningless — the descendants that are
+  // still holding the pipes are no longer under it, and on Windows the pid may
+  // already have been recycled onto an unrelated process tree.
+  if (rootExited) return;
   const action = describeTreeKill(process.platform, child.pid, { force });
   if (action.kind === "none") return;
   if (action.kind === "taskkill") {
-    spawn(action.command, action.args, { stdio: "ignore", windowsHide: true }).on("error", () => {});
+    spawn(action.command, action.args, { stdio: "ignore", windowsHide: true }).on(
+      "error",
+      () => {}
+    );
     return;
   }
   try {
@@ -224,29 +264,55 @@ function runHarnessOnce({ runIndex, runCount, timeoutMs }) {
         let output = "";
         let hardKillTimer;
         let giveUpTimer;
+        let drainTimer;
         let settled = false;
+        // Set from `exit`, which fires when the root process goes away. `close`
+        // fires only once every inherited stdio pipe has drained — see below.
+        let rootExited = false;
+        let exitCode = null;
+        let exitSignal = null;
 
-        // One settlement path. `error` and `close` can both fire (a spawn
-        // failure emits `error`, and a failed spawn may never emit `close` at
-        // all), and cleanup must never be what decides whether this promise
-        // settles — see `finish` below.
-        const finish = (error, result) => {
+        const onSignal = (signal) => {
+          // `detached` put Electron in its own process group, so a Ctrl+C in the
+          // terminal reaches this script and nothing else. Pass it on, or we
+          // trade the Windows hang this file exists to fix for a POSIX orphan.
+          runTreeKill(child, { force: false, rootExited });
+          process.exit(128 + (os.constants.signals[signal] ?? 0));
+        };
+        const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
+        for (const signal of SIGNALS) process.on(signal, onSignal);
+
+        // One settlement path. `error` and `close` can both fire, `close` may
+        // never fire at all, and cleanup must never be what decides whether this
+        // promise settles.
+        const finish = async (error, result) => {
           if (settled) return;
           settled = true;
           clearTimeout(timeoutTimer);
           if (hardKillTimer) clearTimeout(hardKillTimer);
           if (giveUpTimer) clearTimeout(giveUpTimer);
-          // Fire-and-forget, and non-throwing: on Windows the app can still hold
-          // a handle under the user-data dir, and an rm rejection inside an async
-          // listener would leave this promise pending forever — the runner would
-          // hang on a run that had already produced its verdict.
-          rm(userDataDir, { recursive: true, force: true }).catch((removeError) => {
-            console.error(
-              `[FREEZE-RUNNER] Could not remove ${userDataDir}: ${
-                removeError instanceof Error ? removeError.message : String(removeError)
-              }`
-            );
-          });
+          if (drainTimer) clearTimeout(drainTimer);
+          for (const signal of SIGNALS) process.off(signal, onSignal);
+          // Awaited, but only up to a deadline. Awaiting unconditionally is the
+          // hang this file exists to prevent; not awaiting at all means the
+          // explicit exit routinely kills the removal mid-flight and leaks an
+          // Electron profile per run. On Windows a held handle also needs a
+          // moment to be released after the tree dies.
+          await Promise.race([
+            rm(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }).catch(
+              (removeError) => {
+                console.error(
+                  `[FREEZE-RUNNER] Could not remove ${userDataDir}: ${
+                    removeError instanceof Error ? removeError.message : String(removeError)
+                  }`
+                );
+              }
+            ),
+            new Promise((r) => {
+              const t = setTimeout(r, CLEANUP_DEADLINE_MS);
+              t.unref();
+            }),
+          ]);
           if (error) reject(error);
           else resolve(result);
         };
@@ -256,13 +322,16 @@ function runHarnessOnce({ runIndex, runCount, timeoutMs }) {
           console.error(
             `[FREEZE-RUNNER] Run ${runIndex}/${runCount}: timed out after ${timeoutMs}ms`
           );
-          runTreeKill(child, { force: false });
-          hardKillTimer = setTimeout(() => runTreeKill(child, { force: true }), CHILD_KILL_GRACE_MS);
+          runTreeKill(child, { force: false, rootExited });
+          hardKillTimer = setTimeout(
+            () => runTreeKill(child, { force: true, rootExited }),
+            CHILD_KILL_GRACE_MS
+          );
           // A tree we could not fully reach may keep the stdio pipes open, so
           // `close` never arrives. Settle anyway — the timeout is already the
           // verdict, and waiting past it is the hang we are defending against.
           giveUpTimer = setTimeout(
-            () => finish(null, { code: null, signal: "SIGKILL", output, timedOut: true }),
+            () => void finish(null, { code: exitCode, signal: exitSignal, output, timedOut: true }),
             CHILD_KILL_GRACE_MS * 2
           );
         }, timeoutMs);
@@ -276,8 +345,46 @@ function runHarnessOnce({ runIndex, runCount, timeoutMs }) {
         child.stdout?.on("data", (chunk) => capture(chunk, process.stdout));
         child.stderr?.on("data", (chunk) => capture(chunk, process.stderr));
 
-        child.on("error", (error) => finish(error, null));
-        child.on("close", (code, signal) => finish(null, { code, signal, output, timedOut }));
+        child.on("error", (error) => {
+          if (rootExited || timedOut) {
+            // Not a spawn failure — `error` also reports a kill we failed to
+            // deliver. Settling on it here would report the wrong cause and
+            // disarm the escalation that is still mid-flight.
+            console.error(
+              `[FREEZE-RUNNER] Teardown error: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+            return;
+          }
+          void finish(error, null);
+        });
+
+        // `exit` is the root's verdict; `close` additionally waits for every
+        // inherited stdio pipe to drain. Electron's descendants inherit those
+        // pipes, so a single survivor means `close` never arrives — and a run
+        // that PASSED and exited 0 would otherwise sit here until the timeout
+        // and be reported as a failure. Take the verdict from `exit`, give the
+        // pipes a bounded moment to drain for the sake of the log tail, then
+        // settle regardless.
+        child.on("exit", (code, signal) => {
+          rootExited = true;
+          exitCode = code;
+          exitSignal = signal;
+          drainTimer = setTimeout(
+            () => void finish(null, { code, signal, output, timedOut }),
+            OUTPUT_DRAIN_MS
+          );
+        });
+
+        child.on("close", (code, signal) => {
+          void finish(null, {
+            code: code ?? exitCode,
+            signal: signal ?? exitSignal,
+            output,
+            timedOut,
+          });
+        });
       })
       .catch(reject);
   });
@@ -301,7 +408,9 @@ async function main() {
       // before its first marker has said nothing at all on the console — the
       // reason is sitting unread in `output`. Dump it, once, on the way out.
       console.error(`[FREEZE-RUNNER] Captured output from run ${i}/${runCount}:`);
-      console.error(result.output.trimEnd() || "(child produced no output)");
+      console.error(
+        boundedTail(result.output.trimEnd(), MAX_DUMP_CHARS) || "(child produced no output)"
+      );
       throw error;
     }
     console.log(`[FREEZE-RUNNER] Run ${i}/${runCount}: PASS`);

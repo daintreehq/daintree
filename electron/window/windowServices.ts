@@ -805,19 +805,33 @@ export async function setupWindowServices(
       app.exit(1);
       return "exit-requested";
     }
-    const passed = await runFreezeHarness(opts.projectViewManager);
-    if (win && !win.isDestroyed()) win.destroy();
+    // `app.exit` lives in the finally so that nothing between here and it can
+    // strand the process: the harness contracts to return a boolean, but a
+    // throw from it or from `win.destroy()` would otherwise leave a booted app
+    // with no exit issued and the runner waiting out its whole timeout.
+    let passed = false;
     try {
-      getWorkspaceClientRef()?.dispose();
-    } catch {
-      /* ignore */
+      passed = await runFreezeHarness(opts.projectViewManager);
+    } catch (error) {
+      console.error("[FREEZE-HARNESS] FAILED — harness threw:", error);
+    } finally {
+      try {
+        if (win && !win.isDestroyed()) win.destroy();
+      } catch {
+        /* ignore */
+      }
+      try {
+        getWorkspaceClientRef()?.dispose();
+      } catch {
+        /* ignore */
+      }
+      try {
+        getPtyClient()?.dispose();
+      } catch {
+        /* ignore */
+      }
+      app.exit(passed ? 0 : 1);
     }
-    try {
-      getPtyClient()?.dispose();
-    } catch {
-      /* ignore */
-    }
-    app.exit(passed ? 0 : 1);
     return "exit-requested";
   }
 

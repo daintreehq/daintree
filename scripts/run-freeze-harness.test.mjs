@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   REQUIRED_MARKERS,
+  boundedTail,
   describeTreeKill,
   extractResultLine,
   parsePositiveInt,
@@ -8,14 +9,15 @@ import {
   validateHarnessOutput,
 } from "./run-freeze-harness.mjs";
 
+// Built from the exported markers rather than restating them: a renamed marker
+// should break the runner's contract test, not force a matching edit to a
+// fixture that never exercised the producer in the first place. The first
+// marker keeps a trailing suffix so the `startsWith` filter below stays honest.
 const PASSING_OUTPUT = [
-  "[FREEZE-HARNESS] CHECK: cached view ready — projectId=7f39de12 visible=false",
-  "[FREEZE-HARNESS] CHECK: probe running — OK",
+  `${REQUIRED_MARKERS[0]} — projectId=7f39de12 visible=false`,
+  ...REQUIRED_MARKERS.slice(1),
   "[FREEZE-HARNESS] window=3000ms control=54224 frozen=0 recovered=52533",
   '[FREEZE-HARNESS] RESULT {"control":54224,"frozen":0,"recovered":52533,"freezeRatio":54224,"recoveryRatio":52533,"visibilityState":"hidden"}',
-  "[FREEZE-HARNESS] CHECK: freeze ratio — OK",
-  "[FREEZE-HARNESS] CHECK: recovery — OK",
-  "[FREEZE-HARNESS] PASS",
 ].join("\n");
 
 function okResult(overrides = {}) {
@@ -113,16 +115,67 @@ describe("describeTreeKill", () => {
     expect(action.args).toContain("/t");
   });
 
-  it("never falls back to an image-name kill", () => {
+  it("escalates on Windows by forcing, not by changing the target", () => {
+    const graceful = describeTreeKill("win32", 4321);
+    const forced = describeTreeKill("win32", 4321, { force: true });
+    // Graceful asks the tree to close; only the escalation forces it. Both
+    // forcing would make the second call a duplicate rather than a step up.
+    expect(graceful.args).not.toContain("/f");
+    expect(forced.args).toContain("/f");
+    expect(forced.args.filter((a) => a !== "/f")).toEqual(graceful.args);
+  });
+
+  it("addresses the tree only by pid, never by image name", () => {
     // This runner launches the unpackaged electron binary, so `taskkill /im`
     // would take out every other Electron app on the developer's machine.
     const action = describeTreeKill("win32", 4321, { force: true });
-    expect(action.args).not.toContain("/im");
-    expect(action.args.join(" ")).not.toMatch(/\.exe/i);
+    expect(action.args).toEqual(["/pid", "4321", "/t", "/f"]);
   });
 
   it.each([undefined, null, 0, -1, 1.5, NaN])("issues no kill for the pid %s", (pid) => {
     expect(describeTreeKill("darwin", pid).kind).toBe("none");
     expect(describeTreeKill("win32", pid).kind).toBe("none");
+  });
+});
+
+describe("parsePositiveInt ceiling", () => {
+  it("rejects a delay Node would clamp to a near-instant timer", () => {
+    // Node clamps an out-of-range setTimeout to ~1ms, so accepting this would
+    // turn "wait a very long time" into "time out immediately".
+    const tooLarge = 2_147_483_648;
+    expect(parsePositiveInt(String(tooLarge), 180_000)).toBe(180_000);
+    expect(parsePositiveInt(String(tooLarge - 1), 180_000)).toBe(tooLarge - 1);
+  });
+
+  it("refuses to reinterpret a value the caller did not write", () => {
+    // parseInt would read these as 5 and 1 respectively.
+    expect(parsePositiveInt("5junk", 7)).toBe(7);
+    expect(parsePositiveInt("1.5", 7)).toBe(7);
+    expect(parsePositiveInt(" 5 ", 7)).toBe(5);
+  });
+
+  it("honours a caller-supplied ceiling independently of the timer ceiling", () => {
+    expect(parsePositiveInt("11", 1, 10)).toBe(1);
+    expect(parsePositiveInt("10", 1, 10)).toBe(10);
+  });
+});
+
+describe("boundedTail", () => {
+  it("passes short text through untouched", () => {
+    expect(boundedTail("all of it", 100)).toBe("all of it");
+  });
+
+  it("keeps the end, which is where the failure is, and says what it dropped", () => {
+    const text = "abcdefghij";
+    const tail = boundedTail(text, 4);
+    expect(tail.endsWith("ghij")).toBe(true);
+    expect(tail).toContain(String(text.length - 4));
+  });
+
+  it("bounds the payload so one write cannot outrun the flush", () => {
+    const huge = "x".repeat(500_000);
+    // The prefix adds a little, but the result must stay the same order of
+    // magnitude as the cap rather than the input.
+    expect(boundedTail(huge, 1_000).length).toBeLessThan(1_100);
   });
 });

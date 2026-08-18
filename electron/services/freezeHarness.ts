@@ -211,8 +211,10 @@ export interface PurgeBudget {
 /**
  * Does the rest of the run fit before the cached view's first memory purge?
  *
- * The purge timer is armed inside `deactivateEntry` the moment the view flips to
- * `cached`, and fires `CACHED_VIEW_PURGE_DELAY_MS` later. A purge landing
+ * `deactivateEntry` stamps `lastUsed` when the view flips to `cached` and arms
+ * the purge timer a little later in the same pass, so measuring from `lastUsed`
+ * puts the deadline slightly early — conservative, which is the safe direction.
+ * The timer fires `CACHED_VIEW_PURGE_DELAY_MS` after it is armed. A purge landing
  * mid-measurement perturbs the very throughput being measured, so the docstring
  * on `MEASURE_WINDOW_MS` has always said the run must finish first — this makes
  * that a check rather than a promise, because `MEASURE_WINDOW_MS` is
@@ -456,6 +458,25 @@ export async function runFreezeHarness(pvm: ProjectViewManager): Promise<boolean
     await delay(MEASURE_WINDOW_MS);
     const recoveredEnd = Date.now();
 
+    // The budget above checks the plan; this checks what actually happened.
+    // `setTimeout` widths are minimums, so eight sequential delays on a loaded
+    // box can finish materially later than planned — and a purge landing inside
+    // a measured window is exactly what the budget exists to keep out of the
+    // numbers. Only the windows have to beat it: the read that follows can take
+    // as long as it likes, because a purge cannot retroactively change bucket
+    // counts already recorded.
+    const actualFinishMs = recoveredEnd - cached.lastUsed;
+    if (actualFinishMs > budget.deadlineMs) {
+      log(
+        "FAILED — measurement overran the cached-view purge: last window closed %dms after caching, " +
+          "past the %dms deadline. Planned %dms; timers ran long.",
+        actualFinishMs,
+        budget.deadlineMs,
+        budget.plannedFinishMs
+      );
+      return false;
+    }
+
     // First read of the run. Anything earlier would have to survive the frozen
     // window, and a frozen renderer does not answer.
     const reading = await withTimeout(
@@ -532,14 +553,6 @@ export async function runFreezeHarness(pvm: ProjectViewManager): Promise<boolean
     log("FAILED — %s", formatErrorMessage(error, "freeze harness threw"));
     return false;
   } finally {
-    // An early return or a throw can leave the view frozen; the process is about
-    // to exit either way, but a frozen view can't answer the CDP teardown the
-    // shutdown path issues.
-    try {
-      pvm.setEfficiencyFreeze(false);
-    } catch {
-      // best-effort
-    }
     for (const projectId of createdProjectIds) {
       try {
         await projectStore.removeProject(projectId);
@@ -555,6 +568,15 @@ export async function runFreezeHarness(pvm: ProjectViewManager): Promise<boolean
       } catch (error) {
         log("WARN — could not remove %s: %s", tempRoot, formatErrorMessage(error, "unknown"));
       }
+    }
+    // Last, not first: `ResourceProfileService` runs on its own cadence and can
+    // re-enable efficiency freeze during the awaits above. Desired-state only —
+    // the thaw it triggers is fire-and-forget, so this records the intent rather
+    // than guaranteeing the renderer is running again by the time we return.
+    try {
+      pvm.setEfficiencyFreeze(false);
+    } catch {
+      // best-effort
     }
   }
 }
