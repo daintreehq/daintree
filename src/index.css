@@ -2717,9 +2717,9 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 
   /* The two-tone mark is an SVG, so it needs its fills forced rather than its
-     background. Both slices collapse to CanvasText: the split cannot survive a
-     palette with no second colour to carry it, and only the notch between them
-     is left to say the mark had two halves. */
+     background. Both shapes collapse to one CanvasText disc: the split cannot
+     survive a palette with no second colour to carry it. */
+  svg.workspace-mark circle,
   svg.workspace-mark path {
     fill: CanvasText;
   }

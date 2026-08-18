@@ -470,22 +470,30 @@ describe("ProjectSwitcherPalette liveness axis", () => {
     expect(shareOf(stalled)).toBeNull();
     expect(shareOf(churning)).not.toBeNull();
     // Structurally different marks, not just differently classed ones: the
-    // split one is drawn as two filled shapes so its two colours meet on a
-    // shared edge, while a row leaning entirely one way stays a plain disc.
+    // split one is a wedge over a full disc, while a row leaning entirely one
+    // way stays a plain div. Both shapes are named, and their fills asserted
+    // apart, because the wedge alone still renders as a plausible mark — it
+    // would just be a slice floating on the row, which is the transparent
+    // background the disc underneath exists to prevent.
     expect(markIn(stalled)?.tagName).toBe("DIV");
     expect(markIn(churning)?.tagName).toBe("svg");
-    expect(markIn(churning)?.querySelector("path")).toBeTruthy();
+    const disc = markIn(churning)?.querySelector("circle");
+    const wedge = markIn(churning)?.querySelector("path");
+    expect(disc).toBeTruthy();
+    expect(wedge).toBeTruthy();
+    expect(disc?.getAttribute("fill")).not.toBe(wedge?.getAttribute("fill"));
   });
 
   it("leans the mark toward whichever side has more agents", () => {
-    // Relational rather than a literal fraction: what has to hold is that more
-    // running agents move the mark further toward the running side, whatever
-    // the snapping happens to round them to.
-    const mostlyRunning = renderPair(6).churning;
+    // Deliberately one agent apart rather than a wide spread. Against one
+    // waiting agent these are 3/4 and 2/3 — two ratios the old quarter-snapped
+    // mark drew identically, so this fails if the component ever goes back to
+    // rendering a pose instead of the counts' own proportion.
+    const mostlyRunning = renderPair(3).churning;
     cleanup();
-    const evenlySplit = renderPair(1).churning;
+    const nearerEven = renderPair(2).churning;
 
-    expect(Number(shareOf(mostlyRunning))).toBeGreaterThan(Number(shareOf(evenlySplit)));
+    expect(Number(shareOf(mostlyRunning))).toBeGreaterThan(Number(shareOf(nearerEven)));
   });
 
   it("leaves the demand sentence identical on both", () => {

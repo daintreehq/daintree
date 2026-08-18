@@ -1276,52 +1276,99 @@ describe("formatFleetLiveness", () => {
 
 /**
  * The mark's proportion, which has one job the exact counts cannot do: say
- * which way a row leans without being read. Everything here is about staying
- * honest at 8px, where the alternative to snapping is a wedge nobody can
- * measure and a count that rounds away to nothing.
+ * which way a row leans without being read. It draws the counts' own fraction,
+ * so everything here is about the two places that is not the whole story — the
+ * floor that keeps a lone agent from becoming a splinter at 8px, and the
+ * branches where a side reaching zero hands the mark over entirely.
  */
 describe("running share", () => {
   it("gives the whole mark to whichever side is alone", () => {
     expect(runningShare({ demand: 0, running: 4 })).toBe(1);
     expect(runningShare({ demand: 4, running: 0 })).toBe(0);
+    // The empty guard, which is unreachable through `agentMix` today — it is
+    // null when both sides are zero — and is here because removing it turns a
+    // division by zero into NaN coordinates in the wedge path rather than into
+    // anything a caller would notice.
+    expect(runningShare({ demand: 0, running: 0 })).toBe(0);
   });
 
-  it("never rounds a live agent out of the mark", () => {
-    // The failure this exists to prevent: 1-of-13 is 7.7%, which any honest
-    // rounding sends to zero — and a mark that says "nothing is running" about
-    // a project with a running agent is worse than one that says nothing.
-    const lopsided = runningShare({ demand: 12, running: 1 });
-    expect(lopsided).toBeGreaterThan(0);
-    expect(lopsided).toBeLessThan(0.5);
-
-    // Symmetrically, one straggler waiting must not be rounded away either.
-    const inverted = runningShare({ demand: 1, running: 12 });
-    expect(inverted).toBeLessThan(1);
-    expect(inverted).toBeGreaterThan(0.5);
-  });
-
-  it("lands on quarters, so the mark makes a finite set of statements", () => {
-    // Snapping is what makes an 8px angle readable at all: the reader
-    // recognises a shape rather than estimating a proportion. Sampled across
-    // the range rather than asserted case by case — the property is what
-    // matters, and a case list would just restate the arithmetic.
-    for (let demand = 0; demand <= 12; demand++) {
-      for (let running = 0; running <= 12; running++) {
-        if (demand === 0 && running === 0) continue;
+  it("never lets a present side round out of the mark", () => {
+    // The failure this exists to prevent: a mark that says "nothing is running"
+    // about a project with a running agent is worse than one that says nothing.
+    // Swept well past the floor, because the two exclusive branches are the
+    // only places a share of exactly 0 or 1 may come from — a lopsided mix must
+    // reach neither, however lopsided it gets.
+    for (const other of [1, 4, 13, 60, 400]) {
+      for (const [demand, running] of [
+        [other, 1],
+        [1, other],
+      ] as const) {
         const share = runningShare({ demand, running });
-        expect((share * 4) % 1).toBe(0);
-        expect(share).toBeGreaterThanOrEqual(0);
-        expect(share).toBeLessThanOrEqual(1);
+        expect(share).toBeGreaterThan(0);
+        expect(share).toBeLessThan(1);
       }
     }
   });
 
+  it("draws the counts' own proportion once both sides are visible", () => {
+    // The mark is a pie, not a set of poses: a mixed row's wedge is the
+    // fraction the counts make, so it cannot lean one way while the figures
+    // printed beside it lean the other. Sampled across the range rather than
+    // asserted case by case — the property is what matters, and a case list
+    // would just restate the arithmetic.
+    for (let demand = 1; demand <= 12; demand++) {
+      for (let running = 1; running <= 12; running++) {
+        const exact = running / (demand + running);
+        const share = runningShare({ demand, running });
+        // Clamped only where a side would otherwise be a splinter, which no
+        // pair this small reaches.
+        expect(share).toBeCloseTo(exact, 10);
+      }
+    }
+  });
+
+  it("keeps a lone agent among many wide enough to see", () => {
+    // 1-of-50 is 2% of the disc — a sub-pixel sliver at 8px. The clamp is what
+    // stops the mark from claiming a side that is present has nothing.
+    const sliver = runningShare({ demand: 49, running: 1 });
+    expect(sliver).toBeGreaterThan(1 / 50);
+    expect(sliver).toBeLessThan(0.1);
+    expect(runningShare({ demand: 1, running: 49 })).toBeCloseTo(1 - sliver, 10);
+  });
+
   it("leans the way the counts do", () => {
-    // Monotonic in the direction that matters: adding runs never moves the mark
-    // toward the demand side.
-    expect(runningShare({ demand: 3, running: 1 })).toBeLessThan(
-      runningShare({ demand: 1, running: 3 })
-    );
+    // Monotonic in the one variable that matters: with the waiting side held
+    // still, adding a run never moves the mark toward demand. Holding `demand`
+    // fixed is the point — varying both at once would pass on a function that
+    // merely responded to the ratio's sign.
+    for (const demand of [1, 3, 20]) {
+      let previous = runningShare({ demand, running: 1 });
+      for (let running = 2; running <= 40; running++) {
+        const share = runningShare({ demand, running });
+        expect(share).toBeGreaterThanOrEqual(previous);
+        previous = share;
+      }
+    }
+
+    // Equal counts split the mark down the middle, which is the one proportion
+    // a reader can name on sight.
     expect(runningShare({ demand: 2, running: 2 })).toBe(0.5);
+  });
+
+  it("stops being proportional only where a side would be a splinter", () => {
+    // The floor's cost, stated rather than hidden: past a point, two different
+    // ratios draw the same mark. Asserted as a plateau between two extremes
+    // rather than against the constant itself, so the number can be retuned for
+    // a different mark size without editing this.
+    const veryLopsided = runningShare({ demand: 400, running: 1 });
+    const evenMoreSo = runningShare({ demand: 4000, running: 1 });
+    expect(veryLopsided).toBe(evenMoreSo);
+
+    // ...and the plateau is narrow. A mix that any reader could see is lopsided
+    // without being extreme still draws its true proportion.
+    expect(runningShare({ demand: 9, running: 1 })).toBeCloseTo(0.1, 10);
+
+    // Symmetric: the same clamp applies to whichever side is outnumbered.
+    expect(runningShare({ demand: 1, running: 400 })).toBeCloseTo(1 - veryLopsided, 10);
   });
 });

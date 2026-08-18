@@ -127,29 +127,34 @@ export const ROW_MARK_COLOR: Record<ProjectRowTone, string> = {
 };
 
 /**
- * Share of the mark the running agents take, snapped so it stays readable at
- * 8px (#11832).
+ * Share of the mark the running agents take (#11832).
  *
- * Angle is a weak channel — Cleveland & McGill rank it below position and
- * length — and below roughly 14px a continuous pie stops being a proportion at
- * all and becomes "there are two colours here". Quantising to quarters is what
- * rescues it: three mixed states (a quarter, half, three quarters) are shape
- * recognition rather than angle estimation, and a reader can name which side is
- * winning without measuring anything.
+ * The exact proportion: a project with three runs against one wait draws
+ * three-quarters green, and one with seven against five draws the angle those
+ * twelve actually make. An earlier version snapped this to quarters on the
+ * theory that angle is a weak channel at 8px — true of *reading* a pie, but the
+ * mark is not asked to be measured. Snapping bought nothing and cost accuracy:
+ * the five statements it allowed were as hard to tell apart as the real angles
+ * would have been, and every one of them was a lie about the counts printed on
+ * the same row.
  *
- * The clamp is the other half. A naive round sends 1-of-13 to zero and deletes
- * a running agent from the row, so any non-zero count keeps at least a quarter
- * of the mark — the figures beside it carry the exact split, and the mark's job
- * is only to say which way the row leans.
+ * `MIN_VISIBLE_SHARE` is the one departure, and only at the extremes. A single
+ * run among fifty is 2% of the disc — a sub-pixel splinter that either
+ * disappears into antialiasing or reads as a rendering artefact — so any
+ * non-zero count keeps a wedge wide enough to be a wedge. The exact figures
+ * lead the line beside the mark, which is where anyone who needs them reads
+ * them anyway.
  */
+const MIN_VISIBLE_SHARE = 0.06;
+
 export function runningShare(mix: { demand: number; running: number }): number {
   const total = mix.demand + mix.running;
   if (total === 0) return 0;
   if (mix.demand === 0) return 1;
   if (mix.running === 0) return 0;
 
-  const snapped = Math.round((mix.running / total) * 4) / 4;
-  return Math.min(0.75, Math.max(0.25, snapped));
+  const share = mix.running / total;
+  return Math.min(1 - MIN_VISIBLE_SHARE, Math.max(MIN_VISIBLE_SHARE, share));
 }
 
 /**
@@ -219,10 +224,10 @@ export interface ProjectRowStatus {
    * where nothing is being asked of anyone. `running` is the same figure the
    * count column prints.
    *
-   * Both are raw counts rather than a ready-made fraction: the snapping the
-   * mark does to stay legible at 8px is a rendering decision, and a classifier
-   * that had already rounded would leave the renderer unable to tell a genuine
-   * half from a rounded one.
+   * Both are raw counts rather than a ready-made fraction: the floor the mark
+   * applies to keep a lone agent visible at 8px is a rendering decision, and a
+   * classifier that had already clamped would leave the renderer unable to tell
+   * a genuine near-zero share from a floored one.
    */
   agentMix: { demand: number; running: number } | null;
   /**
