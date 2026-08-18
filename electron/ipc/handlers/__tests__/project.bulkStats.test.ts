@@ -131,6 +131,13 @@ vi.mock("../../../window/portDistribution.js", () => ({
   distributePortsToView: vi.fn(),
 }));
 
+// Same default as the push-path suite: on screen unless a test hides it.
+const helpSessionMock = vi.hoisted(() => ({
+  isPanelVisible: vi.fn<(id: string) => boolean>(() => true),
+}));
+vi.mock("../../../services/HelpSessionService.js", () => ({
+  helpSessionService: helpSessionMock,
+}));
 vi.mock("../../../window/deferredInitQueue.js", () => ({
   registerDeferredTask: vi.fn(),
 }));
@@ -905,6 +912,7 @@ describe("bulk stats assistant presence (#11806)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    helpSessionMock.isPanelVisible.mockReturnValue(true);
     // The real availability store, because that is what decides `"help"` and
     // this test exists to prove the seed reads the same verdict the push does.
     getAgentAvailabilityStore().markAsHelp(HELP_TERMINAL_ID);
@@ -945,6 +953,34 @@ describe("bulk stats assistant presence (#11806)", () => {
       waitingAgentCount: entry.waitingAgentCount,
       processCount: entry.processCount,
     }).toEqual(ASSISTANT_PROJECTION_PARITY);
+  });
+
+  it("omits them again once the user hides the panel", async () => {
+    // The seed reads the same visibility gate the push does. A palette opened
+    // with a hidden assistant would otherwise hydrate the row with a wait the
+    // pushed map has already stopped reporting, and the push suppresses
+    // unchanged payloads — so nothing would take it back down.
+    const ptyClient = makePtyClient({
+      getAllTerminalsAsync: vi.fn().mockResolvedValue([helpTerminal(PARITY_ASSISTANT_TERMINAL)]),
+      getProjectStats: vi.fn().mockResolvedValue({
+        terminalCount: 1,
+        terminalTypes: { terminal: 1 },
+        processIds: [100],
+      }),
+    });
+    helpSessionMock.isPanelVisible.mockReturnValue(false);
+    registerProjectCrudHandlers(makeDeps(ptyClient));
+
+    const result = (await getBulkStatsHandler()(fakeEvent, [PROJECT_ID])) as Record<
+      string,
+      Record<string, unknown>
+    >;
+
+    const entry = result[PROJECT_ID]!;
+    expect(entry).not.toHaveProperty("assistantState");
+    expect(entry).not.toHaveProperty("assistantWaitingReason");
+    expect(entry).not.toHaveProperty("assistantStateSince");
+    expect(entry.processCount).toBe(0);
   });
 
   it("omits the assistant fields when the project has no live assistant", async () => {

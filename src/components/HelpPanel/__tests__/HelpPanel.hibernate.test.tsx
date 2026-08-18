@@ -303,11 +303,22 @@ vi.mock("@/store", () => {
 // Mocked at its leaf path, mirroring the component's import (#11068). The panel
 // pulls `useScratchStore` from `@/store/scratchStore` rather than the `@/store`
 // barrel precisely so barrel-mocking suites like this one don't have to list it.
+// Focus mode parks the assistant off-canvas without closing it, so the panel's
+// report has to be able to say "open but not on screen".
+const focusStoreState = { gestureAssistantHidden: false };
+
 vi.mock("@/store/scratchStore", () => {
   const store = (selector?: (state: typeof scratchStoreState) => unknown) =>
     selector ? selector(scratchStoreState) : scratchStoreState;
   store.getState = () => scratchStoreState;
   return { useScratchStore: store };
+});
+
+vi.mock("@/store/focusStore", () => {
+  const store = (selector?: (s: typeof focusStoreState) => unknown) =>
+    selector ? selector(focusStoreState) : focusStoreState;
+  store.getState = () => focusStoreState;
+  return { useFocusStore: store };
 });
 
 vi.mock("@/store/macroFocusStore", () => {
@@ -461,6 +472,7 @@ function resetState() {
   mockRestorePendingHibernation.mockResolvedValue(false);
   mockReportPanelOpen.mockReset();
   mockReportPanelOpen.mockResolvedValue(undefined);
+  focusStoreState.gestureAssistantHidden = false;
   mockProvisionSession.mockReset();
   mockProvisionSession.mockResolvedValue(null);
   mockRevokeSession.mockReset();
@@ -1033,7 +1045,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       render(<HelpPanel width={380} />);
     });
 
-    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true);
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true, true);
   });
 
   it("auto-opens and resumes the captured session WITHOUT recording consent on cold restore", async () => {
@@ -1387,7 +1399,11 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
 
     expect(mockPeekPendingHibernation).toHaveBeenCalledWith("scratch-1");
     expect(mockTakePendingHibernation).toHaveBeenCalledWith("scratch-1");
-    expect(mockReportPanelOpen).toHaveBeenCalledWith("scratch-1", expect.any(Boolean));
+    expect(mockReportPanelOpen).toHaveBeenCalledWith(
+      "scratch-1",
+      expect.any(Boolean),
+      expect.any(Boolean)
+    );
     // Provisioning treats the scratch as the workspace — same opaque id/path.
     expect(mockProvisionSession).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1562,6 +1578,23 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     );
   });
 
+  it("reports an open-but-parked panel as not visible", async () => {
+    // Focus mode slides the assistant off-canvas and deliberately leaves
+    // `isOpen` true so exiting the gesture can bring it back. The two facts go
+    // to main separately: the open flag still drives cold-resume, while the
+    // project tallies read visibility and must stop reporting an assistant
+    // nobody can see.
+    helpPanelState.isOpen = true;
+    focusStoreState.gestureAssistantHidden = true;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true, false);
+  });
+
   it("reports the panel closed to main when isOpen transitions to false", async () => {
     helpPanelState.isOpen = true;
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
@@ -1570,7 +1603,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     await act(async () => {
       view = render(<HelpPanel width={380} />);
     });
-    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true);
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true, true);
 
     // User closes the panel — main must learn so a later eviction does not
     // stamp panelWasOpen:true and auto-resume an assistant the user dismissed.
@@ -1578,7 +1611,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     await act(async () => {
       view!.rerender(<HelpPanel width={380} />);
     });
-    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", false);
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", false, false);
   });
 });
 

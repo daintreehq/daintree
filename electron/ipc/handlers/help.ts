@@ -228,10 +228,18 @@ async function handleRestorePendingHibernation(
 async function handleReportPanelOpen(
   ctx: import("../types.js").IpcContext,
   projectId: string,
-  isOpen: boolean
+  isOpen: boolean,
+  /**
+   * Whether the panel is actually ON SCREEN. Focus mode parks it off-canvas
+   * with `isOpen` left true, and a parked assistant is one the project tallies
+   * must stop reporting. Optional so an older renderer (or a caller that has
+   * only the one fact) still reports exactly what it always did.
+   */
+  isVisible?: boolean
 ): Promise<void> {
   if (typeof projectId !== "string" || !projectId) return;
   if (typeof isOpen !== "boolean") return;
+  const visible = typeof isVisible === "boolean" ? isVisible : isOpen;
   // Same cross-project guard as the hibernation handlers: only the renderer
   // bound to this project's webContents may report its panel state. A
   // mismatched report would let one view's open-state drive another's
@@ -245,7 +253,15 @@ async function handleReportPanelOpen(
     return;
   }
   const { helpSessionService } = await getHelpSessionService();
-  helpSessionService.reportPanelOpen(projectId, isOpen);
+  if (!helpSessionService.reportPanelOpen(projectId, isOpen, visible)) return;
+  // Visibility moved, and nothing else will notice: the stats poll is driven by
+  // agent, terminal and snooze events, none of which fire when a panel slides
+  // away. Without this the row keeps reporting a hidden assistant until the
+  // next tick — and a switcher opened inside that window freezes its band
+  // membership around the stale answer.
+  const { getProjectStatsService } = await import("./projectCrud/stats.js");
+  const stats = getProjectStatsService();
+  if (stats?.isStarted) stats.refresh();
 }
 
 export const helpNamespace = defineIpcNamespace({

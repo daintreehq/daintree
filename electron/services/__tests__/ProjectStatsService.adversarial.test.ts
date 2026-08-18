@@ -27,6 +27,12 @@ const availabilityMock = vi.hoisted(() => ({
   isHelpTerminal: vi.fn<(id: string) => boolean>(() => false),
 }));
 
+// The panel is on screen unless a test says otherwise: these suites are about
+// what a live assistant reports, not about where it is rendered.
+const helpSessionMock = vi.hoisted(() => ({
+  isPanelVisible: vi.fn<(id: string) => boolean>(() => true),
+}));
+
 vi.mock("../../ipc/utils.js", () => ({
   typedBroadcast: broadcastMock,
 }));
@@ -37,6 +43,7 @@ vi.mock("../ScratchStore.js", () => ({ scratchStore: scratchStoreMock }));
 vi.mock("../AgentAvailabilityStore.js", () => ({
   getAgentAvailabilityStore: () => availabilityMock,
 }));
+vi.mock("../HelpSessionService.js", () => ({ helpSessionService: helpSessionMock }));
 
 import { ProjectStatsService } from "../ProjectStatsService.js";
 import {
@@ -924,6 +931,31 @@ describe("ProjectStatsService assistant presence (#11806)", () => {
   beforeEach(() => {
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
     availabilityMock.isHelpTerminal.mockImplementation((id: string) => id.startsWith("help"));
+    helpSessionMock.isPanelVisible.mockReturnValue(true);
+  });
+
+  it("reports nothing at all once the user hides the panel", async () => {
+    // Closing the panel does not kill the session — the PTY lives until the
+    // idle-hibernate timer fires — but it does end the reporting. A row must
+    // not ask the user to deal with an assistant they have put away.
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      helpTerminal({ agentState: "waiting", waitingReason: "prompt", lastStateChange: 1_000 }),
+    ]);
+    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 1 });
+    helpSessionMock.isPanelVisible.mockReturnValue(false);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const p1 = lastPayload().p1;
+    expect(p1).not.toHaveProperty("assistantState");
+    expect(p1).not.toHaveProperty("assistantWaitingReason");
+    expect(p1).not.toHaveProperty("assistantStateSince");
+    // The PTY is still the host's to account for, hidden or not.
+    expect(p1.processCount).toBe(0);
+    svc.stop();
   });
 
   it("pushes the assistant's state while still keeping it out of every count", async () => {

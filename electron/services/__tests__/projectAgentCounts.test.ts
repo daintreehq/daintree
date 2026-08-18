@@ -561,6 +561,44 @@ describe("computeProjectAgentCounts — assistant presence (#11806)", () => {
     expect(counts.get("p2")!.assistantState).toBeNull();
   });
 
+  it("reports nothing for an assistant the user has hidden", () => {
+    // Closing the panel leaves the PTY alive until the idle-hibernate timer
+    // fires. A session nobody can see is not a state anyone can act on, so the
+    // row must read as if the project had no assistant at all.
+    const terminals = [
+      agent({ id: "help-1", agentState: "waiting", waitingReason: "prompt" }),
+      agent({ id: "help-2", projectId: "p2", agentState: "waiting", waitingReason: "prompt" }),
+    ];
+    const counts = computeProjectAgentCounts(
+      ["p1", "p2"],
+      terminals,
+      undefined,
+      undefined,
+      (id) => id === "p2"
+    );
+
+    expect(counts.get("p1")!.assistantState).toBeNull();
+    expect(counts.get("p1")!.assistantWaitingReason).toBeNull();
+    expect(counts.get("p1")!.assistantStateSince).toBeNull();
+    expect(counts.get("p2")!.assistantState).toBe("waiting");
+  });
+
+  it("still nets out a hidden assistant's PTY", () => {
+    // Hiding the panel does not stop the host counting the process. Dropping it
+    // from `helpTerminals` along with its state would put the phantom process
+    // count of #10989 back on every row with a closed assistant.
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "help", agentState: "waiting", waitingReason: "prompt" })],
+      undefined,
+      undefined,
+      () => false
+    );
+
+    expect(counts.get("p1")!.helpTerminals).toBe(1);
+    expect(counts.get("p1")!.assistantState).toBeNull();
+  });
+
   it("keeps each project's assistant to its own entry", () => {
     const counts = computeProjectAgentCounts(
       ["p1", "p2"],

@@ -996,11 +996,12 @@ describe("row status liveness", () => {
       expect(settled.livenessDetail, label).toBeUndefined();
       expect(live.livenessDetail, label).toBe("3 agents running");
 
-      // The mark follows the demand only while the demand is asking for
-      // something. A snooze and a seen completion are not, so on those rows the
-      // run takes the mark instead of leaving it settled beside three agents
-      // that are visibly still going.
-      const asking = settled.tone !== "snoozed" && settled.tone !== "muted";
+      // The mark follows the demand only while a WORKER is asking for
+      // something. A snooze, a seen completion and a waiting assistant are not,
+      // so on those rows the run takes the mark instead of leaving it settled
+      // beside three agents that are visibly still going.
+      const asking =
+        settled.tone !== "snoozed" && settled.tone !== "muted" && settled.tone !== "assistant";
       expect(live.markTone, label).toBe(asking ? settled.markTone : "working");
     }
   });
@@ -1015,13 +1016,15 @@ describe("row status liveness", () => {
     expect(quiet.isDormantFallback).toBe(true);
   });
 
-  it("lets a working assistant keep its line without taking a running row's", () => {
-    // The one case where the mark and the sentence come apart: the assistant is
-    // presence rather than demand (#11806), so it says what it is while the
-    // mark goes to the runs the user actually launched.
+  it("lets a working assistant keep its line while the mark reports the work", () => {
+    // The mark asks "is anything executing", which an assistant answers as well
+    // as an agent does — so it goes green on its own. The COUNT beside it still
+    // speaks only for the runs the user launched (#11806): the assistant is one
+    // session and was never an answer to how many agents there are.
     const assistantOnly = getProjectRowStatus(project({ assistantState: "working" }), NOW);
     expect(assistantOnly.text).toBe("Assistant working");
-    expect(assistantOnly.markTone).toBe("assistant");
+    expect(assistantOnly.markTone).toBe("working");
+    expect(assistantOnly.agentMix).toBeNull();
 
     const alsoRunning = getProjectRowStatus(
       project({ assistantState: "working", activeAgentCount: 2 }),
@@ -1029,6 +1032,27 @@ describe("row status liveness", () => {
     );
     expect(alsoRunning.markTone).toBe("working");
     expect(alsoRunning.livenessDetail).toBe("2 agents running");
+  });
+
+  it("never lets a waiting assistant grey out a row that is still running", () => {
+    // The regression this rule exists for: an assistant parked at its prompt
+    // beside a working agent used to take the mark and draw it settled, so a
+    // project with a run in flight reported itself as stopped.
+    const stopped = getProjectRowStatus(
+      project({ assistantState: "waiting", isActive: true }),
+      NOW
+    );
+    expect(stopped.markTone).toBe("assistant");
+
+    const running = getProjectRowStatus(
+      project({ assistantState: "waiting", isActive: true, activeAgentCount: 1 }),
+      NOW
+    );
+    expect(running.markTone).toBe("working");
+    // Solid, not split: the assistant is not a worker the mark weighs a run
+    // against, so the wedge has nothing to divide.
+    expect(running.agentMix).toEqual({ demand: 0, running: 1 });
+    expect(runningShare(running.agentMix!)).toBe(1);
   });
 
   it("keeps a running row's own settled line instead of the assistant's", () => {

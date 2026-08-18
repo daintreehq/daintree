@@ -63,11 +63,29 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
 /**
  * The mark for one tone, as the utility classes that draw it.
  *
- * The solid states draw a filled 8px disc; the settled ones draw a ring. A row
- * that is part running and part waiting draws neither: `AgentMixDot` takes
- * these two tones' colours from `ROW_MARK_COLOR` and splits the disc between
- * them (#11832 first shipped liveness as a second SHAPE on this mark — a
- * hairline arc in a demand hue — which read as neither axis).
+ * The mark answers one question: is this project busy, and does any of it want
+ * me? The row's line says who and how many; the band says how urgent. The mark
+ * only carries those two facts, and it carries them in colour:
+ *
+ * - green, filled — something is executing here. Agents, the assistant, or
+ *   both; the line beside it says which.
+ * - amber, filled — something has stopped and is waiting on the user.
+ * - red, filled — something is blocked: stopped on a failure, where input may
+ *   not restart it.
+ * - green/amber pie — both at once, in the proportion of the counts
+ *   (see `AgentMixDot` and `runningShare`).
+ * - hollow ring — settled: finished and seen, or snoozed (dashed).
+ * - no mark at all — the project is merely open, which its presence in the
+ *   list already says (#11692).
+ *
+ * One standing exception: `review` keeps the completed hue, which derives from
+ * `status-success` and so reads green in most palettes even though nothing is
+ * executing. It predates this legend and the row's line always names the count
+ * ("2 ready for review"), so it is recorded here rather than quietly reconciled.
+ *
+ * A hollow ring must never land on a row with something running. It used to:
+ * an assistant waiting beside a working agent took the mark and drew it grey,
+ * so a project with an agent in flight reported itself as idle.
  */
 export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
   blocked: "bg-status-danger",
@@ -90,14 +108,18 @@ export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
   // that mean something — dormant rows draw no dot at all now (#11692), so the
   // ring is back to marking the two muted states that earned a line.
   muted: "border border-daintree-text/20",
-  // Hollow, and that is the whole point: the filled dot means a run the user
-  // launched, and the assistant is the machine acting on its own. It is the
-  // convention for machine-initiated background work, and it leaves the worker
-  // dot meaning exactly what it meant before (#11806).
-  assistant: "border border-daintree-text/40",
-  // Same hollow shape carrying the danger hue: still not a worker run, but a
-  // failure the row should not have to be read closely to notice.
-  "assistant-blocked": "border border-status-danger",
+  // Amber, like any other wait. Only ever reached with nothing running — a
+  // live row hands the mark to the run — so this is a project that has fully
+  // stopped and has the assistant sitting at its prompt. Who is waiting is the
+  // line's job to say; the mark says only that someone is. It was hollow grey
+  // under #11806, on the theory that the assistant is not a run the user
+  // launched, but that made the mark answer "who" instead of "does this want
+  // me", and grey is how the row says nobody is waiting at all.
+  assistant: "bg-status-warning",
+  // Filled danger, and it keeps the mark even on a row whose agents are still
+  // running: a failed assistant is not a slower wait, and green beside it would
+  // report the project as healthy.
+  "assistant-blocked": "bg-status-danger",
 };
 
 /**
@@ -122,7 +144,7 @@ export const ROW_MARK_COLOR: Record<ProjectRowTone, string> = {
   running: "var(--color-status-success)",
   snoozed: "rgb(from var(--color-daintree-text) r g b / 0.4)",
   muted: "rgb(from var(--color-daintree-text) r g b / 0.2)",
-  assistant: "rgb(from var(--color-daintree-text) r g b / 0.4)",
+  assistant: "var(--color-status-warning)",
   "assistant-blocked": "var(--color-status-danger)",
 };
 
@@ -376,11 +398,15 @@ function withLiveness(
   const running = workspace.activeAgentCount;
   const isLive = running > 0 || classifyAssistantActivity(workspace) === "working";
 
-  // Demand owns the mark wherever it is asking for something. The lines that
-  // are not — a dormant fallback, the assistant's presence line, and the two
-  // settled tones — hand it to a live run instead, so a project quietly working
-  // through four agents marks itself as working rather than as empty, as the
-  // assistant's, or as the snooze it happens to also carry.
+  // Running owns the mark unless a worker is asking for something. The lines
+  // that yield — a dormant fallback, either assistant line, and the two settled
+  // tones — describe a project nothing is stopped on, so a row with anything
+  // executing marks itself green rather than as empty, as the assistant's, or
+  // as the snooze it happens to also carry.
+  //
+  // The assistant yields both its states that can coexist with a run: it is one
+  // session the user can look at whenever they want, and it must not be able to
+  // paint a project that is still working as a project that has stopped.
   //
   // Deliberately NOT every tone with a zero demand count. "Directory not found"
   // and a blocked assistant both report zero agents and both still need saying:
@@ -389,10 +415,15 @@ function withLiveness(
   const yieldsMark =
     status.isDormantFallback === true ||
     assistantPresenceLine === true ||
+    status.tone === "assistant" ||
     status.tone === "snoozed" ||
     status.tone === "muted";
+  // `isLive`, not `running > 0`: a working assistant is something executing,
+  // and the mark's green means exactly that. The count beside it still speaks
+  // only for the runs the user launched (#11806) — that is the line's question,
+  // not the mark's.
   const markTone: ProjectRowTone | null =
-    yieldsMark && running > 0 ? "working" : status.isDormantFallback ? null : status.tone;
+    yieldsMark && isLive ? "working" : status.isDormantFallback ? null : status.tone;
 
   // The weighting the mark draws (#11832). Null on a row with no agents in
   // either bucket, which is what leaves the settled tones their plain ring:

@@ -1810,6 +1810,29 @@ describe("HelpSessionService", () => {
       expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
     });
 
+    it("separates a parked panel from a closed one", () => {
+      // Focus mode leaves `isOpen` true while the panel sits off-canvas. The
+      // cold-resume decision still wants the open answer — the user expects the
+      // panel back when the gesture ends — but the project tallies want the
+      // visible one, so an assistant nobody can see stops being reported.
+      expect(service.reportPanelOpen("proj-parked", true, false)).toBe(false);
+      expect(service.isPanelVisible("proj-parked")).toBe(false);
+
+      // Ending the gesture makes it visible again, and says so.
+      expect(service.reportPanelOpen("proj-parked", true, true)).toBe(true);
+      expect(service.isPanelVisible("proj-parked")).toBe(true);
+
+      // Omitting the second fact means the caller doesn't distinguish them.
+      expect(service.reportPanelOpen("proj-plain", true)).toBe(true);
+      expect(service.isPanelVisible("proj-plain")).toBe(true);
+      expect(service.reportPanelOpen("proj-plain", false)).toBe(true);
+      expect(service.isPanelVisible("proj-plain")).toBe(false);
+
+      // Unchanged reports report no change — the caller pushes a recompute on
+      // the return value, and a repeat must not schedule one.
+      expect(service.reportPanelOpen("proj-plain", false)).toBe(false);
+    });
+
     it("peekPendingHibernation mid-capture neither consumes the entry nor blocks the real resume-id write", async () => {
       // A switch-back can peek (to render the Resume CTA) while main's
       // gracefulKill is still resolving. Peek must be a pure read: it must NOT

@@ -215,11 +215,15 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     // the palette would hydrate rows that still counted snoozed agents as
     // waiting, and the push path suppresses unchanged payloads, so nothing
     // would correct them until agent state next moved.
+    const { helpSessionService } = await import("../../../services/HelpSessionService.js");
     const agentCounts = computeProjectAgentCounts(
       uniqueIds,
       allTerminals,
       seenMap,
-      runAttentionServiceInstance?.getActiveSnoozes()
+      runAttentionServiceInstance?.getActiveSnoozes(),
+      // A hidden assistant reports nothing, exactly as the pushed status map
+      // has it — the two paths answering differently is what #10989 was.
+      (id) => helpSessionService.isPanelVisible(id)
     );
 
     const result: BulkProjectStats = {};

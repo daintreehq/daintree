@@ -51,6 +51,7 @@ import { isAssistantFocused, useMacroFocusStore } from "@/store/macroFocusStore"
 // hand-listed hook set) across the HelpPanel/controller suites, so pulling a new
 // hook through it would crash every one of them on an undefined destructure.
 import { useScratchStore } from "@/store/scratchStore";
+import { useFocusStore } from "@/store/focusStore";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
@@ -437,11 +438,23 @@ export function HelpPanel({
   // #10815: report this workspace's panel open-state to main on every change so
   // an LRU eviction / crash capture can stamp `panelWasOpen` onto the resume
   // token. Fire-and-forget — a slow or missing binding must never block the UI.
+  //
+  // Visibility rides along as a second fact, because the project tallies want a
+  // different question answered: focus mode parks the panel off-canvas without
+  // touching `isOpen` (`AppLayout`'s `showAssistant`), and an assistant nobody
+  // can see must not put its project in the switcher's attention band. The open
+  // flag stays exactly what it was so the cold-resume decision it feeds is
+  // unchanged — a panel parked by a gesture is still one the user expects back.
+  const gestureAssistantHidden = useFocusStore((s) => s.gestureAssistantHidden);
   useEffect(() => {
     if (!activeWorkspaceId) return;
-    const reported = window.electron.help.reportPanelOpen?.(activeWorkspaceId, isOpen);
+    const reported = window.electron.help.reportPanelOpen?.(
+      activeWorkspaceId,
+      isOpen,
+      isOpen && !gestureAssistantHidden
+    );
     if (reported) safeFireAndForget(reported, { context: "HelpPanel.reportPanelOpen" });
-  }, [isOpen, activeWorkspaceId]);
+  }, [isOpen, gestureAssistantHidden, activeWorkspaceId]);
 
   // #10815: cold switch-back auto-resume — driven by the reliable pull-on-mount
   // peek, NOT a racy main→renderer push. The lazy HelpPanel mounts behind

@@ -4,6 +4,7 @@ import { events } from "./events.js";
 import { projectStore } from "./ProjectStore.js";
 import { scratchStore } from "./ScratchStore.js";
 import { computeProjectAgentCounts } from "./projectAgentCounts.js";
+import { helpSessionService } from "./HelpSessionService.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { RunAttentionService } from "./RunAttentionService.js";
 import type { ProjectStatusMap } from "../../shared/types/ipc/project.js";
@@ -238,7 +239,12 @@ export class ProjectStatsService {
         projectIds,
         allTerminals,
         seenMap,
-        activeSnoozes
+        activeSnoozes,
+        // Same visibility gate the pull path applies. Omitting it on either
+        // side is the drift the shared helper exists to prevent: the push
+        // suppresses unchanged payloads, so a row hydrated with a hidden
+        // assistant would keep reporting it until agent state next moved.
+        (id) => helpSessionService.isPanelVisible(id)
       );
 
       const statusMap: ProjectStatusMap = {};

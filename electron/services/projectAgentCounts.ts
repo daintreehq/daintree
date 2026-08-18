@@ -57,7 +57,7 @@ export interface ProjectAgentCounts {
   helpTerminals: number;
   /**
    * What the live Daintree Assistant is doing, or null when this project has
-   * no live assistant PTY (#11806).
+   * no live assistant PTY — or has one the user has hidden (#11806).
    *
    * Reported beside the tallies and never folded into them: the assistant is
    * not a run the user launched, so it must not read as one. It is here at all
@@ -269,7 +269,23 @@ export function computeProjectAgentCounts(
    * the drift it exists to prevent. `RunAttentionService.getActiveSnoozes()` is
    * the intended source.
    */
-  activeSnoozes?: ReadonlyMap<string, { snoozedUntil?: number }>
+  activeSnoozes?: ReadonlyMap<string, { snoozedUntil?: number }>,
+  /**
+   * Whether a workspace's assistant panel is currently on screen.
+   * `HelpSessionService.isPanelOpen` is the intended source.
+   *
+   * A hidden assistant reports no state at all: closing the panel keeps the PTY
+   * alive until the idle-hibernate timer fires, and a session the user has put
+   * away is not something they can be asked to act on. Its PTY is still counted
+   * into {@link ProjectAgentCounts.helpTerminals} — the host tallied the
+   * process whether or not anyone is looking at it, and failing to net it back
+   * out would resurrect the phantom process counts of #10989.
+   *
+   * Omitting the predicate means the caller doesn't consume the distinction and
+   * every live assistant reports, which is what a harness computing raw tallies
+   * wants.
+   */
+  isAssistantVisible?: (workspaceId: string) => boolean
 ): Map<string, ProjectAgentCounts> {
   const counts = new Map<string, ProjectAgentCounts>();
   for (const id of projectIds) counts.set(id, empty());
@@ -376,6 +392,12 @@ export function computeProjectAgentCounts(
   for (const [projectId, assistant] of assistantByProject) {
     const entry = counts.get(projectId);
     if (!entry) continue;
+    // Out of sight, out of the tallies. Left as the `null` every state field
+    // starts at, so a hidden assistant is indistinguishable from no assistant
+    // — which is the point: every surface reading these fields asks the same
+    // question of them, and one that only some of them honoured would put a
+    // project in the attention band for a panel nobody can see.
+    if (isAssistantVisible && !isAssistantVisible(projectId)) continue;
     entry.assistantState = assistant.agentState ?? null;
     entry.assistantWaitingReason =
       assistant.agentState === "waiting" ? (assistant.waitingReason ?? null) : null;

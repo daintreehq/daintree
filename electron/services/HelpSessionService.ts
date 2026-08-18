@@ -320,6 +320,13 @@ export class HelpSessionService {
   // multi-window/same-project setup the last reporter wins, which at worst
   // reopens a panel both windows would resume into the same shared session.
   private readonly panelOpenByProjectId = new Map<string, boolean>();
+  /**
+   * Which workspaces have the assistant actually ON SCREEN, as opposed to
+   * merely open. Focus mode slides the panel off-canvas without touching
+   * `isOpen` (`AppLayout`'s `showAssistant`), so the two answers differ and the
+   * tallies want this one.
+   */
+  private readonly panelVisibleByProjectId = new Map<string, boolean>();
   private onMcpSessionRevokedFn: ((token: string) => void) | null = null;
   private disposed = false;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -351,14 +358,57 @@ export class HelpSessionService {
    * project, reported by the renderer on every `isOpen` change. Consulted at
    * eviction-capture time to decide whether the cold switch-back should
    * auto-reopen and auto-resume. In-memory only.
+   *
+   * `isVisible` is the same panel's on-screen state, which is a different
+   * question: focus mode parks the panel off-canvas with `isOpen` left true so
+   * exiting focus mode can bring it back. Kept as a second map rather than
+   * folded into the first because the cold-resume decision genuinely wants the
+   * open one — a panel the user parked for a gesture is still a panel they
+   * expect to find when they come back. Defaults to `isOpen` so a caller that
+   * doesn't distinguish them (and every stored report from before this split)
+   * behaves as it always did.
+   *
+   * Returns whether the VISIBLE answer moved, so the caller can push the
+   * tallies that read it instead of waiting out a poll interval.
    */
-  reportPanelOpen(projectId: string, isOpen: boolean): void {
-    if (!projectId) return;
+  reportPanelOpen(projectId: string, isOpen: boolean, isVisible: boolean = isOpen): boolean {
+    if (!projectId) return false;
     if (isOpen) {
       this.panelOpenByProjectId.set(projectId, true);
     } else {
       this.panelOpenByProjectId.delete(projectId);
     }
+
+    const was = this.panelVisibleByProjectId.get(projectId) === true;
+    if (isVisible) {
+      this.panelVisibleByProjectId.set(projectId, true);
+    } else {
+      this.panelVisibleByProjectId.delete(projectId);
+    }
+    return was !== isVisible;
+  }
+
+  /**
+   * Whether this workspace's assistant panel is on screen, as last reported by
+   * its renderer.
+   *
+   * Read by the project tallies to decide whether the assistant has anything to
+   * say about a row. A hidden panel keeps its PTY until the idle-hibernate
+   * timer fires, and a session nobody can see is not a state anyone can act on
+   * — reporting it left projects claiming "Assistant waiting" for a panel the
+   * user had deliberately put away.
+   *
+   * Unreported reads as hidden, which is the conservative answer here: a
+   * project whose view has never mounted the panel this session has no
+   * assistant on screen either. Every way this can go stale — a view evicted
+   * without a parting report, two windows on one project where the last
+   * reporter wins — leaves a `true` behind rather than a `false`, so the
+   * failure mode is a row that keeps reporting an assistant, which is where
+   * this surface stood before the gate existed.
+   */
+  isPanelVisible(projectId: string): boolean {
+    if (!projectId) return false;
+    return this.panelVisibleByProjectId.get(projectId) === true;
   }
 
   validateToken(token: string): HelpAssistantTier | false {

@@ -705,7 +705,7 @@ export interface GeneratedIpcInvokeMap {
     } | null;
   };
   "help:report-panel-open": {
-    args: [projectId: string, isOpen: boolean];
+    args: [projectId: string, isOpen: boolean, isVisible?: boolean | undefined];
     result: void;
   };
   "help:restore-pending-hibernation": {
