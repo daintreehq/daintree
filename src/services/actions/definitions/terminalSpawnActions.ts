@@ -4,6 +4,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import {
   buildPanelDuplicateOptions,
+  panelKindHasLaunchRoot,
   resolveInheritedPanelCwd,
 } from "@/services/terminal/panelDuplicationService";
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
@@ -165,9 +166,8 @@ export function registerTerminalSpawnActions(
           };
           // The worktree id above can fall back to the active worktree while
           // `cwd` still carries the closed panel's directory, so re-derive the
-          // directory from whichever id actually won (#11854). Browser panels
-          // keep their deliberate empty `cwd` and review panels have none.
-          if (reopenOptions.kind === "terminal" || reopenOptions.kind === "dev-preview") {
+          // directory from whichever id actually won (#11854).
+          if (panelKindHasLaunchRoot(reopenOptions.kind)) {
             reopenOptions.cwd = resolveInheritedPanelCwd(reopenOptions);
           }
           await state.addPanel(reopenOptions);

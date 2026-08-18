@@ -19,6 +19,8 @@ vi.mock("@/store/layoutUndoStore", () => ({ useLayoutUndoStore: layoutUndoMock }
 vi.mock("@/services/terminal/panelDuplicationService", () => ({
   buildPanelDuplicateOptions: buildPanelDuplicateOptionsMock,
   resolveInheritedPanelCwd: resolveInheritedPanelCwdMock,
+  panelKindHasLaunchRoot: (kind: string | undefined) =>
+    kind === "terminal" || kind === "dev-preview",
 }));
 vi.mock("@/services/terminal/optimisticPanelClose", () => ({
   flushOptimisticCloses: flushOptimisticClosesMock,

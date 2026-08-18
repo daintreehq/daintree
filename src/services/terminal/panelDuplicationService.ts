@@ -163,6 +163,19 @@ function buildDevPreviewOptions(panel: import("@shared/types/panel").DevPreviewP
 }
 
 /**
+ * Kinds whose `cwd` is a real process launch directory. Browser panels carry a
+ * placeholder empty string and review panels carry no `cwd` at all, so neither
+ * has a launch root to resolve. Not `panelKindHasPty`: a dev preview spawns its
+ * server through `DevPreviewSessionService` rather than the panel's own PTY, so
+ * that flag is false for it while its `cwd` is still a real spawn directory.
+ */
+const LAUNCH_ROOT_KINDS: ReadonlySet<PanelKind> = new Set(["terminal", "dev-preview"]);
+
+export function panelKindHasLaunchRoot(kind: PanelKind | undefined): boolean {
+  return kind !== undefined && LAUNCH_ROOT_KINDS.has(kind);
+}
+
+/**
  * Working directory for a panel that inherits its worktree rather than choosing
  * one. A duplicate is a brand new process, so it belongs in the worktree it is
  * filed under — not the directory the source process kept after a cross-worktree
