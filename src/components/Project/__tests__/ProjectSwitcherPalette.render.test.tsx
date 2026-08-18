@@ -469,7 +469,12 @@ describe("ProjectSwitcherPalette liveness axis", () => {
     // used to draw the same mark, while only one of them was still moving.
     expect(shareOf(stalled)).toBeNull();
     expect(shareOf(churning)).not.toBeNull();
-    expect(markIn(stalled)?.className).not.toBe(markIn(churning)?.className);
+    // Structurally different marks, not just differently classed ones: the
+    // split one is drawn as two filled shapes so its two colours meet on a
+    // shared edge, while a row leaning entirely one way stays a plain disc.
+    expect(markIn(stalled)?.tagName).toBe("DIV");
+    expect(markIn(churning)?.tagName).toBe("svg");
+    expect(markIn(churning)?.querySelector("path")).toBeTruthy();
   });
 
   it("leans the mark toward whichever side has more agents", () => {

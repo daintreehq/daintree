@@ -293,26 +293,37 @@ function StatusDot({
 }
 
 /**
+ * The wedge covering `share` of the mark, swept clockwise from 12 o'clock.
+ *
+ * Drawn against a full-bleed circle rather than as a stroked arc: the mark is a
+ * filled disc that happens to be two colours, so the wedge is a pie slice with
+ * no outline of its own and the two fills meet on a single shared edge.
+ *
+ * `share` only ever arrives snapped to a quarter, so every endpoint here lands
+ * exactly on an axis and the boundary is a clean vertical or horizontal cut
+ * rather than something the rasteriser has to feather.
+ */
+function wedgePath(share: number): string {
+  const angle = share * 2 * Math.PI;
+  const x = 8 + 8 * Math.sin(angle);
+  const y = 8 - 8 * Math.cos(angle);
+  const largeArc = share > 0.5 ? 1 : 0;
+  return `M 8 8 L 8 0 A 8 8 0 ${largeArc} 1 ${x} ${y} Z`;
+}
+
+/**
  * The mark itself: a solid disc when the row leans entirely one way, a two-tone
  * pie when it has both kinds of agent at once.
  *
  * Solid is the common case and stays a plain background class, so a row with
  * only waits or only runs draws exactly what it drew before this existed and
- * the ring tones keep their borders. The gradient is reached only by a row that
+ * the ring tones keep their borders. The pie is reached only by a row that
  * genuinely has something to divide.
  *
  * `aria-hidden`, like every mark in this list: the row's own line states both
  * counts in words, and a mark that also announced itself would have a reader
  * hear the same fact twice.
  */
-/**
- * Half the width of the notch cut at each boundary of a two-tone mark, in
- * turns. At 8px it lands a little under a pixel at the rim — enough to read as
- * a division rather than as a seam, and small enough that the wedge it eats
- * cannot move the mark across one of its snapped quarters.
- */
-const MARK_GAP_TURNS = 0.025;
-
 function AgentMixDot({ tone, mix }: { tone: ProjectRowTone; mix: ProjectRowStatus["agentMix"] }) {
   const share = mix ? runningShare(mix) : 0;
 
@@ -326,36 +337,24 @@ function AgentMixDot({ tone, mix }: { tone: ProjectRowTone; mix: ProjectRowStatu
     );
   }
 
+  // SVG rather than a `conic-gradient` on a rounded div. The gradient version
+  // needed the div's `border-radius` to clip it into a circle, and at 8px that
+  // clip's own antialiasing read as a thin dark rim around the whole mark. Two
+  // filled shapes in one viewBox have no clip and no stroke, so the disc's edge
+  // and the boundary between the counts are both drawn once.
   return (
-    <div
-      className="workspace-mark w-2 h-2 rounded-full"
-      style={{
-        // Hard stops, not a blend: the boundary between the two counts is the
-        // whole signal, and an interpolated one at 8px would smear into a single
-        // muddy hue. Green leads from 12 o'clock so the running share reads
-        // clockwise from the top on every row.
-        //
-        // Both boundaries are cut by a transparent notch rather than drawn in a
-        // colour. Transparent shows the row through, so the separator is right
-        // in every theme without anything having to know which one is active —
-        // and it is what makes the split survive two hues that sit close
-        // together, which `review` and `working` do in most palettes (both are
-        // greens). It costs `MARK_GAP_TURNS` of each wedge, well inside the
-        // quarter the share was already snapped to.
-        background: [
-          "conic-gradient(",
-          `transparent 0turn ${MARK_GAP_TURNS}turn,`,
-          `${ROW_MARK_COLOR.working} ${MARK_GAP_TURNS}turn ${share - MARK_GAP_TURNS}turn,`,
-          `transparent ${share - MARK_GAP_TURNS}turn ${share + MARK_GAP_TURNS}turn,`,
-          `${ROW_MARK_COLOR[tone]} ${share + MARK_GAP_TURNS}turn ${1 - MARK_GAP_TURNS}turn,`,
-          `transparent ${1 - MARK_GAP_TURNS}turn 1turn`,
-          ")",
-        ].join(" "),
-      }}
+    <svg
+      viewBox="0 0 16 16"
+      className="workspace-mark w-2 h-2"
       data-testid="workspace-status-dot"
       data-running-share={share}
       aria-hidden="true"
-    />
+    >
+      {/* The demand hue fills the disc; the running share is laid over it, so
+          the two meet on the wedge's edge with nothing between them. */}
+      <circle cx="8" cy="8" r="8" fill={ROW_MARK_COLOR[tone]} />
+      <path d={wedgePath(share)} fill={ROW_MARK_COLOR.working} />
+    </svg>
   );
 }
 
