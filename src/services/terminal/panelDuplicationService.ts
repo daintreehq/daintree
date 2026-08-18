@@ -16,6 +16,8 @@ import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { agentSettingsClient, systemClient } from "@/clients";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
+import { getWorktreePathIndex } from "@/store/storeAccessors";
+import { classifyLaunchRootAlignment } from "@/utils/worktreeAlignment";
 import {
   buildAgentLaunchFlagsForRuntimeSettings,
   resolveAgentRuntimeSettings,
@@ -161,10 +163,69 @@ function buildDevPreviewOptions(panel: import("@shared/types/panel").DevPreviewP
 }
 
 /**
+ * Kinds whose `cwd` is a real process launch directory. Browser panels carry a
+ * placeholder empty string and review panels carry no `cwd` at all, so neither
+ * has a launch root to resolve. Not `panelKindHasPty`: a dev preview spawns its
+ * server through `DevPreviewSessionService` rather than the panel's own PTY, so
+ * that flag is false for it while its `cwd` is still a real spawn directory.
+ */
+const LAUNCH_ROOT_KINDS: ReadonlySet<PanelKind> = new Set(["terminal", "dev-preview"]);
+
+export function panelKindHasLaunchRoot(kind: PanelKind | undefined): boolean {
+  return kind !== undefined && LAUNCH_ROOT_KINDS.has(kind);
+}
+
+/**
+ * Working directory for a panel that inherits its worktree rather than choosing
+ * one. A duplicate is a brand new process, so it belongs in the worktree it is
+ * filed under — not the directory the source process kept after a cross-worktree
+ * drag left `cwd` and `worktreeId` pointing at different worktrees (#11854).
+ *
+ * Only a launch root that provably belongs to a DIFFERENT worktree is rerooted,
+ * because that is the one state a drag can produce. Everything else is kept:
+ * a subdirectory of the filed worktree is a deliberate choice, and so is a path
+ * under no worktree at all (a scratch directory from `UpdateCwdDialog`, another
+ * drive on Windows) — a drag moves between worktrees, so it cannot have produced
+ * that path. Only an empty launch root adopts the filed worktree by default,
+ * having nothing to preserve. `classifyLaunchRootAlignment` decides this
+ * segment-aware, surviving nested worktrees and separator differences that
+ * `startsWith` would get wrong.
+ *
+ * The bias is deliberate: failing to reroot leaves today's behavior, while
+ * rerooting a directory the user chose silently discards it.
+ *
+ * Takes the filing id and the inherited fallback together so no branch can
+ * resolve one without the other. Soft-degrades to the inherited `cwd` when the
+ * panel has no worktree, no view store is mounted, or the id no longer resolves:
+ * the id is inherited rather than asserted by a caller, so a stale one must not
+ * fail the launch (#11655).
+ */
+export function resolveInheritedPanelCwd(panel: { cwd?: string; worktreeId?: string }): string {
+  const fallback = panel.cwd || "";
+  if (!panel.worktreeId) return fallback;
+
+  const index = getWorktreePathIndex();
+  const filedPath = index?.get(panel.worktreeId);
+  if (!index || !filedPath) return fallback;
+
+  const worktrees = Array.from(index, ([id, path]) => ({ id, path }));
+  const alignment = classifyLaunchRootAlignment(fallback, worktrees, panel.worktreeId);
+  if (alignment === "launch-root-mismatch") return filedPath;
+  return fallback || filedPath;
+}
+
+/**
  * Build a synchronous snapshot of a panel's config for last-closed fallback.
  * Copies the same fields as buildPanelDuplicateOptions but preserves the
  * existing command verbatim (no async agent command regeneration).
  * Does not include location — callers inject it at use time.
+ *
+ * Keeps `cwd` verbatim rather than resolving it against `worktreeId` the way
+ * `buildPanelDuplicateOptions` does. This snapshot is stored and reopened much
+ * later, so resolving here would freeze one answer and destroy the fallback the
+ * late resolve needs: if the filed worktree is deleted between trash and reopen,
+ * a baked-in path points at the deleted worktree while the untouched `cwd` still
+ * points somewhere real. `terminal.duplicate` resolves at reopen instead (#11854).
  *
  * Called synchronously from `trashPanel` / `trashPanelGroup` — must not throw.
  * Returns `null` for broken agent-running terminals (missing `command` or
@@ -310,7 +371,7 @@ export async function buildPanelDuplicateOptions(
       // Keep explicit names pinned on the copy — without this, detection
       // rewrites "X (copy)" back to the registry name moments after spawn.
       titleMode: presetWasStale ? undefined : duplicateTitleMode(sourcePanel),
-      cwd: sourcePanel.cwd || "",
+      cwd: resolveInheritedPanelCwd(sourcePanel),
       worktreeId: sourcePanel.worktreeId,
       location: targetLocation,
       exitBehavior: sourcePanel.exitBehavior,
@@ -337,7 +398,7 @@ export async function buildPanelDuplicateOptions(
   if (isDevPreviewPanel(sourcePanel)) {
     return {
       kind: "dev-preview",
-      cwd: sourcePanel.cwd || "",
+      cwd: resolveInheritedPanelCwd(sourcePanel),
       worktreeId: sourcePanel.worktreeId,
       location: targetLocation,
       exitBehavior: sourcePanel.exitBehavior,
@@ -357,7 +418,7 @@ export async function buildPanelDuplicateOptions(
     return {
       kind: "terminal",
       launchAgentId: sourcePanel.launchAgentId,
-      cwd: sourcePanel.cwd || "",
+      cwd: resolveInheritedPanelCwd(sourcePanel),
       title: sourcePanel.title,
       titleMode: duplicateTitleMode(sourcePanel),
       worktreeId: sourcePanel.worktreeId,

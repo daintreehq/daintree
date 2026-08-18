@@ -9,6 +9,7 @@ const layoutUndoMock = vi.hoisted(() => ({
 }));
 const moveTerminalToWorktreeAndFollowRescueMock = vi.hoisted(() => vi.fn());
 const buildPanelDuplicateOptionsMock = vi.hoisted(() => vi.fn());
+const resolveInheritedPanelCwdMock = vi.hoisted(() => vi.fn());
 const flushOptimisticClosesMock = vi.hoisted(() => vi.fn());
 const buildResumePanelOptionsMock = vi.hoisted(() => vi.fn());
 const listAgentSessionsMock = vi.hoisted(() => vi.fn());
@@ -17,6 +18,9 @@ vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
 vi.mock("@/store/layoutUndoStore", () => ({ useLayoutUndoStore: layoutUndoMock }));
 vi.mock("@/services/terminal/panelDuplicationService", () => ({
   buildPanelDuplicateOptions: buildPanelDuplicateOptionsMock,
+  resolveInheritedPanelCwd: resolveInheritedPanelCwdMock,
+  panelKindHasLaunchRoot: (kind: string | undefined) =>
+    kind === "terminal" || kind === "dev-preview",
 }));
 vi.mock("@/services/terminal/optimisticPanelClose", () => ({
   flushOptimisticCloses: flushOptimisticClosesMock,
@@ -129,6 +133,9 @@ beforeEach(() => {
       if (kind === "browser" || kind === "dev-preview") return base;
       return { ...base, title: panel.title };
     }
+  );
+  resolveInheritedPanelCwdMock.mockImplementation(
+    (panel: { cwd?: string; worktreeId?: string }) => panel.cwd ?? ""
   );
 });
 
@@ -310,6 +317,99 @@ describe("terminal.duplicate (copy) suffix", () => {
         worktreeId: "wt-1",
       })
     );
+  });
+
+  it("re-derives a reopened panel's cwd from the worktree it ends up filed under", async () => {
+    // Snapshot the cwd as `addPanel` saw it: production hands the same object to
+    // the resolver and to `addPanel`, so inspecting the retained reference would
+    // still show a corrected value even if the two statements were swapped.
+    let cwdAtAddPanel: string | undefined;
+    const addPanel = vi.fn((options: AddPanelOptions) => {
+      cwdAtAddPanel = options.cwd;
+      return Promise.resolve(undefined);
+    });
+    const pathsByWorktree: Record<string, string> = { "wt-1": "/worktrees/active" };
+    let worktreeIdAtResolve: string | undefined;
+    resolveInheritedPanelCwdMock.mockImplementation(
+      (panel: { cwd?: string; worktreeId?: string }) => {
+        worktreeIdAtResolve = panel.worktreeId;
+        return (panel.worktreeId && pathsByWorktree[panel.worktreeId]) || panel.cwd || "";
+      }
+    );
+    setPanelState({
+      panels: [],
+      addPanel,
+      // No worktreeId, so the action adopts the active worktree while `cwd`
+      // still points at the closed panel's directory.
+      lastClosedConfig: { kind: "terminal", command: "bash", cwd: "/worktrees/stale" },
+    });
+
+    const run = setupActions();
+    await run("terminal.duplicate");
+
+    // The resolver must see the id that actually won, not the snapshot's.
+    expect(worktreeIdAtResolve).toBe("wt-1");
+    expect(cwdAtAddPanel).toBe(pathsByWorktree["wt-1"]);
+  });
+
+  it("resolves a reopened panel against its own worktree when the snapshot kept one", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    let worktreeIdAtResolve: string | undefined;
+    resolveInheritedPanelCwdMock.mockImplementation((panel: { worktreeId?: string }) => {
+      worktreeIdAtResolve = panel.worktreeId;
+      return "/worktrees/saved";
+    });
+    setPanelState({
+      panels: [],
+      addPanel,
+      lastClosedConfig: {
+        kind: "terminal",
+        command: "bash",
+        cwd: "/worktrees/stale",
+        worktreeId: "wt-saved",
+      },
+    });
+
+    const run = setupActions();
+    await run("terminal.duplicate");
+
+    // A saved id outranks the active worktree, so resolution must key off it.
+    expect(worktreeIdAtResolve).toBe("wt-saved");
+    expect((addPanel.mock.calls[0]![0] as AddPanelOptions).cwd).toBe("/worktrees/saved");
+  });
+
+  it("re-derives a reopened dev-preview's cwd too, since it spawns a dev server", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    resolveInheritedPanelCwdMock.mockReturnValue("/worktrees/active");
+    setPanelState({
+      panels: [],
+      addPanel,
+      lastClosedConfig: {
+        kind: "dev-preview",
+        devCommand: "npm run dev",
+        cwd: "/worktrees/stale",
+      },
+    });
+
+    const run = setupActions();
+    await run("terminal.duplicate");
+
+    expect(resolveInheritedPanelCwdMock).toHaveBeenCalled();
+    expect((addPanel.mock.calls[0]![0] as AddPanelOptions).cwd).toBe("/worktrees/active");
+  });
+
+  it("leaves a reopened browser panel out of cwd resolution", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    setPanelState({
+      panels: [],
+      addPanel,
+      lastClosedConfig: { kind: "browser", cwd: "", browserUrl: "https://example.com" },
+    });
+
+    const run = setupActions();
+    await run("terminal.duplicate");
+
+    expect(resolveInheritedPanelCwdMock).not.toHaveBeenCalled();
   });
 
   it("browser panel duplication never carries a (copy)-suffixed title (service omits title)", async () => {
