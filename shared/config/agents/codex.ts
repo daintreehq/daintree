@@ -120,9 +120,35 @@ export const config: AgentConfig = {
   resume: {
     kind: "session-id",
     args: (sessionId: string) => ["resume", sessionId],
-    quitCommand: "/quit",
     sessionIdPattern: "codex resume ([\\w-]+)",
     resumeLatestArgs: ["resume", "--last"],
+    // Codex takes a gated Ctrl-C instead of `/quit` (#11851). Writing the slash
+    // command left `/quit` sitting in the user's own transcript and in Codex's
+    // `/resume` picker: mid-turn the composer queues it as a chat message the
+    // model then answers, burning tokens and capturing no id at all (38% over
+    // 26 measured teardowns). A modal or the directory-trust prompt swallowed
+    // it outright, and every launch is busy for its first 10-30s booting MCP
+    // servers. Ctrl-C survives all three because it is not composer text.
+    //
+    // The footer substring is harvested from the real `codex-cli 0.147.0`
+    // binary — deliberately a short fragment rather than the full sentence, so
+    // a wording tweak upstream doesn't silently stop matching. 750ms is
+    // generous for a footer that redraws within a frame.
+    //
+    // TWO presses, not three. Two sufficed in every measured state and three
+    // produced nothing at all after 12s, so a third can only ever lose. The cap
+    // has to carry that on its own because the gate cannot: Ratatui repaints
+    // the whole frame, so a repaint emitted while press two is already tearing
+    // the TUI down looks identical to a genuine re-arm, and the substring can
+    // in principle be satisfied by conversation text too. Raise this only with
+    // a measured state where two presses demonstrably fail.
+    shutdownSignal: {
+      kind: "gated-key-escalation",
+      keySequence: "\x03",
+      gateText: "again to quit",
+      maxPresses: 2,
+      perPressTimeoutMs: 750,
+    },
   },
   help: {
     args: [],

@@ -173,6 +173,7 @@ export class TerminalProcess {
   private semanticBufferManager!: SemanticBufferManager;
   private identityWatcher!: IdentityWatcher;
 
+  private gracefulShutdownInFlight: Promise<string | null> | null = null;
   private writeQueue!: WriteQueue;
   private inputController!: TerminalInputController;
   private ptyDataPipeline!: PtyDataPipeline;
@@ -1383,16 +1384,46 @@ export class TerminalProcess {
     };
   }
 
+  /**
+   * Single-flight: concurrent callers share one teardown rather than each
+   * running their own. The entry gates inside `runGracefulShutdown` (`isExited`
+   * / `wasKilled`) can't do this — neither is set until the teardown finishes,
+   * so two callers arriving together both pass. Overlapping teardowns used to
+   * be merely untidy (two `/quit` writes), but a gated key escalation makes
+   * them dangerous: each loop counts only its OWN presses, so two loops can
+   * write past the cap the agent's config exists to enforce (#11851). Hibernate
+   * racing app quit, or a bookmark capture racing a project close, is enough.
+   */
   gracefulShutdown(): Promise<string | null> {
+    if (this.gracefulShutdownInFlight) {
+      return this.gracefulShutdownInFlight;
+    }
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
-    return runGracefulShutdown({
+    const inFlight = runGracefulShutdown({
       terminalInfo: this.terminalInfo,
       get isAgentLive() {
         return self.isAgentLive;
       },
+      acquireInputLock: () => this.inputController.acquireShutdownInputLock(),
       kill: (reason) => this.kill(reason),
     });
+    this.gracefulShutdownInFlight = inFlight;
+    // Latch cleared on a SEPARATE chain rather than by returning `inFlight
+    // .finally(...)`: chaining would add a microtask hop to every caller, and
+    // the preassigned path's whole promise is that it settles without spending
+    // anything. Cleared only if we are still the current attempt, so a late
+    // settle from a superseded promise can't unlatch a newer one. The cost is a
+    // one-tick window after settlement where a fresh call gets the finished
+    // promise back — which answers with the same captured id, and by then the
+    // terminal is killed anyway, so a real second teardown had nothing to do.
+    const clear = () => {
+      if (self.gracefulShutdownInFlight === inFlight) {
+        self.gracefulShutdownInFlight = null;
+      }
+    };
+    void inFlight.then(clear, clear);
+    return inFlight;
   }
 
   kill(

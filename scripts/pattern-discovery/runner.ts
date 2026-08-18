@@ -146,10 +146,18 @@ async function runSession(options: RunnerOptions): Promise<string> {
       }
 
       if (promptIndex >= options.prompts.length && silenceMs > 5000 && bootDetected) {
-        console.log("[runner] All prompts sent, sending quit command");
-        const quitCmd = agentConfig.resume?.quitCommand ?? "/quit";
-        ptyProcess.write(quitCmd + "\r");
         clearInterval(promptInterval);
+        // No blind `/quit` fallback: an agent without a `quitCommand` uses a
+        // structured shutdown signal instead (#11851), and typing a slash
+        // command into it lands in the conversation the corpus is capturing.
+        const quitCmd = agentConfig.resume?.quitCommand;
+        if (quitCmd) {
+          console.log("[runner] All prompts sent, sending quit command");
+          ptyProcess.write(quitCmd + "\r");
+        } else {
+          console.log("[runner] All prompts sent, no quit command — killing the harness");
+          ptyProcess.kill();
+        }
       }
     }, 1000);
 

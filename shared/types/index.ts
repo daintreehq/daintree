@@ -341,6 +341,7 @@ export {
   buildResumeLatestCommand,
   buildAssignedSessionIdArgs,
   supportsSessionIdAssignment,
+  supportsExactSessionCapture,
   mintAssignedSessionId,
   stripAssignedSessionIdArgs,
   buildLaunchCommandFromFlags,

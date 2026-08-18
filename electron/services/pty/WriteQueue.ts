@@ -108,6 +108,35 @@ export class WriteQueue {
   }
 
   /**
+   * Drop everything queued and wake every drain waiter, WITHOUT disposing:
+   * the queue stays usable afterwards. The reusable half of {@link dispose},
+   * added for the graceful-shutdown input lock (#11851) — teardown writes go
+   * straight to the PTY, so a chunked paste still pacing through this queue
+   * would interleave its bytes with the shutdown signal, and a gated
+   * escalation spanning a second or more is wide open to that.
+   *
+   * `submitInFlight` is deliberately left alone. It is owned by the running
+   * `drainSubmitQueue` loop, which clears it in its own `finally`; forcing it
+   * false here would let a second submit start while the first is still
+   * awaiting, which is the exact interleaving the flag exists to prevent.
+   * Draining the queues is enough — the in-flight submit finds nothing left to
+   * do, and `TerminalInputController`'s generation check stops it writing.
+   */
+  cancelPendingInput(): void {
+    if (this.disposed) return;
+    if (this.inputWriteTimeout) {
+      clearTimeout(this.inputWriteTimeout);
+      this.inputWriteTimeout = null;
+    }
+    this.inputWriteQueue = [];
+    this.submitQueue = [];
+    for (const resolve of this.inputWriteDrainResolvers) {
+      resolve();
+    }
+    this.inputWriteDrainResolvers = [];
+  }
+
+  /**
    * Cancel the pacing timer, drop pending chunks and submits, and mark the
    * queue disposed. Idempotent. Any in-flight `waitForInputWriteDrain` /
    * `waitForOutputSettle` resolves immediately on the next poll because the

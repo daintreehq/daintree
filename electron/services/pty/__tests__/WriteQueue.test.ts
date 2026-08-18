@@ -309,6 +309,91 @@ describe("WriteQueue.waitForInputWriteDrain", () => {
   });
 });
 
+describe("WriteQueue.cancelPendingInput", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("drops queued chunks and stops the pacing timer", async () => {
+    const m = makeOptions();
+    const queue = new WriteQueue(m.options);
+
+    queue.enqueueChunked("y".repeat(WRITE_MAX_CHUNK_SIZE * 4));
+    const writesBeforeCancel = m.writeToPty.mock.calls.length;
+    expect(queue.hasPendingWrites()).toBe(true);
+
+    queue.cancelPendingInput();
+
+    expect(queue.hasPendingWrites()).toBe(false);
+    await vi.advanceTimersByTimeAsync(WRITE_INTERVAL_MS * 10);
+    expect(m.writeToPty.mock.calls.length).toBe(writesBeforeCancel);
+  });
+
+  it("wakes drain waiters instead of leaving them parked forever", async () => {
+    // performSubmit awaits waitForInputWriteDrain mid-sequence. Cancelling
+    // without resolving would deadlock that submit and leak submitInFlight.
+    const m = makeOptions();
+    const queue = new WriteQueue(m.options);
+
+    queue.enqueueChunked("z".repeat(WRITE_MAX_CHUNK_SIZE * 4));
+    let drained = false;
+    const waiting = queue.waitForInputWriteDrain().then(() => {
+      drained = true;
+    });
+
+    queue.cancelPendingInput();
+    await waiting;
+    expect(drained).toBe(true);
+  });
+
+  it("leaves the queue usable, unlike dispose", () => {
+    // The distinction the shutdown input lock depends on (#11851): the lock is
+    // released when teardown ends, and on a teardown that resolved without
+    // killing the pane the queue has to still accept input.
+    const m = makeOptions();
+    const queue = new WriteQueue(m.options);
+
+    queue.enqueueChunked("a".repeat(WRITE_MAX_CHUNK_SIZE * 3));
+    queue.cancelPendingInput();
+    m.writeToPty.mockClear();
+
+    queue.enqueueChunked("after-cancel");
+    expect(m.writeToPty).toHaveBeenCalledWith("after-cancel");
+  });
+
+  it("drops queued submits without stranding the in-flight slot", async () => {
+    const m = makeOptions();
+    let releaseFirst: (() => void) | undefined;
+    m.performSubmit.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        })
+    );
+    const queue = new WriteQueue(m.options);
+
+    queue.submit("first");
+    queue.submit("second");
+    await Promise.resolve();
+    expect(m.performSubmit).toHaveBeenCalledTimes(1);
+
+    queue.cancelPendingInput();
+    releaseFirst?.();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // "second" was dropped, and the freed in-flight slot still accepts work.
+    expect(m.performSubmit).toHaveBeenCalledTimes(1);
+    m.performSubmit.mockImplementation(async () => {});
+    queue.submit("third");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(m.performSubmit).toHaveBeenCalledWith("third");
+  });
+});
+
 describe("WriteQueue.dispose", () => {
   beforeEach(() => {
     vi.useFakeTimers();

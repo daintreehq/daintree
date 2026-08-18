@@ -30,7 +30,10 @@ import type {
 } from "../../../../shared/types/ipc/agentSessionHistory.js";
 import { resolveDaintreeMcpTier } from "../../../../shared/types/project.js";
 import { normalizeTerminalGridDimension } from "../../../../shared/types/terminal.js";
-import { DEFAULT_DANGEROUS_ARGS } from "../../../../shared/types/agentSettings.js";
+import {
+  DEFAULT_DANGEROUS_ARGS,
+  supportsExactSessionCapture,
+} from "../../../../shared/types/agentSettings.js";
 import {
   getAssistantWiredAgentIds,
   getEffectiveAgentConfig,
@@ -991,10 +994,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         message: `Terminal ${terminalId} is not a live agent pane`,
       });
     }
-    // Only agents with an exact-session resume can be bookmarked — a
-    // rolling-history / resume-latest agent has no specific conversation to pin.
-    const resume = getEffectiveAgentConfig(info.launchAgentId)?.resume;
-    if (resume?.kind !== "session-id") {
+    // Only agents whose session id can actually be OBSERVED can be bookmarked —
+    // a rolling-history / resume-latest agent has no specific conversation to
+    // pin. Gated on the capture path rather than on `resume.kind` alone: an
+    // agent can resume by exact id yet have no way to learn one (#11851), and
+    // the capture below is a KILL, so passing that pane through here would tear
+    // down the user's live agent and only then report that nothing was saved.
+    if (!supportsExactSessionCapture(info.launchAgentId)) {
       throw new AppError({
         code: "NOT_BOOKMARKABLE",
         message: `Agent ${info.launchAgentId} has no exact-session resume to bookmark`,

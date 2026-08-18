@@ -3,13 +3,37 @@ import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import { GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS, GRACEFUL_SHUTDOWN_TIMEOUT_MS } from "../types.js";
-import { SUBMIT_ENTER_DELAY_MS } from "../terminalInput.js";
+import { SUBMIT_ENTER_DELAY_MS, OUTPUT_SETTLE_MAX_WAIT_MS } from "../terminalInput.js";
+import { getAgentConfig } from "../../../../shared/config/agentRegistry.js";
+import type { AgentGatedKeyEscalation } from "../../../../shared/config/agentRegistry.js";
 import { logBuffer } from "../../LogBuffer.js";
 import { getLogLevelOverrides, setLogLevelOverrides } from "../../../utils/logger.js";
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
 });
+
+// Built rather than written as an escape in a pattern: eslint's `no-control-regex`
+// is error-level in this repo, so a raw control char must never reach a regex
+// literal. Keeping the byte in one named constant also makes every assertion
+// below read as "the Ctrl-C press" rather than as an opaque escape.
+const CTRL_C = String.fromCharCode(3);
+
+/**
+ * Codex's declared escalation, read from the config the implementation reads.
+ * Copying the numbers here instead would let an implementation that hardcoded
+ * them — rather than honouring `shutdownSignal` — pass every test below.
+ */
+function codexShutdownSignal(): AgentGatedKeyEscalation {
+  const resume = getAgentConfig("codex")?.resume;
+  if (resume?.kind !== "session-id" || !resume.shutdownSignal) {
+    throw new Error("codex must declare a gated shutdown signal");
+  }
+  return resume.shutdownSignal;
+}
+
+const CODEX_PER_PRESS_TIMEOUT_MS = codexShutdownSignal().perPressTimeoutMs;
+const CODEX_MAX_PRESSES = codexShutdownSignal().maxPresses;
 
 interface MockPtyHandles {
   pty: IPty;
@@ -42,7 +66,13 @@ function createMockPty(writeOverride?: (data: string) => void): MockPtyHandles {
   });
 
   const pty: Partial<IPty> = {
-    pid: 123,
+    // 0, not a real-looking pid: TerminalProcess.kill() routes through
+    // ProcessTreeKiller, which for any pid > 0 calls process.kill(pid, ...) /
+    // taskkill for real and arms a 500ms SIGKILL sweep. Every test here ends in
+    // a kill, and several advance past that delay, so a plausible pid would
+    // signal whatever actually owns it on this machine. `pid <= 0` takes the
+    // early bail that only calls the mocked pty.kill().
+    pid: 0,
     cols: 80,
     rows: 24,
     write: (data: string) => {
@@ -379,9 +409,13 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
     await expect(shutdownPromise).resolves.toBe("live-agent");
   });
 
-  it("captures Codex session ID after split-submitting /quit", async () => {
+  it("captures a session ID after split-submitting the quit command", async () => {
+    // The split-write happy path: body, gap, Enter, then the resume hint. Claude
+    // covers capture on the single-write path and Kiro covers a split write with
+    // no capture, so without this nothing covers their composition. Used to be
+    // Codex's test; Codex now takes the gated Ctrl-C path (#11851).
     const handles = createMockPty();
-    const terminal = createAgentTerminal(handles, "codex");
+    const terminal = createAgentTerminal(handles, "gemini");
 
     const shutdownPromise = terminal.gracefulShutdown();
     await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
@@ -394,20 +428,43 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
     expect(handles.writeMock).toHaveBeenCalledTimes(3);
     expect(handles.writeMock.mock.calls[2]?.[0]).toBe("\r");
 
-    handles.emitData("codex resume codex-session-123\n");
-    await expect(shutdownPromise).resolves.toBe("codex-session-123");
-    expect(terminal.getInfo().agentSessionId).toBe("codex-session-123");
+    handles.emitData("gemini --resume gemini-session-123\n");
+    await expect(shutdownPromise).resolves.toBe("gemini-session-123");
+    expect(terminal.getInfo().agentSessionId).toBe("gemini-session-123");
+  });
+
+  it("sends the quit command but scrapes nothing for a session-id agent with no pattern", async () => {
+    // Antigravity resumes by an id it holds but never prints one this tree can
+    // match, so it declares no `sessionIdPattern` (#11851). It must still be
+    // quit — just without a ghost regex burning the budget on unrelated output.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "antigravity");
+
+    const shutdownPromise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    await vi.advanceTimersByTimeAsync(SUBMIT_ENTER_DELAY_MS);
+
+    expect(handles.writeMock.mock.calls.map((c) => c[0]).join("")).toContain("/quit");
+
+    // Output that the old fabricated pattern was shaped to match must not be
+    // captured, because nothing claims it can be.
+    handles.emitData("Run agy --conversation not-a-real-capture\n");
+    handles.emitExit(0);
+
+    await expect(shutdownPromise).resolves.toBeNull();
+    expect(terminal.getInfo().agentSessionId).toBeUndefined();
   });
 
   it("skips Enter when the split-write agent demotes during the quit-submit delay", async () => {
-    // Mid-flight liveness guard for the split-write path only — Codex (and
-    // other Ratatui/readline CLIs) writes the body and Enter as separate
-    // PTY writes with a delay between them. If the agent demotes during
-    // that gap, the trailing Enter must be skipped so it doesn't land in a
-    // plain shell. Claude uses single-write so this guard isn't reachable
-    // for it; using `codex` keeps the split-write coverage explicit.
+    // Mid-flight liveness guard for the split-write path only — a readline/
+    // Ratatui CLI writes the body and Enter as separate PTY writes with a delay
+    // between them. If the agent demotes during that gap, the trailing Enter
+    // must be skipped so it doesn't land in a plain shell. Claude uses
+    // single-write so this guard isn't reachable for it, and Codex no longer
+    // writes a quit command at all (#11851) — Gemini is the split-write agent
+    // that still exercises it.
     const handles = createMockPty();
-    const terminal = createAgentTerminal(handles, "codex");
+    const terminal = createAgentTerminal(handles, "gemini");
 
     const shutdownPromise = terminal.gracefulShutdown();
     await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
@@ -472,6 +529,454 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
 
     await expect(shutdownPromise).resolves.toBeNull();
     expect(terminal.getInfo().agentSessionId).toBeUndefined();
+  });
+});
+
+describe("TerminalProcess.gracefulShutdown — gated Ctrl-C escalation (#11851)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    // Every resolved shutdown ends in TerminalProcess.kill(), which arms a
+    // ~500ms SIGKILL escalation in ProcessTreeKiller. Left queued, the next
+    // test's timer advance fires it and sweeps the mock's pid — a real number —
+    // against the real OS.
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  /** One Ratatui repaint of the confirm-to-quit footer, with its usual ANSI dressing. */
+  function footerFrame(): string {
+    return "\x1b[2K\x1b[0G  Ctrl+C again to quit  \x1b[0m";
+  }
+
+  it("writes Ctrl-C as its very first byte, never the prelude or a quit command", async () => {
+    // The whole point of the issue: `\x05\x15` assumes readline semantics
+    // Codex does not have, and `/quit` mid-turn is queued as a chat message
+    // that ends up in the user's transcript and in Codex's own resume picker.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+    expect(handles.writeMock.mock.calls[0]?.[0]).toBe(CTRL_C);
+
+    handles.emitData("  codex resume gated-1\n");
+    await expect(promise).resolves.toBe("gated-1");
+
+    const written = handles.writeMock.mock.calls.map((c) => c[0]);
+    expect(written.every((chunk) => chunk === CTRL_C)).toBe(true);
+    expect(written.join("")).not.toContain("/quit");
+  });
+
+  it("stops at one press when that press was enough", async () => {
+    // An idle session with a clean composer quits on the first press and never
+    // prints the footer at all. Pressing again on a process already on its way
+    // out is the fatal case, so silence must mean stop.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    handles.emitData("  codex resume single-press\n");
+    await expect(promise).resolves.toBe("single-press");
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends the next press only after a fresh gate match", async () => {
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    // Most of the per-press window passes with no footer: still one press.
+    await vi.advanceTimersByTimeAsync(CODEX_PER_PRESS_TIMEOUT_MS - 50);
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    handles.emitData(footerFrame());
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handles.writeMock).toHaveBeenCalledTimes(2);
+    expect(handles.writeMock.mock.calls[1]?.[0]).toBe(CTRL_C);
+
+    handles.emitData("  codex resume two-press\n");
+    await expect(promise).resolves.toBe("two-press");
+  });
+
+  it("spends one press per gate arm no matter how often the footer repaints", async () => {
+    // Ratatui repaints the whole frame every tick, so one absorbed press
+    // produces the footer text over and over. Counting matches instead of
+    // latching per arm would burn the press budget on a single confirmation and
+    // walk straight into the third press that measured as fatal.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    // Five repaints of the same confirmation, all landing before the loop gets
+    // a chance to arm its next press.
+    for (let i = 0; i < 5; i++) {
+      handles.emitData(footerFrame());
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(handles.writeMock).toHaveBeenCalledTimes(2);
+
+    handles.emitData("  codex resume no-double-fire\n");
+    await expect(promise).resolves.toBe("no-double-fire");
+    expect(handles.writeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("matches a gate string split across two PTY chunks", async () => {
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    handles.emitData("  Ctrl+C ag");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    handles.emitData("ain to quit  ");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handles.writeMock).toHaveBeenCalledTimes(2);
+
+    handles.emitData("  codex resume split-gate\n");
+    await expect(promise).resolves.toBe("split-gate");
+  });
+
+  it("keeps listening for the whole budget after the gate goes quiet", async () => {
+    // The measured resume hint lands 0.76-1.16s after the first press. Treating
+    // an unanswered gate as a reason to finish would kill the terminal while its
+    // hint was still in flight — worse than the code this replaces.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Gate never matches: the escalation gives up after one press...
+    await vi.advanceTimersByTimeAsync(CODEX_PER_PRESS_TIMEOUT_MS + 10);
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    // ...but the terminal is still alive and still scraping.
+    handles.emitData("  codex resume late-hint\n");
+    await expect(promise).resolves.toBe("late-hint");
+    expect(terminal.getInfo().agentSessionId).toBe("late-hint");
+  });
+
+  it("never exceeds the configured press cap, and still waits out the budget", async () => {
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Answer every gate, so only the cap can stop the escalation.
+    for (let i = 0; i < CODEX_MAX_PRESSES + 2; i++) {
+      handles.emitData(footerFrame());
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+    expect(handles.writeMock).toHaveBeenCalledTimes(CODEX_MAX_PRESSES);
+
+    handles.emitData("  codex resume capped\n");
+    await expect(promise).resolves.toBe("capped");
+    expect(handles.writeMock).toHaveBeenCalledTimes(CODEX_MAX_PRESSES);
+  });
+
+  it("sends no further press once the process has exited", async () => {
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    handles.emitData("  codex resume on-exit-capture");
+    handles.emitExit(0);
+
+    await expect(promise).resolves.toBe("on-exit-capture");
+
+    // A footer racing in behind the exit must not resurrect the escalation.
+    handles.emitData(footerFrame());
+    await vi.advanceTimersByTimeAsync(CODEX_PER_PRESS_TIMEOUT_MS * 2);
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops pressing when the capture wins between two presses", async () => {
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // One frame carrying both the footer and the resume hint: the capture has
+    // to win, or the escalation presses again on an agent already quitting.
+    handles.emitData(`${footerFrame()}\n  codex resume same-frame\n`);
+    await expect(promise).resolves.toBe("same-frame");
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops at the cap when repaints keep arriving in separate frames", async () => {
+    // The repaint test above emits its frames back to back, so the loop never
+    // gets a turn between them. node-pty delivers real frames in separate
+    // callbacks with microtasks in between, which is the sequence that can walk
+    // the escalation forward one press per repaint. Ratatui redraws the whole
+    // frame, so a repaint emitted while a press is already tearing the TUI down
+    // is indistinguishable from a genuine re-arm — the cap is the only thing
+    // standing between that and the press count measured as unrecoverable.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    for (let frame = 0; frame < 6; frame++) {
+      handles.emitData(footerFrame());
+      // Yield fully between frames so each one meets a freshly armed press.
+      await vi.advanceTimersByTimeAsync(1);
+    }
+
+    expect(handles.writeMock).toHaveBeenCalledTimes(CODEX_MAX_PRESSES);
+
+    handles.emitData("  codex resume capped-across-frames\n");
+    await expect(promise).resolves.toBe("capped-across-frames");
+    expect(handles.writeMock).toHaveBeenCalledTimes(CODEX_MAX_PRESSES);
+  });
+
+  it("never presses again off a frame that already carries a session id", async () => {
+    // PTY chunk boundaries are arbitrary. A chunk ending exactly after the id
+    // has no trailing boundary yet, so the capture is held as provisional — but
+    // the agent is plainly quitting, and letting that same chunk satisfy the
+    // gate would fire the next press at the exact moment the hint is printing.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    // Footer and an unterminated resume hint in one chunk.
+    handles.emitData(`${footerFrame()}\n  codex resume boundary-id`);
+    await vi.advanceTimersByTimeAsync(1);
+
+    // Provisional capture, so not resolved yet — but no press either.
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    handles.emitData("\n");
+    await expect(promise).resolves.toBe("boundary-id");
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one escalation between concurrent teardown callers", async () => {
+    // Neither `isExited` nor `wasKilled` is set until a teardown finishes, so
+    // two callers arriving together both clear the entry gates. Each loop
+    // counts only its own presses, so without single-flighting the aggregate
+    // sails past the cap the config exists to enforce.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const first = terminal.gracefulShutdown();
+    const second = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    handles.emitData(footerFrame());
+    await vi.advanceTimersByTimeAsync(1);
+    expect(handles.writeMock).toHaveBeenCalledTimes(CODEX_MAX_PRESSES);
+
+    handles.emitData("  codex resume shared-teardown\n");
+    await expect(first).resolves.toBe("shared-teardown");
+    await expect(second).resolves.toBe("shared-teardown");
+    expect(handles.writeMock).toHaveBeenCalledTimes(CODEX_MAX_PRESSES);
+  });
+
+  it("writes no press once the wall-clock budget is spent, even if a gate answers late", async () => {
+    // The overall timer only fires when the loop gets a turn. An onData that
+    // began before the deadline can settle a gate and have its continuation run
+    // after it, which on a loaded machine mid-app-quit is a real ordering.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    // Freeze the loop's view of the clock past the deadline WITHOUT letting the
+    // overall timer run — the exact interleaving the write-site check exists for.
+    vi.setSystemTime(Date.now() + GRACEFUL_SHUTDOWN_TIMEOUT_MS + 1);
+    handles.emitData(footerFrame());
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+    await expect(promise).resolves.toBeNull();
+  });
+
+  it("leaves room to hear the resume hint even when a press stalls", async () => {
+    // A press whose gate never answers costs a full `perPressTimeoutMs` and
+    // then ends the escalation — but that press may well be the one that quit
+    // the agent, whose hint was measured arriving up to 1160ms later. So the
+    // stall plus the hint has to fit the per-terminal budget, and the whole
+    // escalation must not be able to consume it outright. Read from the real
+    // config so a retune has to face both numbers.
+    const MEASURED_HINT_LATENCY_MS = 1160;
+    const signal = codexShutdownSignal();
+    // Worst case is every gate but the last one answering at its deadline, then
+    // the final press printing its hint at the slowest measured latency. Both
+    // halves have to fit, so neither term may be checked on its own.
+    const worstCaseMs =
+      (signal.maxPresses - 1) * signal.perPressTimeoutMs + MEASURED_HINT_LATENCY_MS;
+    expect(worstCaseMs).toBeLessThan(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+  });
+
+  it("gives up at the overall budget rather than pressing past it", async () => {
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+
+    await expect(promise).resolves.toBeNull();
+    expect(handles.writeMock.mock.calls.length).toBeLessThanOrEqual(CODEX_MAX_PRESSES);
+  });
+});
+
+describe("TerminalProcess.gracefulShutdown — input lock (#11851)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("refuses user input for the duration and releases it when the teardown ends", async () => {
+    // Teardown writes bypass TerminalInputController entirely, so without the
+    // lock a keystroke on the <=512-byte fast path lands between two presses —
+    // in the agent's composer, and in the middle of the press economics the
+    // gate depends on.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const writesBefore = handles.writeMock.mock.calls.length;
+    terminal.write("hello");
+    terminal.submit("some prompt");
+    terminal.stage("staged text");
+    expect(handles.writeMock.mock.calls.length).toBe(writesBefore);
+    expect(terminal.tryWrite("x").ok).toBe(false);
+
+    handles.emitData("  codex resume locked\n");
+    await expect(promise).resolves.toBe("locked");
+  });
+
+  it("drops input still pacing through the write queue", async () => {
+    // A chunked paste mid-flight would otherwise keep emitting its chunks on
+    // the pacing timer, straight into the shutdown exchange.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    terminal.write("x".repeat(4096));
+    const queuedBefore = handles.writeMock.mock.calls.length;
+    expect(queuedBefore).toBeGreaterThan(0);
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Only the Ctrl-C press was added; the rest of the paste is gone.
+    expect(handles.writeMock.mock.calls.length).toBe(queuedBefore + 1);
+    await vi.advanceTimersByTimeAsync(CODEX_PER_PRESS_TIMEOUT_MS);
+    const written = handles.writeMock.mock.calls.map((c) => c[0]);
+    expect(written.filter((chunk) => chunk.startsWith("x"))).toHaveLength(1);
+
+    handles.emitData("  codex resume paste-dropped\n");
+    await expect(promise).resolves.toBe("paste-dropped");
+  });
+
+  it("abandons the Enter of a submit that was already in flight", async () => {
+    // The entry guards catch input that STARTS after the lock. This is the other
+    // half: performSubmit writes the body, awaits its pre-Enter gap, then writes
+    // Enter. A teardown beginning inside that gap must leave the Enter unsent,
+    // or it submits whatever the shutdown signal left in the composer.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+
+    terminal.submit("half-typed prompt");
+    await vi.advanceTimersByTimeAsync(1);
+    const afterBody = handles.writeMock.mock.calls.map((c) => c[0]).join("");
+    expect(afterBody).toContain("half-typed prompt");
+    expect(afterBody).not.toContain("\r");
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Let the submit's pre-Enter wait elapse inside the teardown. The gated
+    // path writes only Ctrl-C, so any "\r" in the log can only be that Enter.
+    await vi.advanceTimersByTimeAsync(SUBMIT_ENTER_DELAY_MS + OUTPUT_SETTLE_MAX_WAIT_MS);
+
+    expect(handles.writeMock.mock.calls.map((c) => c[0]).join("")).not.toContain("\r");
+
+    handles.emitData("  codex resume submit-abandoned\n");
+    await expect(promise).resolves.toBe("submit-abandoned");
+  });
+
+  it("releases the lock even when the kill on the way out throws", async () => {
+    // finish() calls host.kill() from inside the onData listener, so a throw
+    // there unwinds into node-pty's emitter rather than this promise — leaving
+    // it forever pending and the input lock forever held. The captured id has
+    // to come back regardless of whether the kill succeeded.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "codex");
+    vi.spyOn(terminal, "kill").mockImplementation(() => {
+      throw new Error("kill exploded");
+    });
+
+    const promise = terminal.gracefulShutdown();
+    await Promise.resolve();
+    await Promise.resolve();
+    handles.emitData("  codex resume kill-throws\n");
+
+    await expect(promise).resolves.toBe("kill-throws");
+
+    // Input works again despite the throw.
+    const writesBefore = handles.writeMock.mock.calls.length;
+    terminal.write("after");
+    expect(handles.writeMock.mock.calls.length).toBe(writesBefore + 1);
   });
 });
 
@@ -761,16 +1266,52 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
     },
 
     // ...whereas here the split-write body landed and only Enter is missing.
-    // Codex splits body and Enter, so only it reaches this gate.
+    // Gemini splits body and Enter, so it reaches this gate; Codex takes the
+    // gated-escalation path below instead and never writes a quit command.
     async demotedDuringSubmitDelay() {
       const handles = createMockPty();
-      const terminal = createAgentTerminal(handles, "codex");
+      const terminal = createAgentTerminal(handles, "gemini");
       const promise = terminal.gracefulShutdown();
       await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
       terminal.getInfo().agentState = "exited";
       terminal.getInfo().detectedAgentId = undefined;
       await vi.advanceTimersByTimeAsync(SUBMIT_ENTER_DELAY_MS);
       await expect(promise).resolves.toBeNull();
+      return soleOutcome();
+    },
+
+    // The gated escalation's own demotion guard (#11851). Codex's presses are
+    // separated by a gate wait, so the agent can exit between them just as it
+    // can between a split-write body and its Enter — and the next press would
+    // land in whatever replaced it.
+    async demotedDuringGatedSignal() {
+      const handles = createMockPty();
+      const terminal = createAgentTerminal(handles, "codex");
+      const promise = terminal.gracefulShutdown();
+      await Promise.resolve();
+      await Promise.resolve();
+      // Satisfy the first press's gate so the loop comes back for a second one.
+      handles.emitData("  Ctrl+C again to quit\n");
+      terminal.getInfo().agentState = "exited";
+      terminal.getInfo().detectedAgentId = undefined;
+      await vi.advanceTimersByTimeAsync(CODEX_PER_PRESS_TIMEOUT_MS);
+      await expect(promise).resolves.toBeNull();
+      // Logging the right outcome is not enough: the point of the guard is that
+      // the press never went out, and an implementation that wrote first and
+      // logged after would satisfy the outcome check alone.
+      expect(handles.writeMock).toHaveBeenCalledTimes(1);
+      return soleOutcome();
+    },
+
+    // Distinct from `quit-signal-write-failed`: a dead PTY on the gated path
+    // has written no slash command to be half-submitted, so the two failures
+    // point at different suspects.
+    async gatedSignalWriteFailed() {
+      const handles = createMockPty((data: string) => {
+        if (data === CTRL_C) throw new Error("pty dead");
+      });
+      const terminal = createAgentTerminal(handles, "codex");
+      await expect(terminal.gracefulShutdown()).resolves.toBeNull();
       return soleOutcome();
     },
   };
@@ -857,6 +1398,7 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
       "captured",
       "elapsedMs",
       "outcome",
+      "pressesSent",
       "projectId",
       "terminalId",
     ]);
