@@ -6,6 +6,7 @@ import {
   extractResultLine,
   parsePositiveInt,
   shouldDetach,
+  shouldSuppressTreeKill,
   validateHarnessOutput,
 } from "./run-freeze-harness.mjs";
 
@@ -177,5 +178,33 @@ describe("boundedTail", () => {
     // The prefix adds a little, but the result must stay the same order of
     // magnitude as the cap rather than the input.
     expect(boundedTail(huge, 1_000).length).toBeLessThan(1_100);
+  });
+});
+
+describe("shouldSuppressTreeKill", () => {
+  it("keeps killing while the root is alive on every platform", () => {
+    for (const platform of ["darwin", "linux", "win32"]) {
+      expect(shouldSuppressTreeKill(platform, false)).toBe(false);
+    }
+  });
+
+  it("stops aiming at a dead root's pid on Windows, where /t walks a tree that is gone", () => {
+    // The pid may also have been recycled onto an unrelated process by now.
+    expect(shouldSuppressTreeKill("win32", true)).toBe(true);
+  });
+
+  it("keeps signalling the POSIX group after its leader exits", () => {
+    // The group outlives the leader and still holds the survivors pinning our
+    // stdio pipes open — suppressing here would disable escalation exactly when
+    // it becomes the only thing that can reach them.
+    expect(shouldSuppressTreeKill("darwin", true)).toBe(false);
+    expect(shouldSuppressTreeKill("linux", true)).toBe(false);
+  });
+
+  it("diverges by platform only once the root is gone", () => {
+    const alive = ["darwin", "win32"].map((p) => shouldSuppressTreeKill(p, false));
+    const dead = ["darwin", "win32"].map((p) => shouldSuppressTreeKill(p, true));
+    expect(new Set(alive).size).toBe(1);
+    expect(new Set(dead).size).toBe(2);
   });
 });

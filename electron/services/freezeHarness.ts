@@ -354,11 +354,12 @@ async function createHarnessRepo(root: string, name: string): Promise<string> {
  * error; the caller maps that to the process exit code.
  */
 export async function runFreezeHarness(pvm: ProjectViewManager): Promise<boolean> {
-  // Every failure has to come back as `false`, not a rejection: the caller maps
-  // the return value to the process exit code, and a throw would escape
-  // `setupWindowServices` with the harness window still up and no exit issued.
-  // `mkdtemp` is inside the guard for that reason — a full or unwritable tmpdir
-  // is a setup failure like any other.
+  // Every failure comes back as `false`, not a rejection: the caller maps the
+  // return value to the process exit code, and a boolean is a verdict where a
+  // throw is an accident. `mkdtemp` is inside the guard for that reason — a full
+  // or unwritable tmpdir is a setup failure like any other. The caller also
+  // catches, so this is defence in depth rather than the only thing standing
+  // between a failed run and a booted app that never exits.
   let tempRoot: string | null = null;
   const createdProjectIds: string[] = [];
 
@@ -468,8 +469,8 @@ export async function runFreezeHarness(pvm: ProjectViewManager): Promise<boolean
     const actualFinishMs = recoveredEnd - cached.lastUsed;
     if (actualFinishMs > budget.deadlineMs) {
       log(
-        "FAILED — measurement overran the cached-view purge: last window closed %dms after caching, " +
-          "past the %dms deadline. Planned %dms; timers ran long.",
+        "FAILED — measurement overran its purge budget: last window closed %dms after caching, " +
+          "past the %dms guarded deadline. Planned %dms; timers ran long.",
         actualFinishMs,
         budget.deadlineMs,
         budget.plannedFinishMs

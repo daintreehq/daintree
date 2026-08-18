@@ -21,7 +21,7 @@
  * is the platform most likely to differ and is unverified.
  */
 
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { constants as fsConstants } from "fs";
 import { access, mkdtemp, rm } from "fs/promises";
 import { createRequire } from "module";
@@ -67,6 +67,8 @@ const FLUSH_TIMEOUT_MS = 5_000;
  * falls back rather than silently inverting what the caller asked for.
  */
 const MAX_TIMER_MS = 2_147_483_647;
+/** Runs are ~15s each; a ceiling here is a typo guard, not a capability limit. */
+const MAX_RUNS = 1_000;
 
 export function parsePositiveInt(value, fallback, max = MAX_TIMER_MS) {
   const raw = String(value ?? "").trim();
@@ -111,9 +113,9 @@ export function boundedTail(text, maxChars) {
 export function describeTreeKill(platform, pid, { force = false } = {}) {
   if (!Number.isInteger(pid) || pid <= 0) return { kind: "none" };
   if (platform === "win32") {
-    // `/t` walks the tree as it stands right now, so anything already orphaned
-    // by the root's own exit is out of reach — which is why the caller escalates
-    // rather than trusting one call.
+    // `/t` walks the tree as it stands right now, so a descendant already
+    // reparented away is out of reach; the caller escalates rather than
+    // trusting one call, and stops entirely once the root pid is stale.
     // `/f` only on escalation. Without it taskkill asks the tree to close, which
     // is the graceful half of the same escalation the POSIX branch expresses as
     // SIGTERM-then-SIGKILL; forcing on the first call would make the second one
@@ -124,6 +126,8 @@ export function describeTreeKill(platform, pid, { force = false } = {}) {
   }
   // Valid only because the child is spawned `detached` on POSIX, which makes it
   // a process-group leader with pgid === pid. Never negate a pid that was not.
+  // The group outlives the leader, so this stays deliverable after the root has
+  // exited — which is precisely when the survivors matter.
   return { kind: "group-signal", pid: -pid, signal: force ? "SIGKILL" : "SIGTERM" };
 }
 
@@ -132,14 +136,36 @@ export function shouldDetach(platform) {
   return platform !== "win32";
 }
 
-function runTreeKill(child, { force, rootExited }) {
-  // Once the root has exited its pid is meaningless — the descendants that are
-  // still holding the pipes are no longer under it, and on Windows the pid may
-  // already have been recycled onto an unrelated process tree.
-  if (rootExited) return;
+/**
+ * Is the pid still a safe thing to aim at once the root has exited?
+ *
+ * Platform-specific, because the two branches address different things. Windows
+ * `taskkill /pid /t` walks a tree rooted at that pid, which no longer exists —
+ * and the pid may already have been recycled onto an unrelated process. POSIX
+ * aims at `-pid`, the process GROUP, which outlives its leader and still
+ * contains exactly the survivors holding our pipes. Suppressing there would
+ * disable the escalation at the moment it becomes the only thing that can work.
+ */
+export function shouldSuppressTreeKill(platform, rootExited) {
+  return rootExited && platform === "win32";
+}
+
+function runTreeKill(child, { force, rootExited, sync = false }) {
+  if (shouldSuppressTreeKill(process.platform, rootExited)) return;
   const action = describeTreeKill(process.platform, child.pid, { force });
   if (action.kind === "none") return;
   if (action.kind === "taskkill") {
+    // Synchronously when we are about to exit: `spawn` only *starts* taskkill,
+    // and a runner that exits in the same tick gives it no ordering guarantee.
+    // POSIX needs no equivalent — `process.kill` is the syscall itself.
+    if (sync) {
+      try {
+        spawnSync(action.command, action.args, { stdio: "ignore", windowsHide: true });
+      } catch {
+        // Nothing left to escalate to.
+      }
+      return;
+    }
     spawn(action.command, action.args, { stdio: "ignore", windowsHide: true }).on(
       "error",
       () => {}
@@ -273,10 +299,12 @@ function runHarnessOnce({ runIndex, runCount, timeoutMs }) {
         let exitSignal = null;
 
         const onSignal = (signal) => {
-          // `detached` put Electron in its own process group, so a Ctrl+C in the
-          // terminal reaches this script and nothing else. Pass it on, or we
-          // trade the Windows hang this file exists to fix for a POSIX orphan.
-          runTreeKill(child, { force: false, rootExited });
+          // On POSIX `detached` put Electron in its own process group, so a
+          // Ctrl+C in the terminal reaches this script and nothing else. Pass it
+          // on, or we trade the Windows hang this file exists to fix for a POSIX
+          // orphan. Windows spawns attached, but forwarding is still correct
+          // there — the runner is the only thing that will do it.
+          runTreeKill(child, { force: false, rootExited, sync: true });
           process.exit(128 + (os.constants.signals[signal] ?? 0));
         };
         const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
@@ -371,8 +399,15 @@ function runHarnessOnce({ runIndex, runCount, timeoutMs }) {
           rootExited = true;
           exitCode = code;
           exitSignal = signal;
+          if (settled) return;
+          // Disarm the timeout: the root has reported, so the run is decided.
+          // Without this a root that exits 0 with every PASS marker moments
+          // before the deadline still settles `timedOut: true` and is reported
+          // as a failure — the drain below outlives the timer that flips it.
+          clearTimeout(timeoutTimer);
+          const timedOutAtExit = timedOut;
           drainTimer = setTimeout(
-            () => void finish(null, { code, signal, output, timedOut }),
+            () => void finish(null, { code, signal, output, timedOut: timedOutAtExit }),
             OUTPUT_DRAIN_MS
           );
         });
@@ -393,7 +428,7 @@ function runHarnessOnce({ runIndex, runCount, timeoutMs }) {
 async function main() {
   await assertBuildArtifacts();
 
-  const runCount = parsePositiveInt(process.env.FREEZE_HARNESS_RUNS, 1);
+  const runCount = parsePositiveInt(process.env.FREEZE_HARNESS_RUNS, 1, MAX_RUNS);
   const timeoutMs = parsePositiveInt(process.env.FREEZE_HARNESS_TIMEOUT_MS, 180_000);
   const results = [];
 
