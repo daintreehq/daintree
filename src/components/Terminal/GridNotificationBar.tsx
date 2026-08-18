@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Info, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, X, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   BANNER_ENTER_DURATION,
@@ -297,7 +297,12 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
           )}
         </div>
 
-        {displayedNotification && actions.length > 0 && (
+        {/* Controls: action buttons first, dismiss trailing. Dismiss is always
+         *  present — the grid bar carries signals from outside the visible UI,
+         *  so the user must be able to clear one that is already handled or
+         *  irrelevant without waiting for a duration persistent notifications
+         *  do not have. Ordering matches Toast (actions, then close). */}
+        {displayedNotification && (
           <div className="flex shrink-0 items-center gap-1.5">
             {actions.map((action, index) => (
               <button
@@ -319,21 +324,19 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
                 {action.label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => removeNotification(displayedNotification.id)}
+              aria-label="Dismiss"
+              className={cn(
+                "flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-xs)] text-daintree-text/60 transition-colors hover:bg-tint/10 hover:text-daintree-text/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/60",
+                buttonPointerClass
+              )}
+              {...interactionGuard}
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
           </div>
-        )}
-
-        {displayedNotification && actions.length === 0 && (
-          <button
-            type="button"
-            onClick={() => removeNotification(displayedNotification.id)}
-            className={cn(
-              "h-7 shrink-0 rounded-[var(--radius-xs)] border border-tint/10 bg-tint/5 px-2 text-xs text-daintree-text/60 transition-colors hover:bg-tint/10 hover:text-daintree-text/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/60",
-              buttonPointerClass
-            )}
-            {...interactionGuard}
-          >
-            Dismiss
-          </button>
         )}
       </div>
     </div>
