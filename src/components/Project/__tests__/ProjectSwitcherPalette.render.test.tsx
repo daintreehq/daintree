@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
-import { render, screen, within, fireEvent, act } from "@testing-library/react";
+import { render, screen, within, fireEvent, act, cleanup } from "@testing-library/react";
 
 const originalScrollIntoView = Element.prototype.scrollIntoView;
 beforeAll(() => {
@@ -228,14 +228,14 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
       />
     );
     // A project that needs the user outranks one that is merely busy.
-    expect(screen.getByText("3 agents need input")).toBeTruthy();
+    expect(screen.getByText("3 need input")).toBeTruthy();
   });
 
   it("singularises a lone waiting agent", () => {
     render(
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ waitingAgentCount: 1 })]} />
     );
-    expect(screen.getByText("Agent needs input")).toBeTruthy();
+    expect(screen.getByText("1 needs input")).toBeTruthy();
   });
 
   it("ages the oldest wait", () => {
@@ -250,7 +250,7 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
         ]}
       />
     );
-    expect(screen.getByText("2 agents need input · oldest waiting 42m")).toBeTruthy();
+    expect(screen.getByText("2 need input")).toBeTruthy();
   });
 
   it("reports blocked agents alongside the plain waits, not instead of them", () => {
@@ -262,14 +262,16 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
     );
     // An agent stopped on an error is a different ask than one at a prompt, but
     // the two still waiting must not vanish behind it.
-    expect(screen.getByText("2 agents need input · 1 blocked")).toBeTruthy();
+    expect(screen.getByText("2 need input · 1 blocked")).toBeTruthy();
   });
 
-  it("reports running agents when nothing is waiting", () => {
+  it("reports running agents as a count rather than a sentence", () => {
     render(
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ activeAgentCount: 2 })]} />
     );
-    expect(screen.getByText("2 agents running")).toBeTruthy();
+    // Running is the second axis, not a tier of this waterfall — it draws in
+    // the row's own column so it survives a wait or a snooze winning the line.
+    expect(screen.getByTestId("workspace-running-count").textContent).toBe("2 agents running");
   });
 
   // A row with nothing running has nothing to report, and twenty of those in a
@@ -429,14 +431,15 @@ describe("ProjectSwitcherPalette status dot", () => {
 });
 
 /**
- * Two facts, two carriers (#11832). The row's hue and sentence say what it wants
- * from the user; its shape and a muted clause say whether anything is still
- * executing. The tests below always compare two rows that differ in exactly one
- * of those, so a change that collapsed them back onto one carrier fails here
+ * Two facts, two carriers (#11832). The row's mark weighs its running agents
+ * against the ones asking for something; its line states both counts, running
+ * first. The tests below always compare two rows that differ in exactly one of
+ * those, so a change that collapsed them back onto one carrier fails here
  * rather than passing by matching a string.
  */
 describe("ProjectSwitcherPalette liveness axis", () => {
   const markIn = (row: HTMLElement) => row.querySelector("[data-testid='workspace-status-dot']");
+  const shareOf = (row: HTMLElement) => markIn(row)?.getAttribute("data-running-share") ?? null;
 
   function renderPair(runningCount: number) {
     render(
@@ -459,71 +462,119 @@ describe("ProjectSwitcherPalette liveness axis", () => {
     };
   }
 
-  it("draws an open mark for a row still executing and a closed one for a row at rest", () => {
-    const { stalled, churning } = renderPair(2);
+  it("splits the mark on the row that has both, and leaves the stalled one solid", () => {
+    const { stalled, churning } = renderPair(3);
 
-    // Topology, read off the geometry rather than a class name: the live mark
-    // is a stroked circle with a gap in it, which is what "open" means. A dash
-    // pattern is the only thing that puts the gap there — swapping in a plain
-    // ring would still be an SVG circle, and asserting merely "is an SVG"
-    // would call that a pass. The dash VALUES stay unasserted: those belong to
-    // the glyph, and pinning them here would just restate its source.
-    const liveCircle = markIn(churning)?.querySelector("circle");
-    expect(liveCircle?.getAttribute("stroke-dasharray")).toBeTruthy();
-    expect(markIn(stalled)?.querySelector("circle")).toBeNull();
+    // The original bug in one assertion: these two rows want the same thing and
+    // used to draw the same mark, while only one of them was still moving.
+    expect(shareOf(stalled)).toBeNull();
+    expect(shareOf(churning)).not.toBeNull();
+    expect(markIn(stalled)?.className).not.toBe(markIn(churning)?.className);
+  });
+
+  it("leans the mark toward whichever side has more agents", () => {
+    // Relational rather than a literal fraction: what has to hold is that more
+    // running agents move the mark further toward the running side, whatever
+    // the snapping happens to round them to.
+    const mostlyRunning = renderPair(6).churning;
+    cleanup();
+    const evenlySplit = renderPair(1).churning;
+
+    expect(Number(shareOf(mostlyRunning))).toBeGreaterThan(Number(shareOf(evenlySplit)));
   });
 
   it("leaves the demand sentence identical on both", () => {
     const { stalled, churning } = renderPair(2);
 
     // Purely additive: the tier that won the line is unchanged, so a row that
-    // gained the clause did not lose anything to it.
-    const demand = (row: HTMLElement) => within(row).getByText("Agent needs input");
+    // gained the count did not lose anything to it.
+    const demand = (row: HTMLElement) => within(row).getByText("1 needs input");
     expect(demand(churning).textContent).toBe(demand(stalled).textContent);
     expect(demand(churning).className).toBe(demand(stalled).className);
   });
 
-  it("trails the hidden count on the churning row only", () => {
+  it("draws the count on the churning row only", () => {
     const { stalled, churning } = renderPair(2);
 
-    expect(within(churning).getByText(/2 running/)).toBeTruthy();
-    expect(within(stalled).queryByText(/running/)).toBeNull();
+    expect(within(churning).getByTestId("workspace-running-count").textContent).toBe(
+      "2 agents running"
+    );
+    expect(within(stalled).queryByTestId("workspace-running-count")).toBeNull();
   });
 
-  it("keeps the clause out of the coloured token", () => {
+  it("leads the line with the count and colours it apart from the demand", () => {
     const { churning } = renderPair(2);
 
-    // The demand tone is the row's one coloured word. A clause folded into that
-    // element would inherit the hue and read as part of the ask.
-    const demand = within(churning).getByText("Agent needs input");
-    expect(demand.textContent).not.toContain("running");
-    expect(within(churning).getByText(/2 running/)).not.toBe(demand);
+    // Running is the figure the switcher gets opened for, so it comes first —
+    // and it carries its own hue, because greying it made it read as an
+    // afterthought rather than as the answer.
+    const count = within(churning).getByTestId("workspace-running-count");
+    const demand = within(churning).getByText("1 needs input");
+    expect(count.compareDocumentPosition(demand) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(count.className).not.toBe(demand.className);
+    expect(count.textContent).not.toContain("need input");
   });
 
-  it("reaches assistive tech as words, not as a shape", () => {
+  it("reaches assistive tech as words, not as a mark", () => {
     renderPair(3);
 
     // Queried by accessible NAME, not by text content: the mark is
-    // `aria-hidden`, so the clause is the only carrier left, and a clause that
-    // was itself hidden from the accessibility tree would still sit in the DOM
-    // for `textContent` to find while leaving shape as the sole encoding. It
-    // rides the row's own name rather than a live region — one per row would
-    // re-announce the whole list on every tick.
-    const spoken = screen.getByRole("option", { name: /Churning.*3 running/s });
-    expect(spoken).toBeTruthy();
+    // `aria-hidden`, so the line is the only carrier left, and a count that was
+    // itself hidden from the accessibility tree would still sit in the DOM for
+    // `textContent` to find while leaving the mark as the sole encoding.
+    const spoken = screen.getByRole("option", { name: /Churning.*3 agents running/s });
     expect(markIn(spoken)?.getAttribute("aria-hidden")).toBe("true");
+    expect(
+      within(spoken).getByTestId("workspace-running-count").getAttribute("aria-hidden")
+    ).toBeNull();
   });
 
-  it("says nothing extra on a row whose sentence already names the run", () => {
+  it("states a row's run exactly once", () => {
     render(
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ activeAgentCount: 2 })]} />
     );
 
     const row = screen.getByRole("option", { name: /Test Project/ });
-    expect(within(row).getByText("2 agents running")).toBeTruthy();
-    // Open mark, one sentence: "2 agents running · 2 running" says it twice.
-    expect(markIn(row)?.querySelector("circle")).toBeTruthy();
-    expect(row.textContent).not.toContain("· 2 running");
+    // A row whose only fact is the run has no demand to state, so the count is
+    // the whole line — "2 agents running · 2 agents running" would say it twice.
+    expect(within(row).getByTestId("workspace-running-count").textContent).toBe("2 agents running");
+    expect(row.textContent?.match(/agents running/g)).toHaveLength(1);
+    // It is still marked, and solid: with nothing waiting there is nothing to
+    // weigh the run against.
+    expect(markIn(row)).toBeTruthy();
+    expect(shareOf(row)).toBeNull();
+  });
+
+  it("marks a running row differently from a waiting one", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({ id: "run", name: "Runs", activeAgentCount: 2 }),
+          makeProject({ id: "wait", name: "Waits", waitingAgentCount: 2 }),
+        ]}
+      />
+    );
+
+    // Both are solid discs, so hue is the only thing separating them — compared
+    // rather than named, so renaming a token is not a test edit.
+    const running = markIn(screen.getByRole("option", { name: /Runs/ }));
+    const waiting = markIn(screen.getByRole("option", { name: /Waits/ }));
+    expect(running?.className).not.toBe(waiting?.className);
+  });
+
+  it("keeps the resume promise off a row whose agents never stopped", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ activeAgentCount: 2, resumableAgentCount: 3 })]}
+      />
+    );
+
+    const row = screen.getByRole("option", { name: /Test Project/ });
+    expect(within(row).queryByTestId("workspace-resume-dot")).toBeNull();
+    expect(row.textContent).not.toContain("will resume");
+    expect(within(row).getByTestId("workspace-running-count")).toBeTruthy();
   });
 
   it("carries both axes on a scratch row too", () => {
@@ -548,8 +599,9 @@ describe("ProjectSwitcherPalette liveness axis", () => {
 
     render(<ProjectSwitcherPalette {...baseProps} results={[]} scratchResults={[busyScratch]} />);
 
-    expect(screen.getByText("Agent needs input")).toBeTruthy();
-    expect(screen.getByText(/2 running/)).toBeTruthy();
+    const row = screen.getByRole("option", { name: /Spike.*2 agents running/s });
+    expect(within(row).getByText("1 needs input")).toBeTruthy();
+    expect(shareOf(row)).not.toBeNull();
   });
 
   it("carries both axes on a scratch in the ranked list too", () => {
@@ -581,10 +633,9 @@ describe("ProjectSwitcherPalette liveness axis", () => {
       />
     );
 
-    const row = screen.getByRole("option", { name: /Spike/ });
-    expect(within(row).getByText("Agent needs input")).toBeTruthy();
-    expect(within(row).getByText(/2 running/)).toBeTruthy();
-    expect(markIn(row)?.querySelector("circle")?.getAttribute("stroke-dasharray")).toBeTruthy();
+    const row = screen.getByRole("option", { name: /Spike.*2 agents running/s });
+    expect(within(row).getByText("1 needs input")).toBeTruthy();
+    expect(shareOf(row)).not.toBeNull();
   });
 });
 
@@ -647,7 +698,7 @@ describe("ProjectSwitcherPalette status conveyance", () => {
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ waitingAgentCount: 2 })]} />
     );
 
-    expect(screen.getByText("2 agents need input")).toBeTruthy();
+    expect(screen.getByText("2 need input")).toBeTruthy();
     expect(screen.queryByLabelText("Agents waiting")).toBeNull();
     expect(screen.queryByLabelText("Idle")).toBeNull();
   });
@@ -1382,13 +1433,13 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
   it("states agent activity on a ranked scratch row", () => {
     render(<ProjectSwitcherPalette {...rankedProps({ waitingAgentCount: 2 })} />);
 
-    expect(screen.getByText("2 agents need input")).toBeTruthy();
+    expect(screen.getByText("2 need input")).toBeTruthy();
   });
 
   it("states agent activity on a pinned scratch row", () => {
     render(<ProjectSwitcherPalette {...browseProps({ waitingAgentCount: 2 })} />);
 
-    expect(screen.getByText("2 agents need input")).toBeTruthy();
+    expect(screen.getByText("2 need input")).toBeTruthy();
   });
 
   // In the ranked list a scratch sits among projects with no section header to
@@ -1404,9 +1455,10 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
       "Spike notes",
       "· Scratch",
     ]);
-    // The status keeps its own line rather than sharing the name's.
-    expect(nameLine.textContent).not.toContain("Agent running");
-    expect(screen.getByText("Agent running")).toBeTruthy();
+    // The running count keeps the row's trailing edge rather than sharing the
+    // name's line.
+    expect(nameLine.textContent).not.toContain("running");
+    expect(screen.getByTestId("workspace-running-count").textContent).toBe("1 agent running");
   });
 
   it("gives a quiet scratch one line without losing what it is", () => {
@@ -1436,7 +1488,7 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     const lastOpened = Date.now() - (SCRATCH_CLEANUP_TTL_MS - 2 * 24 * 3600_000);
     render(<ProjectSwitcherPalette {...browseProps({ lastOpened, activeAgentCount: 1 })} />);
 
-    expect(screen.getByText("Agent running")).toBeTruthy();
+    expect(screen.getByTestId("workspace-running-count").textContent).toBe("1 agent running");
     expect(screen.getByTestId("scratch-cleanup-countdown")).toBeTruthy();
   });
 
@@ -1445,7 +1497,7 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
   it("conveys scratch status as text rather than a labelled dot", () => {
     render(<ProjectSwitcherPalette {...browseProps({ blockedAgentCount: 1 })} />);
 
-    expect(screen.getByText("Agent blocked")).toBeTruthy();
+    expect(screen.getByText("1 blocked")).toBeTruthy();
     expect(screen.queryByLabelText("Agents waiting")).toBeNull();
     expect(screen.queryByLabelText("Idle")).toBeNull();
   });
@@ -1494,13 +1546,13 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
         />
       );
 
-      expect(screen.getByText("Agent needs input · waiting 1m")).toBeTruthy();
+      expect(screen.getByText("waiting 1m")).toBeTruthy();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(60_000);
       });
 
-      expect(screen.getByText("Agent needs input · waiting 2m")).toBeTruthy();
+      expect(screen.getByText("waiting 2m")).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }
@@ -1597,7 +1649,7 @@ describe("ProjectSwitcherPalette resumable-agent dot", () => {
     // tone would light this row up — and its agents finished in a window that
     // is still open, not on disk waiting to be brought back.
     const row = screen.getByRole("option", { name: /Open elsewhere/i });
-    expect(within(row).getByText(/Agent finished/)).toBeTruthy();
+    expect(within(row).getByText(/1 finished/)).toBeTruthy();
     expect(within(row).getByTestId("workspace-status-dot")).toBeTruthy();
     expect(within(row).queryByTestId("workspace-resume-dot")).toBeNull();
     expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();

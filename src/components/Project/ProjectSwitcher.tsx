@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { ChevronsUpDown, FileText, Plus } from "lucide-react";
-import { SpinnerCircle } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { useProjectStore } from "@/store/projectStore";
@@ -146,10 +145,12 @@ export function ProjectSwitcher() {
   // Reads the totals across every non-active project rather than `results`,
   // which is ordered and filtered for presentation.
   //
-  // Two axes on one mark, the same split the switcher's rows draw (#11832):
-  // hue says what is being asked of the user, shape says whether anything is
-  // still moving. Before that they contended for one carrier, so a fleet that
-  // was both waiting AND churning looked exactly like one that had stalled.
+  // One mark, one axis: the dot's hue says what is being asked of the user. The
+  // fleet's running work is in the label rather than the glyph — a second shape
+  // on this mark could say that something was moving but never how much, which
+  // is the half worth knowing. The switcher's rows split the same way, and get
+  // to draw the proportion because they have one project's counts to weigh; a
+  // fleet-wide badge would be averaging every project into one dot.
   const badgeStatus = useMemo(() => {
     const { activeAgentCount, waitingAgentCount, waitingProjectCount } =
       projectSwitcher.nonActiveAgentCounts;
@@ -173,14 +174,13 @@ export function ProjectSwitcher() {
     }
 
     return {
-      // Demand still wins the hue outright — the badge's colour has always
-      // meant "this needs you", and liveness rides the shape instead of
-      // competing for it.
-      color: waitingAgentCount > 0 ? "bg-state-waiting" : "bg-activity-active",
-      arc: waitingAgentCount > 0 ? "text-state-waiting" : "text-activity-active",
-      isLive: activeAgentCount > 0,
-      // Both facts, always. The mark is a single glyph and the label is the
-      // only place a reader who cannot see it learns either one.
+      // Demand wins the hue outright — the badge's colour has always meant
+      // "this needs you" — and liveness stays in the label rather than
+      // competing for the one mark a fleet-wide badge has.
+      color: waitingAgentCount > 0 ? "bg-state-waiting" : "bg-activity-working",
+      // Both facts, always. The mark carries demand alone, so the label is the
+      // only place either a reader who cannot see it or one who can learns how
+      // much is still running.
       label: parts.join(", "),
     };
   }, [projectSwitcher.nonActiveAgentCounts]);
@@ -404,33 +404,20 @@ export function ProjectSwitcher() {
                 <ChevronsUpDown className="shrink-0 text-text-muted transition-colors group-hover:text-text-secondary" />
               )}
               {badgeStatus && (
-                // A fixed box either mark centres in, so switching between them
-                // moves nothing around it. The 10px arc lands on the same
-                // footprint the 8px dot and its ring already occupied.
+                // A fixed box the mark centres in, so a change of hue moves
+                // nothing around it.
                 <span
                   role="status"
                   aria-label={badgeStatus.label}
                   className="absolute top-0.5 right-0.5 flex h-3 w-3 items-center justify-center"
                 >
-                  {badgeStatus.isLive ? (
-                    // Sized inline rather than by class. `Button` sizes every
-                    // SVG under it with a descendant rule (`[&_svg]:size-4`),
-                    // which outranks a utility class on the glyph itself — so a
-                    // classed 10px arc would silently render at 16px and spill
-                    // out of the badge's box.
-                    <SpinnerCircle
-                      className={badgeStatus.arc}
-                      style={{ width: "0.625rem", height: "0.625rem" }}
-                      data-testid="project-switcher-badge-arc"
-                    />
-                  ) : (
-                    <span
-                      className={cn(
-                        "h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-panel-elevated)]",
-                        badgeStatus.color
-                      )}
-                    />
-                  )}
+                  <span
+                    className={cn(
+                      "h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-panel-elevated)]",
+                      badgeStatus.color
+                    )}
+                    data-testid="project-switcher-badge-dot"
+                  />
                 </span>
               )}
             </Button>

@@ -2706,6 +2706,20 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     background-color: CanvasText !important;
   }
 
+  /* Project-switcher row marks. Every one of them is a background — a fill for
+     the solid states, a conic-gradient for a row that is part running and part
+     waiting — and forced colors drops background images entirely while forcing
+     ordinary backgrounds toward Canvas, so the whole 8px slot would read as
+     empty. Repaint them as a single CanvasText disc: the hue and the split are
+     gone either way here, and the row's own line states both counts in words,
+     so what this has to preserve is only that the row is marked at all.
+     !important beats the inline gradient the mixed mark sets. */
+  .workspace-mark {
+    background-color: CanvasText !important;
+    background-image: none !important;
+    border-color: CanvasText;
+  }
+
   /* SettingsSwitch (Radix Switch). The track's unchecked border is already
      covered by the global button/[role="button"] rule above. Add the checked
      fill plus thumb contrast so on/off is distinguishable beyond thumb position.
