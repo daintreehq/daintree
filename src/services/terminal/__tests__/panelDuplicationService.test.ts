@@ -1,4 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  setWorktreePathIndexAccessor,
+  resetStoreAccessorsForTesting,
+} from "@/store/storeAccessors";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
 import type { BrowserPanelOptions, DevPreviewPanelOptions } from "@shared/types/addPanelOptions";
@@ -62,6 +66,10 @@ vi.mock("@/store/projectPresetsStore", () => ({
     getState: vi.fn(() => ({ presetsByAgent: {} })),
   },
 }));
+
+afterEach(() => {
+  resetStoreAccessorsForTesting();
+});
 
 function makePanel(overrides: Partial<PtyPanelData> | Partial<PanelInstance> = {}): PanelInstance {
   return {
@@ -727,5 +735,121 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
 
     const opts = spy.mock.calls[0]![3] as Record<string, unknown>;
     expect(opts.presetArgs).toBeUndefined();
+  });
+});
+
+describe("inherited worktree cwd resolution (#11854)", () => {
+  const stalePath = "/worktrees/source";
+  const filedPath = "/worktrees/destination";
+  const filedId = "wt-destination";
+
+  let buildPanelSnapshotOptions: (panel: PanelInstance) => AddPanelOptions | null;
+  let buildPanelDuplicateOptions: (
+    panel: PanelInstance,
+    location: "grid" | "dock"
+  ) => Promise<AddPanelOptions>;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const { systemClient } = await import("@/clients");
+    (systemClient.getTmpDir as ReturnType<typeof vi.fn>).mockResolvedValue("/tmp");
+    const { useCcrPresetsStore } = await import("@/store/ccrPresetsStore");
+    (useCcrPresetsStore.getState as ReturnType<typeof vi.fn>).mockReturnValue({
+      ccrPresetsByAgent: {},
+    });
+    const { useProjectPresetsStore } = await import("@/store/projectPresetsStore");
+    (useProjectPresetsStore.getState as ReturnType<typeof vi.fn>).mockReturnValue({
+      presetsByAgent: {},
+    });
+    const mod = await import("../panelDuplicationService");
+    buildPanelSnapshotOptions = mod.buildPanelSnapshotOptions;
+    buildPanelDuplicateOptions = mod.buildPanelDuplicateOptions;
+  });
+
+  // Every kind whose cwd is a real spawn directory. Browser hardcodes "" and
+  // review has no cwd, so both are covered separately below.
+  const spawningPanels: Array<[string, Partial<PanelInstance>]> = [
+    ["agent terminal", { kind: "terminal", launchAgentId: "claude", command: "claude --flag" }],
+    ["plain terminal", { kind: "terminal", command: "bash" }],
+    ["dev-preview", { kind: "dev-preview", devCommand: "npm run dev" }],
+  ];
+
+  async function bothBuilders(panel: PanelInstance): Promise<Array<AddPanelOptions>> {
+    const snapshot = buildPanelSnapshotOptions(panel);
+    expect(snapshot).not.toBeNull();
+    return [snapshot!, await buildPanelDuplicateOptions(panel, "grid")];
+  }
+
+  describe.each(spawningPanels)("%s", (_label, overrides) => {
+    it("launches in the path of the worktree it is filed under, not the source cwd", async () => {
+      setWorktreePathIndexAccessor(() => new Map([[filedId, filedPath]]));
+      const panel = makePanel({ ...overrides, cwd: stalePath, worktreeId: filedId });
+
+      for (const options of await bothBuilders(panel)) {
+        expect(options.cwd).toBe(filedPath);
+        expect(options.cwd).not.toBe(panel.cwd);
+        // The filing id is the input to the fix, never an output of it.
+        expect(options.worktreeId).toBe(panel.worktreeId);
+      }
+    });
+
+    it("keeps the source cwd when no view store is mounted", async () => {
+      setWorktreePathIndexAccessor(() => null);
+      const panel = makePanel({ ...overrides, cwd: stalePath, worktreeId: filedId });
+
+      for (const options of await bothBuilders(panel)) {
+        expect(options.cwd).toBe(panel.cwd);
+      }
+    });
+
+    it("keeps the source cwd when the filed worktree is no longer in the index", async () => {
+      setWorktreePathIndexAccessor(() => new Map([["wt-unrelated", "/worktrees/unrelated"]]));
+      const panel = makePanel({ ...overrides, cwd: stalePath, worktreeId: filedId });
+
+      for (const options of await bothBuilders(panel)) {
+        expect(options.cwd).toBe(panel.cwd);
+      }
+    });
+
+    it("keeps the source cwd for a worktree-less panel", async () => {
+      setWorktreePathIndexAccessor(() => new Map([[filedId, filedPath]]));
+      const panel = makePanel({ ...overrides, cwd: stalePath, worktreeId: undefined });
+
+      for (const options of await bothBuilders(panel)) {
+        expect(options.cwd).toBe(panel.cwd);
+      }
+    });
+
+    it("falls back to an empty cwd when the panel has neither a cwd nor a resolvable worktree", async () => {
+      setWorktreePathIndexAccessor(() => new Map([[filedId, filedPath]]));
+      const panel = makePanel({ ...overrides, cwd: undefined, worktreeId: undefined });
+
+      for (const options of await bothBuilders(panel)) {
+        expect(options.cwd).toBe("");
+      }
+    });
+  });
+
+  it("never resolves a cwd for browser panels, which own no directory", async () => {
+    setWorktreePathIndexAccessor(() => new Map([[filedId, filedPath]]));
+    const panel = makePanel({
+      kind: "browser",
+      browserUrl: "https://example.com",
+      cwd: stalePath,
+      worktreeId: filedId,
+    } as Partial<PanelInstance>);
+
+    for (const options of await bothBuilders(panel)) {
+      expect(options.cwd).toBe("");
+    }
+  });
+
+  it("does not resolve a worktree path when the panel has no cwd to correct", async () => {
+    setWorktreePathIndexAccessor(() => new Map([[filedId, filedPath]]));
+    const panel = makePanel({ kind: "review", worktreeId: filedId } as Partial<PanelInstance>);
+
+    for (const options of await bothBuilders(panel)) {
+      expect(options.cwd).toBeUndefined();
+    }
   });
 });

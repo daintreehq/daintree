@@ -2,13 +2,17 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
-import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import {
+  buildPanelDuplicateOptions,
+  resolveInheritedPanelCwd,
+} from "@/services/terminal/panelDuplicationService";
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
 import { moveTerminalToWorktreeAndFollowRescue } from "@/services/terminal/crossWorktreeMove";
 import { buildResumePanelOptions } from "@/services/agentResume";
 import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
+import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
 import type { PtyPanelData, TerminalSpawnSource } from "@shared/types/panel";
 import { isPtyPanel } from "@shared/types/panel";
 
@@ -153,12 +157,20 @@ export function registerTerminalSpawnActions(
                 "grid"
               )
             : lastClosed;
-          await state.addPanel({
+          const reopenOptions: AddPanelOptions = {
             ...baseOptions,
             location: "grid",
             worktreeId: lastClosed.worktreeId ?? callbacks.getActiveWorktreeId(),
             ...(spawnedBy ? { spawnedBy } : {}),
-          });
+          };
+          // The worktree id above can fall back to the active worktree while
+          // `cwd` still carries the closed panel's directory, so re-derive the
+          // directory from whichever id actually won (#11854). Browser panels
+          // keep their deliberate empty `cwd` and review panels have none.
+          if (reopenOptions.kind === "terminal" || reopenOptions.kind === "dev-preview") {
+            reopenOptions.cwd = resolveInheritedPanelCwd(reopenOptions);
+          }
+          await state.addPanel(reopenOptions);
         } else {
           await state.addPanel({
             kind: "terminal",

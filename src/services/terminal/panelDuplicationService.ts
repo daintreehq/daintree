@@ -16,6 +16,7 @@ import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { agentSettingsClient, systemClient } from "@/clients";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
+import { getWorktreePathIndex } from "@/store/storeAccessors";
 import {
   buildAgentLaunchFlagsForRuntimeSettings,
   resolveAgentRuntimeSettings,
@@ -161,6 +162,25 @@ function buildDevPreviewOptions(panel: import("@shared/types/panel").DevPreviewP
 }
 
 /**
+ * Working directory for a panel that inherits its worktree rather than choosing
+ * one. A duplicate or reopened panel is a brand new process, so it belongs in
+ * the worktree it is filed under — not whatever directory the source process
+ * happened to still be running in after a cross-worktree drag (#11854).
+ *
+ * Takes the filing id and the inherited fallback together so no branch can
+ * resolve one without the other. Soft-degrades to the inherited `cwd` when the
+ * panel has no worktree, no view store is mounted, or the id no longer resolves:
+ * the id is inherited rather than asserted by a caller, so a stale one must not
+ * fail the launch (#11655). Never throws — `buildPanelSnapshotOptions` runs
+ * inside `trashPanel`.
+ */
+export function resolveInheritedPanelCwd(panel: { cwd?: string; worktreeId?: string }): string {
+  const fallback = panel.cwd || "";
+  if (!panel.worktreeId) return fallback;
+  return getWorktreePathIndex()?.get(panel.worktreeId) ?? fallback;
+}
+
+/**
  * Build a synchronous snapshot of a panel's config for last-closed fallback.
  * Copies the same fields as buildPanelDuplicateOptions but preserves the
  * existing command verbatim (no async agent command regeneration).
@@ -190,7 +210,7 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       // Reopen-last restores the same terminal — the ownership rung carries
       // verbatim so a renamed title stays pinned across close/reopen.
       titleMode: panel.titleMode,
-      cwd: panel.cwd || "",
+      cwd: resolveInheritedPanelCwd(panel),
       worktreeId: panel.worktreeId,
       exitBehavior: panel.exitBehavior,
       isInputLocked: panel.isInputLocked,
@@ -216,7 +236,7 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
   if (isDevPreviewPanel(panel)) {
     return {
       kind: "dev-preview",
-      cwd: panel.cwd || "",
+      cwd: resolveInheritedPanelCwd(panel),
       worktreeId: panel.worktreeId,
       exitBehavior: panel.exitBehavior,
       ...buildDevPreviewOptions(panel),
@@ -236,7 +256,7 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       launchAgentId: panel.launchAgentId,
       title: panel.title,
       titleMode: panel.titleMode,
-      cwd: panel.cwd || "",
+      cwd: resolveInheritedPanelCwd(panel),
       worktreeId: panel.worktreeId,
       exitBehavior: panel.exitBehavior,
       isInputLocked: panel.isInputLocked,
@@ -310,7 +330,7 @@ export async function buildPanelDuplicateOptions(
       // Keep explicit names pinned on the copy — without this, detection
       // rewrites "X (copy)" back to the registry name moments after spawn.
       titleMode: presetWasStale ? undefined : duplicateTitleMode(sourcePanel),
-      cwd: sourcePanel.cwd || "",
+      cwd: resolveInheritedPanelCwd(sourcePanel),
       worktreeId: sourcePanel.worktreeId,
       location: targetLocation,
       exitBehavior: sourcePanel.exitBehavior,
@@ -337,7 +357,7 @@ export async function buildPanelDuplicateOptions(
   if (isDevPreviewPanel(sourcePanel)) {
     return {
       kind: "dev-preview",
-      cwd: sourcePanel.cwd || "",
+      cwd: resolveInheritedPanelCwd(sourcePanel),
       worktreeId: sourcePanel.worktreeId,
       location: targetLocation,
       exitBehavior: sourcePanel.exitBehavior,
@@ -357,7 +377,7 @@ export async function buildPanelDuplicateOptions(
     return {
       kind: "terminal",
       launchAgentId: sourcePanel.launchAgentId,
-      cwd: sourcePanel.cwd || "",
+      cwd: resolveInheritedPanelCwd(sourcePanel),
       title: sourcePanel.title,
       titleMode: duplicateTitleMode(sourcePanel),
       worktreeId: sourcePanel.worktreeId,
