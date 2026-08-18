@@ -168,12 +168,18 @@ function buildDevPreviewOptions(panel: import("@shared/types/panel").DevPreviewP
  * filed under — not the directory the source process kept after a cross-worktree
  * drag left `cwd` and `worktreeId` pointing at different worktrees (#11854).
  *
- * Only a genuine mismatch is rerooted. A launch root already inside the filed
- * worktree is left alone, because a subdirectory is a deliberate choice there —
- * `UpdateCwdDialog` and an explicit `terminal.spawn` cwd both produce one, and
- * collapsing them to the worktree root would discard what the user picked.
- * `classifyLaunchRootAlignment` makes that call segment-aware, so it survives
- * nested worktrees and Windows separators where `startsWith` would not.
+ * Only a launch root that provably belongs to a DIFFERENT worktree is rerooted,
+ * because that is the one state a drag can produce. Everything else is kept:
+ * a subdirectory of the filed worktree is a deliberate choice, and so is a path
+ * under no worktree at all (a scratch directory from `UpdateCwdDialog`, another
+ * drive on Windows) — a drag moves between worktrees, so it cannot have produced
+ * that path. Only an empty launch root adopts the filed worktree by default,
+ * having nothing to preserve. `classifyLaunchRootAlignment` decides this
+ * segment-aware, surviving nested worktrees and separator differences that
+ * `startsWith` would get wrong.
+ *
+ * The bias is deliberate: failing to reroot leaves today's behavior, while
+ * rerooting a directory the user chose silently discards it.
  *
  * Takes the filing id and the inherited fallback together so no branch can
  * resolve one without the other. Soft-degrades to the inherited `cwd` when the
@@ -190,9 +196,9 @@ export function resolveInheritedPanelCwd(panel: { cwd?: string; worktreeId?: str
   if (!index || !filedPath) return fallback;
 
   const worktrees = Array.from(index, ([id, path]) => ({ id, path }));
-  return classifyLaunchRootAlignment(fallback, worktrees, panel.worktreeId) === "aligned"
-    ? fallback
-    : filedPath;
+  const alignment = classifyLaunchRootAlignment(fallback, worktrees, panel.worktreeId);
+  if (alignment === "launch-root-mismatch") return filedPath;
+  return fallback || filedPath;
 }
 
 /**

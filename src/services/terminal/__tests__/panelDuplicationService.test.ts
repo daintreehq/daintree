@@ -800,10 +800,21 @@ describe("inherited worktree cwd resolution (#11854)", () => {
     });
 
     it("does not treat a sibling worktree whose path merely extends the filed one as inside it", () => {
-      useIndex([[filedId, filedPath]]);
+      useIndex([
+        [filedId, filedPath],
+        ["wt-sibling", `${filedPath}-other`],
+      ]);
 
       expect(resolveInheritedPanelCwd({ cwd: `${filedPath}-other/src`, worktreeId: filedId })).toBe(
         filedPath
+      );
+    });
+
+    it("keeps a launch root that belongs to no known worktree, which no drag could produce", () => {
+      useIndex([[filedId, filedPath]]);
+
+      expect(resolveInheritedPanelCwd({ cwd: "/tmp/scratch", worktreeId: filedId })).toBe(
+        "/tmp/scratch"
       );
     });
 
@@ -868,17 +879,19 @@ describe("inherited worktree cwd resolution (#11854)", () => {
     });
   });
 
-  it("leaves the trash-time snapshot's launch root untouched for the reopen consumer to resolve", () => {
-    useIndex([
-      [filedId, filedPath],
-      ["wt-source", stalePath],
-    ]);
-    const panel = makePanel({ command: "bash", cwd: stalePath, worktreeId: filedId });
+  describe.each(spawningPanels)("buildPanelSnapshotOptions: %s", (_label, overrides) => {
+    it("leaves the trash-time launch root untouched for the reopen consumer to resolve", () => {
+      useIndex([
+        [filedId, filedPath],
+        ["wt-source", stalePath],
+      ]);
+      const panel = makePanel({ ...overrides, cwd: stalePath, worktreeId: filedId });
 
-    // Resolving here would freeze one answer into stored state; `terminal.duplicate`
-    // re-resolves at reopen against a fresher index.
-    expect(buildPanelSnapshotOptions(panel)?.cwd).toBe(stalePath);
-    expect(indexReads).toBe(0);
+      // Resolving here would freeze one answer into stored state; `terminal.duplicate`
+      // re-resolves at reopen against a fresher index.
+      expect(buildPanelSnapshotOptions(panel)?.cwd).toBe(stalePath);
+      expect(indexReads).toBe(0);
+    });
   });
 
   it("never resolves a directory for browser panels, which own none", async () => {
