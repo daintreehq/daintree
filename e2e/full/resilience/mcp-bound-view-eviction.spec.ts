@@ -5,7 +5,7 @@ import { createFixtureRepos } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../../helpers/workflows";
 import { T_LONG } from "../../helpers/timeouts";
-import { ACTIVE_AGENT_STATES } from "../../../shared/types/agent";
+import { ACTIVE_AGENT_STATES, type AgentState } from "../../../shared/types/agent";
 
 /**
  * #11790 moved a cached view backing a live MCP session binding into the LAST
@@ -55,8 +55,8 @@ const PROJECT_C = "project-C";
 const CACHE_LIMIT_ARRANGED = 3;
 const CACHE_LIMIT_TRIGGER = 2;
 
-/** Passed into the main process: `hasActiveAgent`'s own set, not a copy of it. */
-const ACTIVE_STATES: string[] = Array.from(ACTIVE_AGENT_STATES);
+/** Values from `hasActiveAgent`'s source-of-truth set, serialized into main. */
+const ACTIVE_STATES: AgentState[] = Array.from(ACTIVE_AGENT_STATES);
 
 interface McpEndpoint {
   port: number;
@@ -170,10 +170,14 @@ interface PvmViewProbe {
    */
   activeAgent: boolean;
   /**
-   * A registered assistant backend — the one HARD floor, checked before the
-   * bound-session tier, so it would remove A from the candidate list outright.
+   * A registered assistant backend. Deliberately stronger than the hard floor
+   * it stands in for: `hasLiveAssistantBackend` also wants a live PTY and a
+   * matching WebContents, so a record alone protects nothing. Nothing in this
+   * spec provisions a help session, so any record at all is setup
+   * contamination worth failing on — and a real one would take A out of the
+   * candidate list before the tier under test ever ran.
    */
-  assistantBackend: boolean;
+  assistantBackendRegistered: boolean;
 }
 
 interface PvmProbe {
@@ -202,7 +206,7 @@ type ProbedPvm = {
     wc: Electron.WebContents
   ) => { liveBinding: boolean; dispatchLease: boolean; unknown: boolean };
   projectByTerminal: Map<string, string>;
-  agentStateByTerminal: Map<string, string>;
+  agentStateByTerminal: Map<string, AgentState>;
   assistantBackendForProject?: (projectId: string) => unknown;
 };
 
@@ -233,7 +237,7 @@ async function readPvmState(app: AppContext["app"]): Promise<PvmProbe> {
           dispatchLease: mcp.dispatchLease,
           unknown: mcp.unknown,
           activeAgent: activeAgentProjects.has(entry.projectId),
-          assistantBackend: pvm.assistantBackendForProject?.(entry.projectId) != null,
+          assistantBackendRegistered: pvm.assistantBackendForProject?.(entry.projectId) != null,
         };
       }),
     };
@@ -255,8 +259,8 @@ interface PvmConfigureResult {
 
 /**
  * Arm the PVM and trigger the eviction pass, in one synchronous main-process
- * block so nothing can land between the two. Both measures below are test
- * isolation around the seam, not substitutes for it: the tier assignment under
+ * block so nothing can land between the two. Every measure below is test
+ * isolation around the seam, not a substitute for it: the tier assignment under
  * test still runs unmodified, against real views and a real MCP session.
  *
  * 1. `setLowMemoryFreeThresholdMb(null)` closes the periodic sampler's pressure
@@ -275,10 +279,19 @@ interface PvmConfigureResult {
  *    missing A instead would mask the exact regression the negative control
  *    proves this catches.
  *
- * 2. `ResourceProfileService.applyCurrentProfileTo()` re-arms the pressure
- *    policy from a deferred init task and on every profile transition, so a
- *    threshold nulled once at setup can be quietly overwritten later. It is
- *    re-asserted here — and read back — on every call rather than once.
+ * 2. `maybeEvictUnderPressure` is the sampler's own entry point, on a 30s
+ *    jittered tick. A null policy already makes it a no-op, but only for as
+ *    long as the null holds: if measure 3 loses its race the tick becomes a
+ *    live "pressure" pass that can take A or B between the arrangement and the
+ *    trigger, and the premise below would then fail an eviction the product
+ *    got right. Stubbed for the same reason and by the same mechanism as the
+ *    forced reclaim above.
+ *
+ * 3. `ResourceProfileService.applyCurrentProfileTo()` re-arms the pressure
+ *    policy from a deferred init task, so a threshold nulled once at setup can
+ *    be quietly overwritten later. (Profile transitions deliberately do NOT
+ *    re-push it — that block names this very escape hatch.) It is re-asserted
+ *    here — and read back — on every call rather than once.
  */
 async function configurePvm(app: AppContext["app"], limit: number): Promise<PvmConfigureResult> {
   return app.evaluate((_electron, n) => {
@@ -290,12 +303,14 @@ async function configurePvm(app: AppContext["app"], limit: number): Promise<PvmC
           setLowMemoryFreeThresholdMb: (mb: number | null) => void;
           getLowMemoryFreeThresholdMb: () => number | null;
           reclaimCachedViewsUnderPressure: () => number;
+          maybeEvictUnderPressure: () => void;
         })
       | null
       | undefined;
     if (!pvm) throw new Error("[bound-view-eviction] __daintreeGetPvm returned no manager");
 
     pvm.reclaimCachedViewsUnderPressure = () => 0;
+    pvm.maybeEvictUnderPressure = () => {};
     pvm.setLowMemoryFreeThresholdMb(null);
     const lowMemoryFloorMb = pvm.getLowMemoryFreeThresholdMb();
     const before = pvm.getAllViews().map((entry) => entry.projectId);
@@ -428,11 +443,16 @@ test.describe.serial("MCP: a bound session's view outranks LRU under eviction (#
       "A is not the LRU-oldest cached view, so this run never posed the question"
     ).toBeLessThan(lastUsed[projectIdB]);
     // Nothing is protected: a stray binding, an in-flight lease, a throwing
-    // activity callback, an active agent, or an assistant backend would each
-    // deprioritize a view and decide this for us.
+    // activity callback, an active agent, or a registered assistant backend
+    // would each deprioritize a view and decide this for us.
     expect(
       before.views.filter(
-        (v) => v.liveBinding || v.dispatchLease || v.unknown || v.activeAgent || v.assistantBackend
+        (v) =>
+          v.liveBinding ||
+          v.dispatchLease ||
+          v.unknown ||
+          v.activeAgent ||
+          v.assistantBackendRegistered
       ),
       "a view was already protected before the control ran"
     ).toEqual([]);
@@ -491,15 +511,15 @@ test.describe.serial("MCP: a bound session's view outranks LRU under eviction (#
         dispatchLease: viewA?.dispatchLease,
         unknown: viewA?.unknown,
         activeAgent: viewA?.activeAgent,
-        assistantBackend: viewA?.assistantBackend,
+        assistantBackendRegistered: viewA?.assistantBackendRegistered,
       },
-      "A is protected by something other than its live binding, so surviving would not be attributable to #11790"
+      "A carries something beyond its live binding, so surviving would not be attributable to #11790 alone"
     ).toEqual({
       liveBinding: true,
       dispatchLease: false,
       unknown: false,
       activeAgent: false,
-      assistantBackend: false,
+      assistantBackendRegistered: false,
     });
     const viewB = before.views.find((v) => v.projectId === projectIdB);
     expect(
@@ -508,7 +528,7 @@ test.describe.serial("MCP: a bound session's view outranks LRU under eviction (#
         dispatchLease: viewB?.dispatchLease,
         unknown: viewB?.unknown,
         activeAgent: viewB?.activeAgent,
-        assistantBackend: viewB?.assistantBackend,
+        assistantBackendRegistered: viewB?.assistantBackendRegistered,
       },
       "B is not an unprotected candidate, so its eviction would not be attributable to A's binding"
     ).toEqual({
@@ -516,7 +536,7 @@ test.describe.serial("MCP: a bound session's view outranks LRU under eviction (#
       dispatchLease: false,
       unknown: false,
       activeAgent: false,
-      assistantBackend: false,
+      assistantBackendRegistered: false,
     });
     console.log("[bound-view-eviction] bound before", JSON.stringify(before));
 
