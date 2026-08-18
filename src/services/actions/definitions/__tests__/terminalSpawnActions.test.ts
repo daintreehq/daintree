@@ -96,6 +96,7 @@ function setPanelState(options: {
   lastClosedConfig?: AddPanelOptions | null;
   restoreLastTrashed?: ReturnType<typeof vi.fn>;
   activateTerminal?: ReturnType<typeof vi.fn>;
+  moveToNewWorktree?: ReturnType<typeof vi.fn>;
 }) {
   const panels = options.panels ?? [];
   const panelsById: Record<string, MockPanel> = {};
@@ -108,6 +109,7 @@ function setPanelState(options: {
     lastClosedConfig: options.lastClosedConfig ?? null,
     restoreLastTrashed: options.restoreLastTrashed ?? vi.fn().mockReturnValue(false),
     activateTerminal: options.activateTerminal ?? vi.fn(),
+    moveToNewWorktree: options.moveToNewWorktree ?? vi.fn(),
   });
 }
 
@@ -695,6 +697,45 @@ describe("terminal.reopenLast journal fallback", () => {
 
     expect(activateTerminal).not.toHaveBeenCalled();
     expect(addPanel).toHaveBeenCalledWith(resumeOptions);
+  });
+});
+
+describe("terminal.moveToNewWorktree", () => {
+  it("delegates to the store's create-and-move method", async () => {
+    const moveToNewWorktree = vi.fn();
+    setPanelState({
+      panels: [{ id: "p1", location: "grid", worktreeId: "wt-1" }],
+      moveToNewWorktree,
+    });
+    const run = setupActions();
+
+    await run("terminal.moveToNewWorktree", { terminalId: "p1" });
+
+    expect(moveToNewWorktree).toHaveBeenCalledExactlyOnceWith("p1");
+  });
+
+  it("falls back to the focused panel when no terminal id is supplied", async () => {
+    const moveToNewWorktree = vi.fn();
+    setPanelState({
+      focusedId: "p-focused",
+      panels: [{ id: "p-focused", location: "grid", worktreeId: "wt-1" }],
+      moveToNewWorktree,
+    });
+    const run = setupActions();
+
+    await run("terminal.moveToNewWorktree", undefined);
+
+    expect(moveToNewWorktree).toHaveBeenCalledExactlyOnceWith("p-focused");
+  });
+
+  it("does nothing when there is no panel to move", async () => {
+    const moveToNewWorktree = vi.fn();
+    setPanelState({ panels: [], moveToNewWorktree });
+    const run = setupActions();
+
+    await run("terminal.moveToNewWorktree", {});
+
+    expect(moveToNewWorktree).not.toHaveBeenCalled();
   });
 });
 

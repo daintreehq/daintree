@@ -102,10 +102,9 @@ const PTY_FIELD_CLASSIFICATION = {
   runtimeStatus: false,
   flowStatusTimestamp: false,
   isInputLocked: false,
-  // "Move panel only" consent for a cross-worktree move (#11840) — persisted:
-  // restore relaunches at the saved cwd, so the divergence it acknowledges
-  // outlives the session that recorded it.
-  worktreeMoveOptOut: true,
+  // Cross-worktree move prompt (#11853) — NOT persisted: it asks the user to
+  // say something to a running agent, and that agent is gone after a restart.
+  worktreeMoveNotice: false,
   browserUrl: false,
   browserHistory: false,
   browserZoom: false,
@@ -407,15 +406,7 @@ const terminalFixture: PtySerializeInput = {
   fallbackChainIndex: 1,
   agentState: "idle",
   lastStateChange: 1_700_000_000_000,
-  worktreeMoveOptOut: {
-    acknowledgedCwd: "/home/project",
-    acknowledgedWorktreeId: "wt-feature",
-    acknowledgedAlignment: "launch-root-mismatch",
-    launchCwd: "/home/project",
-    launchWorktreeId: "wt-main",
-    sourceHeadOid: "abc123",
-    at: 1_700_000_000_000,
-  },
+  worktreeMoveNotice: { destinationWorktreeId: "wt-feature" },
   createdAt: 1_700_000_000_000,
   lastActiveAt: 1_700_000_000_001,
 };

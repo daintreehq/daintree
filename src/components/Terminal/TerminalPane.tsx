@@ -100,6 +100,8 @@ import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { isPtyPanel } from "@shared/types/panel";
 import { useSessionLostBanner } from "./useSessionLostBanner";
+import { useWorktreeMoveBanner } from "./useWorktreeMoveBanner";
+import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -425,6 +427,7 @@ function TerminalPaneComponent({
   const clearReconnectError = usePanelStore((state) => state.clearReconnectError);
   const clearScrollbackRestoreError = usePanelStore((state) => state.clearScrollbackRestoreError);
   const sessionLostBanner = useSessionLostBanner(id);
+  const worktreeMoveBanner = useWorktreeMoveBanner(id);
 
   const cliDetails = useCliAvailabilityStore((state) => state.details);
   const getPanelCliDetail = (): AgentCliDetail | undefined => {
@@ -1416,6 +1419,14 @@ function TerminalPaneComponent({
             icon: RotateCcw,
             onClick: resetForceResumeQueue,
           }}
+        />
+      </BannerSlot>
+
+      <BannerSlot visible={worktreeMoveBanner.visible}>
+        <WorktreeMoveBanner
+          destinationPath={worktreeMoveBanner.destinationPath}
+          onTell={worktreeMoveBanner.tell}
+          onDismiss={worktreeMoveBanner.dismiss}
         />
       </BannerSlot>
 

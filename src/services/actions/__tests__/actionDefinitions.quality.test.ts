@@ -659,7 +659,6 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.restart",
   "terminal.restartAll",
   "terminal.arm",
-  "terminal.moveToWorktree",
   "worktree.delete",
   "worktree.sessions.endAll",
   "worktree.sessions.trashAll",
@@ -751,11 +750,6 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // fleet ribbon (which calls the store directly, not ActionService), so there
   // is no user-facing dispatch path to co-locate a ConfirmDialog with.
   "terminal.arm",
-  // Three-way decision (transfer / move panel only / cancel), so the surface is
-  // WorktreeMoveDecisionDialog rather than a ConfirmDialog (#11840). Requested
-  // from the crossWorktreeMove choke point every gesture funnels through, which
-  // is what keeps the drag and context-menu paths from drifting apart.
-  "terminal.moveToWorktree",
   // Agent-dispatch only — no user-side ConfirmDialog. danger:"confirm" gates MCP/agent
   // dispatch only; user dispatch of recipe.run is intentionally ungated.
   "recipe.run",

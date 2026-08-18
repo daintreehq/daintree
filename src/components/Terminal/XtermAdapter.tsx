@@ -15,7 +15,6 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { writeTerminalInputOrFleet } from "@/services/terminal/fleetInputRouter";
 import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelClose";
 import { useTerminalAppearance } from "@/hooks/useTerminalAppearance";
-import { useWorktreeMoveDecisionStore } from "@/store/worktreeMoveDecisionStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
@@ -183,12 +182,7 @@ export function XtermAdapter({
     detectedAgentId,
     agentState,
   });
-  // The hook already withholds the state while locked; this keeps the render
-  // side honest if that ever changes.
-  const decisionInputLocked = useWorktreeMoveDecisionStore((state) =>
-    state.lockedPanelIds.has(terminalId)
-  );
-  const showFileDropOverlay = isDragOverFiles && !isInputLocked && !decisionInputLocked;
+  const showFileDropOverlay = isDragOverFiles && !isInputLocked;
 
   const hasVisibleBufferContent = useCallback(() => {
     const managed = terminalInstanceService.get(terminalId);
@@ -709,14 +703,9 @@ export function XtermAdapter({
     terminalInstanceService.updateOptions(terminalId, delta);
   }, [terminalId, terminalOptions]);
 
-  // A cross-worktree move holds input until the user resolves the decision
-  // (#11840). That hold is ephemeral and never persisted, so it has to be OR'd
-  // in here — otherwise this effect re-applies the panel's stored value on
-  // mount and releases the hold on the very remount that following the
-  // destination causes.
   useLayoutEffect(() => {
-    terminalInstanceService.setInputLocked(terminalId, !!isInputLocked || decisionInputLocked);
-  }, [terminalId, isInputLocked, decisionInputLocked]);
+    terminalInstanceService.setInputLocked(terminalId, !!isInputLocked);
+  }, [terminalId, isInputLocked]);
 
   // Resolve current tier on every render. The provider identity is intentionally
   // stable, while the store state it reads changes as activity/runtime status

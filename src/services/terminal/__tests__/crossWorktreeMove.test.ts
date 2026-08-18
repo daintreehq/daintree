@@ -3,7 +3,7 @@ import type { PanelLocation, PtyPanelData } from "@shared/types/panel";
 import type { DeletedWorktree } from "@/store/worktreeStore";
 
 vi.mock("@/clients", () => ({
-  terminalClient: { resize: vi.fn() },
+  terminalClient: { resize: vi.fn(), submit: vi.fn().mockResolvedValue(undefined) },
   agentSettingsClient: { get: vi.fn().mockResolvedValue(null) },
   appClient: { setState: vi.fn().mockResolvedValue(undefined) },
 }));
@@ -18,6 +18,9 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     getInstance: vi.fn(),
     setInputLocked: vi.fn(),
     captureBufferText: vi.fn().mockReturnValue(""),
+    getAgentState: vi.fn().mockReturnValue("working"),
+    addAgentStateListener: vi.fn().mockReturnValue(() => {}),
+    addExitListener: vi.fn().mockReturnValue(() => {}),
   },
 }));
 
@@ -43,10 +46,9 @@ const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
 const { moveTerminalToWorktreeAndFollowRescue } = await import("../crossWorktreeMove");
 
 /**
- * An exited terminal. The launch-root decision only engages for a live process
- * (#11840), so this keeps the rescue-follow suite testing selection semantics
- * rather than the decision gate. Live-panel behaviour has its own suite in
- * `worktreeMoveDecision.test.ts`.
+ * An exited terminal. A dead panel never raises the move notice, so this keeps
+ * the rescue-follow suite testing selection semantics on their own. Live-panel
+ * reconciliation has its own describe block below.
  */
 function panel(id: string, worktreeId: string, location: PanelLocation = "grid"): PtyPanelData {
   return {
@@ -92,6 +94,30 @@ function deletedRow(id: string): DeletedWorktree {
 function setLiveWorktrees(ids: string[]): void {
   liveWorktrees.clear();
   for (const id of ids) liveWorktrees.set(id, { id });
+}
+
+/** Live worktrees with real paths, so launch-root classification can resolve. */
+function setWorktreesWithPaths(entries: { id: string; path: string }[]): void {
+  liveWorktrees.clear();
+  for (const entry of entries) liveWorktrees.set(entry.id, entry);
+}
+
+/** A running agent pane launched in `cwd`. */
+function agentPanel(id: string, worktreeId: string, cwd: string): PtyPanelData {
+  return {
+    ...panel(id, worktreeId),
+    cwd,
+    runtimeStatus: "running",
+    agentState: "working",
+    launchAgentId: "claude",
+  };
+}
+
+function noticeOf(id: string): string | undefined {
+  const p = usePanelStore.getState().panelsById[id];
+  return p && "worktreeMoveNotice" in p
+    ? (p as PtyPanelData).worktreeMoveNotice?.destinationWorktreeId
+    : undefined;
 }
 
 /**
@@ -345,5 +371,152 @@ describe("moveTerminalToWorktreeAndFollowRescue", () => {
     moveTerminalToWorktreeAndFollowRescue("ghost", "wt-b");
 
     expect(usePanelStore.getState().focusedId).toBe("t1");
+  });
+});
+
+describe("moveTerminalToWorktreeAndFollowRescue — move notice (#11853)", () => {
+  const WORKTREES = [
+    { id: "wt-a", path: "/repo/wt-a" },
+    { id: "wt-b", path: "/repo/wt-b" },
+  ];
+
+  beforeEach(() => {
+    setWorktreesWithPaths(WORKTREES);
+  });
+
+  it("raises the notice on a live agent left off its launch root", () => {
+    seedPanels([agentPanel("t1", "wt-a", "/repo/wt-a")]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(noticeOf("t1")).toBe("wt-b");
+  });
+
+  it("raises the notice when the launch root cannot be classified at all", () => {
+    // `unknown` is not proof of alignment — treating "can't prove it" as "it's
+    // fine" is the silence this feature exists to end.
+    seedPanels([agentPanel("t1", "wt-a", "/somewhere/else")]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(noticeOf("t1")).toBe("wt-b");
+  });
+
+  it("raises no notice for a plain shell pane", () => {
+    // Injecting "please continue in ..." at a shell prompt just types junk.
+    const shell: PtyPanelData = { ...agentPanel("t1", "wt-a", "/repo/wt-a") };
+    delete shell.launchAgentId;
+    seedPanels([shell]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(noticeOf("t1")).toBeUndefined();
+  });
+
+  it("raises no notice when the agent is already running in the destination", () => {
+    seedPanels([agentPanel("t1", "wt-a", "/repo/wt-b")]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(noticeOf("t1")).toBeUndefined();
+  });
+
+  it("realigns an exited pane's next launch instead of raising a notice", () => {
+    seedPanels([{ ...panel("t1", "wt-a"), cwd: "/repo/wt-a" }]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(noticeOf("t1")).toBeUndefined();
+    expect(usePanelStore.getState().panelsById["t1"]?.cwd).toBe("/repo/wt-b");
+  });
+
+  it("leaves an exited pane's custom cwd alone when it maps to no worktree", () => {
+    // Re-homing an `unknown` cwd would silently relocate a shell the user
+    // deliberately launched outside every worktree.
+    seedPanels([{ ...panel("t1", "wt-a"), cwd: "/somewhere/else" }]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(usePanelStore.getState().panelsById["t1"]?.cwd).toBe("/somewhere/else");
+  });
+
+  it("retargets the notice when a second move lands before the first is answered", () => {
+    setWorktreesWithPaths([...WORKTREES, { id: "wt-c", path: "/repo/wt-c" }]);
+    seedPanels([agentPanel("t1", "wt-a", "/repo/wt-a")]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-c");
+
+    expect(noticeOf("t1")).toBe("wt-c");
+  });
+
+  it("clears the notice when the panel is dragged back to its launch worktree", () => {
+    seedPanels([agentPanel("t1", "wt-a", "/repo/wt-a")]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+    expect(noticeOf("t1")).toBe("wt-b");
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-a");
+
+    expect(noticeOf("t1")).toBeUndefined();
+  });
+
+  it("gives every member of a moved tab group its own notice", () => {
+    // Per panel, never per group — one click must not message four agents.
+    seedPanels([agentPanel("t1", "wt-a", "/repo/wt-a"), agentPanel("t2", "wt-a", "/repo/wt-a")]);
+    usePanelStore.setState({
+      tabGroups: new Map([
+        [
+          "g1",
+          {
+            id: "g1",
+            location: "grid" as const,
+            worktreeId: "wt-a",
+            activeTabId: "t1",
+            panelIds: ["t1", "t2"],
+          },
+        ],
+      ]),
+    });
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(noticeOf("t1")).toBe("wt-b");
+    expect(noticeOf("t2")).toBe("wt-b");
+  });
+
+  it("classifies a mixed group per member", () => {
+    const dead = { ...panel("t2", "wt-a"), cwd: "/repo/wt-a" };
+    seedPanels([agentPanel("t1", "wt-a", "/repo/wt-a"), dead]);
+    usePanelStore.setState({
+      tabGroups: new Map([
+        [
+          "g1",
+          {
+            id: "g1",
+            location: "grid" as const,
+            worktreeId: "wt-a",
+            activeTabId: "t1",
+            panelIds: ["t1", "t2"],
+          },
+        ],
+      ]),
+    });
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(noticeOf("t1")).toBe("wt-b");
+    expect(noticeOf("t2")).toBeUndefined();
+    expect(usePanelStore.getState().panelsById["t2"]?.cwd).toBe("/repo/wt-b");
+  });
+
+  it("never locks input or changes the active worktree on an ordinary move", () => {
+    // The whole point of #11853: the gesture stays instant.
+    seedPanels([agentPanel("t1", "wt-a", "/repo/wt-a")]);
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-a" });
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(usePanelStore.getState().panelsById["t1"]?.isInputLocked).toBeFalsy();
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-a");
   });
 });
