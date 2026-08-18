@@ -17,6 +17,7 @@ import { agentSettingsClient, systemClient } from "@/clients";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { getWorktreePathIndex } from "@/store/storeAccessors";
+import { classifyLaunchRootAlignment } from "@/utils/worktreeAlignment";
 import {
   buildAgentLaunchFlagsForRuntimeSettings,
   resolveAgentRuntimeSettings,
@@ -163,21 +164,35 @@ function buildDevPreviewOptions(panel: import("@shared/types/panel").DevPreviewP
 
 /**
  * Working directory for a panel that inherits its worktree rather than choosing
- * one. A duplicate or reopened panel is a brand new process, so it belongs in
- * the worktree it is filed under — not whatever directory the source process
- * happened to still be running in after a cross-worktree drag (#11854).
+ * one. A duplicate is a brand new process, so it belongs in the worktree it is
+ * filed under — not the directory the source process kept after a cross-worktree
+ * drag left `cwd` and `worktreeId` pointing at different worktrees (#11854).
+ *
+ * Only a genuine mismatch is rerooted. A launch root already inside the filed
+ * worktree is left alone, because a subdirectory is a deliberate choice there —
+ * `UpdateCwdDialog` and an explicit `terminal.spawn` cwd both produce one, and
+ * collapsing them to the worktree root would discard what the user picked.
+ * `classifyLaunchRootAlignment` makes that call segment-aware, so it survives
+ * nested worktrees and Windows separators where `startsWith` would not.
  *
  * Takes the filing id and the inherited fallback together so no branch can
  * resolve one without the other. Soft-degrades to the inherited `cwd` when the
  * panel has no worktree, no view store is mounted, or the id no longer resolves:
  * the id is inherited rather than asserted by a caller, so a stale one must not
- * fail the launch (#11655). Never throws — `buildPanelSnapshotOptions` runs
- * inside `trashPanel`.
+ * fail the launch (#11655).
  */
 export function resolveInheritedPanelCwd(panel: { cwd?: string; worktreeId?: string }): string {
   const fallback = panel.cwd || "";
   if (!panel.worktreeId) return fallback;
-  return getWorktreePathIndex()?.get(panel.worktreeId) ?? fallback;
+
+  const index = getWorktreePathIndex();
+  const filedPath = index?.get(panel.worktreeId);
+  if (!index || !filedPath) return fallback;
+
+  const worktrees = Array.from(index, ([id, path]) => ({ id, path }));
+  return classifyLaunchRootAlignment(fallback, worktrees, panel.worktreeId) === "aligned"
+    ? fallback
+    : filedPath;
 }
 
 /**
@@ -185,6 +200,13 @@ export function resolveInheritedPanelCwd(panel: { cwd?: string; worktreeId?: str
  * Copies the same fields as buildPanelDuplicateOptions but preserves the
  * existing command verbatim (no async agent command regeneration).
  * Does not include location — callers inject it at use time.
+ *
+ * Keeps `cwd` verbatim rather than resolving it against `worktreeId` the way
+ * `buildPanelDuplicateOptions` does. This snapshot is stored and reopened much
+ * later, so resolving here would freeze one answer and destroy the fallback the
+ * late resolve needs: if the filed worktree is deleted between trash and reopen,
+ * a baked-in path points at the deleted worktree while the untouched `cwd` still
+ * points somewhere real. `terminal.duplicate` resolves at reopen instead (#11854).
  *
  * Called synchronously from `trashPanel` / `trashPanelGroup` — must not throw.
  * Returns `null` for broken agent-running terminals (missing `command` or
@@ -210,7 +232,7 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       // Reopen-last restores the same terminal — the ownership rung carries
       // verbatim so a renamed title stays pinned across close/reopen.
       titleMode: panel.titleMode,
-      cwd: resolveInheritedPanelCwd(panel),
+      cwd: panel.cwd || "",
       worktreeId: panel.worktreeId,
       exitBehavior: panel.exitBehavior,
       isInputLocked: panel.isInputLocked,
@@ -236,7 +258,7 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
   if (isDevPreviewPanel(panel)) {
     return {
       kind: "dev-preview",
-      cwd: resolveInheritedPanelCwd(panel),
+      cwd: panel.cwd || "",
       worktreeId: panel.worktreeId,
       exitBehavior: panel.exitBehavior,
       ...buildDevPreviewOptions(panel),
@@ -256,7 +278,7 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       launchAgentId: panel.launchAgentId,
       title: panel.title,
       titleMode: panel.titleMode,
-      cwd: resolveInheritedPanelCwd(panel),
+      cwd: panel.cwd || "",
       worktreeId: panel.worktreeId,
       exitBehavior: panel.exitBehavior,
       isInputLocked: panel.isInputLocked,

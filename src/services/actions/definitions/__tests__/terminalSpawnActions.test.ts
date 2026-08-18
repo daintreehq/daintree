@@ -318,11 +318,21 @@ describe("terminal.duplicate (copy) suffix", () => {
   });
 
   it("re-derives a reopened panel's cwd from the worktree it ends up filed under", async () => {
-    const addPanel = vi.fn().mockResolvedValue(undefined);
+    // Snapshot the cwd as `addPanel` saw it: production hands the same object to
+    // the resolver and to `addPanel`, so inspecting the retained reference would
+    // still show a corrected value even if the two statements were swapped.
+    let cwdAtAddPanel: string | undefined;
+    const addPanel = vi.fn((options: AddPanelOptions) => {
+      cwdAtAddPanel = options.cwd;
+      return Promise.resolve(undefined);
+    });
     const pathsByWorktree: Record<string, string> = { "wt-1": "/worktrees/active" };
+    let worktreeIdAtResolve: string | undefined;
     resolveInheritedPanelCwdMock.mockImplementation(
-      (panel: { cwd?: string; worktreeId?: string }) =>
-        (panel.worktreeId && pathsByWorktree[panel.worktreeId]) || panel.cwd || ""
+      (panel: { cwd?: string; worktreeId?: string }) => {
+        worktreeIdAtResolve = panel.worktreeId;
+        return (panel.worktreeId && pathsByWorktree[panel.worktreeId]) || panel.cwd || "";
+      }
     );
     setPanelState({
       panels: [],
@@ -336,29 +346,54 @@ describe("terminal.duplicate (copy) suffix", () => {
     await run("terminal.duplicate");
 
     // The resolver must see the id that actually won, not the snapshot's.
-    expect(resolveInheritedPanelCwdMock).toHaveBeenCalledWith(
-      expect.objectContaining({ worktreeId: "wt-1" })
-    );
-    const opts = addPanel.mock.calls[0]![0] as AddPanelOptions;
-    expect(opts.worktreeId).toBe("wt-1");
-    expect(opts.cwd).toBe(pathsByWorktree["wt-1"]);
+    expect(worktreeIdAtResolve).toBe("wt-1");
+    expect(cwdAtAddPanel).toBe(pathsByWorktree["wt-1"]);
   });
 
-  it("keeps a reopened panel's cwd when its worktree no longer resolves", async () => {
+  it("resolves a reopened panel against its own worktree when the snapshot kept one", async () => {
     const addPanel = vi.fn().mockResolvedValue(undefined);
-    resolveInheritedPanelCwdMock.mockImplementation(
-      (panel: { cwd?: string; worktreeId?: string }) => panel.cwd || ""
-    );
+    let worktreeIdAtResolve: string | undefined;
+    resolveInheritedPanelCwdMock.mockImplementation((panel: { worktreeId?: string }) => {
+      worktreeIdAtResolve = panel.worktreeId;
+      return "/worktrees/saved";
+    });
     setPanelState({
       panels: [],
       addPanel,
-      lastClosedConfig: { kind: "terminal", command: "bash", cwd: "/worktrees/stale" },
+      lastClosedConfig: {
+        kind: "terminal",
+        command: "bash",
+        cwd: "/worktrees/stale",
+        worktreeId: "wt-saved",
+      },
     });
 
     const run = setupActions();
     await run("terminal.duplicate");
 
-    expect((addPanel.mock.calls[0]![0] as AddPanelOptions).cwd).toBe("/worktrees/stale");
+    // A saved id outranks the active worktree, so resolution must key off it.
+    expect(worktreeIdAtResolve).toBe("wt-saved");
+    expect((addPanel.mock.calls[0]![0] as AddPanelOptions).cwd).toBe("/worktrees/saved");
+  });
+
+  it("re-derives a reopened dev-preview's cwd too, since it spawns a dev server", async () => {
+    const addPanel = vi.fn().mockResolvedValue(undefined);
+    resolveInheritedPanelCwdMock.mockReturnValue("/worktrees/active");
+    setPanelState({
+      panels: [],
+      addPanel,
+      lastClosedConfig: {
+        kind: "dev-preview",
+        devCommand: "npm run dev",
+        cwd: "/worktrees/stale",
+      },
+    });
+
+    const run = setupActions();
+    await run("terminal.duplicate");
+
+    expect(resolveInheritedPanelCwdMock).toHaveBeenCalled();
+    expect((addPanel.mock.calls[0]![0] as AddPanelOptions).cwd).toBe("/worktrees/active");
   });
 
   it("leaves a reopened browser panel out of cwd resolution", async () => {
@@ -373,7 +408,6 @@ describe("terminal.duplicate (copy) suffix", () => {
     await run("terminal.duplicate");
 
     expect(resolveInheritedPanelCwdMock).not.toHaveBeenCalled();
-    expect((addPanel.mock.calls[0]![0] as AddPanelOptions).cwd).toBe("");
   });
 
   it("browser panel duplication never carries a (copy)-suffixed title (service omits title)", async () => {
