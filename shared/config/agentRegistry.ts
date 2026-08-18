@@ -241,6 +241,137 @@ export interface AgentPackages {
 }
 
 /**
+ * A shutdown signal that escalates one key press at a time, gated on the
+ * agent's own output rather than on a fixed press count (#11851).
+ *
+ * `shutdownKeySequence` is written exactly once, which is safe only for agents
+ * where one press is either enough or harmless. Codex is neither: while its
+ * Ratatui TUI holds raw mode a Ctrl-C is just a keystroke, but the instant
+ * cooked mode returns the next one is a real SIGINT that kills the process
+ * before it can print its resume hint. Measured on `codex-cli 0.147.0`: two
+ * presses print the hint in 0.76-1.16s depending on state, three print nothing
+ * at all. The press count needed varies with state (leftover composer text
+ * costs one, being mid-turn costs another), so no constant is correct.
+ *
+ * `gateText` is the escape hatch: the TUI prints a confirm-to-quit footer after
+ * an absorbed press, so a fresh match is positive proof the TUI is still alive
+ * and in raw mode — i.e. that the next press is still a keystroke. Send one,
+ * wait for a fresh match, and only then send the next.
+ *
+ * Declaring this REPLACES the `quitCommand` path entirely: no input-clear
+ * prelude, no slash command, no fallback. Writing `quitCommand` after a stalled
+ * escalation would put the very text into the user's transcript that this
+ * exists to keep out.
+ *
+ * Per-agent evidence only. Do not copy this to another agent without measuring
+ * that agent's own TUI — the gate string, the press economics, and the raw-mode
+ * boundary are all specific to the CLI that was measured.
+ */
+export interface AgentGatedKeyEscalation {
+  kind: "gated-key-escalation";
+  /** Raw bytes written per press (e.g. Ctrl-C). */
+  keySequence: string;
+  /**
+   * Literal substring (NOT a regex) matched against ANSI-stripped output
+   * produced since the last press. A literal keeps an unescapable TUI glyph
+   * from silently compiling into a pattern that never matches.
+   */
+  gateText: string;
+  /**
+   * Hard cap on presses. A safety net, not the mechanism — the gate is what
+   * actually decides whether another press is safe. Reaching the cap stops the
+   * escalation but does NOT end the teardown.
+   */
+  maxPresses: number;
+  /**
+   * How long to wait for a fresh `gateText` match after a press. On expiry the
+   * escalation stops and the teardown keeps listening for the session pattern
+   * on its remaining budget — a press that quit the agent outright, or one that
+   * dismissed a modal without redrawing the footer, still gets its hint read.
+   */
+  perPressTimeoutMs: number;
+}
+
+interface AgentSessionIdResumeBase {
+  kind: "session-id";
+  /** Returns CLI args for resuming a captured session (e.g. ["--resume", id]). */
+  args: (sessionId: string) => string[];
+  /**
+   * Regex with a single capture group for the session ID emitted post-quit.
+   *
+   * OMIT when the agent prints no resume hint this tree can match against real
+   * output. An omitted pattern skips the teardown capture loop outright, which
+   * is the honest shape for an agent whose id can't be observed: a fabricated
+   * pattern spends the whole shutdown budget matching nothing and reports
+   * `exited-no-match`, which reads as a broken regex rather than as an agent
+   * that never had a hint to scrape (#11851 — Antigravity, 0 captures in 6).
+   * `resumeLatestArgs` stays available to such an agent as its resume path.
+   */
+  sessionIdPattern?: string;
+  /**
+   * CLI args for resuming the most recent session without a captured ID
+   * (e.g. ["--continue"] for Claude, ["-r", "latest"] for Gemini,
+   * ["resume", "--last"] for Codex). When present, the relaunch path uses
+   * these args as a fallback when `sessionIdPattern` capture missed
+   * (timeout, no match). Scoped to the launch CWD by the underlying CLI.
+   * Omit for agents that have no resume-latest flag.
+   */
+  resumeLatestArgs?: string[];
+  /**
+   * CLI args that ASSIGN a caller-supplied session id at launch, for CLIs
+   * that accept one (e.g. Claude's `--session-id <uuid>`). Declaring this
+   * inverts how the id is obtained (#11782): instead of scraping it out of
+   * the TUI during teardown, Daintree mints the id up front and hands it to
+   * the CLI, so the id is known before the session exists.
+   *
+   * That removes the scrape's whole failure surface for this agent. The
+   * teardown scrape only works when the agent is idle and unblocked at the
+   * exact moment we tear it down — a mid-turn agent swallows `quitCommand`
+   * as chat text, a modal (trust/approval prompt) eats the keystrokes, and
+   * an empty session exits without printing a hint at all. A pre-assigned
+   * id also survives the paths the scrape can never reach: force quit, a
+   * crash, a SIGKILL, or a pty-host death, none of which run a teardown.
+   *
+   * ONE-SHOT, NOT IDEMPOTENT. The id may only be assigned when creating a
+   * NEW conversation — re-sending an already-used id is an error, not a
+   * resume (`claude --session-id <used>` exits with "Session ID <id> is
+   * already in use"). Resuming that conversation later goes through
+   * {@link AgentResume.args} (`--resume <id>`), which reuses the original
+   * id rather than minting a new one. So: assign once at fresh launch,
+   * resume by id forever after, and mint a DISTINCT id for a duplicated
+   * pane (see `buildAssignedSessionIdArgs`).
+   *
+   * Omit for CLIs that only hand out their own ids — those keep the
+   * `sessionIdPattern` teardown scrape as their sole capture path.
+   */
+  assignSessionIdArgs?: (sessionId: string) => string[];
+}
+
+/**
+ * `session-id` resume, with its shutdown protocol as a closed choice: EITHER
+ * the structured gated escalation OR the one-shot `quitCommand` (plus optional
+ * `shutdownKeySequence`) that every other scrape agent uses. The two are
+ * mutually exclusive at the type level because combining them is always a bug —
+ * a gated Ctrl-C exists precisely to avoid writing a slash command, so a config
+ * carrying both would defeat itself on the fallback path.
+ */
+export type AgentSessionIdResume = AgentSessionIdResumeBase &
+  (
+    | {
+        shutdownSignal: AgentGatedKeyEscalation;
+        quitCommand?: never;
+        shutdownKeySequence?: never;
+      }
+    | {
+        shutdownSignal?: never;
+        /** Command sent to the running agent to trigger graceful exit (e.g. "/quit"). */
+        quitCommand: string;
+        /** Optional raw key sequence sent before `quitCommand` (e.g. Ctrl-C). */
+        shutdownKeySequence?: string;
+      }
+  );
+
+/**
  * Discriminated union describing how an agent's prior session can be resumed.
  * The `kind` field selects the shape:
  *
@@ -259,58 +390,12 @@ export interface AgentPackages {
  *
  * `quitCommand` and `shutdownKeySequence` apply to all kinds — the PTY host
  * sends the quit command (or the key sequence, if provided) on graceful
- * shutdown. `sessionIdPattern` applies only to `session-id` and is the only
- * field that triggers the PTY host's pattern-match capture loop.
+ * shutdown. `sessionIdPattern` and `shutdownSignal` apply only to `session-id`;
+ * `sessionIdPattern` is the only field that triggers the PTY host's
+ * pattern-match capture loop.
  */
 export type AgentResume =
-  | {
-      kind: "session-id";
-      /** Returns CLI args for resuming a captured session (e.g. ["--resume", id]). */
-      args: (sessionId: string) => string[];
-      /** Command sent to the running agent to trigger graceful exit (e.g. "/quit"). */
-      quitCommand: string;
-      /** Regex with a single capture group for the session ID emitted post-quit. */
-      sessionIdPattern: string;
-      /** Optional raw key sequence sent before `quitCommand` (e.g. Ctrl-C). */
-      shutdownKeySequence?: string;
-      /**
-       * CLI args for resuming the most recent session without a captured ID
-       * (e.g. ["--continue"] for Claude, ["-r", "latest"] for Gemini,
-       * ["resume", "--last"] for Codex). When present, the relaunch path uses
-       * these args as a fallback when `sessionIdPattern` capture missed
-       * (timeout, no match). Scoped to the launch CWD by the underlying CLI.
-       * Omit for agents that have no resume-latest flag.
-       */
-      resumeLatestArgs?: string[];
-      /**
-       * CLI args that ASSIGN a caller-supplied session id at launch, for CLIs
-       * that accept one (e.g. Claude's `--session-id <uuid>`). Declaring this
-       * inverts how the id is obtained (#11782): instead of scraping it out of
-       * the TUI during teardown, Daintree mints the id up front and hands it to
-       * the CLI, so the id is known before the session exists.
-       *
-       * That removes the scrape's whole failure surface for this agent. The
-       * teardown scrape only works when the agent is idle and unblocked at the
-       * exact moment we tear it down — a mid-turn agent swallows `quitCommand`
-       * as chat text, a modal (trust/approval prompt) eats the keystrokes, and
-       * an empty session exits without printing a hint at all. A pre-assigned
-       * id also survives the paths the scrape can never reach: force quit, a
-       * crash, a SIGKILL, or a pty-host death, none of which run a teardown.
-       *
-       * ONE-SHOT, NOT IDEMPOTENT. The id may only be assigned when creating a
-       * NEW conversation — re-sending an already-used id is an error, not a
-       * resume (`claude --session-id <used>` exits with "Session ID <id> is
-       * already in use"). Resuming that conversation later goes through
-       * {@link AgentResume.args} (`--resume <id>`), which reuses the original
-       * id rather than minting a new one. So: assign once at fresh launch,
-       * resume by id forever after, and mint a DISTINCT id for a duplicated
-       * pane (see `buildAssignedSessionIdArgs`).
-       *
-       * Omit for CLIs that only hand out their own ids — those keep the
-       * `sessionIdPattern` teardown scrape as their sole capture path.
-       */
-      assignSessionIdArgs?: (sessionId: string) => string[];
-    }
+  | AgentSessionIdResume
   | {
       kind: "rolling-history";
       args: () => string[];

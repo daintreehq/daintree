@@ -1391,6 +1391,7 @@ export class TerminalProcess {
       get isAgentLive() {
         return self.isAgentLive;
       },
+      acquireInputLock: () => this.inputController.acquireShutdownInputLock(),
       kill: (reason) => this.kill(reason),
     });
   }

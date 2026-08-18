@@ -1032,6 +1032,23 @@ export function buildAssignedSessionIdArgs(
  * Whether `agentId` lets Daintree choose the session id at launch, making the
  * teardown scrape unnecessary for it (#11782).
  */
+/**
+ * True when this agent's session id can actually be OBSERVED for a specific
+ * pane — either scraped at teardown via `sessionIdPattern` or minted at launch
+ * via `assignSessionIdArgs`.
+ *
+ * `resume.kind === "session-id"` alone does not imply this. An agent can resume
+ * by exact id (so `args(id)` is meaningful for an id it already holds) while
+ * having no way to learn one in the first place (#11851). Callers that need a
+ * concrete id for THIS pane must gate on this, not on the kind.
+ */
+export function supportsExactSessionCapture(agentId: string | undefined): boolean {
+  if (!agentId) return false;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  if (resume?.kind !== "session-id") return false;
+  return Boolean(resume.sessionIdPattern) || typeof resume.assignSessionIdArgs === "function";
+}
+
 export function supportsSessionIdAssignment(agentId: string | undefined): boolean {
   if (!agentId) return false;
   const resume = getEffectiveAgentConfig(agentId)?.resume;

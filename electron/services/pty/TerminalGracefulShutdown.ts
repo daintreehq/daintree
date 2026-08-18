@@ -1,6 +1,8 @@
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import type { AgentGatedKeyEscalation } from "../../../shared/config/agentRegistry.js";
 import { supportsSessionIdAssignment } from "../../../shared/types/agentSettings.js";
 import { stripAnsiCodes } from "../../../shared/utils/artifactParser.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   GRACEFUL_SHUTDOWN_TIMEOUT_MS,
   GRACEFUL_SHUTDOWN_BUFFER_SIZE,
@@ -16,6 +18,12 @@ const logger = createLogger("pty:TerminalGracefulShutdown");
 export interface TerminalGracefulShutdownHost {
   readonly terminalInfo: TerminalInfo;
   readonly isAgentLive: boolean;
+  /**
+   * Take exclusive ownership of the terminal's input for the teardown and
+   * return the release. Shutdown writes bypass the normal input path, so
+   * anything still draining there would interleave with them (#11851).
+   */
+  acquireInputLock(): () => void;
   kill(reason: string): void;
 }
 
@@ -30,6 +38,13 @@ export interface TerminalGracefulShutdownHost {
  * mid-stream or on the last-chance match at exit doesn't explain anything,
  * because nothing went wrong. Failure stays granular for the opposite reason:
  * each bucket points at a different suspect.
+ *
+ * A stalled gated escalation (#11851) deliberately gets no bucket of its own.
+ * Running out of gate matches or presses stops the ESCALATION, not the
+ * teardown: the remaining budget is still spent listening, so the terminal
+ * ends on whichever of `captured` / `exited-no-match` / `timeout` it earns.
+ * How far the escalation got rides the same log line as `pressesSent` instead,
+ * which keeps every outcome a distinct branch.
  *
  * `preassigned` is a third thing: not a capture that succeeded but a capture
  * that was never needed, because the id was chosen at launch (#11782). It stays
@@ -51,7 +66,9 @@ export type GracefulShutdownOutcome =
   | "prelude-write-failed"
   | "demoted-during-clear-delay"
   | "demoted-during-submit-delay"
-  | "quit-signal-write-failed";
+  | "demoted-during-gated-signal"
+  | "quit-signal-write-failed"
+  | "gated-signal-write-failed";
 
 /**
  * Issue the agent's `quitCommand` / `shutdownKeySequence`, optionally wait
@@ -84,6 +101,11 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
   // Never log the captured session id itself — it's a resume credential
   // (`--resume <id>`) and `logs.getAll` serves this buffer to agents verbatim.
   // `captured` carries everything the issue asked for.
+  // Presses the gated escalation actually got out (#11851). Zero for every
+  // agent on the `quitCommand` path, which is what makes the field readable:
+  // a Codex line reading `captured` with 1 press and one reading `timeout`
+  // with 3 are different stories, and neither needs its own outcome bucket.
+  let pressesSent = 0;
   const logOutcome = (outcome: GracefulShutdownOutcome, captured: boolean): void => {
     logger.info("Graceful shutdown capture outcome", {
       terminalId: terminal.id,
@@ -91,6 +113,7 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
       agentId: liveAgentId,
       outcome,
       captured,
+      pressesSent,
       elapsedMs: Date.now() - startedAt,
     });
   };
@@ -156,9 +179,15 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
     host.kill("graceful-shutdown");
     return preassignedId;
   }
+  // Structured escalation is `session-id`-only, so the union has to be narrowed
+  // before the field exists. It REPLACES the quit-command path rather than
+  // preceding it: the type makes them mutually exclusive, and falling back to
+  // `quitCommand` after a stalled escalation would write the very text into the
+  // transcript that the escalation exists to keep out (#11851).
+  const shutdownSignal = resume.kind === "session-id" ? resume.shutdownSignal : undefined;
   const quitCommand = resume.quitCommand;
   const shutdownKeySequence = resume.shutdownKeySequence;
-  if (!quitCommand && !shutdownKeySequence) {
+  if (!quitCommand && !shutdownKeySequence && !shutdownSignal) {
     logOutcome("no-quit-signal", false);
     return null;
   }
@@ -167,151 +196,292 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
   );
   const quitSubmitMode = agentConfig?.capabilities?.quitSubmitMode ?? "split-write";
 
-  // Only `session-id` triggers the post-quit pattern-match capture loop —
-  // other kinds (rolling-history, named-target, project-scoped) just send
-  // the quit signal and resolve null. Lesson from #4781: never run the
-  // capture loop for non-`session-id` agents — directory-scoped sessions
-  // (Kiro) don't emit IDs and the ghost regex would either time out or
-  // false-positive on unrelated output.
-  const pattern = resume.kind === "session-id" ? new RegExp(resume.sessionIdPattern) : null;
+  // Only a declared `sessionIdPattern` triggers the post-quit capture loop.
+  // Other kinds (rolling-history, named-target, project-scoped) just send the
+  // quit signal and resolve null. Lesson from #4781: never run the capture loop
+  // for non-`session-id` agents — directory-scoped sessions (Kiro) don't emit
+  // IDs and the ghost regex would either time out or false-positive on
+  // unrelated output. A `session-id` agent that omits the pattern is the same
+  // case (#11851): it resumes by an id this tree can hold but never observes
+  // one being printed, so a pattern would be a ghost regex too.
+  const sessionIdPattern = resume.kind === "session-id" ? resume.sessionIdPattern : undefined;
+  const pattern = sessionIdPattern ? new RegExp(sessionIdPattern) : null;
 
   let shutdownBuffer = "";
   let resolved = false;
 
-  return new Promise<string | null>((resolve) => {
-    // Pre-declared so finish() can dispose them centrally (forward reference).
-    // No-op sentinel keeps disposal safe even on synchronous early-exit paths
-    // before assignment. node-pty's IDisposable scan is idempotent, so the
-    // existing branch-local dispose calls remain harmless double-disposes.
-    let origOnData: { dispose(): void } = { dispose() {} };
-    let origOnExit: { dispose(): void } = { dispose() {} };
+  // Held for the whole teardown so nothing else can write between our bytes,
+  // and released on every exit path by the `finally` below — including a
+  // throwing `host.kill()`, which would otherwise strand the terminal's input.
+  const releaseInputLock = host.acquireInputLock();
+  try {
+    return await new Promise<string | null>((resolve) => {
+      // Pre-declared so finish() can dispose them centrally (forward reference).
+      // No-op sentinel keeps disposal safe even on synchronous early-exit paths
+      // before assignment. node-pty's IDisposable scan is idempotent, so the
+      // existing branch-local dispose calls remain harmless double-disposes.
+      let origOnData: { dispose(): void } = { dispose() {} };
+      let origOnExit: { dispose(): void } = { dispose() {} };
 
-    const finish = (sessionId: string | null, outcome: GracefulShutdownOutcome) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timer);
+      // At most one gate arm is live at a time, created immediately before each
+      // press and settled by the first of: a fresh `gateText` match in
+      // `gateProbe`, its own per-press timer, or `finish()`. `settled` is the
+      // latch that makes Ratatui's full-frame redraws harmless — the footer is
+      // repainted on every tick, so without it one press would keep re-arming
+      // the escalation off a single stale frame.
+      let gateArm: {
+        settled: boolean;
+        timer: NodeJS.Timeout | null;
+        resolve: (matched: boolean) => void;
+      } | null = null;
+      // Output since the CURRENT press only. Reset per press rather than scanned
+      // by offset into `shutdownBuffer`, whose tail truncation would shift any
+      // stored index; accumulating also means a `gateText` split across two PTY
+      // chunks still matches.
+      let gateProbe = "";
 
-      // Dispose listeners before kill() so a synchronous onExit during teardown
-      // can't re-enter this path. Lesson from #4974: order matters in shutdown.
-      origOnData.dispose();
-      origOnExit.dispose();
+      const settleGateArm = (matched: boolean): void => {
+        const arm = gateArm;
+        if (!arm || arm.settled) return;
+        arm.settled = true;
+        if (arm.timer) clearTimeout(arm.timer);
+        gateArm = null;
+        arm.resolve(matched);
+      };
 
-      if (sessionId) {
-        terminal.agentSessionId = sessionId;
-      }
+      const finish = (sessionId: string | null, outcome: GracefulShutdownOutcome) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+        // Unblocks an escalation parked on its gate and clears that press's
+        // timer; the loop re-checks `resolved` after every await, so it stops
+        // rather than sending a press into a process that is already going.
+        settleGateArm(false);
 
-      // Logged before kill() so a throwing kill can't erase the diagnostic, and
-      // after the `resolved` guard so a losing racer never double-logs.
-      logOutcome(outcome, sessionId !== null);
-
-      host.kill("graceful-shutdown");
-      resolve(sessionId);
-    };
-
-    const timer = setTimeout(() => finish(null, "timeout"), GRACEFUL_SHUTDOWN_TIMEOUT_MS);
-
-    origOnData = terminal.ptyProcess.onData((data: string) => {
-      if (resolved) return;
-      if (!pattern) return;
-
-      shutdownBuffer += data;
-      if (shutdownBuffer.length > GRACEFUL_SHUTDOWN_BUFFER_SIZE) {
-        shutdownBuffer = shutdownBuffer.slice(-GRACEFUL_SHUTDOWN_BUFFER_SIZE);
-      }
-
-      const stripped = stripAnsiCodes(shutdownBuffer);
-      const match = pattern.exec(stripped);
-      if (match?.[1]) {
-        // Guard against truncated captures when the PTY delivers the
-        // session-ID line in chunks. Every `sessionIdPattern` ends with a
-        // greedy `[\w-]+` capture group — if that group ends at the buffer
-        // tail, the regex's character class may still be consuming a token
-        // that is mid-arrival. Wait for at least one trailing character
-        // (newline, space, prompt glyph) that confirms the token boundary
-        // has been seen. Without this, Gemini's resume hint can be captured
-        // as "fc1c3a37-2294-4" instead of the full 36-char UUID, leaving
-        // restore-on-restart to hand the agent an invalid identifier.
-        const captureEnd = match.index + match[0].length;
-        if (captureEnd < stripped.length) {
-          finish(match[1], "captured");
-        }
-      }
-    });
-
-    origOnExit = terminal.ptyProcess.onExit(() => {
-      if (!pattern) {
-        finish(null, "exited-no-pattern");
-        return;
-      }
-      const stripped = stripAnsiCodes(shutdownBuffer);
-      const match = pattern.exec(stripped);
-      const sessionId = match?.[1] ?? null;
-      finish(sessionId, sessionId ? "captured" : "exited-no-match");
-    });
-
-    // Clear any partial user input at the agent prompt before issuing the quit command.
-    // Without this prelude, concatenated input (e.g. "half-typed/quit") is treated as a
-    // chat message by the agent and the session-ID line is never emitted. See #5785.
-    //   \x05 — Ctrl-E: move cursor to end of line
-    //   \x15 — Ctrl-U: erase from cursor to beginning of line
-    // ESC is avoided because it navigates/dismisses TUI state in bubbletea and ink CLIs.
-    (async () => {
-      try {
-        terminal.ptyProcess.write("\x05\x15");
-      } catch {
+        // Dispose listeners before kill() so a synchronous onExit during teardown
+        // can't re-enter this path. Lesson from #4974: order matters in shutdown.
         origOnData.dispose();
         origOnExit.dispose();
-        finish(null, "prelude-write-failed");
-        return;
-      }
 
-      await new Promise<void>((r) => setTimeout(r, GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS));
-
-      if (resolved) return;
-
-      // Re-check liveness: if the agent demoted during the clear-delay
-      // window (e.g. user typed /quit milliseconds before shutdown), the
-      // pending write would land in a plain shell.
-      if (!host.isAgentLive) {
-        origOnData.dispose();
-        origOnExit.dispose();
-        finish(null, "demoted-during-clear-delay");
-        return;
-      }
-
-      try {
-        if (shutdownKeySequence) {
-          terminal.ptyProcess.write(shutdownKeySequence);
+        if (sessionId) {
+          terminal.agentSessionId = sessionId;
         }
-        if (quitCommand) {
-          if (quitSubmitMode === "single-write") {
-            // Ink-based TUIs (e.g. Claude Code) require body + Enter in the
-            // same PTY write so the slash-command parser sees them in one
-            // event-loop tick. A non-zero gap is interpreted as deliberate
-            // slow typing, so the command never submits and the
-            // session-ID line is never echoed (issue #6981).
-            terminal.ptyProcess.write(quitCommand + "\r");
-          } else {
-            terminal.ptyProcess.write(quitCommand);
-            await new Promise<void>((r) => setTimeout(r, quitSubmitEnterDelayMs));
 
-            if (resolved) return;
+        // Logged before kill() so a throwing kill can't erase the diagnostic, and
+        // after the `resolved` guard so a losing racer never double-logs.
+        logOutcome(outcome, sessionId !== null);
 
-            if (!host.isAgentLive) {
-              origOnData.dispose();
-              origOnExit.dispose();
-              finish(null, "demoted-during-submit-delay");
-              return;
-            }
+        // A throwing kill must not escape. `finish()` is reached from the
+        // `onData`/`onExit` listeners, so an escaping throw unwinds into
+        // node-pty's emitter instead of this promise — which would then never
+        // settle, stranding the input lock the `finally` below releases and
+        // hanging the caller's own timeout. Swallow it and resolve: the
+        // terminal is still live, and `PtyManager.gracefulKill` already has a
+        // fallback kill for exactly that observation.
+        try {
+          host.kill("graceful-shutdown");
+        } catch (error) {
+          logger.warn("Graceful shutdown kill threw; falling through to the caller", {
+            terminalId: terminal.id,
+            error: formatErrorMessage(error, "kill threw a non-Error"),
+          });
+        }
+        resolve(sessionId);
+      };
 
-            terminal.ptyProcess.write("\r");
+      const timer = setTimeout(() => finish(null, "timeout"), GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+
+      origOnData = terminal.ptyProcess.onData((data: string) => {
+        if (resolved) return;
+
+        // Gate first so the escalation is never starved by an early `return`
+        // below, but settled only after the capture check — a frame that carries
+        // both the footer and the resume hint must resolve as a capture, not as
+        // permission to press again.
+        if (gateArm && shutdownSignal) {
+          gateProbe += data;
+          if (gateProbe.length > GRACEFUL_SHUTDOWN_BUFFER_SIZE) {
+            gateProbe = gateProbe.slice(-GRACEFUL_SHUTDOWN_BUFFER_SIZE);
           }
         }
-      } catch {
-        origOnData.dispose();
-        origOnExit.dispose();
-        finish(null, "quit-signal-write-failed");
-      }
-    })();
-  });
+        const gateMatched =
+          gateArm !== null &&
+          shutdownSignal !== undefined &&
+          stripAnsiCodes(gateProbe).includes(shutdownSignal.gateText);
+
+        if (!pattern) {
+          if (gateMatched) settleGateArm(true);
+          return;
+        }
+
+        shutdownBuffer += data;
+        if (shutdownBuffer.length > GRACEFUL_SHUTDOWN_BUFFER_SIZE) {
+          shutdownBuffer = shutdownBuffer.slice(-GRACEFUL_SHUTDOWN_BUFFER_SIZE);
+        }
+
+        const stripped = stripAnsiCodes(shutdownBuffer);
+        const match = pattern.exec(stripped);
+        if (match?.[1]) {
+          // Guard against truncated captures when the PTY delivers the
+          // session-ID line in chunks. Every `sessionIdPattern` ends with a
+          // greedy `[\w-]+` capture group — if that group ends at the buffer
+          // tail, the regex's character class may still be consuming a token
+          // that is mid-arrival. Wait for at least one trailing character
+          // (newline, space, prompt glyph) that confirms the token boundary
+          // has been seen. Without this, Gemini's resume hint can be captured
+          // as "fc1c3a37-2294-4" instead of the full 36-char UUID, leaving
+          // restore-on-restart to hand the agent an invalid identifier.
+          const captureEnd = match.index + match[0].length;
+          if (captureEnd < stripped.length) {
+            finish(match[1], "captured");
+            return;
+          }
+        }
+
+        if (gateMatched) settleGateArm(true);
+      });
+
+      origOnExit = terminal.ptyProcess.onExit(() => {
+        if (!pattern) {
+          finish(null, "exited-no-pattern");
+          return;
+        }
+        const stripped = stripAnsiCodes(shutdownBuffer);
+        const match = pattern.exec(stripped);
+        const sessionId = match?.[1] ?? null;
+        finish(sessionId, sessionId ? "captured" : "exited-no-match");
+      });
+
+      // Escalate one press at a time, gated on the agent's own confirm-to-quit
+      // footer (#11851). Nothing else is written: no input-clear prelude (its
+      // Ctrl-E/Ctrl-U readline assumption does not hold here, and Ctrl-C already
+      // clears leftover composer text on its own) and no quit command.
+      //
+      // Running out of gate matches or presses ends the ESCALATION, never the
+      // teardown. The measured resume hint lands 0.76-1.16s after the first
+      // press, so killing at the first unanswered gate would throw away captures
+      // the old code would have caught — a press that quit the agent outright,
+      // or one that dismissed a modal without redrawing the footer, prints its
+      // hint with no further footer ever appearing. Stop pressing, keep
+      // listening, and let the normal outcomes decide.
+      const runGatedEscalation = async (signal: AgentGatedKeyEscalation): Promise<void> => {
+        while (pressesSent < signal.maxPresses) {
+          if (resolved) return;
+
+          // Same demotion guard the quit path uses between its writes: if the
+          // agent exited between presses, the next one lands in a plain shell.
+          if (!host.isAgentLive) {
+            finish(null, "demoted-during-gated-signal");
+            return;
+          }
+
+          // Armed BEFORE the write so a footer arriving in the same tick as the
+          // press is still counted; `gateProbe` resets with it so only output
+          // produced by THIS press can satisfy it.
+          gateProbe = "";
+          const armed = new Promise<boolean>((resolveArm) => {
+            const arm = {
+              settled: false,
+              timer: null as NodeJS.Timeout | null,
+              resolve: resolveArm,
+            };
+            arm.timer = setTimeout(() => settleGateArm(false), signal.perPressTimeoutMs);
+            gateArm = arm;
+          });
+
+          try {
+            terminal.ptyProcess.write(signal.keySequence);
+          } catch {
+            settleGateArm(false);
+            finish(null, "gated-signal-write-failed");
+            return;
+          }
+          pressesSent++;
+
+          const matchedGate = await armed;
+          if (resolved) return;
+
+          // A press whose gate never matched is the end of the escalation: with
+          // no positive proof the TUI is still holding raw mode, the next press
+          // could be a real SIGINT that kills the process before it prints
+          // anything (three ungated presses produced nothing at all after 12s).
+          if (!matchedGate) return;
+        }
+      };
+
+      (async () => {
+        if (shutdownSignal) {
+          await runGatedEscalation(shutdownSignal);
+          return;
+        }
+
+        // Clear any partial user input at the agent prompt before issuing the quit command.
+        // Without this prelude, concatenated input (e.g. "half-typed/quit") is treated as a
+        // chat message by the agent and the session-ID line is never emitted. See #5785.
+        //   \x05 — Ctrl-E: move cursor to end of line
+        //   \x15 — Ctrl-U: erase from cursor to beginning of line
+        // ESC is avoided because it navigates/dismisses TUI state in bubbletea and ink CLIs.
+        // Not sent on the gated path above: Ctrl-E/Ctrl-U assume readline semantics that
+        // the agents taking that path don't have, and Ctrl-C clears the composer anyway.
+        try {
+          terminal.ptyProcess.write("\x05\x15");
+        } catch {
+          origOnData.dispose();
+          origOnExit.dispose();
+          finish(null, "prelude-write-failed");
+          return;
+        }
+
+        await new Promise<void>((r) => setTimeout(r, GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS));
+
+        if (resolved) return;
+
+        // Re-check liveness: if the agent demoted during the clear-delay
+        // window (e.g. user typed /quit milliseconds before shutdown), the
+        // pending write would land in a plain shell.
+        if (!host.isAgentLive) {
+          origOnData.dispose();
+          origOnExit.dispose();
+          finish(null, "demoted-during-clear-delay");
+          return;
+        }
+
+        try {
+          if (shutdownKeySequence) {
+            terminal.ptyProcess.write(shutdownKeySequence);
+          }
+          if (quitCommand) {
+            if (quitSubmitMode === "single-write") {
+              // Ink-based TUIs (e.g. Claude Code) require body + Enter in the
+              // same PTY write so the slash-command parser sees them in one
+              // event-loop tick. A non-zero gap is interpreted as deliberate
+              // slow typing, so the command never submits and the
+              // session-ID line is never echoed (issue #6981).
+              terminal.ptyProcess.write(quitCommand + "\r");
+            } else {
+              terminal.ptyProcess.write(quitCommand);
+              await new Promise<void>((r) => setTimeout(r, quitSubmitEnterDelayMs));
+
+              if (resolved) return;
+
+              if (!host.isAgentLive) {
+                origOnData.dispose();
+                origOnExit.dispose();
+                finish(null, "demoted-during-submit-delay");
+                return;
+              }
+
+              terminal.ptyProcess.write("\r");
+            }
+          }
+        } catch {
+          origOnData.dispose();
+          origOnExit.dispose();
+          finish(null, "quit-signal-write-failed");
+        }
+      })();
+    });
+  } finally {
+    releaseInputLock();
+  }
 }

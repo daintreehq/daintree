@@ -310,7 +310,20 @@ export const PRESERVED_SNAPSHOT_RECENT_ACCESS_GUARD_MS = 5 * 60 * 1000; // 5 min
 export { TRASH_TTL_MS } from "../../../shared/config/trash.js";
 
 // Graceful shutdown configuration
-export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 2500;
+//
+// Total per-terminal budget for the quit signal plus the session-id scrape.
+// Raised from 2500ms for the gated Ctrl-C escalation (#11851), which spends
+// part of its budget waiting for the agent's confirm-to-quit footer between
+// presses before the resume hint can even arrive (measured at 0.76-1.16s).
+//
+// The real ceiling is the 4000ms per-project race in `electron/lifecycle/
+// shutdown.ts` — a terminal that outlives it has its captured id discarded.
+// 3000ms leaves 1000ms for the PtyClient RPC round-trip on either side of this
+// window. Both layers are `Promise.all` (terminals within a project, projects
+// within the quit), so this budget is parallel, not additive: ten terminals
+// cost one terminal's wall clock, not ten. Raise it only against that 4000ms
+// number, and only with the RPC round-trip still covered.
+export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 3000;
 export const GRACEFUL_SHUTDOWN_BUFFER_SIZE = 8 * 1024;
 // Delay between writing the input-clear prelude and the quit command. Without this gap,
 // the target CLI's async event loop can drop or corrupt the quit command bytes under load.

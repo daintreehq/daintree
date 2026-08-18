@@ -533,7 +533,7 @@ describe("mistral configuration", () => {
 
   it("captures session IDs from 'vibe --resume {id}' output", () => {
     const resume = getAgentConfig("mistral")?.resume;
-    if (resume?.kind === "session-id") {
+    if (resume?.kind === "session-id" && resume.sessionIdPattern) {
       const re = new RegExp(resume.sessionIdPattern);
       const match = "Or: vibe --resume abc-123-def-456".match(re);
       expect(match?.[1]).toBe("abc-123-def-456");
@@ -1060,16 +1060,80 @@ describe("screen-mode flag capabilities (#11423)", () => {
 });
 
 describe("resume configuration", () => {
-  it("session-id agents have a quitCommand and a sessionIdPattern", () => {
-    const ids = getAgentIds();
-    for (const id of ids) {
+  it("every session-id agent declares exactly one shutdown protocol", () => {
+    // Weaker than "must have a quitCommand" on purpose: an agent may take a
+    // structured `shutdownSignal` instead (#11851). Stronger in the direction
+    // that matters — declaring BOTH is the bug the type exists to prevent, since
+    // a gated escalation exists precisely to avoid writing a slash command.
+    for (const id of getAgentIds()) {
       const resume = getAgentConfig(id)?.resume;
-      if (resume?.kind === "session-id") {
-        expect(typeof resume.args).toBe("function");
-        expect(resume.quitCommand).toBeTruthy();
-        expect(resume.sessionIdPattern).toBeTruthy();
-      }
+      if (resume?.kind !== "session-id") continue;
+      expect(typeof resume.args).toBe("function");
+      const declared = [resume.quitCommand, resume.shutdownSignal].filter(Boolean);
+      expect(
+        declared,
+        `${id} must declare a quitCommand or a shutdownSignal, not both`
+      ).toHaveLength(1);
     }
+  });
+
+  it("no session-id agent ships an empty or uncompilable sessionIdPattern", () => {
+    // The field is optional now — an agent whose id was never observable omits
+    // it rather than carrying a pattern that matches nothing (#11851). What is
+    // NOT allowed is a present-but-useless one: an empty string matches
+    // everywhere, and an uncompilable one throws inside the teardown listener.
+    for (const id of getAgentIds()) {
+      const resume = getAgentConfig(id)?.resume;
+      if (resume?.kind !== "session-id" || resume.sessionIdPattern === undefined) continue;
+      expect(resume.sessionIdPattern, `${id} declares an empty sessionIdPattern`).not.toBe("");
+      const compiled = new RegExp(resume.sessionIdPattern);
+      // One capture group is what the teardown reads back as the id.
+      expect(compiled.exec("")?.[1] ?? null).toBeNull();
+    }
+  });
+
+  it("an agent with no capture path still has a way to resume", () => {
+    // Dropping a fabricated pattern must not strand the agent: without either a
+    // capture path or a resume-latest fallback it could never come back at all.
+    for (const id of getAgentIds()) {
+      const resume = getAgentConfig(id)?.resume;
+      if (resume?.kind !== "session-id") continue;
+      const canCapture = Boolean(resume.sessionIdPattern) || Boolean(resume.assignSessionIdArgs);
+      if (canCapture) continue;
+      expect(
+        resume.resumeLatestArgs?.length,
+        `${id} can neither capture nor resume-latest`
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("codex quits on a gated Ctrl-C and writes no slash command", () => {
+    const resume = getAgentConfig("codex")?.resume;
+    expect(resume?.kind).toBe("session-id");
+    if (resume?.kind !== "session-id") return;
+    // The `/quit` write is what landed in the user's own transcript (#11851).
+    expect(resume.quitCommand).toBeUndefined();
+    const signal = resume.shutdownSignal;
+    expect(signal?.kind).toBe("gated-key-escalation");
+    expect(signal?.keySequence).toBe(String.fromCharCode(3));
+    // A gate the TUI never prints would silently degrade to a single press.
+    expect("  Ctrl+C again to quit  ").toContain(signal?.gateText);
+    // Budget fit lives in the pty suite, which owns GRACEFUL_SHUTDOWN_TIMEOUT_MS —
+    // importing it here would drag electron into a shared/ test.
+    expect(signal?.maxPresses).toBeGreaterThan(1);
+    expect(signal?.perPressTimeoutMs).toBeGreaterThan(0);
+  });
+
+  it("antigravity claims no session-id capture it cannot make", () => {
+    // 0 captures in 6 teardowns, and no public `agy` output to verify a
+    // corrected pattern against (#11851). Resuming by an id it already holds
+    // still works, and `-c` remains the path that actually restores.
+    const resume = getAgentConfig("antigravity")?.resume;
+    expect(resume?.kind).toBe("session-id");
+    if (resume?.kind !== "session-id") return;
+    expect(resume.sessionIdPattern).toBeUndefined();
+    expect(resume.args("conv-42")).toEqual(["--conversation", "conv-42"]);
+    expect(resume.resumeLatestArgs).toEqual(["-c"]);
   });
 
   it("claude is session-id and produces --resume flag args", () => {
@@ -1163,7 +1227,7 @@ describe("resume configuration", () => {
   it("goose sessionIdPattern extracts the id from the session-closed line", () => {
     const resume = getAgentConfig("goose")?.resume;
     expect(resume?.kind).toBe("session-id");
-    if (resume?.kind === "session-id") {
+    if (resume?.kind === "session-id" && resume.sessionIdPattern) {
       const re = new RegExp(resume.sessionIdPattern);
       const match = re.exec("● session closed · 20260429_1");
       expect(match?.[1]).toBe("20260429_1");

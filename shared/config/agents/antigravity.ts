@@ -58,11 +58,19 @@ export const config: AgentConfig = {
     promptHintPatterns: [],
     completionPatterns: [],
   },
+  // No `sessionIdPattern`: the `agy --conversation <id>` hint this tree used to
+  // scrape for has never matched real output — 0 captures in 6 teardowns
+  // (#11851) — and there is no public `agy` output to verify a corrected one
+  // against. Claiming a pattern that cannot match is worse than claiming none:
+  // it spends the whole shutdown budget matching nothing and then reports
+  // `exited-no-match`, which reads as a broken regex rather than as an agent
+  // whose id was never observable. `--conversation <id>` stays as `args` so a
+  // stored id still resumes exactly, and `-c` remains the working restore path.
+  // Restore this pattern only alongside real captured `agy` output.
   resume: {
     kind: "session-id",
     args: (sessionId: string) => ["--conversation", sessionId],
     quitCommand: "/quit",
-    sessionIdPattern: "agy --conversation ([\\w-]+)",
     resumeLatestArgs: ["-c"],
   },
   help: {
