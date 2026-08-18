@@ -1029,10 +1029,6 @@ export function buildAssignedSessionIdArgs(
 }
 
 /**
- * Whether `agentId` lets Daintree choose the session id at launch, making the
- * teardown scrape unnecessary for it (#11782).
- */
-/**
  * True when this agent's session id can actually be OBSERVED for a specific
  * pane — either scraped at teardown via `sessionIdPattern` or minted at launch
  * via `assignSessionIdArgs`.
@@ -1049,6 +1045,10 @@ export function supportsExactSessionCapture(agentId: string | undefined): boolea
   return Boolean(resume.sessionIdPattern) || typeof resume.assignSessionIdArgs === "function";
 }
 
+/**
+ * Whether `agentId` lets Daintree choose the session id at launch, making the
+ * teardown scrape unnecessary for it (#11782).
+ */
 export function supportsSessionIdAssignment(agentId: string | undefined): boolean {
   if (!agentId) return false;
   const resume = getEffectiveAgentConfig(agentId)?.resume;

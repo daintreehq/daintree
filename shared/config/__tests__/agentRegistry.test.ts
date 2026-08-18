@@ -534,12 +534,12 @@ describe("mistral configuration", () => {
 
   it("captures session IDs from 'vibe --resume {id}' output", () => {
     const resume = getAgentConfig("mistral")?.resume;
-    if (resume?.kind === "session-id" && resume.sessionIdPattern) {
-      const re = new RegExp(resume.sessionIdPattern);
-      const match = "Or: vibe --resume abc-123-def-456".match(re);
-      expect(match?.[1]).toBe("abc-123-def-456");
-      expect("vibe --continue".match(re)).toBeNull();
-    }
+    if (resume?.kind !== "session-id") throw new Error("mistral resume must be session-id");
+    expect(resume.sessionIdPattern).toBeDefined();
+    const re = new RegExp(resume.sessionIdPattern!);
+    const match = "Or: vibe --resume abc-123-def-456".match(re);
+    expect(match?.[1]).toBe("abc-123-def-456");
+    expect("vibe --continue".match(re)).toBeNull();
   });
 
   it("relies on prompt fast-path without a per-agent quiet override", () => {
@@ -1243,12 +1243,11 @@ describe("resume configuration", () => {
 
   it("goose sessionIdPattern extracts the id from the session-closed line", () => {
     const resume = getAgentConfig("goose")?.resume;
-    expect(resume?.kind).toBe("session-id");
-    if (resume?.kind === "session-id" && resume.sessionIdPattern) {
-      const re = new RegExp(resume.sessionIdPattern);
-      const match = re.exec("● session closed · 20260429_1");
-      expect(match?.[1]).toBe("20260429_1");
-    }
+    if (resume?.kind !== "session-id") throw new Error("goose resume must be session-id");
+    expect(resume.sessionIdPattern).toBeDefined();
+    const re = new RegExp(resume.sessionIdPattern!);
+    const match = re.exec("● session closed · 20260429_1");
+    expect(match?.[1]).toBe("20260429_1");
   });
 });
 
