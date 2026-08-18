@@ -19,6 +19,7 @@ import {
   type AssistantSupports,
 } from "../agentRegistry.js";
 import { UserAgentConfigSchema } from "../../types/userAgentRegistry.js";
+import { buildResumeCommand, buildResumeLatestCommand } from "../../types/agentSettings.js";
 import {
   BUILT_IN_AGENT_IDS,
   LAUNCHABLE_AGENT_IDS,
@@ -1069,11 +1070,20 @@ describe("resume configuration", () => {
       const resume = getAgentConfig(id)?.resume;
       if (resume?.kind !== "session-id") continue;
       expect(typeof resume.args).toBe("function");
-      const declared = [resume.quitCommand, resume.shutdownSignal].filter(Boolean);
+      // `shutdownKeySequence` counts as part of the legacy protocol: pairing it
+      // with a structured signal is the same contradiction, and leaving it out
+      // of this check would let that pair through.
+      const legacy = Boolean(resume.quitCommand) || Boolean(resume.shutdownKeySequence);
+      const structured = Boolean(resume.shutdownSignal);
       expect(
-        declared,
-        `${id} must declare a quitCommand or a shutdownSignal, not both`
+        [legacy, structured].filter(Boolean),
+        `${id} must declare a legacy quit signal or a shutdownSignal, not both`
       ).toHaveLength(1);
+      if (legacy) {
+        // An empty string is falsy to the teardown's own `if (quitCommand)`
+        // guard, so it would silently send nothing at all.
+        expect(resume.quitCommand ?? resume.shutdownKeySequence).not.toBe("");
+      }
     }
   });
 
@@ -1086,9 +1096,12 @@ describe("resume configuration", () => {
       const resume = getAgentConfig(id)?.resume;
       if (resume?.kind !== "session-id" || resume.sessionIdPattern === undefined) continue;
       expect(resume.sessionIdPattern, `${id} declares an empty sessionIdPattern`).not.toBe("");
-      const compiled = new RegExp(resume.sessionIdPattern);
-      // One capture group is what the teardown reads back as the id.
-      expect(compiled.exec("")?.[1] ?? null).toBeNull();
+      // The teardown reads `match[1]`, so a pattern with no capture group can
+      // never yield an id no matter what the agent prints. Alternating with an
+      // empty branch forces a match on "" so the group count is readable even
+      // when the pattern itself matches nothing.
+      const groupCount = (new RegExp(`${resume.sessionIdPattern}|`).exec("")?.length ?? 1) - 1;
+      expect(groupCount, `${id}'s sessionIdPattern has no capture group`).toBeGreaterThanOrEqual(1);
     }
   });
 
@@ -1132,8 +1145,12 @@ describe("resume configuration", () => {
     expect(resume?.kind).toBe("session-id");
     if (resume?.kind !== "session-id") return;
     expect(resume.sessionIdPattern).toBeUndefined();
-    expect(resume.args("conv-42")).toEqual(["--conversation", "conv-42"]);
-    expect(resume.resumeLatestArgs).toEqual(["-c"]);
+    // Staying `session-id` is load-bearing, not incidental: the resume-latest
+    // builder is gated on that kind, so reclassifying would silently take away
+    // the `-c` restore that actually works. Pinned as built commands rather than
+    // raw arrays so a change to either builder has to face this.
+    expect(buildResumeCommand("antigravity", "conv-42")).toBe("agy --conversation conv-42");
+    expect(buildResumeLatestCommand("antigravity")).toBe("agy -c");
   });
 
   it("claude is session-id and produces --resume flag args", () => {

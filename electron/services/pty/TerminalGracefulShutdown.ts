@@ -210,6 +210,13 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
   let shutdownBuffer = "";
   let resolved = false;
 
+  // The overall budget as an instant, not just a timer. A timer callback only
+  // runs when the loop gets a turn, so an `onData` that began before the
+  // deadline can settle a gate and have its continuation write AFTER it if the
+  // pty-host stalls in between — on app quit, under load, which is exactly when
+  // that happens. The timer wakes the teardown; this is what bounds the writes.
+  const deadlineAt = startedAt + GRACEFUL_SHUTDOWN_TIMEOUT_MS;
+
   // Held for the whole teardown so nothing else can write between our bytes,
   // and released on every exit path by the `finally` below — including a
   // throwing `host.kill()`, which would otherwise strand the terminal's input.
@@ -322,6 +329,16 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
         const stripped = stripAnsiCodes(shutdownBuffer);
         const match = pattern.exec(stripped);
         if (match?.[1]) {
+          // A session id in this chunk means the agent is already on its way
+          // out, so this chunk must never also read as permission to press
+          // again — including when the capture below turns out to be
+          // provisional. A chunk ending exactly after the id (no trailing
+          // boundary yet) would otherwise fall through to the gate and fire the
+          // next press at the precise moment the hint is printing. Leaving the
+          // arm pending is safe: the next chunk completes the capture, `onExit`
+          // takes EOF as the boundary, or the per-press timer stops the
+          // escalation without ending the teardown.
+          if (gateArm) settleGateArm(false);
           // Guard against truncated captures when the PTY delivers the
           // session-ID line in chunks. Every `sessionIdPattern` ends with a
           // greedy `[\w-]+` capture group — if that group ends at the buffer
@@ -367,6 +384,7 @@ export async function gracefulShutdown(host: TerminalGracefulShutdownHost): Prom
       const runGatedEscalation = async (signal: AgentGatedKeyEscalation): Promise<void> => {
         while (pressesSent < signal.maxPresses) {
           if (resolved) return;
+          if (Date.now() >= deadlineAt) return;
 
           // Same demotion guard the quit path uses between its writes: if the
           // agent exited between presses, the next one lands in a plain shell.

@@ -131,15 +131,22 @@ export const config: AgentConfig = {
     // servers. Ctrl-C survives all three because it is not composer text.
     //
     // The footer substring is harvested from the real `codex-cli 0.147.0`
-    // binary — it is deliberately a short fragment rather than the full
-    // sentence so a wording tweak upstream doesn't silently stop matching.
-    // 750ms is generous for a footer that redraws within a frame; three presses
-    // is a backstop, not a target (two sufficed in every measured state).
+    // binary — deliberately a short fragment rather than the full sentence, so
+    // a wording tweak upstream doesn't silently stop matching. 750ms is
+    // generous for a footer that redraws within a frame.
+    //
+    // TWO presses, not three. Two sufficed in every measured state and three
+    // produced nothing at all after 12s, so a third can only ever lose. The cap
+    // has to carry that on its own because the gate cannot: Ratatui repaints
+    // the whole frame, so a repaint emitted while press two is already tearing
+    // the TUI down looks identical to a genuine re-arm, and the substring can
+    // in principle be satisfied by conversation text too. Raise this only with
+    // a measured state where two presses demonstrably fail.
     shutdownSignal: {
       kind: "gated-key-escalation",
       keySequence: "\x03",
       gateText: "again to quit",
-      maxPresses: 3,
+      maxPresses: 2,
       perPressTimeoutMs: 750,
     },
   },
