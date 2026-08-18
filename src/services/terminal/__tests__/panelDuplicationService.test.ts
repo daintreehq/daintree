@@ -865,7 +865,7 @@ describe("inherited worktree cwd resolution (#11854)", () => {
       const options = await buildPanelDuplicateOptions(panel, "grid");
 
       expect(options.cwd).toBe(filedPath);
-      expect(options.cwd).not.toBe(panel.cwd);
+      expect(options.cwd).not.toBe(stalePath);
       // The filing id is the input to the fix, never an output of it.
       expect(options.worktreeId).toBe(panel.worktreeId);
     });
