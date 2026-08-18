@@ -79,6 +79,25 @@ describe("useCopyTreeCompletionNotice", () => {
     expect(result.current.announcement).toBe("");
   });
 
+  it("keeps the notice up past the point a glanceable-only window would have closed", () => {
+    // The window has to outlast reading, not just noticing: two lines of copy
+    // costs 3.5-4.5s to acquire and read, so a sub-second-scale window shows a
+    // message nobody finishes. Pinned at 3s — comfortably past the 2s this
+    // shipped with, and short of the configured window — so shrinking the
+    // constant back toward a glance fails here instead of passing silently.
+    vi.useFakeTimers();
+    const { ref } = makeAnchor();
+    const { result } = renderHook(() => useCopyTreeCompletionNotice(ref));
+
+    announce();
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    expect(result.current.notice).toEqual(NOTICE);
+    expect(result.current.announcement).toBe(`${NOTICE.title}. ${NOTICE.message}`);
+  });
+
   it("re-arms the display window when a second completion lands mid-notice", () => {
     vi.useFakeTimers();
     const { ref } = makeAnchor();
@@ -93,7 +112,8 @@ describe("useCopyTreeCompletionNotice", () => {
       vi.advanceTimersByTime(COPY_TREE_NOTICE_DURATION_MS - 500);
     });
 
-    // A stale first-notice timer would have hidden this 500ms ago.
+    // A stale first-notice timer would have hidden this 500ms after the first
+    // announce, long before now.
     expect(result.current.notice).toEqual(NOTICE);
 
     act(() => {

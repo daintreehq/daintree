@@ -1,13 +1,16 @@
 import { notify } from "@/lib/notify";
 
 /**
- * Completion feedback for clipboard-bound copy-tree runs (the full toast felt
- * heavy for a one-second copy). The toolbar's Copy context button registers a
- * presenter that shows the notice as a transient tooltip on the button itself;
- * `announceCopyTreeCopy` hands each completion to that presenter first and only
- * falls back to the old toast when no visible button can carry it — the button
- * unpinned from the toolbar, evicted into the overflow menu, or not mounted at
- * all. Feedback about a silent clipboard overwrite must never just vanish.
+ * Completion feedback for copy-tree runs that produce an artifact the user
+ * asked for — the clipboard copies and the temp-file bundle alike (the full
+ * toast felt heavy for a one-second copy). The toolbar's Copy context button
+ * registers a presenter that shows the notice as a transient tooltip on the
+ * button itself; `announceCopyTreeCopy` hands each completion to that presenter
+ * first and only falls back to notify() when no visible button can carry it —
+ * the button unpinned from the toolbar, evicted into the overflow menu, or not
+ * mounted at all. That fallback is a toast while the window is focused and an
+ * inbox row otherwise, which is notify()'s own gate, not a choice made here.
+ * Feedback about work the user did not watch happen must never just vanish.
  */
 export interface CopyTreeCompletionNotice {
   /** Short outcome line, e.g. "Context copied". */

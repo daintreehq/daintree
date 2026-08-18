@@ -677,12 +677,13 @@ export function Toolbar({
   // so nothing outside this component needs to open it (#11733).
   const [copyTreeOpen, setCopyTreeOpen] = useState(false);
   const copyTreeButtonRef = useRef<HTMLButtonElement>(null);
-  // Completion feedback for clipboard copies: the action layer announces every
-  // finished copy (announceCopyTreeCopy) and this hook's presenter pins it to
-  // the button as a short-lived tooltip, with a toast fallback whenever the
-  // button can't anchor one. Suppressed while the recents panel is open — both
-  // portal to the same anchor, and an MCP completion landing mid-browse would
-  // stack the tooltip on the panel.
+  // Completion feedback for copy-tree runs — the clipboard copies and the
+  // temp-file bundle agents generate: the action layer announces every finished
+  // run (announceCopyTreeCopy) and this hook's presenter pins it to the button
+  // as a short-lived tooltip, falling back to notify() whenever the button
+  // can't anchor one. Suppressed while the recents panel is open — both portal
+  // to the same anchor, and an MCP completion landing mid-browse would stack
+  // the tooltip on the panel.
   const {
     notice: copyTreeNotice,
     announcement: copyTreeAnnouncement,
