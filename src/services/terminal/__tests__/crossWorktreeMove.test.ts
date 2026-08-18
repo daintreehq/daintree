@@ -1,5 +1,10 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { isPtyPanel, type PanelLocation, type PtyPanelData } from "@shared/types/panel";
+import {
+  isPtyPanel,
+  type PanelInstance,
+  type PanelLocation,
+  type PtyPanelData,
+} from "@shared/types/panel";
 import type { DeletedWorktree } from "@/store/worktreeStore";
 
 vi.mock("@/clients", () => ({
@@ -400,8 +405,13 @@ describe("isPanelProcessLive", () => {
   });
 
   it("rejects a non-PTY pane", () => {
-    const browser = { id: "b1", kind: "browser", title: "b1", location: "grid" };
-    expect(isPanelProcessLive(browser as unknown as PtyPanelData)).toBe(false);
+    const browser: PanelInstance = {
+      id: "b1",
+      kind: "browser",
+      title: "b1",
+      location: "grid",
+    };
+    expect(isPanelProcessLive(browser)).toBe(false);
   });
 
   it.each([

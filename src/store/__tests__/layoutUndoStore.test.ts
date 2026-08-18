@@ -52,7 +52,7 @@ import { useLayoutUndoStore } from "../layoutUndoStore";
 import { usePanelStore } from "../panelStore";
 import { useLayoutConfigStore } from "../layoutConfigStore";
 import { setWorktreeSelectionAccessor } from "@/store/storeAccessors";
-import type { PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@shared/types";
 
 let terminalCounter = 0;
@@ -760,8 +760,8 @@ describe("layoutUndoStore — cross-worktree move notice", () => {
   });
 
   function noticeOf(id: string): string | undefined {
-    const panel = usePanelStore.getState().panelsById[id] as PtyPanelData | undefined;
-    return panel?.worktreeMoveNotice?.destinationWorktreeId;
+    const panel = usePanelStore.getState().panelsById[id];
+    return panel && isPtyPanel(panel) ? panel.worktreeMoveNotice?.destinationWorktreeId : undefined;
   }
 
   it("clears a stale notice when the move that raised it is undone", () => {
