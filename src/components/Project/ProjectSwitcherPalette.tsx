@@ -293,22 +293,34 @@ function StatusDot({
 }
 
 /**
- * The wedge covering `share` of the mark, swept clockwise from 12 o'clock.
- *
- * Drawn against a full-bleed circle rather than as a stroked arc: the mark is a
- * filled disc that happens to be two colours, so the wedge is a pie slice with
- * no outline of its own and the two fills meet on a single shared edge.
- *
- * `share` only ever arrives snapped to a quarter, so every endpoint here lands
- * exactly on an axis and the boundary is a clean vertical or horizontal cut
- * rather than something the rasteriser has to feather.
+ * Half the width of the notch cut at each boundary of a two-tone mark, in
+ * turns. At 8px it lands a little under a pixel at the rim — enough to read as
+ * a division rather than as a seam, and small enough that the wedge it eats
+ * cannot move the mark across one of the quarters `runningShare` snaps to.
  */
-function wedgePath(share: number): string {
-  const angle = share * 2 * Math.PI;
-  const x = 8 + 8 * Math.sin(angle);
-  const y = 8 - 8 * Math.cos(angle);
-  const largeArc = share > 0.5 ? 1 : 0;
-  return `M 8 8 L 8 0 A 8 8 0 ${largeArc} 1 ${x} ${y} Z`;
+const MARK_GAP_TURNS = 0.025;
+
+/**
+ * One slice of the mark, from `startTurn` to `endTurn` clockwise from 12
+ * o'clock.
+ *
+ * Both halves are drawn this way rather than laying a wedge over a full-bleed
+ * circle. Inset by `MARK_GAP_TURNS` at each end, the two slices leave a
+ * transparent notch at both boundaries and the row shows through — which is
+ * what makes the split survive two hues that sit close together, as `review`
+ * and `working` do in most palettes (both are greens, `activity-completed`
+ * falling back to `status-success`). Meeting on a shared edge those two read as
+ * one solid disc, which is exactly the single-hue mark the split exists to
+ * replace. Transparent rather than a drawn separator, so it is right in every
+ * theme without anything here having to know which one is active.
+ */
+function wedgePath(startTurn: number, endTurn: number): string {
+  const point = (turn: number) => {
+    const angle = turn * 2 * Math.PI;
+    return `${(8 + 8 * Math.sin(angle)).toFixed(3)} ${(8 - 8 * Math.cos(angle)).toFixed(3)}`;
+  };
+  const largeArc = endTurn - startTurn > 0.5 ? 1 : 0;
+  return `M 8 8 L ${point(startTurn)} A 8 8 0 ${largeArc} 1 ${point(endTurn)} Z`;
 }
 
 /**
@@ -350,10 +362,10 @@ function AgentMixDot({ tone, mix }: { tone: ProjectRowTone; mix: ProjectRowStatu
       data-running-share={share}
       aria-hidden="true"
     >
-      {/* The demand hue fills the disc; the running share is laid over it, so
-          the two meet on the wedge's edge with nothing between them. */}
-      <circle cx="8" cy="8" r="8" fill={ROW_MARK_COLOR[tone]} />
-      <path d={wedgePath(share)} fill={ROW_MARK_COLOR.working} />
+      {/* Running leads from 12 o'clock and demand takes the rest. Neither
+          reaches the other: the notch between them is the separator. */}
+      <path d={wedgePath(MARK_GAP_TURNS, share - MARK_GAP_TURNS)} fill={ROW_MARK_COLOR.working} />
+      <path d={wedgePath(share + MARK_GAP_TURNS, 1 - MARK_GAP_TURNS)} fill={ROW_MARK_COLOR[tone]} />
     </svg>
   );
 }
@@ -384,11 +396,22 @@ function RowStatusLine({ status }: { status: ProjectRowStatus }) {
   // #11692 takes it at its word. Everything else earned its line.
   const sentence = status.isDormantFallback ? null : status.text;
 
+  // The hue follows what this slot is actually reporting, because two different
+  // facts arrive in it. A count of runs the user launched is green, the way a
+  // run is green everywhere else in this app. "Assistant working" is
+  // machine-initiated presence, and reads at settled weight (#11806) — green
+  // there would both claim a run nobody started and paint the same fact a
+  // different colour from the assistant-only row, where it lands in the demand
+  // sentence instead. `withLiveness` only ever reaches the assistant phrase
+  // with no agents running, so the count is the fact itself, not a proxy.
+  const livenessTone =
+    (status.agentMix?.running ?? 0) > 0 ? ROW_TONE_CLASS.working : ROW_TONE_CLASS.assistant;
+
   const parts = [
     status.livenessDetail !== undefined && (
       <span
         key="running"
-        className={cn("shrink-0", ROW_TONE_CLASS.working)}
+        className={cn("shrink-0", livenessTone)}
         data-testid="workspace-running-count"
       >
         {status.livenessDetail}

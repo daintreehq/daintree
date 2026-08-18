@@ -104,13 +104,13 @@ export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
  * The colour each tone paints with, as a CSS value rather than a utility class.
  *
  * Parallel to `ROW_DOT_CLASS` because the mark draws two ways: a solid mark is
- * a class on a div, and a two-tone mark is a `conic-gradient`, which needs
+ * a class on a div, and a two-tone mark is a pair of SVG fills, which need
  * actual colour values and cannot be assembled out of Tailwind backgrounds. The
  * two maps are kept adjacent and both total over the union, so a tone added
  * later has to answer for both or fail to compile.
  *
  * The ring tones resolve to the same greys their borders use. They cannot reach
- * the gradient today — a settled tone hands the mark to the run rather than
+ * the split mark today — a settled tone hands the mark to the run rather than
  * splitting it — but the map is total over the union, so a tone added later
  * cannot ship without a colour and silently paint transparent.
  */

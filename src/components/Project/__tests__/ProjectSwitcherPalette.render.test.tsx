@@ -520,6 +520,40 @@ describe("ProjectSwitcherPalette liveness axis", () => {
     expect(count.textContent).not.toContain("need input");
   });
 
+  it("keeps the assistant's phrase out of the hue a launched run wears", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({ id: "solo", name: "Solo", assistantState: "working" }),
+          makeProject({
+            id: "helped",
+            name: "Helped",
+            waitingAgentCount: 1,
+            assistantState: "working",
+          }),
+          makeProject({ id: "worked", name: "Worked", waitingAgentCount: 1, activeAgentCount: 2 }),
+        ]}
+      />
+    );
+
+    const rowOf = (name: RegExp) => screen.getByRole("option", { name });
+    const countIn = (row: HTMLElement) => within(row).getByTestId("workspace-running-count");
+    // The assistant says the same thing on both rows and only its carrier
+    // moves: alone it is the row's sentence, and with a wait beside it the
+    // sentence is taken and it lands in the slot the count uses. Compared to
+    // itself rather than to a named token, so the invariant is "one fact, one
+    // hue" and not whichever class happens to draw it.
+    const spokenAlone = within(rowOf(/Solo/)).getByText("Assistant working");
+    const spokenBeside = countIn(rowOf(/Helped/));
+
+    expect(spokenBeside.textContent).toBe(spokenAlone.textContent);
+    expect(spokenBeside.className).toBe(spokenAlone.className);
+    // And never the weight a run the user launched carries (#11806) — the slot
+    // used to paint everything that reached it in the worker hue.
+    expect(spokenBeside.className).not.toBe(countIn(rowOf(/Worked/)).className);
+  });
+
   it("reaches assistive tech as words, not as a mark", () => {
     renderPair(3);
 
