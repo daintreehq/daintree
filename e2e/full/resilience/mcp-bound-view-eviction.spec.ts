@@ -5,6 +5,7 @@ import { createFixtureRepos } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { addAndSwitchToProject, selectExistingProjectAndRefresh } from "../../helpers/workflows";
 import { T_LONG } from "../../helpers/timeouts";
+import { ACTIVE_AGENT_STATES } from "../../../shared/types/agent";
 
 /**
  * #11790 moved a cached view backing a live MCP session binding into the LAST
@@ -47,9 +48,15 @@ const PROJECT_A = "project-A";
 const PROJECT_B = "project-B";
 const PROJECT_C = "project-C";
 
-/** Three cached views, then one, so exactly one eviction decision is observed. */
+/**
+ * Three managed views — A and B cached, C active, since the active view stays
+ * in the map — then a limit one lower, so exactly one eviction is observed.
+ */
 const CACHE_LIMIT_ARRANGED = 3;
 const CACHE_LIMIT_TRIGGER = 2;
+
+/** Passed into the main process: `hasActiveAgent`'s own set, not a copy of it. */
+const ACTIVE_STATES: string[] = Array.from(ACTIVE_AGENT_STATES);
 
 interface McpEndpoint {
   port: number;
@@ -156,6 +163,17 @@ interface PvmViewProbe {
   dispatchLease: boolean;
   /** The activity callback threw — deprioritizes like a binding, so it is a premise. */
   unknown: boolean;
+  /**
+   * `hasActiveAgent` for this project, recomputed from the manager's own
+   * terminal maps. It ranks a view behind the unprotected tier, so an active
+   * agent on A would spare A without the binding doing any of the work.
+   */
+  activeAgent: boolean;
+  /**
+   * A registered assistant backend — the one HARD floor, checked before the
+   * bound-session tier, so it would remove A from the candidate list outright.
+   */
+  assistantBackend: boolean;
 }
 
 interface PvmProbe {
@@ -183,14 +201,24 @@ type ProbedPvm = {
     workspaceId: string,
     wc: Electron.WebContents
   ) => { liveBinding: boolean; dispatchLease: boolean; unknown: boolean };
+  projectByTerminal: Map<string, string>;
+  agentStateByTerminal: Map<string, string>;
+  assistantBackendForProject?: (projectId: string) => unknown;
 };
 
 async function readPvmState(app: AppContext["app"]): Promise<PvmProbe> {
-  return app.evaluate(() => {
+  return app.evaluate((_electron, activeStates) => {
     const g = globalThis as Record<string, unknown>;
     const getPvm = g.__daintreeGetPvm as (() => unknown) | undefined;
     const pvm = getPvm?.() as ProbedPvm | null | undefined;
     if (!pvm) return { ok: false, activeProjectId: null, outgoingBridgeProjectId: null, views: [] };
+    // Mirrors `hasActiveAgent`: a project is protected when one of its mapped
+    // terminals sits in an active state. Both maps are the manager's own.
+    const activeAgentProjects = new Set<string>();
+    for (const [terminalId, projectId] of pvm.projectByTerminal) {
+      const state = pvm.agentStateByTerminal.get(terminalId);
+      if (state != null && activeStates.includes(state)) activeAgentProjects.add(projectId);
+    }
     return {
       ok: true,
       activeProjectId: pvm.getActiveProjectId(),
@@ -204,16 +232,25 @@ async function readPvmState(app: AppContext["app"]): Promise<PvmProbe> {
           liveBinding: mcp.liveBinding,
           dispatchLease: mcp.dispatchLease,
           unknown: mcp.unknown,
+          activeAgent: activeAgentProjects.has(entry.projectId),
+          assistantBackend: pvm.assistantBackendForProject?.(entry.projectId) != null,
         };
       }),
     };
-  });
+  }, ACTIVE_STATES);
 }
 
 interface PvmConfigureResult {
   /** Read back inside the same synchronous block that nulled it. */
   lowMemoryFloorMb: number | null;
-  forcedReclaimStubbed: boolean;
+  /**
+   * Membership either side of `setCachedViewLimit`, captured in the same
+   * synchronous block. The pass runs inside that call, so this is the eviction
+   * itself rather than a settled reading taken afterwards — a view that had
+   * already gone shows up here as a trigger that decided nothing.
+   */
+  before: string[];
+  after: string[];
 }
 
 /**
@@ -261,25 +298,19 @@ async function configurePvm(app: AppContext["app"], limit: number): Promise<PvmC
     pvm.reclaimCachedViewsUnderPressure = () => 0;
     pvm.setLowMemoryFreeThresholdMb(null);
     const lowMemoryFloorMb = pvm.getLowMemoryFreeThresholdMb();
-    const forcedReclaimStubbed = Object.prototype.hasOwnProperty.call(
-      pvm,
-      "reclaimCachedViewsUnderPressure"
-    );
+    const before = pvm.getAllViews().map((entry) => entry.projectId);
     pvm.setCachedViewLimit(n);
-    return { lowMemoryFloorMb, forcedReclaimStubbed };
+    const after = pvm.getAllViews().map((entry) => entry.projectId);
+    return { lowMemoryFloorMb, before, after };
   }, limit);
 }
 
-/** Both isolation measures held at the moment the pass ran. */
+/** The pressure policy was still disarmed at the moment the pass ran. */
 function expectIsolated(result: PvmConfigureResult): void {
   expect(
     result.lowMemoryFloorMb,
     "the memory-pressure policy was re-armed under the test — a pressure pass could evict the wrong view"
   ).toBeNull();
-  expect(
-    result.forcedReclaimStubbed,
-    "the forced tier-2 reclaim was not stubbed — it collapses the cache to the active view"
-  ).toBe(true);
 }
 
 let ctx: AppContext;
@@ -311,16 +342,17 @@ async function arrangeThreeViews(): Promise<void> {
 }
 
 async function evictDownToTwo(label: string): Promise<string[]> {
-  expectIsolated(await configurePvm(ctx.app, CACHE_LIMIT_TRIGGER));
-  await expect
-    .poll(async () => (await readPvmState(ctx.app)).views.length, {
-      timeout: T_LONG,
-      intervals: [200, 400, 800],
-    })
-    .toBe(CACHE_LIMIT_TRIGGER);
-  const survivors = (await readPvmState(ctx.app)).views.map((v) => v.projectId);
-  console.log(`[bound-view-eviction] ${label} survivors`, JSON.stringify(survivors));
-  return survivors;
+  const pass = await configurePvm(ctx.app, CACHE_LIMIT_TRIGGER);
+  expectIsolated(pass);
+  expect(
+    [...pass.before].sort(),
+    "the pass did not start from all three views, so its decision was about a different arrangement"
+  ).toEqual([projectIdA, projectIdB, projectIdC].sort());
+  expect(pass.after, "the trigger did not evict exactly one view").toHaveLength(
+    CACHE_LIMIT_TRIGGER
+  );
+  console.log(`[bound-view-eviction] ${label} survivors`, JSON.stringify(pass.after));
+  return pass.after;
 }
 
 test.describe.serial("MCP: a bound session's view outranks LRU under eviction (#11790)", () => {
@@ -383,6 +415,8 @@ test.describe.serial("MCP: a bound session's view outranks LRU under eviction (#
   });
 
   test("with nothing bound, pure LRU evicts the oldest cached view", async () => {
+    // Three project switches, each with its own retry ladder, then the pass.
+    test.slow();
     expectIsolated(await configurePvm(ctx.app, CACHE_LIMIT_ARRANGED));
     await arrangeThreeViews();
 
@@ -393,10 +427,13 @@ test.describe.serial("MCP: a bound session's view outranks LRU under eviction (#
       lastUsed[projectIdA],
       "A is not the LRU-oldest cached view, so this run never posed the question"
     ).toBeLessThan(lastUsed[projectIdB]);
-    // Nothing is protected: a stray binding, an in-flight lease, or a throwing
-    // activity callback would each deprioritize a view and decide this for us.
+    // Nothing is protected: a stray binding, an in-flight lease, a throwing
+    // activity callback, an active agent, or an assistant backend would each
+    // deprioritize a view and decide this for us.
     expect(
-      before.views.filter((v) => v.liveBinding || v.dispatchLease || v.unknown),
+      before.views.filter(
+        (v) => v.liveBinding || v.dispatchLease || v.unknown || v.activeAgent || v.assistantBackend
+      ),
       "a view was already protected before the control ran"
     ).toEqual([]);
     console.log("[bound-view-eviction] control before", JSON.stringify(before));
@@ -408,6 +445,9 @@ test.describe.serial("MCP: a bound session's view outranks LRU under eviction (#
   });
 
   test("a live MCP binding on the oldest view inverts LRU — the younger view dies", async () => {
+    // Three project switches, each with its own retry ladder, then the
+    // handshake, the binding poll, and the pass.
+    test.slow();
     expectIsolated(await configurePvm(ctx.app, CACHE_LIMIT_ARRANGED));
     await arrangeThreeViews();
 
@@ -440,15 +480,44 @@ test.describe.serial("MCP: a bound session's view outranks LRU under eviction (#
       lastUsed[projectIdA],
       "A is not the LRU-oldest cached view, so surviving proves nothing"
     ).toBeLessThan(lastUsed[projectIdB]);
+    // The binding has to be A's ONLY protection. A dispatch lease drops A out
+    // of the candidate list before any tiering, an assistant backend puts it
+    // behind a hard floor, and an active agent ranks it behind B — each would
+    // spare A on its own, and each would survive the guard being neutered.
+    const viewA = before.views.find((v) => v.projectId === projectIdA);
+    expect(
+      {
+        liveBinding: viewA?.liveBinding,
+        dispatchLease: viewA?.dispatchLease,
+        unknown: viewA?.unknown,
+        activeAgent: viewA?.activeAgent,
+        assistantBackend: viewA?.assistantBackend,
+      },
+      "A is protected by something other than its live binding, so surviving would not be attributable to #11790"
+    ).toEqual({
+      liveBinding: true,
+      dispatchLease: false,
+      unknown: false,
+      activeAgent: false,
+      assistantBackend: false,
+    });
     const viewB = before.views.find((v) => v.projectId === projectIdB);
     expect(
       {
         liveBinding: viewB?.liveBinding,
         dispatchLease: viewB?.dispatchLease,
         unknown: viewB?.unknown,
+        activeAgent: viewB?.activeAgent,
+        assistantBackend: viewB?.assistantBackend,
       },
       "B is not an unprotected candidate, so its eviction would not be attributable to A's binding"
-    ).toEqual({ liveBinding: false, dispatchLease: false, unknown: false });
+    ).toEqual({
+      liveBinding: false,
+      dispatchLease: false,
+      unknown: false,
+      activeAgent: false,
+      assistantBackend: false,
+    });
     console.log("[bound-view-eviction] bound before", JSON.stringify(before));
 
     const survivors = await evictDownToTwo("bound");
