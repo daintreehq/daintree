@@ -224,6 +224,8 @@ npm run build && npm run test:freeze-harness
 FREEZE_HARNESS_RUNS=5 npm run test:freeze-harness   # variance
 ```
 
+The whole measurement has to finish before the cached view's first memory purge (`CACHED_VIEW_PURGE_DELAY_MS`, armed the moment the view is cached), or the purge perturbs the throughput being measured. That is checked against the elapsed clock just before the control leg, so widening `DAINTREE_FREEZE_HARNESS_WINDOW_MS` past what fits fails the run with the shortfall rather than reporting a number measured across a purge.
+
 Reference numbers (macOS, Electron 42, 3s windows): control ~54,000 ticks, frozen **0**, recovered ~52,000. With `freezeWebContents` neutered the same run reads control 54,026 / frozen 53,875 — a ratio of 1.0x against 54,000x, so the harness is discriminating by a wide margin.
 
 **Measured on macOS only.** The mechanism is Chromium/CDP semantics and should be platform-independent, but that is an inference; Windows is unverified and is the platform most likely to differ. The harness is not wired into any workflow yet — run it on demand.

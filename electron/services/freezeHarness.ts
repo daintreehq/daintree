@@ -46,6 +46,7 @@ import os from "os";
 import path from "path";
 import { promisify } from "util";
 import type { ProjectViewManager } from "../window/ProjectViewManager.js";
+import { CACHED_VIEW_PURGE_DELAY_MS } from "../window/ProjectViewLifecycleController.js";
 import { projectStore } from "./ProjectStore.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
@@ -64,8 +65,10 @@ const PROBE_WARMUP_MS = 750;
 /**
  * Each measurement leg runs for this long. All three legs use the same width.
  * Overridable for run-to-run variance work, but the whole run must stay inside
- * `CACHED_VIEW_PURGE_DELAY_MS` (20s from the moment the view is cached) so the
- * periodic CDP memory purge never lands mid-measurement.
+ * `CACHED_VIEW_PURGE_DELAY_MS` (from the moment the view is cached) so the
+ * periodic CDP memory purge never lands mid-measurement. `evaluatePurgeBudget`
+ * enforces that against the elapsed clock and fails the run rather than
+ * reporting a number measured across a purge.
  */
 const MEASURE_WINDOW_MS = readWindowMsOverride() ?? 3_000;
 
@@ -96,6 +99,12 @@ const THAW_SETTLE_MS = 1_000;
 /** A still-frozen or dead renderer never answers; fail loudly instead of hanging. */
 const PROBE_READ_TIMEOUT_MS = 15_000;
 const VIEW_SETTLE_MS = 1_500;
+/**
+ * Slack subtracted from the purge deadline before the budget is accepted, so a
+ * schedule that only fits if every `setTimeout` lands on time is rejected rather
+ * than run. Timer overshoot across eight sequential delays is cumulative.
+ */
+const PURGE_BUDGET_GUARD_MS = 1_000;
 
 /**
  * Liveness floor for the positive control only. Without it, a probe that never
@@ -185,6 +194,53 @@ export function longestStall(
     if (durationMs > best.durationMs) best = { startMs, endMs, durationMs };
   }
   return best;
+}
+
+export interface PurgeBudget {
+  /** Deterministic schedule still ahead of the check point, in ms. */
+  plannedRemainingMs: number;
+  /** When the last window closes, measured from the instant the view was cached. */
+  plannedFinishMs: number;
+  /** The purge instant the run has to beat, guard already subtracted. */
+  deadlineMs: number;
+  /** Signed slack against the deadline. Negative means the run would overrun it. */
+  headroomMs: number;
+  fits: boolean;
+}
+
+/**
+ * Does the rest of the run fit before the cached view's first memory purge?
+ *
+ * The purge timer is armed inside `deactivateEntry` the moment the view flips to
+ * `cached`, and fires `CACHED_VIEW_PURGE_DELAY_MS` later. A purge landing
+ * mid-measurement perturbs the very throughput being measured, so the docstring
+ * on `MEASURE_WINDOW_MS` has always said the run must finish first — this makes
+ * that a check rather than a promise, because `MEASURE_WINDOW_MS` is
+ * env-overridable and a large override silently produces a corrupted number.
+ *
+ * Takes elapsed time rather than assuming it: probe injection is an IPC
+ * round-trip of unbounded duration, so the setup cost is only knowable at the
+ * check point. Everything after that point is `setTimeout`s of known width.
+ */
+export function evaluatePurgeBudget({
+  elapsedSinceCachedMs,
+  measureWindowMs,
+  purgeDelayMs = CACHED_VIEW_PURGE_DELAY_MS,
+  guardMs = PURGE_BUDGET_GUARD_MS,
+}: {
+  elapsedSinceCachedMs: number;
+  measureWindowMs: number;
+  purgeDelayMs?: number;
+  guardMs?: number;
+}): PurgeBudget {
+  // Three measurement legs plus the two settles and the trailing guard that
+  // separate them. Mirrors the call order in `runFreezeHarness` below.
+  const plannedRemainingMs =
+    3 * measureWindowMs + FREEZE_SETTLE_MS + FREEZE_TRAILING_GUARD_MS + THAW_SETTLE_MS;
+  const plannedFinishMs = elapsedSinceCachedMs + plannedRemainingMs;
+  const deadlineMs = purgeDelayMs - guardMs;
+  const headroomMs = deadlineMs - plannedFinishMs;
+  return { plannedRemainingMs, plannedFinishMs, deadlineMs, headroomMs, fits: headroomMs >= 0 };
 }
 
 export function evaluateFreezeMeasurement(measurement: FreezeMeasurement): FreezeVerdict {
@@ -296,10 +352,16 @@ async function createHarnessRepo(root: string, name: string): Promise<string> {
  * error; the caller maps that to the process exit code.
  */
 export async function runFreezeHarness(pvm: ProjectViewManager): Promise<boolean> {
-  const tempRoot = await mkdtemp(path.join(os.tmpdir(), "daintree-freeze-harness-"));
+  // Every failure has to come back as `false`, not a rejection: the caller maps
+  // the return value to the process exit code, and a throw would escape
+  // `setupWindowServices` with the harness window still up and no exit issued.
+  // `mkdtemp` is inside the guard for that reason — a full or unwritable tmpdir
+  // is a setup failure like any other.
+  let tempRoot: string | null = null;
   const createdProjectIds: string[] = [];
 
   try {
+    tempRoot = await mkdtemp(path.join(os.tmpdir(), "daintree-freeze-harness-"));
     const pathA = await createHarnessRepo(tempRoot, "project-a");
     const pathB = await createHarnessRepo(tempRoot, "project-b");
     const projectA = await projectStore.addProject(pathA);
@@ -335,6 +397,16 @@ export async function runFreezeHarness(pvm: ProjectViewManager): Promise<boolean
       String(cached.view.getVisible())
     );
 
+    // Establish a known-thawed baseline before injecting. `deactivateEntry`
+    // freezes the outgoing view immediately — no debounce — when efficiency
+    // freeze is already on, and `ResourceProfileService` can turn it on at any
+    // point on its own 30s cadence. Without this, a run that started under the
+    // efficiency profile would inject into a frozen renderer (which never
+    // answers) or measure a control leg that was frozen the whole time. Calling
+    // it with `false` when already false and idle is a no-op; with a freeze
+    // timer pending it cancels the timer and thaws, which is what we want.
+    pvm.setEfficiencyFreeze(false);
+
     const started = await withTimeout(
       cachedWc.executeJavaScript(PROBE_START_JS, true) as Promise<string>,
       PROBE_READ_TIMEOUT_MS,
@@ -346,6 +418,26 @@ export async function runFreezeHarness(pvm: ProjectViewManager): Promise<boolean
     }
     await delay(PROBE_WARMUP_MS);
     log("CHECK: probe running — OK");
+
+    // Last point before the clock matters. Setup is done, so the only unknown —
+    // how long injection took — is now measured rather than assumed.
+    const budget = evaluatePurgeBudget({
+      elapsedSinceCachedMs: Date.now() - cached.lastUsed,
+      measureWindowMs: MEASURE_WINDOW_MS,
+    });
+    if (!budget.fits) {
+      log(
+        "FAILED — measurement would outlast the cached-view purge: window=%dms needs %dms more, " +
+          "finishing at %dms after caching against a %dms deadline (%dms short). " +
+          "Lower DAINTREE_FREEZE_HARNESS_WINDOW_MS.",
+        MEASURE_WINDOW_MS,
+        budget.plannedRemainingMs,
+        budget.plannedFinishMs,
+        budget.deadlineMs,
+        -budget.headroomMs
+      );
+      return false;
+    }
 
     const controlStart = Date.now();
     await delay(MEASURE_WINDOW_MS);
@@ -440,6 +532,14 @@ export async function runFreezeHarness(pvm: ProjectViewManager): Promise<boolean
     log("FAILED — %s", formatErrorMessage(error, "freeze harness threw"));
     return false;
   } finally {
+    // An early return or a throw can leave the view frozen; the process is about
+    // to exit either way, but a frozen view can't answer the CDP teardown the
+    // shutdown path issues.
+    try {
+      pvm.setEfficiencyFreeze(false);
+    } catch {
+      // best-effort
+    }
     for (const projectId of createdProjectIds) {
       try {
         await projectStore.removeProject(projectId);
@@ -447,6 +547,14 @@ export async function runFreezeHarness(pvm: ProjectViewManager): Promise<boolean
         // best-effort cleanup
       }
     }
-    await rm(tempRoot, { recursive: true, force: true });
+    if (tempRoot) {
+      // Guarded: on Windows the app can still hold a handle under this root, and
+      // a rejected unlink here would replace a completed verdict with a throw.
+      try {
+        await rm(tempRoot, { recursive: true, force: true });
+      } catch (error) {
+        log("WARN — could not remove %s: %s", tempRoot, formatErrorMessage(error, "unknown"));
+      }
+    }
   }
 }

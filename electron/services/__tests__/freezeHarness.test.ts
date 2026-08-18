@@ -7,8 +7,17 @@ vi.mock("../ProjectStore.js", () => ({
   },
 }));
 
+// The harness imports the purge delay from the lifecycle controller so the two
+// can't drift. The controller reaches `electron` at module scope, which a unit
+// test has no business booting — and every budget assertion below passes its own
+// delay explicitly, so the value here is never the thing under test.
+vi.mock("../../window/ProjectViewLifecycleController.js", () => ({
+  CACHED_VIEW_PURGE_DELAY_MS: 20_000,
+}));
+
 const {
   evaluateFreezeMeasurement,
+  evaluatePurgeBudget,
   longestStall,
   sumTicksInWindow,
   MIN_CONTROL_TICKS,
@@ -183,5 +192,66 @@ describe("evaluateFreezeMeasurement", () => {
     });
     expect(verdict.passed).toBe(false);
     expect(verdict.failures.join("\n")).toContain("positive control is not alive");
+  });
+});
+
+describe("evaluatePurgeBudget", () => {
+  const base = { elapsedSinceCachedMs: 2_000, measureWindowMs: 3_000, purgeDelayMs: 20_000 };
+
+  it("scales the remaining schedule by three windows, one per measurement leg", () => {
+    // The three legs are the only window-width terms; the settles and the guard
+    // are fixed. So a delta in window width must show up exactly three times.
+    const narrow = evaluatePurgeBudget({ ...base, measureWindowMs: 1_000 });
+    const wide = evaluatePurgeBudget({ ...base, measureWindowMs: 1_500 });
+    expect(wide.plannedRemainingMs - narrow.plannedRemainingMs).toBe(3 * 500);
+  });
+
+  it("charges setup time against the same deadline, one ms for one ms", () => {
+    const early = evaluatePurgeBudget(base);
+    const late = evaluatePurgeBudget({ ...base, elapsedSinceCachedMs: 2_000 + 750 });
+    expect(early.headroomMs - late.headroomMs).toBe(750);
+    // The schedule ahead is unchanged — only where it lands moved.
+    expect(late.plannedRemainingMs).toBe(early.plannedRemainingMs);
+  });
+
+  it("subtracts the guard from the purge delay rather than spending it", () => {
+    const guarded = evaluatePurgeBudget({ ...base, guardMs: 1_000 });
+    const unguarded = evaluatePurgeBudget({ ...base, guardMs: 0 });
+    expect(unguarded.deadlineMs - guarded.deadlineMs).toBe(1_000);
+    expect(guarded.headroomMs).toBe(unguarded.headroomMs - 1_000);
+  });
+
+  it("flips at the boundary its own headroom identifies", () => {
+    const fitting = evaluatePurgeBudget(base);
+    expect(fitting.fits).toBe(true);
+
+    // Consume exactly the reported headroom: still fits, with nothing to spare.
+    const exact = evaluatePurgeBudget({
+      ...base,
+      elapsedSinceCachedMs: base.elapsedSinceCachedMs + fitting.headroomMs,
+    });
+    expect(exact.headroomMs).toBe(0);
+    expect(exact.fits).toBe(true);
+
+    // One millisecond past it does not.
+    const over = evaluatePurgeBudget({
+      ...base,
+      elapsedSinceCachedMs: base.elapsedSinceCachedMs + fitting.headroomMs + 1,
+    });
+    expect(over.fits).toBe(false);
+  });
+
+  it("rejects a window override large enough to outlast the purge", () => {
+    // The failure this guard exists for: DAINTREE_FREEZE_HARNESS_WINDOW_MS is
+    // free-form, and a wide window pushes the recovery leg past the purge.
+    const wide = evaluatePurgeBudget({ ...base, measureWindowMs: 5_000 });
+    expect(wide.fits).toBe(false);
+    expect(wide.plannedFinishMs).toBeGreaterThan(wide.deadlineMs);
+  });
+
+  it("reports a finish that is the elapsed time plus everything still scheduled", () => {
+    const budget = evaluatePurgeBudget(base);
+    expect(budget.plannedFinishMs).toBe(base.elapsedSinceCachedMs + budget.plannedRemainingMs);
+    expect(budget.headroomMs).toBe(budget.deadlineMs - budget.plannedFinishMs);
   });
 });

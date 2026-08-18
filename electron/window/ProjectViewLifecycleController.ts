@@ -34,7 +34,12 @@ import type { ViewEntry } from "./ProjectViewManagerTypes.js";
 // the interval re-purges long-cached views whose background work (agent
 // output, worktree events) keeps re-accumulating garbage. Purge is per-target
 // CDP — the active view is never touched.
-const CACHED_VIEW_PURGE_DELAY_MS = 20_000;
+/**
+ * Delay from a view becoming cached to its first memory purge. Exported so
+ * the freeze harness can budget its measurement against the same number
+ * rather than duplicating it (`electron/services/freezeHarness.ts`).
+ */
+export const CACHED_VIEW_PURGE_DELAY_MS = 20_000;
 const CACHED_VIEW_PURGE_INTERVAL_MS = 60_000;
 
 export function deactivateEntry(host: ProjectViewManager, current: ViewEntry): void {

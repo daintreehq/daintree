@@ -50,9 +50,97 @@ export const REQUIRED_MARKERS = [
 
 const FAILURE_MARKER = "[FREEZE-HARNESS] FAILED";
 
+/** Grace between the graceful kill and the hard one, and again before we stop waiting. */
+const CHILD_KILL_GRACE_MS = 5_000;
+/** Backstop for a pipe whose write callback never fires. See `exitAfterFlush`. */
+const FLUSH_TIMEOUT_MS = 5_000;
+
 export function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * How to kill the child's whole tree on a given platform, as data.
+ *
+ * Electron's descendants (GPU, utility, pty-host, workspace-host) inherit this
+ * script's stdout/stderr, so a survivor holds those pipes open and this process
+ * never exits — the v0.32.0 Windows hang, which took a release step from 43s to
+ * a 12-minute timeout. Killing the root alone is not enough.
+ *
+ * Deliberately PID-scoped on both platforms. `run-packaged-smoke.mjs` can fall
+ * back to `taskkill /im Daintree.exe` because it is single-tenant against a
+ * packaged build; this runner launches the *unpackaged* `electron.exe`, so an
+ * image-name kill would take out VS Code and every other Electron app on the
+ * developer's machine. There is no last resort here, by design.
+ *
+ * Returned as a descriptor rather than executed so the platform branch is
+ * testable without spawning anything.
+ */
+export function describeTreeKill(platform, pid, { force = false } = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return { kind: "none" };
+  if (platform === "win32") {
+    // `/t` walks the tree as it stands right now, so anything already orphaned
+    // by the root's own exit is out of reach — which is why the caller escalates
+    // rather than trusting one call.
+    return {
+      kind: "taskkill",
+      command: "taskkill",
+      args: ["/pid", String(pid), "/t", "/f"],
+    };
+  }
+  // Valid only because the child is spawned `detached` on POSIX, which makes it
+  // a process-group leader with pgid === pid. Never negate a pid that was not.
+  return { kind: "group-signal", pid: -pid, signal: force ? "SIGKILL" : "SIGTERM" };
+}
+
+/** Whether the child should lead its own process group. Windows has no groups. */
+export function shouldDetach(platform) {
+  return platform !== "win32";
+}
+
+function runTreeKill(child, { force }) {
+  const action = describeTreeKill(process.platform, child.pid, { force });
+  if (action.kind === "none") return;
+  if (action.kind === "taskkill") {
+    spawn(action.command, action.args, { stdio: "ignore", windowsHide: true }).on("error", () => {});
+    return;
+  }
+  try {
+    process.kill(action.pid, action.signal);
+  } catch {
+    // The group is already gone, or we raced its exit. Fall back to the root.
+    try {
+      child.kill(action.signal);
+    } catch {
+      // Ignore races with process exit.
+    }
+  }
+}
+
+/**
+ * Exit without waiting for the event loop to drain.
+ *
+ * Mirrors `run-packaged-smoke.mjs`. Flush first: under CI stdout/stderr are
+ * pipes, which are async, and this script forwards the app's output through
+ * them — a bare exit truncates the tail of the log, which is exactly the part
+ * that explains a failure. The timer is the backstop for a blocked pipe whose
+ * write callback never fires, and is unref'd so it cannot itself hold us open.
+ */
+function exitAfterFlush(code) {
+  let exited = false;
+  const done = () => {
+    if (exited) return;
+    exited = true;
+    process.exit(code);
+  };
+
+  const bail = setTimeout(done, FLUSH_TIMEOUT_MS);
+  bail.unref();
+
+  process.stdout.write("", () => {
+    process.stderr.write("", done);
+  });
 }
 
 /**
@@ -128,17 +216,39 @@ function runHarnessOnce({ runIndex, runCount, timeoutMs }) {
         const child = spawn(electronPath, args, {
           cwd: ROOT,
           env,
+          detached: shouldDetach(process.platform),
           stdio: ["ignore", "pipe", "pipe"],
         });
 
         let timedOut = false;
         let output = "";
         let hardKillTimer;
+        let giveUpTimer;
+        let settled = false;
 
-        const cleanup = async () => {
+        // One settlement path. `error` and `close` can both fire (a spawn
+        // failure emits `error`, and a failed spawn may never emit `close` at
+        // all), and cleanup must never be what decides whether this promise
+        // settles — see `finish` below.
+        const finish = (error, result) => {
+          if (settled) return;
+          settled = true;
           clearTimeout(timeoutTimer);
           if (hardKillTimer) clearTimeout(hardKillTimer);
-          await rm(userDataDir, { recursive: true, force: true });
+          if (giveUpTimer) clearTimeout(giveUpTimer);
+          // Fire-and-forget, and non-throwing: on Windows the app can still hold
+          // a handle under the user-data dir, and an rm rejection inside an async
+          // listener would leave this promise pending forever — the runner would
+          // hang on a run that had already produced its verdict.
+          rm(userDataDir, { recursive: true, force: true }).catch((removeError) => {
+            console.error(
+              `[FREEZE-RUNNER] Could not remove ${userDataDir}: ${
+                removeError instanceof Error ? removeError.message : String(removeError)
+              }`
+            );
+          });
+          if (error) reject(error);
+          else resolve(result);
         };
 
         const timeoutTimer = setTimeout(() => {
@@ -146,8 +256,15 @@ function runHarnessOnce({ runIndex, runCount, timeoutMs }) {
           console.error(
             `[FREEZE-RUNNER] Run ${runIndex}/${runCount}: timed out after ${timeoutMs}ms`
           );
-          child.kill();
-          hardKillTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+          runTreeKill(child, { force: false });
+          hardKillTimer = setTimeout(() => runTreeKill(child, { force: true }), CHILD_KILL_GRACE_MS);
+          // A tree we could not fully reach may keep the stdio pipes open, so
+          // `close` never arrives. Settle anyway — the timeout is already the
+          // verdict, and waiting past it is the hang we are defending against.
+          giveUpTimer = setTimeout(
+            () => finish(null, { code: null, signal: "SIGKILL", output, timedOut: true }),
+            CHILD_KILL_GRACE_MS * 2
+          );
         }, timeoutMs);
         timeoutTimer.unref();
 
@@ -159,15 +276,8 @@ function runHarnessOnce({ runIndex, runCount, timeoutMs }) {
         child.stdout?.on("data", (chunk) => capture(chunk, process.stdout));
         child.stderr?.on("data", (chunk) => capture(chunk, process.stderr));
 
-        child.on("error", async (error) => {
-          await cleanup();
-          reject(error);
-        });
-
-        child.on("close", async (code, signal) => {
-          await cleanup();
-          resolve({ code, signal, output, timedOut });
-        });
+        child.on("error", (error) => finish(error, null));
+        child.on("close", (code, signal) => finish(null, { code, signal, output, timedOut }));
       })
       .catch(reject);
   });
@@ -184,7 +294,16 @@ async function main() {
     const result = await runHarnessOnce({ runIndex: i, runCount, timeoutMs });
     const parsed = extractResultLine(result.output);
     if (parsed) results.push(parsed);
-    validateHarnessOutput(i, runCount, result);
+    try {
+      validateHarnessOutput(i, runCount, result);
+    } catch (error) {
+      // Only `[FREEZE-HARNESS]` lines are echoed live, so a child that died
+      // before its first marker has said nothing at all on the console — the
+      // reason is sitting unread in `output`. Dump it, once, on the way out.
+      console.error(`[FREEZE-RUNNER] Captured output from run ${i}/${runCount}:`);
+      console.error(result.output.trimEnd() || "(child produced no output)");
+      throw error;
+    }
     console.log(`[FREEZE-RUNNER] Run ${i}/${runCount}: PASS`);
   }
 
@@ -203,11 +322,13 @@ const invokedDirectly =
   process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (invokedDirectly) {
-  main().catch((error) => {
-    console.error(
-      "[FREEZE-RUNNER] FAILED:",
-      error instanceof Error ? error.message : String(error)
-    );
-    process.exit(1);
-  });
+  main()
+    .then(() => exitAfterFlush(0))
+    .catch((error) => {
+      console.error(
+        "[FREEZE-RUNNER] FAILED:",
+        error instanceof Error ? error.message : String(error)
+      );
+      exitAfterFlush(1);
+    });
 }
