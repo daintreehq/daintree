@@ -1251,6 +1251,165 @@ describe("useProjectSwitcherPalette", () => {
     });
   });
 
+  describe("search activity freeze — issue #11861", () => {
+    const base = (id: string, name: string) => ({
+      id,
+      name,
+      path: `/repo/${id}`,
+      emoji: "🌲",
+      lastOpened: 100,
+      frecencyScore: 3.0,
+      status: "closed" as const,
+    });
+    const pair = () => [base("one", "alpha-one"), base("two", "alpha-two")];
+    const QUIET = { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 };
+    const WAITING = { activeAgentCount: 0, waitingAgentCount: 2, processCount: 0 };
+
+    it("holds the ranked order against a stats push while the counts keep updating", async () => {
+      // Search ranks equally-well-matched names by what they are asking for, and
+      // that answer arrives live over IPC. Re-ranking on every push would move a
+      // row out from under the pointer between deciding to click and clicking —
+      // and would change what Enter commits, since selection is the top row
+      // until the user arrows.
+      const projects = pair();
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = { two: WAITING };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const { result, rerender, unmount } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+      act(() => {
+        result.current.setQuery("alpha");
+      });
+      await waitFor(() => {
+        expect(result.current.results.map((r) => r.id)).toEqual(["two", "one"]);
+      });
+
+      // The wait moves to the other project mid-read.
+      act(() => {
+        projectStatsState.stats = { one: WAITING, two: QUIET };
+        rerender();
+      });
+
+      // The order is the one the user is looking at...
+      expect(result.current.results.map((r) => r.id)).toEqual(["two", "one"]);
+      // ...while the rows themselves report what is true now, which is what
+      // keeps a held row's status line honest about why it is where it is.
+      expect(result.current.results.find((r) => r.id === "one")?.waitingAgentCount).toBe(2);
+      expect(result.current.results.find((r) => r.id === "two")?.waitingAgentCount).toBe(0);
+
+      // Reopening is what refreshes it — the freeze is per session, not forever.
+      act(() => {
+        result.current.close();
+      });
+      act(() => {
+        result.current.open("modal");
+      });
+      act(() => {
+        result.current.setQuery("alpha");
+      });
+      await waitFor(() => {
+        expect(result.current.results.map((r) => r.id)).toEqual(["one", "two"]);
+      });
+      unmount();
+    });
+
+    it("regroups a session that opened before any stats arrived, then holds", async () => {
+      // A snapshot taken cold reads every row as quiet, which is not an order —
+      // it is the absence of one. It has to resolve once, the way browse's band
+      // freeze does, rather than locking the session into the guess.
+      const projects = pair();
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {};
+      const bulk = emptyBulkStats(projects.map((p) => p.id));
+      bulk.two!.waitingAgentCount = 2;
+      getBulkStatsMock.mockResolvedValue(bulk);
+
+      const { result, rerender, unmount } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(setStatsMock).toHaveBeenCalled();
+      });
+      act(() => {
+        result.current.setQuery("alpha");
+      });
+
+      await waitFor(() => {
+        expect(result.current.results.map((r) => r.id)).toEqual(["two", "one"]);
+      });
+
+      // Resolved once, and now as immovable as a session that opened warm.
+      act(() => {
+        projectStatsState.stats = { one: WAITING, two: QUIET };
+        rerender();
+      });
+      expect(result.current.results.map((r) => r.id)).toEqual(["two", "one"]);
+      unmount();
+    });
+
+    it("holds a project that registered after the freeze just as still", async () => {
+      // An arrival has no snapshot entry, so it ranks as quiet until it is
+      // folded in. What it must never do is track the live counts — that is the
+      // one row still moving on every push.
+      const projects = pair();
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = { two: WAITING };
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(projects.map((p) => p.id)));
+
+      const { result, rerender, unmount } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+      act(() => {
+        result.current.setQuery("alpha");
+      });
+      await waitFor(() => {
+        expect(result.current.results.map((r) => r.id)).toEqual(["two", "one"]);
+      });
+
+      // A third project registers, already blocked — the loudest thing in the list.
+      act(() => {
+        projectState.projects = [...projects, base("three", "alpha-three")];
+        projectStatsState.stats = {
+          two: WAITING,
+          three: {
+            activeAgentCount: 0,
+            waitingAgentCount: 5,
+            blockedAgentCount: 5,
+            processCount: 0,
+          },
+        };
+        rerender();
+      });
+
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(3);
+      });
+      expect(result.current.results.map((r) => r.id)).toEqual(["three", "two", "one"]);
+
+      // And having taken that one position it stops moving, like everything else.
+      act(() => {
+        projectStatsState.stats = { one: WAITING, two: QUIET, three: QUIET };
+        rerender();
+      });
+      expect(result.current.results.map((r) => r.id)).toEqual(["three", "two", "one"]);
+      unmount();
+    });
+  });
+
   describe("toggle for repeated Cmd+Alt+P", () => {
     const threeProjects = [
       {

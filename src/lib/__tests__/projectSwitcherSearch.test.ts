@@ -4,6 +4,8 @@ import {
   scoreProjectQuery,
   scoreScratchQuery,
   rankSwitcherMatches,
+  QUIET_SEARCH_ACTIVITY,
+  computeSearchActivityKey,
 } from "../projectSwitcherSearch";
 import type { SearchableProject, SearchableScratch } from "@/hooks/useProjectSwitcherPalette";
 
@@ -200,17 +202,17 @@ describe("rankSwitcherMatches", () => {
   ];
 
   it("returns empty for empty query", () => {
-    expect(rankSwitcherMatches("", projects, [])).toEqual([]);
-    expect(rankSwitcherMatches("  ", projects, [])).toEqual([]);
+    expect(rankSwitcherMatches("", projects, [], null)).toEqual([]);
+    expect(rankSwitcherMatches("  ", projects, [], null)).toEqual([]);
   });
 
   it("filters out non-matching projects", () => {
-    const results = rankSwitcherMatches("xyz", projects, []);
+    const results = rankSwitcherMatches("xyz", projects, [], null);
     expect(results).toHaveLength(0);
   });
 
   it("ranks exact name substring matches first", () => {
-    const results = rankSwitcherMatches("daintree", projects, []);
+    const results = rankSwitcherMatches("daintree", projects, [], null);
     expect(results.length).toBeGreaterThanOrEqual(2);
     expect(results[0]!.name).toContain("daintree");
   });
@@ -230,13 +232,13 @@ describe("rankSwitcherMatches", () => {
         frecencyScore: 5.0,
       }),
     ];
-    const results = rankSwitcherMatches("alpha", tieProjects, []);
+    const results = rankSwitcherMatches("alpha", tieProjects, [], null);
     expect(results[0]!.id).toBe("b"); // higher frecencyScore wins
   });
 
   it("trims whitespace from query before matching", () => {
-    const results = rankSwitcherMatches("  daintree  ", projects, []);
-    const resultsClean = rankSwitcherMatches("daintree", projects, []);
+    const results = rankSwitcherMatches("  daintree  ", projects, [], null);
+    const resultsClean = rankSwitcherMatches("daintree", projects, [], null);
     expect(results).toHaveLength(resultsClean.length);
     expect(results.map((r) => r.id)).toEqual(resultsClean.map((r) => r.id));
   });
@@ -245,7 +247,7 @@ describe("rankSwitcherMatches", () => {
     const many = Array.from({ length: 20 }, (_, i) =>
       makeProject({ id: `p${i}`, name: `project-${i}`, path: `/repos/p${i}`, lastOpened: i })
     );
-    const results = rankSwitcherMatches("project", many, []);
+    const results = rankSwitcherMatches("project", many, [], null);
     expect(results).toHaveLength(20);
   });
 
@@ -257,12 +259,12 @@ describe("rankSwitcherMatches", () => {
     const weak = makeProject({ id: "weak", name: "a-l-p-h-a", path: "/zzz", frecencyScore: 99 });
     const scratch = makeScratch({ id: "mid", name: "alpha-spike" });
 
-    const mixed = rankSwitcherMatches("alpha", [weak, strong], [scratch]);
+    const mixed = rankSwitcherMatches("alpha", [weak, strong], [scratch], null);
 
     expect(mixed.map((r) => r.id)).toEqual(["strong", "mid", "weak"]);
     // And the projects keep the order they had with no scratch in the pool.
     expect(mixed.filter((r) => r.kind === "project").map((r) => r.id)).toEqual(
-      rankSwitcherMatches("alpha", [weak, strong], []).map((r) => r.id)
+      rankSwitcherMatches("alpha", [weak, strong], [], null).map((r) => r.id)
     );
   });
 
@@ -270,7 +272,8 @@ describe("rankSwitcherMatches", () => {
     const results = rankSwitcherMatches(
       "alpha",
       [makeProject({ id: "p", name: "alpha-app", path: "/repos/alpha" })],
-      [makeScratch({ id: "s", name: "alpha-notes" })]
+      [makeScratch({ id: "s", name: "alpha-notes" })],
+      null
     );
     expect(results.map((r) => r.kind).sort()).toEqual(["project", "scratch"]);
   });
@@ -280,7 +283,7 @@ describe("rankSwitcherMatches", () => {
       makeScratch({ id: "s1", name: "auth-notes" }),
       makeScratch({ id: "s2", name: "billing-spike" }),
     ];
-    const results = rankSwitcherMatches("auth", [], scratches);
+    const results = rankSwitcherMatches("auth", [], scratches, null);
     expect(results.map((r) => r.id)).toEqual(["s1"]);
   });
 
@@ -294,7 +297,7 @@ describe("rankSwitcherMatches", () => {
       scoreScratchQuery("release", scratch.name)
     );
 
-    expect(rankSwitcherMatches("release", [project], [scratch]).map((r) => r.id)).toEqual([
+    expect(rankSwitcherMatches("release", [project], [scratch], null).map((r) => r.id)).toEqual([
       "p",
       "s",
     ]);
@@ -306,7 +309,8 @@ describe("rankSwitcherMatches", () => {
     const results = rankSwitcherMatches(
       "auth",
       [makeProject({ id: "p", name: "a-u-t-h-elper", path: "/repos/auth-adjacent" })],
-      [makeScratch({ id: "s", name: "auth-notes" })]
+      [makeScratch({ id: "s", name: "auth-notes" })],
+      null
     );
     expect(results[0]!.id).toBe("s");
   });
@@ -318,8 +322,426 @@ describe("rankSwitcherMatches", () => {
       [
         makeScratch({ id: "old", name: "notes", lastOpened: 100 }),
         makeScratch({ id: "new", name: "notes", lastOpened: 900 }),
-      ]
+      ],
+      null
     );
     expect(results.map((r) => r.id)).toEqual(["new", "old"]);
+  });
+});
+
+describe("rankSwitcherMatches activity ordering", () => {
+  // The four real workspaces from #11861. Every name starts with "Daintree" and
+  // every path sits under the same parent, which is what made all four score
+  // identically at every prefix.
+  const DAINTREE_ROOT = "/Users/gpriday/Projects/Daintree";
+
+  function daintreeFixture(): SearchableProject[] {
+    return [
+      makeProject({
+        id: "daintree",
+        name: "Daintree",
+        path: `${DAINTREE_ROOT}/daintree`,
+        frecencyScore: 163.2,
+        activeAgentCount: 1,
+      }),
+      makeProject({
+        id: "backend",
+        name: "Daintree Assistant Backend",
+        path: `${DAINTREE_ROOT}/assistant-backend`,
+        frecencyScore: 102.3,
+        completedAgentCount: 1,
+        unacknowledgedCompletedAgentCount: 1,
+      }),
+      makeProject({
+        id: "assistant",
+        name: "Daintree Assistant",
+        path: `${DAINTREE_ROOT}/assistant`,
+        frecencyScore: 75.6,
+        waitingAgentCount: 2,
+      }),
+      makeProject({
+        id: "website",
+        name: "Daintree Website",
+        path: `${DAINTREE_ROOT}/website`,
+        frecencyScore: 12.7,
+        waitingAgentCount: 1,
+        blockedAgentCount: 1,
+      }),
+    ];
+  }
+
+  it("keeps every shared-prefix name in one cohort, whatever trails the match", () => {
+    // The suffixes differ in length and the paths differ in tail, but none of
+    // that may split the cohort — a cohort that splits has activity ordering
+    // rows that were never comparable in the first place.
+    const projects = daintreeFixture();
+    // Frecency runs the other way, so the comparator this replaces returns the
+    // exact reverse of the expectation below at every one of these queries.
+    expect(
+      [...projects].sort((a, b) => b.frecencyScore - a.frecencyScore).map((p) => p.id)
+    ).toEqual(["daintree", "backend", "assistant", "website"]);
+
+    for (const query of ["d", "dai", "daint"]) {
+      expect(rankSwitcherMatches(query, projects, [], null).map((r) => r.id)).toEqual([
+        "website", // blocked
+        "assistant", // waiting
+        "backend", // unreviewed completion
+        "daintree", // working
+      ]);
+    }
+  });
+
+  it("keeps a dormant exact name first against prefix matches that are on fire", () => {
+    const projects = daintreeFixture().map((project) =>
+      project.id === "daintree"
+        ? makeProject({ ...project, frecencyScore: 0, lastOpened: 0, activeAgentCount: 0 })
+        : makeProject({ ...project, waitingAgentCount: 40, blockedAgentCount: 40 })
+    );
+
+    expect(rankSwitcherMatches("daintree", projects, [], null)[0]!.id).toBe("daintree");
+    // One character short of the full name it is merely a prefix match again,
+    // so the tier is what is carrying it rather than anything about the row.
+    expect(rankSwitcherMatches("daintre", projects, [], null)[0]!.id).not.toBe("daintree");
+  });
+
+  it("orders an equal-quality cohort by what it is asking, loudest first", () => {
+    const projects = [
+      makeProject({ id: "quiet", name: "alpha-quiet", path: "/repos/alpha" }),
+      makeProject({
+        id: "work-1",
+        name: "alpha-work-1",
+        path: "/repos/alpha",
+        activeAgentCount: 1,
+      }),
+      makeProject({
+        id: "work-3",
+        name: "alpha-work-3",
+        path: "/repos/alpha",
+        activeAgentCount: 3,
+      }),
+      makeProject({
+        id: "review",
+        name: "alpha-review",
+        path: "/repos/alpha",
+        completedAgentCount: 2,
+        unacknowledgedCompletedAgentCount: 2,
+      }),
+      makeProject({
+        id: "wait-1",
+        name: "alpha-wait-1",
+        path: "/repos/alpha",
+        waitingAgentCount: 1,
+      }),
+      makeProject({
+        id: "wait-3",
+        name: "alpha-wait-3",
+        path: "/repos/alpha",
+        waitingAgentCount: 3,
+      }),
+    ];
+
+    expect(rankSwitcherMatches("alpha", projects, [], null).map((r) => r.id)).toEqual([
+      "wait-3",
+      "wait-1",
+      "review",
+      "work-3",
+      "work-1",
+      "quiet",
+    ]);
+  });
+
+  it("never lets activity lift a row out of a weaker text tier", () => {
+    // Forty blocked agents on a scattered subsequence and on a name that never
+    // matched at all, against a prefix match asking for nothing.
+    const projects = [
+      makeProject({
+        id: "loose",
+        name: "a-l-p-h-a-x",
+        path: "/repos/loose",
+        waitingAgentCount: 40,
+        blockedAgentCount: 40,
+      }),
+      makeProject({
+        id: "path-only",
+        name: "zeta",
+        path: "/repos/alpha/zeta",
+        waitingAgentCount: 40,
+        blockedAgentCount: 40,
+      }),
+      makeProject({ id: "prefix", name: "alpha-core", path: "/repos/prefix" }),
+    ];
+    // Both decoys really do match, so they are being ordered rather than filtered.
+    expect(scoreProjectQuery("alpha", "a-l-p-h-a-x", "/repos/loose")).toBeGreaterThan(0);
+    expect(scoreProjectQuery("alpha", "zeta", "/repos/alpha/zeta")).toBeGreaterThan(0);
+
+    expect(rankSwitcherMatches("alpha", projects, [], null).map((r) => r.id)).toEqual([
+      "prefix",
+      "loose",
+      "path-only",
+    ]);
+  });
+
+  it("does not let a shared path decide between two equally good names", () => {
+    const decoy = makeProject({
+      id: "decoy",
+      name: "Daintree Website",
+      path: `${DAINTREE_ROOT}/website`,
+    });
+    const busy = makeProject({
+      id: "busy",
+      name: "Daintree Assistant",
+      path: "/opt/checkouts/assistant",
+      waitingAgentCount: 1,
+    });
+    // The decoy's path really is worth more, so this proves the path term was
+    // outranked rather than merely absent.
+    expect(scoreProjectQuery("daint", decoy.name, decoy.path)).toBeGreaterThan(
+      scoreProjectQuery("daint", busy.name, busy.path)
+    );
+
+    expect(rankSwitcherMatches("daint", [decoy, busy], [], null).map((r) => r.id)).toEqual([
+      "busy",
+      "decoy",
+    ]);
+  });
+
+  it("ranks a busy scratch on its activity without giving it path relevance", () => {
+    const project = makeProject({
+      id: "p",
+      name: "alpha-app",
+      path: `${DAINTREE_ROOT}/alpha/alpha-app`,
+    });
+    const busyScratch = makeScratch({ id: "s", name: "alpha-notes", waitingAgentCount: 1 });
+    // A scratch whose only claim on the query is its machine-generated folder,
+    // and the busiest row in the pool.
+    const uuidScratch = makeScratch({
+      id: "alpha-9f8e7d6c",
+      name: "unrelated",
+      waitingAgentCount: 40,
+      blockedAgentCount: 40,
+    });
+    expect(uuidScratch.path).toContain("alpha");
+
+    expect(
+      rankSwitcherMatches("alpha", [project], [busyScratch, uuidScratch], null).map((r) => r.id)
+    ).toEqual(["s", "p"]);
+  });
+
+  it("orders the same rows the same way whatever order they arrive in", () => {
+    // Rows alike on every key but their id, plus one that has to sort below all
+    // of them. Any pair the comparator called equal would seat differently
+    // across these orderings; an intransitive one would too.
+    const projects = [
+      makeProject({ id: "p-a", name: "alpha", path: "/repos/alpha" }),
+      makeProject({ id: "p-b", name: "alpha", path: "/repos/alpha" }),
+      makeProject({ id: "p-c", name: "alpha", path: "/repos/alpha" }),
+      makeProject({
+        id: "loose",
+        name: "a-l-p-h-a-z",
+        path: "/repos/loose",
+        waitingAgentCount: 40,
+        blockedAgentCount: 40,
+        frecencyScore: 999,
+      }),
+    ];
+    const scratches = [
+      makeScratch({ id: "s-a", name: "alpha", lastOpened: 5 }),
+      makeScratch({ id: "s-b", name: "alpha", lastOpened: 5 }),
+      makeScratch({ id: "s-c", name: "alpha", lastOpened: 5 }),
+    ];
+
+    function permutations<T>(items: T[]): T[][] {
+      if (items.length <= 1) return [items];
+      return items.flatMap((item, index) =>
+        permutations([...items.slice(0, index), ...items.slice(index + 1)]).map((rest) => [
+          item,
+          ...rest,
+        ])
+      );
+    }
+
+    // The ranker takes the two kinds as separate arrays, so this IS every
+    // distinct input the palette can hand it for this fixture.
+    const projectOrders = permutations(projects);
+    const scratchOrders = permutations(scratches);
+    expect(projectOrders.length * scratchOrders.length).toBe(144);
+
+    const expected = ["p-a", "p-b", "p-c", "s-a", "s-b", "s-c", "loose"];
+    for (const projectOrder of projectOrders) {
+      for (const scratchOrder of scratchOrders) {
+        const ids = rankSwitcherMatches("alpha", projectOrder, scratchOrder, null).map((r) => r.id);
+        expect(ids).toEqual(expected);
+      }
+    }
+  });
+
+  it("leaves the filter's threshold to the filter, and the ranker without one", () => {
+    // Both surfaces read the same raw `scoreField` output against different
+    // bars. Rescaling it to a ratio would move both at once; each half of this
+    // pins one side.
+    const RESEARCH_TITLE = "Research file browser folder selection usability";
+    expect(isFilterMatch("fltsnp", "fleet snapshot service")).toBe(true);
+    expect(isFilterMatch("rust", RESEARCH_TITLE)).toBe(false);
+
+    // The ranker has no floor, so the query the filter rejects still ranks —
+    // it just sorts last, which is the backstop the filter does not have.
+    const scattered = makeProject({ id: "scattered", name: RESEARCH_TITLE, path: "/repos/notes" });
+    expect(rankSwitcherMatches("rust", [scattered], [], null).map((r) => r.id)).toEqual([
+      "scattered",
+    ]);
+  });
+});
+
+describe("rankSwitcherMatches activity classification", () => {
+  // One shared path so every row's text score is identical and only activity —
+  // then, on an activity tie, the name — can order them.
+  function row(id: string, overrides: Partial<SearchableProject> = {}): SearchableProject {
+    return makeProject({ id, name: `alpha-${id}`, path: "/repos/alpha", ...overrides });
+  }
+
+  function rank(projects: SearchableProject[]): string[] {
+    return rankSwitcherMatches("alpha", projects, [], null).map((r) => r.id);
+  }
+
+  it("puts a blocked agent above a larger pool of merely waiting ones", () => {
+    expect(
+      rank([
+        row("waiting", { waitingAgentCount: 5 }),
+        row("blocked", { waitingAgentCount: 1, blockedAgentCount: 1 }),
+      ])
+    ).toEqual(["blocked", "waiting"]);
+  });
+
+  it("sizes the blocked class by its own count, not by the waits it is a subset of", () => {
+    // "a-fewer-blocked" has the bigger waiting pool and the smaller blocked one.
+    // Summing the two would put it first; so would reading `waitingAgentCount`.
+    // Its name also sorts first, so a tie would too — only the subset count
+    // produces the expectation below.
+    const fewerBlocked = row("a-fewer-blocked", { waitingAgentCount: 5, blockedAgentCount: 2 });
+    const moreBlocked = row("z-more-blocked", { waitingAgentCount: 3, blockedAgentCount: 3 });
+    expect(rank([fewerBlocked, moreBlocked])).toEqual(["z-more-blocked", "a-fewer-blocked"]);
+  });
+
+  it("lets an assistant escalate a row nothing else is asking about", () => {
+    // Named so the name tie-break runs the OTHER way: with no assistant
+    // classification at all these four are equally quiet and come back
+    // alphabetically, which is the exact reverse of the expectation.
+    expect(
+      rank([
+        row("a-dormant"),
+        row("b-working", { assistantState: "working" }),
+        row("c-unseen", {
+          assistantState: "waiting",
+          assistantStateSince: 500,
+          lastOpened: 100,
+        }),
+        row("d-blocked", { assistantState: "waiting", assistantWaitingReason: "error" }),
+      ])
+    ).toEqual(["d-blocked", "c-unseen", "b-working", "a-dormant"]);
+  });
+
+  it("counts an escalated assistant as one presence, never as part of a worker tally", () => {
+    // Three workers waiting plus an unseen assistant, against four workers
+    // waiting. Folding the assistant into the tally makes the first row four as
+    // well, and its name wins the tie — so that bug produces the reverse of this.
+    const mixed = row("a-mixed", {
+      waitingAgentCount: 3,
+      assistantState: "waiting",
+      assistantStateSince: 500,
+      lastOpened: 100,
+    });
+    const workers = row("z-workers", { waitingAgentCount: 4 });
+    expect(rank([mixed, workers])).toEqual(["z-workers", "a-mixed"]);
+    expect(rank([workers, mixed])).toEqual(["z-workers", "a-mixed"]);
+  });
+
+  it("does not let an assistant re-tier a row a worker already spoke for", () => {
+    // A worker waiting alongside an assistant that has failed. The row is a
+    // wait — the tier its status line will also report — not a block. Letting
+    // the assistant speak would tie the two in the blocked class, where the
+    // name tie-break returns the reverse of this.
+    const workerWait = row("a-worker-wait", {
+      waitingAgentCount: 1,
+      assistantState: "waiting",
+      assistantWaitingReason: "error",
+    });
+    const workerBlocked = row("z-worker-blocked", { waitingAgentCount: 1, blockedAgentCount: 1 });
+    expect(rank([workerWait, workerBlocked])).toEqual(["z-worker-blocked", "a-worker-wait"]);
+  });
+
+  it("treats a seen assistant wait, snoozed runs, acknowledged work and processes as quiet", () => {
+    // "a-control" carries no signal at all and sorts first, so none of the four
+    // rows under test holds the top quiet slot by name. Any one of them wrongly
+    // promoted has to jump the control row to get there, which shows up here.
+    const ranked = rank([
+      row("x-seen-wait", { assistantState: "waiting", assistantStateSince: 100, lastOpened: 500 }),
+      row("y-snoozed", { snoozedAgentCount: 4, nextSnoozeWakeAt: 999 }),
+      row("z-acknowledged", { completedAgentCount: 4, unacknowledgedCompletedAgentCount: 0 }),
+      row("w-processes", { processCount: 9 }),
+      row("a-control"),
+      row("m-busy", { waitingAgentCount: 1 }),
+    ]);
+
+    // The demanding row leads from the middle of the alphabet, so the waiting
+    // class is what put it there rather than its name.
+    expect(ranked).toEqual([
+      "m-busy",
+      "a-control",
+      "w-processes",
+      "x-seen-wait",
+      "y-snoozed",
+      "z-acknowledged",
+    ]);
+  });
+
+  it("still reads a snoozed working run as working, exactly as browse does", () => {
+    // Snooze withholds a run from the demanding tallies, not from the working
+    // one — `activeAgentCount` keeps counting it, in main and in browse's
+    // Running band alike. Search must not net it out on its own.
+    expect(
+      rank([row("dormant"), row("snoozed-worker", { activeAgentCount: 1, snoozedAgentCount: 1 })])
+    ).toEqual(["snoozed-worker", "dormant"]);
+  });
+});
+
+describe("rankSwitcherMatches frozen activity", () => {
+  const busy = makeProject({
+    id: "busy",
+    name: "alpha-busy",
+    path: "/repos/alpha",
+    waitingAgentCount: 3,
+  });
+  const calm = makeProject({ id: "calm", name: "alpha-calm", path: "/repos/alpha" });
+  // Taken from the helper rather than written out, so the fixture cannot drift
+  // from — or quietly restate — how a key is encoded.
+  const WAS_WAITING = computeSearchActivityKey(busy);
+
+  it("ranks on the snapshot rather than on the rows' live counts", () => {
+    // The snapshot says the calm row was the busy one when the palette opened.
+    // The live counts say the opposite, and must not move anything.
+    const snapshot = new Map([
+      ["calm", WAS_WAITING],
+      ["busy", QUIET_SEARCH_ACTIVITY],
+    ]);
+    expect(rankSwitcherMatches("alpha", [busy, calm], [], snapshot).map((r) => r.id)).toEqual([
+      "calm",
+      "busy",
+    ]);
+    // Without a snapshot the same rows rank the other way, so the fixture is
+    // not quietly agreeing with itself.
+    expect(rankSwitcherMatches("alpha", [busy, calm], [], null).map((r) => r.id)).toEqual([
+      "busy",
+      "calm",
+    ]);
+  });
+
+  it("reads a row the snapshot never saw as quiet, not as whatever it is doing now", () => {
+    // A row that registered mid-session. Falling back to its live counts would
+    // put it back on the stats push the freeze exists to insulate it from.
+    const snapshot = new Map([["calm", WAS_WAITING]]);
+    expect(rankSwitcherMatches("alpha", [busy, calm], [], snapshot).map((r) => r.id)).toEqual([
+      "calm",
+      "busy",
+    ]);
   });
 });

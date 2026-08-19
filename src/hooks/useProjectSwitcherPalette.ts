@@ -1,5 +1,9 @@
 import { useState, useCallback, useMemo, useEffect, useRef, useDeferredValue } from "react";
-import { rankSwitcherMatches } from "@/lib/projectSwitcherSearch";
+import {
+  computeSearchActivityKey,
+  rankSwitcherMatches,
+  type SearchActivityKey,
+} from "@/lib/projectSwitcherSearch";
 import { buildDisplayPaths } from "@/lib/projectDisplayPath";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
@@ -416,6 +420,47 @@ export interface UseProjectSwitcherPaletteReturn {
   isDeletingOriginalScratch: boolean;
 }
 
+/**
+ * Whether this project's BAND is a guess until main reports stats for it.
+ *
+ * The active row is banded `current` and a missing one `unavailable` without
+ * consulting stats, so neither says anything about hydration — they are excluded
+ * from the question, never from the freeze itself.
+ *
+ * Browse only. Search bands nothing and reads an active row's activity like any
+ * other's, so it asks a wider question — see {@link countSearchRowsAwaitingStats}.
+ */
+function isStatsSensitive(project: SearchableProject): boolean {
+  return !project.isActive && !project.isMissing;
+}
+
+/**
+ * How many rows search ranks, and how many of those main has not reported on.
+ *
+ * Wider than {@link isStatsSensitive} on both axes, because search ranks every
+ * row on what it is doing: the active project and the unavailable one included,
+ * and scratches alongside projects (#11466). Gating search on browse's
+ * project-only question would strand a session that has scratches but no
+ * projects — with nothing to ask about it would read as hydrated at once, and
+ * freeze every scratch as quiet for the rest of the session.
+ *
+ * Safe to ask about every row because the bulk pull seeds an entry for each id
+ * it is handed, present or absent, and it is handed both kinds
+ * (`projectAgentCounts`). A row stays unkeyed only if the pull never lands, and
+ * a session that never hydrates simply behaves as it did before any of this —
+ * the same floor browse's regroup has.
+ */
+function countSearchRowsAwaitingStats(
+  projects: SearchableProject[],
+  scratches: SearchableScratch[],
+  stats: ProjectStatusMap
+): { total: number; unkeyed: number } {
+  let unkeyed = 0;
+  for (const project of projects) if (stats[project.id] === undefined) unkeyed += 1;
+  for (const scratch of scratches) if (stats[scratch.id] === undefined) unkeyed += 1;
+  return { total: projects.length + scratches.length, unkeyed };
+}
+
 interface FrozenLayout {
   order: string[];
   sections: Map<string, ProjectSectionKey>;
@@ -423,6 +468,28 @@ interface FrozenLayout {
    * True while this freeze is still a guess: it was taken before any stats
    * reached the view, so every band in it is a placeholder. Cleared by the one
    * regroup that resolves the session.
+   */
+  isProvisional: boolean;
+}
+
+/**
+ * Search's own freeze: what every workspace was asking of the user when the
+ * palette opened, keyed by row id (#11861).
+ *
+ * Separate from {@link FrozenLayout} rather than folded into it, because that
+ * one answers a different question. It holds browse's ORDER and BAND membership
+ * — current/pinned/snoozed policy search has no use for — and it covers projects
+ * only, while search ranks scratches in the same list (#11466).
+ *
+ * What is frozen is the SORT KEY, never the row. The view-models stay live, so a
+ * promoted row's status line keeps counting up while the row itself holds still.
+ */
+interface FrozenSearchActivity {
+  keys: Map<string, SearchActivityKey>;
+  /**
+   * Same meaning as {@link FrozenLayout.isProvisional}, but reached on its own
+   * terms — search asks about a wider set of rows, so a session can be
+   * provisional for one freeze and settled for the other.
    */
   isProvisional: boolean;
 }
@@ -672,16 +739,21 @@ function compareWithinSection(
  * keys off the same signal ({@link UseProjectSwitcherPaletteReturn.isRankedSearch}),
  * so for that frame the scratches are simply still down there — never listed
  * twice, and never briefly absent from both places.
+ *
+ * `activityKeys` is the session's frozen activity snapshot, which search ranks
+ * by within each tier of name-match quality. Browse ignores it: its own freeze
+ * already holds that order.
  */
 function buildResults(
   browseRows: ProjectSwitcherRow[],
   browseOrdered: SearchableProject[],
   scratches: SearchableScratch[],
   rankQuery: string,
-  isSearching: boolean
+  isSearching: boolean,
+  activityKeys: ReadonlyMap<string, SearchActivityKey> | null
 ): ProjectSwitcherRow[] {
   if (isSearching && rankQuery.trim()) {
-    return rankSwitcherMatches(rankQuery, browseOrdered, scratches);
+    return rankSwitcherMatches(rankQuery, browseOrdered, scratches, activityKeys);
   }
   return browseRows;
 }
@@ -993,6 +1065,29 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     []
   );
 
+  // Search's activity keys are frozen for the same reason and over the same
+  // session, but separately: browse's freeze is projects-and-bands, and search
+  // ranks scratches in the same list with no bands at all (#11861).
+  const [frozenSearchActivity, setFrozenSearchActivity] = useState<FrozenSearchActivity | null>(
+    null
+  );
+
+  const captureSearchActivity = useCallback(
+    (
+      projects: SearchableProject[],
+      scratches: SearchableScratch[],
+      isProvisional = false
+    ): FrozenSearchActivity => {
+      const keys = new Map<string, SearchActivityKey>();
+      // Every row, including the active and the missing ones: search has no band
+      // that spares a row from being ranked on what it is doing.
+      for (const project of projects) keys.set(project.id, computeSearchActivityKey(project));
+      for (const scratch of scratches) keys.set(scratch.id, computeSearchActivityKey(scratch));
+      return { keys, isProvisional };
+    },
+    []
+  );
+
   // Changing the sort order is the one input that must beat the freeze. The
   // freeze exists so rows don't move on their own; a mode the user just picked
   // is the opposite of that, and holding it until the next open would read as
@@ -1081,8 +1176,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     // session just behaves as it did before this fix.
     if (frozenLayout.isProvisional) {
       const stillGuessing = liveBrowseOrder.some(
-        (project) =>
-          !project.isActive && !project.isMissing && projectStats[project.id] === undefined
+        (project) => isStatsSensitive(project) && projectStats[project.id] === undefined
       );
       if (!stillGuessing) {
         setFrozenLayout((previous) =>
@@ -1190,6 +1284,77 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     return list;
   }, [scratches, currentScratch?.id, projectStats]);
 
+  // The search freeze's counterpart to the browse regroup above, over search's
+  // own set of rows rather than browse's.
+  //
+  // A provisional snapshot read every row as quiet, which is not an ordering —
+  // it is the absence of one. Once no row search ranks is still a guess it is
+  // recaptured whole, exactly once, and holds from there. A session that opened
+  // before the workspace lists themselves loaded stays provisional through the
+  // arrivals below, so the recapture is still ahead of it: `total === 0` is the
+  // emptiest guess there is, not a settled answer.
+  //
+  // Rows that appear afterwards are folded in at their key of the moment. Until
+  // that lands they rank as quiet rather than as their live counts
+  // (`rankSwitcherMatches`) — so an arrival is seated once at the bottom of its
+  // text tier and once at its real place, and never again. Browse's arrivals
+  // avoid even that because their band-end slot is the same before and after;
+  // search has nowhere equivalent to park one. Reading live counts for the
+  // gap instead would leave that row tracking every push, which is the whole
+  // thing this freeze exists to stop.
+  useEffect(() => {
+    if (!frozenSearchActivity) return;
+
+    if (frozenSearchActivity.isProvisional) {
+      const { total, unkeyed } = countSearchRowsAwaitingStats(
+        searchableProjects,
+        scratchResults,
+        projectStats
+      );
+      // `total > 0` so an empty session waits for its rows instead of resolving
+      // against nothing and locking whatever arrives next in as quiet.
+      if (total > 0 && unkeyed === 0) {
+        setFrozenSearchActivity((previous) =>
+          // Identity, not truthiness: an effect left over from a previous open
+          // session must not recapture this one against stale rows.
+          previous === frozenSearchActivity
+            ? captureSearchActivity(searchableProjects, scratchResults)
+            : previous
+        );
+        return;
+      }
+    }
+
+    const arrivals = [...searchableProjects, ...scratchResults].filter(
+      (row) => !frozenSearchActivity.keys.has(row.id)
+    );
+    if (arrivals.length === 0) return;
+    setFrozenSearchActivity((previous) => {
+      // Identity, for the same reason the recapture above checks it: an updater
+      // queued against a previous open session must not seat its arrivals in
+      // this one. Bailing is free — the snapshot is a dependency, so the effect
+      // fires again against whichever one React actually applied.
+      if (previous !== frozenSearchActivity) return previous;
+      const keys = new Map(previous.keys);
+      let added = false;
+      for (const row of arrivals) {
+        if (keys.has(row.id)) continue;
+        keys.set(row.id, computeSearchActivityKey(row));
+        added = true;
+      }
+      if (!added) return previous;
+      // Spread, so a session still waiting on its first stats stays provisional
+      // and folds this arrival into its pending recapture.
+      return { ...previous, keys };
+    });
+  }, [
+    searchableProjects,
+    scratchResults,
+    projectStats,
+    frozenSearchActivity,
+    captureSearchActivity,
+  ]);
+
   /**
    * What is executing across every workspace, for the palette header (#11832).
    *
@@ -1235,8 +1400,16 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const isRankedSearch = isSearching && resultsQuery.trim().length > 0;
 
   const results = useMemo<ProjectSwitcherRow[]>(
-    () => buildResults(browseRows, browseOrdered, scratchResults, resultsQuery, isSearching),
-    [browseRows, browseOrdered, scratchResults, resultsQuery, isSearching]
+    () =>
+      buildResults(
+        browseRows,
+        browseOrdered,
+        scratchResults,
+        resultsQuery,
+        isSearching,
+        frozenSearchActivity?.keys ?? null
+      ),
+    [browseRows, browseOrdered, scratchResults, resultsQuery, isSearching, frozenSearchActivity]
   );
 
   // The selected ROW is the state; its index is derived. Tracking an index
@@ -1301,13 +1474,30 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       // looking at. Active and unavailable rows are banded without stats, so
       // they say nothing about hydration; pinned rows do, since attention
       // outranks a pin.
-      const statsSensitive = liveBrowseOrder.filter(
-        (project) => !project.isActive && !project.isMissing
-      );
+      const statsSensitive = liveBrowseOrder.filter(isStatsSensitive);
       const isProvisional =
         statsSensitive.length > 0 &&
         statsSensitive.every((project) => projectStats[project.id] === undefined);
       setFrozenLayout(captureLayout(liveBrowseOrder, isProvisional));
+      // Its own verdict, over its own rows: search ranks scratches and the
+      // active row too, so browse's answer does not cover the set it froze.
+      const searchRows = countSearchRowsAwaitingStats(
+        searchableProjects,
+        scratchResults,
+        projectStats
+      );
+      setFrozenSearchActivity(
+        captureSearchActivity(
+          searchableProjects,
+          scratchResults,
+          // No rows counts as provisional, unlike browse's check. Loading the
+          // workspace lists is itself async and retried, so a palette opened
+          // during boot can capture nothing at all — and calling that snapshot
+          // settled would let the scratches that arrive a moment later fold in
+          // as quiet with no recapture ever due.
+          searchRows.unkeyed === searchRows.total
+        )
+      );
       // Preselect the first ENABLED row that isn't the project we're already
       // in, so open-then-Enter is a one-two return that never defaults onto an
       // Unavailable row (selecting one opens the relocation dialog — the right
@@ -1323,7 +1513,14 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         liveBrowseOrder[0];
       setSelectedRowId(initial?.id ?? null);
     },
-    [liveBrowseOrder, captureLayout, projectStats]
+    [
+      liveBrowseOrder,
+      captureLayout,
+      projectStats,
+      captureSearchActivity,
+      searchableProjects,
+      scratchResults,
+    ]
   );
 
   const close = useCallback(() => {
@@ -1335,6 +1532,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     setQuery("");
     setSelectedRowId(null);
     setFrozenLayout(null);
+    setFrozenSearchActivity(null);
   }, [mode]);
 
   // Steps the selection by `delta` rows, wrapping. Resolves the current row

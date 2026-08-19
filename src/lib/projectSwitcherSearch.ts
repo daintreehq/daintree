@@ -1,7 +1,9 @@
+import { classifyAssistantActivity } from "@/lib/projectAssistantActivity";
 import type {
   ProjectSwitcherRow,
   SearchableProject,
   SearchableScratch,
+  WorkspaceRowStatusFields,
 } from "@/hooks/useProjectSwitcherPalette";
 
 const NAME_WEIGHT = 4;
@@ -144,13 +146,16 @@ export function scoreProjectQuery(query: string, name: string, path: string): nu
  * directly comparable: an equal name match leaves the project ahead by exactly
  * its path term, which is never negative.
  *
- * That a scratch containing the query outranks a loosely-matched project is a
- * consequence of the scores, not a guarantee. Long queries let a project's
- * per-character boundary bonuses plus a path hit overtake the substring bonus —
- * but only where the project's own name matches nearly as exactly, which is a
- * project that deserves the top slot anyway. Promoting substring quality into a
- * ranking tier would have to apply to every pair, projects included, or the
- * comparator stops being transitive.
+ * A scratch whose name contains the query outranking a loosely-matched project
+ * no longer rests on these totals: {@link rankSwitcherMatches} compares a
+ * name-match tier before it consults either one, and that tier applies to every
+ * pair, projects included — which is what keeps the comparator transitive. The
+ * totals are consulted only after both the tier and the activity keys have tied.
+ *
+ * One caveat inherited from {@link scoreField}: a scratch scoring 0 is filtered
+ * out before any of that, and a long enough name drains the substring bonus to
+ * nothing. The guarantee covers a substring match that still scores, not every
+ * substring match.
  */
 export function scoreScratchQuery(query: string, name: string): number {
   if (!query) return 0;
@@ -161,49 +166,245 @@ export function scoreScratchQuery(query: string, name: string): number {
   return NAME_WEIGHT * nameScore;
 }
 
-/** Projects sort ahead of scratches on an exact score tie. */
+/** Projects sort ahead of scratches once every earlier key has tied. */
 const KIND_RANK: Record<ProjectSwitcherRow["kind"], number> = { project: 0, scratch: 1 };
+
+/**
+ * How well a row's NAME answers the query, as a discrete tier.
+ *
+ * Read off the name STRING rather than off {@link scoreField}'s output, for two
+ * reasons. Ranking by score alone is what #11861 was: four workspaces sharing a
+ * prefix score identically at every prefix, because the walk stops the moment
+ * the query is consumed and never looks at what trails it. And a class derived
+ * from a project's TOTAL would see the path, which would scatter rows whose
+ * names are equally good across several tiers on the strength of a directory
+ * they merely happen to share — the "grouped before the path is consulted"
+ * requirement, met structurally by never showing the path to this function.
+ *
+ * Discrete on purpose. Activity orders rows WITHIN a tier and can never lift one
+ * out of it, so a scattered subsequence with five agents waiting still sits
+ * below a clean prefix match with none. That is the contract every launcher
+ * that gets this right shares (fzf's `--tiebreak`, `prescient.el`'s match
+ * tiers): the secondary signal orders inside the class, it does not jump it.
+ *
+ * `exact` is not folded in with `prefix` even though every exact match is also a
+ * prefix one: typing a workspace's whole name has to land on that workspace,
+ * whatever the four projects it shares a prefix with are doing.
+ */
+const TEXT_CLASS_EXACT = 0;
+const TEXT_CLASS_NAME_PREFIX = 1;
+const TEXT_CLASS_NAME_SUBSTRING = 2;
+const TEXT_CLASS_FUZZY_NAME = 3;
+const TEXT_CLASS_PATH_ONLY = 4;
+
+/**
+ * `hasNameMatch` rather than a name score, because the only thing the last two
+ * tiers turn on is whether the name matched at all. A scratch always passes it:
+ * its total IS its name term ({@link scoreScratchQuery}), so a scratch that
+ * scored at all matched its name, and `path-only` is structurally unreachable
+ * for one — which is what keeps a scratch from ever picking up path relevance.
+ */
+function textQualityClass(lowerQuery: string, name: string, hasNameMatch: boolean): number {
+  const lowerName = name.toLowerCase();
+  if (lowerName === lowerQuery) return TEXT_CLASS_EXACT;
+  if (lowerName.startsWith(lowerQuery)) return TEXT_CLASS_NAME_PREFIX;
+  if (lowerName.includes(lowerQuery)) return TEXT_CLASS_NAME_SUBSTRING;
+  return hasNameMatch ? TEXT_CLASS_FUZZY_NAME : TEXT_CLASS_PATH_ONLY;
+}
+
+const ACTIVITY_BLOCKED = 0;
+const ACTIVITY_WAITING = 1;
+const ACTIVITY_REVIEW = 2;
+const ACTIVITY_WORKING = 3;
+const ACTIVITY_QUIET = 4;
+
+/**
+ * What a workspace is asking of the user, reduced to the pair of numbers the
+ * search comparator orders equally-well-matched rows by.
+ *
+ * `activityVolume` is only ever compared against another row in the SAME class,
+ * so the counts it carries never have to be commensurable across classes.
+ */
+export interface SearchActivityKey {
+  readonly activityClass: number;
+  readonly activityVolume: number;
+}
+
+/**
+ * Asking nothing. Also what a row absent from a frozen snapshot reads as — see
+ * {@link rankSwitcherMatches}.
+ */
+export const QUIET_SEARCH_ACTIVITY: SearchActivityKey = {
+  activityClass: ACTIVITY_QUIET,
+  activityVolume: 0,
+};
+
+/**
+ * The demand a row is making, on the same terms browse bands and tiers by
+ * (`sectionForProject`/`attentionClass`) so the two modes cannot disagree about
+ * what a workspace is doing while its status line says one thing either way.
+ *
+ * Workers are consulted before the assistant, exactly as `attentionClass` does
+ * it: an escalated assistant tiers a row that nothing else was asking about,
+ * and never re-tiers one a worker has already spoken for. The assistant is
+ * worth exactly one unit and is never added to a worker tally (#11806).
+ *
+ * `blockedAgentCount` is a SUBSET of `waitingAgentCount`, so it is the volume of
+ * its own class and is never summed alongside it.
+ *
+ * Deliberately blind to three signals, all of which are non-demanding in browse
+ * and stay non-demanding here: `snoozedAgentCount` (the user already said not
+ * yet), `completedAgentCount` (only the unacknowledged subset is an ask), and
+ * `processCount` (residency, not intent).
+ *
+ * Snoozing does NOT withdraw a run from `activeAgentCount` — a snoozed worker
+ * still counts as working, in main's tally and in browse's Running band alike
+ * (`WorkspaceRowStatusFields`, `projectAgentCounts`). That asymmetry is the data
+ * model's decision, not an oversight: snooze withholds a run from the tallies
+ * that make a workspace read as DEMANDING — waiting, its blocked subset, and
+ * unacknowledged completions, all three of which this function reads and all
+ * three of which are already snooze-free. Netting snooze out of the working
+ * class here would put search at odds with browse over the same row, and could
+ * not be done soundly anyway: a snoozed COMPLETION would cancel an unrelated
+ * live worker.
+ */
+export function computeSearchActivityKey(workspace: WorkspaceRowStatusFields): SearchActivityKey {
+  if (workspace.blockedAgentCount > 0) {
+    return { activityClass: ACTIVITY_BLOCKED, activityVolume: workspace.blockedAgentCount };
+  }
+  if (workspace.waitingAgentCount > 0) {
+    return { activityClass: ACTIVITY_WAITING, activityVolume: workspace.waitingAgentCount };
+  }
+
+  const assistant = classifyAssistantActivity(workspace);
+  if (assistant === "blocked") return { activityClass: ACTIVITY_BLOCKED, activityVolume: 1 };
+  if (assistant === "waiting-unseen") return { activityClass: ACTIVITY_WAITING, activityVolume: 1 };
+
+  if (workspace.unacknowledgedCompletedAgentCount > 0) {
+    return {
+      activityClass: ACTIVITY_REVIEW,
+      activityVolume: workspace.unacknowledgedCompletedAgentCount,
+    };
+  }
+  if (workspace.activeAgentCount > 0) {
+    return { activityClass: ACTIVITY_WORKING, activityVolume: workspace.activeAgentCount };
+  }
+  if (assistant === "working") return { activityClass: ACTIVITY_WORKING, activityVolume: 1 };
+
+  return QUIET_SEARCH_ACTIVITY;
+}
+
+interface RankedEntry {
+  row: ProjectSwitcherRow;
+  textClass: number;
+  activity: SearchActivityKey;
+  score: number;
+  /** `frecencyScore` for a project, `lastOpened` for a scratch. Only ever compared same-kind. */
+  recency: number;
+}
 
 /**
  * Ranks projects and scratches into the one array the palette renders, indexes
  * and walks with the arrow keys (#11071). Scratches are only ever ranked — in
  * browse they stay in their own pinned section, which is the caller's business.
  *
- * The comparator is a lexicographic tuple — score, then kind, then the per-kind
- * recency proxy — which makes it transitive and total. That matters: a rule that
- * reordered only CROSS-kind pairs (say, promoting a name substring over a loose
- * subsequence) while same-kind pairs stayed on raw score would admit cycles, and
- * `Array.prototype.sort` on an intransitive comparator is implementation-defined.
+ * The comparator is a lexicographic tuple, which is what makes it transitive and
+ * total — every key is a number or a string compared the same way for every
+ * pair, and the last of them is the row id, so it returns 0 only for a row
+ * against itself. A rule that reordered only SOME pairs (say, promoting a name
+ * substring cross-kind while same-kind pairs stayed on raw score) would admit
+ * cycles, and `Array.prototype.sort` on an intransitive comparator is
+ * implementation-defined.
  *
- * With an empty scratch list this reduces exactly to the old project-only
- * ranking, so search order for a user without scratches is unchanged.
+ * In order: how well the NAME answers the query, then what the workspace is
+ * asking of the user, then how loud that ask is, then the raw text score, then
+ * kind, then per-kind recency, then name, then id. Activity sits below the name
+ * tier and can never climb out of it (#11861), but it orders EVERY pair inside
+ * one — including a pair the raw scores could have separated, which is the
+ * point: those scores are what a shared parent directory decides.
+ *
+ * `activityKeys` is the palette session's frozen snapshot, keyed by row id.
+ * Activity arrives live over IPC and every push re-runs this ranking, so reading
+ * the rows' own counts would move a row out from under the pointer between the
+ * moment the user decided to click and the moment they clicked — and would
+ * change what Enter commits, since selection is the top row until the user
+ * arrows. Passing `null` ranks against the rows' live counts instead, which is
+ * what a caller ranking a fixed list wants. A row MISSING from a supplied
+ * snapshot reads as {@link QUIET_SEARCH_ACTIVITY} rather than falling back to
+ * its live counts: it arrived mid-session, and the whole point of the freeze is
+ * that no row's position tracks a live push. It is folded into the snapshot on
+ * the next commit and takes its real key from there.
+ *
+ * The parameter is required rather than optional so that omitting the snapshot
+ * at the production call site is a compile error instead of a silent unfreeze.
+ *
+ * With an empty scratch list this still reduces to a project-only ranking, but
+ * NOT to the old one: search now leads on match quality and activity rather than
+ * on the blended score, which is the change (#11861).
  */
 export function rankSwitcherMatches(
   query: string,
   projects: SearchableProject[],
-  scratches: SearchableScratch[]
+  scratches: SearchableScratch[],
+  activityKeys: ReadonlyMap<string, SearchActivityKey> | null
 ): ProjectSwitcherRow[] {
   const trimmed = query.trim();
   if (!trimmed) return [];
+  const lowerQuery = trimmed.toLowerCase();
 
-  const scored: { row: ProjectSwitcherRow; score: number }[] = [];
+  const activityFor = (workspace: WorkspaceRowStatusFields & { id: string }): SearchActivityKey =>
+    activityKeys === null
+      ? computeSearchActivityKey(workspace)
+      : (activityKeys.get(workspace.id) ?? QUIET_SEARCH_ACTIVITY);
+
+  const scored: RankedEntry[] = [];
 
   for (const project of projects) {
     const score = scoreProjectQuery(trimmed, project.name, project.path);
-    if (score > 0) scored.push({ row: { kind: "project", ...project }, score });
+    if (score <= 0) continue;
+    scored.push({
+      row: { kind: "project", ...project },
+      // Walks the name a second time rather than taking the term apart out of
+      // `score`: how the two fields are weighted stays owned by
+      // `scoreProjectQuery`, and names are short.
+      textClass: textQualityClass(lowerQuery, project.name, scoreField(trimmed, project.name) > 0),
+      activity: activityFor(project),
+      score,
+      recency: project.frecencyScore,
+    });
   }
   for (const scratch of scratches) {
     const score = scoreScratchQuery(trimmed, scratch.name);
-    if (score > 0) scored.push({ row: { kind: "scratch", ...scratch }, score });
+    if (score <= 0) continue;
+    scored.push({
+      row: { kind: "scratch", ...scratch },
+      textClass: textQualityClass(lowerQuery, scratch.name, true),
+      activity: activityFor(scratch),
+      score,
+      recency: scratch.lastOpened,
+    });
   }
 
   scored.sort((a, b) => {
+    if (a.textClass !== b.textClass) return a.textClass - b.textClass;
+    if (a.activity.activityClass !== b.activity.activityClass) {
+      return a.activity.activityClass - b.activity.activityClass;
+    }
+    if (a.activity.activityVolume !== b.activity.activityVolume) {
+      return b.activity.activityVolume - a.activity.activityVolume;
+    }
     if (a.score !== b.score) return b.score - a.score;
     if (a.row.kind !== b.row.kind) return KIND_RANK[a.row.kind] - KIND_RANK[b.row.kind];
-    if (a.row.kind === "project" && b.row.kind === "project") {
-      return b.row.frecencyScore - a.row.frecencyScore;
-    }
-    return b.row.lastOpened - a.row.lastOpened;
+    // Kinds are equal by here, so this never compares a frecency against a
+    // timestamp — the two scales never have to be commensurable.
+    if (a.recency !== b.recency) return b.recency - a.recency;
+    const byName = a.row.name.localeCompare(b.row.name, undefined, { sensitivity: "base" });
+    if (byName !== 0) return byName;
+    // Ends on the id for the same reason `compareProjectsByMode` does: without
+    // it two rows alike on every key above compare equal, and a sort that
+    // reports a tie between distinct rows can seat them either way between
+    // renders. Activity ties are far more common than score ties were.
+    return a.row.id.localeCompare(b.row.id);
   });
 
   return scored.map((entry) => entry.row);
