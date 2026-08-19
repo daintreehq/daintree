@@ -475,14 +475,6 @@ describe("external tool surface budget (#11585)", () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);
   });
 
-  // Preset discovery resolves an argument `agent.launch` already accepts, so it
-  // is only useful to this caller class while it sits on the same surface as
-  // the launch itself. With the count now at the ceiling, an over-eager cut
-  // would drop it silently; naming it here makes that a failing test.
-  it("advertises preset discovery alongside launching", () => {
-    expect(isTierPermitted("external", "agent.listPresets")).toBe(true);
-  });
-
   // Guards the opposite failure: a bad merge or an over-eager cut emptying the
   // list would make every assertion above vacuous rather than red.
   it("still carries a usable orchestration surface", () => {
@@ -761,7 +753,7 @@ describe("help-session tier policy (#10640)", () => {
 // `agent.listToolbar` reports which buttons the user has surfaced in the UI —
 // real for the in-app assistant, not worth a slot on a capped external surface.
 describe("narrow agent discovery tier reachability", () => {
-  it.each(["agent.listToolbar", "agent.listAvailable"] as const)(
+  it.each(["agent.listToolbar", "agent.listAvailable", "agent.listPresets"] as const)(
     "permits %s at every in-app tier",
     (toolId) => {
       for (const tier of ["workbench", "action", "system"] as const) {
@@ -770,8 +762,12 @@ describe("narrow agent discovery tier reachability", () => {
     }
   );
 
-  it("keeps only the launch-registry read on the external tier", () => {
+  it("keeps only the launch-resolving reads on the external tier", () => {
     expect(isTierPermitted("external", "agent.listAvailable")).toBe(true);
+    // Preset ids are the other argument `agent.launch` accepts and cannot be
+    // guessed from outside, so this read earns the same slot on the same
+    // argument as the registry read above.
+    expect(isTierPermitted("external", "agent.listPresets")).toBe(true);
     expect(isTierPermitted("external", "agent.listToolbar")).toBe(false);
   });
 

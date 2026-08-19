@@ -1849,6 +1849,8 @@ describe("agent.listPresets", () => {
    * key allowlist below can see it. A strict schema would strip the leak and
    * make the very test that hunts for it pass.
    */
+  const PRESET_ROW_KEYS = new Set(["id", "name", "source", "description"]);
+
   const PresetsResultShape = z.object({
     presetsComplete: z.boolean(),
     presets: z.array(z.looseObject({ id: z.string(), name: z.string(), source: z.string() })),
@@ -1879,9 +1881,12 @@ describe("agent.listPresets", () => {
     });
   }
 
+  // Defaults to a scratch scope: a view that has resolved its workspace and
+  // genuinely has no project. Tests that mean "the view resolved nothing" pass
+  // an explicit empty context instead.
   async function listPresets(
     args: Record<string, unknown> = { agentId: "claude" },
-    ctx: Partial<ActionContext> = {}
+    ctx: Partial<ActionContext> = { scratchId: "scratch-1" }
   ) {
     const actions = setupActions(makeCallbacks());
     return PresetsResultShape.parse(await callAction(actions, "agent.listPresets", args, ctx));
@@ -1901,7 +1906,12 @@ describe("agent.listPresets", () => {
       settings: { agents: { claude: { customPresets: [{ id: "zai", name: "Z.AI" }] } } },
     });
     const actions = setupActions(makeCallbacks());
-    const result = await callAction(actions, "agent.listPresets", { agentId: "claude" });
+    const result = await callAction(
+      actions,
+      "agent.listPresets",
+      { agentId: "claude" },
+      { scratchId: "scratch-1" }
+    );
 
     // `resultSchema` is parsed at dispatch, so a run() that drifts from it
     // fails as a validation error rather than shipping the extra field.
@@ -2018,14 +2028,17 @@ describe("agent.listPresets", () => {
     expect((await listPresets()).presetsComplete).toBe(true);
   });
 
-  it("falls back to the settings client before the store hydrates", async () => {
+  it("names client-fallback presets without certifying them", async () => {
     setSources({ settings: null });
     clientsMock.agentSettingsClient.get.mockResolvedValue({
       agents: { claude: { customPresets: [{ id: "zai", name: "Z.AI" }] } },
     });
 
+    // The launcher resolves a preset id against the settings store, not this
+    // client. Naming the preset early is useful; certifying it would promise an
+    // id a launch in this same window would not find.
     expect(await listPresets()).toEqual({
-      presetsComplete: true,
+      presetsComplete: false,
       presets: [{ id: "zai", name: "Z.AI", source: "custom" }],
     });
     expect(clientsMock.agentSettingsClient.get).toHaveBeenCalled();
@@ -2038,16 +2051,126 @@ describe("agent.listPresets", () => {
     expect((await listPresets()).presetsComplete).toBe(false);
   });
 
-  it("keeps built-in presets when the CCR store holds nothing for the agent", async () => {
-    // The store leaves an agent's key absent rather than empty, and that
-    // distinction is load-bearing: an empty array would replace the built-in
-    // bucket instead of leaving it alone.
+  it("degrades to the proven layers when the settings client rejects", async () => {
+    setSources({
+      settings: null,
+      ccrPresetsByAgent: { claude: [{ id: "ccr-route", name: "CCR route" }] },
+    });
+    clientsMock.agentSettingsClient.get.mockRejectedValue(new Error("ipc down"));
+
+    // A read-only query that already carries a completeness flag has a better
+    // answer than failing outright: report what is proven and say so.
+    expect(await listPresets()).toEqual({
+      presetsComplete: false,
+      presets: [{ id: "ccr-route", name: "CCR route", source: "ccr" }],
+    });
+  });
+
+  it("keeps built-in presets when the CCR store holds no key for the agent", async () => {
+    // An absent key is not an empty bucket: `[]` would replace the built-in
+    // presets, so the action must pass absence through as absence.
     setSources({ ccrPresetsByAgent: {} });
 
     const result = await listPresets({ agentId: "mistral" });
 
     expect(result.presets.length).toBeGreaterThan(0);
     expect(result.presets.every((row) => row.source === "registry")).toBe(true);
-    expect(JSON.stringify(result)).not.toContain("--agent");
+    // Asserted against the key allowlist rather than a sentinel from the
+    // registry fixture, so editing that agent's presets cannot quietly retire
+    // the leak check.
+    for (const row of result.presets) {
+      expect(Object.keys(row).every((key) => PRESET_ROW_KEYS.has(key))).toBe(true);
+    }
+  });
+
+  it("passes an own empty CCR bucket through as a replacement", async () => {
+    // The mirror of the case above: an own `[]` is real data meaning "CCR
+    // discovery cleared this agent", and it must still displace the built-ins.
+    setSources({ ccrPresetsByAgent: { mistral: [] } });
+
+    expect(await listPresets({ agentId: "mistral" })).toEqual({
+      presetsComplete: true,
+      presets: [],
+    });
+  });
+
+  it("does not treat an inherited key as a preset bucket", async () => {
+    setSources({});
+
+    // `agentId` is unconstrained, so `__proto__` would otherwise resolve to
+    // `Object.prototype` and throw on the first array operation.
+    for (const agentId of ["__proto__", "constructor", "toString", "valueOf"]) {
+      expect(await listPresets({ agentId })).toEqual({ presetsComplete: true, presets: [] });
+    }
+  });
+
+  it("ignores a corrupted non-array bucket rather than throwing", async () => {
+    setSources({
+      ccrPresetsByAgent: { claude: "not-an-array" as unknown as unknown[] },
+      presetsByAgent: { claude: 7 as unknown as unknown[] },
+      hydratedProjectId: "proj-1",
+    });
+
+    expect(await listPresets({ agentId: "claude" }, { projectId: "proj-1" })).toEqual({
+      presetsComplete: true,
+      presets: [],
+    });
+  });
+
+  it("still returns the proven layers while another source is incomplete", async () => {
+    // Guards the lazy implementation that empties the list whenever the flag is
+    // false — the flag qualifies the list, it does not replace it.
+    setSources({
+      settings: { agents: { claude: { customPresets: [{ id: "zai", name: "Z.AI" }] } } },
+      ccrInitialized: false,
+    });
+
+    expect(await listPresets()).toEqual({
+      presetsComplete: false,
+      presets: [{ id: "zai", name: "Z.AI", source: "custom" }],
+    });
+
+    setSources({
+      settings: { agents: { claude: { customPresets: [{ id: "zai", name: "Z.AI" }] } } },
+      presetsByAgent: { claude: [{ id: "team", name: "Team" }] },
+      hydratedProjectId: "other-project",
+    });
+
+    expect(await listPresets({ agentId: "claude" }, { projectId: "proj-1" })).toEqual({
+      presetsComplete: false,
+      presets: [{ id: "zai", name: "Z.AI", source: "custom" }],
+    });
+  });
+
+  it("treats an owned but empty project snapshot as complete", async () => {
+    setSources({ presetsByAgent: {}, hydratedProjectId: "proj-1" });
+
+    expect(
+      (await listPresets({ agentId: "claude" }, { projectId: "proj-1" })).presetsComplete
+    ).toBe(true);
+  });
+
+  it("does not certify a view that has resolved no workspace at all", async () => {
+    setSources({});
+
+    // A scratch is a real "no repository presets" answer; no pointer at all is
+    // an unresolved view, where an absent project layer is a gap.
+    expect(
+      (await listPresets({ agentId: "claude" }, { scratchId: "scratch-1" })).presetsComplete
+    ).toBe(true);
+    expect((await listPresets({ agentId: "claude" }, {})).presetsComplete).toBe(false);
+  });
+
+  it("advertises an item shape that cannot carry launch payload", async () => {
+    const def = getDefinition(setupActions(makeCallbacks()), "agent.listPresets");
+    const withPayload = {
+      presetsComplete: true,
+      presets: [{ id: "zai", name: "Z.AI", source: "custom", env: { KEY: "secret" } }],
+    };
+
+    // The schema is parsed at dispatch and strips what it does not declare, so
+    // this proves the advertised contract itself has no room for a payload.
+    const parsed = def.resultSchema!.parse(withPayload);
+    expect(JSON.stringify(parsed)).not.toContain("secret");
   });
 });

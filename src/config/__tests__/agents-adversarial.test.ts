@@ -3,6 +3,7 @@ import {
   getMergedPresets,
   getMergedPreset,
   getMergedPresetIdentities,
+  PRESET_DESCRIPTION_MAX_CHARS,
   sanitizeAgentEnv,
   sanitizeDisplayTitle,
 } from "@/config/agents";
@@ -725,21 +726,56 @@ describe("Adversarial: Preset Identity Projection", () => {
     expect(getMergedPresetIdentities("mistral", undefined, undefined).length).toBeGreaterThan(0);
   });
 
-  it("bounds and sanitizes the description that reaches a caller", () => {
-    const rows = getMergedPresetIdentities("claude", [
-      { id: "a", name: "A", description: `  <script>alert(1)</script>  ` },
-      { id: "b", name: "B", description: "x".repeat(500) },
-      { id: "c", name: "C", description: "   " },
-      { id: "d", name: "D", description: 42 as unknown as string },
-    ]);
+  function describeOne(description: unknown): string | undefined {
+    return getMergedPresetIdentities("claude", [
+      { id: "p", name: "P", description: description as string },
+    ])[0]!.description;
+  }
 
-    const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
-    expect(byId.a!.description).toBe("scriptalert(1)/script");
-    expect(byId.b!.description).toHaveLength(200);
-    // Whitespace-only and non-string descriptions collapse to "absent" rather
-    // than shipping an empty string.
-    expect(byId.c).not.toHaveProperty("description");
-    expect(byId.d).not.toHaveProperty("description");
+  it("strips markup and invisible characters from a description", () => {
+    const cleaned = describeOne("  <script>alert(1)</script>  ");
+    // Asserted as invariants rather than one exact escaped string, so an
+    // equally safe escaping strategy does not require editing this test.
+    expect(cleaned).not.toMatch(/[<>]/);
+    expect(cleaned).toContain("alert(1)");
+    expect(cleaned?.trim()).toBe(cleaned);
+  });
+
+  it("drops characters that make text read differently than it is stored", () => {
+    // Bidi overrides and isolates, zero-width joiners, BOM, and line/paragraph
+    // separators all survive a plain control-char filter but let a description
+    // disguise itself to a reader or to an agent reading it as prompt text.
+    for (const hidden of ["\u202e", "\u2066", "\u200b", "\ufeff", "\u2028", "\u2029"]) {
+      expect(describeOne(`safe${hidden}text`)).toBe("safetext");
+    }
+  });
+
+  it("truncates by code point so a description never ends mid-character", () => {
+    const emoji = "😀";
+    const truncated = describeOne("A".repeat(PRESET_DESCRIPTION_MAX_CHARS - 1) + emoji + emoji);
+
+    const points = Array.from(truncated!);
+    expect(points).toHaveLength(PRESET_DESCRIPTION_MAX_CHARS);
+    expect(points.at(-1)).toBe(emoji);
+    // The real hazard of a UTF-16 slice is half a surrogate pair reaching JSON.
+    // `Array.from` iterates by code point, so a split pair shows up as a
+    // standalone surrogate code unit rather than a whole character.
+    const isLoneSurrogate = (ch: string) =>
+      ch.length === 1 && ch.charCodeAt(0) >= 0xd800 && ch.charCodeAt(0) <= 0xdfff;
+    expect(points.some(isLoneSurrogate)).toBe(false);
+  });
+
+  it("leaves a description that already fits untouched", () => {
+    const fits = "Routes through a self-hosted gateway";
+    expect(describeOne(fits)).toBe(fits);
+  });
+
+  it("treats an unusable description as absent rather than empty", () => {
+    // An empty string would add a key with no information to every row on the
+    // wire; absence is both smaller and truthful.
+    for (const unusable of ["   ", 42, null, undefined, "<>"]) {
+      expect(describeOne(unusable)).toBeUndefined();
+    }
   });
 
   it("drops presets the shared validator rejects", () => {
@@ -758,6 +794,30 @@ describe("Adversarial: Preset Identity Projection", () => {
       { id: "shared", name: "Project" },
     ]);
     expect(rows).toEqual([{ id: "shared", name: "Project", source: "project" }]);
+  });
+
+  it("lets a project preset override a CCR preset of the same id", () => {
+    // Without this the bottom two layers could be swapped and every other
+    // precedence test would still pass.
+    expect(
+      getMergedPresetIdentities(
+        "claude",
+        undefined,
+        [{ id: "dup", name: "From CCR" }],
+        [{ id: "dup", name: "From project" }]
+      )
+    ).toEqual([{ id: "dup", name: "From project", source: "project" }]);
+  });
+
+  it("does not let a rejected project preset shadow a valid CCR preset", () => {
+    expect(
+      getMergedPresetIdentities(
+        "claude",
+        undefined,
+        [{ id: "dup", name: "From CCR" }],
+        [{ id: "dup", name: "   " }]
+      )
+    ).toEqual([{ id: "dup", name: "From CCR", source: "ccr" }]);
   });
 
   it("stays in step with the launch-facing merge it mirrors", () => {

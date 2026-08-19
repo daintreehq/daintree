@@ -250,6 +250,12 @@ export interface AgentPresetIdentity {
 }
 
 /**
+ * Cap on a preset description as it reaches an agent or the UI. Exported so a
+ * test asserts truncation against the contract rather than restating a literal.
+ */
+export const PRESET_DESCRIPTION_MAX_CHARS = 200;
+
+/**
  * Bound a preset's free-form description for agent-facing surfaces.
  *
  * `sanitizePreset` never touches `description`, so it arrives here as raw text
@@ -260,17 +266,36 @@ export interface AgentPresetIdentity {
  */
 function sanitizePresetDescription(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  // Drop C0 (0x00-0x1f), DEL (0x7f), and C1 (0x80-0x9f) control chars without
-  // a control-char regex literal.
   const cleaned = Array.from(value)
     .filter((ch) => {
       const code = ch.codePointAt(0) ?? 0;
-      return code > 0x1f && code !== 0x7f && !(code >= 0x80 && code <= 0x9f);
+      // C0 (0x00-0x1f), DEL (0x7f) and C1 (0x80-0x9f), matched without a
+      // control-char regex literal.
+      if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f)) return false;
+      // Line and paragraph separators: not control chars by the range above,
+      // but they still break a single-line rendering.
+      if (code === 0x2028 || code === 0x2029) return false;
+      // Zero-width and BOM: invisible to a reader, so they can only ever
+      // disguise what the text actually says.
+      if ((code >= 0x200b && code <= 0x200d) || code === 0xfeff) return false;
+      // Bidi embedding, override and isolate controls. A description reaches an
+      // agent as prompt text and a person as UI text; either way, characters
+      // whose whole job is to make a string read differently than it is stored
+      // have no legitimate use here.
+      if (code >= 0x202a && code <= 0x202e) return false;
+      if (code >= 0x2066 && code <= 0x2069) return false;
+      return true;
     })
     .join("")
     .replace(/[<>]/g, "")
     .trim();
-  return cleaned ? cleaned.slice(0, 200) : undefined;
+  if (!cleaned) return undefined;
+  // Truncate by code point, not UTF-16 unit: slicing a string mid-surrogate
+  // would emit half an emoji as a lone surrogate.
+  const points = Array.from(cleaned);
+  return points.length > PRESET_DESCRIPTION_MAX_CHARS
+    ? points.slice(0, PRESET_DESCRIPTION_MAX_CHARS).join("")
+    : cleaned;
 }
 
 /**
@@ -292,12 +317,19 @@ export function getMergedPresetIdentities(
   ccrPresets?: AgentPreset[],
   projectPresets?: AgentPreset[]
 ): AgentPresetIdentity[] {
-  const registryPresets = ccrPresets ?? getAgentConfig(agentId)?.presets ?? [];
+  const registryBucket = ccrPresets ?? getAgentConfig(agentId)?.presets ?? [];
+  const registryPresets = Array.isArray(registryBucket) ? registryBucket : [];
   const registrySource: AgentPresetSource = ccrPresets !== undefined ? "ccr" : "registry";
 
   const tagged: Array<{ preset: AgentPreset; source: AgentPresetSource }> = [
-    ...(customPresets ?? []).map((preset) => ({ preset, source: "custom" as const })),
-    ...(projectPresets ?? []).map((preset) => ({ preset, source: "project" as const })),
+    ...(Array.isArray(customPresets) ? customPresets : []).map((preset) => ({
+      preset,
+      source: "custom" as const,
+    })),
+    ...(Array.isArray(projectPresets) ? projectPresets : []).map((preset) => ({
+      preset,
+      source: "project" as const,
+    })),
     ...registryPresets.map((preset) => ({ preset, source: registrySource })),
   ];
 
