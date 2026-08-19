@@ -34,7 +34,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       id: "recipe.list",
       title: "List Recipes",
       description:
-        "List the saved recipes for the current project — named multi-terminal setups the user has configured, plus any a plugin contributes. Use this to discover recipe ids before running one. Each entry reports its origin, so a plugin-contributed recipe (read-only, available in every project) is distinguishable from one the user authored. It never fails, and it reports whether recipes are still loading: an empty list while loading means not read yet, not that the project has none.",
+        "List the saved recipes for the current project — named multi-terminal setups the user has configured, plus any a plugin contributes. Use this to discover recipe ids before running one; each entry reports its origin. It never fails, and it reports whether recipes are still loading: an empty list while loading means not read yet, not that the project has none.",
       category: "recipes",
       kind: "query",
       danger: "safe",
