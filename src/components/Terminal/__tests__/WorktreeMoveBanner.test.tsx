@@ -33,16 +33,26 @@ beforeAll(() => {
 function renderBanner(destinationPath: string | undefined) {
   const onTell = vi.fn();
   const onDismiss = vi.fn();
+  // Stands in for TerminalPane, which focuses the pane from a React `onClick`
+  // on the shell wrapping every banner slot. A control inside the bar has to
+  // stop the click before it reaches that handler.
+  const onPaneClick = vi.fn();
   const result = render(
     <WindowControlsInsetProvider>
-      <WorktreeMoveBanner destinationPath={destinationPath} onTell={onTell} onDismiss={onDismiss} />
+      <div onClick={onPaneClick}>
+        <WorktreeMoveBanner
+          destinationPath={destinationPath}
+          onTell={onTell}
+          onDismiss={onDismiss}
+        />
+      </div>
     </WindowControlsInsetProvider>
   );
-  return { ...result, onTell, onDismiss };
+  return { ...result, onTell, onDismiss, onPaneClick };
 }
 
 const PATH = "/repo/wt-b";
-const TELL = "Tell the agent";
+const TELL = `Tell it to continue in ${PATH}`;
 const DISMISS = "Dismiss worktree move notice";
 
 describe("WorktreeMoveBanner", () => {
@@ -50,10 +60,10 @@ describe("WorktreeMoveBanner", () => {
     renderBanner(PATH);
 
     expect(screen.getByText("Agent may still be in the original worktree")).not.toBeNull();
-    expect(screen.getByText("Tell it to continue in /repo/wt-b")).not.toBeNull();
+    expect(screen.getByRole("button", { name: TELL })).not.toBeNull();
   });
 
-  it("offers exactly two outcomes", () => {
+  it("offers exactly two outcomes while the destination resolves", () => {
     // One action plus the built-in close. A third control for two outcomes is
     // what made the #11840 dialog feel like an interrogation.
     renderBanner(PATH);
@@ -61,6 +71,15 @@ describe("WorktreeMoveBanner", () => {
     expect(screen.getAllByRole("button")).toHaveLength(2);
     expect(screen.getByRole("button", { name: TELL })).not.toBeNull();
     expect(screen.getByRole("button", { name: DISMISS })).not.toBeNull();
+  });
+
+  it("carries the whole sentence as the control, outside the description paragraph", () => {
+    // #11868: the action is the sentence, not a button beside it. Nesting it in
+    // the description would produce invalid `<p>` markup and flatten the
+    // control away in the live region's announcement.
+    renderBanner(PATH);
+
+    expect(screen.getByRole("button", { name: TELL }).closest("p")).toBeNull();
   });
 
   it("is a polite status, not an alert", () => {
@@ -72,13 +91,14 @@ describe("WorktreeMoveBanner", () => {
     expect(container.querySelector('[aria-live="polite"]')).not.toBeNull();
   });
 
-  it("reports the click through to tell", () => {
-    const { onTell, onDismiss } = renderBanner(PATH);
+  it("reports the click through to tell without reaching the pane", () => {
+    const { onTell, onDismiss, onPaneClick } = renderBanner(PATH);
 
     fireEvent.click(screen.getByRole("button", { name: TELL }));
 
     expect(onTell).toHaveBeenCalledTimes(1);
     expect(onDismiss).not.toHaveBeenCalled();
+    expect(onPaneClick).not.toHaveBeenCalled();
   });
 
   it("reports the close through to dismiss", () => {
@@ -90,17 +110,15 @@ describe("WorktreeMoveBanner", () => {
     expect(onTell).not.toHaveBeenCalled();
   });
 
-  it("says so and disables the tell when the destination is gone", () => {
+  it("says so and offers no tell at all when the destination is gone", () => {
     // No fallback path is offered — guessing one is how a destructive default
-    // ships (#7880).
-    const { onTell } = renderBanner(undefined);
+    // ships (#7880) — and no dead disabled control either: there is nothing to
+    // tell, so the sentence explains itself and the X is the only way out.
+    renderBanner(undefined);
 
     expect(screen.getByText("The destination worktree is no longer available")).not.toBeNull();
-    const tell = screen.getByRole("button", { name: TELL });
-    expect(tell.hasAttribute("disabled")).toBe(true);
-
-    fireEvent.click(tell);
-    expect(onTell).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /^Tell it to continue in / })).toBeNull();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
   });
 
   it("keeps the dismiss available when the destination is gone", () => {

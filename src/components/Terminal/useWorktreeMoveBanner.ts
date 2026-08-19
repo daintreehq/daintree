@@ -9,9 +9,9 @@ export interface WorktreeMoveBanner {
   visible: boolean;
   /**
    * Destination path as it resolves right now, or `undefined` when the
-   * worktree has since gone. `undefined` disables the tell — there is no
-   * fallback path, because guessing one is how a destructive default gets
-   * shipped (#7880).
+   * worktree has since gone. `undefined` drops the tell affordance entirely —
+   * there is no fallback path, because guessing one is how a destructive
+   * default gets shipped (#7880).
    */
   destinationPath: string | undefined;
   /** Send the instruction (now, or once the agent is free) and hide the bar. */
