@@ -140,11 +140,13 @@ export function registerWorkflowCreationActions(
 
         const rootPath = currentProject.path;
 
-        // Spawning recipe terminals is gated behind recipe.run (danger:"confirm"),
-        // which ActionService hard-blocks for plugin sources. Reject the same
-        // effect here — before any IPC — so plugins can't bypass that gate by
-        // passing a recipeId to an otherwise-safe worktree action. Agent/user
-        // sources are unaffected.
+        // Plugins have no confirm bypass at all, so this stays a hard rejection
+        // rather than a confirmation: there is no surface on which a plugin
+        // dispatch could be approved. Agent dispatch is NOT rejected here — it
+        // is elevated to an effective confirm tier in ActionService before
+        // `run()` is ever entered (`resolveEffectiveActionDanger`, #11860), so
+        // by the time this line runs an agent caller has already been approved.
+        // User dispatch is unaffected.
         if (recipeId && ctx.dispatchSource === "plugin") {
           throw new Error(
             "Plugins cannot spawn recipe terminals through worktree creation. Dispatch recipe.run instead."
@@ -405,11 +407,13 @@ export function registerWorkflowCreationActions(
           throw new Error("No active project");
         }
 
-        // Spawning recipe terminals is gated behind recipe.run (danger:"confirm"),
-        // which ActionService hard-blocks for plugin sources. Reject the same
-        // effect here — before any IPC — so plugins can't bypass that gate by
-        // passing a recipeId to an otherwise-safe worktree action. Agent/user
-        // sources are unaffected.
+        // Plugins have no confirm bypass at all, so this stays a hard rejection
+        // rather than a confirmation: there is no surface on which a plugin
+        // dispatch could be approved. Agent dispatch is NOT rejected here — it
+        // is elevated to an effective confirm tier in ActionService before
+        // `run()` is ever entered (`resolveEffectiveActionDanger`, #11860), so
+        // by the time this line runs an agent caller has already been approved.
+        // User dispatch is unaffected.
         if (recipeId && ctx.dispatchSource === "plugin") {
           throw new Error(
             "Plugins cannot spawn recipe terminals through worktree creation. Dispatch recipe.run instead."

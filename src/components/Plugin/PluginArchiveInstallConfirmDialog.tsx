@@ -153,6 +153,7 @@ export function PluginArchiveInstallConfirmDialog() {
       <div className="pt-3 space-y-4">
         <ArchiveIdentityCard intent={current} />
         <ArchivePermissions capabilities={current.manifest.capabilities} />
+        <ArchiveRecipes recipes={current.manifest.recipes} />
         {error !== null && (
           <div
             role="alert"
@@ -221,6 +222,40 @@ function ArchiveIdentityCard({ intent }: { intent: PendingPluginArchiveInstall }
 }
 
 const SEVERITY_RANK: Record<CapabilitySeverity, number> = { danger: 0, warning: 1, neutral: 2 };
+
+/**
+ * Recipes the archive contributes (#11860). A recipe runs shell commands and
+ * launches agents, but needs no capability to declare — so this block is the
+ * only place the user sees them before approving. Kept separate from
+ * Permissions rather than folded in: these are contributions, not grants, and
+ * showing them as permissions would misdescribe both.
+ */
+function ArchiveRecipes({ recipes }: { recipes: { count: number; names: string[] } }) {
+  if (recipes.count === 0) return null;
+  const undisclosed = recipes.count - recipes.names.length;
+  return (
+    <div className="space-y-2">
+      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
+        Recipes
+      </h4>
+      <p className="text-xs text-daintree-text/40">
+        Adds {recipes.count} launch {recipes.count === 1 ? "recipe" : "recipes"}, available in every
+        project. Each starts terminals that run commands or agents.
+      </p>
+      <ul className="space-y-1">
+        {recipes.names.map((name, index) => (
+          <li
+            key={`${name}-${index}`}
+            className="text-xs text-daintree-text/70 break-words min-w-0"
+          >
+            {name}
+          </li>
+        ))}
+        {undisclosed > 0 && <li className="text-xs text-daintree-text/40">+{undisclosed} more</li>}
+      </ul>
+    </div>
+  );
+}
 
 /**
  * What this archive asks to do, in the exact rows the detail pane's

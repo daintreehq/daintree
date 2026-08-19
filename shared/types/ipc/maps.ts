@@ -1919,6 +1919,16 @@ export interface IpcEventMap {
     complete: boolean;
   };
 
+  // Plugin recipe registry events (main → renderer, #11860). Carries the full
+  // effective plugin recipe list — manifest content with the user's sidecar
+  // metadata already overlaid — so the renderer replaces its plugin tier
+  // wholesale rather than reconciling per-plugin. Same `complete` flag
+  // semantics as toolbar buttons.
+  "plugin:recipes-changed": {
+    recipes: import("../project.js").TerminalRecipe[];
+    complete: boolean;
+  };
+
   // Plugin file-decoration invalidation (main → renderer). Carries only the
   // changed scope (optionally narrowed to `paths`) — never decoration data.
   // The renderer re-pulls fresh decorations via `plugin:file-decorations-get`.
@@ -2088,6 +2098,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:context-menu-items-changed"
   // Plugin agent registry (global broadcast)
   | "plugin:agents-changed"
+  // Plugin recipe registry (global broadcast)
+  | "plugin:recipes-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
   // Plugin panel-badge state (global broadcast)

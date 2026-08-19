@@ -2,6 +2,9 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { defineAction } from "../defineAction";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
+import type { TerminalRecipe } from "@shared/types";
+import { isPluginRecipe } from "@shared/types/project";
+import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { useRecipeStore } from "@/store/recipeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
@@ -12,12 +15,26 @@ import {
 } from "./schemas";
 
 export function registerRecipeActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
+  /**
+   * Normalize a recipe's tier for `recipe.list` (#11860). Plugin provenance is
+   * checked first because a plugin recipe also carries no `projectId` and would
+   * otherwise report as "global" — the same inference bug the persistence
+   * routing has to avoid.
+   */
+  const describeRecipeOrigin = (
+    recipe: TerminalRecipe
+  ): { kind: "global" | "project" | "team" | "plugin"; pluginId: string | null } => {
+    if (isPluginRecipe(recipe)) return { kind: "plugin", pluginId: recipe.origin.pluginId };
+    if (isInRepoRecipeId(recipe)) return { kind: "team", pluginId: null };
+    return { kind: recipe.projectId === undefined ? "global" : "project", pluginId: null };
+  };
+
   actions.set("recipe.list", () =>
     defineAction({
       id: "recipe.list",
       title: "List Recipes",
       description:
-        "List the saved recipes for the current project — named multi-terminal setups the user has configured. Use this to discover recipe ids before running one. It never fails, and it reports whether recipes are still loading: an empty list while loading means not read yet, not that the project has none.",
+        "List the saved recipes for the current project — named multi-terminal setups the user has configured, plus any a plugin contributes. Use this to discover recipe ids before running one. Each entry reports its origin, so a plugin-contributed recipe (read-only, available in every project) is distinguishable from one the user authored. It never fails, and it reports whether recipes are still loading: an empty list while loading means not read yet, not that the project has none.",
       category: "recipes",
       kind: "query",
       danger: "safe",
@@ -53,6 +70,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
             worktreeId: r.worktreeId ?? null,
             terminalCount: r.terminals.length,
             showInEmptyState: r.showInEmptyState ?? false,
+            origin: describeRecipeOrigin(r),
           })),
           isLoading: recipeState.isLoading,
         };

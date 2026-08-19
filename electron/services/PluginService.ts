@@ -144,6 +144,7 @@ import {
   unregisterFileDecorationProviders,
 } from "./fileDecorationRegistry.js";
 import {
+  getPluginIdForAgent,
   registerPluginAgents,
   unregisterPluginAgents,
 } from "../../shared/config/pluginAgentRegistry.js";
@@ -152,10 +153,21 @@ import {
   unregisterPluginProcessTools,
 } from "../../shared/config/pluginProcessToolRegistry.js";
 import { registerPluginSkills, unregisterPluginSkills } from "./plugin/PluginSkillRegistry.js";
+import {
+  getPluginRecipe,
+  getPluginRecipeOwner,
+  getPluginRecipeQualifiedIdsByPlugin,
+  getPluginRecipes,
+  registerPluginRecipes,
+  setPluginRecipeMetadataSnapshot,
+  unregisterPluginRecipes,
+} from "./plugin/PluginRecipeRegistry.js";
+import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
+import type { PluginRecipeMetadataPatch, TerminalRecipe } from "../../shared/types/project.js";
 import type { PluginToolbarButtonId } from "../../shared/types/toolbar.js";
 import { getPluginActionAuditService } from "./PluginActionAuditService.js";
 import { stableArgsSha256 } from "../utils/pluginMcpHash.js";
@@ -385,6 +397,25 @@ function isParkedOrTempDirName(name: string): boolean {
   );
 }
 
+/**
+ * `<userData>/global` — the same directory `ProjectStore` puts `recipes.json`
+ * in, so the plugin recipe sidecar sits beside the global recipes it
+ * deliberately never joins. Resolved at call time (`app.getPath` is invalid at
+ * module evaluation) and tolerant of the minimal `electron` stubs some suites
+ * install: an unresolvable path degrades to the same `~/.daintree` root the
+ * plugin dir default uses.
+ */
+function resolveGlobalConfigDir(): string {
+  try {
+    if (typeof app.getPath === "function") {
+      return path.join(app.getPath("userData"), "global");
+    }
+  } catch {
+    // Fall through to the home-relative default.
+  }
+  return path.join(os.homedir(), ".daintree", "global");
+}
+
 export class PluginService {
   private plugins = new Map<string, LoadedPlugin>();
   /**
@@ -414,6 +445,16 @@ export class PluginService {
    * through the collaborator's getters so dispatch semantics are unchanged.
    */
   private readonly channels: PluginChannelRegistry;
+  /** User-owned half of plugin-contributed recipes (#11860). */
+  private readonly recipeMetadata: PluginRecipeMetadataStore;
+  /**
+   * Plugin directory names seen across every configured root during
+   * {@link initialize}. Directory name IS the plugin id, so this is the
+   * "what is installed" side of the metadata reconciliation — deliberately
+   * independent of whether the manifest parsed or the plugin was allowed to
+   * load, so a disabled, blocked, or broken plugin keeps its metadata.
+   */
+  private startupInstalledPluginIds = new Set<string>();
   private cleanupMap = new Map<string, () => void>();
   /**
    * Plugin ids whose `activate()` has resolved successfully this session.
@@ -679,9 +720,14 @@ export class PluginService {
       builtinPluginsRoot?: string;
       sideloadPluginsRoot?: string;
       blocklistService?: PluginBlocklistService;
+      /** Overridable so tests can point the recipe metadata sidecar at a tmpdir. */
+      globalConfigDir?: string;
     }
   ) {
     this.pluginsRoot = pluginsRoot ?? path.join(os.homedir(), ".daintree", "plugins");
+    this.recipeMetadata = new PluginRecipeMetadataStore(
+      options?.globalConfigDir ?? resolveGlobalConfigDir()
+    );
     this.appVersion = appVersion ?? app.getVersion();
     this.builtinPluginsRoot = options?.builtinPluginsRoot;
     this.sideloadPluginsRoot = options?.sideloadPluginsRoot;
@@ -749,6 +795,7 @@ export class PluginService {
       setPluginArchiveHash: (pluginId, hash) => this.setPluginArchiveHash(pluginId, hash),
       setEnabled: (pluginId, enabled) => this.setEnabled(pluginId, enabled),
       broadcastProvenanceChanged: () => this.broadcaster.broadcastProvenanceChanged(),
+      purgeRecipeMetadata: (pluginId) => this.purgePluginRecipeMetadata(pluginId),
       getPlugin: (pluginId) => this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId),
       reservedNames: this.reservedNames,
       disabledPlugins: this.disabledPlugins,
@@ -918,7 +965,22 @@ export class PluginService {
     // initialize() runs before any install/update-check/swap can start this
     // session, so this can't race a live temp dir; it only touches the user
     // root, never the built-in or sideload roots.
+    this.startupInstalledPluginIds = new Set<string>();
+
     await this.installer.sweepStalePluginTempDirs();
+
+    // Read the recipe sidecar BEFORE any plugin loads so the first registration
+    // already overlays the user's frecency/pins — otherwise the initial
+    // broadcast would carry manifest defaults and be corrected a tick later,
+    // flashing "Never used" on every plugin recipe (#11860).
+    try {
+      await this.recipeMetadata.initialize();
+      setPluginRecipeMetadataSnapshot(this.recipeMetadata.getAllSync());
+    } catch (err) {
+      // Degraded, not fatal: manifest defaults apply for the session. Plugin
+      // loading must not fail because a frecency file was unreadable.
+      console.error("[PluginService] Failed to read plugin recipe metadata:", err);
+    }
 
     // Resolve the kill-switch blocklist once, before any scan, so the
     // per-plugin load gate below reads a single immutable snapshot and the
@@ -946,6 +1008,10 @@ export class PluginService {
       console.log(
         `[PluginService] Loaded ${builtinLoaded} built-in plugin(s) from ${builtinDir ?? "<unresolved>"}, ${userLoaded} user plugin(s) from ${this.pluginsRoot}, and ${sideloadLoaded} sideloaded plugin(s) from ${this.sideloadPluginsRoot ?? "<none>"}`
       );
+      // Only reachable when every configured root was enumerated, so the
+      // installed-id set is authoritative. A partial inventory would read as
+      // "uninstalled" and delete live metadata (#6110).
+      await this.reconcilePluginRecipeMetadata();
     } finally {
       // Idempotency must hold even when a scan throws (e.g. EACCES on the
       // user dir): a retry would re-run the built-in scan and trigger
@@ -953,6 +1019,81 @@ export class PluginService {
       // registries.
       this.initialized = true;
     }
+  }
+
+  /**
+   * Startup sweep of the recipe sidecar against what is installed on disk.
+   * Catches a contribution id dropped by a plugin update and an orphan left by
+   * a crash between deleting a plugin's files and purging its metadata.
+   * Best-effort: a failure leaves stale rows that the next startup retries.
+   */
+  private async reconcilePluginRecipeMetadata(): Promise<void> {
+    try {
+      await this.recipeMetadata.reconcile({
+        installedPluginIds: this.startupInstalledPluginIds,
+        knownQualifiedIdsByPlugin: getPluginRecipeQualifiedIdsByPlugin(),
+      });
+      setPluginRecipeMetadataSnapshot(this.recipeMetadata.getAllSync());
+      this.broadcaster.scheduleRecipesBroadcast(true);
+    } catch (err) {
+      console.error("[PluginService] Failed to reconcile plugin recipe metadata:", err);
+    }
+  }
+
+  /** Effective plugin recipe list — manifest content with user metadata overlaid. */
+  getPluginRecipes(): TerminalRecipe[] {
+    return getPluginRecipes();
+  }
+
+  /**
+   * Append one run timestamp for a plugin recipe. Provenance is resolved from
+   * the registry, never from the caller — a renderer supplies only the
+   * qualified id, and an id no loaded plugin declares is rejected rather than
+   * creating a record for a plugin that may not exist.
+   */
+  async recordPluginRecipeUse(qualifiedId: string, timestamp: number): Promise<TerminalRecipe> {
+    const owner = getPluginRecipeOwner(qualifiedId);
+    if (!owner) throw new Error(`Plugin recipe ${qualifiedId} not found`);
+    await this.recipeMetadata.recordUse(
+      qualifiedId,
+      owner.pluginId,
+      owner.contributionId,
+      timestamp
+    );
+    setPluginRecipeMetadataSnapshot(this.recipeMetadata.getAllSync());
+    const updated = getPluginRecipe(qualifiedId);
+    if (!updated) throw new Error(`Plugin recipe ${qualifiedId} not found`);
+    return updated;
+  }
+
+  /** Apply a user preference patch to a plugin recipe's sidecar record. */
+  async updatePluginRecipeMetadata(
+    qualifiedId: string,
+    patch: PluginRecipeMetadataPatch
+  ): Promise<TerminalRecipe> {
+    const owner = getPluginRecipeOwner(qualifiedId);
+    if (!owner) throw new Error(`Plugin recipe ${qualifiedId} not found`);
+    await this.recipeMetadata.setUserOverrides(
+      qualifiedId,
+      owner.pluginId,
+      owner.contributionId,
+      patch
+    );
+    setPluginRecipeMetadataSnapshot(this.recipeMetadata.getAllSync());
+    this.broadcaster.scheduleRecipesBroadcast(false);
+    const updated = getPluginRecipe(qualifiedId);
+    if (!updated) throw new Error(`Plugin recipe ${qualifiedId} not found`);
+    return updated;
+  }
+
+  /**
+   * Drop a plugin's recipe metadata. Wired ONLY to the successful branch of an
+   * explicit uninstall — disable, reload, and update all expect the recipes
+   * back and their frecency intact.
+   */
+  async purgePluginRecipeMetadata(pluginId: string): Promise<void> {
+    await this.recipeMetadata.purgePlugin(pluginId);
+    setPluginRecipeMetadataSnapshot(this.recipeMetadata.getAllSync());
   }
 
   /**
@@ -1008,6 +1149,13 @@ export class PluginService {
     const pluginDirs = entries.filter(
       (e) => e.isDirectory() && !e.name.startsWith(".") && !isParkedOrTempDirName(e.name)
     );
+    // Directory name IS the plugin id (uninstall joins it onto the root), so
+    // this records "installed" without depending on the manifest parsing or the
+    // plugin being allowed to load — which is what keeps recipe metadata alive
+    // across disable, blocklist, and engine-incompatibility (#11860).
+    for (const dir of pluginDirs) {
+      this.startupInstalledPluginIds.add(dir.name);
+    }
     // Disabled state applies to built-in and user plugins alike (#9284).
     const disabled = this.records.getDisabledIds();
     const results = await Promise.allSettled(
@@ -1328,6 +1476,20 @@ export class PluginService {
       // renderer is covered by the broadcast above; the pty-host is a separate
       // process that never registers agents itself.
       getPtyClient()?.syncPluginAgentRegistry();
+    }
+
+    // Recipes (#11860) are registered AFTER agents so `ownedAgentIds` can be
+    // resolved against the live registry rather than the manifest: a
+    // cross-plugin agent-id collision resolves first-registered-wins, and a
+    // plugin that lost one must not have its recipe launch the winner's agent.
+    if (manifest.contributes.recipes.length > 0) {
+      const ownedAgentIds = new Set(
+        manifest.contributes.agents
+          .map((agent) => agent.id)
+          .filter((id) => getPluginIdForAgent(id) === manifest.name)
+      );
+      registerPluginRecipes(manifest.name, manifest.contributes.recipes, ownedAgentIds);
+      this.broadcaster.scheduleRecipesBroadcast(false);
     }
 
     if (manifest.contributes.processTools.length > 0) {
@@ -3101,6 +3263,12 @@ export class PluginService {
       unregisterFileDecorationProviderImpls(pluginId)
     );
     runUnloadStep(pluginId, "unregisterPluginSkills", () => unregisterPluginSkills(pluginId));
+    // Recipes retract on unload/disable/reload, but their sidecar metadata does
+    // NOT — only an explicit successful uninstall purges that (#11860).
+    runUnloadStep(pluginId, "unregisterPluginRecipes", () => unregisterPluginRecipes(pluginId));
+    runUnloadStep(pluginId, "scheduleRecipesBroadcast", () =>
+      this.broadcaster.scheduleRecipesBroadcast(true)
+    );
     runUnloadStep(pluginId, "unregisterPluginAgents", () => unregisterPluginAgents(pluginId));
     runUnloadStep(pluginId, "scheduleAgentsBroadcast", () =>
       this.broadcaster.scheduleAgentsBroadcast(true)

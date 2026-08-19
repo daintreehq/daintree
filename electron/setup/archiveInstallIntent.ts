@@ -94,6 +94,11 @@ function surfaceArchiveError(fileName: string, detail: string): void {
 // the installer, which does its own validation.
 const PREVIEW_TEXT_MAX = 200;
 
+// How many contributed recipe names the install dialog lists. The manifest cap
+// allows dozens; the dialog shows a readable subset and reports the true total
+// alongside it, so a large manifest can't push the capability rows off-screen.
+const MAX_PREVIEW_RECIPE_NAMES = 10;
+
 // Unicode format controls (bidi overrides, zero-widths, line/paragraph
 // separators, C0/C1) can visually reorder or overpaint the trusted text beside
 // an interpolated field — U+202E flips everything rendered after it, which
@@ -154,6 +159,7 @@ async function runPreviewWorker(): Promise<void> {
       try {
         const { readArchiveManifest } = await import("../services/PluginArchive.js");
         const manifest = await readArchiveManifest(job.archivePath);
+        const recipeContributions = manifest.contributes?.recipes ?? [];
         pendingIntents.push({
           intentId: randomUUID(),
           archivePath: job.archivePath,
@@ -170,6 +176,22 @@ async function runPreviewWorker(): Promise<void> {
               ...(author.role !== undefined ? { role: sanitizePreviewText(author.role) } : {}),
             })),
             capabilities: manifest.capabilities ?? [],
+            // Recipes are executable content that ships with NO capability to
+            // advertise it, so the install confirmation is the only place a
+            // user sees them before approving (#11860). Names are
+            // plugin-author-controlled and cross IPC into a dialog, so they get
+            // the same clamp/sanitize treatment as author names. `count` stays
+            // the true total even when the name list is trimmed.
+            // Optional access even though a parsed manifest always materializes
+            // `contributes`: this whole worker fails an archive closed on any
+            // throw, so a manifest shape that surprises us must degrade to "no
+            // recipes disclosed" rather than reject an otherwise-valid plugin.
+            recipes: {
+              count: recipeContributions.length,
+              names: recipeContributions
+                .slice(0, MAX_PREVIEW_RECIPE_NAMES)
+                .map((recipe) => clampPreviewText(recipe.name)),
+            },
           },
         });
         flushArchiveInstallIntents();

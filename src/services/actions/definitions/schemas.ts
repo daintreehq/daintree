@@ -479,6 +479,14 @@ export const RecipeSummarySchema = z.object({
   worktreeId: z.string().nullable(),
   terminalCount: z.number(),
   showInEmptyState: z.boolean(),
+  // Where the recipe comes from (#11860). Flat rather than a discriminated
+  // union so a model reads one shape for every tier. `pluginId` is copied from
+  // the recipe's real provenance field — a plugin id is itself dotted, so it
+  // can never be recovered by splitting the qualified recipe id (#10109).
+  origin: z.object({
+    kind: z.enum(["global", "project", "team", "plugin"]),
+    pluginId: z.string().nullable(),
+  }),
 });
 
 // Mirror of `AgentSessionRecord` (shared/types/ipc/agentSessionHistory.ts) — the

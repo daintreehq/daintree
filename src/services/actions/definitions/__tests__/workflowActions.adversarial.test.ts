@@ -56,6 +56,8 @@ vi.mock("@/store/slices/panelRegistry", () => selectorMock);
   { electron: { git: { getStagingStatus: gitGetStagingStatusMock } } };
 
 import { registerWorkflowActions } from "../workflowActions";
+import { ActionService } from "@/services/ActionService";
+import type { ActionDefinition, ActionId } from "@shared/types/actions";
 import {
   clearPluginAgentRegistryForTests,
   setPluginAgentRegistry,
@@ -129,6 +131,23 @@ function setupActions(callbacks: MockCallbacks) {
 
     return factory() as unknown as AnyActionDefinition;
   };
+}
+
+/**
+ * Register the workflow definitions into a real {@link ActionService} so a test
+ * can exercise `dispatch()`'s gating rather than calling `run()` directly. The
+ * recipe-argument confirmation tier lives in the service, so a direct `run()`
+ * call is structurally blind to it (#11860).
+ */
+function registerThroughActionService(callbacks: MockCallbacks): ActionService {
+  const actions: ActionRegistry = new Map();
+  registerWorkflowActions(actions, callbacks as unknown as Pick<ActionCallbacks, "onLaunchAgent">);
+  const service = new ActionService();
+  for (const [, factory] of actions) {
+    service.register(factory() as unknown as ActionDefinition<never, unknown>);
+  }
+  service.setContextProvider(() => ({}) as never);
+  return service;
 }
 
 async function runWorkflow(
@@ -555,16 +574,44 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
     expect(result.recipeLaunched).toBe(false);
   });
 
-  it("worktree.createWithRecipe: agent + recipeId is not blocked", async () => {
+  it("worktree.createWithRecipe: agent + recipeId is confirmation-gated before any effect", async () => {
+    // Inverted from "is not blocked" (#11860). The gate is at the ActionService
+    // layer, not inside run(), so this dispatches through the service — calling
+    // def.run() directly could never observe it.
     const runRecipeWithResults = setRecipe("recipe-1");
-    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    const service = registerThroughActionService(makeCallbacks());
 
-    await def.run({ branchName: "feature/foo", recipeId: "recipe-1" }, {
-      dispatchSource: "agent",
-    } as never);
+    const blocked = await service.dispatch(
+      "worktree.createWithRecipe" as ActionId,
+      { branchName: "feature/foo", recipeId: "recipe-1" },
+      { source: "agent" }
+    );
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) expect(blocked.error.code).toBe("CONFIRMATION_REQUIRED");
+    // Nothing was created — the point of gating before run() rather than
+    // prompting after the worktree already exists.
+    expect(worktreeClientMock.create).not.toHaveBeenCalled();
+    expect(runRecipeWithResults).not.toHaveBeenCalled();
 
+    const approved = await service.dispatch(
+      "worktree.createWithRecipe" as ActionId,
+      { branchName: "feature/foo", recipeId: "recipe-1" },
+      { source: "agent", confirmed: true }
+    );
+    expect(approved.ok).toBe(true);
     expect(worktreeClientMock.create).toHaveBeenCalled();
     expect(runRecipeWithResults).toHaveBeenCalled();
+  });
+
+  it("worktree.createWithRecipe: agent without a recipeId still needs no confirmation", async () => {
+    const service = registerThroughActionService(makeCallbacks());
+    const result = await service.dispatch(
+      "worktree.createWithRecipe" as ActionId,
+      { branchName: "feature/foo" },
+      { source: "agent" }
+    );
+    expect(result.ok).toBe(true);
+    expect(worktreeClientMock.create).toHaveBeenCalled();
   });
 
   it("workflow.startWorkOnIssue: plugin + recipeId throws before any IPC", async () => {
@@ -606,20 +653,38 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
     expect(result.recipeLaunched).toBe(false);
   });
 
-  it("workflow.startWorkOnIssue: agent + recipeId is not blocked and forwards dispatchSource", async () => {
+  it("workflow.startWorkOnIssue: agent + recipeId is gated, then forwards dispatchSource once approved", async () => {
+    // Inverted from "is not blocked" (#11860), same reasoning as the
+    // worktree.createWithRecipe case above.
     forgeClientMock.getIssue.mockResolvedValue({
       number: 6609,
       title: "Add workflow macro tools",
       url: "https://github.com/x/y/issues/6609",
     });
     const runRecipeWithResults = setRecipe("recipe-1");
-    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+    const service = registerThroughActionService(makeCallbacks());
 
-    await def.run({ issueNumber: 6609, agentId: "claude", recipeId: "recipe-1" }, {
-      dispatchSource: "agent",
-    } as never);
+    const blocked = await service.dispatch(
+      "workflow.startWorkOnIssue" as ActionId,
+      { issueNumber: 6609, agentId: "claude", recipeId: "recipe-1" },
+      { source: "agent" }
+    );
+    expect(blocked.ok).toBe(false);
+    if (!blocked.ok) expect(blocked.error.code).toBe("CONFIRMATION_REQUIRED");
+    // The issue lookup is the first IPC this action makes; a gated dispatch
+    // must not even probe issue existence.
+    expect(forgeClientMock.getIssue).not.toHaveBeenCalled();
+    expect(worktreeClientMock.create).not.toHaveBeenCalled();
+    expect(runRecipeWithResults).not.toHaveBeenCalled();
 
+    const approved = await service.dispatch(
+      "workflow.startWorkOnIssue" as ActionId,
+      { issueNumber: 6609, agentId: "claude", recipeId: "recipe-1" },
+      { source: "agent", confirmed: true }
+    );
+    expect(approved.ok).toBe(true);
     expect(worktreeClientMock.create).toHaveBeenCalled();
+    // The structured spawn-result plumbing (#10110) must survive the gate.
     expect(runRecipeWithResults).toHaveBeenCalledWith(
       "recipe-1",
       expect.any(String),

@@ -2115,6 +2115,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         complete: boolean;
       }) => void
     ): () => void;
+    /** Subscribe to plugin-contributed recipe changes (#11860). Returns a cleanup. */
+    onRecipesChanged(
+      callback: (payload: {
+        recipes: import("../project.js").TerminalRecipe[];
+        complete: boolean;
+      }) => void
+    ): () => void;
     /** Subscribe to plugin toolbar button registry changes. Returns a cleanup. */
     onToolbarButtonsChanged(
       callback: (payload: {

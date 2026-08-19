@@ -406,4 +406,44 @@ describe("archiveInstallIntent", () => {
     await importFresh();
     expect(deepLinkMock.registerPaintedFlushListener).toHaveBeenCalledWith(expect.any(Function));
   });
+
+  it("discloses contributed recipe names and the true count (#11860)", async () => {
+    // Recipes ship with no capability to advertise them, so this dialog is the
+    // only place a user sees them before approving.
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+    archiveMock.readArchiveManifest.mockResolvedValue(
+      manifest({
+        contributes: {
+          recipes: [
+            { id: "a", name: "Deploy stack", terminals: [] },
+            { id: "b", name: "Run \u202Etset", terminals: [] },
+          ],
+        },
+      } as unknown as Partial<PluginManifest>)
+    );
+
+    const { enqueueArchiveInstallIntent } = await importFresh();
+    await enqueueArchiveInstallIntent(P("recipes.dntr"));
+
+    const [intent] = intentsFrom(painted.sent);
+    const recipes = (intent as { manifest: { recipes: { count: number; names: string[] } } })
+      .manifest.recipes;
+    expect(recipes.count).toBe(2);
+    expect(recipes.names[0]).toBe("Deploy stack");
+    // Bidi overrides can repaint the dialog's own trusted copy, so they are
+    // stripped from every author-controlled string that crosses IPC.
+    expect(recipes.names[1]).not.toContain("\u202E");
+  });
+
+  it("reports no recipes for a manifest that contributes none (#11860)", async () => {
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+
+    const { enqueueArchiveInstallIntent } = await importFresh();
+    await enqueueArchiveInstallIntent(P("plain.dntr"));
+
+    const [intent] = intentsFrom(painted.sent);
+    expect(intent).toMatchObject({ manifest: { recipes: { count: 0, names: [] } } });
+  });
 });

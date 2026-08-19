@@ -532,6 +532,65 @@ Markdown-defined instruction/knowledge snippets that extend Daintree's built-in 
 
 The markdown file content is returned to the agent when it calls `skills.load`, so it can be incorporated into the current task. See [Agent extensions → Skills](./agent-extensions.md#skills) for the full file format and invocation mechanics.
 
+## Recipes — _Shipped_
+
+Named multi-terminal launch layouts a plugin ships. A contributed recipe is registered under the qualified id `{pluginId}.{id}`, merged into the recipe list as a plugin-owned tier, and available in **every** project — a plugin that ships an agent can also ship a ready-made layout that runs it, with no per-project setup.
+
+```json
+{
+  "contributes": {
+    "recipes": [
+      {
+        "id": "review-loop",
+        "name": "Review loop",
+        "showInEmptyState": true,
+        "terminals": [
+          {
+            "type": "acme-reviewer",
+            "initialPrompt": "Review the working tree",
+            "args": "--strict"
+          },
+          { "type": "terminal", "command": "npm run test:watch" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | Namespaced as `{pluginId}.{id}`. |
+| `name` | yes | Human label, shown in the recipe manager and in the install confirmation. |
+| `terminals` | yes | 1–10 terminal definitions. See the table below. |
+| `showInEmptyState` | no | Default for the empty-state pin. A user pin/unpin overrides it. |
+| `autoAssign` | no | `always` \| `never` \| `prompt` — default issue auto-assign behaviour during quick worktree creation. A user choice overrides it. |
+
+**Terminal fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `type` | yes | `terminal`, `dev-preview`, a built-in agent id, or an agent id **this same plugin** contributes. Any other value drops that terminal at load. |
+| `title` | no | Custom pane title. |
+| `command` | no | Shell command, for `type: "terminal"`. |
+| `devCommand` | no | Dev-server command, for `type: "dev-preview"`. |
+| `initialPrompt` | no | Sent to an agent terminal after boot. Supports the same `{{issue_number}}` / `{{branch_name}}` variables user recipes do. |
+| `args` | no | Extra CLI flags for an agent terminal. |
+| `env` | no | Environment variables for the spawned terminal. |
+| `exitBehavior` | no | `keep` \| `trash` \| `remove`. |
+
+**No capability required.** Recipes are declarative content, like [Skills](#skills--shipped) — a capability in an unsandboxed runtime would be a label rather than a gate. Disclosure happens where it can actually inform a decision instead: the sideload install confirmation lists every contributed recipe by name, which is why terminals are declared inline rather than pointing at a shipped JSON file (the installer reads the manifest without extracting the archive).
+
+**Content is immutable.** The plugin owns what its recipes run; edits and deletes are rejected, and a plugin update replaces them wholesale. To customise one, use **Save to repo** — that duplicates it into a user-owned team recipe you can edit freely, leaving the plugin's original in place.
+
+**Your own metadata survives.** Frecency (`lastUsedAt` / usage history), the empty-state pin, and `autoAssign` are yours, not the plugin's, so they live in a sidecar (`plugin-recipe-metadata.json` in the global config dir) keyed by qualified id. They persist across disable, reload, and plugin updates, and are purged only when you explicitly uninstall the plugin.
+
+**Referencing your own agent.** A recipe terminal may name an agent id from the same plugin's `contributes.agents`. Ownership is resolved against the live registry, not the manifest: if another plugin already claimed that agent id, the terminal is dropped rather than silently launching someone else's agent.
+
+**Agent-initiated runs are confirmation-gated.** Any agent or MCP dispatch that carries a `recipeId` — through `recipe.run` or a composite like `worktree.createWithRecipe` — pauses for a single human approval showing the resolved recipe, its origin, and the commands each terminal will run (env keys are listed, values are not). This applies to every recipe tier, not just plugin-contributed ones.
+
 ## Themes — _Future_
 
 Ships palette-based themes, following the same `BuiltInThemeSource` shape used by Daintree's built-in themes. See [Theme system](../themes/theme-system.md) for the palette and token model.

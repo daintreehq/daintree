@@ -92,6 +92,12 @@ interface PluginInstallerDeps {
   setPluginArchiveHash: (pluginId: string, archiveHash: string) => void;
   setEnabled: (pluginId: string, enabled: boolean) => Promise<void>;
   broadcastProvenanceChanged: () => void;
+  /**
+   * Drop a plugin's recipe sidecar metadata (#11860). Wired to the SUCCESSFUL
+   * uninstall tail only — never to unload, which also fires on disable and
+   * reload, where the recipes are expected back with their frecency intact.
+   */
+  purgeRecipeMetadata: (pluginId: string) => Promise<void>;
   /** Lookup for the running or skipped-at-launch plugin (only `isBuiltin` is consumed). */
   getPlugin: (pluginId: string) => InstallerPluginInfo | undefined;
   /** Shared launch-time name reservation set — stays PluginService-owned (read by a test cast). */
@@ -1134,6 +1140,17 @@ export class PluginInstaller {
         delete records[pluginId];
         this.records.writeInstalledRecords(records);
       }
+      // Last, and best-effort: the files and records are already gone, so a
+      // failed sidecar write must not fail the uninstall. The next startup's
+      // reconciliation pass removes the orphan (#11860).
+      await this.deps
+        .purgeRecipeMetadata(pluginId)
+        .catch((err: unknown) =>
+          console.error(
+            `[PluginService] recipe metadata purge during uninstall of "${pluginId}" threw:`,
+            err
+          )
+        );
       this.deps.broadcastProvenanceChanged();
     } finally {
       await release().catch((err) =>

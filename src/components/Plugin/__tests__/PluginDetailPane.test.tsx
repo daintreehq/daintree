@@ -71,6 +71,7 @@ function makePlugin(overrides: Partial<LoadedPluginInfo> = {}): LoadedPluginInfo
         fileDecorationProviders: [],
         agents: [],
         processTools: [],
+        recipes: [],
       },
     },
     dir: "/plugins/acme.demo",
