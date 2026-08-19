@@ -37,10 +37,17 @@ describe("PluginRecipeRegistry (#11860)", () => {
   });
 
   it("keeps two plugins' same-named contributions distinct", () => {
+    // A bare contribution id is unique only per-plugin (#10109), so both must
+    // survive under their own qualified ids — asserting only that the second
+    // resolves would still pass if it had clobbered the first.
     registerPluginRecipes("acme.tools", [recipe()], new Set());
     registerPluginRecipes("other.tools", [recipe()], new Set());
-    const ids = getPluginRecipes().map((r) => r.id);
-    expect(new Set(ids).size).toBe(ids.length);
+    expect(
+      getPluginRecipes()
+        .map((r) => r.id)
+        .sort()
+    ).toEqual(["acme.tools.deploy", "other.tools.deploy"]);
+    expect(getPluginRecipeOwner("acme.tools.deploy")?.pluginId).toBe("acme.tools");
     expect(getPluginRecipeOwner("other.tools.deploy")?.pluginId).toBe("other.tools");
   });
 
@@ -126,12 +133,21 @@ describe("PluginRecipeRegistry (#11860)", () => {
   });
 
   it("hands out copies, so a consumer cannot mutate the registry through a snapshot", () => {
-    registerPluginRecipes("acme.tools", [recipe()], new Set());
+    registerPluginRecipes(
+      "acme.tools",
+      [recipe({ terminals: [{ type: "terminal", command: "npm run dev", env: { API: "a" } }] })],
+      new Set()
+    );
     const first = getPluginRecipes()[0]!;
     first.terminals[0]!.command = "rm -rf /";
     first.name = "Mutated";
+    // Nested too: a shallow spread would leave the same env object reachable,
+    // so one consumer could rewrite every later reader's environment.
+    first.terminals[0]!.env!.API = "stolen";
+
     const second = getPluginRecipes()[0]!;
     expect(second.terminals[0]?.command).toBe("npm run dev");
     expect(second.name).toBe("Deploy stack");
+    expect(second.terminals[0]?.env).toEqual({ API: "a" });
   });
 });

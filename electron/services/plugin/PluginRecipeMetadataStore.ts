@@ -33,7 +33,7 @@ import { resilientAtomicWriteFile, resilientRename } from "../../utils/fs.js";
 const METADATA_FILENAME = "plugin-recipe-metadata.json";
 
 /** Matches the renderer-side frecency cap in `recipeStore.runRecipeWithResults`. */
-const MAX_USAGE_HISTORY = 20;
+export const MAX_PLUGIN_RECIPE_USAGE_HISTORY = 20;
 
 /**
  * Bumped only for a breaking layout change. A file claiming a HIGHER version was
@@ -75,7 +75,7 @@ function decodeEntry(key: string, raw: unknown): PluginRecipeMetadata | null {
   if (Array.isArray(raw.usageHistory)) {
     const history = raw.usageHistory
       .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
-      .slice(-MAX_USAGE_HISTORY);
+      .slice(-MAX_PLUGIN_RECIPE_USAGE_HISTORY);
     if (history.length > 0) entry.usageHistory = history;
   }
   if (typeof raw.showInEmptyState === "boolean") {
@@ -100,8 +100,27 @@ export class PluginRecipeMetadataStore {
   /** See {@link GlobalFileStore.enqueueRecipesUpdate} — same rationale. */
   private writeTail: Promise<void> = Promise.resolve();
 
-  constructor(private readonly globalConfigDir: string) {
-    this.metadataPath = path.join(globalConfigDir, METADATA_FILENAME);
+  /**
+   * Set when the file on disk claims a schema version this build doesn't
+   * understand. Reads already return empty for that case; without this every
+   * mutator would then persist its empty view as v1 and destroy state a newer
+   * build still uses — so a downgrade-then-run would silently wipe it.
+   */
+  private readOnly = false;
+
+  /**
+   * No resolvable global config dir (an Electron stub with no `getPath`, i.e.
+   * a unit test) — the store runs inert rather than guessing a path. Guessing a
+   * plausible-looking home-relative one meant test runs wrote into the user's
+   * real `~/.daintree` tree, and a production `getPath` failure would have
+   * silently relocated everyone's metadata.
+   */
+  private readonly inert: boolean;
+
+  constructor(private readonly globalConfigDir: string | null) {
+    this.inert = globalConfigDir === null;
+    this.metadataPath =
+      globalConfigDir === null ? "" : path.join(globalConfigDir, METADATA_FILENAME);
   }
 
   /**
@@ -111,6 +130,10 @@ export class PluginRecipeMetadataStore {
    * load — a missing `lastUsedAt` degrades frecency, it doesn't break anything.
    */
   async initialize(): Promise<void> {
+    if (this.inert) {
+      this.cache = {};
+      return;
+    }
     this.cache = await this.read();
   }
 
@@ -125,7 +148,7 @@ export class PluginRecipeMetadataStore {
 
   /**
    * Append one run timestamp for `qualifiedId`, capped at the newest
-   * {@link MAX_USAGE_HISTORY}. Atomic against the freshest on-disk state rather
+   * {@link MAX_PLUGIN_RECIPE_USAGE_HISTORY}. Atomic against the freshest on-disk state rather
    * than accepting a whole array from a renderer, so two windows running the
    * same recipe at once can't have one overwrite the other's history with its
    * own stale copy.
@@ -139,7 +162,9 @@ export class PluginRecipeMetadataStore {
     let result!: PluginRecipeMetadata;
     await this.enqueue(async (current) => {
       const existing = current[qualifiedId];
-      const history = [...(existing?.usageHistory ?? []), timestamp].slice(-MAX_USAGE_HISTORY);
+      const history = [...(existing?.usageHistory ?? []), timestamp].slice(
+        -MAX_PLUGIN_RECIPE_USAGE_HISTORY
+      );
       result = {
         ...(existing ?? { pluginId, contributionId }),
         pluginId,
@@ -253,10 +278,15 @@ export class PluginRecipeMetadataStore {
       current: Record<string, PluginRecipeMetadata>
     ) => Promise<Record<string, PluginRecipeMetadata>>
   ): Promise<void> {
+    if (this.inert) return;
     const next = this.writeTail
       .catch(() => {})
       .then(async () => {
         const current = await this.read();
+        // Re-checked INSIDE the queue turn: `read()` is what discovers a future
+        // schema version, so a store that was fine at construction can become
+        // read-only the moment a newer build writes the file underneath it.
+        if (this.readOnly) return;
         const updated = await updater(current);
         await this.write(updated);
         this.cache = updated;
@@ -294,10 +324,12 @@ export class PluginRecipeMetadataStore {
     const version = parsed._schemaVersion;
     if (typeof version === "number" && version > CURRENT_SCHEMA_VERSION) {
       console.warn(
-        `[PluginRecipeMetadataStore] Ignoring metadata written by a newer build (v${version}).`
+        `[PluginRecipeMetadataStore] Ignoring metadata written by a newer build (v${version}); this session will not write to it.`
       );
+      this.readOnly = true;
       return {};
     }
+    this.readOnly = false;
 
     const decoded: Record<string, PluginRecipeMetadata> = {};
     for (const [key, raw] of Object.entries(parsed.recipes)) {
@@ -308,6 +340,8 @@ export class PluginRecipeMetadataStore {
   }
 
   private async write(recipes: Record<string, PluginRecipeMetadata>): Promise<void> {
+    // Unreachable when inert: `enqueue` is the only caller and returns early.
+    if (this.globalConfigDir === null) return;
     const payload: PluginRecipeMetadataFile = { _schemaVersion: CURRENT_SCHEMA_VERSION, recipes };
     const serialized = JSON.stringify(payload, null, 2);
     try {

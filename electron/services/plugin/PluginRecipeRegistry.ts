@@ -132,7 +132,12 @@ function toTerminalRecipe(entry: RegisteredPluginRecipe): TerminalRecipe {
     name: entry.name,
     // Fresh copies per read: main's registry objects must not be reachable for
     // mutation through a returned snapshot, and the array crosses IPC anyway.
-    terminals: entry.terminals.map((terminal) => ({ ...terminal })),
+    // `env` is copied too — a shallow spread would leave the same object
+    // reachable, so one consumer could rewrite every later reader's env.
+    terminals: entry.terminals.map((terminal) => ({
+      ...terminal,
+      ...(terminal.env ? { env: { ...terminal.env } } : {}),
+    })),
     // Deterministic rather than install time: a contributed recipe has no
     // meaningful creation moment, and a reload-varying value would churn every
     // broadcast payload for no reader's benefit.

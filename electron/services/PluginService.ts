@@ -401,19 +401,24 @@ function isParkedOrTempDirName(name: string): boolean {
  * `<userData>/global` — the same directory `ProjectStore` puts `recipes.json`
  * in, so the plugin recipe sidecar sits beside the global recipes it
  * deliberately never joins. Resolved at call time (`app.getPath` is invalid at
- * module evaluation) and tolerant of the minimal `electron` stubs some suites
- * install: an unresolvable path degrades to the same `~/.daintree` root the
- * plugin dir default uses.
+ * module evaluation).
+ *
+ * Returns `null` rather than a home-relative guess when the Electron app API
+ * is unavailable (the minimal `electron` stubs some suites install). The
+ * sidecar then runs inert. A guess would have been worse in both directions: it
+ * made unit-test runs write into the user's real `~/.daintree` tree, and a
+ * production `getPath` failure would silently relocate everyone's metadata to a
+ * directory nothing else reads.
  */
-function resolveGlobalConfigDir(): string {
+function resolveGlobalConfigDir(): string | null {
   try {
     if (typeof app.getPath === "function") {
       return path.join(app.getPath("userData"), "global");
     }
   } catch {
-    // Fall through to the home-relative default.
+    // Unresolvable — fall through to inert.
   }
-  return path.join(os.homedir(), ".daintree", "global");
+  return null;
 }
 
 export class PluginService {
@@ -721,7 +726,7 @@ export class PluginService {
       sideloadPluginsRoot?: string;
       blocklistService?: PluginBlocklistService;
       /** Overridable so tests can point the recipe metadata sidecar at a tmpdir. */
-      globalConfigDir?: string;
+      globalConfigDir?: string | null;
     }
   ) {
     this.pluginsRoot = pluginsRoot ?? path.join(os.homedir(), ".daintree", "plugins");
@@ -1029,8 +1034,21 @@ export class PluginService {
    */
   private async reconcilePluginRecipeMetadata(): Promise<void> {
     try {
+      // Directory name is USUALLY the plugin id, but not always — the built-in
+      // `github` directory declares `daintree.github`, and a sideloaded folder
+      // can be named anything. Union the scanned directory names with every id
+      // the service actually knows about (running, disabled, blocked, or
+      // name-reserved) so a mismatch can never read as "uninstalled" and purge
+      // live metadata. Union is the fail-safe direction: an extra id only means
+      // one fewer row is swept.
+      const installedPluginIds = new Set(this.startupInstalledPluginIds);
+      for (const id of this.plugins.keys()) installedPluginIds.add(id);
+      for (const id of this.disabledPlugins.keys()) installedPluginIds.add(id);
+      for (const id of this.blockedPlugins.keys()) installedPluginIds.add(id);
+      for (const id of this.reservedNames) installedPluginIds.add(id);
+
       await this.recipeMetadata.reconcile({
-        installedPluginIds: this.startupInstalledPluginIds,
+        installedPluginIds,
         knownQualifiedIdsByPlugin: getPluginRecipeQualifiedIdsByPlugin(),
       });
       setPluginRecipeMetadataSnapshot(this.recipeMetadata.getAllSync());
@@ -1061,6 +1079,11 @@ export class PluginService {
       timestamp
     );
     setPluginRecipeMetadataSnapshot(this.recipeMetadata.getAllSync());
+    // The calling window already applied this optimistically, but a second
+    // project window would otherwise keep stale frecency ordering until an
+    // unrelated push. The payload carries the persisted value, so replaying it
+    // over the optimistic one converges rather than conflicts.
+    this.broadcaster.scheduleRecipesBroadcast(false);
     const updated = getPluginRecipe(qualifiedId);
     if (!updated) throw new Error(`Plugin recipe ${qualifiedId} not found`);
     return updated;

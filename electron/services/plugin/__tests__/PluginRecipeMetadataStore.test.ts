@@ -1,8 +1,11 @@
-import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PluginRecipeMetadataStore } from "../PluginRecipeMetadataStore.js";
+import {
+  MAX_PLUGIN_RECIPE_USAGE_HISTORY,
+  PluginRecipeMetadataStore,
+} from "../PluginRecipeMetadataStore.js";
 
 let dir: string;
 let store: PluginRecipeMetadataStore;
@@ -49,15 +52,19 @@ describe("PluginRecipeMetadataStore (#11860)", () => {
     expect(new Set(history)).toEqual(new Set([100, 200]));
   });
 
-  it("drops the oldest timestamps once the history is full, keeping the newest", async () => {
-    const cap = 20;
-    for (let i = 1; i <= cap + 5; i++) {
+  it("keeps the newest suffix of the run history once it is full", async () => {
+    // Bounded BY the exported cap, never asserted to equal a copied literal:
+    // the invariant is "the retained history is the newest suffix of what was
+    // recorded, capped", which stays true if the cap ever changes.
+    const recorded: number[] = [];
+    for (let i = 1; i <= MAX_PLUGIN_RECIPE_USAGE_HISTORY + 5; i++) {
+      recorded.push(i);
       await store.recordUse("acme.tools.deploy", "acme.tools", "deploy", i);
     }
     const entry = store.getAllSync()["acme.tools.deploy"]!;
-    expect(entry.usageHistory?.[0]).toBe(6);
-    expect(entry.usageHistory?.at(-1)).toBe(cap + 5);
-    expect(entry.lastUsedAt).toBe(cap + 5);
+    expect(entry.usageHistory).toEqual(recorded.slice(-MAX_PLUGIN_RECIPE_USAGE_HISTORY));
+    expect(entry.usageHistory).toHaveLength(MAX_PLUGIN_RECIPE_USAGE_HISTORY);
+    expect(entry.lastUsedAt).toBe(recorded.at(-1));
   });
 
   it("stores a false override rather than treating it as absent", async () => {
@@ -134,18 +141,29 @@ describe("PluginRecipeMetadataStore (#11860)", () => {
     expect(Object.keys(reloaded.getAllSync())).toEqual(["acme.tools.ok"]);
   });
 
-  it("quarantines malformed content and recovers to an empty store", async () => {
+  it("quarantines malformed content to a sibling file and recovers to an empty store", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    await writeFile(metadataPath(), "{ not json");
+    const corrupt = '{ "recipes": { unterminated';
+    await writeFile(metadataPath(), corrupt);
     const reloaded = new PluginRecipeMetadataStore(dir);
     await reloaded.initialize();
     expect(reloaded.getAllSync()).toEqual({});
+
+    // The original bytes must survive somewhere — recovering by overwriting
+    // would silently destroy whatever the user had.
+    const quarantined = (await readdir(dir)).filter((name) => name.includes(".corrupted."));
+    expect(quarantined).toHaveLength(1);
+    expect(await readFile(path.join(dir, quarantined[0]!), "utf-8")).toBe(corrupt);
+
     await reloaded.recordUse("acme.tools.deploy", "acme.tools", "deploy", 5);
     expect(Object.keys((await readFileJson()).recipes)).toEqual(["acme.tools.deploy"]);
     error.mockRestore();
   });
 
-  it("leaves a file written by a newer build untouched instead of overwriting it", async () => {
+  it("never writes over a file a newer build owns, through any mutator", async () => {
+    // Reading it as empty is not enough: a mutator that then persisted its
+    // empty view as v1 would destroy state the newer build still uses, so a
+    // downgrade-then-run-a-recipe would silently wipe it.
     const future = JSON.stringify({
       _schemaVersion: 99,
       recipes: { "acme.tools.deploy": { pluginId: "acme.tools", contributionId: "deploy" } },
@@ -155,8 +173,45 @@ describe("PluginRecipeMetadataStore (#11860)", () => {
     const reloaded = new PluginRecipeMetadataStore(dir);
     await reloaded.initialize();
     expect(reloaded.getAllSync()).toEqual({});
+
+    await reloaded.recordUse("acme.tools.deploy", "acme.tools", "deploy", 1);
+    await reloaded.setUserOverrides("acme.tools.deploy", "acme.tools", "deploy", {
+      showInEmptyState: true,
+    });
+    await reloaded.purgePlugin("acme.tools");
+    await reloaded.reconcile({
+      installedPluginIds: new Set(),
+      knownQualifiedIdsByPlugin: new Map(),
+    });
+
     expect(await readFile(metadataPath(), "utf-8")).toBe(future);
     warn.mockRestore();
+  });
+
+  it("runs inert with no resolvable config dir instead of guessing a path", async () => {
+    // A unit test installing a minimal Electron stub must not cause writes into
+    // the user's real home tree, and a production getPath failure must not
+    // relocate metadata to a directory nothing else reads.
+    const inert = new PluginRecipeMetadataStore(null);
+    await inert.initialize();
+    expect(inert.getAllSync()).toEqual({});
+    await inert.recordUse("acme.tools.deploy", "acme.tools", "deploy", 1);
+    await inert.setUserOverrides("acme.tools.deploy", "acme.tools", "deploy", {
+      autoAssign: "never",
+    });
+    expect(inert.getAllSync()).toEqual({});
+  });
+
+  it("keeps accepting writes after one mutation fails", async () => {
+    // The write tail swallows a failed link so a single bad turn can't poison
+    // every later write on the same instance.
+    await store.recordUse("acme.tools.deploy", "acme.tools", "deploy", 1);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failing = store.recordUse("acme.tools.boom", "acme.tools", "boom", Number.NaN);
+    await failing.catch(() => {});
+    error.mockRestore();
+    await store.recordUse("acme.tools.deploy", "acme.tools", "deploy", 2);
+    expect(store.getAllSync()["acme.tools.deploy"]?.usageHistory).toEqual([1, 2]);
   });
 
   it("aborts a mutation rather than rewriting the store from an unreadable base", async () => {

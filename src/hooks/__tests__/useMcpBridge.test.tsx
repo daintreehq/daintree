@@ -1121,6 +1121,155 @@ describe("useMcpBridge", () => {
       expect.objectContaining({ source: "agent" })
     );
   });
+  it("asks ActionService for the danger of THIS dispatch, not the action's static tier (#11860)", () => {
+    // The gate is args-conditional: worktree.createWithRecipe is statically
+    // "safe" and only becomes confirm when the args name a recipe. If this call
+    // ever reverts to the bare `getDispatchMeta(actionId)`, the bridge reads
+    // "safe", skips the modal, dispatches unconfirmed, and ActionService returns
+    // CONFIRMATION_REQUIRED with no dialog ever shown — a permanent dead end for
+    // every legitimate agent recipe launch.
+    mocks.get.mockReturnValue(safeManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    void dispatchHandler?.({
+      requestId: "req-meta",
+      actionId: "worktree.createWithRecipe",
+      args: { branchName: "feat/x", recipeId: "recipe-1" },
+    });
+
+    expect(mocks.get).toHaveBeenCalledWith("worktree.createWithRecipe", {
+      source: "agent",
+      args: { branchName: "feat/x", recipeId: "recipe-1" },
+    });
+  });
+
+  it("opens the modal for an args-elevated dispatch and only runs it after approval (#11860)", async () => {
+    // Mirrors the real resolver: safe on its own, confirm once a recipeId rides along.
+    mocks.get.mockImplementation((_id: string, dispatch?: { args?: unknown }) => {
+      const args = dispatch?.args as { recipeId?: string } | undefined;
+      return args?.recipeId
+        ? confirmManifestEntry({
+            id: "worktree.createWithRecipe",
+            name: "worktree.createWithRecipe",
+            title: "Create Worktree with Recipe",
+            dangerRationale: "spawns the recipe's terminals",
+          })
+        : safeManifestEntry({ id: "worktree.createWithRecipe" });
+    });
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-elevated",
+      actionId: "worktree.createWithRecipe",
+      args: { branchName: "feat/x", recipeId: "recipe-1" },
+    });
+
+    await Promise.resolve();
+    const pending = useMcpConfirmStore.getState().current;
+    expect(pending).not.toBeNull();
+    expect(pending?.danger).toBe("confirm");
+    expect(pending?.dangerRationale).toBe("spawns the recipe's terminals");
+    // Nothing has run — the whole point of gating before the composite creates
+    // a worktree rather than prompting once the effects have landed.
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "worktree.createWithRecipe",
+      expect.objectContaining({ recipeId: "recipe-1", branchName: "feat/x" }),
+      expect.objectContaining({ source: "agent", confirmed: true })
+    );
+  });
+
+  it("does not raise a modal for the same action when no recipe is named (#11860)", async () => {
+    mocks.get.mockImplementation((_id: string, dispatch?: { args?: unknown }) => {
+      const args = dispatch?.args as { recipeId?: string } | undefined;
+      return args?.recipeId
+        ? confirmManifestEntry({ id: "worktree.createWithRecipe" })
+        : safeManifestEntry({ id: "worktree.createWithRecipe" });
+    });
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    await dispatchHandler?.({
+      requestId: "req-plain",
+      actionId: "worktree.createWithRecipe",
+      args: { branchName: "feat/x" },
+    });
+
+    expect(useMcpConfirmStore.getState().current).toBeNull();
+    expect(mocks.dispatch).toHaveBeenCalled();
+  });
+
+  it("pins an approved recipe dispatch to the resolved winner it previewed (#11860)", async () => {
+    // getRecipeById follows shadowing, so the id the caller named and the recipe
+    // the approver saw can differ. The dispatch must run what was shown.
+    const { useRecipeStore } = await import("@/store/recipeStore");
+    useRecipeStore.setState({
+      recipes: [
+        {
+          id: "shadowed",
+          name: "Work",
+          projectId: "p1",
+          shadowedBy: "Work",
+          terminals: [{ type: "terminal", command: "old" }],
+          createdAt: 1,
+        },
+        {
+          id: "winner",
+          name: "Work",
+          projectId: "p1",
+          scope: "inrepo",
+          terminals: [{ type: "terminal", command: "new" }],
+          createdAt: 1,
+        },
+      ],
+      inRepoRecipes: [
+        {
+          id: "winner",
+          name: "Work",
+          projectId: "p1",
+          scope: "inrepo",
+          terminals: [{ type: "terminal", command: "new" }],
+          createdAt: 1,
+        },
+      ],
+    });
+
+    mocks.get.mockReturnValue(confirmManifestEntry({ id: "recipe.run", name: "recipe.run" }));
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-pin",
+      actionId: "recipe.run",
+      args: { recipeId: "shadowed" },
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    const preview = (useMcpConfirmStore.getState().current?.preview ?? []).join("\n");
+    expect(preview).toContain("new");
+    expect(preview).not.toContain("old");
+
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "recipe.run",
+      expect.objectContaining({ recipeId: "winner" }),
+      expect.objectContaining({ confirmed: true })
+    );
+    useRecipeStore.getState().reset();
+  });
 });
 
 describe("resolveMcpConfirmPreviewTarget (#11538)", () => {

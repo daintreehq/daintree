@@ -193,6 +193,7 @@ type PluginManifestShape = {
     agents?: unknown[];
     skills?: unknown[];
     processTools?: unknown[];
+    recipes?: unknown[];
   };
 };
 
@@ -2189,5 +2190,123 @@ describe("PluginService integration — stale temp dir sweep", () => {
       id: "acme.real-plugin.viewer",
       extensionId: "acme.real-plugin",
     });
+  });
+});
+
+describe("PluginService integration — recipe contributions (issue #11860)", () => {
+  it("registers a manifest recipes entry, broadcasts it, and retracts it on unload", async () => {
+    await writePlugin("acme.recipe-plugin", {
+      name: "acme.recipe-plugin",
+      version: "1.0.0",
+      contributes: {
+        recipes: [
+          {
+            id: "review",
+            name: "Review loop",
+            showInEmptyState: true,
+            terminals: [
+              { type: "terminal", command: "npm run test:watch" },
+              { type: "dev-preview", devCommand: "npm run dev" },
+            ],
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    // Flush the coalesced microtask broadcast scheduled on load.
+    await Promise.resolve();
+
+    const registered = service.getPluginRecipes();
+    expect(registered).toHaveLength(1);
+    expect(registered[0]).toMatchObject({
+      id: "acme.recipe-plugin.review",
+      name: "Review loop",
+      showInEmptyState: true,
+      origin: { kind: "plugin", pluginId: "acme.recipe-plugin", contributionId: "review" },
+    });
+    expect(registered[0]?.terminals.map((t) => t.type)).toEqual(["terminal", "dev-preview"]);
+
+    // The renderer only ever learns about plugin recipes through this channel,
+    // so registering without broadcasting would leave the tier invisible.
+    expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith("events:push", {
+      name: "plugin:recipes-changed",
+      payload: {
+        recipes: [expect.objectContaining({ id: "acme.recipe-plugin.review" })],
+        complete: false,
+      },
+    });
+
+    vi.mocked(broadcastToRenderer).mockClear();
+    service.unloadPlugin("acme.recipe-plugin");
+    await Promise.resolve();
+
+    expect(service.getPluginRecipes()).toEqual([]);
+    // `complete: true` marks an authoritative post-unload snapshot the renderer
+    // may replace wholesale against.
+    expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith("events:push", {
+      name: "plugin:recipes-changed",
+      payload: { recipes: [], complete: true },
+    });
+  });
+
+  it("admits a recipe terminal naming the same plugin's agent but not a foreign one", async () => {
+    await writePlugin("acme.own-agent", {
+      name: "acme.own-agent",
+      version: "1.0.0",
+      capabilities: ["agent:register"],
+      contributes: {
+        agents: [{ id: "acme-runner", name: "Acme Runner", command: "acme-runner" }],
+        recipes: [
+          {
+            id: "mixed",
+            name: "Mixed",
+            terminals: [
+              { type: "acme-runner", initialPrompt: "go" },
+              { type: "someone-elses-agent", initialPrompt: "go" },
+            ],
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    await Promise.resolve();
+
+    const recipe = service.getPluginRecipes().find((r) => r.id === "acme.own-agent.mixed");
+    expect(recipe?.terminals.map((t) => t.type)).toEqual(["acme-runner"]);
+  });
+
+  it("keeps a disabled plugin's recipe metadata across a restart", async () => {
+    // Disable must never be destructive: the recipes retract, but the pins and
+    // frecency the user built up have to be waiting when it comes back.
+    const globalConfigDir = path.join(tmpDir, "global-config");
+    await writePlugin("acme.keeps-meta", {
+      name: "acme.keeps-meta",
+      version: "1.0.0",
+      contributes: {
+        recipes: [
+          { id: "pinned", name: "Pinned", terminals: [{ type: "terminal", command: "ls" }] },
+        ],
+      },
+    });
+
+    const first = new PluginService(tmpDir, "0.0.0", { globalConfigDir });
+    await first.initialize();
+    await first.recordPluginRecipeUse("acme.keeps-meta.pinned", 1234);
+    await first.setEnabled("acme.keeps-meta", false);
+
+    // Fresh service = a restart. The plugin is installed but disabled, so it
+    // contributes no recipe set — reconciliation must read that as "unknown",
+    // not "uninstalled".
+    const second = new PluginService(tmpDir, "0.0.0", { globalConfigDir });
+    await second.initialize();
+    await second.setEnabled("acme.keeps-meta", true);
+    await Promise.resolve();
+
+    const restored = second.getPluginRecipes().find((r) => r.id === "acme.keeps-meta.pinned");
+    expect(restored?.lastUsedAt).toBe(1234);
   });
 });
