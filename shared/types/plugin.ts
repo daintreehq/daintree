@@ -19,7 +19,6 @@ import type {
   PluginCanDispatchResult,
 } from "./actions.js";
 import type { AgentState, WaitingReason } from "./agent.js";
-import type { RecipeAutoAssign } from "./project.js";
 import type { AgentDetectionConfig } from "../config/agentRegistry.js";
 import type { z } from "zod";
 
@@ -354,8 +353,18 @@ export interface RecipeContribution {
   terminals: RecipeContributionTerminal[];
   /** Default for the empty-state pin; a user pin/unpin overrides it. */
   showInEmptyState?: boolean;
-  /** Default issue auto-assign behaviour; a user choice overrides it. */
-  autoAssign?: RecipeAutoAssign;
+  /**
+   * Default issue auto-assign behaviour; a user choice overrides it.
+   *
+   * Spelled out rather than importing `RecipeAutoAssign` from `./project.js`.
+   * This module is an entry point of the plugin SDK's bundled declarations, and
+   * a type-only import still widens that rollup's graph: pulling in `project.ts`
+   * drags `panel.ts` → `panelKindRegistry.ts` → `theme/terminal.ts` behind it,
+   * and the DTS build then fails on an `@xterm/xterm` type that module imports.
+   * The two stay in step because the registry assigns this straight onto
+   * `TerminalRecipe.autoAssign`, so any drift is a compile error there.
+   */
+  autoAssign?: "always" | "never" | "prompt";
 }
 
 /**
