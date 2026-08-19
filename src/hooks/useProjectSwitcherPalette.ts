@@ -486,7 +486,11 @@ interface FrozenLayout {
  */
 interface FrozenSearchActivity {
   keys: Map<string, SearchActivityKey>;
-  /** Same meaning as {@link FrozenLayout.isProvisional}, resolved on the same commit. */
+  /**
+   * Same meaning as {@link FrozenLayout.isProvisional}, but reached on its own
+   * terms — search asks about a wider set of rows, so a session can be
+   * provisional for one freeze and settled for the other.
+   */
   isProvisional: boolean;
 }
 
@@ -1280,27 +1284,36 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     return list;
   }, [scratches, currentScratch?.id, projectStats]);
 
-  // The search freeze's counterpart to the browse regroup above, gated on the
-  // same predicate so both resolve on one commit.
+  // The search freeze's counterpart to the browse regroup above, over search's
+  // own set of rows rather than browse's.
   //
   // A provisional snapshot read every row as quiet, which is not an ordering —
-  // it is the absence of one. Once no stats-sensitive row is still a guess it is
-  // recaptured whole, exactly once, and holds from there.
+  // it is the absence of one. Once no row search ranks is still a guess it is
+  // recaptured whole, exactly once, and holds from there. A session that opened
+  // before the workspace lists themselves loaded stays provisional through the
+  // arrivals below, so the recapture is still ahead of it: `total === 0` is the
+  // emptiest guess there is, not a settled answer.
   //
   // Rows that appear afterwards are folded in at their key of the moment. Until
   // that lands they rank as quiet rather than as their live counts
-  // (`rankSwitcherMatches`), so an arrival still never moves on a stats push —
-  // it takes its one position and then holds like everything else.
+  // (`rankSwitcherMatches`) — so an arrival is seated once at the bottom of its
+  // text tier and once at its real place, and never again. Browse's arrivals
+  // avoid even that because their band-end slot is the same before and after;
+  // search has nowhere equivalent to park one. Reading live counts for the
+  // gap instead would leave that row tracking every push, which is the whole
+  // thing this freeze exists to stop.
   useEffect(() => {
     if (!frozenSearchActivity) return;
 
     if (frozenSearchActivity.isProvisional) {
-      const { unkeyed } = countSearchRowsAwaitingStats(
+      const { total, unkeyed } = countSearchRowsAwaitingStats(
         searchableProjects,
         scratchResults,
         projectStats
       );
-      if (unkeyed === 0) {
+      // `total > 0` so an empty session waits for its rows instead of resolving
+      // against nothing and locking whatever arrives next in as quiet.
+      if (total > 0 && unkeyed === 0) {
         setFrozenSearchActivity((previous) =>
           // Identity, not truthiness: an effect left over from a previous open
           // session must not recapture this one against stale rows.
@@ -1477,7 +1490,12 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         captureSearchActivity(
           searchableProjects,
           scratchResults,
-          searchRows.total > 0 && searchRows.unkeyed === searchRows.total
+          // No rows counts as provisional, unlike browse's check. Loading the
+          // workspace lists is itself async and retried, so a palette opened
+          // during boot can capture nothing at all — and calling that snapshot
+          // settled would let the scratches that arrive a moment later fold in
+          // as quiet with no recapture ever due.
+          searchRows.unkeyed === searchRows.total
         )
       );
       // Preselect the first ENABLED row that isn't the project we're already

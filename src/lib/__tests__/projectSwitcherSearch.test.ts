@@ -670,19 +670,28 @@ describe("rankSwitcherMatches activity classification", () => {
   });
 
   it("treats a seen assistant wait, snoozed runs, acknowledged work and processes as quiet", () => {
-    // Named so every one of these four sits BELOW where a promotion would put
-    // it: the demanding row sorts last alphabetically and still leads, and
-    // "y-acknowledged" sorts last of the quiet run, so a completion wrongly
-    // read as unreviewed would jump it to second.
+    // "a-control" carries no signal at all and sorts first, so none of the four
+    // rows under test holds the top quiet slot by name. Any one of them wrongly
+    // promoted has to jump the control row to get there, which shows up here.
     const ranked = rank([
-      row("b-seen-wait", { assistantState: "waiting", assistantStateSince: 100, lastOpened: 500 }),
-      row("c-snoozed", { snoozedAgentCount: 4, nextSnoozeWakeAt: 999 }),
-      row("y-acknowledged", { completedAgentCount: 4, unacknowledgedCompletedAgentCount: 0 }),
-      row("a-processes", { processCount: 9 }),
-      row("z-busy", { waitingAgentCount: 1 }),
+      row("x-seen-wait", { assistantState: "waiting", assistantStateSince: 100, lastOpened: 500 }),
+      row("y-snoozed", { snoozedAgentCount: 4, nextSnoozeWakeAt: 999 }),
+      row("z-acknowledged", { completedAgentCount: 4, unacknowledgedCompletedAgentCount: 0 }),
+      row("w-processes", { processCount: 9 }),
+      row("a-control"),
+      row("m-busy", { waitingAgentCount: 1 }),
     ]);
 
-    expect(ranked).toEqual(["z-busy", "a-processes", "b-seen-wait", "c-snoozed", "y-acknowledged"]);
+    // The demanding row leads from the middle of the alphabet, so the waiting
+    // class is what put it there rather than its name.
+    expect(ranked).toEqual([
+      "m-busy",
+      "a-control",
+      "w-processes",
+      "x-seen-wait",
+      "y-snoozed",
+      "z-acknowledged",
+    ]);
   });
 
   it("still reads a snoozed working run as working, exactly as browse does", () => {

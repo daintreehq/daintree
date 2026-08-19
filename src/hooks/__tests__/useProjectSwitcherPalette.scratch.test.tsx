@@ -1174,6 +1174,40 @@ describe("scratch activity in the search freeze — issue #11861", () => {
     projectStatsState.stats = {};
   });
 
+  it("still resolves when the palette opened before the scratches loaded", async () => {
+    // Loading the workspace lists is itself async and retried, so a palette
+    // opened during boot captures an EMPTY snapshot. Treating "nothing to ask
+    // about" as a settled answer would fold the scratches that arrive a moment
+    // later in as quiet, with no recapture ever due.
+    scratchState.scratches = [];
+    scratchState.currentScratch = null;
+    projectStatsState.stats = {};
+
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+    act(() => result.current.open("modal"));
+
+    // The lists land first...
+    act(() => {
+      seedScratches(2);
+      rerender();
+    });
+    // ...and their stats only after.
+    act(() => {
+      projectStatsState.stats = {
+        "scratch-1": { activeAgentCount: 0, waitingAgentCount: 2, processCount: 0 },
+        "scratch-2": { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+      };
+      rerender();
+    });
+    act(() => result.current.setQuery("Spike"));
+
+    // Recency alone puts the newer scratch-2 first, so only a snapshot that was
+    // still open to a recapture can produce this.
+    await waitFor(() => {
+      expect(result.current.results.map((row) => row.id)).toEqual(["scratch-1", "scratch-2"]);
+    });
+  });
+
   it("resolves a cold scratch-only session once its stats land", async () => {
     // With no projects there is nothing for a project-gated hydration check to
     // ask about, so it reads as hydrated immediately and freezes every scratch
