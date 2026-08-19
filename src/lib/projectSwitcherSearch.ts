@@ -146,11 +146,16 @@ export function scoreProjectQuery(query: string, name: string, path: string): nu
  * directly comparable: an equal name match leaves the project ahead by exactly
  * its path term, which is never negative.
  *
- * A scratch containing the query outranking a loosely-matched project is now a
- * guarantee rather than a consequence of these totals. {@link rankSwitcherMatches}
- * compares a name-match tier before it consults either one, and that tier applies
- * to every pair, projects included — which is what keeps the comparator
- * transitive. The totals decide an order only once two rows have tied on it.
+ * A scratch whose name contains the query outranking a loosely-matched project
+ * no longer rests on these totals: {@link rankSwitcherMatches} compares a
+ * name-match tier before it consults either one, and that tier applies to every
+ * pair, projects included — which is what keeps the comparator transitive. The
+ * totals are consulted only after both the tier and the activity keys have tied.
+ *
+ * One caveat inherited from {@link scoreField}: a scratch scoring 0 is filtered
+ * out before any of that, and a long enough name drains the substring bonus to
+ * nothing. The guarantee covers a substring match that still scores, not every
+ * substring match.
  */
 export function scoreScratchQuery(query: string, name: string): number {
   if (!query) return 0;
@@ -313,9 +318,10 @@ interface RankedEntry {
  *
  * In order: how well the NAME answers the query, then what the workspace is
  * asking of the user, then how loud that ask is, then the raw text score, then
- * kind, then per-kind recency, then name, then id. Activity sits below the text
- * tier and can never climb out of it (#11861) — it separates rows the text
- * scores cannot tell apart, which is what four workspaces sharing a prefix are.
+ * kind, then per-kind recency, then name, then id. Activity sits below the name
+ * tier and can never climb out of it (#11861), but it orders EVERY pair inside
+ * one — including a pair the raw scores could have separated, which is the
+ * point: those scores are what a shared parent directory decides.
  *
  * `activityKeys` is the palette session's frozen snapshot, keyed by row id.
  * Activity arrives live over IPC and every push re-runs this ranking, so reading

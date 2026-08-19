@@ -5,6 +5,7 @@ import {
   scoreScratchQuery,
   rankSwitcherMatches,
   QUIET_SEARCH_ACTIVITY,
+  computeSearchActivityKey,
 } from "../projectSwitcherSearch";
 import type { SearchableProject, SearchableScratch } from "@/hooks/useProjectSwitcherPalette";
 
@@ -504,7 +505,7 @@ describe("rankSwitcherMatches activity ordering", () => {
     ]);
   });
 
-  it("ranks an active scratch on activity without giving it path relevance", () => {
+  it("ranks a busy scratch on its activity without giving it path relevance", () => {
     const project = makeProject({
       id: "p",
       name: "alpha-app",
@@ -622,18 +623,21 @@ describe("rankSwitcherMatches activity classification", () => {
   });
 
   it("lets an assistant escalate a row nothing else is asking about", () => {
+    // Named so the name tie-break runs the OTHER way: with no assistant
+    // classification at all these four are equally quiet and come back
+    // alphabetically, which is the exact reverse of the expectation.
     expect(
       rank([
-        row("dormant"),
-        row("assistant-working", { assistantState: "working" }),
-        row("assistant-unseen", {
+        row("a-dormant"),
+        row("b-working", { assistantState: "working" }),
+        row("c-unseen", {
           assistantState: "waiting",
           assistantStateSince: 500,
           lastOpened: 100,
         }),
-        row("assistant-blocked", { assistantState: "waiting", assistantWaitingReason: "error" }),
+        row("d-blocked", { assistantState: "waiting", assistantWaitingReason: "error" }),
       ])
-    ).toEqual(["assistant-blocked", "assistant-unseen", "assistant-working", "dormant"]);
+    ).toEqual(["d-blocked", "c-unseen", "b-working", "a-dormant"]);
   });
 
   it("counts an escalated assistant as one presence, never as part of a worker tally", () => {
@@ -666,18 +670,19 @@ describe("rankSwitcherMatches activity classification", () => {
   });
 
   it("treats a seen assistant wait, snoozed runs, acknowledged work and processes as quiet", () => {
+    // Named so every one of these four sits BELOW where a promotion would put
+    // it: the demanding row sorts last alphabetically and still leads, and
+    // "y-acknowledged" sorts last of the quiet run, so a completion wrongly
+    // read as unreviewed would jump it to second.
     const ranked = rank([
-      row("seen-wait", { assistantState: "waiting", assistantStateSince: 100, lastOpened: 500 }),
-      row("snoozed", { snoozedAgentCount: 4, nextSnoozeWakeAt: 999 }),
-      row("acknowledged", { completedAgentCount: 4, unacknowledgedCompletedAgentCount: 0 }),
-      row("processes", { processCount: 9 }),
-      row("busy", { waitingAgentCount: 1 }),
+      row("b-seen-wait", { assistantState: "waiting", assistantStateSince: 100, lastOpened: 500 }),
+      row("c-snoozed", { snoozedAgentCount: 4, nextSnoozeWakeAt: 999 }),
+      row("y-acknowledged", { completedAgentCount: 4, unacknowledgedCompletedAgentCount: 0 }),
+      row("a-processes", { processCount: 9 }),
+      row("z-busy", { waitingAgentCount: 1 }),
     ]);
 
-    // The one demanding row leads. The other four are indistinguishable on
-    // activity, so they fall through to the name tie-break — which is what
-    // proves none of those four signals promoted anything.
-    expect(ranked).toEqual(["busy", "acknowledged", "processes", "seen-wait", "snoozed"]);
+    expect(ranked).toEqual(["z-busy", "a-processes", "b-seen-wait", "c-snoozed", "y-acknowledged"]);
   });
 
   it("still reads a snoozed working run as working, exactly as browse does", () => {
@@ -698,12 +703,15 @@ describe("rankSwitcherMatches frozen activity", () => {
     waitingAgentCount: 3,
   });
   const calm = makeProject({ id: "calm", name: "alpha-calm", path: "/repos/alpha" });
+  // Taken from the helper rather than written out, so the fixture cannot drift
+  // from — or quietly restate — how a key is encoded.
+  const WAS_WAITING = computeSearchActivityKey(busy);
 
   it("ranks on the snapshot rather than on the rows' live counts", () => {
     // The snapshot says the calm row was the busy one when the palette opened.
     // The live counts say the opposite, and must not move anything.
     const snapshot = new Map([
-      ["calm", { activityClass: 1, activityVolume: 3 }],
+      ["calm", WAS_WAITING],
       ["busy", QUIET_SEARCH_ACTIVITY],
     ]);
     expect(rankSwitcherMatches("alpha", [busy, calm], [], snapshot).map((r) => r.id)).toEqual([
@@ -721,7 +729,7 @@ describe("rankSwitcherMatches frozen activity", () => {
   it("reads a row the snapshot never saw as quiet, not as whatever it is doing now", () => {
     // A row that registered mid-session. Falling back to its live counts would
     // put it back on the stats push the freeze exists to insulate it from.
-    const snapshot = new Map([["calm", { activityClass: 1, activityVolume: 3 }]]);
+    const snapshot = new Map([["calm", WAS_WAITING]]);
     expect(rankSwitcherMatches("alpha", [busy, calm], [], snapshot).map((r) => r.id)).toEqual([
       "calm",
       "busy",

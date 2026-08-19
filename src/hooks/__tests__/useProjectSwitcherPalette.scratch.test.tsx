@@ -1174,10 +1174,57 @@ describe("scratch activity in the search freeze — issue #11861", () => {
     projectStatsState.stats = {};
   });
 
+  it("resolves a cold scratch-only session once its stats land", async () => {
+    // With no projects there is nothing for a project-gated hydration check to
+    // ask about, so it reads as hydrated immediately and freezes every scratch
+    // as quiet — for the whole session, since the one recapture never fires.
+    const seeded = seedScratches(2);
+    expect(seeded[1]!.lastOpened).toBeGreaterThan(seeded[0]!.lastOpened);
+    projectStatsState.stats = {};
+    vi.mocked(projectClient.getBulkStats).mockResolvedValue({
+      "scratch-1": {
+        processCount: 0,
+        terminalCount: 0,
+        estimatedMemoryMB: 0,
+        terminalTypes: {},
+        processIds: [],
+        activeAgentCount: 0,
+        waitingAgentCount: 2,
+        blockedAgentCount: 0,
+        completedAgentCount: 0,
+        unacknowledgedCompletedAgentCount: 0,
+        snoozedAgentCount: 0,
+      },
+      "scratch-2": {
+        processCount: 0,
+        terminalCount: 0,
+        estimatedMemoryMB: 0,
+        terminalTypes: {},
+        processIds: [],
+        activeAgentCount: 0,
+        waitingAgentCount: 0,
+        blockedAgentCount: 0,
+        completedAgentCount: 0,
+        unacknowledgedCompletedAgentCount: 0,
+        snoozedAgentCount: 0,
+      },
+    });
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => result.current.open("modal"));
+    await waitFor(() => expect(projectClient.getBulkStats).toHaveBeenCalled());
+    act(() => result.current.setQuery("Spike"));
+
+    // Recency alone would put the newer scratch-2 first; only a snapshot that
+    // resolved after hydration can see the wait on scratch-1.
+    await waitFor(() => {
+      expect(result.current.results.map((row) => row.id)).toEqual(["scratch-1", "scratch-2"]);
+    });
+  });
+
   it("ranks scratches on frozen activity, and holds it against a stats push", async () => {
     // Scratches join the ranked list (#11466) but never a browse band, so
-    // search's freeze is the only one that covers them. A snapshot that
-    // captured projects alone would leave every scratch reading as quiet.
+    // search's freeze is the only one that covers them at all.
     const seeded = seedScratches(2);
     // Recency runs the other way, so the wait is the only thing that can put
     // scratch-1 first.
