@@ -394,6 +394,25 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "List the launch presets for one agent, merged across user settings, repository preset files and CCR discovery in the precedence the launcher applies, so every id returned is one a launch will accept. Identity only: no environment values or flags. While the completeness flag is false a source is still loading.",
+    "examples": [
+      {
+        "args": {
+          "agentId": "claude",
+        },
+        "description": "Discover the preset ids available for Claude Code",
+      },
+    ],
+    "id": "agent.listPresets",
+    "keywords": undefined,
+    "kind": "query",
+    "requiresArgs": true,
+    "title": "List Agent Presets",
+  },
+  {
+    "category": "agent",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "List the built-in agents together with whether each one currently shows in the toolbar. Use this to see what the user has surfaced without reading full agent settings. Visibility is resolved for you: an agent can be explicitly pinned, explicitly hidden, or left to follow whether its CLI is installed, so read the resolved visibility rather than inferring it from pinning alone.",
     "examples": undefined,
     "id": "agent.listToolbar",

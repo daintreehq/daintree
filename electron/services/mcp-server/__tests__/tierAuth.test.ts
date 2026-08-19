@@ -753,7 +753,7 @@ describe("help-session tier policy (#10640)", () => {
 // `agent.listToolbar` reports which buttons the user has surfaced in the UI —
 // real for the in-app assistant, not worth a slot on a capped external surface.
 describe("narrow agent discovery tier reachability", () => {
-  it.each(["agent.listToolbar", "agent.listAvailable"] as const)(
+  it.each(["agent.listToolbar", "agent.listAvailable", "agent.listPresets"] as const)(
     "permits %s at every in-app tier",
     (toolId) => {
       for (const tier of ["workbench", "action", "system"] as const) {
@@ -762,8 +762,12 @@ describe("narrow agent discovery tier reachability", () => {
     }
   );
 
-  it("keeps only the launch-registry read on the external tier", () => {
+  it("keeps only the launch-resolving reads on the external tier", () => {
     expect(isTierPermitted("external", "agent.listAvailable")).toBe(true);
+    // Preset ids are the other argument `agent.launch` accepts and cannot be
+    // guessed from outside, so this read earns the same slot on the same
+    // argument as the registry read above.
+    expect(isTierPermitted("external", "agent.listPresets")).toBe(true);
     expect(isTierPermitted("external", "agent.listToolbar")).toBe(false);
   });
 

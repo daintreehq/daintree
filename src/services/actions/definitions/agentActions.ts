@@ -12,7 +12,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { AGENT_REGISTRY, getAgentDisplayTitle } from "@/config/agents";
+import { AGENT_REGISTRY, getAgentDisplayTitle, getMergedPresetIdentities } from "@/config/agents";
 import { agentCapabilitiesClient, agentSettingsClient, cliAvailabilityClient } from "@/clients";
 import { userAgentRegistryClient } from "@/clients/userAgentRegistryClient";
 import {
@@ -23,6 +23,7 @@ import {
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type { ActionContext, ActionId } from "@shared/types/actions";
+import type { AgentPreset } from "@shared/config/agentRegistry";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
 import type {
   AgentSessionBookmarkMetadata,
@@ -76,6 +77,17 @@ const BookmarkListArgsSchema = z
     offset: SessionListOffsetSchema,
   })
   .optional();
+
+const AgentListPresetsArgsSchema = z.object({
+  agentId: AgentIdSchema,
+  projectId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Which project's repository presets to include. Defaults to the project this call is dispatched in. Naming one that is not the loaded project returns the other layers and reports the result as incomplete rather than answering for the wrong project."
+    ),
+});
 
 const SessionHistoryListArgsSchema = z
   .object({
@@ -178,6 +190,38 @@ function keepRepresentableRecords(records: AgentSessionRecord[]): AgentSessionRe
  * timeout and the guard's 45s lease TTL.
  */
 const AGENT_DISCOVERY_READ_TIMEOUT_MS = 25_000;
+
+/**
+ * Ceiling for one preset-source read.
+ *
+ * Sized well under Main's 30s dispatch timeout so a stalled IPC surfaces as a
+ * named error here rather than leaving the renderer action — and the spawn
+ * guard's lease — pending after Main has already abandoned the request. Much
+ * tighter than `AGENT_DISCOVERY_READ_TIMEOUT_MS` because none of these legs
+ * can fall through to a CLI probe; they read settings that are already loaded
+ * or already failed.
+ */
+const AGENT_PRESET_READ_TIMEOUT_MS = 10_000;
+
+async function withReadDeadline<T>(work: Promise<T>, leg: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(
+            `Timed out after ${AGENT_PRESET_READ_TIMEOUT_MS}ms reading ${leg} for preset discovery`
+          )
+        ),
+      AGENT_PRESET_READ_TIMEOUT_MS
+    );
+  });
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   const readAgentDiscoveryState = async () => {
@@ -1119,6 +1163,132 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
             ...(builtIn ? { toolbarVisible: isAgentToolbarVisible(entry, rawState) } : {}),
           };
         }),
+      };
+    },
+  }));
+
+  /**
+   * Read the three layers a merged preset list is built from.
+   *
+   * Deliberately reads the same renderer stores the launcher resolves against
+   * rather than re-fetching over IPC. A fresh IPC read could report a preset
+   * the launcher's stores have not installed yet, and an id that cannot be
+   * launched is worse than an id reported a moment late — the whole point of
+   * this listing is that what it returns is what a launch will accept.
+   *
+   * Settings keep the cache-aware client fallback because that layer has one;
+   * the two preset stores do not, so they carry hydration markers instead and
+   * an unproven snapshot is reported as incomplete rather than guessed at.
+   */
+  const readAgentPresetSources = async (
+    agentId: string,
+    projectId: string | undefined,
+    scopeKnown: boolean
+  ) => {
+    const [{ useAgentSettingsStore }, { useCcrPresetsStore }, { useProjectPresetsStore }] =
+      await Promise.all([
+        import("@/store/agentSettingsStore"),
+        import("@/store/ccrPresetsStore"),
+        import("@/store/projectPresetsStore"),
+      ]);
+
+    const storeSettings = useAgentSettingsStore.getState().settings;
+    // Only the store is certifiable. The launcher resolves a preset id against
+    // that store, so a preset that exists solely in a client response is one
+    // this listing would promise and the next launch would fail to find. The
+    // fallback still runs, because naming presets before hydration is useful —
+    // it just cannot be reported as settled.
+    const settings =
+      storeSettings ??
+      (await withReadDeadline(agentSettingsClient.get(), "agentSettings").catch(() => null));
+    const ccrState = useCcrPresetsStore.getState();
+    const projectState = useProjectPresetsStore.getState();
+
+    // `agentId` is caller-supplied and unconstrained, so an inherited key like
+    // `__proto__` would otherwise resolve to `Object.prototype` and throw on
+    // the first array operation. Own-key plus shape checks also keep a
+    // corrupted persisted map from reaching the merge.
+    const ownBucket = (
+      byAgent: Record<string, AgentPreset[]>,
+      id: string
+    ): AgentPreset[] | undefined => {
+      if (!Object.hasOwn(byAgent, id)) return undefined;
+      const bucket = byAgent[id];
+      return Array.isArray(bucket) ? bucket : undefined;
+    };
+
+    // A project in scope contributes presets only when the loaded snapshot
+    // demonstrably belongs to it: the store is reused across project switches,
+    // and serving another project's presets would hand back ids this project
+    // cannot launch.
+    const projectScoped = projectId !== undefined && projectState.hydratedProjectId === projectId;
+    const agents = settings?.agents;
+    const entry = agents && Object.hasOwn(agents, agentId) ? agents[agentId] : undefined;
+
+    return {
+      customPresets: entry?.customPresets,
+      // Passed through exactly as stored: an absent key keeps the built-in
+      // registry presets, while an own array — `[]` included — replaces them.
+      ccrPresets: ownBucket(ccrState.ccrPresetsByAgent, agentId),
+      projectPresets: projectScoped ? ownBucket(projectState.presetsByAgent, agentId) : undefined,
+      presetsComplete:
+        storeSettings != null &&
+        ccrState.isInitialized &&
+        // No project id has two meanings. A scratch workspace genuinely has no
+        // repository presets, so nothing is missing there. A view that has not
+        // resolved its workspace at all is simply unknown, and certifying that
+        // as complete would report a project's presets as absent rather than
+        // unread.
+        (projectId !== undefined ? projectScoped : scopeKnown),
+    };
+  };
+
+  actions.set("agent.listPresets", () => ({
+    id: "agent.listPresets",
+    title: "List Agent Presets",
+    description:
+      "List the launch presets for one agent, merged across user settings, repository preset files and CCR discovery in the precedence the launcher applies, so every id returned is one a launch will accept. Identity only: no environment values or flags. While the completeness flag is false a source is still loading.",
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: AgentListPresetsArgsSchema,
+    examples: [
+      {
+        args: { agentId: "claude" },
+        description: "Discover the preset ids available for Claude Code",
+      },
+    ],
+    resultSchema: z.object({
+      presetsComplete: z.boolean(),
+      presets: z.array(
+        z.object({
+          id: z.string(),
+          name: z.string(),
+          source: z.enum(["custom", "project", "ccr", "registry"]),
+          description: z.string().optional(),
+        })
+      ),
+    }),
+    mcpOutputSchema: true,
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { agentId, projectId: requestedProjectId } = AgentListPresetsArgsSchema.parse(
+        args ?? {}
+      );
+      const projectId = requestedProjectId ?? ctx.projectId;
+      // Either workspace pointer proves the view resolved its own scope; with
+      // neither, "no project presets" is a gap rather than an answer.
+      const scopeKnown = projectId !== undefined || ctx.scratchId !== undefined;
+      const sources = await readAgentPresetSources(agentId, projectId, scopeKnown);
+
+      return {
+        presetsComplete: sources.presetsComplete,
+        presets: getMergedPresetIdentities(
+          agentId,
+          sources.customPresets,
+          sources.ccrPresets,
+          sources.projectPresets
+        ),
       };
     },
   }));

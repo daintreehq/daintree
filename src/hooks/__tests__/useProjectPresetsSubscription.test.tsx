@@ -108,4 +108,96 @@ describe("useProjectPresetsSubscription", () => {
     });
     expect(useProjectPresetsStore.getState().presetsByAgent.claude?.[0]?.id).toBe("team-b");
   });
+  /**
+   * `hydratedProjectId` is what lets a reader tell "this project declares no
+   * presets" from "the load has not landed". Because the store is reused across
+   * project switches, it must never name a project other than the one the
+   * loaded payload came from.
+   */
+  it("records which project a loaded snapshot belongs to", async () => {
+    mockCurrentProjectId = "project-a";
+    getInRepoPresetsMock.mockResolvedValueOnce({
+      claude: [{ id: "team-a", name: "Team A" }],
+    });
+
+    renderHook(() => useProjectPresetsSubscription());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(useProjectPresetsStore.getState().hydratedProjectId).toBe("project-a");
+  });
+
+  it("records ownership for a project that declares no presets", async () => {
+    mockCurrentProjectId = "project-a";
+    getInRepoPresetsMock.mockResolvedValueOnce({});
+
+    renderHook(() => useProjectPresetsSubscription());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const state = useProjectPresetsStore.getState();
+    expect(state.presetsByAgent).toEqual({});
+    expect(state.hydratedProjectId).toBe("project-a");
+  });
+
+  it("leaves ownership unclaimed when the load fails", async () => {
+    mockCurrentProjectId = "project-a";
+    getInRepoPresetsMock.mockRejectedValueOnce(new Error("IPC failure"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    renderHook(() => useProjectPresetsSubscription());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(useProjectPresetsStore.getState().hydratedProjectId).toBeNull();
+    warnSpy.mockRestore();
+  });
+
+  it("releases ownership as soon as the project changes", async () => {
+    mockCurrentProjectId = "project-a";
+    getInRepoPresetsMock.mockResolvedValueOnce({
+      claude: [{ id: "team-a", name: "Team A" }],
+    });
+
+    const { rerender } = renderHook(() => useProjectPresetsSubscription());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(useProjectPresetsStore.getState().hydratedProjectId).toBe("project-a");
+
+    mockCurrentProjectId = null;
+    rerender();
+
+    expect(useProjectPresetsStore.getState().hydratedProjectId).toBeNull();
+  });
+
+  it("never lets a stale response claim ownership for the project it left", async () => {
+    let resolveA: (v: Record<string, AgentPreset[]>) => void = () => {};
+    const pendingA = new Promise<Record<string, AgentPreset[]>>((r) => {
+      resolveA = r;
+    });
+
+    mockCurrentProjectId = "project-a";
+    getInRepoPresetsMock.mockReturnValueOnce(pendingA);
+    const { rerender } = renderHook(() => useProjectPresetsSubscription());
+
+    mockCurrentProjectId = "project-b";
+    getInRepoPresetsMock.mockResolvedValueOnce({
+      claude: [{ id: "team-b", name: "Team B" }],
+    });
+    rerender();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      resolveA({ claude: [{ id: "team-a", name: "Team A" }] });
+      await Promise.resolve();
+    });
+
+    expect(useProjectPresetsStore.getState().hydratedProjectId).toBe("project-b");
+  });
 });

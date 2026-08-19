@@ -328,6 +328,7 @@ export const BUILT_IN_ACTION_IDS = [
   "agent.getState",
   "agent.listToolbar",
   "agent.listAvailable",
+  "agent.listPresets",
   "agentSessionHistory.list",
   // -- session bookmarks (#11288) --
   "session.bookmarkAndClose",

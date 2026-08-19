@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 
@@ -49,12 +50,40 @@ const cliAvailabilityStoreMock = vi.hoisted(() => ({
   useCliAvailabilityStore: { getState: vi.fn() },
 }));
 
+// Return types are spelled out because `vi.fn` otherwise infers them from the
+// default implementation, which narrows `hydratedProjectId` to `null` and makes
+// every ownership case below a type error rather than a test.
+const ccrPresetsStoreMock = vi.hoisted(() => ({
+  useCcrPresetsStore: {
+    getState: vi.fn<() => { ccrPresetsByAgent: Record<string, unknown[]>; isInitialized: boolean }>(
+      () => ({ ccrPresetsByAgent: {}, isInitialized: true })
+    ),
+  },
+}));
+
+const projectPresetsStoreMock = vi.hoisted(() => ({
+  useProjectPresetsStore: {
+    getState: vi.fn<
+      () => { presetsByAgent: Record<string, unknown[]>; hydratedProjectId: string | null }
+    >(() => ({ presetsByAgent: {}, hydratedProjectId: null })),
+  },
+}));
+
 vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
 vi.mock("@/store/createWorktreeStore", () => currentViewStoreMock);
 vi.mock("@/store/worktreeStore", () => worktreeSelectionMock);
 vi.mock("@/store/agentSettingsStore", () => agentSettingsStoreMock);
 vi.mock("@/store/cliAvailabilityStore", () => cliAvailabilityStoreMock);
-vi.mock("@/config/agents", () => agentRegistryMock);
+vi.mock("@/store/ccrPresetsStore", () => ccrPresetsStoreMock);
+vi.mock("@/store/projectPresetsStore", () => projectPresetsStoreMock);
+// Partial rather than whole-module: a factory-built namespace throws on any
+// export it did not declare, so replacing the module outright would break the
+// moment production code reaches a second symbol in it. Spreading the real
+// module also means the preset-identity merge under test here is the real one.
+vi.mock("@/config/agents", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/config/agents")>();
+  return { ...actual, ...agentRegistryMock };
+});
 vi.mock("@/clients/userAgentRegistryClient", () => ({
   userAgentRegistryClient: clientsMock.userAgentRegistryClient,
 }));
@@ -1808,5 +1837,342 @@ describe("agentSessionHistory.list (#10854)", () => {
     expect(schema?.safeParse({ worktreeId: "wt-1", limit: -5 }).success).toBe(false);
     expect(schema?.safeParse({ worktreeId: "wt-1", limit: 2.5 }).success).toBe(false);
     expect(schema?.safeParse({ worktreeId: "wt-1", limit: 100_000 }).success).toBe(false);
+  });
+});
+
+describe("agent.listPresets", () => {
+  const SECRET = "sk-live-do-not-leak";
+
+  /**
+   * Narrow the dispatch result without a type assertion, and deliberately
+   * loosely: a row that smuggled an extra field has to survive parsing so the
+   * key allowlist below can see it. A strict schema would strip the leak and
+   * make the very test that hunts for it pass.
+   */
+  const PRESET_ROW_KEYS = new Set(["id", "name", "source", "description"]);
+
+  const PresetsResultShape = z.object({
+    presetsComplete: z.boolean(),
+    presets: z.array(z.looseObject({ id: z.string(), name: z.string(), source: z.string() })),
+  });
+
+  beforeEach(() => {
+    clientsMock.agentSettingsClient.get.mockResolvedValue({ agents: {} });
+    setSources({});
+  });
+
+  function setSources(options: {
+    settings?: { agents?: Record<string, unknown> } | null;
+    ccrPresetsByAgent?: Record<string, unknown[]>;
+    ccrInitialized?: boolean;
+    presetsByAgent?: Record<string, unknown[]>;
+    hydratedProjectId?: string | null;
+  }): void {
+    agentSettingsStoreMock.useAgentSettingsStore.getState.mockReturnValue({
+      settings: options.settings === undefined ? { agents: {} } : options.settings,
+    });
+    ccrPresetsStoreMock.useCcrPresetsStore.getState.mockReturnValue({
+      ccrPresetsByAgent: options.ccrPresetsByAgent ?? {},
+      isInitialized: options.ccrInitialized ?? true,
+    });
+    projectPresetsStoreMock.useProjectPresetsStore.getState.mockReturnValue({
+      presetsByAgent: options.presetsByAgent ?? {},
+      hydratedProjectId: options.hydratedProjectId ?? null,
+    });
+  }
+
+  // Defaults to a scratch scope: a view that has resolved its workspace and
+  // genuinely has no project. Tests that mean "the view resolved nothing" pass
+  // an explicit empty context instead.
+  async function listPresets(
+    args: Record<string, unknown> = { agentId: "claude" },
+    ctx: Partial<ActionContext> = { scratchId: "scratch-1" }
+  ) {
+    const actions = setupActions(makeCallbacks());
+    return PresetsResultShape.parse(await callAction(actions, "agent.listPresets", args, ctx));
+  }
+
+  it("registers as a narrow read with a structured MCP result", () => {
+    const def = getDefinition(setupActions(makeCallbacks()), "agent.listPresets");
+    expect(def.kind).toBe("query");
+    expect(def.danger).toBe("safe");
+    expect(def.scope).toBe("renderer");
+    expect(def.mcpVisibility).toBeUndefined();
+    expect(def.mcpOutputSchema).toBe(true);
+  });
+
+  it("returns rows the declared result schema accepts", async () => {
+    setSources({
+      settings: { agents: { claude: { customPresets: [{ id: "zai", name: "Z.AI" }] } } },
+    });
+    const actions = setupActions(makeCallbacks());
+    const result = await callAction(
+      actions,
+      "agent.listPresets",
+      { agentId: "claude" },
+      { scratchId: "scratch-1" }
+    );
+
+    // `resultSchema` is parsed at dispatch, so a run() that drifts from it
+    // fails as a validation error rather than shipping the extra field.
+    expect(parseAgainstSchema(actions, "agent.listPresets", result).success).toBe(true);
+    expect(result).toEqual({
+      presetsComplete: true,
+      presets: [{ id: "zai", name: "Z.AI", source: "custom" }],
+    });
+  });
+
+  it("never leaks a preset's launch payload", async () => {
+    setSources({
+      settings: {
+        agents: {
+          claude: {
+            customPresets: [
+              {
+                id: "zai",
+                name: "Z.AI",
+                description: "Routes through Z.AI",
+                env: { ANTHROPIC_API_KEY: SECRET },
+                args: ["--secret-flag"],
+                customFlags: "--dangerous",
+                dangerousMode: "on",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const result = await listPresets();
+
+    expect(Object.keys(result.presets[0]!).sort()).toEqual(
+      ["description", "id", "name", "source"].sort()
+    );
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(SECRET);
+    expect(serialized).not.toContain("--secret-flag");
+    expect(serialized).not.toContain("dangerous");
+  });
+
+  it("merges the three layers in launch precedence and tags each one", async () => {
+    setSources({
+      settings: { agents: { claude: { customPresets: [{ id: "shared", name: "Custom" }] } } },
+      ccrPresetsByAgent: { claude: [{ id: "ccr-route", name: "CCR route" }] },
+      presetsByAgent: {
+        claude: [
+          { id: "shared", name: "Project" },
+          { id: "team", name: "Team" },
+        ],
+      },
+      hydratedProjectId: "proj-1",
+    });
+
+    expect(await listPresets({ agentId: "claude" }, { projectId: "proj-1" })).toEqual({
+      presetsComplete: true,
+      presets: [
+        { id: "shared", name: "Custom", source: "custom" },
+        { id: "team", name: "Team", source: "project" },
+        { id: "ccr-route", name: "CCR route", source: "ccr" },
+      ],
+    });
+  });
+
+  it("prefers an explicit project over the dispatch context", async () => {
+    setSources({
+      presetsByAgent: { claude: [{ id: "team", name: "Team" }] },
+      hydratedProjectId: "proj-explicit",
+    });
+
+    expect(
+      await listPresets(
+        { agentId: "claude", projectId: "proj-explicit" },
+        { projectId: "proj-ambient" }
+      )
+    ).toEqual({
+      presetsComplete: true,
+      presets: [{ id: "team", name: "Team", source: "project" }],
+    });
+
+    // The ambient project would have been the wrong scope for this snapshot.
+    expect(await listPresets({ agentId: "claude" }, { projectId: "proj-ambient" })).toEqual({
+      presetsComplete: false,
+      presets: [],
+    });
+  });
+
+  it("withholds another project's presets rather than answering for the wrong one", async () => {
+    setSources({
+      presetsByAgent: { claude: [{ id: "team", name: "Team" }] },
+      hydratedProjectId: "proj-1",
+    });
+
+    expect(await listPresets({ agentId: "claude" }, { projectId: "proj-2" })).toEqual({
+      presetsComplete: false,
+      presets: [],
+    });
+  });
+
+  it("reports completeness per unproven source", async () => {
+    // A project in scope whose snapshot has not landed.
+    setSources({ hydratedProjectId: null });
+    expect(
+      (await listPresets({ agentId: "claude" }, { projectId: "proj-1" })).presetsComplete
+    ).toBe(false);
+
+    // CCR discovery still in flight.
+    setSources({ ccrInitialized: false });
+    expect((await listPresets()).presetsComplete).toBe(false);
+
+    // No project in scope: there are no repository presets to be missing.
+    setSources({});
+    expect((await listPresets()).presetsComplete).toBe(true);
+  });
+
+  it("names client-fallback presets without certifying them", async () => {
+    setSources({ settings: null });
+    clientsMock.agentSettingsClient.get.mockResolvedValue({
+      agents: { claude: { customPresets: [{ id: "zai", name: "Z.AI" }] } },
+    });
+
+    // The launcher resolves a preset id against the settings store, not this
+    // client. Naming the preset early is useful; certifying it would promise an
+    // id a launch in this same window would not find.
+    expect(await listPresets()).toEqual({
+      presetsComplete: false,
+      presets: [{ id: "zai", name: "Z.AI", source: "custom" }],
+    });
+    expect(clientsMock.agentSettingsClient.get).toHaveBeenCalled();
+  });
+
+  it("reports an unreadable settings layer as incomplete", async () => {
+    setSources({ settings: null });
+    clientsMock.agentSettingsClient.get.mockResolvedValue(null);
+
+    expect((await listPresets()).presetsComplete).toBe(false);
+  });
+
+  it("degrades to the proven layers when the settings client rejects", async () => {
+    setSources({
+      settings: null,
+      ccrPresetsByAgent: { claude: [{ id: "ccr-route", name: "CCR route" }] },
+    });
+    clientsMock.agentSettingsClient.get.mockRejectedValue(new Error("ipc down"));
+
+    // A read-only query that already carries a completeness flag has a better
+    // answer than failing outright: report what is proven and say so.
+    expect(await listPresets()).toEqual({
+      presetsComplete: false,
+      presets: [{ id: "ccr-route", name: "CCR route", source: "ccr" }],
+    });
+  });
+
+  it("keeps built-in presets when the CCR store holds no key for the agent", async () => {
+    // An absent key is not an empty bucket: `[]` would replace the built-in
+    // presets, so the action must pass absence through as absence.
+    setSources({ ccrPresetsByAgent: {} });
+
+    const result = await listPresets({ agentId: "mistral" });
+
+    expect(result.presets.length).toBeGreaterThan(0);
+    expect(result.presets.every((row) => row.source === "registry")).toBe(true);
+    // Asserted against the key allowlist rather than a sentinel from the
+    // registry fixture, so editing that agent's presets cannot quietly retire
+    // the leak check.
+    for (const row of result.presets) {
+      expect(Object.keys(row).every((key) => PRESET_ROW_KEYS.has(key))).toBe(true);
+    }
+  });
+
+  it("passes an own empty CCR bucket through as a replacement", async () => {
+    // The mirror of the case above: an own `[]` is real data meaning "CCR
+    // discovery cleared this agent", and it must still displace the built-ins.
+    setSources({ ccrPresetsByAgent: { mistral: [] } });
+
+    expect(await listPresets({ agentId: "mistral" })).toEqual({
+      presetsComplete: true,
+      presets: [],
+    });
+  });
+
+  it("does not treat an inherited key as a preset bucket", async () => {
+    setSources({});
+
+    // `agentId` is unconstrained, so `__proto__` would otherwise resolve to
+    // `Object.prototype` and throw on the first array operation.
+    for (const agentId of ["__proto__", "constructor", "toString", "valueOf"]) {
+      expect(await listPresets({ agentId })).toEqual({ presetsComplete: true, presets: [] });
+    }
+  });
+
+  it("reads a corrupted bucket as absent, the same way a launch would", async () => {
+    setSources({
+      ccrPresetsByAgent: { claude: "not-an-array" as unknown as unknown[] },
+      presetsByAgent: { claude: 7 as unknown as unknown[] },
+      hydratedProjectId: "proj-1",
+    });
+
+    // Certifying this is honest only because the launch-facing merge now reads
+    // a malformed bucket as absent too — the listing and the launcher agree.
+    expect(await listPresets({ agentId: "claude" }, { projectId: "proj-1" })).toEqual({
+      presetsComplete: true,
+      presets: [],
+    });
+  });
+
+  it("still returns the proven layers while another source is incomplete", async () => {
+    // Guards the lazy implementation that empties the list whenever the flag is
+    // false — the flag qualifies the list, it does not replace it.
+    setSources({
+      settings: { agents: { claude: { customPresets: [{ id: "zai", name: "Z.AI" }] } } },
+      ccrInitialized: false,
+    });
+
+    expect(await listPresets()).toEqual({
+      presetsComplete: false,
+      presets: [{ id: "zai", name: "Z.AI", source: "custom" }],
+    });
+
+    setSources({
+      settings: { agents: { claude: { customPresets: [{ id: "zai", name: "Z.AI" }] } } },
+      presetsByAgent: { claude: [{ id: "team", name: "Team" }] },
+      hydratedProjectId: "other-project",
+    });
+
+    expect(await listPresets({ agentId: "claude" }, { projectId: "proj-1" })).toEqual({
+      presetsComplete: false,
+      presets: [{ id: "zai", name: "Z.AI", source: "custom" }],
+    });
+  });
+
+  it("treats an owned but empty project snapshot as complete", async () => {
+    setSources({ presetsByAgent: {}, hydratedProjectId: "proj-1" });
+
+    expect(
+      (await listPresets({ agentId: "claude" }, { projectId: "proj-1" })).presetsComplete
+    ).toBe(true);
+  });
+
+  it("does not certify a view that has resolved no workspace at all", async () => {
+    setSources({});
+
+    // A scratch is a real "no repository presets" answer; no pointer at all is
+    // an unresolved view, where an absent project layer is a gap.
+    expect(
+      (await listPresets({ agentId: "claude" }, { scratchId: "scratch-1" })).presetsComplete
+    ).toBe(true);
+    expect((await listPresets({ agentId: "claude" }, {})).presetsComplete).toBe(false);
+  });
+
+  it("advertises an item shape that cannot carry launch payload", async () => {
+    const def = getDefinition(setupActions(makeCallbacks()), "agent.listPresets");
+    const withPayload = {
+      presetsComplete: true,
+      presets: [{ id: "zai", name: "Z.AI", source: "custom", env: { KEY: "secret" } }],
+    };
+
+    // The schema is parsed at dispatch and strips what it does not declare, so
+    // this proves the advertised contract itself has no room for a payload.
+    const parsed = def.resultSchema!.parse(withPayload);
+    expect(JSON.stringify(parsed)).not.toContain("secret");
   });
 });
