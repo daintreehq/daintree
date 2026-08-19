@@ -2,7 +2,6 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { classifyLaunchRootAlignment } from "@/utils/worktreeAlignment";
-import { cancelWorktreeMoveInstruction } from "@/services/terminal/worktreeMoveInstruction";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 
@@ -92,11 +91,6 @@ export function reconcileMovedPanel(panelId: string, destinationWorktreeId: stri
   const store = usePanelStore.getState();
   const panel = store.panelsById[panelId];
   if (!panel || !isPtyPanel(panel)) return;
-
-  // Any move invalidates a queued instruction: it names the *previous*
-  // destination's path, and delivering that after a second move would send the
-  // agent somewhere the user has already moved on from.
-  cancelWorktreeMoveInstruction(panelId);
 
   if (!isPanelProcessLive(panel)) {
     alignDeadPanelCwd(panelId, destinationWorktreeId);

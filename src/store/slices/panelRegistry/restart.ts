@@ -1077,9 +1077,17 @@ export const createRestartActions = (
     set((state) => {
       const terminal = state.panelsById[id];
       if (!terminal || !isPtyPanel(terminal)) return state;
-      // Clearing an already-clear notice, or re-raising the same destination,
-      // keeps the same state object so repeat writes don't wake subscribers.
-      if (terminal.worktreeMoveNotice?.destinationWorktreeId === notice?.destinationWorktreeId) {
+      // Clearing an already-clear notice, or re-raising the same destination in
+      // the same delivery state, keeps the same state object so repeat writes
+      // don't wake subscribers. `deliveryFailed` has to be part of that
+      // comparison: marking an existing notice as failed changes nothing else
+      // about it, so a destination-only check would silently drop the write
+      // (#11867). Normalized because absent and `false` mean the same thing.
+      const current = terminal.worktreeMoveNotice;
+      if (
+        current?.destinationWorktreeId === notice?.destinationWorktreeId &&
+        (current?.deliveryFailed ?? false) === (notice?.deliveryFailed ?? false)
+      ) {
         return state;
       }
       return {

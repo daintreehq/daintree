@@ -345,6 +345,12 @@ interface BasePanelData {
 export interface PanelWorktreeMoveNotice {
   /** Worktree the panel was filed under by the move that raised this notice. */
   destinationWorktreeId: string;
+  /**
+   * Set when a "Tell the agent" click could not put the instruction into the
+   * terminal (#11867). The bar stays up and says so rather than disappearing
+   * on a delivery that never happened.
+   */
+  deliveryFailed?: boolean;
 }
 
 export interface PtyPanelData extends BasePanelData {

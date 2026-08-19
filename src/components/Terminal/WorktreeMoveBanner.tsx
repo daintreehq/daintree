@@ -4,6 +4,8 @@ import { InlineStatusBanner } from "./InlineStatusBanner";
 export interface WorktreeMoveBannerProps {
   /** Destination path, or `undefined` when the worktree has since gone. */
   destinationPath: string | undefined;
+  /** A tell was tried and the terminal did not take it (#11867). */
+  deliveryFailed?: boolean;
   onTell: () => void;
   onDismiss: () => void;
 }
@@ -30,18 +32,36 @@ export interface WorktreeMoveBannerProps {
  *
  * With no destination there is nothing to tell, so the control is absent rather
  * than present-but-disabled: the sentence explains why, and the X still works.
+ *
+ * A failed delivery turns the same bar red rather than raising a toast: the
+ * signal and its recovery both live here, and the bar is already on screen.
+ * It also stops being a polite status — the user asked for something and it
+ * did not happen, which is worth interrupting for. The recovery keeps the
+ * sentence shape; the red wash renders a boxed fill no better than the amber
+ * one did, and `InlineStatusBanner` types an error banner as taking at most one
+ * boxed `action` anyway.
  */
 export function WorktreeMoveBanner({
   destinationPath,
+  deliveryFailed = false,
   onTell,
   onDismiss,
 }: WorktreeMoveBannerProps) {
+  const description =
+    destinationPath === undefined
+      ? "The destination worktree is no longer available"
+      : deliveryFailed
+        ? "The instruction didn't reach the terminal. Wait until it's connected, unlocked and not restarting, then retry."
+        : undefined;
+
   return (
     <InlineStatusBanner
       icon={FolderGit2}
-      severity="warning"
-      title="Agent may still be in the original worktree"
-      description={destinationPath ? undefined : "The destination worktree is no longer available"}
+      severity={deliveryFailed ? "error" : "warning"}
+      title={
+        deliveryFailed ? "Couldn't tell the agent" : "Agent may still be in the original worktree"
+      }
+      description={description}
       descriptionExtras={
         destinationPath ? (
           <button
@@ -55,12 +75,13 @@ export function WorktreeMoveBanner({
             }}
             className="-ml-1 mt-0.5 inline-block max-w-full cursor-pointer rounded-sm px-1 py-0.5 text-left text-xs font-medium whitespace-normal break-words text-daintree-text underline underline-offset-4 outline-hidden transition-[background-color] duration-150 ease-out hover:bg-overlay-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent"
           >
-            Tell it to continue in {destinationPath}
+            {deliveryFailed ? "Retry telling it to continue in" : "Tell it to continue in"}{" "}
+            {destinationPath}
           </button>
         ) : undefined
       }
-      role="status"
-      ariaLive="polite"
+      role={deliveryFailed ? "alert" : "status"}
+      ariaLive={deliveryFailed ? undefined : "polite"}
       onClose={onDismiss}
       closeAriaLabel="Dismiss worktree move notice"
     />

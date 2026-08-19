@@ -444,6 +444,23 @@ describe("moveTerminalToWorktreeAndFollowRescue — move notice (#11853)", () =>
     expect(noticeOf("t1")).toBe("wt-b");
   });
 
+  it("clears a stale delivery failure when the same move is raised again", () => {
+    // The bar's error state belongs to one attempt (#11867). A fresh move has
+    // not failed yet, even when it names the destination the last one did.
+    seedPanels([agentPanel("t1", "wt-a", "/repo/wt-a")]);
+    usePanelStore
+      .getState()
+      .setWorktreeMoveNotice("t1", { destinationWorktreeId: "wt-b", deliveryFailed: true });
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(noticeOf("t1")).toBe("wt-b");
+    const panel = usePanelStore.getState().panelsById["t1"];
+    expect(panel && isPtyPanel(panel) ? panel.worktreeMoveNotice?.deliveryFailed : "unset").toBe(
+      undefined
+    );
+  });
+
   it("raises the notice when the launch root cannot be classified at all", () => {
     // `unknown` is not proof of alignment — treating "can't prove it" as "it's
     // fine" is the silence this feature exists to end.

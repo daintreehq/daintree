@@ -69,12 +69,31 @@ import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
 import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
+import { composeDraftWithInstruction } from "@/services/terminal/worktreeMoveInstruction";
 
 export interface HybridInputBarHandle {
   focus: () => void;
   /** Returns whether an editor was mounted to take the focus. */
   focusWithCursorAtEnd: () => boolean;
   cancelPendingFocus: () => void;
+  /**
+   * Submit the live draft with `instruction` appended, through `submit` rather
+   * than the pane's fire-and-forget send, and report whether the terminal took
+   * it (#11867).
+   *
+   * The composed text comes from the mounted CodeMirror document, never from
+   * the draft store: an external write syncs into the editor in a later effect,
+   * so a caller that wrote the store and read it back in the same click stack
+   * would compose against the previous draft.
+   *
+   * Calls `sendText`, not `sendFromEditor`, which is what keeps this strictly
+   * panel-specific — the fleet-broadcast branch lives in `sendFromEditor` and
+   * is unreachable from here by construction rather than by a flag.
+   */
+  submitWithInstruction: (
+    instruction: string,
+    submit: (text: string) => Promise<boolean>
+  ) => Promise<boolean>;
 }
 
 export interface HybridInputBarProps {
@@ -658,8 +677,33 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         cancelPendingFocus: () => {
           focusGenerationRef.current += 1;
         },
+        submitWithInstruction: async (instruction, submit) => {
+          const view = editorViewRef.current;
+          const latest = latestRef.current;
+          // "Mounted and usable", not "rendered": the editor loads lazily, and
+          // a bar that cannot take the user's own Enter cannot take this
+          // either. Say no and let the caller keep its banner up.
+          if (!view || !latest || latest.disabled) return false;
+          const snapshot = view.state.doc.toString();
+          const readStoredDraft = () =>
+            useTerminalInputStore.getState().getDraftInput(terminalId, latest.projectId);
+          const storedAtSend = readStoredDraft();
+          return sendText(snapshot, {
+            compose: (draft) => composeDraftWithInstruction(draft, instruction),
+            submit,
+            // What was sent is a snapshot; what the user has by the time the
+            // submit lands may not be. Only the snapshot is ours to clear.
+            // The store is checked as well as the document because voice,
+            // prompt history, file references and type-anywhere all write the
+            // draft store first and reach CodeMirror an effect later — during
+            // that window the document alone still looks untouched.
+            isDraftUnchanged: () =>
+              editorViewRef.current?.state.doc.toString() === snapshot &&
+              readStoredDraft() === storedAtSend,
+          });
+        },
       }),
-      [focusEditor]
+      [focusEditor, sendText]
     );
 
     // Claim the type-anywhere routing target (#11134) whenever the user really
