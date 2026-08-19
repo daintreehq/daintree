@@ -51,7 +51,7 @@ export function WorktreeMoveBanner({
     destinationPath === undefined
       ? "The destination worktree is no longer available"
       : deliveryFailed
-        ? "The instruction didn't reach the terminal. Check that it's connected and unlocked, then retry."
+        ? "The instruction didn't reach the terminal. Wait until it's connected, unlocked and not restarting, then retry."
         : undefined;
 
   return (

@@ -135,6 +135,14 @@ export interface SendTextOptions {
    * (#11867).
    */
   submit?: (text: string) => Promise<boolean>;
+  /**
+   * Consulted just before the editor and the draft store are cleared, on a send
+   * that has already succeeded. `false` leaves the draft alone: an awaited
+   * `submit` is a window the user can keep typing in, and eating what they
+   * wrote in it to tidy up after text that has already gone out is the worse
+   * of the two outcomes.
+   */
+  isDraftUnchanged?: () => boolean;
 }
 
 interface UseTokenResolutionParams {
@@ -272,8 +280,10 @@ export function useTokenResolution({
         }
 
         setIsExpanded(false);
-        applyEditorValue("", { selection: EditorSelection.create([EditorSelection.cursor(0)]) });
-        latest.clearDraftInput(latest.terminalId, latest.projectId);
+        if (options?.isDraftUnchanged?.() ?? true) {
+          applyEditorValue("", { selection: EditorSelection.create([EditorSelection.cursor(0)]) });
+          latest.clearDraftInput(latest.terminalId, latest.projectId);
+        }
         setActiveCompletionContext(null);
         return true;
       } finally {

@@ -72,7 +72,8 @@ vi.mock("../../../store/slices/panelRegistry/persistence", async () => {
 });
 
 const { usePanelStore } = await import("@/store/panelStore");
-const { useWorktreeMoveBanner } = await import("../useWorktreeMoveBanner");
+const { useWorktreeMoveBanner, resolveWorktreeMoveRoute } =
+  await import("../useWorktreeMoveBanner");
 
 function panel(id: string, overrides: Partial<PtyPanelData> = {}): PanelInstance {
   return {
@@ -149,6 +150,36 @@ beforeEach(() => {
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
 });
 
+describe("resolveWorktreeMoveRoute", () => {
+  const route = (over: Partial<Parameters<typeof resolveWorktreeMoveRoute>[0]> = {}) =>
+    resolveWorktreeMoveRoute({
+      isHybridInputDisabled: false,
+      hasHybridInputBar: true,
+      isFleetComposing: false,
+      ...over,
+    });
+
+  it("refuses to pick a delivery route while the pane cannot take input", () => {
+    // Whatever else is true, a locked / recovering / restarting pane is blocked.
+    for (const over of [{ hasHybridInputBar: true }, { hasHybridInputBar: false }]) {
+      expect(route({ ...over, isHybridInputDisabled: true })).toBe("blocked");
+      expect(route({ ...over, isHybridInputDisabled: true, isFleetComposing: true })).toBe(
+        "blocked"
+      );
+    }
+  });
+
+  it("uses the bar only when one is actually rendered", () => {
+    expect(route({ hasHybridInputBar: true })).toBe("hybrid");
+    expect(route({ hasHybridInputBar: false })).toBe("direct");
+  });
+
+  it("leaves a fleet's shared draft alone", () => {
+    // Submitting it would mirror the cleared value into every armed pane.
+    expect(route({ hasHybridInputBar: true, isFleetComposing: true })).toBe("direct");
+  });
+});
+
 describe("useWorktreeMoveBanner", () => {
   it("is hidden for a pane with no pending move", () => {
     seed(panel("t-1"));
@@ -215,6 +246,9 @@ describe("useWorktreeMoveBanner", () => {
 
       expect(submitWithInstruction).toHaveBeenCalledTimes(1);
       expect(submitWithInstruction.mock.calls[0]![0]).toContain("/repo/wt-b");
+      // Exactly one: delegating to the bar and *then* dispatching directly
+      // would put the sentence in front of the agent twice.
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
       const { command } = mockDispatch.mock.calls[0]![1] as { command: string };
       expect(command).toContain("look at this");
       expect(noticeOf("t-1")).toBeUndefined();
@@ -394,6 +428,87 @@ describe("useWorktreeMoveBanner", () => {
       expect(mockDispatch).toHaveBeenCalledTimes(1);
     });
 
+    it("answers the notice that is current at click time, not at render time", async () => {
+      seed(panel("t-1", NOTICE));
+      const { result } = render("t-1", "direct");
+      worktrees.set("wt-c", { id: "wt-c", path: "/repo/wt-c" });
+      act(() => {
+        usePanelStore.getState().setWorktreeMoveNotice("t-1", { destinationWorktreeId: "wt-c" });
+      });
+
+      await tell(result);
+
+      const { command } = mockDispatch.mock.calls[0]![1] as { command: string };
+      expect(command).toContain("/repo/wt-c");
+      expect(noticeOf("t-1")).toBeUndefined();
+    });
+
+    it("does not dispatch for a notice replaced before the send begins", async () => {
+      // Identity, not destination id: a same-destination replacement is still a
+      // different question from the one this click answered.
+      seed(panel("t-1", NOTICE));
+      const { ref } = stubBar(async (submit) => {
+        const store = usePanelStore.getState();
+        store.setWorktreeMoveNotice("t-1", undefined);
+        store.setWorktreeMoveNotice("t-1", { destinationWorktreeId: "wt-b" });
+        return submit("INSTRUCTION");
+      });
+      const { result } = render("t-1", "hybrid", ref);
+
+      await tell(result);
+
+      expect(mockDispatch).not.toHaveBeenCalled();
+      expect(noticeOf("t-1")).toBe("wt-b");
+    });
+
+    it("says so rather than sending to a path that moved mid-send", async () => {
+      seed(panel("t-1", NOTICE));
+      const { ref } = stubBar(async (submit) => {
+        worktrees.set("wt-b", { id: "wt-b", path: "/repo/elsewhere" });
+        return submit("INSTRUCTION");
+      });
+      const { result } = render("t-1", "hybrid", ref);
+
+      await tell(result);
+
+      expect(mockDispatch).not.toHaveBeenCalled();
+      expect(ptyOf("t-1")?.worktreeMoveNotice?.deliveryFailed).toBe(true);
+    });
+
+    it("refuses to submit once the pane has been blocked mid-send", async () => {
+      // Resolving `@diff` is a round trip; a lock or a restart can land inside
+      // it, and the route decided at click time must not outlive that. The bar
+      // is parked mid-resolution here, the pane re-renders blocked, and only
+      // then does the submit get its chance.
+      seed(panel("t-1", NOTICE));
+      let release!: () => void;
+      const parked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const { ref } = stubBar(async (submit) => {
+        await parked;
+        return submit("INSTRUCTION");
+      });
+      let route: WorktreeMoveDeliveryRoute = "hybrid";
+      const hook = renderHook(() => useWorktreeMoveBanner("t-1", { route, inputBarRef: ref }));
+
+      let pending!: Promise<void>;
+      act(() => {
+        pending = hook.result.current.tell();
+      });
+
+      route = "blocked";
+      hook.rerender();
+
+      await act(async () => {
+        release();
+        await pending;
+      });
+
+      expect(mockDispatch).not.toHaveBeenCalled();
+      expect(noticeOf("t-1")).toBe("wt-b");
+    });
+
     it("sends nothing when the destination vanished between render and click", async () => {
       seed(panel("t-1", NOTICE));
       const { result } = render("t-1", "direct");
@@ -404,6 +519,35 @@ describe("useWorktreeMoveBanner", () => {
       expect(mockDispatch).not.toHaveBeenCalled();
       expect(noticeOf("t-1")).toBe("wt-b");
     });
+  });
+
+  // The bug itself (#11867): the bar used to go the moment a job was accepted,
+  // long before anything reached the terminal.
+  it("keeps the bar up for the whole send, and drops it only once it lands", async () => {
+    let resolveDispatch!: (v: unknown) => void;
+    mockDispatch.mockReturnValue(
+      new Promise((resolve) => {
+        resolveDispatch = resolve;
+      })
+    );
+    seed(panel("t-1", NOTICE));
+    const { result } = render("t-1", "direct");
+    const before = ptyOf("t-1")?.worktreeMoveNotice;
+
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.tell();
+    });
+
+    expect(result.current.visible).toBe(true);
+    expect(ptyOf("t-1")?.worktreeMoveNotice).toBe(before);
+
+    await act(async () => {
+      resolveDispatch({ ok: true, result: { sent: true } });
+      await pending;
+    });
+
+    expect(noticeOf("t-1")).toBeUndefined();
   });
 
   it("hides the bar on dismiss without sending anything", () => {

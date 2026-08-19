@@ -100,7 +100,7 @@ import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { isPtyPanel } from "@shared/types/panel";
 import { useSessionLostBanner } from "./useSessionLostBanner";
-import { useWorktreeMoveBanner, type WorktreeMoveDeliveryRoute } from "./useWorktreeMoveBanner";
+import { useWorktreeMoveBanner, resolveWorktreeMoveRoute } from "./useWorktreeMoveBanner";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
@@ -583,13 +583,12 @@ function TerminalPaneComponent({
   // Below `showHybridInputBar`/`isHybridInputDisabled` because it needs both:
   // "the bar is rendered" and "the bar can take input" are different questions,
   // and delivering the move instruction has to respect the second one (#11867).
-  const worktreeMoveRoute: WorktreeMoveDeliveryRoute = isHybridInputDisabled
-    ? "blocked"
-    : showHybridInputBar
-      ? "hybrid"
-      : "direct";
   const worktreeMoveBanner = useWorktreeMoveBanner(id, {
-    route: worktreeMoveRoute,
+    route: resolveWorktreeMoveRoute({
+      isHybridInputDisabled,
+      hasHybridInputBar: showHybridInputBar,
+      isFleetComposing: isArmed && armedIds.size >= 2,
+    }),
     inputBarRef,
   });
 

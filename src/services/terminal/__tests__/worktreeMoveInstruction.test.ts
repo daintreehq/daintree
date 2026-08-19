@@ -50,9 +50,13 @@ describe("composeDraftWithInstruction", () => {
   it("adds only newlines, and only the ones the draft is missing", () => {
     for (const draft of ["fix it", "fix it\n", "fix it\n\n", "fix it\n\n\n\n", "fix it  "]) {
       const composed = composeDraftWithInstruction(draft, INSTRUCTION);
+
+      // Anchored first: without this the rows that already end in a blank line
+      // would pass even if the instruction were dropped entirely.
+      expect(composed.startsWith(draft)).toBe(true);
+      expect(composed.endsWith(INSTRUCTION)).toBe(true);
       const separator = composed.slice(draft.length, composed.length - INSTRUCTION.length);
 
-      expect(composed.startsWith(draft)).toBe(true);
       // Nothing but newlines is ever inserted...
       expect(separator).toMatch(/^\n*$/);
       // ...enough of them to leave a blank line...

@@ -684,9 +684,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // a bar that cannot take the user's own Enter cannot take this
           // either. Say no and let the caller keep its banner up.
           if (!view || !latest || latest.disabled) return false;
-          return sendText(view.state.doc.toString(), {
+          const snapshot = view.state.doc.toString();
+          return sendText(snapshot, {
             compose: (draft) => composeDraftWithInstruction(draft, instruction),
             submit,
+            // What was sent is a snapshot; what is on screen when the submit
+            // finally lands may not be. Only the snapshot is ours to clear.
+            isDraftUnchanged: () => editorViewRef.current?.state.doc.toString() === snapshot,
           });
         },
       }),

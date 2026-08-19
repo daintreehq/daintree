@@ -153,7 +153,7 @@ describe("useTokenResolution.sendText — targeted submit", () => {
   });
 
   it("clears the draft exactly once when the submit is accepted", async () => {
-    const { sendText, applyEditorValue, clearDraftInput } = setup();
+    const { sendText, applyEditorValue, clearDraftInput, onSend } = setup();
 
     await act(async () => {
       await sendText("send me", { submit: async () => true });
@@ -162,6 +162,22 @@ describe("useTokenResolution.sendText — targeted submit", () => {
     expect(applyEditorValue).toHaveBeenCalledTimes(1);
     expect(applyEditorValue.mock.calls[0]![0]).toBe("");
     expect(clearDraftInput).toHaveBeenCalledTimes(1);
+    // Exactly one delivery: the targeted submit replaces the pane's own send
+    // rather than joining it, or the agent would get the text twice.
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("keeps a draft the user changed while the submit was in flight", async () => {
+    // The snapshot went out; whatever is on screen now is newer than it and is
+    // not ours to delete.
+    const { sendText, applyEditorValue, clearDraftInput } = setup();
+
+    await act(async () => {
+      await sendText("snapshot", { submit: async () => true, isDraftUnchanged: () => false });
+    });
+
+    expect(applyEditorValue).not.toHaveBeenCalled();
+    expect(clearDraftInput).not.toHaveBeenCalled();
   });
 
   it("resolves tokens in the draft but never in the composed suffix", async () => {

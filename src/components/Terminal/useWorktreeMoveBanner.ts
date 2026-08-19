@@ -17,6 +17,25 @@ import type { HybridInputBarHandle } from "./HybridInputBar";
  */
 export type WorktreeMoveDeliveryRoute = "hybrid" | "direct" | "blocked";
 
+/**
+ * Pick the route from the pane's live input state.
+ *
+ * Fleet composition goes direct even though a usable bar is right there. That
+ * draft belongs to the fleet, not to this pane: submitting it mirrors the
+ * cleared value into every other armed pane (`useFleetMirror`), which would
+ * delete drafts the user never sent from panes they were not looking at. The
+ * instruction alone is what this pane's agent needs anyway.
+ */
+export function resolveWorktreeMoveRoute(options: {
+  isHybridInputDisabled: boolean;
+  hasHybridInputBar: boolean;
+  isFleetComposing: boolean;
+}): WorktreeMoveDeliveryRoute {
+  if (options.isHybridInputDisabled) return "blocked";
+  if (options.isFleetComposing) return "direct";
+  return options.hasHybridInputBar ? "hybrid" : "direct";
+}
+
 export interface WorktreeMoveBanner {
   /** True while this pane has an unanswered cross-worktree move prompt. */
   visible: boolean;
@@ -40,6 +59,16 @@ function readWorktreePath(worktreeId: string): string | undefined {
   const path = getCurrentViewStoreOrNull()?.getState().worktrees.get(worktreeId)?.path;
   return path?.trim() ? path : undefined;
 }
+
+/**
+ * Panels with a tell in flight.
+ *
+ * Module-scoped, not a component ref: a worktree switch unmounts this pane
+ * mid-dispatch, and a per-mount lock would let the remount fire a second
+ * instruction at the same notice — delivering the sentence twice, and letting
+ * the loser's failure overwrite the winner's success.
+ */
+const inFlight = new Set<string>();
 
 function readNotice(panelId: string): PanelWorktreeMoveNotice | undefined {
   const panel = usePanelStore.getState().panelsById[panelId];
@@ -85,7 +114,11 @@ export function useWorktreeMoveBanner(
   );
 
   const setWorktreeMoveNotice = usePanelStore((state) => state.setWorktreeMoveNotice);
-  const inFlightRef = useRef(false);
+  // Read at dispatch time, not captured: a lock or a restart can land while the
+  // bar is still resolving `@diff`, and the route decided at click time would
+  // then submit behind it.
+  const routeRef = useRef(route);
+  routeRef.current = route;
 
   const dismiss = useCallback(
     () => setWorktreeMoveNotice(panelId, undefined),
@@ -93,7 +126,7 @@ export function useWorktreeMoveBanner(
   );
 
   const tell = useCallback(async () => {
-    if (inFlightRef.current) return;
+    if (inFlight.has(panelId)) return;
 
     // Read through, not off the render: a second move can land between the
     // paint and the click, and the notice captured here is the one this
@@ -113,6 +146,7 @@ export function useWorktreeMoveBanner(
      * the moment there is actually something to send.
      */
     const submit = async (command: string): Promise<boolean> => {
+      if (routeRef.current === "blocked") return false;
       if (readNotice(panelId) !== attempt) return false;
       if (readWorktreePath(attempt.destinationWorktreeId) !== path) return false;
       const result = await actionService.dispatch(
@@ -123,7 +157,7 @@ export function useWorktreeMoveBanner(
       return result.ok;
     };
 
-    inFlightRef.current = true;
+    inFlight.add(panelId);
     let delivered = false;
     try {
       if (route === "hybrid") {
@@ -138,7 +172,7 @@ export function useWorktreeMoveBanner(
         delivered = await submit(buildWorktreeMoveInstruction(path));
       }
     } finally {
-      inFlightRef.current = false;
+      inFlight.delete(panelId);
     }
 
     // A move, a dismiss, or another pane's answer while this was in flight owns
