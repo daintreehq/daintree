@@ -700,8 +700,8 @@ describe("FileLinksAddon", () => {
       };
 
       // Clipped at the end: the window stops at 2000 columns, exactly where
-      // this token's only extension sits, so the match ends on the cut.
-      const endClipped = `src/${"a".repeat(1994)}.ts${"/b".repeat(400)}`;
+      // this token's only extension ends, so the match runs onto the cut.
+      const endClipped = `src/${"a".repeat(1993)}.ts${"/b".repeat(400)}`;
       expect(await linksForRows(toRows(endClipped), 0)).toBeUndefined();
 
       // Clipped at the start: hovering the last row walks upward instead, and
@@ -723,6 +723,66 @@ describe("FileLinksAddon", () => {
         expect(links).toHaveLength(1);
         expect(readLink(links![0]!).absolutePath).toBe("/tmp/(src/foo.ts");
       }
+    });
+
+    it("refuses to link a path whose head was trimmed out of scrollback", async () => {
+      // xterm keeps `isWrapped` on the topmost row when the circular buffer
+      // evicts the rows above it, so the buffer still says "this continues
+      // something" with nothing left to continue. The visible fragment
+      // resolves against the cwd — the same silent wrong-file failure the
+      // rejoin exists to prevent, arriving by a different route.
+      expect(
+        await linksForRows(["rvices/foo.ts and more"], 0, { wrapped: [true] })
+      ).toBeUndefined();
+    });
+
+    it("spans a path that wrapped across three rows", async () => {
+      const rows = ["built src/components/Term", "inal/inputEditorExtensions/f", "ileChip.ts ok"];
+      for (const hoveredRow of [0, 1, 2]) {
+        const links = await linksForRows(rows, hoveredRow);
+        expect(links).toHaveLength(1);
+        const link = links![0]!;
+        expect(readLink(link).absolutePath).toBe(
+          "/home/user/project/src/components/Terminal/inputEditorExtensions/fileChip.ts"
+        );
+        expect(link.range.start).toEqual({ x: "built ".length + 1, y: 1 });
+        expect(link.range.end).toEqual({ x: "ileChip.ts".length, y: 3 });
+      }
+    });
+
+    it("ends the range on the right row when a match stops at a row boundary", async () => {
+      // The end column comes from the match's LAST character, not the one past
+      // it; mapping the exclusive end would push the range onto the next row's
+      // first cell and underline a character the token never covered.
+      const links = await linksForRows(["at src/App.tsx:42", " and elsewhere"], 0);
+      expect(links).toHaveLength(1);
+      const link = links![0]!;
+      expect(readLink(link).text).toBe("src/App.tsx:42");
+      expect(link.range.end).toEqual({ x: "at src/App.tsx:42".length, y: 1 });
+    });
+
+    it("still links a whole token inside a window the budget clipped", async () => {
+      // Clipping distrusts the window's EDGES, not everything inside it. An
+      // implementation that dropped every match whenever a flag was set would
+      // blind the pointer to paths it can see perfectly well.
+      const rows = Array.from({ length: 40 }, () => "z".repeat(80));
+      rows[20] = ` src/mid.ts ${"z".repeat(68)}`;
+      const links = await linksForRows(rows, 20);
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe("/home/user/project/src/mid.ts");
+    });
+
+    it("rejoins a WSL UNC path that wrapped mid-token", async () => {
+      const links = await linksForRows(
+        ["see \\\\wsl$\\Ubuntu\\home\\user\\pro", "ject\\src\\App.tsx:45:12 failed"],
+        1
+      );
+      expect(links).toHaveLength(1);
+      const link = readLink(links![0]!);
+      expect(link.text).toBe("\\\\wsl$\\Ubuntu\\home\\user\\project\\src\\App.tsx:45:12");
+      expect(link.absolutePath).toBe("\\\\wsl$\\Ubuntu\\home\\user\\project\\src\\App.tsx");
+      expect(link._line).toBe(45);
+      expect(link._col).toBe(12);
     });
 
     it("hands the hover callback the full path, not the fragment", async () => {

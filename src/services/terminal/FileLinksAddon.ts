@@ -388,20 +388,19 @@ export class FileLinksAddon implements ILinkProvider {
       // Disposed while validating (terminal closed): the registration is
       // gone, so a late reply has no linkifier to serve.
       if (this._disposed) return;
-      // The line may have been rewritten under the pointer while validation
+      // The buffer may have been rewritten under the pointer while validation
       // was in flight (streaming agent output). xterm caches replies by the
-      // pointer's current line, so links computed for the OLD text would
+      // pointer's current line, so links computed for the OLD content would
       // paint on the new one — drop the whole reply instead.
-      const current = this._terminal.buffer.active.getLine(bufferLineNumber - 1);
-      if (!current || current.translateToString(true) !== lineText) {
-        callback(undefined);
-        return;
-      }
-      // A file or URL link can span rows that check never looks at, so re-read
-      // the whole window it was computed from: rewriting only a continuation
-      // row would otherwise leave a link to the path the line used to name,
-      // and a re-wrap that merely moves a row boundary would leave a range
-      // underlining the wrong cells.
+      //
+      // The whole rejoin window is re-read rather than the hovered row alone:
+      // a link can span rows the row itself never sees, and a re-wrap that
+      // merely moves a boundary leaves a range underlining the wrong cells.
+      // Comparing windows also keeps the check off `translateToString(true)`,
+      // which is not stable across an intervening untrimmed read — xterm
+      // caches one string per line, and a trailing space the app actually
+      // printed survives `getTrimmedLength()` but not the cached value's
+      // `trimEnd()`, so the same unchanged row can compare unequal to itself.
       const currentLogical = this._readLogicalLine(bufferLineNumber - 1);
       if (!currentLogical || !sameLogicalLine(currentLogical, logical)) {
         callback(undefined);
@@ -582,7 +581,16 @@ export class FileLinksAddon implements ILinkProvider {
     let clippedEnd = false;
 
     // `isWrapped` marks a row as the CONTINUATION of the one above it.
-    while (startRow > 0 && buffer.getLine(startRow)?.isWrapped === true) {
+    while (buffer.getLine(startRow)?.isWrapped === true) {
+      // Row 0 still claiming to continue something means the rows carrying the
+      // token's head were trimmed out of scrollback — xterm keeps the flag
+      // when its circular buffer evicts the row above. The window then opens
+      // mid-token exactly the way the budget cutoff does, and a headless
+      // fragment resolves against the cwd just as happily as a whole path.
+      if (startRow === 0) {
+        clippedStart = true;
+        break;
+      }
       const above = buffer.getLine(startRow - 1);
       if (!above) break;
       const text = above.translateToString(false);

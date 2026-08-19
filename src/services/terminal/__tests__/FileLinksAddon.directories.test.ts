@@ -210,10 +210,12 @@ describe("FileLinksAddon directory links", () => {
     const addon = new FileLinksAddon(makeTerminal(rows), () => root);
     const callback = vi.fn();
     addon.provideLinks(1, callback);
+    await vi.waitFor(() => expect(fileBrowserClient.statPaths).toHaveBeenCalled());
+    expect(callback).not.toHaveBeenCalled();
     rows[0] = "completely different text";
     stat.resolve(["directory"]);
     await vi.waitFor(() => expect(callback).toHaveBeenCalled());
-    expect(callback).toHaveBeenCalledWith(undefined);
+    expect(callback.mock.calls).toEqual([[undefined]]);
   });
 
   it("drops the reply when only a wrapped URL's continuation row was rewritten", async () => {
@@ -227,10 +229,12 @@ describe("FileLinksAddon directory links", () => {
     const addon = new FileLinksAddon(makeTerminal(rows), () => root);
     const callback = vi.fn();
     addon.provideLinks(1, callback);
+    await vi.waitFor(() => expect(fileBrowserClient.statPaths).toHaveBeenCalled());
+    expect(callback).not.toHaveBeenCalled();
     rows[1] = "b.png";
     stat.resolve(["directory"]);
     await vi.waitFor(() => expect(callback).toHaveBeenCalled());
-    expect(callback).toHaveBeenCalledWith(undefined);
+    expect(callback.mock.calls).toEqual([[undefined]]);
   });
 
   it.each(["resolve", "reject"] as const)(
@@ -251,11 +255,13 @@ describe("FileLinksAddon directory links", () => {
       const addon = new FileLinksAddon(makeTerminal(rows), () => root);
       const callback = vi.fn();
       addon.provideLinks(1, callback);
+      await vi.waitFor(() => expect(fileBrowserClient.statPaths).toHaveBeenCalled());
+      expect(callback).not.toHaveBeenCalled();
       rows[1] = "y";
       if (outcome === "resolve") stat.resolve(["directory"]);
       else stat.reject(new Error("view evicted"));
       await vi.waitFor(() => expect(callback).toHaveBeenCalled());
-      expect(callback).toHaveBeenCalledWith(undefined);
+      expect(callback.mock.calls).toEqual([[undefined]]);
     }
   );
 
@@ -271,11 +277,13 @@ describe("FileLinksAddon directory links", () => {
     const addon = new FileLinksAddon(makeTerminal(rows), () => root);
     const callback = vi.fn();
     addon.provideLinks(1, callback);
+    await vi.waitFor(() => expect(fileBrowserClient.statPaths).toHaveBeenCalled());
+    expect(callback).not.toHaveBeenCalled();
     rows[1] = "render";
     rows[2] = "s/a.png";
     stat.resolve(["directory"]);
     await vi.waitFor(() => expect(callback).toHaveBeenCalled());
-    expect(callback).toHaveBeenCalledWith(undefined);
+    expect(callback.mock.calls).toEqual([[undefined]]);
   });
 
   it("shields a continuation fragment the file pass owns but cannot resolve", async () => {
