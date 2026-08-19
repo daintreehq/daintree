@@ -41,13 +41,9 @@ export function WorktreeMoveBanner({
       icon={FolderGit2}
       severity="warning"
       title="Agent may still be in the original worktree"
-      description={
-        destinationPath === undefined
-          ? "The destination worktree is no longer available"
-          : undefined
-      }
+      description={destinationPath ? undefined : "The destination worktree is no longer available"}
       descriptionExtras={
-        destinationPath === undefined ? undefined : (
+        destinationPath ? (
           <button
             type="button"
             onClick={(e) => {
@@ -57,11 +53,11 @@ export function WorktreeMoveBanner({
               e.stopPropagation();
               onTell();
             }}
-            className="-ml-1 mt-0.5 inline-block max-w-full cursor-pointer rounded-sm px-1 py-0.5 text-left text-xs font-medium whitespace-normal break-words text-daintree-text underline underline-offset-4 outline-hidden transition-[background-color] duration-150 ease-out hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent"
+            className="-ml-1 mt-0.5 inline-block max-w-full cursor-pointer rounded-sm px-1 py-0.5 text-left text-xs font-medium whitespace-normal break-words text-daintree-text underline underline-offset-4 outline-hidden transition-[background-color] duration-150 ease-out hover:bg-overlay-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent"
           >
             Tell it to continue in {destinationPath}
           </button>
-        )
+        ) : undefined
       }
       role="status"
       ariaLive="polite"

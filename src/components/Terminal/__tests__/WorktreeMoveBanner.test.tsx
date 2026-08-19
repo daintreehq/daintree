@@ -12,8 +12,9 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
-// jsdom ships no `matchMedia`, and `InlineStatusBanner` reads it through
-// `useTitleBarSurface`. Same stub the sibling banner suite installs.
+// jsdom ships no `matchMedia`, and `InlineStatusBanner` reads it directly while
+// rendering to resolve `prefers-reduced-motion`. Same stub the sibling banner
+// suite installs.
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -73,13 +74,31 @@ describe("WorktreeMoveBanner", () => {
     expect(screen.getByRole("button", { name: DISMISS })).not.toBeNull();
   });
 
-  it("carries the whole sentence as the control, outside the description paragraph", () => {
-    // #11868: the action is the sentence, not a button beside it. Nesting it in
-    // the description would produce invalid `<p>` markup and flatten the
-    // control away in the live region's announcement.
-    renderBanner(PATH);
+  it("carries the whole sentence as the control, in the text column", () => {
+    // #11868: the action *is* the sentence, not a boxed button beside it. A
+    // banner action lives in the controls row, a sibling of the text column, so
+    // it would only meet the title at the banner root — restoring the
+    // indistinct fill this fix removed while still passing every other test
+    // here. Walking up rather than indexing fixed levels keeps this honest
+    // without pinning InlineStatusBanner's exact nesting.
+    const { container } = renderBanner(PATH);
 
-    expect(screen.getByRole("button", { name: TELL }).closest("p")).toBeNull();
+    const banner = container.querySelector('[role="status"]');
+    const title = screen.getByText("Agent may still be in the original worktree");
+    const tell = screen.getByRole("button", { name: TELL });
+
+    let shared = title.parentElement;
+    while (shared && !shared.contains(tell)) shared = shared.parentElement;
+
+    expect(shared).not.toBeNull();
+    expect(shared).not.toBe(banner);
+    // Nesting it in the description would be invalid `<p>` markup and would
+    // flatten the control away in the live region's announcement.
+    expect(tell.closest("p")).toBeNull();
+    // A native button, not a `role="button"` stand-in: Enter/Space activation
+    // comes free, and TerminalPane's keydown handler passes over events whose
+    // target is a BUTTON — a span would leak them to the pane.
+    expect(tell).toBeInstanceOf(HTMLButtonElement);
   });
 
   it("is a polite status, not an alert", () => {
@@ -101,13 +120,14 @@ describe("WorktreeMoveBanner", () => {
     expect(onPaneClick).not.toHaveBeenCalled();
   });
 
-  it("reports the close through to dismiss", () => {
-    const { onTell, onDismiss } = renderBanner(PATH);
+  it("reports the close through to dismiss without reaching the pane", () => {
+    const { onTell, onDismiss, onPaneClick } = renderBanner(PATH);
 
     fireEvent.click(screen.getByRole("button", { name: DISMISS }));
 
     expect(onDismiss).toHaveBeenCalledTimes(1);
     expect(onTell).not.toHaveBeenCalled();
+    expect(onPaneClick).not.toHaveBeenCalled();
   });
 
   it("says so and offers no tell at all when the destination is gone", () => {
