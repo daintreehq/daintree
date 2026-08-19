@@ -98,10 +98,10 @@ describe("useCcrPresetsSubscription", () => {
     expect(state.ccrPresetsByAgent.claude?.[0]?.id).toBe("late");
   });
 
-  it("lets a broadcast that lands mid-flight win over the initial read", async () => {
+  it("proves the snapshot from a broadcast that lands while the initial read is pending", async () => {
     // `loadAndApply()` broadcasts before its own invoke resolves, so the update
-    // handler can fire while the initial read is still pending. Whatever the
-    // ordering, the store must end up initialized rather than stuck unproven.
+    // handler routinely fires first. The assertion runs while the initial
+    // promise is still pending, so only the broadcast path can satisfy it.
     let resolveInitial: (presets: AgentPreset[]) => void = () => {};
     getCcrPresets.mockReturnValue(
       new Promise<AgentPreset[]>((r) => {
@@ -110,14 +110,19 @@ describe("useCcrPresetsSubscription", () => {
     );
 
     await mount();
+    expect(useCcrPresetsStore.getState().isInitialized).toBe(false);
+
     await act(async () => {
-      emit?.({ agentId: "claude", presets: [] });
+      emit?.({ agentId: "claude", presets: [{ id: "broadcast", name: "Broadcast" }] });
     });
+
+    const midFlight = useCcrPresetsStore.getState();
+    expect(midFlight.isInitialized).toBe(true);
+    expect(midFlight.ccrPresetsByAgent.claude?.[0]?.id).toBe("broadcast");
+
     await act(async () => {
       resolveInitial([]);
     });
-
-    expect(useCcrPresetsStore.getState().isInitialized).toBe(true);
   });
 
   it("keeps an update event's empty array verbatim", async () => {

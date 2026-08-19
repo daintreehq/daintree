@@ -193,15 +193,28 @@ function sanitizePreset(preset: AgentPreset): AgentPreset | null {
   };
 }
 
+/**
+ * Treat anything that is not an array as an absent bucket.
+ *
+ * Shared by both merges on purpose. A corrupted persisted bucket used to throw
+ * on the first `.map()` in the launch-facing merge while the identity merge
+ * quietly skipped it, so a listing could certify presets that the very next
+ * launch crashed resolving. Absent is the one reading both can agree on.
+ */
+function presetBucket(value: AgentPreset[] | undefined): AgentPreset[] | undefined {
+  return Array.isArray(value) ? value : undefined;
+}
+
 export function getMergedPresets(
   agentId: string,
   customPresets?: AgentPreset[],
   ccrPresets?: AgentPreset[],
   projectPresets?: AgentPreset[]
 ): AgentPreset[] {
-  const registryPresets = ccrPresets ?? getAgentConfig(agentId)?.presets ?? [];
-  const custom = customPresets ?? [];
-  const project = projectPresets ?? [];
+  const ccr = presetBucket(ccrPresets);
+  const registryPresets = ccr ?? presetBucket(getAgentConfig(agentId)?.presets) ?? [];
+  const custom = presetBucket(customPresets) ?? [];
+  const project = presetBucket(projectPresets) ?? [];
 
   const sanitizedRegistry = registryPresets.map(sanitizePreset).filter(Boolean) as AgentPreset[];
   const sanitizedCustom = custom.map(sanitizePreset).filter(Boolean) as AgentPreset[];
@@ -267,27 +280,33 @@ export const PRESET_DESCRIPTION_MAX_CHARS = 200;
 function sanitizePresetDescription(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const cleaned = Array.from(value)
-    .filter((ch) => {
+    .map((ch) => {
       const code = ch.codePointAt(0) ?? 0;
-      // C0 (0x00-0x1f), DEL (0x7f) and C1 (0x80-0x9f), matched without a
-      // control-char regex literal.
-      if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f)) return false;
-      // Line and paragraph separators: not control chars by the range above,
-      // but they still break a single-line rendering.
-      if (code === 0x2028 || code === 0x2029) return false;
-      // Zero-width and BOM: invisible to a reader, so they can only ever
-      // disguise what the text actually says.
-      if ((code >= 0x200b && code <= 0x200d) || code === 0xfeff) return false;
-      // Bidi embedding, override and isolate controls. A description reaches an
-      // agent as prompt text and a person as UI text; either way, characters
-      // whose whole job is to make a string read differently than it is stored
-      // have no legitimate use here.
-      if (code >= 0x202a && code <= 0x202e) return false;
-      if (code >= 0x2066 && code <= 0x2069) return false;
-      return true;
+      // Line breaks and separators become a space rather than vanishing:
+      // deleting one silently welds the words on either side into a new one.
+      if (code === 0x09 || code === 0x0a || code === 0x0d) return " ";
+      if (code === 0x2028 || code === 0x2029) return " ";
+      // Remaining C0, DEL and C1 controls carry no text at all.
+      if (code <= 0x1f || code === 0x7f || (code >= 0x80 && code <= 0x9f)) return "";
+      // Half a character. `Array.from` iterates by code point, so an unpaired
+      // surrogate surfaces as its own unit here, and it cannot survive JSON.
+      if (code >= 0xd800 && code <= 0xdfff) return "";
+      // Invisible and direction-altering formatting: zero-width marks, BOM,
+      // word joiner, bidi marks, embeddings, overrides and isolates. Their
+      // whole function is to make stored text read differently than it is
+      // written, which is precisely the hazard for a string that reaches both
+      // an agent as prompt text and a person as UI text. Zero-width joiners go
+      // with them: losing a compound emoji is a smaller price than keeping a
+      // channel for hidden text.
+      if (code === 0x061c || code === 0x2060 || code === 0xfeff) return "";
+      if (code >= 0x200b && code <= 0x200f) return "";
+      if (code >= 0x202a && code <= 0x202e) return "";
+      if (code >= 0x2066 && code <= 0x2069) return "";
+      return ch;
     })
     .join("")
     .replace(/[<>]/g, "")
+    .replace(/\s+/g, " ")
     .trim();
   if (!cleaned) return undefined;
   // Truncate by code point, not UTF-16 unit: slicing a string mid-surrogate
@@ -317,16 +336,13 @@ export function getMergedPresetIdentities(
   ccrPresets?: AgentPreset[],
   projectPresets?: AgentPreset[]
 ): AgentPresetIdentity[] {
-  const registryBucket = ccrPresets ?? getAgentConfig(agentId)?.presets ?? [];
-  const registryPresets = Array.isArray(registryBucket) ? registryBucket : [];
-  const registrySource: AgentPresetSource = ccrPresets !== undefined ? "ccr" : "registry";
+  const ccr = presetBucket(ccrPresets);
+  const registryPresets = ccr ?? presetBucket(getAgentConfig(agentId)?.presets) ?? [];
+  const registrySource: AgentPresetSource = ccr !== undefined ? "ccr" : "registry";
 
   const tagged: Array<{ preset: AgentPreset; source: AgentPresetSource }> = [
-    ...(Array.isArray(customPresets) ? customPresets : []).map((preset) => ({
-      preset,
-      source: "custom" as const,
-    })),
-    ...(Array.isArray(projectPresets) ? projectPresets : []).map((preset) => ({
+    ...(presetBucket(customPresets) ?? []).map((preset) => ({ preset, source: "custom" as const })),
+    ...(presetBucket(projectPresets) ?? []).map((preset) => ({
       preset,
       source: "project" as const,
     })),

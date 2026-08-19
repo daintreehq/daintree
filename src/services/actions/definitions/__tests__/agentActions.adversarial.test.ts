@@ -2104,13 +2104,15 @@ describe("agent.listPresets", () => {
     }
   });
 
-  it("ignores a corrupted non-array bucket rather than throwing", async () => {
+  it("reads a corrupted bucket as absent, the same way a launch would", async () => {
     setSources({
       ccrPresetsByAgent: { claude: "not-an-array" as unknown as unknown[] },
       presetsByAgent: { claude: 7 as unknown as unknown[] },
       hydratedProjectId: "proj-1",
     });
 
+    // Certifying this is honest only because the launch-facing merge now reads
+    // a malformed bucket as absent too — the listing and the launcher agree.
     expect(await listPresets({ agentId: "claude" }, { projectId: "proj-1" })).toEqual({
       presetsComplete: true,
       presets: [],

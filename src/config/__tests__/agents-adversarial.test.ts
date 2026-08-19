@@ -7,6 +7,7 @@ import {
   sanitizeAgentEnv,
   sanitizeDisplayTitle,
 } from "@/config/agents";
+import type { AgentPreset } from "@shared/config/agentRegistry";
 
 // Adversarial unit tests for preset merging logic
 describe("Adversarial: Preset Merging", () => {
@@ -742,12 +743,39 @@ describe("Adversarial: Preset Identity Projection", () => {
   });
 
   it("drops characters that make text read differently than it is stored", () => {
-    // Bidi overrides and isolates, zero-width joiners, BOM, and line/paragraph
-    // separators all survive a plain control-char filter but let a description
-    // disguise itself to a reader or to an agent reading it as prompt text.
-    for (const hidden of ["\u202e", "\u2066", "\u200b", "\ufeff", "\u2028", "\u2029"]) {
+    // Each of these survives a plain control-char filter but lets a description
+    // disguise itself to a reader, or to an agent reading it as prompt text:
+    // bidi overrides/isolates/marks, zero-width marks and joiners, the word
+    // joiner, the Arabic letter mark, and the BOM.
+    for (const hidden of [
+      "\u202e",
+      "\u202a",
+      "\u2066",
+      "\u200b",
+      "\u200d",
+      "\u200e",
+      "\u200f",
+      "\u061c",
+      "\u2060",
+      "\ufeff",
+    ]) {
       expect(describeOne(`safe${hidden}text`)).toBe("safetext");
     }
+  });
+
+  it("drops an unpaired surrogate rather than emitting half a character", () => {
+    // A lone surrogate cannot round-trip through JSON, so it must not reach a
+    // caller even when it was already in the stored description.
+    expect(describeOne("A\ud800B")).toBe("AB");
+    expect(describeOne("A\udc00B")).toBe("AB");
+  });
+
+  it("turns line breaks into spaces instead of welding words together", () => {
+    // Deleting the break would silently invent the word "line1line2".
+    for (const brk of ["\n", "\r\n", "\t", "\u2028", "\u2029"]) {
+      expect(describeOne(`line1${brk}line2`)).toBe("line1 line2");
+    }
+    expect(describeOne("spaced     out")).toBe("spaced out");
   });
 
   it("truncates by code point so a description never ends mid-character", () => {
@@ -818,6 +846,21 @@ describe("Adversarial: Preset Identity Projection", () => {
         [{ id: "dup", name: "   " }]
       )
     ).toEqual([{ id: "dup", name: "From CCR", source: "ccr" }]);
+  });
+
+  it("treats a malformed bucket as absent in both merges alike", () => {
+    const junk = "not-an-array" as unknown as AgentPreset[];
+
+    // The launch-facing merge used to throw here while the identity merge
+    // skipped it, which is how a listing could certify presets that the next
+    // launch crashed resolving. Both must now read it the same way.
+    expect(() => getMergedPresets("mistral", junk, junk, junk)).not.toThrow();
+    expect(getMergedPresetIdentities("mistral", junk, junk, junk).map((r) => r.id)).toEqual(
+      getMergedPresets("mistral", junk, junk, junk).map((p) => p.id)
+    );
+    // A malformed CCR bucket reads as absent, so the built-in presets survive
+    // rather than being replaced by nothing.
+    expect(getMergedPresetIdentities("mistral", undefined, junk).length).toBeGreaterThan(0);
   });
 
   it("stays in step with the launch-facing merge it mirrors", () => {
