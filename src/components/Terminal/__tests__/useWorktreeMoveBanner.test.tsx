@@ -509,6 +509,38 @@ describe("useWorktreeMoveBanner", () => {
       expect(noticeOf("t-1")).toBe("wt-b");
     });
 
+    it("refuses once the pane has joined a fleet mid-send", async () => {
+      // Committing now would clear a draft that has become the fleet's, and
+      // `useFleetMirror` would push the empty value into every armed pane.
+      seed(panel("t-1", NOTICE));
+      let release!: () => void;
+      const parked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const { ref } = stubBar(async (submit) => {
+        await parked;
+        return submit("INSTRUCTION");
+      });
+      let route: WorktreeMoveDeliveryRoute = "hybrid";
+      const hook = renderHook(() => useWorktreeMoveBanner("t-1", { route, inputBarRef: ref }));
+
+      let pending!: Promise<void>;
+      act(() => {
+        pending = hook.result.current.tell();
+      });
+
+      route = "direct";
+      hook.rerender();
+
+      await act(async () => {
+        release();
+        await pending;
+      });
+
+      expect(mockDispatch).not.toHaveBeenCalled();
+      expect(noticeOf("t-1")).toBe("wt-b");
+    });
+
     it("sends nothing when the destination vanished between render and click", async () => {
       seed(panel("t-1", NOTICE));
       const { result } = render("t-1", "direct");

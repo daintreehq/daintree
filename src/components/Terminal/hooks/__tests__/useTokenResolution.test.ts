@@ -56,6 +56,8 @@ function setup(overrides: Partial<Latest> = {}) {
     addToHistory,
     applyEditorValue: params.applyEditorValue as ReturnType<typeof vi.fn>,
     clearDraftInput: latest.clearDraftInput as ReturnType<typeof vi.fn>,
+    setIsExpanded: params.setIsExpanded as ReturnType<typeof vi.fn>,
+    setActiveCompletionContext: params.setActiveCompletionContext as ReturnType<typeof vi.fn>,
   };
 }
 
@@ -169,8 +171,14 @@ describe("useTokenResolution.sendText — targeted submit", () => {
 
   it("keeps a draft the user changed while the submit was in flight", async () => {
     // The snapshot went out; whatever is on screen now is newer than it and is
-    // not ours to delete.
-    const { sendText, applyEditorValue, clearDraftInput } = setup();
+    // not ours to delete — and neither is the composer state around it.
+    const {
+      sendText,
+      applyEditorValue,
+      clearDraftInput,
+      setIsExpanded,
+      setActiveCompletionContext,
+    } = setup();
 
     await act(async () => {
       await sendText("snapshot", { submit: async () => true, isDraftUnchanged: () => false });
@@ -178,6 +186,8 @@ describe("useTokenResolution.sendText — targeted submit", () => {
 
     expect(applyEditorValue).not.toHaveBeenCalled();
     expect(clearDraftInput).not.toHaveBeenCalled();
+    expect(setIsExpanded).not.toHaveBeenCalled();
+    expect(setActiveCompletionContext).not.toHaveBeenCalled();
   });
 
   it("resolves tokens in the draft but never in the composed suffix", async () => {

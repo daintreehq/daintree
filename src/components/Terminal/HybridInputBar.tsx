@@ -685,12 +685,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // either. Say no and let the caller keep its banner up.
           if (!view || !latest || latest.disabled) return false;
           const snapshot = view.state.doc.toString();
+          const readStoredDraft = () =>
+            useTerminalInputStore.getState().getDraftInput(terminalId, latest.projectId);
+          const storedAtSend = readStoredDraft();
           return sendText(snapshot, {
             compose: (draft) => composeDraftWithInstruction(draft, instruction),
             submit,
-            // What was sent is a snapshot; what is on screen when the submit
-            // finally lands may not be. Only the snapshot is ours to clear.
-            isDraftUnchanged: () => editorViewRef.current?.state.doc.toString() === snapshot,
+            // What was sent is a snapshot; what the user has by the time the
+            // submit lands may not be. Only the snapshot is ours to clear.
+            // The store is checked as well as the document because voice,
+            // prompt history, file references and type-anywhere all write the
+            // draft store first and reach CodeMirror an effect later — during
+            // that window the document alone still looks untouched.
+            isDraftUnchanged: () =>
+              editorViewRef.current?.state.doc.toString() === snapshot &&
+              readStoredDraft() === storedAtSend,
           });
         },
       }),

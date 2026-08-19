@@ -279,12 +279,15 @@ export function useTokenResolution({
             .recordPrompt(latest.projectId, authored, agentId ?? null);
         }
 
-        setIsExpanded(false);
+        // The whole composer reset is one decision: if the draft is newer than
+        // what went out, collapsing it and closing the completion the user has
+        // since opened would be the same overreach as deleting their text.
         if (options?.isDraftUnchanged?.() ?? true) {
+          setIsExpanded(false);
           applyEditorValue("", { selection: EditorSelection.create([EditorSelection.cursor(0)]) });
           latest.clearDraftInput(latest.terminalId, latest.projectId);
+          setActiveCompletionContext(null);
         }
-        setActiveCompletionContext(null);
         return true;
       } finally {
         isSendingRef.current = false;

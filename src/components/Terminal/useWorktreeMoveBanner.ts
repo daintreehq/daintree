@@ -1,4 +1,4 @@
-import { useCallback, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type RefObject } from "react";
 import { isPtyPanel, type PanelWorktreeMoveNotice } from "@shared/types/panel";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -114,11 +114,15 @@ export function useWorktreeMoveBanner(
   );
 
   const setWorktreeMoveNotice = usePanelStore((state) => state.setWorktreeMoveNotice);
-  // Read at dispatch time, not captured: a lock or a restart can land while the
-  // bar is still resolving `@diff`, and the route decided at click time would
-  // then submit behind it.
+  // Read at dispatch time, not captured: a lock, a restart or a fleet arming
+  // can land while the bar is still resolving `@diff`, and the route decided at
+  // click time would then act on a pane that has since changed underneath it.
+  // Written in an effect rather than during render so a render React discards
+  // cannot leave a route here that the user never got.
   const routeRef = useRef(route);
-  routeRef.current = route;
+  useEffect(() => {
+    routeRef.current = route;
+  }, [route]);
 
   const dismiss = useCallback(
     () => setWorktreeMoveNotice(panelId, undefined),
@@ -146,7 +150,10 @@ export function useWorktreeMoveBanner(
      * the moment there is actually something to send.
      */
     const submit = async (command: string): Promise<boolean> => {
-      if (routeRef.current === "blocked") return false;
+      // Any change, not just a block. Arming a fleet turns this pane's draft
+      // into the fleet's, and committing the send would clear it out from
+      // under every other armed pane.
+      if (routeRef.current !== route) return false;
       if (readNotice(panelId) !== attempt) return false;
       if (readWorktreePath(attempt.destinationWorktreeId) !== path) return false;
       const result = await actionService.dispatch(
