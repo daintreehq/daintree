@@ -496,6 +496,10 @@ export function registerTerminalQueryActions(
     category: "terminal",
     kind: "command",
     danger: "safe",
+    // Never captured into `lastAction`: replaying `action.repeatLast` would
+    // re-inject the exact same text into the agent pane, which for a composed
+    // submission (instruction plus the user's draft) is a silent duplicate send.
+    nonRepeatable: true,
     // Reachable by user and agent (MCP) dispatch, but NOT by plugin
     // host.dispatch — sending text into an agent terminal is exactly the
     // injection the capability model gates. Plugins must declare `agent:input`
