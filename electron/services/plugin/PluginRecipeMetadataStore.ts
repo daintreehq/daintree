@@ -256,11 +256,16 @@ export class PluginRecipeMetadataStore {
    * The caller must only pass an inventory built from a COMPLETE scan of every
    * plugin root; a partial inventory would read as "not installed" and delete
    * live metadata.
+   *
+   * Returns whether anything was actually dropped, so the caller can skip
+   * announcing a snapshot that did not change — this runs on every startup, and
+   * the overwhelmingly common outcome is "nothing to do".
    */
   async reconcile(input: {
     installedPluginIds: ReadonlySet<string>;
     knownQualifiedIdsByPlugin: ReadonlyMap<string, ReadonlySet<string>>;
-  }): Promise<void> {
+  }): Promise<boolean> {
+    let dropped = 0;
     await this.enqueue(async (current) => {
       const next: Record<string, PluginRecipeMetadata> = {};
       for (const [key, entry] of Object.entries(current)) {
@@ -269,8 +274,10 @@ export class PluginRecipeMetadataStore {
         if (known && !known.has(key)) continue;
         next[key] = entry;
       }
+      dropped = Object.keys(current).length - Object.keys(next).length;
       return next;
     });
+    return dropped > 0;
   }
 
   private async enqueue(

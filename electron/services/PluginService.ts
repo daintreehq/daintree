@@ -1047,12 +1047,16 @@ export class PluginService {
       for (const id of this.blockedPlugins.keys()) installedPluginIds.add(id);
       for (const id of this.reservedNames) installedPluginIds.add(id);
 
-      await this.recipeMetadata.reconcile({
+      const dropped = await this.recipeMetadata.reconcile({
         installedPluginIds,
         knownQualifiedIdsByPlugin: getPluginRecipeQualifiedIdsByPlugin(),
       });
       setPluginRecipeMetadataSnapshot(this.recipeMetadata.getAllSync());
-      this.broadcaster.scheduleRecipesBroadcast(true);
+      // Only when the sweep actually removed something. This runs on every
+      // startup and almost always finds nothing, so announcing unconditionally
+      // meant every boot emitted an authoritative empty-snapshot broadcast that
+      // told the renderer nothing it didn't already know.
+      if (dropped) this.broadcaster.scheduleRecipesBroadcast(true);
     } catch (err) {
       console.error("[PluginService] Failed to reconcile plugin recipe metadata:", err);
     }
