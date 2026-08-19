@@ -28,25 +28,51 @@ function bindWorktrees(worktrees: Map<string, { id: string; path: string }>): vo
   } as unknown as ReturnType<typeof getCurrentViewStoreOrNull>);
 }
 
-function makeTerminal(lines: string[]): Terminal {
-  let call = 0;
+/**
+ * Rows keyed by buffer index, not by call order: the addon reads a row more
+ * than once per hover (the row itself, the wrap probe, the rejoin, the
+ * post-validation re-read), so a call-counting mock would silently change what
+ * a test means the moment that count moved. `rows` is read live, so a test can
+ * model a mid-validation rewrite by mutating it. `wrapped[i]` marks row i as
+ * the CONTINUATION of row i-1.
+ */
+function makeTerminal(rows: string[], wrapped?: boolean[]): Terminal {
   return {
     buffer: {
       active: {
-        getLine: vi.fn((): IBufferLine => {
-          const text = lines[Math.min(call, lines.length - 1)]!;
-          call += 1;
-          return { translateToString: () => text } as IBufferLine;
+        getLine: vi.fn((index: number): IBufferLine | undefined => {
+          const text = rows[index];
+          if (text === undefined) return undefined;
+          return {
+            translateToString: (trimRight?: boolean) => (trimRight ? text.trimEnd() : text),
+            isWrapped: wrapped ? wrapped[index] === true : index > 0,
+          } as IBufferLine;
         }),
       },
     },
   } as unknown as Terminal;
 }
 
-function provide(addon: FileLinksAddon): Promise<ILink[] | undefined> {
+function provide(addon: FileLinksAddon, bufferLineNumber = 1): Promise<ILink[] | undefined> {
   return new Promise((resolve) => {
-    addon.provideLinks(1, resolve);
+    addon.provideLinks(bufferLineNumber, resolve);
   });
+}
+
+/** A `statPaths` call held open so a test can rewrite the buffer under it. */
+function pendingStat(): {
+  resolve: (kinds: Array<"directory" | "file" | null>) => void;
+  reject: (error: Error) => void;
+} {
+  let resolve: (kinds: Array<"directory" | "file" | null>) => void = () => {};
+  let reject: (error: Error) => void = () => {};
+  vi.mocked(fileBrowserClient.statPaths).mockReturnValue(
+    new Promise((onResolve, onReject) => {
+      resolve = onResolve;
+      reject = onReject;
+    })
+  );
+  return { resolve, reject };
 }
 
 describe("FileLinksAddon directory links", () => {
@@ -176,52 +202,106 @@ describe("FileLinksAddon directory links", () => {
   it("drops the whole reply when the line was rewritten mid-validation", async () => {
     const root = nextRoot();
     bindWorktrees(new Map([[root, { id: root, path: root }]]));
-    vi.mocked(fileBrowserClient.statPaths).mockResolvedValue(["directory"]);
+    const stat = pendingStat();
 
-    // First read (provideLinks) sees the token; the post-validation re-read
-    // sees different text, so the stale reply must be discarded.
-    const addon = new FileLinksAddon(
-      makeTerminal(["output in src/generated now", "completely different text"]),
-      () => root
-    );
-    expect(await provide(addon)).toBeUndefined();
+    // The row is rewritten while validation is in flight, so links computed
+    // for the old text must not paint on the new.
+    const rows = ["output in src/generated now"];
+    const addon = new FileLinksAddon(makeTerminal(rows), () => root);
+    const callback = vi.fn();
+    addon.provideLinks(1, callback);
+    await vi.waitFor(() => expect(fileBrowserClient.statPaths).toHaveBeenCalled());
+    expect(callback).not.toHaveBeenCalled();
+    rows[0] = "completely different text";
+    stat.resolve(["directory"]);
+    await vi.waitFor(() => expect(callback).toHaveBeenCalled());
+    expect(callback.mock.calls).toEqual([[undefined]]);
   });
 
   it("drops the reply when only a wrapped URL's continuation row was rewritten", async () => {
     const root = nextRoot();
     bindWorktrees(new Map([[root, { id: root, path: root }]]));
-    let release: (value: Array<"directory" | "file" | null>) => void = () => {};
-    vi.mocked(fileBrowserClient.statPaths).mockReturnValue(
-      new Promise((resolve) => {
-        release = resolve;
-      })
-    );
+    const stat = pendingStat();
 
     // The hovered row never changes, so the single-row guard sees nothing —
     // only the rejoined window reveals that the URL now names another file.
     const rows = ["src/generated file:///tmp/renders/", "a.png"];
-    const terminal = {
-      buffer: {
-        active: {
-          getLine: vi.fn((index: number): IBufferLine | undefined => {
-            const text = rows[index];
-            if (text === undefined) return undefined;
-            return {
-              translateToString: (trimRight?: boolean) => (trimRight ? text.trimEnd() : text),
-              isWrapped: index > 0,
-            } as IBufferLine;
-          }),
-        },
-      },
-    } as unknown as Terminal;
-
-    const addon = new FileLinksAddon(terminal, () => root);
+    const addon = new FileLinksAddon(makeTerminal(rows), () => root);
     const callback = vi.fn();
     addon.provideLinks(1, callback);
+    await vi.waitFor(() => expect(fileBrowserClient.statPaths).toHaveBeenCalled());
+    expect(callback).not.toHaveBeenCalled();
     rows[1] = "b.png";
-    release(["directory"]);
+    stat.resolve(["directory"]);
     await vi.waitFor(() => expect(callback).toHaveBeenCalled());
-    expect(callback).toHaveBeenCalledWith(undefined);
+    expect(callback.mock.calls).toEqual([[undefined]]);
+  });
+
+  it.each(["resolve", "reject"] as const)(
+    "drops the reply on %s when a wrapped bare path's continuation row was rewritten",
+    async (outcome) => {
+      const root = nextRoot();
+      bindWorktrees(new Map([[root, { id: root, path: root }]]));
+      const stat = pendingStat();
+
+      // A bare file link can span rows now, so the rejection branch has to run
+      // the same staleness checks the success branch does — a reply that only
+      // drops its directory links would still paint a file link naming the
+      // path the line used to carry.
+      // The hovered row carries a token that reads as a whole path on its own,
+      // so a reply that skipped the checks would ship a link to `.../a.ts`
+      // while the buffer now says something else entirely.
+      const rows = ["src/generated holds src/renders/a.ts", "x"];
+      const addon = new FileLinksAddon(makeTerminal(rows), () => root);
+      const callback = vi.fn();
+      addon.provideLinks(1, callback);
+      await vi.waitFor(() => expect(fileBrowserClient.statPaths).toHaveBeenCalled());
+      expect(callback).not.toHaveBeenCalled();
+      rows[1] = "y";
+      if (outcome === "resolve") stat.resolve(["directory"]);
+      else stat.reject(new Error("view evicted"));
+      await vi.waitFor(() => expect(callback).toHaveBeenCalled());
+      expect(callback.mock.calls).toEqual([[undefined]]);
+    }
+  );
+
+  it("drops the reply when a re-wrap moves a row boundary without changing text", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    const stat = pendingStat();
+
+    // Same hovered row, same rejoined string, different split. Every buffer
+    // coordinate a multi-row link carries comes from the row offsets, so
+    // comparing text alone would ship a range underlining the wrong cells.
+    const rows = ["src/generated holds src/", "renders", "/a.png"];
+    const addon = new FileLinksAddon(makeTerminal(rows), () => root);
+    const callback = vi.fn();
+    addon.provideLinks(1, callback);
+    await vi.waitFor(() => expect(fileBrowserClient.statPaths).toHaveBeenCalled());
+    expect(callback).not.toHaveBeenCalled();
+    rows[1] = "render";
+    rows[2] = "s/a.png";
+    stat.resolve(["directory"]);
+    await vi.waitFor(() => expect(callback).toHaveBeenCalled());
+    expect(callback.mock.calls).toEqual([[undefined]]);
+  });
+
+  it("shields a continuation fragment the file pass owns but cannot resolve", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+
+    // With no cwd the rejoined relative token resolves to nothing, but its
+    // continuation row still reads as an absolute directory on its own. The
+    // file pass claims every span it matches, resolved or not, so the looser
+    // directory pass can't come back with a link to a path the line never
+    // named.
+    const addon = new FileLinksAddon(
+      makeTerminal(["open relative", `${root}/existing.ts`]),
+      () => ""
+    );
+
+    expect(await provide(addon, 2)).toBeUndefined();
+    expect(fileBrowserClient.statPaths).not.toHaveBeenCalled();
   });
 
   it("stays silent after disposal", async () => {
