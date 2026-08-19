@@ -50,7 +50,13 @@ function setup(overrides: Partial<Latest> = {}) {
     agentId: undefined,
   };
   const { result } = renderHook(() => useTokenResolution(params));
-  return { sendText: result.current.sendText, onSend, addToHistory };
+  return {
+    sendText: result.current.sendText,
+    onSend,
+    addToHistory,
+    applyEditorValue: params.applyEditorValue as ReturnType<typeof vi.fn>,
+    clearDraftInput: latest.clearDraftInput as ReturnType<typeof vi.fn>,
+  };
 }
 
 describe("useTokenResolution.sendText", () => {
@@ -103,5 +109,135 @@ describe("useTokenResolution.sendText", () => {
 
     expect(getWorkingDiff).not.toHaveBeenCalled();
     expect(onSend.mock.calls[0]![0].text).toBe("just $neo and @file.ts");
+  });
+});
+
+/**
+ * #11867's contract for a targeted submit: the editor, the draft store and the
+ * history are a single transaction that commits only once the terminal has
+ * actually taken the text.
+ */
+describe("useTokenResolution.sendText — targeted submit", () => {
+  beforeEach(() => {
+    (window as unknown as { electron: unknown }).electron = {
+      git: { getWorkingDiff: vi.fn().mockResolvedValue("BODY") },
+    };
+  });
+
+  it("reports acceptance instead of returning silently", async () => {
+    const { sendText } = setup();
+    let accepted: boolean | undefined;
+    let refused: boolean | undefined;
+
+    await act(async () => {
+      accepted = await sendText("hi", { submit: async () => true });
+      refused = await sendText("hi", { submit: async () => false });
+    });
+
+    expect(accepted).toBe(true);
+    expect(refused).toBe(false);
+  });
+
+  it("leaves the draft alone when the submit is refused", async () => {
+    const { sendText, applyEditorValue, clearDraftInput, addToHistory, onSend } = setup();
+
+    await act(async () => {
+      await sendText("keep me", { submit: async () => false });
+    });
+
+    expect(applyEditorValue).not.toHaveBeenCalled();
+    expect(clearDraftInput).not.toHaveBeenCalled();
+    expect(addToHistory).not.toHaveBeenCalled();
+    // The pane's fire-and-forget path must not run alongside the targeted one.
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("clears the draft exactly once when the submit is accepted", async () => {
+    const { sendText, applyEditorValue, clearDraftInput } = setup();
+
+    await act(async () => {
+      await sendText("send me", { submit: async () => true });
+    });
+
+    expect(applyEditorValue).toHaveBeenCalledTimes(1);
+    expect(applyEditorValue.mock.calls[0]![0]).toBe("");
+    expect(clearDraftInput).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves tokens in the draft but never in the composed suffix", async () => {
+    // The appended sentence carries a directory path verbatim; a path that
+    // happens to look like an @-token must not be rewritten into a diff.
+    const submit = vi.fn().mockResolvedValue(true);
+    const { sendText } = setup();
+
+    await act(async () => {
+      await sendText("check @diff", {
+        compose: (draft) => `${draft}\n\ncontinue in /repo/@diff`,
+        submit,
+      });
+    });
+
+    const sent = submit.mock.calls[0]![0] as string;
+    expect(sent).toContain("```diff\nBODY\n```");
+    expect(sent).toContain("continue in /repo/@diff");
+  });
+
+  it("records the authored composition in history, not the expansion", async () => {
+    const { sendText, addToHistory } = setup();
+
+    await act(async () => {
+      await sendText("check @diff", {
+        compose: (draft) => `${draft}\n\nAND THIS`,
+        submit: async () => true,
+      });
+    });
+
+    expect(addToHistory).toHaveBeenCalledWith("t1", "check @diff\n\nAND THIS", undefined);
+  });
+
+  it("sends a composed instruction even when the draft is empty", async () => {
+    const submit = vi.fn().mockResolvedValue(true);
+    const { sendText } = setup();
+
+    await act(async () => {
+      await sendText("", { compose: () => "INSTRUCTION", submit });
+    });
+
+    expect(submit).toHaveBeenCalledWith("INSTRUCTION");
+  });
+
+  it("refuses a second send while the first is still awaiting its submit", async () => {
+    let release!: (v: boolean) => void;
+    const submit = vi.fn().mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        release = resolve;
+      })
+    );
+    const { sendText } = setup();
+
+    let first!: Promise<boolean>;
+    let second!: boolean;
+    await act(async () => {
+      first = sendText("one", { submit });
+      second = await sendText("two", { submit });
+      release(true);
+      await first;
+    });
+
+    expect(second).toBe(false);
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses while disabled without consulting the submit", async () => {
+    const submit = vi.fn().mockResolvedValue(true);
+    const { sendText } = setup({ disabled: true });
+    let sent: boolean | undefined;
+
+    await act(async () => {
+      sent = await sendText("hi", { submit });
+    });
+
+    expect(sent).toBe(false);
+    expect(submit).not.toHaveBeenCalled();
   });
 });

@@ -100,7 +100,7 @@ import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { isPtyPanel } from "@shared/types/panel";
 import { useSessionLostBanner } from "./useSessionLostBanner";
-import { useWorktreeMoveBanner } from "./useWorktreeMoveBanner";
+import { useWorktreeMoveBanner, type WorktreeMoveDeliveryRoute } from "./useWorktreeMoveBanner";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
@@ -427,7 +427,6 @@ function TerminalPaneComponent({
   const clearReconnectError = usePanelStore((state) => state.clearReconnectError);
   const clearScrollbackRestoreError = usePanelStore((state) => state.clearScrollbackRestoreError);
   const sessionLostBanner = useSessionLostBanner(id);
-  const worktreeMoveBanner = useWorktreeMoveBanner(id);
 
   const cliDetails = useCliAvailabilityStore((state) => state.details);
   const getPanelCliDetail = (): AgentCliDetail | undefined => {
@@ -579,6 +578,19 @@ function TerminalPaneComponent({
     hybridInputEnabled,
     isFleetArmed: isArmed,
     fleetSize: armedIds.size,
+  });
+
+  // Below `showHybridInputBar`/`isHybridInputDisabled` because it needs both:
+  // "the bar is rendered" and "the bar can take input" are different questions,
+  // and delivering the move instruction has to respect the second one (#11867).
+  const worktreeMoveRoute: WorktreeMoveDeliveryRoute = isHybridInputDisabled
+    ? "blocked"
+    : showHybridInputBar
+      ? "hybrid"
+      : "direct";
+  const worktreeMoveBanner = useWorktreeMoveBanner(id, {
+    route: worktreeMoveRoute,
+    inputBarRef,
   });
 
   const pingedIdSelector = (state: ReturnType<typeof usePanelStore.getState>) =>
@@ -1425,6 +1437,7 @@ function TerminalPaneComponent({
       <BannerSlot visible={worktreeMoveBanner.visible}>
         <WorktreeMoveBanner
           destinationPath={worktreeMoveBanner.destinationPath}
+          deliveryFailed={worktreeMoveBanner.deliveryFailed}
           onTell={worktreeMoveBanner.tell}
           onDismiss={worktreeMoveBanner.dismiss}
         />

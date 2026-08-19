@@ -31,7 +31,7 @@ beforeAll(() => {
   });
 });
 
-function renderBanner(destinationPath: string | undefined) {
+function renderBanner(destinationPath: string | undefined, deliveryFailed = false) {
   const onTell = vi.fn();
   const onDismiss = vi.fn();
   // Stands in for TerminalPane, which focuses the pane from a React `onClick`
@@ -43,6 +43,7 @@ function renderBanner(destinationPath: string | undefined) {
       <div onClick={onPaneClick}>
         <WorktreeMoveBanner
           destinationPath={destinationPath}
+          deliveryFailed={deliveryFailed}
           onTell={onTell}
           onDismiss={onDismiss}
         />
@@ -54,6 +55,7 @@ function renderBanner(destinationPath: string | undefined) {
 
 const PATH = "/repo/wt-b";
 const TELL = `Tell it to continue in ${PATH}`;
+const RETRY = `Retry telling it to continue in ${PATH}`;
 const DISMISS = "Dismiss worktree move notice";
 
 describe("WorktreeMoveBanner", () => {
@@ -74,32 +76,54 @@ describe("WorktreeMoveBanner", () => {
     expect(screen.getByRole("button", { name: DISMISS })).not.toBeNull();
   });
 
-  it("carries the whole sentence as the control, in the text column", () => {
-    // #11868: the action *is* the sentence, not a boxed button beside it. A
-    // banner action lives in the controls row, a sibling of the text column, so
-    // it would only meet the title at the banner root — restoring the
-    // indistinct fill this fix removed while still passing every other test
-    // here. Walking up rather than indexing fixed levels keeps this honest
-    // without pinning InlineStatusBanner's exact nesting.
-    const { container } = renderBanner(PATH);
+  const SENTENCE_CASES = [
+    {
+      state: "first attempt",
+      bannerRole: "status",
+      deliveryFailed: false,
+      controlName: TELL,
+      titleText: "Agent may still be in the original worktree",
+    },
+    {
+      state: "after a failed send",
+      bannerRole: "alert",
+      deliveryFailed: true,
+      controlName: RETRY,
+      titleText: "Couldn't tell the agent",
+    },
+  ];
 
-    const banner = container.querySelector('[role="status"]');
-    const title = screen.getByText("Agent may still be in the original worktree");
-    const tell = screen.getByRole("button", { name: TELL });
+  it.each(SENTENCE_CASES)(
+    "carries the whole sentence as the control, in the text column ($state)",
+    ({ bannerRole, deliveryFailed, controlName, titleText }) => {
+      // #11868: the action *is* the sentence, not a boxed button beside it. A
+      // banner action lives in the controls row, a sibling of the text column,
+      // so it would only meet the title at the banner root — restoring the
+      // indistinct fill this fix removed while still passing every other test
+      // here. Walking up rather than indexing fixed levels keeps this honest
+      // without pinning InlineStatusBanner's exact nesting. The recovery on a
+      // failed send (#11867) is the same sentence in the same slot: the red
+      // wash hides a boxed fill exactly as the amber one did.
+      const { container } = renderBanner(PATH, deliveryFailed);
 
-    let shared = title.parentElement;
-    while (shared && !shared.contains(tell)) shared = shared.parentElement;
+      const banner = container.querySelector(`[role="${bannerRole}"]`);
+      const title = screen.getByText(titleText);
+      const tell = screen.getByRole("button", { name: controlName });
 
-    expect(shared).not.toBeNull();
-    expect(shared).not.toBe(banner);
-    // Nesting it in the description would be invalid `<p>` markup and would
-    // flatten the control away in the live region's announcement.
-    expect(tell.closest("p")).toBeNull();
-    // A native button, not a `role="button"` stand-in: Enter/Space activation
-    // comes free, and TerminalPane's keydown handler passes over events whose
-    // target is a BUTTON — a span would leak them to the pane.
-    expect(tell).toBeInstanceOf(HTMLButtonElement);
-  });
+      let shared = title.parentElement;
+      while (shared && !shared.contains(tell)) shared = shared.parentElement;
+
+      expect(shared).not.toBeNull();
+      expect(shared).not.toBe(banner);
+      // Nesting it in the description would be invalid `<p>` markup and would
+      // flatten the control away in the live region's announcement.
+      expect(tell.closest("p")).toBeNull();
+      // A native button, not a `role="button"` stand-in: Enter/Space activation
+      // comes free, and TerminalPane's keydown handler passes over events whose
+      // target is a BUTTON — a span would leak them to the pane.
+      expect(tell).toBeInstanceOf(HTMLButtonElement);
+    }
+  );
 
   it("is a polite status, not an alert", () => {
     // It reports a condition the user created; it must not interrupt them.
@@ -137,7 +161,48 @@ describe("WorktreeMoveBanner", () => {
     renderBanner(undefined);
 
     expect(screen.getByText("The destination worktree is no longer available")).not.toBeNull();
-    expect(screen.queryByRole("button", { name: /^Tell it to continue in / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /continue in / })).toBeNull();
+    expect(screen.getAllByRole("button")).toHaveLength(1);
+  });
+
+  it("interrupts once a delivery has failed, instead of staying polite", () => {
+    // The user asked for something and it did not happen (#11867) — that is
+    // worth taking the screen reader off its queue for.
+    const { container } = renderBanner(PATH, true);
+
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    expect(container.querySelector('[role="status"]')).toBeNull();
+  });
+
+  it("offers one recovery action and the close, and no more, on failure", () => {
+    const { onTell, onPaneClick } = renderBanner(PATH, true);
+
+    expect(screen.getAllByRole("button")).toHaveLength(2);
+    // The first-attempt wording is gone: the sentence now says it is a retry.
+    expect(screen.queryByRole("button", { name: TELL })).toBeNull();
+    expect(screen.getByRole("button", { name: DISMISS })).not.toBeNull();
+    const retry = screen.getByRole("button", { name: RETRY });
+
+    fireEvent.click(retry);
+    expect(onTell).toHaveBeenCalledTimes(1);
+    expect(onPaneClick).not.toHaveBeenCalled();
+  });
+
+  it("says the send failed before offering the retry", () => {
+    // The description carries the why; the sentence-control carries the what.
+    renderBanner(PATH, true);
+
+    expect(screen.getByRole("alert").textContent).toContain("didn't reach the terminal");
+    expect(screen.getByRole("button", { name: RETRY })).not.toBeNull();
+  });
+
+  it("offers no recovery at all when the destination is gone", () => {
+    // A failed send does not conjure a destination back into existence, and a
+    // dead disabled Retry would only look like the app had stopped responding.
+    renderBanner(undefined, true);
+
+    expect(screen.getByText("The destination worktree is no longer available")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /continue in / })).toBeNull();
     expect(screen.getAllByRole("button")).toHaveLength(1);
   });
 

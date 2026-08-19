@@ -119,6 +119,24 @@ interface LatestRefShape {
   clearDraftInput: (terminalId: string, projectId?: string) => void;
 }
 
+export interface SendTextOptions {
+  /**
+   * Turn the resolved draft into the exact text to submit. Applied *after*
+   * token resolution so anything appended here reaches the terminal verbatim —
+   * a directory path that happens to contain something shaped like an @-token
+   * must not be rewritten into a diff.
+   */
+  compose?: (resolvedDraft: string) => string;
+  /**
+   * Replaces the pane's fire-and-forget `onSend` handoff with a submission that
+   * reports whether the terminal accepted the text. The editor, the draft store
+   * and the history are committed only when it resolves `true`, so a caller
+   * that surfaces failure can retry without the draft having been eaten
+   * (#11867).
+   */
+  submit?: (text: string) => Promise<boolean>;
+}
+
 interface UseTokenResolutionParams {
   latestRef: React.RefObject<LatestRefShape | null>;
   applyEditorValue: (
@@ -143,98 +161,124 @@ export function useTokenResolution({
 }: UseTokenResolutionParams) {
   const isSendingRef = useRef(false);
 
+  /**
+   * Returns whether the text actually reached the terminal. Every bail-out is
+   * `false`: callers that only mirror the user's Enter can keep ignoring it,
+   * but a caller that has to tell the user whether their click landed cannot
+   * work with a silent void (#11867).
+   */
   const sendText = useCallback(
-    async (text: string) => {
+    async (text: string, options?: SendTextOptions): Promise<boolean> => {
       const latest = latestRef.current;
-      if (!latest || latest.disabled) return;
-      if (text.trim().length === 0) return;
-      if (isSendingRef.current) return;
+      if (!latest || latest.disabled) return false;
+      if (isSendingRef.current) return false;
 
-      let resolvedText = text;
+      // Held across the whole transaction, not just the diff fetch it used to
+      // guard: an awaited `submit` is another window in which a second send
+      // could otherwise interleave and double-post.
+      isSendingRef.current = true;
+      try {
+        let resolvedText = text;
 
-      const terminalTokens = getAllAtTerminalTokens(text);
-      const selectionTokens = getAllAtSelectionTokens(text);
-      const diffTokens = getAllAtDiffTokens(text);
+        const terminalTokens = getAllAtTerminalTokens(text);
+        const selectionTokens = getAllAtSelectionTokens(text);
+        const diffTokens = getAllAtDiffTokens(text);
 
-      const replacements: Array<{ start: number; end: number; replacement: string }> = [];
+        const replacements: Array<{ start: number; end: number; replacement: string }> = [];
 
-      for (const token of terminalTokens) {
-        const managed = terminalInstanceService.get(terminalId);
-        let replacement: string;
-        if (managed) {
-          const buffer = managed.terminal.buffer.active;
-          const start = Math.max(0, buffer.length - 100);
-          const lines: string[] = [];
-          for (let i = start; i < buffer.length; i++) {
-            const line = buffer.getLine(i);
-            if (line) lines.push(line.translateToString(true));
-          }
-          const content = lines.join("\n").trimEnd();
-          replacement = content ? "```\n" + content + "\n```" : "[No terminal output]";
-        } else {
-          replacement = "[Terminal not available]";
-        }
-        replacements.push({ start: token.start, end: token.end, replacement });
-      }
-
-      for (const token of selectionTokens) {
-        const selection = terminalInstanceService.getCachedSelection(terminalId);
-        const replacement = selection ? "```\n" + selection + "\n```" : "[No terminal selection]";
-        replacements.push({ start: token.start, end: token.end, replacement });
-      }
-
-      if (diffTokens.length > 0) {
-        isSendingRef.current = true;
-        try {
-          for (const token of diffTokens) {
-            let replacement: string;
-            try {
-              const raw = await window.electron.git.getWorkingDiff(cwd, token.diffType);
-              if (raw) {
-                replacement = "```diff\n" + raw + "\n```";
-              } else {
-                const labels: Record<DiffContextType, string> = {
-                  unstaged: "working tree",
-                  staged: "staged",
-                  head: "HEAD",
-                };
-                replacement = `No ${labels[token.diffType]} changes.`;
-              }
-            } catch (err) {
-              const msg = formatErrorMessage(err, "Failed to fetch diff");
-              replacement = `[Error fetching diff: ${msg}]`;
+        for (const token of terminalTokens) {
+          const managed = terminalInstanceService.get(terminalId);
+          let replacement: string;
+          if (managed) {
+            const buffer = managed.terminal.buffer.active;
+            const start = Math.max(0, buffer.length - 100);
+            const lines: string[] = [];
+            for (let i = start; i < buffer.length; i++) {
+              const line = buffer.getLine(i);
+              if (line) lines.push(line.translateToString(true));
             }
-            replacements.push({ start: token.start, end: token.end, replacement });
+            const content = lines.join("\n").trimEnd();
+            replacement = content ? "```\n" + content + "\n```" : "[No terminal output]";
+          } else {
+            replacement = "[Terminal not available]";
           }
-        } finally {
-          isSendingRef.current = false;
+          replacements.push({ start: token.start, end: token.end, replacement });
         }
-      }
 
-      if (replacements.length > 0) {
-        replacements.sort((a, b) => b.start - a.start);
-        for (const r of replacements) {
-          resolvedText = resolvedText.slice(0, r.start) + r.replacement + resolvedText.slice(r.end);
+        for (const token of selectionTokens) {
+          const selection = terminalInstanceService.getCachedSelection(terminalId);
+          const replacement = selection ? "```\n" + selection + "\n```" : "[No terminal selection]";
+          replacements.push({ start: token.start, end: token.end, replacement });
         }
+
+        for (const token of diffTokens) {
+          let replacement: string;
+          try {
+            const raw = await window.electron.git.getWorkingDiff(cwd, token.diffType);
+            if (raw) {
+              replacement = "```diff\n" + raw + "\n```";
+            } else {
+              const labels: Record<DiffContextType, string> = {
+                unstaged: "working tree",
+                staged: "staged",
+                head: "HEAD",
+              };
+              replacement = `No ${labels[token.diffType]} changes.`;
+            }
+          } catch (err) {
+            const msg = formatErrorMessage(err, "Failed to fetch diff");
+            replacement = `[Error fetching diff: ${msg}]`;
+          }
+          replacements.push({ start: token.start, end: token.end, replacement });
+        }
+
+        if (replacements.length > 0) {
+          replacements.sort((a, b) => b.start - a.start);
+          for (const r of replacements) {
+            resolvedText =
+              resolvedText.slice(0, r.start) + r.replacement + resolvedText.slice(r.end);
+          }
+        }
+
+        const outgoing = options?.compose ? options.compose(resolvedText) : resolvedText;
+        // Checked on the composed result rather than the raw draft: an empty
+        // draft is a perfectly good send once an instruction has been appended.
+        if (outgoing.trim().length === 0) return false;
+
+        if (options?.submit) {
+          // Nothing below this line runs on a refused submission — the draft the
+          // user can still see is the draft they still have.
+          if (!(await options.submit(outgoing))) return false;
+        } else {
+          const payload = buildTerminalSendPayload(outgoing);
+          latest.onSend({ data: payload.data, trackerData: payload.trackerData, text: outgoing });
+        }
+
+        // Learn dictionary words from manual corrections to dictated text. Uses
+        // the original `text` (the human-authored content), not `resolvedText`
+        // (which has @-token expansions spliced in).
+        detectDictionaryCorrections(terminalId, text);
+
+        // History keeps what the human authored, so recalling it re-runs the
+        // tokens rather than a frozen expansion — composed the same way, because
+        // the instruction was part of what was sent.
+        const authored = options?.compose ? options.compose(text) : text;
+        latest.addToHistory(latest.terminalId, authored, latest.projectId);
+        latest.resetHistoryIndex(latest.terminalId, latest.projectId);
+        if (latest.projectId) {
+          useCommandHistoryStore
+            .getState()
+            .recordPrompt(latest.projectId, authored, agentId ?? null);
+        }
+
+        setIsExpanded(false);
+        applyEditorValue("", { selection: EditorSelection.create([EditorSelection.cursor(0)]) });
+        latest.clearDraftInput(latest.terminalId, latest.projectId);
+        setActiveCompletionContext(null);
+        return true;
+      } finally {
+        isSendingRef.current = false;
       }
-
-      // Learn dictionary words from manual corrections to dictated text. Uses
-      // the original `text` (the human-authored content), not `resolvedText`
-      // (which has @-token expansions spliced in).
-      detectDictionaryCorrections(terminalId, text);
-
-      const payload = buildTerminalSendPayload(resolvedText);
-      latest.onSend({ data: payload.data, trackerData: payload.trackerData, text: resolvedText });
-      latest.addToHistory(latest.terminalId, text, latest.projectId);
-      latest.resetHistoryIndex(latest.terminalId, latest.projectId);
-      if (latest.projectId) {
-        useCommandHistoryStore.getState().recordPrompt(latest.projectId, text, agentId ?? null);
-      }
-
-      setIsExpanded(false);
-      applyEditorValue("", { selection: EditorSelection.create([EditorSelection.cursor(0)]) });
-      latest.clearDraftInput(latest.terminalId, latest.projectId);
-      setActiveCompletionContext(null);
     },
     [
       applyEditorValue,
