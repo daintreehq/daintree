@@ -57,6 +57,14 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   // Daintree knows the authoritative effective registry and live launchability.
   // Not something the caller's shell can answer.
   "agent.listAvailable",
+  // The same argument one step further in: launching also takes a preset id,
+  // and those ids are generated rather than guessable. They come from user
+  // settings, `.daintree/presets/` files and CCR discovery, merged with a
+  // precedence only Daintree applies, so no shell command reconstructs the
+  // list. Without it the preset argument is undiscoverable from out here — the
+  // caller's only route today is reading an id off a panel already running one
+  // (#11859). Identity only: no env, args or flags at any redaction level.
+  "agent.listPresets",
 
   // Read-only fleet-run supervision snapshot (#10930). The broadcast itself is
   // deliberately NOT exposed — external orchestrators fan out

@@ -475,6 +475,14 @@ describe("external tool surface budget (#11585)", () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);
   });
 
+  // Preset discovery resolves an argument `agent.launch` already accepts, so it
+  // is only useful to this caller class while it sits on the same surface as
+  // the launch itself. With the count now at the ceiling, an over-eager cut
+  // would drop it silently; naming it here makes that a failing test.
+  it("advertises preset discovery alongside launching", () => {
+    expect(isTierPermitted("external", "agent.listPresets")).toBe(true);
+  });
+
   // Guards the opposite failure: a bad merge or an over-eager cut emptying the
   // list would make every assertion above vacuous rather than red.
   it("still carries a usable orchestration surface", () => {

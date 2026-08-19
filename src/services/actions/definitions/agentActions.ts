@@ -12,7 +12,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { AGENT_REGISTRY, getAgentDisplayTitle } from "@/config/agents";
+import { AGENT_REGISTRY, getAgentDisplayTitle, getMergedPresetIdentities } from "@/config/agents";
 import { agentCapabilitiesClient, agentSettingsClient, cliAvailabilityClient } from "@/clients";
 import { userAgentRegistryClient } from "@/clients/userAgentRegistryClient";
 import {
@@ -76,6 +76,17 @@ const BookmarkListArgsSchema = z
     offset: SessionListOffsetSchema,
   })
   .optional();
+
+const AgentListPresetsArgsSchema = z.object({
+  agentId: AgentIdSchema,
+  projectId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Which project's repository presets to include. Defaults to the project this call is dispatched in. Naming one that is not the loaded project returns the other layers and reports the result as incomplete rather than answering for the wrong project."
+    ),
+});
 
 const SessionHistoryListArgsSchema = z
   .object({
@@ -1119,6 +1130,97 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
             ...(builtIn ? { toolbarVisible: isAgentToolbarVisible(entry, rawState) } : {}),
           };
         }),
+      };
+    },
+  }));
+
+  /**
+   * Read the three layers a merged preset list is built from.
+   *
+   * Deliberately reads the same renderer stores the launcher resolves against
+   * rather than re-fetching over IPC. A fresh IPC read could report a preset
+   * the launcher's stores have not installed yet, and an id that cannot be
+   * launched is worse than an id reported a moment late — the whole point of
+   * this listing is that what it returns is what a launch will accept.
+   *
+   * Settings keep the cache-aware client fallback because that layer has one;
+   * the two preset stores do not, so they carry hydration markers instead and
+   * an unproven snapshot is reported as incomplete rather than guessed at.
+   */
+  const readAgentPresetSources = async (agentId: string, projectId: string | undefined) => {
+    const [{ useAgentSettingsStore }, { useCcrPresetsStore }, { useProjectPresetsStore }] =
+      await Promise.all([
+        import("@/store/agentSettingsStore"),
+        import("@/store/ccrPresetsStore"),
+        import("@/store/projectPresetsStore"),
+      ]);
+
+    const storeSettings = useAgentSettingsStore.getState().settings;
+    const settings = storeSettings ?? (await agentSettingsClient.get());
+    const ccrState = useCcrPresetsStore.getState();
+    const projectState = useProjectPresetsStore.getState();
+
+    // Without a project in scope there are no repository presets to miss, so
+    // that layer is complete by having nothing in it. With one, the snapshot
+    // only counts if it demonstrably belongs to that project — the store is
+    // reused across project switches, and serving another project's presets
+    // would hand back ids this project cannot launch.
+    const projectScoped = projectId !== undefined && projectState.hydratedProjectId === projectId;
+
+    return {
+      customPresets: settings?.agents?.[agentId]?.customPresets,
+      // Passed through exactly as stored: `undefined` keeps the built-in
+      // registry presets, while any array replaces them wholesale.
+      ccrPresets: ccrState.ccrPresetsByAgent[agentId],
+      projectPresets: projectScoped ? projectState.presetsByAgent[agentId] : undefined,
+      presetsComplete:
+        settings != null && ccrState.isInitialized && (projectId === undefined || projectScoped),
+    };
+  };
+
+  actions.set("agent.listPresets", () => ({
+    id: "agent.listPresets",
+    title: "List Agent Presets",
+    description:
+      "List the launch presets for one agent, merged across user settings, repository preset files and CCR discovery in the precedence the launcher applies, so every id returned is one a launch will accept. Identity only: no environment values or flags. While the completeness flag is false a source is still loading.",
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: AgentListPresetsArgsSchema,
+    examples: [
+      {
+        args: { agentId: "claude" },
+        description: "Discover the preset ids available for Claude Code",
+      },
+    ],
+    resultSchema: z.object({
+      presetsComplete: z.boolean(),
+      presets: z.array(
+        z.object({
+          id: z.string(),
+          name: z.string(),
+          source: z.enum(["custom", "project", "ccr", "registry"]),
+          description: z.string().optional(),
+        })
+      ),
+    }),
+    mcpOutputSchema: true,
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { agentId, projectId: requestedProjectId } = AgentListPresetsArgsSchema.parse(
+        args ?? {}
+      );
+      const projectId = requestedProjectId ?? ctx.projectId;
+      const sources = await readAgentPresetSources(agentId, projectId);
+
+      return {
+        presetsComplete: sources.presetsComplete,
+        presets: getMergedPresetIdentities(
+          agentId,
+          sources.customPresets,
+          sources.ccrPresets,
+          sources.projectPresets
+        ),
       };
     },
   }));

@@ -28,7 +28,11 @@ export function useProjectPresetsSubscription(): void {
         const serialized = JSON.stringify(presets);
         if (serialized === lastAppliedRef.current) return;
         lastAppliedRef.current = serialized;
-        setPresetsByAgent(presets);
+        // Ownership rides with the data: `hydratedProjectId` is what lets a
+        // reader tell "this project declares no presets" from "the load has
+        // not landed yet", and it must never name a project other than the one
+        // this payload came from.
+        setPresetsByAgent(projectId, presets);
       } catch (error) {
         console.warn("[useProjectPresetsSubscription] Failed to load project presets:", error);
       }
