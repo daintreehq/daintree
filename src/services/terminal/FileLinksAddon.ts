@@ -191,6 +191,78 @@ function mapToRow(logical: LogicalLine, index: number): { row: number; column: n
 }
 
 /**
+ * Project a logical-line span onto the hovered row, clamped to that row's
+ * text, or null when the span never touches it.
+ *
+ * Every claim in `claimed` — and every overlap test against it — speaks this
+ * coordinate space: the ledger is row-local, and the directory pass reading it
+ * never leaves the row. Handing it a logical-line index typechecks fine and
+ * silently stops shielding anything, so both scanning passes come through here
+ * instead of doing the arithmetic themselves.
+ */
+function projectToRow(
+  rowOffset: number,
+  rowLength: number,
+  startIndex: number,
+  endIndex: number
+): [number, number] | null {
+  const localStart = startIndex - rowOffset;
+  const localEnd = endIndex - rowOffset;
+  // Only tokens touching THIS row are ours to report. xterm projects a
+  // returned range onto the requested row and evicts lower-priority links that
+  // intersect it, so handing back a sibling row's link would blank a web link
+  // the user can actually see.
+  if (localEnd <= 0 || localStart >= rowLength) return null;
+  return [Math.max(0, localStart), Math.min(rowLength, localEnd)];
+}
+
+/**
+ * Whether a match sits against an edge the rejoin budget invented rather than
+ * a real line boundary. The regexes' `^`/`$` read that cutoff as a token
+ * boundary — the same lie a row edge tells — so a token touching one can't be
+ * trusted to be whole. Callers claim it anyway (claiming only ever suppresses
+ * links) and simply never link it. A token lying entirely outside the window
+ * stays invisible; bounding the rejoin is what makes hover affordable, and
+ * that needs a logical line past 2048 columns to reach.
+ */
+function touchesClippedEdge(logical: LogicalLine, startIndex: number, endIndex: number): boolean {
+  return (
+    (logical.clippedStart && startIndex === 0) ||
+    (logical.clippedEnd && endIndex === logical.text.length)
+  );
+}
+
+/** Buffer range for a logical-line span, which may cover several rows. */
+function rangeFor(logical: LogicalLine, startIndex: number, endIndex: number): IBufferRange {
+  const start = mapToRow(logical, startIndex);
+  const end = mapToRow(logical, endIndex - 1);
+  return {
+    // xterm rows are 1-based and the end column is inclusive, so `end`
+    // addresses the token's last character rather than the one past it.
+    start: { x: start.column + 1, y: start.row + 1 },
+    end: { x: end.column + 1, y: end.row + 1 },
+  };
+}
+
+/**
+ * Whether two reads of the same row's rejoin window describe the same
+ * geometry. Text alone isn't enough: a link spanning rows carries coordinates
+ * derived from `startRow` and `rowOffsets`, so a re-wrap that moves a row
+ * boundary without changing a character still invalidates the range it was
+ * given.
+ */
+function sameLogicalLine(a: LogicalLine, b: LogicalLine): boolean {
+  return (
+    a.text === b.text &&
+    a.startRow === b.startRow &&
+    a.clippedStart === b.clippedStart &&
+    a.clippedEnd === b.clippedEnd &&
+    a.rowOffsets.length === b.rowOffsets.length &&
+    a.rowOffsets.every((offset, index) => offset === b.rowOffsets[index])
+  );
+}
+
+/**
  * Cheap validation memo for directory candidates, keyed
  * `worktreeId\nrelativePath`. Hover re-fires for the same line constantly, so
  * without this every pointer crossing would re-stat the same tokens. Entries
@@ -259,60 +331,34 @@ export class FileLinksAddon implements ILinkProvider {
     // dropped instead of stacking a second link on the same characters.
     const claimed: Array<[number, number]> = [];
 
-    // `file://` URLs are scanned first so their spans are claimed before the
-    // bare-path and directory passes. Two gates, both O(1)-ish: a line with no
-    // scheme can't start a URL, and a line that neither continues nor is
-    // continued can't be hiding the rest of one. provideLinks is pointer-driven
-    // across every visible terminal, so the common line still does no work.
-    // `://` (not `file://`) keeps the guard case-insensitive without a copy.
-    const urlScanText =
-      lineText.includes("://") || partOfWrappedLine
-        ? this._collectUrlLinks(bufferLineNumber, lineText, links, claimed)
-        : null;
-
-    // matchAll on the module-scope global regex clones it internally (per spec)
-    // and never mutates lastIndex, so the regex is reused across hover calls
-    // without the per-call `new RegExp(FILE_PATH_REGEX)` allocation.
-    for (const match of lineText.matchAll(FILE_PATH_REGEX)) {
-      const fullMatch = match[1];
-      if (fullMatch === undefined) continue;
-      if (isPathExcluded(fullMatch)) {
-        continue;
-      }
-
-      const resolved = resolveFilePathCandidate(fullMatch, this._getCwd());
-      if (!resolved) {
-        continue;
-      }
-
-      const startIndex = match.index + match[0]!.indexOf(fullMatch);
-      // A `(` is legal inside a file URL and is also this regex's boundary
-      // character, so `file:///tmp/(src/foo.ts` offers `src/foo.ts` as a bare
-      // path — which would resolve against the cwd and link a different file
-      // than the URL names. Every URL span is claimed whether or not it
-      // resolved, so a rejected remote URL can't leak a local link either.
-      if (overlapsClaimed(claimed, startIndex, startIndex + fullMatch.length)) {
-        continue;
-      }
-      claimed.push([startIndex, startIndex + fullMatch.length]);
-
-      const range: IBufferRange = {
-        start: { x: startIndex + 1, y: bufferLineNumber },
-        end: { x: startIndex + fullMatch.length, y: bufferLineNumber },
-      };
-
-      links.push(
-        new FileLink(
-          range,
-          fullMatch,
-          resolved.absolutePath,
-          resolved.line,
-          resolved.col,
-          this._getCwd(),
-          this._onHover
-        )
-      );
+    // One rejoin, shared by both scanning passes and by the deferred reply's
+    // staleness check. xterm soft-wraps mid-token, so neither `file://` URLs
+    // nor bare paths can be decided from a single row: whichever fragment the
+    // margin leaves behind still parses, and linking it opens a real-but-wrong
+    // file. The no-separator fast path above already turned away the rows that
+    // would make this cost anything, and the window itself is budgeted.
+    const logical = this._readLogicalLine(bufferLineNumber - 1);
+    if (!logical) {
+      callback(undefined);
+      return;
     }
+    // The hovered row's offset into the joined text, for translating a match
+    // back into `lineText` coordinates — the space `claimed` and the row-local
+    // directory pass both speak. The window is anchored on this row, so the
+    // lookup always lands.
+    const rowOffset = logical.rowOffsets[bufferLineNumber - 1 - logical.startRow]!;
+
+    // `file://` URLs are scanned first so their spans are claimed before the
+    // bare-path and directory passes. The gate stays: a line with no scheme
+    // can't start a URL, and a line that neither continues nor is continued
+    // can't be hiding the rest of one. provideLinks is pointer-driven across
+    // every visible terminal, so the common line still runs no URL regex.
+    // `://` (not `file://`) keeps the guard case-insensitive without a copy.
+    if (lineText.includes("://") || partOfWrappedLine) {
+      this._collectUrlLinks(logical, rowOffset, lineText, links, claimed);
+    }
+
+    this._collectBarePathLinks(logical, rowOffset, lineText, links, claimed);
 
     const candidates = this._collectDirCandidates(lineText, claimed);
     if (candidates.length === 0) {
@@ -333,60 +379,63 @@ export class FileLinksAddon implements ILinkProvider {
     const timeout = new Promise<ScopedDirCandidate[]>((resolve) =>
       setTimeout(() => resolve([]), DIR_VALIDATION_TIMEOUT_MS)
     );
-    void Promise.race([this._validateDirCandidates(candidates), timeout]).then(
-      (confirmed) => {
-        // Disposed while validating (terminal closed): the registration is
-        // gone, so a late reply has no linkifier to serve.
-        if (this._disposed) return;
-        // The line may have been rewritten under the pointer while validation
-        // was in flight (streaming agent output). xterm caches replies by the
-        // pointer's current line, so links computed for the OLD text would
-        // paint on the new one — drop the whole reply instead.
-        const current = this._terminal.buffer.active.getLine(bufferLineNumber - 1);
-        if (!current || current.translateToString(true) !== lineText) {
-          callback(undefined);
-          return;
-        }
-        // A URL link can span rows this check never looks at, so re-read the
-        // whole window it was computed from: rewriting only the continuation
-        // row would otherwise leave a link to the path the URL used to name.
-        if (
-          urlScanText !== null &&
-          this._readLogicalLine(bufferLineNumber - 1)?.text !== urlScanText
-        ) {
-          callback(undefined);
-          return;
-        }
-        for (const candidate of confirmed) {
-          const range: IBufferRange = {
-            start: { x: candidate.startIndex + 1, y: bufferLineNumber },
-            end: { x: candidate.startIndex + candidate.text.length, y: bufferLineNumber },
-          };
-          links.push(
-            new DirectoryLink(
-              range,
-              candidate.text,
-              candidate.absolutePath,
-              candidate.worktreeId,
-              candidate.relativePath,
-              this._onHover
-            )
-          );
-        }
-        callback(links.length > 0 ? links : undefined);
-      },
-      () => {
-        if (this._disposed) return;
-        callback(links.length > 0 ? links : undefined);
+
+    // Both outcomes land in one finalization. The staleness checks are not a
+    // success-path nicety: a file link can now span rows, so a reply arriving
+    // after the buffer moved would paint coordinates that no longer describe
+    // what the user is looking at — whether or not validation succeeded.
+    const finalize = (confirmed: ScopedDirCandidate[]): void => {
+      // Disposed while validating (terminal closed): the registration is
+      // gone, so a late reply has no linkifier to serve.
+      if (this._disposed) return;
+      // The line may have been rewritten under the pointer while validation
+      // was in flight (streaming agent output). xterm caches replies by the
+      // pointer's current line, so links computed for the OLD text would
+      // paint on the new one — drop the whole reply instead.
+      const current = this._terminal.buffer.active.getLine(bufferLineNumber - 1);
+      if (!current || current.translateToString(true) !== lineText) {
+        callback(undefined);
+        return;
       }
+      // A file or URL link can span rows that check never looks at, so re-read
+      // the whole window it was computed from: rewriting only a continuation
+      // row would otherwise leave a link to the path the line used to name,
+      // and a re-wrap that merely moves a row boundary would leave a range
+      // underlining the wrong cells.
+      const currentLogical = this._readLogicalLine(bufferLineNumber - 1);
+      if (!currentLogical || !sameLogicalLine(currentLogical, logical)) {
+        callback(undefined);
+        return;
+      }
+      for (const candidate of confirmed) {
+        const range: IBufferRange = {
+          start: { x: candidate.startIndex + 1, y: bufferLineNumber },
+          end: { x: candidate.startIndex + candidate.text.length, y: bufferLineNumber },
+        };
+        links.push(
+          new DirectoryLink(
+            range,
+            candidate.text,
+            candidate.absolutePath,
+            candidate.worktreeId,
+            candidate.relativePath,
+            this._onHover
+          )
+        );
+      }
+      callback(links.length > 0 ? links : undefined);
+    };
+
+    void Promise.race([this._validateDirCandidates(candidates), timeout]).then(finalize, () =>
+      finalize([])
     );
   }
 
   /**
    * Scan the logical line for `file://` URLs, appending links and claiming the
-   * spans they occupy on `bufferLineNumber`'s own row.
+   * spans they occupy on the hovered row.
    *
-   * Rows are rejoined first because xterm soft-wraps mid-token and the
+   * Rows are rejoined by the caller because xterm soft-wraps mid-token and the
    * motivating URL — an agent's generated-image path — is long enough to wrap
    * in any tiled terminal. Scanning one row would capture the prefix that
    * happens to end at the margin, and a truncated `file://` URL still parses,
@@ -394,24 +443,14 @@ export class FileLinksAddon implements ILinkProvider {
    *
    * Spans are claimed for every syntactic match, resolved or not: a rejected
    * remote URL must still shield its own characters from the bare-path pass.
-   *
-   * Returns the rejoined text it scanned, so a deferred reply can tell whether
-   * any contributing row changed underneath it, or null if there was no line.
    */
   private _collectUrlLinks(
-    bufferLineNumber: number,
+    logical: LogicalLine,
+    rowOffset: number,
     lineText: string,
     links: ILink[],
     claimed: Array<[number, number]>
-  ): string | null {
-    const logical = this._readLogicalLine(bufferLineNumber - 1);
-    if (!logical) return null;
-    // The current row's offset into the joined text, for translating a match
-    // back into `lineText` coordinates — that's the space `claimed` and the
-    // single-row bare-path and directory passes all speak. The window is
-    // anchored on this row, so the lookup always lands.
-    const rowOffset = logical.rowOffsets[bufferLineNumber - 1 - logical.startRow]!;
-
+  ): void {
     for (const match of logical.text.matchAll(FILE_URL_REGEX)) {
       const url = match[1];
       if (url === undefined) continue;
@@ -422,45 +461,20 @@ export class FileLinksAddon implements ILinkProvider {
       const startIndex = match.index + match[0]!.indexOf(url);
       const endIndex = startIndex + url.length;
 
-      // Only URLs touching THIS row are ours to report. xterm projects a
-      // returned range onto the requested row and evicts lower-priority links
-      // that intersect it, so handing back a sibling row's link would blank a
-      // web link the user can actually see.
-      const localStart = startIndex - rowOffset;
-      const localEnd = endIndex - rowOffset;
-      if (localEnd <= 0 || localStart >= lineText.length) continue;
-      claimed.push([Math.max(0, localStart), Math.min(lineText.length, localEnd)]);
+      const local = projectToRow(rowOffset, lineText.length, startIndex, endIndex);
+      if (!local) continue;
+      claimed.push(local);
 
-      // A token touching a clipped edge may continue past it, and the regex's
-      // `^`/`$` would read the budget cutoff as a boundary — the same lie a row
-      // edge tells. Claim it anyway (claiming only ever suppresses links) but
-      // never link it. A token starting entirely outside the window stays
-      // invisible; bounding the rejoin is what makes hover affordable, and that
-      // needs a logical line past 2048 columns to reach.
-      if (
-        (logical.clippedStart && startIndex === 0) ||
-        (logical.clippedEnd && endIndex === logical.text.length)
-      ) {
-        continue;
-      }
+      if (touchesClippedEdge(logical, startIndex, endIndex)) continue;
 
       const resolved = resolveFileUrlCandidate(url);
       if (!resolved) continue;
-
-      const start = mapToRow(logical, startIndex);
-      const end = mapToRow(logical, endIndex - 1);
-      const range: IBufferRange = {
-        // xterm rows are 1-based and the end column is inclusive, so `end`
-        // addresses the URL's last character rather than the one past it.
-        start: { x: start.column + 1, y: start.row + 1 },
-        end: { x: end.column + 1, y: end.row + 1 },
-      };
 
       // No line/col: `resolveFileUrlCandidate` deliberately doesn't peel a
       // `:line` suffix off a URL, so there is none to forward.
       links.push(
         new FileLink(
-          range,
+          rangeFor(logical, startIndex, endIndex),
           url,
           resolved.absolutePath,
           undefined,
@@ -470,7 +484,71 @@ export class FileLinksAddon implements ILinkProvider {
         )
       );
     }
-    return logical.text;
+  }
+
+  /**
+   * Scan the logical line for bare (non-URL) path tokens, appending links and
+   * claiming the spans they occupy on the hovered row.
+   *
+   * Rejoined for the same reason URLs are, and for one more: `FILE_PATH_REGEX`
+   * opens with `(?:^|[\s(])`, and on a continuation row that `^` asserts a
+   * token boundary at a column where the token is still mid-flight. Scanning a
+   * single row captured whichever fragment the margin left behind — and a
+   * fragment resolves against the cwd just as happily as the whole path, so
+   * the link, the hover callback, and right-click "Reveal" all agreed on a
+   * real-but-wrong file with nothing to signal it (#11865).
+   *
+   * Spans are claimed for every syntactic match touching the row, resolved or
+   * not. The directory pass is looser than this one by design (`and/or`
+   * matches it), so a token this pass owns but can't resolve must not come
+   * back as a lower-confidence directory link on the same characters.
+   */
+  private _collectBarePathLinks(
+    logical: LogicalLine,
+    rowOffset: number,
+    lineText: string,
+    links: ILink[],
+    claimed: Array<[number, number]>
+  ): void {
+    // matchAll on the module-scope global regex clones it internally (per spec)
+    // and never mutates lastIndex, so the regex is reused across hover calls
+    // without the per-call `new RegExp(FILE_PATH_REGEX)` allocation.
+    for (const match of logical.text.matchAll(FILE_PATH_REGEX)) {
+      const fullMatch = match[1];
+      if (fullMatch === undefined) continue;
+
+      const startIndex = match.index + match[0]!.indexOf(fullMatch);
+      const endIndex = startIndex + fullMatch.length;
+
+      const local = projectToRow(rowOffset, lineText.length, startIndex, endIndex);
+      if (!local) continue;
+
+      // A `(` is legal inside a file URL and is also this regex's boundary
+      // character, so `file:///tmp/(src/foo.ts` offers `src/foo.ts` as a bare
+      // path — which would resolve against the cwd and link a different file
+      // than the URL names. Every URL span is claimed whether or not it
+      // resolved, so a rejected remote URL can't leak a local link either.
+      if (overlapsClaimed(claimed, local[0], local[1])) continue;
+      claimed.push(local);
+
+      if (touchesClippedEdge(logical, startIndex, endIndex)) continue;
+      if (isPathExcluded(fullMatch)) continue;
+
+      const resolved = resolveFilePathCandidate(fullMatch, this._getCwd());
+      if (!resolved) continue;
+
+      links.push(
+        new FileLink(
+          rangeFor(logical, startIndex, endIndex),
+          fullMatch,
+          resolved.absolutePath,
+          resolved.line,
+          resolved.col,
+          this._getCwd(),
+          this._onHover
+        )
+      );
+    }
   }
 
   /**

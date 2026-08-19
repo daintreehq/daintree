@@ -556,6 +556,194 @@ describe("FileLinksAddon", () => {
     });
   });
 
+  describe("soft-wrapped bare paths (#11865)", () => {
+    const CWD = "/home/user/project";
+
+    /**
+     * Rows as xterm stores them, with `translateToString` honouring `trimRight`
+     * the way xterm does. `wrapped[i]` marks row i as the CONTINUATION of row
+     * i-1 — the flag the rejoin walks — so a hard newline is modelled by
+     * clearing that flag, never by anything about the text.
+     */
+    const makeWrappedTerminal = (rows: string[], wrapped?: boolean[]): Terminal => {
+      const terminal = createMockTerminal();
+      vi.mocked(terminal.buffer.active.getLine).mockImplementation((index: number) => {
+        const text = rows[index];
+        if (text === undefined) return undefined;
+        return {
+          translateToString: (trimRight?: boolean) => (trimRight ? text.trimEnd() : text),
+          isWrapped: wrapped ? wrapped[index] === true : index > 0,
+        } as IBufferLine;
+      });
+      return terminal;
+    };
+
+    const linksForRows = (
+      rows: string[],
+      hoveredRow: number,
+      options: { wrapped?: boolean[]; cwd?: string } = {}
+    ): Promise<ILink[] | undefined> =>
+      new Promise((resolve) => {
+        new FileLinksAddon(
+          makeWrappedTerminal(rows, options.wrapped),
+          () => options.cwd ?? CWD
+        ).provideLinks(hoveredRow + 1, resolve);
+      });
+
+    const readLink = (link: ILink) =>
+      link as unknown as {
+        kind: string;
+        text: string;
+        absolutePath: string;
+        _line?: number;
+        _col?: number;
+      };
+
+    it("rejoins a soft-wrapped bare path instead of linking the truncated tail", async () => {
+      // The fragment left on the continuation row resolves against the cwd
+      // just as happily as the whole path, so the old row-local scan produced
+      // a link to a real-but-wrong file with nothing to signal it.
+      const rows = ["compiled src/services/terminal/FileLinks", "Addon.ts in 2s"];
+      for (const hoveredRow of [0, 1]) {
+        const links = await linksForRows(rows, hoveredRow);
+        expect(links).toHaveLength(1);
+        const link = links![0]!;
+        expect(readLink(link).text).toBe("src/services/terminal/FileLinksAddon.ts");
+        expect(readLink(link).absolutePath).toBe(
+          "/home/user/project/src/services/terminal/FileLinksAddon.ts"
+        );
+        // One link spanning both rows — 1-based rows, inclusive end column.
+        expect(link.range.start).toEqual({ x: "compiled ".length + 1, y: 1 });
+        expect(link.range.end).toEqual({ x: "Addon.ts".length, y: 2 });
+      }
+    });
+
+    it("links a path split immediately before its extension", async () => {
+      const links = await linksForRows(["see src/components/Terminal", ".tsx now"], 1);
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe(
+        "/home/user/project/src/components/Terminal.tsx"
+      );
+    });
+
+    it("keeps a :line:column suffix that wrapped onto the next row", async () => {
+      const links = await linksForRows(["error at src/App.tsx:4", "2:13 in build"], 0);
+      expect(links).toHaveLength(1);
+      const link = readLink(links![0]!);
+      expect(link.text).toBe("src/App.tsx:42:13");
+      expect(link.absolutePath).toBe("/home/user/project/src/App.tsx");
+      expect(link._line).toBe(42);
+      expect(link._col).toBe(13);
+    });
+
+    it("links from a continuation row that carries no separator of its own", async () => {
+      // `sprite.png` alone would hit the '/'-or-'\' fast path and never be
+      // scanned, leaving the tail of a wrapped path dead to the pointer.
+      const links = await linksForRows(["writing src/generated/", "sprite.png done"], 1);
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe("/home/user/project/src/generated/sprite.png");
+    });
+
+    it("never fuses two paths separated by a hard newline", async () => {
+      // Structural: the rejoin only walks rows flagged as continuations, so a
+      // real line break leaves each path alone on its own row.
+      const rows = ["first src/alpha.ts", "second src/beta.ts"];
+      for (const hoveredRow of [0, 1]) {
+        const links = await linksForRows(rows, hoveredRow, { wrapped: [false, false] });
+        expect(links).toHaveLength(1);
+        const link = links![0]!;
+        expect(readLink(link).absolutePath).toBe(
+          hoveredRow === 0 ? "/home/user/project/src/alpha.ts" : "/home/user/project/src/beta.ts"
+        );
+        expect(link.range.start.y).toBe(hoveredRow + 1);
+        expect(link.range.end.y).toBe(hoveredRow + 1);
+      }
+    });
+
+    it("treats a wrap with no delimiter as the single token the user sees", async () => {
+      // Row one ran to the margin, so the terminal really did print one
+      // unbroken token — the rejoin has to read it the way an unwrapped line
+      // would, rather than inventing a boundary at the row edge.
+      const links = await linksForRows(["see src/foo.ts", "x/bar.md"], 0);
+      expect(links).toHaveLength(1);
+      const link = readLink(links![0]!);
+      expect(link.text).toBe("src/foo.tsx/bar.md");
+      expect(link.absolutePath).toBe("/home/user/project/src/foo.tsx/bar.md");
+    });
+
+    it("keeps the spaces that separate a wrapped path from the next token", async () => {
+      // Row one is full to the margin with real spaces. Trimming them on
+      // rejoin would fuse the two tokens into `src/a.tsdocs/b.md`.
+      const links = await linksForRows(["see src/a.ts   ", "docs/b.md"], 0);
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe("/home/user/project/src/a.ts");
+    });
+
+    it("ignores a bare path that lies entirely on a sibling row", async () => {
+      // xterm evicts lower-priority links intersecting a returned range, so a
+      // link the pointer can't reach on this row must not be reported at all.
+      expect(
+        await linksForRows(["plain prose with no token", "see src/foo.ts"], 0)
+      ).toBeUndefined();
+    });
+
+    it("refuses to link a bare path clipped by the rejoin budget", async () => {
+      // The window is anchored on the hovered row and grows outward on a fixed
+      // budget, so a token longer than that gets an edge the regex reads as a
+      // real token boundary — the same lie a row edge tells.
+      const toRows = (token: string): string[] => {
+        const rows: string[] = [];
+        for (let index = 0; index < token.length; index += 80) {
+          rows.push(token.slice(index, index + 80));
+        }
+        return rows;
+      };
+
+      // Clipped at the end: the window stops at 2000 columns, exactly where
+      // this token's only extension sits, so the match ends on the cut.
+      const endClipped = `src/${"a".repeat(1994)}.ts${"/b".repeat(400)}`;
+      expect(await linksForRows(toRows(endClipped), 0)).toBeUndefined();
+
+      // Clipped at the start: hovering the last row walks upward instead, and
+      // the window opens mid-token where `^` is a lie.
+      const startClipped = `${"s".repeat(880)}/dir/${"c".repeat(1992)}.ts`;
+      const startRows = toRows(startClipped);
+      expect(await linksForRows(startRows, startRows.length - 1)).toBeUndefined();
+    });
+
+    it("keeps a wrapped file:// URL from leaking a bare-path link on either row", async () => {
+      // `(` is legal in a file URL and is also FILE_PATH_REGEX's boundary
+      // character. The URL's claim is recorded in ROW-LOCAL coordinates, so a
+      // logical-line match has to be projected back before it is tested
+      // against the ledger — skip that and the shielding silently stops firing
+      // while everything still typechecks.
+      const rows = ["open file:///tmp/(src/", "foo.ts"];
+      for (const hoveredRow of [0, 1]) {
+        const links = await linksForRows(rows, hoveredRow);
+        expect(links).toHaveLength(1);
+        expect(readLink(links![0]!).absolutePath).toBe("/tmp/(src/foo.ts");
+      }
+    });
+
+    it("hands the hover callback the full path, not the fragment", async () => {
+      // `hoveredLink` is what right-click "Reveal in File Manager" reads, so a
+      // fragment here opens a real-but-wrong file and reports no failure.
+      const seen: Array<{ absolutePath?: string } | null> = [];
+      const addon = new FileLinksAddon(
+        makeWrappedTerminal(["wrote src/generated/", "sprite.png"]),
+        () => CWD,
+        (link) => seen.push(link)
+      );
+
+      const link = await new Promise<ILink>((resolve) =>
+        addon.provideLinks(2, (links) => resolve(links![0]!))
+      );
+      link.hover?.(new Event("mousemove") as unknown as MouseEvent, link.text);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]?.absolutePath).toBe("/home/user/project/src/generated/sprite.png");
+    });
+  });
+
   describe("path resolution", () => {
     it("should resolve relative paths against cwd", () => {
       return new Promise<void>((resolve) => {
