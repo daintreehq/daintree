@@ -979,6 +979,11 @@ export const CHANNELS = {
   /** Renderer reports plugin panel lifecycle transitions (mounted/hidden/trashed/removed) for worker delivery. */
   PLUGIN_REPORT_PANEL_LIFECYCLE: "plugin:report-panel-lifecycle",
   PLUGIN_AGENTS_GET: "plugin:agents-get",
+  PLUGIN_RECIPES_GET: "plugin:recipes-get",
+  /** Append one run timestamp to a plugin recipe's sidecar metadata (#11860). */
+  PLUGIN_RECIPE_RECORD_USE: "plugin:recipe-record-use",
+  /** Patch the user-owned half of a plugin recipe (empty-state pin, auto-assign). */
+  PLUGIN_RECIPE_METADATA_UPDATE: "plugin:recipe-metadata-update",
   PLUGIN_FORGE_PROVIDERS_GET: "plugin:forge-providers-get",
   PLUGIN_FILE_DECORATIONS_GET: "plugin:file-decorations-get",
   PLUGIN_WORKTREE_STATUS_GET: "plugin:worktree-status-get",

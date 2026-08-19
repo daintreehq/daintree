@@ -311,6 +311,63 @@ export interface SkillContribution {
 }
 
 /**
+ * One terminal in a `contributes.recipes` entry (#11860). The authorable subset
+ * of {@link RecipeTerminal}: the transient per-launch fields (`agentModelId`,
+ * `agentLaunchFlags`, `location`) are session state the recipe editor already
+ * strips on persist, so a manifest may not declare them. `type` accepts the
+ * built-in terminal kinds plus an agent id the SAME plugin contributes — a
+ * foreign plugin's agent id is dropped by the sanitizer at registration.
+ */
+export interface RecipeContributionTerminal {
+  type: string;
+  title?: string;
+  command?: string;
+  env?: Record<string, string>;
+  initialPrompt?: string;
+  args?: string;
+  devCommand?: string;
+  exitBehavior?: "keep" | "trash" | "remove";
+}
+
+/**
+ * One `contributes.recipes` entry (#11860). A recipe is a named multi-terminal
+ * launch layout the plugin ships; the host registers it under the qualified id
+ * `{pluginId}.{id}` and merges it into the recipe list as a plugin-owned tier
+ * available in every project.
+ *
+ * Terminals are declared inline rather than pointing at a shipped JSON file so
+ * the install-time confirmation can show what a recipe actually runs:
+ * `readArchiveManifest` reads only the manifest, never extracting the archive.
+ *
+ * Contributed content is immutable — the user customises by duplicating into a
+ * user-owned tier. `showInEmptyState` and `autoAssign` are DEFAULTS: a user
+ * override for either lives in the sidecar
+ * ({@link PluginRecipeMetadata}) and wins. Recipes carry no capability
+ * requirement, matching {@link SkillContribution} — the terminals they declare
+ * still pass the same content sanitizer every other recipe tier does, and a
+ * capability in an unsandboxed runtime would be a label rather than a gate.
+ */
+export interface RecipeContribution {
+  id: string;
+  name: string;
+  terminals: RecipeContributionTerminal[];
+  /** Default for the empty-state pin; a user pin/unpin overrides it. */
+  showInEmptyState?: boolean;
+  /**
+   * Default issue auto-assign behaviour; a user choice overrides it.
+   *
+   * Spelled out rather than importing `RecipeAutoAssign` from `./project.js`.
+   * This module is an entry point of the plugin SDK's bundled declarations, and
+   * a type-only import still widens that rollup's graph: pulling in `project.ts`
+   * drags `panel.ts` → `panelKindRegistry.ts` → `theme/terminal.ts` behind it,
+   * and the DTS build then fails on an `@xterm/xterm` type that module imports.
+   * The two stay in step because the registry assigns this straight onto
+   * `TerminalRecipe.autoAssign`, so any drift is a compile error there.
+   */
+  autoAssign?: "always" | "never" | "prompt";
+}
+
+/**
  * Per-capability scope binding that attenuates the compound-capability lattice
  * elevation in `PluginService.validateAndBuildActionDescriptor`. The lattice
  * elevates `effectiveDanger` to `"confirm"` when a plugin pairs a sensitive
@@ -559,6 +616,14 @@ export interface PluginManifest {
      * in `electron/services/plugin/PluginSettingsManager.ts`.
      */
     settings?: SettingDefinition[];
+    /**
+     * Plugin-contributed recipes (#11860) — named multi-terminal launch layouts
+     * merged into the recipe list as a plugin-owned, globally-available tier.
+     * Inert declarative content; no capability required. Content is immutable;
+     * user-owned frecency and preferences live in a sidecar keyed by the
+     * qualified id. Empty unless the plugin ships recipes.
+     */
+    recipes: RecipeContribution[];
   };
 }
 
@@ -858,6 +923,13 @@ export interface PluginArchiveManifestPreview {
   category: PluginCategoryId;
   authors: PluginAuthor[];
   capabilities: PluginCapability[];
+  /**
+   * Contributed recipes, disclosed by name because a recipe is executable
+   * content that ships with no capability to advertise it (#11860). `count` is
+   * the manifest's true total; `names` is the (clamped, sanitized) subset the
+   * dialog lists, so a manifest declaring dozens can't flood the surface.
+   */
+  recipes: { count: number; names: string[] };
 }
 
 /**

@@ -54,6 +54,7 @@ import { getPluginKeybindings } from "../../services/pluginKeybindingRegistry.js
 import { getPluginContextMenuItems } from "../../services/pluginContextMenuRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import type { AgentConfig } from "../../../shared/config/agentRegistry.js";
+import type { PluginRecipeMetadataPatch, TerminalRecipe } from "../../../shared/types/project.js";
 import {
   getRegisteredForgeProviders,
   type RegisteredForgeProvider,
@@ -740,6 +741,70 @@ async function handleAgentsGet(): Promise<Record<string, AgentConfig>> {
   return getPluginAgentRegistry();
 }
 
+const AUTO_ASSIGN_VALUES: ReadonlySet<string> = new Set(["always", "never", "prompt"]);
+
+function assertQualifiedRecipeId(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("recipeId must be a non-empty string");
+  }
+  return value;
+}
+
+/**
+ * Validate the preference patch in main rather than trusting the renderer's
+ * shape. `null` clears an override; an absent key is not part of the patch.
+ * Provenance is deliberately NOT accepted here — the handler resolves the
+ * owning plugin from the registry (#11860).
+ */
+function parseRecipeMetadataPatch(value: unknown): PluginRecipeMetadataPatch {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("updates must be an object");
+  }
+  const raw = value as Record<string, unknown>;
+  const patch: PluginRecipeMetadataPatch = {};
+  if ("showInEmptyState" in raw) {
+    const next = raw.showInEmptyState;
+    if (next !== null && typeof next !== "boolean") {
+      throw new Error("showInEmptyState must be a boolean or null");
+    }
+    patch.showInEmptyState = next;
+  }
+  if ("autoAssign" in raw) {
+    const next = raw.autoAssign;
+    if (next !== null && (typeof next !== "string" || !AUTO_ASSIGN_VALUES.has(next))) {
+      throw new Error("autoAssign must be one of always/never/prompt, or null");
+    }
+    patch.autoAssign = next as PluginRecipeMetadataPatch["autoAssign"];
+  }
+  return patch;
+}
+
+async function handleRecipesGet(): Promise<TerminalRecipe[]> {
+  await (await getPluginService()).waitForInit();
+  return (await getPluginService()).getPluginRecipes();
+}
+
+async function handleRecipeRecordUse(recipeId: string, timestamp: number): Promise<TerminalRecipe> {
+  const service = await getPluginService();
+  await service.waitForInit();
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    throw new Error("timestamp must be a positive finite number");
+  }
+  return service.recordPluginRecipeUse(assertQualifiedRecipeId(recipeId), timestamp);
+}
+
+async function handleRecipeMetadataUpdate(
+  recipeId: string,
+  updates: PluginRecipeMetadataPatch
+): Promise<TerminalRecipe> {
+  const service = await getPluginService();
+  await service.waitForInit();
+  return service.updatePluginRecipeMetadata(
+    assertQualifiedRecipeId(recipeId),
+    parseRecipeMetadataPatch(updates)
+  );
+}
+
 /**
  * Per-provider budget for a single `provideDecorations` call. A provider that
  * never settles its promise would otherwise hang the whole IPC invocation
@@ -1165,6 +1230,12 @@ export const pluginNamespace = defineIpcNamespace({
       { withContext: true }
     ),
     getAgents: op(PLUGIN_METHOD_CHANNELS.getAgents, handleAgentsGet),
+    getRecipes: op(PLUGIN_METHOD_CHANNELS.getRecipes, handleRecipesGet),
+    recordRecipeUse: op(PLUGIN_METHOD_CHANNELS.recordRecipeUse, handleRecipeRecordUse),
+    updateRecipeMetadata: op(
+      PLUGIN_METHOD_CHANNELS.updateRecipeMetadata,
+      handleRecipeMetadataUpdate
+    ),
     getForgeProviders: op(PLUGIN_METHOD_CHANNELS.getForgeProviders, handleForgeProvidersGet),
     getDecorations: op(PLUGIN_METHOD_CHANNELS.getDecorations, handleFileDecorationsGet),
     getWorktreeStatus: op(PLUGIN_METHOD_CHANNELS.getWorktreeStatus, handleWorktreeStatusGet),

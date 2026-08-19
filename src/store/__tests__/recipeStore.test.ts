@@ -16,6 +16,9 @@ const {
   deleteInRepoRecipeMock,
   exportRecipeToFileMock,
   importRecipeFromFileMock,
+  pluginGetRecipesMock,
+  pluginRecordUseMock,
+  pluginUpdateMetadataMock,
   notifyMock,
 } = vi.hoisted(() => ({
   addRecipeMock: vi.fn().mockResolvedValue(undefined),
@@ -33,6 +36,9 @@ const {
   deleteInRepoRecipeMock: vi.fn().mockResolvedValue(undefined),
   exportRecipeToFileMock: vi.fn().mockResolvedValue(true),
   importRecipeFromFileMock: vi.fn().mockResolvedValue(null),
+  pluginGetRecipesMock: vi.fn().mockResolvedValue([]),
+  pluginRecordUseMock: vi.fn().mockResolvedValue(undefined),
+  pluginUpdateMetadataMock: vi.fn(),
   notifyMock: vi.fn(),
 }));
 
@@ -63,6 +69,11 @@ vi.mock("@/clients", () => ({
     addRecipe: globalAddRecipeMock,
     updateRecipe: globalUpdateRecipeMock,
     deleteRecipe: globalDeleteRecipeMock,
+  },
+  pluginRecipesClient: {
+    getRecipes: pluginGetRecipesMock,
+    recordUse: pluginRecordUseMock,
+    updateMetadata: pluginUpdateMetadataMock,
   },
 }));
 
@@ -153,6 +164,14 @@ describe("recipeStore", () => {
     // hoisted default so each test starts from an empty agent-settings shape
     // instead of inheriting a prior test's mockResolvedValue.
     getAgentSettingsMock.mockResolvedValue({ agents: {} });
+    pluginRecordUseMock.mockResolvedValue(undefined);
+    pluginUpdateMetadataMock.mockImplementation(async (id: string) => ({
+      id,
+      name: "Plugin Recipe",
+      terminals: [{ type: "terminal" as const }],
+      createdAt: 0,
+      origin: { kind: "plugin" as const, pluginId: "acme.tools", contributionId: "deploy" },
+    }));
   });
 
   it("rejects malformed recipe json", async () => {
@@ -3001,6 +3020,147 @@ describe("recipeStore", () => {
       importRecipeFromFileMock.mockResolvedValueOnce(null);
       const result = await useRecipeStore.getState().importRecipeFromFile("proj-1");
       expect(result).toBe(false);
+    });
+  });
+
+  describe("plugin-contributed tier (#11860)", () => {
+    const pluginRecipe = (overrides: Record<string, unknown> = {}) => ({
+      id: "acme.tools.deploy",
+      name: "Deploy stack",
+      terminals: [{ type: "terminal" as const, command: "npm run dev" }],
+      createdAt: 0,
+      origin: { kind: "plugin" as const, pluginId: "acme.tools", contributionId: "deploy" },
+      ...overrides,
+    });
+
+    it("setPluginRecipes merges the tier into the rendered list", () => {
+      useRecipeStore.setState({
+        globalRecipes: [
+          { id: "g-1", name: "Global", terminals: [{ type: "terminal" as const }], createdAt: 1 },
+        ],
+      });
+      useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+      expect(useRecipeStore.getState().recipes.map((r) => r.id)).toEqual([
+        "g-1",
+        "acme.tools.deploy",
+      ]);
+    });
+
+    it("a project switch clears the user tiers but keeps plugin recipes", async () => {
+      useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+      useRecipeStore.setState({ currentProjectId: "proj-1" });
+      await useRecipeStore.getState().loadRecipes("proj-2");
+      expect(useRecipeStore.getState().pluginRecipes.map((r) => r.id)).toEqual([
+        "acme.tools.deploy",
+      ]);
+      expect(useRecipeStore.getState().recipes.map((r) => r.id)).toEqual(["acme.tools.deploy"]);
+    });
+
+    it("a failed load leaves the plugin tier standing", async () => {
+      useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+      globalGetRecipesMock.mockRejectedValueOnce(new Error("boom"));
+      getRecipesMock.mockRejectedValueOnce(new Error("boom"));
+      getInRepoRecipesMock.mockRejectedValueOnce(new Error("boom"));
+      await useRecipeStore.getState().loadRecipes("proj-1");
+      expect(useRecipeStore.getState().recipes.map((r) => r.id)).toContain("acme.tools.deploy");
+    });
+
+    it("strips a forged origin off recipes read from the user-owned stores", async () => {
+      // TerminalRecipeSchema is passthrough and these files are hand-editable, so
+      // an `origin` there is a forgery — honouring it would make the recipe
+      // undeletable and route its writes into the plugin sidecar.
+      globalGetRecipesMock.mockResolvedValueOnce([
+        {
+          id: "g-1",
+          name: "Impostor",
+          terminals: [{ type: "terminal" }],
+          createdAt: 1,
+          origin: { kind: "plugin", pluginId: "acme.tools", contributionId: "deploy" },
+        },
+      ]);
+      await useRecipeStore.getState().loadRecipes("proj-1");
+      expect(useRecipeStore.getState().globalRecipes[0]).not.toHaveProperty("origin");
+    });
+
+    it("a plugin recipe's frecency never reaches GlobalFileStore", async () => {
+      useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("acme.tools.deploy", "/tmp/wt", "wt-1", undefined);
+      expect(globalUpdateRecipeMock).not.toHaveBeenCalled();
+      expect(updateRecipeMock).not.toHaveBeenCalled();
+      expect(pluginRecordUseMock).toHaveBeenCalledWith("acme.tools.deploy", expect.any(Number));
+      // Only the timestamp crosses IPC — never a whole history array a second
+      // window may already have superseded.
+      expect(pluginRecordUseMock.mock.calls[0]).toHaveLength(2);
+    });
+
+    it("a failed frecency write does not fail the spawn", async () => {
+      useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+      pluginRecordUseMock.mockRejectedValueOnce(new Error("disk full"));
+      await expect(
+        useRecipeStore
+          .getState()
+          .runRecipeWithResults("acme.tools.deploy", "/tmp/wt", "wt-1", undefined)
+      ).resolves.toBeDefined();
+    });
+
+    it("routes an empty-state pin to the plugin sidecar, not the global store", async () => {
+      useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+      await useRecipeStore.getState().updateRecipe("acme.tools.deploy", { showInEmptyState: true });
+      expect(globalUpdateRecipeMock).not.toHaveBeenCalled();
+      expect(pluginUpdateMetadataMock).toHaveBeenCalledWith("acme.tools.deploy", {
+        showInEmptyState: true,
+      });
+    });
+
+    it("rolls the pin back when the sidecar write fails", async () => {
+      useRecipeStore.getState().setPluginRecipes([pluginRecipe({ showInEmptyState: false })]);
+      pluginUpdateMetadataMock.mockRejectedValueOnce(new Error("nope"));
+      await expect(
+        useRecipeStore.getState().updateRecipe("acme.tools.deploy", { showInEmptyState: true })
+      ).rejects.toThrow();
+      expect(useRecipeStore.getState().pluginRecipes[0]?.showInEmptyState).toBe(false);
+    });
+
+    it("rejects an edit to plugin-owned content", async () => {
+      useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+      await expect(
+        useRecipeStore.getState().updateRecipe("acme.tools.deploy", { name: "Mine now" })
+      ).rejects.toThrow(/can't be edited/i);
+      expect(pluginUpdateMetadataMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects deleting a plugin recipe and names the owning plugin", async () => {
+      useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+      await expect(useRecipeStore.getState().deleteRecipe("acme.tools.deploy")).rejects.toThrow(
+        /acme\.tools/
+      );
+      expect(globalDeleteRecipeMock).not.toHaveBeenCalled();
+    });
+
+    it("saveToRepo duplicates a plugin recipe into a user-owned copy without deleting the original", async () => {
+      useRecipeStore
+        .getState()
+        .setPluginRecipes([pluginRecipe({ lastUsedAt: 999, usageHistory: [999] })]);
+      useRecipeStore.setState({ currentProjectId: "proj-1" });
+      await useRecipeStore.getState().saveToRepo("acme.tools.deploy", true);
+
+      const [, promoted] = updateInRepoRecipeMock.mock.calls[0]!;
+      expect(promoted).not.toHaveProperty("origin");
+      expect(promoted.id).not.toBe("acme.tools.deploy");
+      expect(promoted.scope).toBe("inrepo");
+      // Plugin-coupled frecency belongs to the original, which keeps it.
+      expect(promoted.lastUsedAt).toBeUndefined();
+      // deleteOriginal is ignored — the original lives in the plugin manifest.
+      expect(globalDeleteRecipeMock).not.toHaveBeenCalled();
+      expect(useRecipeStore.getState().pluginRecipes).toHaveLength(1);
+    });
+
+    it("exports a plugin recipe as a plain user recipe", () => {
+      useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+      const json = useRecipeStore.getState().exportRecipe("acme.tools.deploy")!;
+      expect(JSON.parse(json)).not.toHaveProperty("origin");
     });
   });
 });

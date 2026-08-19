@@ -35,6 +35,7 @@ function makePlugin(overrides: {
         fileDecorationProviders: [],
         agents: [],
         processTools: [],
+        recipes: [],
       },
     },
     dir: `/plugins/${overrides.name}`,

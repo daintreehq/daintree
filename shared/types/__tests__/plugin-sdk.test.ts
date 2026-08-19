@@ -519,6 +519,7 @@ describe("plugin-sdk boundary", () => {
           fileDecorationProviders: [],
           agents: [],
           processTools: [],
+          recipes: [],
         },
       };
       expectTypeOf(manifest.name).toEqualTypeOf<string>();

@@ -3831,7 +3831,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "recipes",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List the saved recipes for the current project — named multi-terminal setups the user has configured. Use this to discover recipe ids before running one. It never fails, and it reports whether recipes are still loading: an empty list while loading means not read yet, not that the project has none.",
+    "description": "List the saved recipes for the current project — named multi-terminal setups the user has configured, plus any a plugin contributes. Use this to discover recipe ids before running one; each entry reports its origin. It never fails, and it reports whether recipes are still loading: an empty list while loading means not read yet, not that the project has none.",
     "examples": undefined,
     "id": "recipe.list",
     "keywords": undefined,

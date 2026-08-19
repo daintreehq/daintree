@@ -4371,6 +4371,55 @@ describe("workspace-bound external sessions (#11789)", () => {
       expect(deps.sessionStore.grantCache.getNativeGrant(grant.id)?.remainingUses).toBe(3);
     });
 
+    it("refuses a statically-safe action whose args elevate it to confirm (#11860)", async () => {
+      // `worktree.createWithRecipe` is on the external allowlist and declares
+      // `danger: "safe"`, so it clears the withheld set — but a call carrying a
+      // `recipeId` is elevated host-side and would raise a dialog in a view
+      // nobody is watching. The static withhold can't see that; the args can.
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockResolvedValue([
+            makeManifestEntry("terminal.list"),
+            makeManifestEntry("worktree.createWithRecipe"),
+          ]),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, {
+        name: "worktree.createWithRecipe",
+        arguments: { branchName: "feat/x", recipeId: "r1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain("CONFIRMATION_REQUIRED");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("still dispatches that action when the args name no recipe", async () => {
+      // The elevation is per-dispatch, so the refusal has to be too: gating the
+      // action id would block every plain worktree creation.
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockResolvedValue([
+            makeManifestEntry("terminal.list"),
+            makeManifestEntry("worktree.createWithRecipe"),
+          ]),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, {
+        name: "worktree.createWithRecipe",
+        arguments: { branchName: "feat/x" },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(deps.dispatchAction).toHaveBeenCalled();
+    });
+
     it("leaves the rest of the bound surface dispatchable", async () => {
       const deps = boundDeps();
       const server = createSessionServer(SESSION, deps);

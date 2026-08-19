@@ -5,6 +5,7 @@ import { getAllPluginToolbarButtonConfigs } from "../../../shared/config/toolbar
 import { getPluginKeybindings } from "../pluginKeybindingRegistry.js";
 import { getPluginContextMenuItems } from "../pluginContextMenuRegistry.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
+import { getPluginRecipes } from "./PluginRecipeRegistry.js";
 import type { PluginActionDescriptor } from "../../../shared/types/plugin.js";
 
 interface PluginContributionBroadcasterDeps {
@@ -66,6 +67,13 @@ export class PluginContributionBroadcaster {
   private agentsBroadcastPending = false;
   /** Mirrors {@link toolbarButtonsBroadcastComplete} for plugin agents. */
   private agentsBroadcastComplete = false;
+  /**
+   * Same coalescing rationale as {@link toolbarButtonsBroadcastPending}. Plugin
+   * recipes are mutated only from `loadPlugin()` / `unloadPlugin()`.
+   */
+  private recipesBroadcastPending = false;
+  /** Mirrors {@link toolbarButtonsBroadcastComplete} for plugin recipes. */
+  private recipesBroadcastComplete = false;
 
   constructor(deps: PluginContributionBroadcasterDeps) {
     this.deps = deps;
@@ -210,6 +218,32 @@ export class PluginContributionBroadcaster {
   }
 
   /**
+   * Same shape as {@link scheduleAgentsBroadcast}. Plugin recipes are mutated
+   * from `loadPlugin()` / `unloadPlugin()` and after a metadata write, all of
+   * which carry the full snapshot (#11860).
+   */
+  scheduleRecipesBroadcast(complete: boolean): void {
+    if (this.deps.isDisposed()) return;
+    if (complete) this.recipesBroadcastComplete = true;
+    if (this.recipesBroadcastPending) return;
+    this.recipesBroadcastPending = true;
+    queueMicrotask(() => {
+      this.recipesBroadcastPending = false;
+      const drained = this.recipesBroadcastComplete;
+      this.recipesBroadcastComplete = false;
+      if (this.deps.isDisposed()) return;
+      this.broadcastPluginRecipes(drained);
+    });
+  }
+
+  private broadcastPluginRecipes(complete: boolean): void {
+    broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+      name: "plugin:recipes-changed",
+      payload: { recipes: getPluginRecipes(), complete },
+    });
+  }
+
+  /**
    * Replay the current actions / panel-kinds / toolbar-button snapshots to a
    * single target webContents. Used by the cold-start view-ready hook so a
    * freshly-restored WebContentsView (post-LRU eviction or first cold load on
@@ -251,6 +285,10 @@ export class PluginContributionBroadcaster {
       {
         name: "plugin:agents-changed",
         payload: { agents: getPluginAgentRegistry(), complete: false },
+      },
+      {
+        name: "plugin:recipes-changed",
+        payload: { recipes: getPluginRecipes(), complete: false },
       },
     ];
     for (const event of events) {

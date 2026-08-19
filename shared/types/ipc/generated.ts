@@ -1134,6 +1134,18 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, request: import("../plugin.js").PluginPickPathRequest];
     result: string | null;
   };
+  "plugin:recipe-metadata-update": {
+    args: [recipeId: string, updates: import("../project.js").PluginRecipeMetadataPatch];
+    result: import("../project.js").TerminalRecipe;
+  };
+  "plugin:recipe-record-use": {
+    args: [recipeId: string, timestamp: number];
+    result: import("../project.js").TerminalRecipe;
+  };
+  "plugin:recipes-get": {
+    args: [];
+    result: import("../project.js").TerminalRecipe[];
+  };
   "plugin:report-panel-lifecycle": {
     args: [events: import("../plugin.js").PluginPanelLifecycleEvent[]];
     result: void;

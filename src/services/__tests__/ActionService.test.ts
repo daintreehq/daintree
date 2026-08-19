@@ -376,6 +376,97 @@ describe("ActionService", () => {
       expect(mockRun).not.toHaveBeenCalled();
     });
 
+    it("gates a statically-safe action when an agent dispatch carries a recipeId (#11860)", async () => {
+      // The composite worktree actions are legitimately `safe` on their own but
+      // spawn a recipe's terminals when the args name one, which is the gap
+      // `recipe.run`'s confirm tier used to have a documented way around.
+      const mockRun = vi.fn().mockResolvedValue(undefined);
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: z.object({ recipeId: z.string().optional() }).optional(),
+        run: mockRun,
+      });
+
+      const blocked = await service.dispatch(
+        "actions.list",
+        { recipeId: "recipe-1" },
+        { source: "agent" }
+      );
+      expect(blocked.ok).toBe(false);
+      if (!blocked.ok) expect(blocked.error.code).toBe("CONFIRMATION_REQUIRED");
+      // Rejected BEFORE run(), so no worktree was created and no issue fetched.
+      expect(mockRun).not.toHaveBeenCalled();
+
+      const approved = await service.dispatch(
+        "actions.list",
+        { recipeId: "recipe-1" },
+        { source: "agent", confirmed: true }
+      );
+      expect(approved.ok).toBe(true);
+      expect(mockRun).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the same action ungated for an agent dispatch that names no recipe (#11860)", async () => {
+      const mockRun = vi.fn().mockResolvedValue(undefined);
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: z.object({ recipeId: z.string().optional() }).optional(),
+        run: mockRun,
+      });
+
+      const result = await service.dispatch("actions.list", {}, { source: "agent" });
+      expect(result.ok).toBe(true);
+      expect(mockRun).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports the effective danger only when getDispatchMeta is given the dispatch (#11860)", async () => {
+      // The MCP bridge and dispatch() must agree: if the bridge read the static
+      // danger it would skip the modal, dispatch unconfirmed, and hand the agent
+      // a CONFIRMATION_REQUIRED it has no way to satisfy.
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: z.object({ recipeId: z.string().optional() }).optional(),
+        run: vi.fn().mockResolvedValue(undefined),
+      });
+
+      expect(service.getDispatchMeta("actions.list" as ActionId)?.danger).toBe("safe");
+      const elevated = service.getDispatchMeta("actions.list" as ActionId, {
+        source: "agent",
+        args: { recipeId: "recipe-1" },
+      });
+      expect(elevated?.danger).toBe("confirm");
+      // A statically-safe action has no rationale of its own, so the elevation
+      // supplies one rather than showing the dialog an unexplained gate.
+      expect(elevated?.dangerRationale).toBeTruthy();
+      expect(
+        service.getDispatchMeta("actions.list" as ActionId, {
+          source: "user",
+          args: { recipeId: "r" },
+        })?.danger
+      ).toBe("safe");
+    });
+
     it("returns RESTRICTED for a restricted action from a plugin source", async () => {
       const mockRun = vi.fn().mockResolvedValue(undefined);
       service.register({

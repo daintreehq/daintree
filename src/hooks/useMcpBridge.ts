@@ -11,6 +11,9 @@ import {
   buildGitRemoteOperationPreview,
   formatGitRemoteOperationPreviewLines,
 } from "@/components/Git/gitRemoteOperationPreview";
+import { formatRecipePreviewLines } from "@/components/TerminalRecipe/recipeConfirmPreview";
+import { readDispatchRecipeId } from "@/services/actions/effectiveDanger";
+import { MAX_AGENT_RECIPE_TERMINALS, useRecipeStore } from "@/store/recipeStore";
 import {
   resolveWorktreeLocation,
   type WorktreeLocationArgs,
@@ -37,6 +40,20 @@ const TIMEOUT_RESULT: ActionDispatchResult = {
   },
 };
 
+/**
+ * Of the gated actions that carry a `recipeId`, the ones that actually START
+ * the recipe's terminals. Purely a wording concern for the confirm preview:
+ * `recipe.delete` and `recipe.saveToRepo` are also gated and preview the same
+ * content, but telling the approver those terminals are about to run would be
+ * false. Getting this list wrong understates a dispatch's framing; it can never
+ * skip a gate, which `resolveEffectiveActionDanger` owns from the args alone.
+ */
+const RECIPE_SPAWNING_ACTIONS = new Set([
+  "recipe.run",
+  "worktree.createWithRecipe",
+  "workflow.startWorkOnIssue",
+]);
+
 const MCP_SPAWN_TAGGED_ACTIONS = new Set([
   "recipe.run",
   "terminal.duplicate",
@@ -60,13 +77,23 @@ function shouldTagMcpSpawn(actionId: string): boolean {
 export type McpConfirmPreviewTarget =
   | { kind: "worktreeDelete"; worktreeId: string }
   | { kind: "gitPush"; cwd: string }
-  | { kind: "gitPullRebase"; cwd: string };
+  | { kind: "gitPullRebase"; cwd: string }
+  /**
+   * `recipeId` is the id the CALLER named; the preview resolves it through
+   * `getRecipeById` and `resolvedRecipeId` records the winner that resolution
+   * picked, so the approved dispatch can be pinned to the recipe actually shown
+   * (#11860). `spawns` says whether this dispatch will actually START those
+   * terminals — `recipe.delete` and `recipe.saveToRepo` are gated and preview
+   * the same content, but describing it as "starts" would be a lie.
+   */
+  | { kind: "recipe"; recipeId: string; resolvedRecipeId: string; spawns: boolean };
 
 /** Section heading rendered above each kind's preview lines. */
 const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   worktreeDelete: "Working tree changes",
   gitPush: "Branch and local commits",
   gitPullRebase: "Branch and local commits",
+  recipe: "Recipe contents",
 };
 
 export function mcpConfirmPreviewTitle(target: McpConfirmPreviewTarget): string {
@@ -165,6 +192,22 @@ export function resolveMcpConfirmPreviewTarget(
     if (cwd === undefined || cwd.length === 0) return undefined;
     return actionId === "git.push" ? { kind: "gitPush", cwd } : { kind: "gitPullRebase", cwd };
   }
+  // Any dispatch carrying a recipe id — `recipe.run` and the two composites that
+  // reach the same effect — previews the terminals it would start. Keyed on the
+  // argument rather than an action allowlist so it can't drift out of step with
+  // `resolveEffectiveActionDanger`, which decides whether the modal opens at all.
+  const recipeId = readDispatchRecipeId(args);
+  if (recipeId !== undefined) {
+    // Resolve now, at request time: `getRecipeById` follows shadowing to the
+    // winner, and that winner is what `runRecipeWithResults` will run (#8725).
+    const resolved = useRecipeStore.getState().getRecipeById(recipeId);
+    return {
+      kind: "recipe",
+      recipeId,
+      resolvedRecipeId: resolved?.id ?? recipeId,
+      spawns: RECIPE_SPAWNING_ACTIONS.has(actionId),
+    };
+  }
   return undefined;
 }
 
@@ -179,6 +222,15 @@ export function resolveMcpConfirmPreviewTarget(
  * Exported for unit tests; the bridge is the only production caller.
  */
 export async function buildMcpConfirmPreview(target: McpConfirmPreviewTarget): Promise<string[]> {
+  if (target.kind === "recipe") {
+    // Renderer state, so no fetch — but re-read here rather than closing over
+    // the resolve-time recipe so the lines reflect the store at modal-open.
+    const recipe = useRecipeStore.getState().getRecipeById(target.resolvedRecipeId) ?? null;
+    return formatRecipePreviewLines(recipe, {
+      agentTerminalCap: MAX_AGENT_RECIPE_TERMINALS,
+      spawns: target.spawns,
+    });
+  }
   if (target.kind === "worktreeDelete") {
     try {
       const preview = await buildWorktreeDeletePreview(target.worktreeId);
@@ -222,6 +274,13 @@ export async function buildMcpConfirmPreview(target: McpConfirmPreviewTarget): P
  */
 function withPreviewedGitCwd(args: unknown, target: McpConfirmPreviewTarget | undefined): unknown {
   if (target === undefined || target.kind === "worktreeDelete") return args;
+  if (target.kind === "recipe") {
+    // Same rationale as the git cwd pin: the dispatch must act on the recipe the
+    // human saw. `getRecipeById` resolves a shadowed id to a different winner,
+    // and re-resolving after the modal could land on a different one.
+    if (args === null || typeof args !== "object" || Array.isArray(args)) return args;
+    return { ...args, recipeId: target.resolvedRecipeId };
+  }
   if (args === undefined) return { cwd: target.cwd };
   if (args === null || typeof args !== "object" || Array.isArray(args)) return args;
   return { ...args, cwd: target.cwd };
@@ -314,7 +373,15 @@ export function useMcpBridge(): void {
           let effectiveConfirmed = confirmed;
 
           if (effectiveConfirmed !== true) {
-            const definition = actionService.getDispatchMeta(actionId as ActionId);
+            // Args-aware: a statically-safe composite carrying a recipeId has
+            // an EFFECTIVE confirm tier that `ActionService.dispatch` will
+            // enforce. Reading the static danger here would skip the modal,
+            // dispatch unconfirmed, and hand the agent a CONFIRMATION_REQUIRED
+            // it has no way to satisfy (#11860).
+            const definition = actionService.getDispatchMeta(actionId as ActionId, {
+              source: "agent",
+              args,
+            });
             if (definition?.danger === "confirm") {
               inFlightConfirms.add(requestId);
               // Fetch the fresh preview OFF the critical path so the modal

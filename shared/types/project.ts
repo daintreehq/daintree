@@ -418,7 +418,7 @@ export interface TerminalRecipe {
   /** Timestamps of recent runs for frecency scoring (capped at 20 entries) */
   usageHistory?: number[];
   /** Controls whether the linked GitHub issue is auto-assigned during quick worktree creation */
-  autoAssign?: "always" | "never" | "prompt";
+  autoAssign?: RecipeAutoAssign;
   /** Set at merge time when this recipe is shadowed by a higher-tier recipe with the same name */
   shadowedBy?: string;
   /**
@@ -429,6 +429,69 @@ export interface TerminalRecipe {
    * {@link isInRepoRecipeId}.
    */
   scope?: "inrepo";
+  /**
+   * Where a recipe came from when it is not user-authored. Absent for every
+   * user-owned recipe (global, project-local, in-repo), which is what makes
+   * `projectId === undefined` a safe global inference only AFTER this field has
+   * been checked — a plugin recipe also carries no `projectId` and would
+   * otherwise route its writes into `GlobalFileStore` (#11860).
+   *
+   * Stamped exclusively by the main-process plugin recipe registry. Never
+   * derived by splitting {@link TerminalRecipe.id}: a plugin id is itself
+   * dotted (`publisher.name`), so the qualified id is ambiguous to a parser
+   * (#10109). Stripped from every disk-loaded user tier and from
+   * import/export, so a hand-edited `recipes.json` cannot impersonate a plugin.
+   */
+  origin?: PluginRecipeOrigin;
+}
+
+/** How a recipe's `autoAssign` behaviour is spelled everywhere it is carried. */
+export type RecipeAutoAssign = "always" | "never" | "prompt";
+
+/**
+ * Provenance for a plugin-contributed recipe (#11860). `pluginId` and
+ * `contributionId` are stored as real fields rather than recovered from the
+ * qualified id, which cannot be split unambiguously.
+ */
+export interface PluginRecipeOrigin {
+  kind: "plugin";
+  pluginId: string;
+  contributionId: string;
+}
+
+/** Narrows a recipe to one contributed by a plugin. */
+export function isPluginRecipe(
+  recipe: TerminalRecipe
+): recipe is TerminalRecipe & { origin: PluginRecipeOrigin } {
+  return recipe.origin?.kind === "plugin";
+}
+
+/**
+ * The user-owned half of a plugin recipe, kept in a sidecar rather than in the
+ * plugin's manifest: contributed content is immutable, but every run still
+ * writes frecency and the user can still pin one or change its auto-assign
+ * behaviour. An absent field means "use the manifest's declared default".
+ *
+ * `pluginId` and `contributionId` are stored explicitly so uninstall cleanup
+ * and reconciliation never have to parse the record's qualified-id key.
+ */
+export interface PluginRecipeMetadata {
+  pluginId: string;
+  contributionId: string;
+  lastUsedAt?: number;
+  usageHistory?: number[];
+  showInEmptyState?: boolean;
+  autoAssign?: RecipeAutoAssign;
+}
+
+/**
+ * The user-settable half of {@link PluginRecipeMetadata}. `null` clears the
+ * override and restores the manifest default; an absent key is not part of the
+ * patch at all.
+ */
+export interface PluginRecipeMetadataPatch {
+  showInEmptyState?: boolean | null;
+  autoAssign?: RecipeAutoAssign | null;
 }
 
 /**
@@ -450,7 +513,7 @@ export interface RecipeNameCollision {
 }
 
 /** Returns the effective autoAssign mode for a recipe, defaulting to "always" for legacy recipes */
-export function getAutoAssign(recipe: TerminalRecipe): "always" | "never" | "prompt" {
+export function getAutoAssign(recipe: TerminalRecipe): RecipeAutoAssign {
   return recipe.autoAssign ?? "always";
 }
 

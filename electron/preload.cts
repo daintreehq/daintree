@@ -3132,6 +3132,12 @@ function buildElectronApi(): ElectronAPI {
           complete: boolean;
         }) => void
       ) => _eventBusOn("plugin:agents-changed", callback),
+      onRecipesChanged: (
+        callback: (payload: {
+          recipes: import("../shared/types/project.js").TerminalRecipe[];
+          complete: boolean;
+        }) => void
+      ) => _eventBusOn("plugin:recipes-changed", callback),
       onToolbarButtonsChanged: (
         callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
       ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),
