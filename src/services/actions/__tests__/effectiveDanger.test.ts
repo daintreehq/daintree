@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { dispatchCarriesRecipeId, resolveEffectiveActionDanger } from "../effectiveDanger";
+import {
+  dispatchCarriesRecipeId,
+  readDispatchRecipeId,
+  resolveEffectiveActionDanger,
+} from "../effectiveDanger";
 
 describe("resolveEffectiveActionDanger (#11860)", () => {
   it("elevates a safe action to confirm when an agent names a recipe", () => {
@@ -30,7 +34,15 @@ describe("resolveEffectiveActionDanger (#11860)", () => {
   });
 });
 
-describe("dispatchCarriesRecipeId", () => {
+describe("readDispatchRecipeId / dispatchCarriesRecipeId", () => {
+  it("returns the id the gate and the preview will both act on", () => {
+    // One extraction point for both, so the dispatch that gets gated and the
+    // recipe that gets previewed can never be resolved by different rules.
+    expect(readDispatchRecipeId({ recipeId: "r1", branchName: "x" })).toBe("r1");
+    expect(readDispatchRecipeId({ branchName: "x" })).toBeUndefined();
+    expect(readDispatchRecipeId({ recipeId: "" })).toBeUndefined();
+  });
+
   it("accepts only a non-empty string id", () => {
     expect(dispatchCarriesRecipeId({ recipeId: "r1" })).toBe(true);
     expect(dispatchCarriesRecipeId({ recipeId: "" })).toBe(false);
@@ -48,7 +60,8 @@ describe("dispatchCarriesRecipeId", () => {
   it("still gates on a recipeId reached through the prototype chain", () => {
     // Fail-safe direction: an inherited id elevates to confirm rather than
     // slipping past. Under-gating is the failure that matters here.
-    const args = Object.create({ recipeId: "inherited" }) as Record<string, unknown>;
+    const proto: Record<string, unknown> = { recipeId: "inherited" };
+    const args: unknown = Object.create(proto);
     expect(dispatchCarriesRecipeId(args)).toBe(true);
   });
 });

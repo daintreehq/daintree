@@ -12,7 +12,7 @@ import {
   formatGitRemoteOperationPreviewLines,
 } from "@/components/Git/gitRemoteOperationPreview";
 import { formatRecipePreviewLines } from "@/components/TerminalRecipe/recipeConfirmPreview";
-import { dispatchCarriesRecipeId } from "@/services/actions/effectiveDanger";
+import { readDispatchRecipeId } from "@/services/actions/effectiveDanger";
 import { MAX_AGENT_RECIPE_TERMINALS, useRecipeStore } from "@/store/recipeStore";
 import {
   resolveWorktreeLocation,
@@ -196,8 +196,8 @@ export function resolveMcpConfirmPreviewTarget(
   // reach the same effect — previews the terminals it would start. Keyed on the
   // argument rather than an action allowlist so it can't drift out of step with
   // `resolveEffectiveActionDanger`, which decides whether the modal opens at all.
-  if (dispatchCarriesRecipeId(args)) {
-    const recipeId = (args as { recipeId: string }).recipeId;
+  const recipeId = readDispatchRecipeId(args);
+  if (recipeId !== undefined) {
     // Resolve now, at request time: `getRecipeById` follows shadowing to the
     // winner, and that winner is what `runRecipeWithResults` will run (#8725).
     const resolved = useRecipeStore.getState().getRecipeById(recipeId);
