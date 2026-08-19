@@ -1169,6 +1169,52 @@ describe("scratches in search results", () => {
  * actually happens, that it re-runs when the map moves, and that the open-time
  * pull (the only guaranteed hydration path) asks for scratch ids too.
  */
+describe("scratch activity in the search freeze — issue #11861", () => {
+  beforeEach(() => {
+    projectStatsState.stats = {};
+  });
+
+  it("ranks scratches on frozen activity, and holds it against a stats push", async () => {
+    // Scratches join the ranked list (#11466) but never a browse band, so
+    // search's freeze is the only one that covers them. A snapshot that
+    // captured projects alone would leave every scratch reading as quiet.
+    const seeded = seedScratches(2);
+    // Recency runs the other way, so the wait is the only thing that can put
+    // scratch-1 first.
+    expect(seeded[1]!.lastOpened).toBeGreaterThan(seeded[0]!.lastOpened);
+    projectStatsState.stats = {
+      "scratch-1": { activeAgentCount: 0, waitingAgentCount: 2, processCount: 0 },
+    };
+
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+    act(() => result.current.open("modal"));
+    act(() => result.current.setQuery("Spike"));
+
+    await waitFor(() => {
+      expect(result.current.results.map((row) => row.id)).toEqual(["scratch-1", "scratch-2"]);
+    });
+
+    // The wait moves to the other scratch mid-read; the order does not.
+    act(() => {
+      projectStatsState.stats = {
+        "scratch-2": { activeAgentCount: 0, waitingAgentCount: 2, processCount: 0 },
+      };
+      rerender();
+    });
+    expect(result.current.results.map((row) => row.id)).toEqual(["scratch-1", "scratch-2"]);
+    // The counts on the rows are still live.
+    expect(result.current.results.find((row) => row.id === "scratch-2")?.waitingAgentCount).toBe(2);
+
+    // Reopening adopts what is true now.
+    act(() => result.current.close());
+    act(() => result.current.open("modal"));
+    act(() => result.current.setQuery("Spike"));
+    await waitFor(() => {
+      expect(result.current.results.map((row) => row.id)).toEqual(["scratch-2", "scratch-1"]);
+    });
+  });
+});
+
 describe("scratch agent-status join", () => {
   // The stats fixture is module-scoped and shared with the suites above, so it
   // has to be cleared per-spec or a seeded map leaks into the next assertion.
