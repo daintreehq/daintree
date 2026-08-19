@@ -152,14 +152,19 @@ export class PluginRecipeMetadataStore {
    * than accepting a whole array from a renderer, so two windows running the
    * same recipe at once can't have one overwrite the other's history with its
    * own stale copy.
+   *
+   * Resolves `null` when nothing was recorded — an `inert` store (no resolvable
+   * global config dir) or a `readOnly` one (file written by a newer build) both
+   * skip the updater entirely, and reporting a record that was never persisted
+   * would be a lie the caller could act on.
    */
   async recordUse(
     qualifiedId: string,
     pluginId: string,
     contributionId: string,
     timestamp: number
-  ): Promise<PluginRecipeMetadata> {
-    let result!: PluginRecipeMetadata;
+  ): Promise<PluginRecipeMetadata | null> {
+    let result: PluginRecipeMetadata | null = null;
     await this.enqueue(async (current) => {
       const existing = current[qualifiedId];
       const history = [...(existing?.usageHistory ?? []), timestamp].slice(

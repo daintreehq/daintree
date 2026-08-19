@@ -156,6 +156,11 @@ export const UNBOUND_SESSION_SURFACE: SessionSurfacePolicy = { workspaceBound: f
  * so a future confirm-gated addition to `MCP_EXTERNAL_TIER_TOOLS` is covered the
  * day it lands — the drift a second curated allowlist would have guaranteed.
  *
+ * Covers only what the manifest declares statically. Confirmation that is
+ * elevated per-dispatch from the ARGUMENTS (#11860) is invisible here, because
+ * discovery has no args to read; `sessionServer`'s bound-external guard refuses
+ * those calls beside this one, where the args are in hand.
+ *
  * Keyed on external tier AND bound, never on "this session has a renderer
  * route": the Daintree Assistant is pinned and carries `recipe.run` in its own
  * tier allowlist, so a blanket "routed sessions can't confirm" rule would

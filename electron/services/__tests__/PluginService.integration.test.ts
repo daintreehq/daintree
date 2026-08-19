@@ -2257,7 +2257,15 @@ describe("PluginService integration — recipe contributions (issue #11860)", ()
       version: "1.0.0",
       capabilities: ["agent:register"],
       contributes: {
-        agents: [{ id: "acme-runner", name: "Acme Runner", command: "acme-runner" }],
+        agents: [
+          {
+            id: "acme-runner",
+            name: "Acme Runner",
+            command: "acme-runner",
+            iconId: "eye",
+            color: "#00aaff",
+          },
+        ],
         recipes: [
           {
             id: "mixed",

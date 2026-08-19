@@ -14,6 +14,7 @@ import {
   McpError,
   ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
+import { dispatchCarriesRecipeId } from "../../../shared/utils/dispatchRecipeId.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
@@ -768,13 +769,31 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
       }
 
-      if (withheldIds.has(actionId)) {
-        const message =
-          `Action '${actionId}' requires confirmation, and this MCP session is bound to workspace ` +
+      // A dispatch can need confirmation for either of two reasons, and neither
+      // is satisfiable here. The first is the manifest's own `danger:
+      // "confirm"`, collected into `withheldIds` above. The second is
+      // args-conditional (#11860): the host elevates any agent-sourced dispatch
+      // carrying a `recipeId` to `"confirm"`, so a statically-`safe` composite
+      // like `worktree.createWithRecipe` clears the withheld set and would then
+      // raise the very dialog this guard exists to avoid. Read through the same
+      // extraction point the elevation uses, so the refusal and the elevation
+      // can never disagree about what names a recipe.
+      const boundConfirmRefusal = withheldIds.has(actionId)
+        ? `Action '${actionId}' requires confirmation, and this MCP session is bound to workspace ` +
           `'${workspaceBinding?.workspaceId}', which runs in the background with no one ` +
           `watching it to approve the dialog. The action was not run. Confirm-gated actions are not part ` +
           `of a workspace-bound session's tool surface — run this one from Daintree, or connect without a ` +
-          `workspace binding.`;
+          `workspace binding.`
+        : dispatchCarriesRecipeId(args)
+          ? `Action '${actionId}' was called with a 'recipeId', so it would start that recipe's ` +
+            `terminals and requires confirmation. This MCP session is bound to workspace ` +
+            `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
+            `to approve the dialog. The action was not run — call it without a 'recipeId', run the ` +
+            `recipe from Daintree, or connect without a workspace binding.`
+          : undefined;
+
+      if (boundConfirmRefusal !== undefined) {
+        const message = boundConfirmRefusal;
         const value: import("../../../shared/types/actions.js").ActionDispatchResult = {
           ok: false,
           error: {
