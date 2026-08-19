@@ -244,11 +244,14 @@ describe("FileLinksAddon directory links", () => {
       // the same staleness checks the success branch does — a reply that only
       // drops its directory links would still paint a file link naming the
       // path the line used to carry.
-      const rows = ["src/generated holds src/renders/", "a.png"];
+      // The hovered row carries a token that reads as a whole path on its own,
+      // so a reply that skipped the checks would ship a link to `.../a.ts`
+      // while the buffer now says something else entirely.
+      const rows = ["src/generated holds src/renders/a.ts", "x"];
       const addon = new FileLinksAddon(makeTerminal(rows), () => root);
       const callback = vi.fn();
       addon.provideLinks(1, callback);
-      rows[1] = "b.png";
+      rows[1] = "y";
       if (outcome === "resolve") stat.resolve(["directory"]);
       else stat.reject(new Error("view evicted"));
       await vi.waitFor(() => expect(callback).toHaveBeenCalled());
