@@ -157,9 +157,9 @@ interface LogicalLine {
   startRow: number;
   /** Where each row's text begins in `text`, indexed from `startRow`. */
   rowOffsets: number[];
-  /** The budget, not a real line start, ended the window — `^` is a lie here. */
+  /** No real line start ended the window — `^` is a lie at `text`'s start. */
   clippedStart: boolean;
-  /** The budget, not a real line end, ended the window — `$` is a lie here. */
+  /** No real line end ended the window — `$` is a lie at `text`'s end. */
   clippedEnd: boolean;
 }
 
@@ -216,19 +216,36 @@ function projectToRow(
   return [Math.max(0, localStart), Math.min(rowLength, localEnd)];
 }
 
+/** Whether any cell between `from` and `to` is a space. */
+function hasSpaceIn(text: string, from: number, to: number): boolean {
+  for (let index = from; index < to; index++) {
+    if (text.charCodeAt(index) === 32) return true;
+  }
+  return false;
+}
+
 /**
- * Whether a match sits against an edge the rejoin budget invented rather than
- * a real line boundary. The regexes' `^`/`$` read that cutoff as a token
- * boundary — the same lie a row edge tells — so a token touching one can't be
- * trusted to be whole. Callers claim it anyway (claiming only ever suppresses
- * links) and simply never link it. A token lying entirely outside the window
- * stays invisible; bounding the rejoin is what makes hover affordable, and
- * that needs a logical line past 2048 columns to reach.
+ * Whether a match sits inside a token the window's edge may have cut in half.
+ *
+ * A clipped edge is not a line boundary — the rejoin budget or a scrollback
+ * eviction put it there — so the regexes' `^`/`$` lie about it. So does a
+ * boundary CHARACTER that can appear mid-token: `(` is legal inside a file
+ * URL, which is exactly how `file:///tmp/(src/foo.ts` offers `src/foo.ts` as a
+ * bare path. Once the scheme has been cut away there is nothing left to claim
+ * that span, so matching on `startIndex === 0` alone would let the fragment
+ * through. Only a real space between the cut and the match proves the match's
+ * own token began after it — and a space is the only whitespace a row can
+ * translate to, since xterm stores tabs as cells and pads empty ones with it.
+ *
+ * Callers claim a rejected match anyway; claiming only ever suppresses links.
+ * A token lying entirely outside the window stays invisible: bounding the
+ * rejoin is what makes hover affordable, and reaching that bound needs a
+ * logical line past 2048 columns.
  */
 function touchesClippedEdge(logical: LogicalLine, startIndex: number, endIndex: number): boolean {
   return (
-    (logical.clippedStart && startIndex === 0) ||
-    (logical.clippedEnd && endIndex === logical.text.length)
+    (logical.clippedStart && !hasSpaceIn(logical.text, 0, startIndex)) ||
+    (logical.clippedEnd && !hasSpaceIn(logical.text, endIndex, logical.text.length))
   );
 }
 
@@ -559,8 +576,10 @@ export class FileLinksAddon implements ILinkProvider {
    * rather than starting at the logical line's first row: a run longer than
    * the budget would otherwise stop before reaching the hovered row, leaving
    * it unclaimed and its characters free for the bare-path pass to mis-link.
-   * Whichever end the budget cuts is reported as clipped, because a match
-   * touching an artificial edge can't be trusted to be whole.
+   * An end the budget cuts is reported as clipped, and so is a start that ran
+   * out of buffer while the topmost row still claimed to continue something:
+   * either way the edge is artificial, and a match against one can't be
+   * trusted to be whole.
    */
   private _readLogicalLine(rowIndex: number): LogicalLine | null {
     const buffer = this._terminal.buffer.active;

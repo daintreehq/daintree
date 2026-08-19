@@ -736,6 +736,14 @@ describe("FileLinksAddon", () => {
       ).toBeUndefined();
     });
 
+    it("distrusts a match a mid-token boundary alone separates from a clipped edge", async () => {
+      // What survived of `file:///tmp/(src/foo.ts` after eviction. `(` is legal
+      // inside a file URL and is also FILE_PATH_REGEX's boundary character, so
+      // it is no proof that `src/foo.ts` is a whole token — and with the scheme
+      // gone there is no URL left to claim the span and shield it.
+      expect(await linksForRows(["tmp/(src/foo.ts done"], 0, { wrapped: [true] })).toBeUndefined();
+    });
+
     it("spans a path that wrapped across three rows", async () => {
       const rows = ["built src/components/Term", "inal/inputEditorExtensions/f", "ileChip.ts ok"];
       for (const hoveredRow of [0, 1, 2]) {
