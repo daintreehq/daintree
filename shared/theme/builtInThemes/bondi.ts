@@ -186,8 +186,12 @@ export const theme: BuiltInThemeSource = {
     "search-selected-result-border": "rgba(35,94,150,0.34)",
     "search-selected-result-icon": "#235E96",
     // Two-layer contact+spread: the engine "light" single penumbra has no
-    // contact edge on a near-white field.
-    "shadow-ambient": "0 1px 2px rgba(43,38,31,0.10), 0 6px 16px rgba(43,38,31,0.10)",
+    // contact edge on a near-white field. Deepened because panels sit on the
+    // cream gutter with only ~0.04 OKLab lightness between them — the dark
+    // themes get 0.074 plus a border that reads at 2.6:1 against their grid,
+    // and on light the way to make up that difference is elevation, not a
+    // heavier outline (border-default also paints every input and divider).
+    "shadow-ambient": "0 1px 2px rgba(43,38,31,0.17), 0 8px 20px rgba(43,38,31,0.13)",
     // Dialogs sit a full z-tier above menus/popovers.
     "shadow-dialog": "0 2px 6px rgba(43,38,31,0.10), 0 24px 60px rgba(43,38,31,0.18)",
     "shadow-floating": "0 1px 3px rgba(43,38,31,0.12), 0 12px 32px rgba(43,38,31,0.14)",
