@@ -312,6 +312,11 @@ export const SEARCH_QUERY = `
         endCursor
       }
       nodes {
+        # GitHub's search API has no PR-only type - is:pr and is:issue are
+        # query text, and a caller-supplied fragment containing OR can widen
+        # the result set past them. The discriminator lets each caller drop the
+        # node kind it did not ask for instead of mapping it anyway.
+        __typename
         ... on Issue {
           number
           title

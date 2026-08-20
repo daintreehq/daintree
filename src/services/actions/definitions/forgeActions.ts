@@ -129,16 +129,23 @@ const ForgeListOptionsSchema = ForgeListPagingSchema.extend({
 }).strict();
 
 // PR listing adds `merged` to the state filter — pull requests have a merged
-// state that issues don't. `search` is absent on purpose: no provider on the
-// roster routes PR listing through a search API, so accepting the key would
-// silently return an unfiltered page. Strict mode turns that into an error
-// instead; re-admitting the key once a provider can honor it only widens the
-// schema, which is non-breaking.
+// state that issues don't. `search` was absent here until a provider could
+// honor it (#11897); the GitHub provider now routes PR listing through the
+// same search API the issue path uses, so the key is admitted rather than
+// rejected. The dialect differs from the issue one — PR state is expressed
+// with `is:` qualifiers, since GitHub's `state:` only accepts open/closed for
+// pull requests — but the fragment is passed through unparsed either way.
 const ForgePRListOptionsSchema = ForgeListPagingSchema.extend({
   state: z
     .enum(["open", "closed", "merged", "all"])
     .optional()
     .describe("State filter (default: open)"),
+  search: z
+    .string()
+    .optional()
+    .describe(
+      "Provider-native query fragment — NOT a plain-text filter. The dialect is the active provider's own pull-request search, which typically supports negation and PR-specific qualifiers: 'is:draft -label:wip'. It is trimmed and appended after the generated repo/type/state/sort qualifiers, and truncated to the provider's query-length cap. Routes via the provider's search API, which caps result depth."
+    ),
 }).strict();
 
 // A forge label, as both the write actions and the issue result describe it.
@@ -760,7 +767,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listPRs",
       title: "List Pull Requests",
       description:
-        "List repository pull requests from the active forge provider, one page at a time. Use this to discover or filter PRs; use the issue listing for issues, and the single-PR lookup when the number is already known. There is no text search here — no provider on the roster can query PRs, so asking for one is rejected rather than quietly returning an unfiltered page. Summary results keep responses small, and bypassing the cache spends a live provider round trip.",
+        "List repository pull requests from the active forge provider, one page at a time. Use this to discover or filter PRs; use the issue listing for issues, and the single-PR lookup when the number is already known. Search takes a provider-native query fragment rather than plain text and routes through the provider's search API, which isn't served from the list cache that pagination uses. Summary results keep responses small, and bypassing the cache spends a live provider round trip.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -768,11 +775,12 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       argsSchema: ForgePRListOptionsSchema,
       resultSchema: ForgePRPageResultSchema,
       run: async (
-        { state, cursor, perPage, sort, direction, bypassCache, view, ...location },
+        { search, state, cursor, perPage, sort, direction, bypassCache, view, ...location },
         ctx: ActionContext
       ) => {
         const resolvedCwd = requireWorktreePath(location, ctx);
         const page = await forgeClient.listPRs(resolvedCwd, {
+          search,
           state,
           cursor,
           perPage,
