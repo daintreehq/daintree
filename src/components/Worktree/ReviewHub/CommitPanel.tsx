@@ -578,7 +578,12 @@ export function CommitPanel({
                 aria-disabled={!canCommit || isBusy || undefined}
                 className={cn(
                   "flex-1",
-                  "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                  // Fading a chromatic CTA to 50% produces a dusty slab of the
+                  // accent that still dominates the dialog, and drops the
+                  // label to ~2.1:1 in every light theme. Neutral disabled
+                  // surface + muted ink instead.
+                  "aria-disabled:bg-surface-inset aria-disabled:text-text-muted",
+                  "aria-disabled:shadow-none aria-disabled:cursor-not-allowed"
                 )}
               >
                 {isCommitting ? (

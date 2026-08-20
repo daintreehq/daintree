@@ -12,7 +12,8 @@ export const theme: BuiltInThemeSource = {
     // One cream family, hue 81. The lightness of every tier is deliberately
     // unchanged from the theme this replaces — only hue and chroma move
     // (94 -> 81, grid C 0.019 -> 0.027), so the app gets warmer without getting
-    // darker and body-text contrast is preserved to within 0.01 everywhere.
+    // darker. Body text gains on canvas (+0.085) and panel (+0.048); the worst
+    // case anywhere is the sidebar at -0.002, which is nothing.
     // Chroma is also carried further up the ladder than before (panel 0.0090 vs
     // 0.0067) so the warmth survives into the content tiers instead of fading to
     // neutral white; `elevated` stays pure white because the top tier's job is
@@ -34,13 +35,14 @@ export const theme: BuiltInThemeSource = {
     },
     text: {
       // Cool ink against warm paper — the counterpoint that stops cream from
-      // going sepia. muted ≥ 4.9:1 on every surface.
+      // going sepia. muted bottoms out at 4.81:1 on the grid, 5.89:1 on canvas.
       primary: "#1C2028",
       secondary: "#454D56",
       muted: "#555B62",
       inverse: "#FDFDFE",
     },
-    // Deepened from the 1.59:1-on-white it had been: on a light theme the border
+    // Deepened from 1.56:1 on white (the long-shipped value was 1.59:1): on a
+    // light theme the border
     // is the main definition channel, and a hairline that faint let panel
     // headers and controls dissolve into the surfaces behind them.
     border: "#CFC7B8",
@@ -72,8 +74,10 @@ export const theme: BuiltInThemeSource = {
     // Warm ink: a cool overlay tint reads as grime on the cream field.
     overlayTint: "#322E26",
     terminal: {
-      // Deep water rather than slate — the ANSI ramp gains margin on every
-      // slot against it (worst dL 0.296 vs 0.285 on the old background).
+      // Deep water rather than slate. Every AUDITED ANSI slot gains margin
+      // against it (worst dL 0.296 vs 0.285 on the old background). Derived
+      // `terminal-black` moves the other way (0.0186 -> 0.0078) but the
+      // terminal audit excludes it by design.
       background: "#16242B",
       foreground: "#C8D0D9",
       // 3.47:1 on the terminal background.
@@ -132,11 +136,13 @@ export const theme: BuiltInThemeSource = {
     // Alpha baked into the tile — the token replaces the engine value wholesale.
     // `--color-category-*-text` is the base mixed 85% toward text-primary and
     // painted on a 12-20% tint of the same base (src/index.css). Five of the
-    // twelve engine defaults land at 3.97-4.36:1 on that pill — under AA for
-    // small labels — and orange clears AA at 4.55 but sits on the line. The
-    // contrast matrix skips all of them because their values are oklch().
-    // These six are the darkest lightness clearing 4.55:1 in BOTH the
-    // canvas/12% and elevated/20% compositions; the other six already pass.
+    // twelve engine defaults land at 4.09-4.49:1 on that pill (green 4.093,
+    // cyan 4.178, teal 4.192, amber 4.331, blue 4.494) — under AA for small
+    // labels. Orange already cleared at 4.668 but is re-cut with them to keep
+    // the family even. The contrast matrix skips all twelve because their
+    // values are oklch(). These are darkened just far enough to clear 4.55:1
+    // in BOTH the canvas/12% and elevated/20% compositions, and now measure
+    // 4.62-5.33:1; the other six already passed.
     "category-blue": "oklch(0.53 0.14 242)",
     "category-cyan": "oklch(0.52 0.11 198)",
     "category-green": "oklch(0.5 0.14 155)",
@@ -207,7 +213,7 @@ export const theme: BuiltInThemeSource = {
     // Placeholders render on more than the input surface — real consumers also
     // sit on the canvas, sidebar and grid. The previous 0.60 scored 4.10-4.36:1
     // there; 0.62 still missed on three of six. 0.66 is the first value that
-    // clears AA on every background it actually paints on (4.57-5.27:1). The
+    // clears AA on every background it actually paints on (4.54-5.27:1). The
     // contrast matrix only enforces 3:1 here, so this passed silently.
     "text-placeholder": "rgba(28,32,40,0.66)",
   },
@@ -217,10 +223,13 @@ export const theme: BuiltInThemeSource = {
     // Lifts to white; the accent hairline border fallback stays as the one
     // signal, matching the worktree-card white-plus-rail idiom.
     "dock-item-bg-active": "#FFFFFF",
-    // Registry format guard: shadow-color channels, alpha ≥ 0.25.
-    "dock-shadow": "0 -2px 8px rgb(from var(--theme-shadow-color) r g b / 0.25)",
+    // Registry format guard: shadow-color channels, alpha >= 0.25 — so the
+    // weight has to come out of the geometry, not the alpha. At -2px/8px this
+    // threw a broad dark band up the shell, heavier than anything else in the
+    // chrome; -1px/5px keeps the contact edge and drops the halo.
+    "dock-shadow": "0 -1px 5px rgb(from var(--theme-shadow-color) r g b / 0.25)",
     // Panel title bars sit clearly between the grid gutter and the panel body
-    // (dL 0.043 above the gutter, 0.053 below it). They previously landed at the
+    // (dL 0.042 above the gutter, 0.055 below it). They previously landed at the
     // same lightness as the gutter, so an unfocused pane's cap dissolved into
     // the grid behind it and the panel lost its top edge. The focused pane's cap
     // goes all the way to white.
@@ -264,9 +273,11 @@ export const theme: BuiltInThemeSource = {
     // Scope pill elevates to white on the tinted settings sidebar.
     "settings-scope-bg": "#FFFFFF",
     "settings-sidebar-bg": "rgba(242,233,218,0.60)",
-    // Composited settings-sidebar-bg over the shell (#F4EFE6 is the result over
-    // white, which is not what it sits on).
-    "settings-sidebar-scroll-fade": "#F7F2E9",
+    // The 60% sidebar wash composited over the shell it actually sits on,
+    // which is `.settings-shell` = surface-panel (#FBF8F2), NOT white. The
+    // over-white result is #F7F2E9, and using it left the fade lighter than
+    // the sidebar it exists to erase.
+    "settings-sidebar-scroll-fade": "#F6EFE4",
     "sidebar-action-hover-bg": "rgba(58,48,30,0.05)",
     // idle < hover < selected; only hover < selected is test-enforced, the rest
     // is held by hand. Contact shadow only, no ring —
@@ -282,9 +293,13 @@ export const theme: BuiltInThemeSource = {
     "toolbar-control-hover-shadow": "none",
     "toolbar-divider": "rgba(207,199,184,0.7)",
     "toolbar-pill-radius": "0.5rem",
-    // Pills sit lighter than the chrome strip (raised, like all content).
+    // Pills sit lighter than the chrome strip (raised, like all content). The
+    // base has to out-run this pill's own two washes: at #F6F0E7 the composed
+    // gradient landed at L 0.9453 against a strip at L 0.9453 — zero lift,
+    // while the sibling stats pill sat 0.012 above. #F9F4EC composes back to
+    // 0.9568/0.9571, level with stats again.
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(245,184,20,0.07), rgba(28,32,40,0.02)), #F6F0E7",
+      "linear-gradient(180deg, rgba(245,184,20,0.07), rgba(28,32,40,0.02)), #F9F4EC",
     "toolbar-project-border": "rgba(207,199,184,0.75)",
     "toolbar-project-chip-bg": "rgba(28,32,40,0.04)",
     "toolbar-project-chip-border": "rgba(207,199,184,0.75)",
