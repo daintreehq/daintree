@@ -531,6 +531,17 @@ export interface AgentConfig {
   iconId: string;
   /** Available models for per-panel model selection at launch time */
   models?: AgentModelConfig[];
+  /**
+   * Marks {@link models} as the authoritative set this CLI accepts, not just an
+   * offline fallback. `AgentModelCatalogService` then lets the remote
+   * models.dev catalog enrich these entries (names, context windows) but never
+   * contribute IDs of its own, because models.dev groups by *provider* — every
+   * model OpenAI or Anthropic publishes — not by what the CLI's `--model` flag
+   * takes. Leave unset for agents whose list is a partial seed and should keep
+   * growing from remote discovery. A live CLI-derived catalog (Codex's
+   * `debug models --bundled`) still outranks a curated list.
+   */
+  curatedModels?: boolean;
   supportsContextInjection: boolean;
   /**
    * Per-concern wiring shape for the Daintree assistant overlay. Replaces the

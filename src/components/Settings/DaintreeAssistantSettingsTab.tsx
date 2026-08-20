@@ -41,6 +41,7 @@ import { useDebounce } from "@/hooks/useDebounce";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
+import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
 import type { AgentModelConfig } from "@shared/config/agentRegistry";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
@@ -154,6 +155,81 @@ const HIBERNATE_OPTIONS = [
   { value: "120", label: "2 hours" },
 ];
 
+interface BypassCopy {
+  title: string;
+  subtitle: string;
+  ariaLabel: string;
+  warning: string;
+}
+
+const TIER_IS_LAST_SAFEGUARD =
+  "The capability tier above is the only remaining safeguard for Daintree actions.";
+
+/**
+ * Per-agent wording for the one stored `bypassPermissions` preference. The
+ * generic template below is accurate for a plain confirmation gate, but
+ * understates any agent whose flag gives up more than that — Codex drops its
+ * sandbox alongside its approvals — and understating the blast radius is the
+ * same failure as labelling every agent with Claude's flag.
+ */
+const BYPASS_COPY: Record<string, Omit<BypassCopy, "subtitle"> & { effect: string }> = {
+  claude: {
+    title: "Bypass Claude permission prompts",
+    effect: "Skip Claude's per-tool confirmation gate",
+    ariaLabel: "Bypass Claude permission prompts during help sessions",
+    warning: `With this on, Claude's permission gate is bypassed for all tools — built-in (Bash, Write) and MCP. ${TIER_IS_LAST_SAFEGUARD}`,
+  },
+  codex: {
+    title: "Bypass Codex approvals and sandbox",
+    effect: "Skip Codex's approval prompts and run tools unsandboxed",
+    ariaLabel: "Bypass Codex approvals and sandbox during help sessions",
+    warning: `With this on, Codex runs every tool without approval and outside its sandbox, so it reaches anywhere the process can. ${TIER_IS_LAST_SAFEGUARD}`,
+  },
+};
+
+/**
+ * What "bypass permissions" means for the selected agent, or `null` when the
+ * agent has no bypass mechanism and the control should stay hidden.
+ *
+ * The flag always comes from `DEFAULT_DANGEROUS_ARGS` — the same map the launch
+ * path appends from (`electron/ipc/handlers/terminal/lifecycle.ts`) — so the
+ * subtitle can't drift from what actually reaches the command line.
+ */
+function getBypassCopy(agentId: string | null): BypassCopy | null {
+  if (!agentId) return null;
+
+  // The assistant has no CLI flag: bypass skips its own confirm sheet via
+  // DAINTREE_ASSISTANT_AUTO_APPROVE, which is why it carries no
+  // DEFAULT_DANGEROUS_ARGS entry and declares `permissionBypass: false`.
+  if (agentId === "daintree-assistant") {
+    return {
+      title: "Auto-approve assistant actions",
+      subtitle: "Skip the assistant's own per-action confirmation sheet",
+      ariaLabel: "Auto-approve Daintree Assistant actions during help sessions",
+      warning: `With this on, the assistant acts without asking — no confirmation sheet for anything it does. ${TIER_IS_LAST_SAFEGUARD}`,
+    };
+  }
+
+  const flag = DEFAULT_DANGEROUS_ARGS[agentId];
+  const config = getAgentConfig(agentId);
+  if (!flag || config?.supports === false || config?.supports?.permissionBypass !== true) {
+    return null;
+  }
+
+  const agentName = config?.name ?? agentId;
+  const known = BYPASS_COPY[agentId];
+  if (known) {
+    const { effect, ...rest } = known;
+    return { ...rest, subtitle: `${effect} (passes ${flag})` };
+  }
+  return {
+    title: `Bypass ${agentName} permission prompts`,
+    subtitle: `Skip ${agentName}'s confirmation gate (passes ${flag})`,
+    ariaLabel: `Bypass ${agentName} permission prompts during help sessions`,
+    warning: `With this on, ${agentName} runs every tool without asking. ${TIER_IS_LAST_SAFEGUARD}`,
+  };
+}
+
 export function DaintreeAssistantSettingsTab() {
   const [settings, setSettings] = useState<HelpAssistantSettings>(DEFAULT_SETTINGS);
   const [mcpStatus, setMcpStatus] = useState<McpStatusSnapshot | null>(null);
@@ -230,6 +306,8 @@ export function DaintreeAssistantSettingsTab() {
   // suggest a value is set when it isn't, leaving onChange unfired and the help
   // panel still in its empty state. The placeholder makes "no selection" explicit.
   const agentSelectValue = preferredAgentId ?? "";
+
+  const bypassCopy = useMemo(() => getBypassCopy(preferredAgentId), [preferredAgentId]);
 
   // Resolved model catalog for the currently-preferred agent. `null` means "not
   // loaded / unavailable" (we render nothing); an empty array means "agent has
@@ -909,7 +987,7 @@ export function DaintreeAssistantSettingsTab() {
       <SettingsSection
         icon={Moon}
         title="Hibernation"
-        description="Idle assistants release memory and capture a resume token, so reopening reconnects to the same Claude conversation."
+        description="Idle assistants release memory and capture a resume token, so reopening reconnects to the same conversation."
       >
         <SettingsSelect
           label="Hibernate after"
@@ -925,7 +1003,7 @@ export function DaintreeAssistantSettingsTab() {
       <SettingsSection
         icon={ShieldAlert}
         title="Security"
-        description="Pick how much the assistant can do without prompting, and whether to bypass Claude Code's per-tool confirmation gate."
+        description="Pick how much the assistant can do without prompting, and whether to bypass the agent's own confirmation gate."
       >
         <SettingsSelect
           label="Capability tier"
@@ -944,18 +1022,23 @@ export function DaintreeAssistantSettingsTab() {
 
         <SessionLiveStatusCard configuredTier={settings.tier} />
 
-        <SettingsSwitchCard
-          variant="compact"
-          icon={ShieldAlert}
-          title="Bypass Claude permission prompts"
-          subtitle="Skip Claude Code's per-tool confirmation gate (passes --dangerously-skip-permissions)"
-          isEnabled={settings.bypassPermissions}
-          onChange={toggleBypassPermissions}
-          ariaLabel="Bypass Claude Code permission prompts during help sessions"
-          colorScheme="amber"
-          disabled={loading}
-        />
-        {settings.bypassPermissions && (
+        {/* The stored preference is agent-agnostic but its effect is not, so the
+            card only renders once an agent with a real bypass mechanism is
+            selected — mirroring the agent-gated Debug logging switch above. */}
+        {bypassCopy && (
+          <SettingsSwitchCard
+            variant="compact"
+            icon={ShieldAlert}
+            title={bypassCopy.title}
+            subtitle={bypassCopy.subtitle}
+            isEnabled={settings.bypassPermissions}
+            onChange={toggleBypassPermissions}
+            ariaLabel={bypassCopy.ariaLabel}
+            colorScheme="amber"
+            disabled={loading}
+          />
+        )}
+        {bypassCopy && settings.bypassPermissions && (
           <div
             className={cn(
               "flex items-start gap-2 p-3 rounded-[var(--radius-md)]",
@@ -964,9 +1047,7 @@ export function DaintreeAssistantSettingsTab() {
           >
             <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-0.5" />
             <div className="text-xs text-daintree-text/70 leading-relaxed select-text">
-              With this on, Claude Code's permission gate is bypassed for all tools — built-in
-              (Bash, Write) and MCP. The capability tier above is the only remaining safeguard for
-              Daintree actions.
+              {bypassCopy.warning}
             </div>
           </div>
         )}
