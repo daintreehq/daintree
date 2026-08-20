@@ -47,10 +47,9 @@ export class TerminalInputController {
    * Teardown writes bypass this controller entirely and go straight to
    * `ptyProcess.write()`. A single quit write mostly got away with that, but a
    * gated Ctrl-C escalation spans a second or more, and anything landing
-   * between two presses — a live keystroke on the ≤512-byte fast path, a
-   * chunked paste still pacing, the trailing Enter of an in-flight submit —
-   * either lands in the agent's composer or breaks the press economics the
-   * gate depends on.
+   * between two presses — a live keystroke, the trailing Enter of an in-flight
+   * submit — either lands in the agent's composer or breaks the press
+   * economics the gate depends on.
    *
    * Blocked input is DROPPED, not buffered. Replaying it after teardown would
    * deliver it to whatever occupies the pane next — a plain shell, or nothing
@@ -81,9 +80,9 @@ export class TerminalInputController {
    * swallowed by `logWriteError`. Returns `{ ok: true }` on success and
    * `{ ok: false, error: NodeJS.ErrnoException }` when `pty.write()` throws.
    *
-   * Falls back to `write()` (queued chunking) for payloads >512 bytes; the
-   * caller cannot meaningfully observe failures in the chunked async path,
-   * but broadcast keystrokes are always single chunks so this is fine.
+   * Falls back to `write()` for payloads >512 bytes, which reports failures
+   * through `logWriteError` rather than returning them; broadcast keystrokes
+   * are always well under that, so the distinction never bites in practice.
    */
   tryWrite(data: string, traceId?: string): { ok: boolean; error?: NodeJS.ErrnoException } {
     const terminal = this.host.terminalInfo;
@@ -110,8 +109,8 @@ export class TerminalInputController {
     }
 
     if (data.length > 512) {
-      // Long payloads queue through chunkInput in write(); we lose precise
-      // per-call failure visibility but that path isn't used by broadcast.
+      // write() swallows the throw into logWriteError, so we lose precise
+      // per-call failure visibility — but that path isn't used by broadcast.
       this.write(data, traceId);
       return { ok: true };
     }
@@ -216,16 +215,16 @@ export class TerminalInputController {
       return;
     }
 
-    if (data.length <= 512) {
-      try {
-        terminal.ptyProcess.write(data);
-      } catch (error) {
-        this.host.logWriteError(error, { operation: "write(fast-path)", traceId });
-      }
-      return;
+    // Everything goes straight to the PTY, large payloads included. Daintree
+    // used to re-split anything over 512 bytes into 50-byte chunks on a 5ms
+    // interval; node-pty owns that queueing now (microsoft/node-pty#831), so
+    // the extra lane only added latency — roughly 10KB/s, which is what made
+    // large context injections take tens of seconds (#11875).
+    try {
+      terminal.ptyProcess.write(data);
+    } catch (error) {
+      this.host.logWriteError(error, { operation: "write(direct)", traceId });
     }
-
-    this.host.writeQueue.enqueueChunked(data);
   }
 
   submit(text: string): void {
@@ -329,8 +328,6 @@ export class TerminalInputController {
         this.write(body);
       }
     }
-
-    await this.host.writeQueue.waitForInputWriteDrain();
 
     if (this.isInputLocked || this.inputGeneration !== generation) {
       return;

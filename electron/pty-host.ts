@@ -1294,6 +1294,15 @@ ptyManager.on("error", (id: string, error: string) => {
   sendEvent({ type: "error", id, error });
 });
 
+// Submit-lane status (#11875). Only fires for submits that cross a threshold
+// or fail, so this is a rare event, not a per-submit pulse.
+ptyManager.on(
+  "submit-status",
+  (id: string, state: import("../shared/types/pty-host.js").TerminalSubmitStatusState) => {
+    sendEvent({ type: "submit-status", id, state });
+  }
+);
+
 ptyManager.on(
   "resize-result",
   (id: string, result: import("../shared/types/pty-host.js").TerminalResizeResult) => {

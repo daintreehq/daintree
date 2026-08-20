@@ -102,6 +102,7 @@ import type {
   SpawnResult,
   TerminalReliabilityMetricPayload,
   TerminalResizeResult,
+  TerminalSubmitStatusPayload,
   TerminalStatusPayload,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
@@ -1400,6 +1401,7 @@ export interface IpcEventMap {
     timestamp: number;
   };
   "terminal:status": TerminalStatusPayload;
+  "terminal:submit-status": TerminalSubmitStatusPayload;
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
   "terminal:fd-leak-warning": FdLeakWarningPayload;
   "terminal:resource-metrics": { metrics: TerminalResourceBatchPayload; timestamp: number };
@@ -2129,6 +2131,7 @@ export type IpcEventBusMap = Pick<
   | "terminal:resize-result"
   | "terminal:reliability-metric"
   | "terminal:status"
+  | "terminal:submit-status"
   // Agent session journaled — resume surfaces refetch (global broadcast)
   | "agent-session:recorded"
   // A gated park auto-released — the ready-again hand-back (global broadcast)

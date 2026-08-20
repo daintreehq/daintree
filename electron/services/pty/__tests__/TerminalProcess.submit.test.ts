@@ -438,4 +438,83 @@ describe("TerminalProcess.submit", () => {
     expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
     vi.useRealTimers();
   });
+
+  // #11875. A slow submit must keep exclusive ownership of the agent's composer
+  // until it finishes. The old `Promise.race` in `drainSubmitQueue` released the
+  // serialiser when the 3000ms timer fired but left `performSubmit` running, so
+  // the next submit wrote its body into the same composer and the abandoned
+  // submit's trailing Enter arrived afterwards — submitting `<FIRST><SECOND>`
+  // as one merged prompt.
+  //
+  // The delay here is an explicitly deferred output-settle gate, NOT a large
+  // paced payload. The byte pacing that used to create this window was deleted
+  // in this same change, so a size-based trigger would quietly stop exercising
+  // the bug. The 4096-char sentinel stays as a stream-integrity payload: it
+  // proves a >512-byte write still arrives whole and in order now that it goes
+  // straight to node-pty instead of through a 50-byte chunk queue.
+  it("keeps the composer exclusive while a slow submit is still in flight", async () => {
+    vi.useFakeTimers();
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "gemini" });
+    // Gemini has supportsBracketedPaste: false, which is what routes performSubmit
+    // through the waitForOutputSettle branch this test gates on.
+    (
+      terminal as unknown as { terminalInfo: { detectedAgentId: string } }
+    ).terminalInfo.detectedAgentId = "gemini";
+
+    // CR/LF-free on purpose: the assertions below locate composer frames by
+    // counting "\r", and a newline would also trip the shell-submit detection
+    // in write().
+    const sentinel = "S".repeat(4096);
+    terminal.write(sentinel);
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const writeQueue = (
+      terminal as unknown as {
+        writeQueue: { waitForOutputSettle: (opts: unknown) => Promise<void> };
+      }
+    ).writeQueue;
+
+    // Hold the first submit past the slow threshold, let the second settle
+    // immediately. This is the whole clock of the test.
+    let releaseFirstSettle: (() => void) | undefined;
+    const firstSettle = new Promise<void>((resolve) => {
+      releaseFirstSettle = resolve;
+    });
+    let settleCalls = 0;
+    vi.spyOn(writeQueue, "waitForOutputSettle").mockImplementation(() => {
+      settleCalls++;
+      return settleCalls === 1 ? firstSettle : Promise.resolve();
+    });
+
+    terminal.submit("<FIRST>");
+    terminal.submit("<SECOND>");
+
+    // The first body is written before performSubmit's first await.
+    expect(ptyWriteMock.mock.calls.map((c) => c[0]).join("")).toContain("<FIRST>");
+
+    // Past the 3000ms slow threshold: the first submit is still holding the
+    // composer, so the second must not have written anything yet.
+    await vi.advanceTimersByTimeAsync(3100);
+    {
+      const midStream = ptyWriteMock.mock.calls.map((c) => c[0]).join("");
+      expect(midStream).not.toContain("<SECOND>");
+      expect(midStream).not.toContain("\r");
+    }
+
+    releaseFirstSettle?.();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const stream = ptyWriteMock.mock.calls.map((c) => c[0]).join("");
+    const firstEnter = stream.indexOf("\r");
+    const secondEnter = stream.indexOf("\r", firstEnter + 1);
+    expect(stream.indexOf("<FIRST>")).toBeLessThan(firstEnter);
+    expect(stream.indexOf("<SECOND>")).toBeGreaterThan(firstEnter);
+    expect(stream.indexOf("<SECOND>")).toBeLessThan(secondEnter);
+    expect(stream.match(/\r/g)).toHaveLength(2);
+
+    // The oversized write arrived whole and ahead of both composer frames.
+    expect(stream.indexOf(sentinel)).toBe(0);
+
+    vi.useRealTimers();
+  });
 });

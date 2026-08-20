@@ -182,6 +182,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       emitter.emit("error", event.id, event.error);
       return true;
 
+    case "submit-status":
+      emitter.emit("submit-status", { id: event.id, state: event.state });
+      return true;
+
     case "snapshot":
       broker.resolve<TerminalSnapshot | null>(event.requestId, event.snapshot ?? null);
       return true;

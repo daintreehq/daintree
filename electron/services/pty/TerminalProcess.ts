@@ -8,7 +8,10 @@ import serialize, { type SerializeAddon as SerializeAddonType } from "@xterm/add
 const { SerializeAddon } = serialize;
 import unicode11 from "@xterm/addon-unicode11";
 const { Unicode11Addon } = unicode11;
-import type { TerminalResizeResult } from "../../../shared/types/pty-host.js";
+import type {
+  TerminalResizeResult,
+  TerminalSubmitStatusState,
+} from "../../../shared/types/pty-host.js";
 import type { PanelTitleMode } from "../../../shared/types/panel.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { applyXtermReflowFastpath } from "../../../shared/utils/xtermReflowFastpath.js";
@@ -116,6 +119,12 @@ export interface TerminalProcessCallbacks {
    * counted, so a burst of exits can't slip past the cap.
    */
   onPreserved?: (id: string) => void;
+  /**
+   * Fired when a submit crosses the slow/stalled threshold, settles after
+   * having done so, or fails (#11875). Absent for the overwhelming majority of
+   * submits, which complete well inside the threshold and report nothing.
+   */
+  onSubmitStatus?: (id: string, state: TerminalSubmitStatusState) => void;
 }
 
 export interface TerminalProcessDependencies {
@@ -455,13 +464,11 @@ export class TerminalProcess {
       },
     });
     this.writeQueue = new WriteQueue({
-      writeToPty: (data) => {
-        this.terminalInfo.ptyProcess.write(data);
-      },
       isExited: () => !this.lifecycle.isAlive,
       lastOutputTime: () => this.terminalInfo.lastOutputTime,
       performSubmit: (text) => this.performSubmit(text),
       onWriteError: (error, context) => this.logWriteError(error, context),
+      onSubmitStatus: (state) => this.callbacks.onSubmitStatus?.(this.id, state),
     });
     this.sessionSnapshotter = this.createSessionSnapshotter();
     this.identityWatcher = new IdentityWatcher(this.createIdentityWatcherDelegate());

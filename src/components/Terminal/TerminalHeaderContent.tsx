@@ -59,6 +59,12 @@ export interface TerminalHeaderContentProps {
   queueCount?: number;
   flowStatus?: TerminalFlowStatus;
   /**
+   * Submit-lane state for this terminal (#11875). Only `"slow"` renders here —
+   * it is the Tier-1 ambient half of the signal. `"stalled"`/`"failed"` escalate
+   * to `TerminalSubmitStatusBanner` in the pane, which owns the recovery action.
+   */
+  submitStatus?: "slow" | "stalled" | "failed";
+  /**
    * True when the agent transitioned to `completed` and the worktree's
    * changed-file count is zero. Drives the "Finished, no changes" pill
    * so users get a quiet confirmation instead of the chip silently disappearing.
@@ -107,6 +113,7 @@ export function TerminalHeaderContent({
   exitCode = null,
   queueCount = 0,
   flowStatus,
+  submitStatus,
   completedWithNoChanges = false,
   isHibernated = false,
 }: TerminalHeaderContentProps) {
@@ -365,6 +372,32 @@ export function TerminalHeaderContent({
         <span className="text-xs font-mono text-status-error" role="status" aria-live="off">
           [exit {exitCode}]
         </span>
+      )}
+
+      {/* Prompt-still-sending badge — Tier-1 ambient (#11875). Self-clearing:
+          the submit reports `settled` when it finally lands. Deliberately no
+          action here — the original Enter is still armed, so any "send again"
+          affordance would double-submit. If it stops progressing entirely the
+          pane escalates to a banner and this pill gives way to it. */}
+      {submitStatus === "slow" && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded border border-divider"
+              role="status"
+              aria-live="off"
+            >
+              <Hourglass className="w-3 h-3" aria-hidden="true" />
+              Prompt still sending
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-xs">
+            <div className="flex flex-col gap-0.5">
+              <span className="font-medium">Still sending</span>
+              <span>Later prompts stay queued so they can&apos;t merge into this one.</span>
+            </div>
+          </TooltipContent>
+        </Tooltip>
       )}
 
       {/* Paused-backpressure badge — Tier-1 ambient (auto-recovering).

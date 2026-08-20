@@ -479,6 +479,8 @@ export type {
   AgentKilledPayload,
   TerminalFlowStatus,
   TerminalStatusPayload,
+  TerminalSubmitStatusState,
+  TerminalSubmitStatusPayload,
   BroadcastWriteTargetResult,
   BroadcastWriteResultPayload,
   SpawnResult,

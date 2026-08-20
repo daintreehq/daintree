@@ -473,6 +473,9 @@ export class PtyManager extends EventEmitter {
               this.registry.delete(termId);
             }
           },
+          onSubmitStatus: (termId, state) => {
+            this.emit("submit-status", termId, state);
+          },
           onPreserved: (termId) => {
             // Preserved terminals retain their full scrollback snapshot in
             // memory and aren't otherwise removed until trash/kill or project

@@ -148,6 +148,7 @@ import type {
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type {
   TerminalStatusPayload,
+  TerminalSubmitStatusPayload,
   SpawnResult,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
@@ -1290,6 +1291,9 @@ function buildElectronApi(): ElectronAPI {
 
       onStatus: (callback: (data: TerminalStatusPayload) => void) =>
         _typedOn(CHANNELS.TERMINAL_STATUS, callback),
+
+      onSubmitStatus: (callback: (data: TerminalSubmitStatusPayload) => void): (() => void) =>
+        _eventBusOn("terminal:submit-status", callback),
 
       onReliabilityMetric: (
         callback: (data: TerminalReliabilityMetricPayload) => void

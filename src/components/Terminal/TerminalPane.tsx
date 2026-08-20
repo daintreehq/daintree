@@ -40,6 +40,8 @@ import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
 import { ScrollbackRestoreErrorBanner } from "./ScrollbackRestoreErrorBanner";
+import { TerminalSubmitStatusBanner } from "./TerminalSubmitStatusBanner";
+import { useTerminalSubmitStatus } from "./useTerminalSubmitStatus";
 import { TerminalAttachErrorBanner } from "./TerminalAttachErrorBanner";
 import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
@@ -1248,6 +1250,16 @@ function TerminalPaneComponent({
     !suppressParseError && Boolean(scrollbackRestoreError) && !restartError;
   const showRestartStatus = restartBannerVariant.type !== "none";
 
+  // Submit-lane status (#11875). `slow` stays ambient in the header pill; only
+  // the escalated states get a banner, and only when the backend is healthy
+  // enough for the message to mean anything.
+  const submitStatus = useTerminalSubmitStatus(id, { isRestarting, isExited });
+  const showSubmitStatusBanner =
+    !suppressBackendDependent &&
+    (submitStatus === "stalled" || submitStatus === "failed") &&
+    !restartError &&
+    !spawnError;
+
   return (
     <ContentPanel
       ref={containerRef}
@@ -1283,6 +1295,7 @@ function TerminalPaneComponent({
       detectedProcessId={detectedProcessId}
       queueCount={queueCount}
       flowStatus={flowStatus}
+      submitStatus={submitStatus ?? undefined}
       isPinged={isPinged}
       wasJustSelected={wasJustSelected}
       ambientAgentState={ambientAgentState}
@@ -1361,6 +1374,17 @@ function TerminalPaneComponent({
             onUpdateCwd={handleUpdateCwd}
             onRetry={handleRestart}
             onTrash={handleTrash}
+            isRestarting={isRestarting}
+          />
+        )}
+      </BannerSlot>
+
+      <BannerSlot visible={showSubmitStatusBanner}>
+        {(submitStatus === "stalled" || submitStatus === "failed") && (
+          <TerminalSubmitStatusBanner
+            terminalId={id}
+            status={submitStatus}
+            onRestart={handleRestart}
             isRestarting={isRestarting}
           />
         )}
