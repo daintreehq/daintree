@@ -2573,9 +2573,11 @@ type ActionHandler = (args: unknown) => unknown | Promise<unknown>;
  * - `duplex`: as `pipe`, but stdin is piped too, so the child can be driven via
  *   {@link PluginDuplexProcessHandle.write}. stdout and stderr stay separate.
  *   This is the mode for a child speaking a protocol over stdio — MCP, LSP and
- *   ACP servers all frame line-delimited JSON-RPC on stdout while using stderr
- *   for diagnostics, so they need a writable input AND an output stream the
- *   diagnostics are not mixed into.
+ *   ACP servers all carry JSON-RPC on stdout while using stderr for
+ *   diagnostics, so they need a writable input AND an output stream the
+ *   diagnostics are not mixed into. The host stays framing-agnostic: MCP and
+ *   ACP delimit messages with newlines, LSP with `Content-Length` headers, and
+ *   the plugin implements whichever its child speaks.
  * - `pty`: the command runs under a real pseudo-terminal, so it sees a TTY,
  *   accepts input via {@link PluginPtyProcessHandle.write}, and can be resized.
  *   A PTY merges stdout and stderr into one stream by construction.
@@ -2719,13 +2721,19 @@ interface PluginProcessHandle {
  */
 interface PluginDuplexProcessHandle extends PluginProcessHandle {
     /**
-     * Write to the child's input. Passed through verbatim — the caller supplies
-     * its own line terminator (`"\n"`) when the command expects one, so a
-     * line-delimited JSON-RPC peer writes `JSON.stringify(msg) + "\n"`.
+     * Write to the child's input. Passed through verbatim — the host adds no
+     * framing, so the caller emits whatever its protocol expects: a newline
+     * terminator for NDJSON (`JSON.stringify(msg) + "\n"`), or a
+     * `Content-Length` header block for LSP.
      *
      * Framing is the caller's job in both directions: {@link PluginProcessHandle.onData}
-     * delivers raw chunks that may split or coalesce protocol frames, so a plugin
-     * speaking NDJSON buffers and splits on `"\n"` itself.
+     * delivers raw chunks that may split or coalesce protocol frames, so the
+     * plugin does its own buffering and message splitting.
+     *
+     * Fire-and-forget: the write is queued on the child's stdin and the
+     * backpressure signal is not surfaced. That suits the low-volume
+     * control-plane traffic this is built for; a plugin that streams bulk data
+     * faster than the child reads it will grow that buffer unboundedly.
      */
     write(data: string): void;
 }
@@ -2767,9 +2775,9 @@ interface PluginProcessApi {
     /**
      * Spawn a child with its stdin piped as well as its stdout/stderr, and return
      * a handle that adds `write()`. Use this to drive a command that speaks a
-     * protocol over stdio — an MCP, LSP or ACP server, or anything else framing
-     * line-delimited JSON-RPC — where the reply stream must stay free of the
-     * diagnostics the child writes to stderr. Output arrives split by stream on
+     * protocol over stdio — an MCP, LSP or ACP server, or anything else carrying
+     * JSON-RPC — where the reply stream must stay free of the diagnostics the
+     * child writes to stderr. Output arrives split by stream on
      * {@link PluginProcessHandle.onData}, exactly as in pipe mode; the host does
      * no framing, so the plugin owns buffering and message splitting.
      *

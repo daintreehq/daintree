@@ -1081,16 +1081,30 @@ describe("PluginProcessManager", () => {
     });
 
     it("no-ops when stdin has ended rather than writing after end", async () => {
-      const h = makeHarness();
-      const handle = await h.manager.spawn("acme.tool", duplexConfig());
-      const fake = h.fakes[0]!;
+      const writes: string[] = [];
+      // Isolates the `writableEnded` branch. A real PassThrough that has been
+      // `end()`ed also reports destroyed and writable:false, so asserting
+      // against one would pass even with this branch deleted; this fake trips
+      // ONLY writableEnded. Writing to a genuinely ended stream would raise
+      // ERR_STREAM_WRITE_AFTER_END.
+      const stdin = {
+        write: (chunk: string) => {
+          writes.push(chunk);
+          return true;
+        },
+        writable: true,
+        writableEnded: true,
+        destroyed: false,
+        on: () => undefined,
+      } as unknown as NodeJS.WritableStream;
+      const manager = new PluginProcessManager({
+        streamSink: () => {},
+        spawner: () => ({ ...makeFakeChild({ duplex: true }).child, stdin }),
+      });
 
-      // `end()` (not `destroy()`) — a distinct guard branch. Writing here would
-      // raise ERR_STREAM_WRITE_AFTER_END.
-      fake.stdin!.end();
-      await flushMicrotasks();
+      const handle = await manager.spawn("acme.tool", duplexConfig());
       expect(() => handle.write("after-end\n")).not.toThrow();
-      expect(fake.stdinWrites.join("")).not.toContain("after-end");
+      expect(writes).toEqual([]);
     });
 
     it("no-ops when the stream reports itself no longer writable", async () => {
@@ -1222,7 +1236,12 @@ describe("PluginProcessManager", () => {
         // test timeout so a failure still runs `finally` and reports what did
         // arrive instead of hanging until the framework kills the test.
         const deadline = Date.now() + 10_000;
-        while (!(byKind("stdout").includes("echo:hello") && byKind("stderr").includes("secret="))) {
+        // The stderr predicate waits for the COMPLETE expected string, not a
+        // `secret=` prefix: a chunk boundary can land mid-value, and stopping
+        // there would assert against a partial read and fail spuriously.
+        while (!(
+          byKind("stdout").includes("echo:hello") && byKind("stderr").includes("secret=undefined")
+        )) {
           if (Date.now() > deadline) break;
           await new Promise((r) => setTimeout(r, 10));
         }
