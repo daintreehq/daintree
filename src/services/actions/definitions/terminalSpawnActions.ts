@@ -15,6 +15,7 @@ import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
+import { isForegroundDispatch } from "./dispatchSource";
 import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
 import type { PtyPanelData, TerminalSpawnSource } from "@shared/types/panel";
 import { isPtyPanel } from "@shared/types/panel";
@@ -283,35 +284,41 @@ export function registerTerminalSpawnActions(
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        const terminal = state.panelsById[targetId];
-        // A named-but-missing panel is a normal race for an agent: it can be
-        // closed between the listing and this call. The drag paths can only
-        // name a panel they are holding, so they keep the quiet return, but an
-        // agent told "OK" for a move that never happened would go on to reason
-        // about a panel that is no longer there (#11877).
-        if (!terminal && ctx.dispatchSource === "agent") {
-          throw new Error(
-            "terminal.moveToWorktree found no panel with that `terminalId` — it may have been closed. Re-read the terminal listing and pass a current panel id."
-          );
+        // Only a person who can see the panel gets a silent no-op; anything
+        // headless — agent, plugin, or a source we don't recognise — is told,
+        // because it cannot observe the difference between "moved" and
+        // "nothing there" and would reason on from a false success.
+        const reportsFailures = !isForegroundDispatch(ctx.dispatchSource);
+        // `Object.hasOwn`, not a truthiness check: `panelsById` is a plain
+        // object, so an id like "constructor" resolves off the prototype and
+        // would be moved as if it were a real panel (same reason
+        // `terminal.close` does this).
+        if (!Object.hasOwn(state.panelsById, targetId)) {
+          if (reportsFailures) {
+            throw new Error(
+              "terminal.moveToWorktree found no panel with that `terminalId` — it may have been closed. Re-read the terminal listing and pass a current panel id."
+            );
+          }
+          return;
         }
+        const terminal = state.panelsById[targetId];
         if (!terminal || terminal.worktreeId === worktreeId) {
           return;
         }
-        // The destination is a bare string, and until this action was reachable
-        // by an agent it could only ever come from a real worktree row. A
-        // hallucinated or stale id would file the panel — and every panel in its
-        // tab group — under a worktree no view can select, hiding a live process
-        // while the caller is told the move succeeded. Verified only when a view
-        // store can answer: a null registry means no project view is mounted
-        // (unit tests, teardown), which is a wiring gap rather than a bad
-        // argument, so it degrades the way the project-location resolver does.
-        if (ctx.dispatchSource === "agent") {
-          const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
-          if (worktrees && !worktrees.has(worktreeId)) {
+        // Checked for EVERY caller, not just headless ones: filing a panel
+        // under an id no view can select hides a live process whoever asked for
+        // it, and a menu row can go stale between opening and clicking. Only
+        // the reporting differs. Verified when a view store can answer — the
+        // accessor is null only before the provider mounts, which cannot
+        // coexist with a panel to move, so there is nothing to fail closed on.
+        const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
+        if (worktrees && !worktrees.has(worktreeId)) {
+          if (reportsFailures) {
             throw new Error(
               "terminal.moveToWorktree found no open worktree with that `worktreeId`. Pass an id from the worktree listing, or create the worktree first and use the id it returns."
             );
           }
+          return;
         }
 
         useLayoutUndoStore.getState().pushLayoutSnapshot();

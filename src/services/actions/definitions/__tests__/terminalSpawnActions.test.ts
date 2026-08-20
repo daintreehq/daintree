@@ -823,7 +823,15 @@ describe("terminal.moveToWorktree", () => {
     setPanelState({ panels: [] });
     const run = setupActions();
 
-    await run("terminal.moveToWorktree", { terminalId: "ghost", worktreeId: "wt-2" });
+    // A foreground source stays a quiet no-op: the person can see that nothing
+    // moved. `ActionService` always stamps a source, defaulting to "user", so
+    // the bare-context shape used elsewhere in this file never reaches
+    // production for this branch.
+    await run(
+      "terminal.moveToWorktree",
+      { terminalId: "ghost", worktreeId: "wt-2" },
+      { dispatchSource: "user" }
+    );
 
     expect(moveTerminalToWorktreeAndFollowRescueMock).not.toHaveBeenCalled();
     expect(pushLayoutSnapshotMock).not.toHaveBeenCalled();
@@ -889,19 +897,59 @@ describe("terminal.moveToWorktree", () => {
     expect(moveTerminalToWorktreeAndFollowRescueMock).toHaveBeenCalledExactlyOnceWith("p1", "wt-2");
   });
 
-  it("leaves the destination unchecked for a drag or menu caller, which can only name a real row", async () => {
+  it("refuses a dead destination for a menu caller too, quietly — the row can go stale mid-click", async () => {
     setPanelState({ panels: [{ id: "p1", location: "grid", worktreeId: "wt-1" }] });
     getCurrentViewStoreOrNullMock.mockReturnValue({
       getState: () => ({ worktrees: new Map([["wt-live", {}]]) }),
     });
     const run = setupActions();
 
-    await run("terminal.moveToWorktree", { terminalId: "p1", worktreeId: "wt-unlisted" });
-
-    expect(moveTerminalToWorktreeAndFollowRescueMock).toHaveBeenCalledExactlyOnceWith(
-      "p1",
-      "wt-unlisted"
+    // No throw: the person can see the result. But the move must not happen —
+    // the integrity rule is uniform, only the reporting is not.
+    await run(
+      "terminal.moveToWorktree",
+      { terminalId: "p1", worktreeId: "wt-unlisted" },
+      { dispatchSource: "context-menu" }
     );
+
+    expect(moveTerminalToWorktreeAndFollowRescueMock).not.toHaveBeenCalled();
+    expect(pushLayoutSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a plugin's dead destination — headless callers are told, not silently no-oped", async () => {
+    setPanelState({ panels: [{ id: "p1", location: "grid", worktreeId: "wt-1" }] });
+    getCurrentViewStoreOrNullMock.mockReturnValue({
+      getState: () => ({ worktrees: new Map([["wt-live", {}]]) }),
+    });
+    const run = setupActions();
+
+    await expect(
+      run(
+        "terminal.moveToWorktree",
+        { terminalId: "p1", worktreeId: "wt-unlisted" },
+        { dispatchSource: "plugin" }
+      )
+    ).rejects.toThrow(/no open worktree with that `worktreeId`/);
+
+    expect(moveTerminalToWorktreeAndFollowRescueMock).not.toHaveBeenCalled();
+  });
+
+  // `panelsById` is a plain object, so a prototype-backed id is truthy without
+  // being a panel.
+  it("does not treat a prototype-backed id as a panel", async () => {
+    setPanelState({ panels: [{ id: "p1", location: "grid", worktreeId: "wt-1" }] });
+    const run = setupActions();
+
+    await expect(
+      run(
+        "terminal.moveToWorktree",
+        { terminalId: "constructor", worktreeId: "wt-2" },
+        { dispatchSource: "agent" }
+      )
+    ).rejects.toThrow(/found no panel with that `terminalId`/);
+
+    expect(moveTerminalToWorktreeAndFollowRescueMock).not.toHaveBeenCalled();
+    expect(pushLayoutSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("tells an agent its named panel is gone rather than reporting a move that did not happen", async () => {

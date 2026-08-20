@@ -638,10 +638,16 @@ describe("terminal action hardening", () => {
       focusedId: "term-a",
     });
 
-    await moveToWorktree.run({ terminalId: "missing", worktreeId: "wt-2" }, {} as never);
+    // A foreground source keeps both of these quiet no-ops; a headless caller
+    // is told instead (#11877), which its own tests cover.
+    await moveToWorktree.run({ terminalId: "missing", worktreeId: "wt-2" }, {
+      dispatchSource: "user",
+    } as never);
     expect(usePanelStore.getState().focusedId).toBe("term-a");
 
-    await moveToWorktree.run({ terminalId: "term-a", worktreeId: "wt-1" }, {} as never);
+    await moveToWorktree.run({ terminalId: "term-a", worktreeId: "wt-1" }, {
+      dispatchSource: "user",
+    } as never);
     expect(usePanelStore.getState().focusedId).toBe("term-a");
   });
 
