@@ -41,7 +41,12 @@ describe("brand badge contrast across the agent roster", () => {
     // surface got picked. Read the source so the constraint outlives the
     // signature: an added `scheme` parameter would keep every other test green.
     const source = readFileSync(new URL("../brandIcon.ts", import.meta.url), "utf8");
-    expect(source).not.toMatch(/surface-|scheme|AppColorScheme/);
-    expect(resolveBrandBadge.length).toBe(1);
+    expect(source).not.toMatch(/surface-|scheme|Scheme|useActiveApp|getActiveTheme|\btokens\b/);
+    // The only thing it may pull from the theme package is hex parsing; anything
+    // else would be a route back to theme state under a different name.
+    const themeImports = [...source.matchAll(/import \{([^}]*)\} from "@shared\/theme"/g)];
+    expect(themeImports.flatMap((m) => m[1]!.split(",").map((n) => n.trim()))).toEqual([
+      "isHexColor",
+    ]);
   });
 });

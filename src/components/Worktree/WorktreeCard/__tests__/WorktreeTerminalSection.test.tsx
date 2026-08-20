@@ -217,14 +217,16 @@ describe("WorktreeTerminalSection summary icon", () => {
     expect(screen.getByTestId("agent-icon")).toBeDefined();
   });
 
-  it("does not pass brandColor to the agent icon (renders in currentColor)", () => {
+  it("renders the shared-agent glyph without a badge of its own", () => {
+    // This row summarises a group of terminals rather than identifying one
+    // agent instance, so it stays a bare inherited glyph — no tile, no ink
+    // override — and must not pick one up from the brand-mark policy.
     renderSection({
       terminals: [makeTerminal({ detectedAgentId: "claude" })],
       counts: { ...baseCounts, total: 1 },
     });
     const icon = screen.getByTestId("agent-icon");
-    expect(icon.getAttribute("brandColor")).toBeNull();
-    expect(icon.getAttribute("style")).toBeNull();
+    expect(icon.closest("span[aria-hidden='true']")).toBeNull();
   });
 });
 

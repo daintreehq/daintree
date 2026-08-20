@@ -8,7 +8,7 @@ export interface AgentOption {
   id: string;
   name: string;
   color: string;
-  Icon: ComponentType<{ size?: number; brandColor?: string; className?: string }>;
+  Icon: ComponentType<{ size?: number; className?: string }>;
   selected: boolean;
   dangerousEnabled: boolean;
   hasCustomFlags: boolean;

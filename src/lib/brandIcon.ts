@@ -41,8 +41,12 @@ function channels(body: string): [number, number, number] {
   ];
 }
 
+function round([r, g, b]: [number, number, number]): [number, number, number] {
+  return [Math.round(r), Math.round(g), Math.round(b)];
+}
+
 function toHex(rgb: [number, number, number]): string {
-  return `#${rgb.map((c) => Math.round(c).toString(16).padStart(2, "0")).join("")}`;
+  return `#${rgb.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
 }
 
 /**
@@ -95,7 +99,10 @@ export function resolveBrandBadge(brandColor: string | undefined): BrandBadge | 
   if (body.length !== 6 && body.length !== 8) {
     return null;
   }
-  const rgb = opaqueChannels(body);
+  // Round before choosing the ink, not after: flattening alpha lands on
+  // fractional channels, and picking against those can name the weaker ink for
+  // the color that actually gets painted.
+  const rgb = round(opaqueChannels(body));
   const tile = body.length === 8 ? toHex(rgb) : brandColor;
   const glyphIsWhite = luminance(rgb) <= INK_CROSSOVER;
   return {

@@ -43,7 +43,7 @@ export function BrandMark({ brandColor, size, className, children }: BrandMarkPr
   return (
     <span
       aria-hidden="true"
-      className={cn("inline-flex items-center justify-center rounded-[3px] p-[12.5%]", className)}
+      className={cn("inline-flex shrink-0 items-center justify-center rounded-[3px]", className)}
       style={{
         ...(fallbackSize !== undefined ? { width: fallbackSize, height: fallbackSize } : null),
         backgroundColor: badge.tile,
@@ -55,11 +55,22 @@ export function BrandMark({ brandColor, size, className, children }: BrandMarkPr
         boxShadow: `inset 0 0 0 1px ${badge.ring}`,
       }}
     >
-      {/* Percentage box rather than a size prop: children arrive sized by a
-          `size` attribute or by `w-*`/`h-*` classes, and an inline percentage
-          beats both without the caller having to say which it used. */}
+      {/* Inset the glyph by sizing it against the tile rather than padding the
+          tile: percentage padding resolves against the *containing block's*
+          width, so a 16px badge in a wide row would inset by a slice of the row.
+          A percentage on the child resolves against this span, which is the box
+          we actually mean. It also beats both ways a caller sizes its icon — a
+          `size` attribute or `w-*`/`h-*` classes — without being told which. */}
       {cloneElement(children, {
-        style: { ...children.props.style, width: "100%", height: "100%" },
+        style: {
+          ...children.props.style,
+          // Callers hand the same className to the wrapper and the glyph, and a
+          // `text-*` class on the glyph would outrank the inherited ink and undo
+          // the contrast the tile was chosen to guarantee.
+          color: "inherit",
+          width: "75%",
+          height: "75%",
+        },
       })}
     </span>
   );

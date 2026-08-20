@@ -1,10 +1,12 @@
-import type { ComponentType } from "react";
+import type { ComponentType, CSSProperties } from "react";
 import { AGENT_ICON_MAP } from "@/config/agentIcons";
 import { getAgentConfig } from "@/config/agents";
 
 export interface TerminalRunIconProps {
   className?: string;
   size?: number;
+  /** Forwarded by `BrandMark` to size the glyph and hand it the badge ink. */
+  style?: CSSProperties;
 }
 
 /**

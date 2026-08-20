@@ -256,9 +256,16 @@ async function launchPreset(
   return { id: terminalId, panel };
 }
 
-/** `#rrggbb` as the `rgb(r, g, b)` string getComputedStyle returns. */
+/** `#rgb`/`#rrggbb` as the `rgb(r, g, b)` string getComputedStyle returns. */
 function hexToRgb(hex: string): string {
-  const body = hex.replace("#", "");
+  const raw = hex.replace("#", "");
+  const body =
+    raw.length === 3
+      ? raw
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : raw;
   const [r, g, b] = [0, 2, 4].map((i) => parseInt(body.slice(i, i + 2), 16));
   return `rgb(${r}, ${g}, ${b})`;
 }

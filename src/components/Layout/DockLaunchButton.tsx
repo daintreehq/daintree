@@ -1304,8 +1304,8 @@ function DockLaunchOptionIcon({ row }: { row: DockLaunchRow }) {
   return (
     <span className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center shrink-0">
       {agent.icon ? (
-        <BrandMark brandColor={brandColor}>
-          <agent.icon className="w-3.5 h-3.5" />
+        <BrandMark brandColor={brandColor} className="h-3.5 w-3.5">
+          <agent.icon />
         </BrandMark>
       ) : (
         <SquareTerminal className="w-3.5 h-3.5 shrink-0" />

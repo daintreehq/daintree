@@ -41,8 +41,10 @@ describe("resolveBrandBadge", () => {
     // goose/interpreter sit within ~1.1:1 of a dark surface and grok of a light
     // one; the ring is the only thing that delimits them, and it has to flip
     // with the ink to stay visible.
-    expect(resolveBrandBadge("#111111")?.ring).toContain("255, 255, 255");
-    expect(resolveBrandBadge("#E8E8E8")?.ring).toContain("0, 0, 0");
+    // Full value, not a substring: a fully opaque or fully transparent ring
+    // would still contain the right channels and prove nothing.
+    expect(resolveBrandBadge("#111111")?.ring).toBe("rgba(255, 255, 255, 0.15)");
+    expect(resolveBrandBadge("#E8E8E8")?.ring).toBe("rgba(0, 0, 0, 0.15)");
   });
 
   it("expands shorthand hex", () => {

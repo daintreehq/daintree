@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { CSSProperties } from "react";
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { contrastRatio } from "@shared/theme";
@@ -8,7 +9,7 @@ import { BrandMark } from "../BrandMark";
 // than through a mock — there is no scheme to stub, and a mock would only
 // re-create the shape drift it used to hide.
 
-function TestIcon({ className, style }: { className?: string; style?: React.CSSProperties }) {
+function TestIcon({ className, style }: { className?: string; style?: CSSProperties }) {
   return <svg data-testid="icon" className={className} style={style} />;
 }
 
@@ -70,14 +71,18 @@ describe("BrandMark", () => {
       const { backgroundColor, color } = (span as HTMLElement).style;
       // jsdom normalizes hex to rgb(); compare through the same lens.
       expect(backgroundColor).toBe("rgb(204, 120, 92)");
-      expect(
-        contrastRatio(color === "rgb(255, 255, 255)" ? "#FFFFFF" : "#000000", "#CC785C")
-      ).toBeGreaterThanOrEqual(4.5);
+      // The ink must be one of the two candidates AND the better of them — an
+      // empty or stray color would otherwise be credited with black's contrast.
+      const inks = { "rgb(255, 255, 255)": "#FFFFFF", "rgb(0, 0, 0)": "#000000" } as const;
+      const ink = inks[color as keyof typeof inks];
+      expect(ink).toBeDefined();
+      const other = ink === "#FFFFFF" ? "#000000" : "#FFFFFF";
+      expect(contrastRatio(ink, "#CC785C")).toBeGreaterThan(contrastRatio(other, "#CC785C"));
     });
 
     it("treats a preset color exactly like a built-in one", () => {
-      // `userChosen` used to fork here; a deliberate color now takes the same
-      // path, which is what keeps it unmodified on both polarities.
+      // A deliberate preset color used to fork onto its own path here; it now
+      // takes the same one, which is what keeps it unmodified on both polarities.
       const preset = render(
         <BrandMark brandColor="#000000">
           <TestIcon />
@@ -95,7 +100,11 @@ describe("BrandMark", () => {
         </BrandMark>
       );
 
-      expect((container.querySelector("span") as HTMLElement).style.boxShadow).toContain("inset");
+      // A dark tile needs a light ring, and it has to be translucent — an opaque
+      // or same-polarity ring is not the edge this is here to draw.
+      expect((container.querySelector("span") as HTMLElement).style.boxShadow).toBe(
+        "inset 0 0 0 1px rgba(255, 255, 255, 0.15)"
+      );
     });
 
     it("applies className to the wrapper and sizes the glyph inside it", () => {
@@ -106,19 +115,31 @@ describe("BrandMark", () => {
       );
 
       expect(container.querySelector("span")?.getAttribute("class")).toContain("mr-2");
-      // The glyph fills the padded box rather than carrying its own size, so a
-      // caller that sized by class and one that sized by prop both work.
-      expect(getByTestId("icon").style.width).toBe("100%");
+      // The glyph is sized against the tile rather than carrying its own size,
+      // so a caller that sized by class and one that sized by prop both work.
+      expect(getByTestId("icon").style.width).toBe("75%");
     });
 
     it("infers a box only when the caller gave neither size prop nor size class", () => {
+      // Unsized: the badge has to declare a square box of its own, or it would
+      // collapse to the glyph's intrinsic size and lose the tile.
       const inferred = render(
         <BrandMark brandColor="#10a37f">
           <TestIcon />
         </BrandMark>
       ).container.querySelector("span") as HTMLElement;
-      expect(inferred.style.width).toBe("16px");
+      expect(inferred.style.width).toBeTruthy();
+      expect(inferred.style.height).toBe(inferred.style.width);
 
+      // An explicit size is echoed in both dimensions rather than inferred over.
+      const explicit = render(
+        <BrandMark brandColor="#10a37f" size={24}>
+          <TestIcon />
+        </BrandMark>
+      ).container.querySelector("span") as HTMLElement;
+      expect([explicit.style.width, explicit.style.height]).toEqual(["24px", "24px"]);
+
+      // Sized by class: no inline box, so the class stays in control.
       const sized = render(
         <BrandMark brandColor="#10a37f" className="w-8 h-8">
           <TestIcon />

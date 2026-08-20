@@ -9,8 +9,9 @@ export const config: AgentConfig = {
   // who installed via the script aren't mis-reported as "missing" when
   // ~/.local/bin isn't inherited by the Electron process PATH.
   nativePaths: ["~/.local/bin/grok"],
-  // xAI's brand mark is monochrome; tint it near-white so it reads on the dark
-  // UI like the other agents' accent hues.
+  // xAI's brand mark is monochrome. This near-white was originally picked so a
+  // coloured glyph read on the dark UI; since #11895 it is the badge tile, which
+  // takes black ink at 17.14:1 and is delimited by the ring on light themes.
   color: "#E8E8E8",
   iconId: "grok",
   supportsContextInjection: true,
