@@ -598,6 +598,10 @@ describe("McpServerService", () => {
         "forge.getChecks",
         "worktree.reviewReadiness",
         "project.runCheck",
+        // Action-tier but never external (#11880) — same reasoning as the cuts
+        // above: without it here, the workbench and external "not listed"
+        // assertions would pass on an empty fixture rather than on the filter.
+        "worktree.create",
       ];
       return ids.map((id) =>
         createManifestEntry({

@@ -603,12 +603,11 @@ const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   // Worktree/workflow creation. `workflow.startWorkOnIssue` is a creation
   // superset of the two below it — a replay duplicates the entire work setup
   // (worktree + branch + agent + injected context) (#11534). Provisioning
-  // spins up a remote/cloud resource a retry could double. `worktree.create`
-  // joins on the `forge.createPR` grounds rather than the duplicate-artifact
-  // one: a same-path replay creates nothing and errors, so the cached success
-  // returns the original worktree id to a caller that is only retrying
-  // (#11880).
-  "worktree.create",
+  // spins up a remote/cloud resource a retry could double. Creating a worktree
+  // is deliberately absent: deleting one leaves its branch behind and the host
+  // reuses that stale branch on the next create (#6463), so create → delete →
+  // recreate with identical arguments is a supported workflow, and caching the
+  // first id would hand back a worktree that no longer exists (#11880).
   "worktree.createWithRecipe",
   "workflow.startWorkOnIssue",
   "worktree.resource.provision",

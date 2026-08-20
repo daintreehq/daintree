@@ -1575,6 +1575,26 @@ describe("sessionServer tier-mismatch notifier", () => {
     );
   });
 
+  it("offers a recovery tier for worktree.create instead of a dead end (#11880)", async () => {
+    // The reported symptom: in no tier allowlist, the primitive resolved to
+    // targetTier null, and HelpPanelBanners withholds both "Approve once" and
+    // "Always allow" on a null target — a denial the user cannot act on at any
+    // tier, including system. A non-null target is what restores those.
+    const notify = vi.fn();
+    const deps = fakeDeps({ notifyTierMismatch: notify });
+    const server = createSessionServer("session-C2", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.create", arguments: {} });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolId: "worktree.create",
+        targetTier: "action",
+      })
+    );
+  });
+
   it("survives a notifyTierMismatch throw without crashing the call", async () => {
     const notify = vi.fn(() => {
       throw new Error("boom");
@@ -2752,69 +2772,36 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
   });
 });
 
-describe("worktree.create dedup (#11880)", () => {
-  // The primitive only became LLM-callable when it joined the action tier, so
-  // a lost response is newly able to leave a worktree stranded. It is deduped
-  // on the `forge.createPR` grounds: the replay creates nothing because the
-  // path is taken, and the cached id beats the error a redispatch would raise.
-  // The session tier here is `action`, so these also fail if the tier fix is
-  // reverted.
+describe("worktree.create redispatch (#11880)", () => {
+  // The primitive became LLM-callable when it joined the action tier, which is
+  // the first time dedup could apply to it at all. It must stay out: deleting
+  // a worktree leaves its branch behind and the host reuses that stale branch
+  // on the next create (#6463), so create -> delete -> recreate with identical
+  // arguments is a supported workflow. Caching the first id would return a
+  // worktree that no longer exists. The session tier is `action`, so a
+  // reverted tier fix shows up here as zero dispatches rather than two.
   const twoDistinctDispatches = () =>
     vi
       .fn()
       .mockResolvedValueOnce({ result: { ok: true, result: "wt-first" } })
       .mockResolvedValueOnce({ result: { ok: true, result: "wt-second" } });
 
-  const createArgs = (path: string) => ({
+  const createArgs = {
     worktreePath: "/repo",
-    options: { baseBranch: "develop", newBranch: "feature/x", path },
-  });
+    options: { baseBranch: "develop", newBranch: "bugfix/issue-6463", path: "/repo-wt-a" },
+  };
 
-  it("replays the original worktree id for a repeated identical create", async () => {
+  it("recreates after a delete instead of replaying the original worktree id", async () => {
     const dispatchAction = twoDistinctDispatches();
     const deps = fakeDeps({ sessionStore: fakeSessionStore("action"), dispatchAction });
-    const server = createSessionServer("dedup-11880", deps);
+    const server = createSessionServer("recreate-11880", deps);
 
-    const args = createArgs("/repo-wt-a");
-    const first = await callTool(server, { name: "worktree.create", arguments: args });
-    const second = await callTool(server, { name: "worktree.create", arguments: args });
-
-    expect(dispatchAction).toHaveBeenCalledTimes(1);
-    expect(second).toEqual(first);
-    expect(JSON.stringify(second)).not.toContain("wt-second");
-  });
-
-  it("shares one dispatch between concurrent identical creates", async () => {
-    const dispatchAction = twoDistinctDispatches();
-    const deps = fakeDeps({ sessionStore: fakeSessionStore("action"), dispatchAction });
-    const server = createSessionServer("dedup-11880-inflight", deps);
-
-    const args = createArgs("/repo-wt-a");
-    const [first, second] = await Promise.all([
-      callTool(server, { name: "worktree.create", arguments: args }),
-      callTool(server, { name: "worktree.create", arguments: args }),
-    ]);
-
-    expect(dispatchAction).toHaveBeenCalledTimes(1);
-    expect(second).toEqual(first);
-    expect(JSON.stringify(second)).not.toContain("wt-second");
-  });
-
-  it("still dispatches a create for a different worktree in the same session", async () => {
-    // Keyed on the canonical args hash, so setting up two worktrees in one
-    // turn must not collapse into one — the failure mode that would make this
-    // entry worse than the retry it absorbs.
-    const dispatchAction = twoDistinctDispatches();
-    const deps = fakeDeps({ sessionStore: fakeSessionStore("action"), dispatchAction });
-    const server = createSessionServer("dedup-11880-distinct", deps);
-
-    await callTool(server, { name: "worktree.create", arguments: createArgs("/repo-wt-a") });
-    const second = await callTool(server, {
-      name: "worktree.create",
-      arguments: createArgs("/repo-wt-b"),
-    });
+    await callTool(server, { name: "worktree.create", arguments: createArgs });
+    const second = await callTool(server, { name: "worktree.create", arguments: createArgs });
 
     expect(dispatchAction).toHaveBeenCalledTimes(2);
+    // The caller sees the second dispatch, not a replay of the first — a
+    // cached id here would name the worktree the delete just removed.
     expect(JSON.stringify(second)).toContain("wt-second");
   });
 });

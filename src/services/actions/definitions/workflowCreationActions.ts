@@ -39,7 +39,7 @@ export function registerWorkflowCreationActions(
       id: "worktree.createWithRecipe",
       title: "Create Worktree with Recipe",
       description:
-        "Create a git worktree with its branch, optionally tracking a pull request, and optionally launch a recipe's terminals in it. This is the heavy composite path: it writes to disk, may check out a remote branch, and may start several processes. Create the worktree alone when no terminals are wanted. Partial failure is possible — the worktree can exist while its recipe did not fully start.",
+        "Create a git worktree with its branch, optionally tracking a pull request, and optionally launch a recipe's terminals in it. This is the heavy composite path: it writes to disk, may check out a remote branch, and may start several processes. Create the worktree alone when no pull request or terminals are wanted. Partial failure is possible — the worktree can exist while its recipe did not fully start.",
       category: "worktree",
       kind: "command",
       danger: "safe",
