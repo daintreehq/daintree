@@ -935,7 +935,7 @@ describe("PluginProcessManager", () => {
   });
 
   describe("duplex mode (#11871)", () => {
-    it("opens a writable stdin and keeps stdout/stderr apart", async () => {
+    it("keeps stdout and stderr apart instead of merging them like a PTY", async () => {
       const h = makeHarness();
       const handle = await h.manager.spawn("acme.tool", duplexConfig());
 
@@ -1072,13 +1072,96 @@ describe("PluginProcessManager", () => {
       expect(h.ptys).toHaveLength(0);
     });
 
-    it("keeps pipe mode's stdin closed so its writes stay inert", async () => {
+    it("leaves pipe-mode writes inert even though the write path now exists", async () => {
       const h = makeHarness();
       const handle = await h.manager.spawn("acme.tool", pipeConfig());
 
-      expect(h.fakes[0]!.child.stdin).toBeNull();
       expect(() => handle.write("x")).not.toThrow();
       expect(h.fakes[0]!.stdinWrites).toEqual([]);
+    });
+
+    it("no-ops when stdin has ended rather than writing after end", async () => {
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", duplexConfig());
+      const fake = h.fakes[0]!;
+
+      // `end()` (not `destroy()`) — a distinct guard branch. Writing here would
+      // raise ERR_STREAM_WRITE_AFTER_END.
+      fake.stdin!.end();
+      await flushMicrotasks();
+      expect(() => handle.write("after-end\n")).not.toThrow();
+      expect(fake.stdinWrites.join("")).not.toContain("after-end");
+    });
+
+    it("no-ops when the stream reports itself no longer writable", async () => {
+      const writes: string[] = [];
+      // Reports `writable: false` while NOT being ended or destroyed — the third
+      // guard branch, which the PassThrough-based fakes can't reach.
+      const stdin = {
+        write: (chunk: string) => {
+          writes.push(chunk);
+          return true;
+        },
+        writable: false,
+        writableEnded: false,
+        destroyed: false,
+        on: () => undefined,
+      } as unknown as NodeJS.WritableStream;
+      const manager = new PluginProcessManager({
+        streamSink: () => {},
+        spawner: () => ({ ...makeFakeChild({ duplex: true }).child, stdin }),
+      });
+
+      const handle = await manager.spawn("acme.tool", duplexConfig());
+      expect(() => handle.write("nope\n")).not.toThrow();
+      expect(writes).toEqual([]);
+    });
+
+    it("no-ops when a duplex child came back without a stdin at all", async () => {
+      const manager = new PluginProcessManager({
+        streamSink: () => {},
+        // A spawner that hands back a child with no stdin despite duplex mode.
+        spawner: () => ({ ...makeFakeChild().child, stdin: null }),
+      });
+
+      const handle = await manager.spawn("acme.tool", duplexConfig());
+      expect(() => handle.write("nowhere\n")).not.toThrow();
+    });
+
+    it("absorbs an EPIPE raised by the write itself instead of crashing", async () => {
+      const errorListeners: Array<(err: Error) => void> = [];
+      // Reports itself fully open, so `write()` clears every guard and actually
+      // calls through — then fails the way a child that died mid-write does.
+      // Without the once-per-child listener installed in startChild, this error
+      // would surface unhandled and take the main process down.
+      const stdin = {
+        write: () => {
+          const err = new Error("write EPIPE") as Error & { code: string };
+          err.code = "EPIPE";
+          for (const listener of errorListeners) listener(err);
+          return false;
+        },
+        writable: true,
+        writableEnded: false,
+        destroyed: false,
+        on: (event: string, listener: (err: Error) => void) => {
+          if (event === "error") errorListeners.push(listener);
+          return undefined;
+        },
+      } as unknown as NodeJS.WritableStream;
+      const manager = new PluginProcessManager({
+        streamSink: () => {},
+        spawner: () => ({ ...makeFakeChild({ duplex: true }).child, stdin }),
+      });
+
+      const handle = await manager.spawn("acme.tool", duplexConfig());
+      // Exactly one listener, installed at spawn — not one per write, which
+      // would accumulate on a chatty plugin.
+      expect(errorListeners).toHaveLength(1);
+
+      expect(() => handle.write("boom\n")).not.toThrow();
+      handle.write("boom-again\n");
+      expect(errorListeners).toHaveLength(1);
     });
 
     // The one test that exercises the REAL default spawner. Asserting the
@@ -1087,6 +1170,7 @@ describe("PluginProcessManager", () => {
     // separately, and that minimalSpawnEnv still filters the host environment.
     it("drives a real child over stdio with a filtered environment", async () => {
       const SECRET = "DAINTREE_TEST_DUPLEX_SECRET";
+      const previousSecret = process.env[SECRET];
       process.env[SECRET] = "must-not-leak";
       const events: Array<{ event: PluginProcessStreamEvent }> = [];
       // No `spawner` override — this uses the production defaultSpawner.
@@ -1094,9 +1178,20 @@ describe("PluginProcessManager", () => {
         streamSink: (_pluginId, event) => events.push({ event }),
       });
 
+      const byKind = (kind: "stdout" | "stderr"): string =>
+        events
+          .map((e) => e.event)
+          .filter((e) => e.kind === kind)
+          .map((e) => (e.kind === kind ? e.chunk : ""))
+          .join("");
+
       try {
-        // Echoes one line back on stdout, reports what it can see of the
-        // environment on stderr, then exits.
+        // Echoes the line back on stdout and reports what it can see of the
+        // environment on stderr. It deliberately does NOT call process.exit():
+        // writes to a pipe are asynchronous, so exiting on top of them can
+        // truncate the output and Node's 'exit' can beat the parent's last
+        // 'data' event. Waiting on the bytes we actually assert on — rather
+        // than on exit — keeps this deterministic. The child is killed below.
         const script = [
           "let buf = '';",
           "process.stdin.setEncoding('utf8');",
@@ -1105,10 +1200,10 @@ describe("PluginProcessManager", () => {
           "  const i = buf.indexOf('\\n');",
           "  if (i === -1) return;",
           "  const line = buf.slice(0, i);",
+          "  buf = buf.slice(i + 1);",
           "  process.stdout.write('echo:' + line + '\\n');",
           "  process.stderr.write('flag=' + String(process.env.PLUGIN_FLAG) +",
           "    ' secret=' + String(process.env." + SECRET + ") + '\\n');",
-          "  process.exit(0);",
           "});",
         ].join("");
 
@@ -1121,30 +1216,31 @@ describe("PluginProcessManager", () => {
           panelId: null,
         });
 
-        const exited = new Promise<void>((resolve) => handle.onExit(() => resolve()));
         handle.write("hello\n");
-        await exited;
-        // Let the final stream chunks drain past the exit event.
-        await flushMicrotasks();
 
-        const byKind = (kind: "stdout" | "stderr"): string =>
-          events
-            .map((e) => e.event)
-            .filter((e) => e.kind === kind)
-            .map((e) => (e.kind === kind ? e.chunk : ""))
-            .join("");
+        // Poll until BOTH streams have delivered, bounded well inside the
+        // test timeout so a failure still runs `finally` and reports what did
+        // arrive instead of hanging until the framework kills the test.
+        const deadline = Date.now() + 10_000;
+        while (!(byKind("stdout").includes("echo:hello") && byKind("stderr").includes("secret="))) {
+          if (Date.now() > deadline) break;
+          await new Promise((r) => setTimeout(r, 10));
+        }
 
         // fd 0 really was piped: the child received what we wrote and answered.
         expect(byKind("stdout")).toContain("echo:hello");
         // fd 2 arrived on its own stream, NOT mixed into the protocol stream.
         expect(byKind("stderr")).toContain("flag=on");
-        expect(byKind("stdout")).not.toContain("flag=on");
-        // minimalSpawnEnv still applies: the explicit entry is present…
-        expect(byKind("stderr")).toContain("flag=on");
-        // …and the host-only secret never reached the child.
+        expect(byKind("stdout")).not.toContain("flag=");
+        // minimalSpawnEnv still applies: the explicit plugin entry reached the
+        // child, but the host-only secret did not.
         expect(byKind("stderr")).toContain("secret=undefined");
       } finally {
-        delete process.env[SECRET];
+        // Runs even when an assertion above throws, so no real child outlives
+        // the test and no env mutation leaks into another file's worker.
+        manager.killAll("acme.tool");
+        if (previousSecret === undefined) delete process.env[SECRET];
+        else process.env[SECRET] = previousSecret;
       }
     }, 20_000);
   });

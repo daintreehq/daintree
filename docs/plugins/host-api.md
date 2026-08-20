@@ -552,7 +552,9 @@ The returned `PluginProcessHandle` carries `id`, `kill()` (clean `SIGTERM`, then
 | `"duplex"`         | writable | separate                          | `write()`             |
 | `"pty"`            | writable | **merged** into one `data` stream | `write()`, `resize()` |
 
-Use `"duplex"` to drive a child that speaks a protocol over stdio — an MCP, LSP or ACP server, or anything else framing line-delimited JSON-RPC. Those need both a writable stdin _and_ a stdout the child's stderr diagnostics are not mixed into, which is exactly what `"pty"` cannot give you: a pseudo-terminal merges the two streams by construction.
+Use `"duplex"` to drive a child that speaks a protocol over stdio — an MCP, LSP or ACP server, or anything else carrying JSON-RPC. Those need both a writable stdin _and_ a stdout the child's stderr diagnostics are not mixed into, which is exactly what `"pty"` cannot give you: a pseudo-terminal merges the two streams by construction.
+
+The host is framing-agnostic — it moves bytes, you delimit messages. MCP and ACP use newline-delimited JSON; LSP uses `Content-Length` headers. The example below is NDJSON.
 
 ```ts
 const rpc = await host.process.spawn("codex", {
@@ -580,6 +582,8 @@ rpc.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" })}\n`
 ```
 
 `resize()` exists only on a `"pty"` handle — a duplex child has no terminal to resize.
+
+`write()` is fire-and-forget: it queues on the child's stdin and does not report backpressure, which suits the low-volume control-plane traffic this is built for. Don't stream bulk data through it — if you write faster than the child reads, that buffer grows unboundedly.
 
 Every spawned process is tied to your plugin's lifetime: on unload/disable/revoke the host SIGTERMs (then SIGKILLs) every outstanding process — a dev server can't leak past a reload. A per-plugin concurrency cap bounds how many processes can run at once; a `spawn` past the cap rejects rather than queueing. `process.spawn` is NOT revoke-guarded — call it from timers and subscription callbacks — but once the plugin unloads it rejects rather than spawning. Spawns are recorded in the plugin audit trail so process execution stays observable. The child does **not** inherit Daintree's full environment — only an allowlist of essentials (`PATH`, locale, temp, OS basics) plus whatever you pass in `env`, so the main process's tokens never leak to a `shell:exec` child; pass anything else the command needs explicitly. `cwd` is a process concern, not an `fs` scope — it is not contained to `scopes.fs.allowedPaths` (it defaults to the active worktree).
 

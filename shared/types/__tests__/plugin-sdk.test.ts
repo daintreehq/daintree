@@ -34,6 +34,7 @@ import type {
   PluginProcessApi,
   PluginProcessHandle,
   PluginDuplexProcessHandle,
+  PluginDuplexProcessSpawnOptions,
   PluginPtyProcessHandle,
   PluginProcessDataChunk,
   PluginProcessSpawnOptions,
@@ -128,6 +129,9 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<PluginProcessApi>().toMatchTypeOf<object>();
       expectTypeOf<PluginProcessHandle>().toMatchTypeOf<object>();
       expectTypeOf<PluginDuplexProcessHandle>().toMatchTypeOf<object>();
+      // The options type is part of the public surface too — a plugin author
+      // annotating a config object imports it by name.
+      expectTypeOf<PluginDuplexProcessSpawnOptions>().toMatchTypeOf<{ mode: "duplex" }>();
       expectTypeOf<PluginProcessSpawnOptions>().toMatchTypeOf<object>();
     });
 

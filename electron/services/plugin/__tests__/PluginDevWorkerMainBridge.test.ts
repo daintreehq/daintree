@@ -753,6 +753,9 @@ describe("PluginDevWorkerMainBridge", () => {
       await flush();
 
       expect(handle.write).toHaveBeenCalledWith('{"jsonrpc":"2.0"}\n');
+      // The resize notification must be DROPPED, not rerouted or thrown: exactly
+      // one relayed call total, so nothing turned the resize into a second write.
+      expect(handle.write).toHaveBeenCalledTimes(1);
       // A duplex child has no terminal, so resize is not part of its shape.
       expect(handle.resize).toBeUndefined();
     });
