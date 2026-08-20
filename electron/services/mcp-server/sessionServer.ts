@@ -620,16 +620,28 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     //      live grant exists, the dispatch proceeds and the grant's TTL
     //      is refreshed on success.
     //
-    // The order means that a session whose static tier already permits the
-    // action never consults the grant cache — grants are an additive layer,
-    // never required when the floor already grants access.
+    //   3. Native session-scoped automation grants (#10648) — these do two
+    //      jobs, and only the first is a tier concern: they widen past the
+    //      static floor, AND they pre-authorise the `danger: "confirm"` modal.
+    //      The second job is orthogonal to the floor, so the lookup runs on
+    //      BOTH legs of the tier check (#11878). Nesting it under denial (as
+    //      it originally was) made every grant unreachable for a tool the tier
+    //      already permitted — `worktree.delete` is `danger: "confirm"` but
+    //      system-tier permitted, so pre-authorising it in Settings did
+    //      nothing and the modal still fired on every call.
+    //
+    // The order means a session whose static tier already permits the action
+    // never consults the per-tool grant cache — those grants only widen the
+    // floor and never bypass confirmation, so they have nothing to add once
+    // the floor allows the call.
+    const tierPermitted = isTierPermitted(tier, actionId);
     let grantIssuedAt: number | undefined;
     // Set when a native session-scoped automation grant (#10648) authorized
     // this call. Captured here so the post-dispatch path can refresh the
     // grant's TTL window, and so the `danger: "confirm"` modal is bypassed —
     // a native grant is an explicit user approval of the tool's scope.
     let nativeGrantId: string | undefined;
-    if (!isTierPermitted(tier, actionId)) {
+    if (!tierPermitted) {
       const grant = sessionStore.grantCache.check(sessionId, actionId);
       const native = grant.granted
         ? null
@@ -706,6 +718,27 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           code: TIER_NOT_PERMITTED_CODE,
           message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
         });
+      }
+    } else {
+      // The floor already admits this call, so nothing here can widen it —
+      // the peek exists purely to learn whether a live native grant should
+      // pre-authorise the `danger: "confirm"` modal below (#11878). Only
+      // native grants are consulted: a per-tool "Approve once" grant widens
+      // the floor and nothing else, so it has no say once the floor allows
+      // the call.
+      //
+      // A match charges a use at the single consume site below, exactly as on
+      // the denied leg. That also charges tools in the grant's `allowedTools`
+      // that are NOT confirm-gated, where the grant buys the call nothing.
+      // Accepted deliberately: `maxUses` is a budget of matching dispatches,
+      // and over-charging fails toward MORE confirmation, never less. Spending
+      // a use only on calls that truly need one would mean resolving the
+      // action's effective danger — the async manifest plus args-conditional
+      // elevation — before this point, which is a far larger change than the
+      // bug warrants.
+      const native = sessionStore.grantCache.peekNativeGrant(sessionId, actionId);
+      if (native.granted) {
+        nativeGrantId = native.grantId;
       }
     }
 
@@ -829,16 +862,25 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Charge the native automation grant's use now that the call has cleared
     // the tier/grant check and is committed to proceeding (#10648). Doing it
     // here — not at the peek above — means an unauthorized call never burns a
-    // use. The peek→consume path is synchronous (no `await`), so the grant
-    // can't be revoked between peek and consume; a `false` return is purely
-    // defensive and fails closed.
+    // use. A `false` return is purely defensive: the grant was live at the
+    // peek, so it can only have aged out or been revoked in between.
+    //
+    // How that failure lands depends on which leg peeked (#11878). On the
+    // denied leg the grant WAS the authorization, so losing it fails closed.
+    // On the permitted leg it only bought a confirmation bypass, and the tier
+    // still admits the call — so drop the bypass and let the normal modal
+    // decide. Refusing there would answer a `system`-tier `worktree.delete`
+    // with "not permitted for the 'system' tier", which is simply untrue.
     if (nativeGrantId !== undefined) {
       const consumed = sessionStore.grantCache.consumeNativeGrantUse(nativeGrantId, actionId);
       if (!consumed) {
-        return buildToolError({
-          code: TIER_NOT_PERMITTED_CODE,
-          message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
-        });
+        if (!tierPermitted) {
+          return buildToolError({
+            code: TIER_NOT_PERMITTED_CODE,
+            message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
+          });
+        }
+        nativeGrantId = undefined;
       }
     }
 

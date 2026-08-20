@@ -196,7 +196,7 @@ The introspection tools (`actions.list`, `actions.search`, `actions.getSchema`) 
 How `danger` interacts with tier gating:
 
 - `danger: "restricted"` — never exposed (hard floor in `shouldExposeTool`) and never dispatchable, the latter enforced by `ActionService.dispatch` rather than by the tier gate.
-- `danger: "confirm"` — _exposed and dispatchable_ if the tier permits, but the `CallTool` handler dispatches it **unconfirmed** so the human approves it host-side in the renderer's native `McpConfirmDialog` (via the renderer bridge) before the mutation fires. This is the MCP-side wiring of the same confirm gate documented in [`destructive-action-safeguards.md`](./destructive-action-safeguards.md): `danger:"confirm"` classifies the action; the host `ConfirmDialog` is the user-facing confirm. A client's self-declared `elicitation.form` capability is **never** treated as authorization — a headless/agentic client could otherwise answer its own in-band elicitation `accept` and self-approve a destructive call with no human in the loop (#11342). When no Daintree window is open to surface the dialog the call is refused with `CONFIRMATION_REQUIRED` (`confirmationChannel: "unavailable"`); only a host-issued native automation grant pre-authorizes a dispatch.
+- `danger: "confirm"` — _exposed and dispatchable_ if the tier permits, but the `CallTool` handler dispatches it **unconfirmed** so the human approves it host-side in the renderer's native `McpConfirmDialog` (via the renderer bridge) before the mutation fires. This is the MCP-side wiring of the same confirm gate documented in [`destructive-action-safeguards.md`](./destructive-action-safeguards.md): `danger:"confirm"` classifies the action; the host `ConfirmDialog` is the user-facing confirm. A client's self-declared `elicitation.form` capability is **never** treated as authorization — a headless/agentic client could otherwise answer its own in-band elicitation `accept` and self-approve a destructive call with no human in the loop (#11342). When no Daintree window is open to surface the dialog the call is refused with `CONFIRMATION_REQUIRED` (`confirmationChannel: "unavailable"`); only a host-issued native automation grant pre-authorizes a dispatch — and it does so whether or not the static tier already permitted the action, since pre-authorizing the modal is orthogonal to clearing the floor (#11878).
 
 ## Session lifecycle (`sessionStore.ts`, `httpLifecycle.ts`)
 
@@ -279,12 +279,26 @@ tools/call(actionId, args)
   │               denial counter, grant lookup, dedup entry or dispatch
   │
   ├─1 Tier floor: isTierPermitted(tier, actionId)?
-  │      └─ no → grantCache.check(sessionId, actionId)
-  │             ├─ granted → proceed (capture issuedAt for post-dispatch refresh)
-  │             └─ denied  → incrementDenial → maybe notifyTierMismatch (banner,
-  │                          suppressed after MCP_DENIAL_SILENCE_THRESHOLD) →
-  │                          recordDenial(abusePolicy); if tripped → revokeSession →
-  │                          return TIER_NOT_PERMITTED
+  │      ├─ no → grantCache.check(sessionId, actionId)
+  │      │      ├─ granted → proceed (capture issuedAt for post-dispatch refresh;
+  │      │      │            widens the floor only — never bypasses confirm)
+  │      │      └─ denied  → peekNativeGrant(sessionId, actionId)
+  │      │             ├─ granted → proceed (capture grantId: widens the floor
+  │      │             │            AND pre-authorizes confirm)
+  │      │             └─ denied  → incrementDenial → maybe notifyTierMismatch (banner,
+  │      │                          suppressed after MCP_DENIAL_SILENCE_THRESHOLD) →
+  │      │                          recordDenial(abusePolicy); if tripped → revokeSession →
+  │      │                          return TIER_NOT_PERMITTED
+  │      └─ yes → peekNativeGrant(sessionId, actionId)  (#11878)
+  │             └─ granted → capture grantId for confirm pre-authorization
+  │
+  │      The native peek runs on BOTH legs because a native grant does two
+  │      jobs and only the first is a tier concern: it widens past the floor,
+  │      and it pre-authorizes the confirm modal. Nesting it under denial made
+  │      it unreachable for a tool the tier already permitted — worktree.delete
+  │      is danger:"confirm" but system-tier permitted, so pre-authorizing it
+  │      in Settings did nothing. The per-tool grant is denial-only: it widens
+  │      the floor and nothing else, so it has no say once the floor admits.
   │
   ├─2 Rate limit: consumeRateLimitToken(sessionId, actionId)
   │      └─ empty bucket → return MCP_RATE_LIMITED (retryAfter; retriable)
