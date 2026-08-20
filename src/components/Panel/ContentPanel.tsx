@@ -464,6 +464,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     exitCode,
     queueCount,
     flowStatus,
+    submitStatus,
     completedWithNoChanges,
     isHibernated,
   ]);
