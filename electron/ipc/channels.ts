@@ -331,6 +331,8 @@ export const CHANNELS = {
 
   ACCESSIBILITY_GET_ENABLED: "accessibility:get-enabled",
   ACCESSIBILITY_SUPPORT_CHANGED: "accessibility:support-changed",
+  /** Broadcast after a configuration bundle applied, so every view refreshes its mirrors (#11889). */
+  CONFIG_BUNDLE_IMPORTED: "config-bundle:imported",
 
   GIT_GET_FILE_DIFF: "git:get-file-diff",
   GIT_GET_PROJECT_PULSE: "git:get-project-pulse",
@@ -433,6 +435,9 @@ export const CHANNELS = {
   KEYBINDING_EXPORT_PROFILE: "keybinding:export-profile",
   KEYBINDING_IMPORT_PROFILE: "keybinding:import-profile",
 
+  CONFIG_BUNDLE_EXPORT: "config-bundle:export",
+  CONFIG_BUNDLE_PREVIEW_IMPORT: "config-bundle:preview-import",
+  CONFIG_BUNDLE_APPLY_IMPORT: "config-bundle:apply-import",
   WORKTREE_CONFIG_GET: "worktree-config:get",
   WORKTREE_CONFIG_SET_PATTERN: "worktree-config:set-pattern",
   WORKTREE_CONFIG_SET_WSL_GIT: "worktree-config:set-wsl-git",

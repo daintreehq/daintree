@@ -25,6 +25,13 @@ interface NotificationSettingsState {
   // never a toast-suppression gate (the OS already silences native banners).
   osDndActive: boolean | undefined;
   hydrate(): Promise<void>;
+  /**
+   * Re-read settings from the main process, ignoring the hydrated guard.
+   * `hydrate()` early-returns once hydrated, so anything that changes settings
+   * behind this store's back — importing a configuration bundle (#11889) — has
+   * no way to refresh the mirror without it.
+   */
+  rehydrate(): Promise<void>;
   setEnabled(value: boolean): void;
   setQuietHoursEnabled(value: boolean): void;
   setQuietHoursStartMin(value: number): void;
@@ -52,6 +59,11 @@ export const useNotificationSettingsStore = create<NotificationSettingsState>((s
   groupByContext: false,
   quietUntil: 0,
   osDndActive: undefined,
+
+  async rehydrate() {
+    set({ hydrated: false });
+    await get().hydrate();
+  },
 
   async hydrate() {
     if (get().hydrated) return;

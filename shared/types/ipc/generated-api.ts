@@ -80,6 +80,17 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["commands:list"]["args"]
     ): Promise<IpcInvokeMap["commands:list"]["result"]>;
   };
+  configBundle: {
+    applyImport(
+      ...args: IpcInvokeMap["config-bundle:apply-import"]["args"]
+    ): Promise<IpcInvokeMap["config-bundle:apply-import"]["result"]>;
+    export(
+      ...args: IpcInvokeMap["config-bundle:export"]["args"]
+    ): Promise<IpcInvokeMap["config-bundle:export"]["result"]>;
+    previewImport(
+      ...args: IpcInvokeMap["config-bundle:preview-import"]["args"]
+    ): Promise<IpcInvokeMap["config-bundle:preview-import"]["result"]>;
+  };
   connectivity: {
     getState(
       ...args: IpcInvokeMap["connectivity:get-state"]["args"]

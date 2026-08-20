@@ -12,6 +12,7 @@ import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
 import { getBuiltInAppSchemeForType, resolveAppTheme } from "@shared/theme";
 import { logError } from "@/utils/logger";
+import { IMPORT_CONFIG_EVENT } from "@/components/Config/importConfigEvent";
 
 async function refreshRendererConfig(): Promise<void> {
   await Promise.all([
@@ -119,6 +120,72 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
       // Main process reloads config and broadcasts APP_CONFIG_RELOADED,
       // which triggers the onConfigReloaded subscription below to refresh renderer stores.
       await window.electron.app.reloadConfig();
+    },
+  }));
+
+  actions.set("app.exportConfig", () => ({
+    id: "app.exportConfig",
+    title: "Export Configuration…",
+    description:
+      "Write the portable configuration — custom agents, agent settings, keyboard shortcuts, theme, notification preferences, worktree path pattern, and global recipes — to a JSON file. Opens a save dialog. Secret-bearing values are left out.",
+    category: "app",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["backup", "config", "settings", "save", "migrate", "transfer"],
+    nonRepeatable: true,
+    run: async () => {
+      try {
+        const result = await window.electron.configBundle.export();
+        if (result.outcome === "canceled") return;
+
+        const omitted = result.omittedSecretPaths.length;
+        notify({
+          type: "success",
+          priority: "high",
+          transient: true,
+          context: { eventKind: "settings" },
+          message:
+            omitted > 0
+              ? `Configuration exported — ${omitted} ${omitted === 1 ? "value that looked like a secret was" : "values that looked like secrets were"} left out`
+              : "Configuration exported",
+          duration: 4000,
+        });
+      } catch (error) {
+        logError("[app.exportConfig] Failed to export configuration", error);
+        notify({
+          type: "error",
+          priority: "high",
+          context: { eventKind: "settings" },
+          message: "Export failed — couldn't write the configuration file.",
+          action: {
+            label: "Try again",
+            onClick: () => {
+              void actionService.dispatch("app.exportConfig", undefined, { source: "user" });
+            },
+          },
+        });
+      }
+    },
+  }));
+
+  actions.set("app.importConfig", () => ({
+    id: "app.importConfig",
+    title: "Import Configuration…",
+    description:
+      "Merge a previously exported Daintree configuration bundle into this installation. Opens a file dialog, then asks the user to confirm what will be replaced before anything is written. Overwrites existing settings, so it takes over the foreground and should not run during other work.",
+    category: "app",
+    kind: "command",
+    // Overwrites configuration that git and reflog cannot recover — destructive
+    // tier D1. The confirmation lives in ImportConfigDialog.
+    danger: "confirm",
+    dangerRationale:
+      "Overwrites custom agents, agent settings, keyboard shortcuts, theme, notification preferences, the worktree path pattern, and global recipes with the values in the chosen file. Nothing on disk records the previous configuration, so there is no undo.",
+    scope: "renderer",
+    keywords: ["restore", "config", "settings", "load", "migrate", "transfer"],
+    nonRepeatable: true,
+    run: async () => {
+      window.dispatchEvent(new CustomEvent(IMPORT_CONFIG_EVENT));
     },
   }));
 

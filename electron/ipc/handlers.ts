@@ -28,6 +28,7 @@ import { registerAppVersionInfoHandlers } from "./handlers/appVersionInfo.js";
 import { registerOsDndHandlers } from "./handlers/osDnd.js";
 import { registerKeybindingHandlers } from "./handlers/keybinding.js";
 import { registerWorktreeConfigHandlers } from "./handlers/worktreeConfig.js";
+import { registerConfigBundleHandlers } from "./handlers/configBundle.js";
 import { registerNotificationHandlers } from "./handlers/notifications.js";
 import { registerMenuHandlers } from "./handlers/menu.js";
 import { registerFilesHandlers } from "./handlers/files.js";
@@ -162,6 +163,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerOsDndHandlers(deps));
     register(() => registerKeybindingHandlers(deps));
     register(() => registerWorktreeConfigHandlers(deps));
+    register(() => registerConfigBundleHandlers(deps));
     register(() => registerNotificationHandlers(deps));
     register(() => registerGeminiHandlers());
     register(() => registerEventsHandlers(deps));
