@@ -195,7 +195,7 @@ test.describe.serial("Presets: Panel Behavior (107–112)", () => {
     fixtureCleanup?.();
   });
 
-  test("107. Panel launched with a preset tints its agent icon with the preset color", async () => {
+  test("107. Panel launched with a preset marks its agent icon with the preset color", async () => {
     const { id, panel } = await launchPresetPanel(ctx.window);
     presetPanelId = id;
 
@@ -211,7 +211,7 @@ test.describe.serial("Presets: Panel Behavior (107–112)", () => {
 
   // 108–109: duplicating a running agent (Claude) panel does not materialize a
   // second tab/panel in the headless e2e harness (the duplicate button is a
-  // no-op for agent panels here — only one preset-tinted icon ever renders), so
+  // no-op for agent panels here — only one preset-colored icon ever renders), so
   // the duplicate-inheritance assertions can't run. The preset-color-on-launch
   // guarantee is covered for real by test 107; dock + restart persistence below
   // does not depend on duplication.
@@ -227,10 +227,10 @@ test.describe.serial("Presets: Panel Behavior (107–112)", () => {
       expect(presetPanelId).not.toBe("");
       const panel = getPanelById(ctx.window, presetPanelId);
       await panel.locator(SEL.panel.duplicate).first().click({ force: true, timeout: T_MEDIUM });
-      const tintedIcons = ctx.window.locator(
+      const presetIcons = ctx.window.locator(
         `[data-terminal-icon-id="claude"][data-terminal-icon-color="${PRESET_COLOR}"]`
       );
-      await expect.poll(() => tintedIcons.count(), { timeout: T_LONG }).toBeGreaterThanOrEqual(2);
+      await expect.poll(() => presetIcons.count(), { timeout: T_LONG }).toBeGreaterThanOrEqual(2);
     }
   );
 

@@ -3,11 +3,10 @@ import { cn } from "@/lib/utils";
 
 type AmpIconProps = SVGProps<SVGSVGElement> & {
   size?: number;
-  brandColor?: string;
 };
 
-export function AmpIcon({ className, size = 16, brandColor, ...props }: AmpIconProps) {
-  const fill = brandColor || "currentColor";
+export function AmpIcon({ className, size = 16, ...props }: AmpIconProps) {
+  const fill = "currentColor";
   return (
     <svg
       width={size}

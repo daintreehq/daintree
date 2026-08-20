@@ -41,7 +41,7 @@ const TERMINAL_KIND_ID = "terminal";
 /** Row id of the "Create a recipe" cue — the one browse row with no item. */
 export const CREATE_RECIPE_ROW_KEY = "create-recipe";
 
-export type LaunchAgentIcon = React.ComponentType<{ className?: string; brandColor?: string }>;
+export type LaunchAgentIcon = React.ComponentType<{ className?: string }>;
 
 /** Which provenance group a preset renders under, in this order. */
 export type DockLaunchPresetGroup = "default" | "ccr" | "project" | "custom";

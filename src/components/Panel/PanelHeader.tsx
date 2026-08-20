@@ -605,7 +605,6 @@ function PanelHeaderComponent({
                 chrome={tab.chrome}
                 className="w-3.5 h-3.5"
                 brandColor={tab.presetColor ?? tab.chrome.color}
-                userChosen={!!tab.presetColor}
               />
             </span>
             <span className="truncate">{tab.title}</span>
@@ -757,7 +756,6 @@ function PanelHeaderComponent({
               chrome={chrome}
               className="w-3.5 h-3.5"
               brandColor={presetColor ?? chrome.color}
-              userChosen={!!presetColor}
             />
           </span>
 
