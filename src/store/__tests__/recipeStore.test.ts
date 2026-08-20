@@ -165,6 +165,10 @@ describe("recipeStore", () => {
     // hoisted default so each test starts from an empty agent-settings shape
     // instead of inheriting a prior test's mockResolvedValue.
     getAgentSettingsMock.mockResolvedValue({ agents: {} });
+    // Same reason: without this, a test that never sets up addPanel inherits
+    // whichever spawn ids the previous test installed, so it passes in the
+    // suite and fails in isolation.
+    addTerminalMock.mockReset().mockResolvedValue(undefined);
     pluginRecordUseMock.mockResolvedValue(undefined);
     pluginUpdateMetadataMock.mockImplementation(async (id: string) => ({
       id,
@@ -651,14 +655,12 @@ describe("recipeStore", () => {
   });
 
   describe("recipe title pinning (#11872)", () => {
-    // `clearAllMocks` keeps whatever implementation a prior test installed, so
-    // give every case its own resolved id rather than inheriting one.
     beforeEach(() => {
       let callIndex = 0;
       addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
     });
 
-    const runWithTerminals = async (terminals: RecipeTerminal[]) => {
+    const runWithTerminals = async (terminals: RecipeTerminal[], terminalIndices?: number[]) => {
       useRecipeStore.setState({
         recipes: [
           {
@@ -672,9 +674,22 @@ describe("recipeStore", () => {
         isLoading: false,
         currentProjectId: "project-1",
       });
-      await useRecipeStore.getState().runRecipe("recipe-titles", "/tmp/worktree", "worktree-1");
+      await useRecipeStore
+        .getState()
+        .runRecipe(
+          "recipe-titles",
+          "/tmp/worktree",
+          "worktree-1",
+          undefined,
+          terminalIndices ? { terminalIndices } : undefined
+        );
       return addTerminalMock.mock.calls.map((call) => call[0]);
     };
+
+    const spawnedTitled = (
+      spawned: { title?: string }[],
+      title: string
+    ): { titleMode?: string } | undefined => spawned.find((options) => options.title === title);
 
     it("pins a named agent pane so detection cannot rename it", async () => {
       const spawned = await runWithTerminals([{ type: "claude", title: "TEAMLEAD", env: {} }]);
@@ -705,61 +720,101 @@ describe("recipeStore", () => {
       );
     });
 
-    it("pins every pane of a fleet independently rather than from one shared title", async () => {
+    it("pins by title content, not by agent type or pane shape", async () => {
+      // Every pane kind the spawn loop reaches, mixed in one run. Titles are
+      // the assertion key rather than call order: the agent branch awaits CLI
+      // resolution, so it can finish after a plain terminal queued later.
+      const spawned = await runWithTerminals([
+        { type: "codex", title: "ARCHITECT", env: {} },
+        { type: "terminal", title: "runner", command: "zsh", env: {} },
+        { type: "claude", title: "DEV1", env: {} },
+        { type: "terminal", title: "0", command: "zsh", env: {} },
+        { type: "dev-preview", title: "Web", devCommand: "npm run dev", env: {} },
+      ]);
+
+      expect(spawned).toHaveLength(5);
+      // A non-Claude agent, a lowercase name, and "0" all pin. Keying off the
+      // agent id, off casing, or off a length floor would still satisfy the
+      // role-name cases above, so those are the mutants these catch.
+      for (const title of ["ARCHITECT", "runner", "DEV1", "0"]) {
+        expect(spawnedTitled(spawned, title)?.titleMode).toBe("custom");
+      }
+      // A dev preview has no PTY and so no detection to fend off; pinning one
+      // would be inert, and reaching it at all means the branch order moved.
+      expect(spawnedTitled(spawned, "Web")).toMatchObject({ kind: "dev-preview" });
+      expect(spawnedTitled(spawned, "Web")?.titleMode).toBeUndefined();
+    });
+
+    it("decides each pane's pin from its own title", async () => {
       const spawned = await runWithTerminals([
         { type: "claude", title: "ARCHITECT", env: {} },
         { type: "claude", title: "", env: {} },
-        { type: "claude", title: "DEV1", env: {} },
+        { type: "terminal", title: "", command: "zsh", env: {} },
+        { type: "terminal", title: "DEV1", command: "zsh", env: {} },
       ]);
 
-      expect(spawned).toHaveLength(3);
+      expect(spawned).toHaveLength(4);
       const named = spawned.filter((options) => options.title);
       const unnamed = spawned.filter((options) => !options.title);
       expect(named.map((options) => options.title).sort()).toEqual(["ARCHITECT", "DEV1"]);
       for (const options of named) {
-        expect(options).toHaveProperty("titleMode", "custom");
+        expect(options.titleMode).toBe("custom");
       }
-      // The untitled pane sits between two pinned ones: a hoisted pin would
-      // have leaked a neighbour's decision onto it.
-      expect(unnamed).toHaveLength(1);
-      expect(unnamed[0]).not.toHaveProperty("titleMode");
+      // Unnamed panes are interleaved with named ones in both branches, so a
+      // pin hoisted above the loop or cached per branch would leak onto them.
+      expect(unnamed).toHaveLength(2);
+      for (const options of unnamed) {
+        expect(options.titleMode).toBeUndefined();
+      }
+    });
+
+    it("pins a retried terminal from its own index, not its place in the retry", async () => {
+      // `terminalIndices` carries original recipe indices; reading the title
+      // off the filtered spawn list would pin from the wrong pane.
+      const spawned = await runWithTerminals(
+        [
+          { type: "terminal", title: "SKIPPED", command: "a", env: {} },
+          { type: "terminal", title: "", command: "b", env: {} },
+          { type: "terminal", title: "DEV5", command: "c", env: {} },
+        ],
+        [2]
+      );
+
+      expect(spawned).toHaveLength(1);
+      expect(spawned[0]).toMatchObject({ title: "DEV5", titleMode: "custom" });
     });
 
     it("leaves a blank title unpinned so the derived title still applies", async () => {
-      // Omitted, empty, whitespace-only, and control-only all mean "no name".
-      // The key must be absent, not `undefined`: `addPanel` reads a present
-      // key as an explicit "default", which is a different contract.
+      // Omitted, empty, whitespace-only, and control-only all mean "no name":
+      // the pane keeps today's behaviour of taking a derived title and letting
+      // detection update it.
       const spawned = await runWithTerminals([
         { type: "terminal", command: "a", env: {} },
         { type: "terminal", title: "", command: "b", env: {} },
         { type: "terminal", title: "   ", command: "c", env: {} },
-        { type: "terminal", title: "", command: "d", env: {} },
+        // The recipe sanitizer keeps titles verbatim (unlike command/args), so
+        // control-only text arrives truthy; plain truthiness would pin it.
+        { type: "terminal", title: "\u0001\u007f", command: "d", env: {} },
       ]);
 
       expect(spawned).toHaveLength(4);
       for (const options of spawned) {
-        expect(options).not.toHaveProperty("titleMode");
+        expect(options.titleMode).toBeUndefined();
       }
     });
 
     it("passes the recipe title through verbatim, sanitizing only to decide the pin", async () => {
-      // Padding is preserved so the pane matches what the recipe editor shows;
-      // sanitizing is a predicate here, not a rewrite.
+      // The pane has to show what the recipe editor shows, so padding and
+      // embedded controls survive into `title`; sanitizing is the predicate
+      // here, not a rewrite of the string being handed over.
       const spawned = await runWithTerminals([
         { type: "terminal", title: "  DEV1  ", command: "a", env: {} },
+        { type: "terminal", title: "DEV\u00012", command: "b", env: {} },
       ]);
 
-      expect(spawned[0]).toMatchObject({ title: "  DEV1  ", titleMode: "custom" });
-    });
-
-    it("does not pin the dev-preview pane, which has no agent detection to fend off", async () => {
-      const spawned = await runWithTerminals([
-        { type: "dev-preview", title: "Web", devCommand: "npm run dev", env: {} },
-      ]);
-
-      expect(spawned).toHaveLength(1);
-      expect(spawned[0]).toMatchObject({ kind: "dev-preview", title: "Web" });
-      expect(spawned[0]).not.toHaveProperty("titleMode");
+      expect(spawned).toHaveLength(2);
+      expect(spawnedTitled(spawned, "  DEV1  ")?.titleMode).toBe("custom");
+      expect(spawnedTitled(spawned, "DEV\u00012")?.titleMode).toBe("custom");
     });
   });
 

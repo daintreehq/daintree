@@ -1044,9 +1044,15 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           // `sanitizeTerminalName` returns "" for those, leaving them
           // unpinned and eligible for the derived title as before. Derived
           // per terminal, never hoisted above the map: one pane's title must
-          // not decide another's pin (#10794). Conditional spread, never
-          // `titleMode: undefined`, which `addPanel` reads as an explicit
-          // "default".
+          // not decide another's pin (#10794).
+          //
+          // Only a title the recipe author wrote should pin. A recipe built by
+          // `generateRecipeFromActiveTerminals` captures whatever title a pane
+          // happened to carry, derived ones included, and `RecipeTerminal` has
+          // no field marking which is which — so a captured "Terminal" pins
+          // here and can no longer promote to "Claude". That is the capture-
+          // time provenance gap #11872 leaves open, not something the spawn
+          // site can tell apart.
           const titlePin = sanitizeTerminalName(terminal.title ?? "")
             ? { titleMode: "custom" as const }
             : {};
