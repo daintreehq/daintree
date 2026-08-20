@@ -912,10 +912,12 @@ describe("model configuration", () => {
 
 describe("getAgentModelConfig", () => {
   it("returns model config for valid agent and model ID", () => {
-    const model = getAgentModelConfig("claude", "opus");
-    expect(model).toBeDefined();
-    expect(model!.name).toBe("Opus");
-    expect(model!.shortLabel).toBe("Opus");
+    // A non-first entry whose name and shortLabel differ, so "returns the
+    // first model" and "returns name instead of shortLabel" both fail here.
+    const expected = getAgentConfig("codex")!.models![1]!;
+    const model = getAgentModelConfig("codex", expected.id);
+    expect(model).toEqual(expected);
+    expect(model!.name).not.toBe(model!.shortLabel);
   });
 
   it("returns undefined for invalid model ID", () => {
@@ -929,7 +931,9 @@ describe("getAgentModelConfig", () => {
 
 describe("getAgentDisplayTitle", () => {
   it("returns agent name with model shortLabel when modelId matches", () => {
-    expect(getAgentDisplayTitle("claude", "opus")).toBe("Claude (Opus)");
+    const model = getAgentConfig("codex")!.models![1]!;
+    expect(getAgentDisplayTitle("codex", model.id)).toBe(`Codex (${model.shortLabel})`);
+    expect(getAgentDisplayTitle("codex", model.id)).not.toContain(model.name);
   });
 
   it("returns plain agent name when no modelId provided", () => {

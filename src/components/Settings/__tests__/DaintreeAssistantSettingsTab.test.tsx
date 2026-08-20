@@ -158,6 +158,14 @@ vi.mock("@/config/agents", () => ({
       return { name: "Codex", supports: { permissionBypass: true, tier: "stable" } };
     if (id === "daintree-assistant")
       return { name: "Daintree Assistant", supports: { permissionBypass: false, tier: "stable" } };
+    // Assistant-wired but with no bypass mechanism of any kind — the shape a
+    // user-defined agent takes.
+    if (id === "byoa")
+      return { name: "BYOA", supports: { permissionBypass: false, tier: "stable" } };
+    // Has a DEFAULT_DANGEROUS_ARGS entry (--yolo) but opts out of bypass, so it
+    // isolates the permissionBypass clause from the missing-flag clause.
+    if (id === "gemini")
+      return { name: "Gemini", supports: { permissionBypass: false, tier: "stable" } };
     return undefined;
   },
 }));
@@ -397,9 +405,14 @@ describe("DaintreeAssistantSettingsTab", () => {
     expect(container.textContent).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(container.textContent).not.toContain("--dangerously-skip-permissions");
     expect(container.textContent).not.toContain("Bypass Claude permission prompts");
-    expect(
-      screen.getByLabelText("Bypass Codex approvals and sandbox during help sessions")
-    ).toBeTruthy();
+
+    const toggle = screen.getByLabelText("Bypass Codex approvals and sandbox during help sessions");
+    fireEvent.click(toggle);
+
+    // The warning has to name the sandbox: Codex's flag gives up more than a
+    // confirmation gate, and understating that is the bug being fixed.
+    await waitForContent(container, "outside its sandbox");
+    expect(container.textContent).not.toContain("built-in (Bash, Write)");
   });
 
   it("describes the Daintree Assistant's env-var bypass, not a CLI flag", async () => {
@@ -413,15 +426,25 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Auto-approve assistant actions");
 
-    // The assistant has no dangerous-args entry — no flag may be claimed.
+    expect(container.textContent).toContain("own per-action confirmation sheet");
+    // The assistant has no dangerous-args entry, so no flag may be claimed.
     expect(container.textContent).not.toContain("--dangerously");
-    expect(
-      screen.getByLabelText("Auto-approve Daintree Assistant actions during help sessions")
-    ).toBeTruthy();
+
+    const toggle = screen.getByLabelText(
+      "Auto-approve Daintree Assistant actions during help sessions"
+    );
+    fireEvent.click(toggle);
+
+    await waitForContent(container, "acts without asking");
+    expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
+      bypassPermissions: true,
+    });
   });
 
-  it("hides the bypass toggle and its warning while no agent is selected", async () => {
-    helpPanelState.preferredAgentId = null;
+  // The gate is what keeps a switch off agents where flipping it does nothing.
+  it("hides the bypass toggle for an agent with no bypass mechanism", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "byoa"]);
+    helpPanelState.preferredAgentId = "byoa";
 
     const { container } = render(
       <SettingsValidationProvider>
@@ -430,7 +453,71 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Capability tier");
 
-    expect(container.textContent).not.toContain("Bypass");
+    expect(screen.queryByRole("switch", { name: /bypass|auto-approve/i })).toBeNull();
+  });
+
+  it("hides the bypass toggle for an agent that opts out of permission bypass", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "gemini"]);
+    helpPanelState.preferredAgentId = "gemini";
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Capability tier");
+
+    // A dangerous flag exists for this agent, so only the supports declaration
+    // keeps the switch away — and the launch path honours the same declaration.
+    expect(screen.queryByRole("switch", { name: /bypass|auto-approve/i })).toBeNull();
+    expect(container.textContent).not.toContain("--yolo");
+  });
+
+  it("follows the selection when the preferred agent changes", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    helpPanelState.preferredAgentId = "claude";
+
+    const { container, rerender } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Bypass Claude permission prompts");
+
+    helpPanelState.preferredAgentId = "codex";
+    rerender(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    await waitForContent(container, "Bypass Codex approvals and sandbox");
+    expect(container.textContent).not.toContain("Bypass Claude permission prompts");
+  });
+
+  it("hides the bypass toggle and its warning while no agent is selected", async () => {
+    helpPanelState.preferredAgentId = null;
+    // Persisted ON: the warning banner must be gated on the agent too, not just
+    // on the stored boolean, or it renders with no switch to turn it back off.
+    installApi({
+      getSettings: vi.fn().mockResolvedValue({
+        docSearch: true,
+        daintreeControl: true,
+        tier: "action" as const,
+        bypassPermissions: true,
+        auditRetention: 7,
+        customArgs: "",
+      }),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Capability tier");
+
+    expect(screen.queryByRole("switch", { name: /bypass|auto-approve/i })).toBeNull();
     expect(container.textContent).not.toContain("only remaining safeguard");
   });
 

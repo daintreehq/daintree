@@ -68,6 +68,11 @@ function mockCodexCli(models: Record<string, unknown>[]): ExecFn {
   })) as unknown as ExecFn;
 }
 
+/** The IDs an agent ships as its offline fallback, in declared order. */
+function bundledIdsFor(agentId: string): string[] {
+  return getEffectiveAgentConfig(agentId)!.models!.map((m) => m.id);
+}
+
 function mockFailingFetch(error: unknown): FetchFn {
   return vi.fn(async () => {
     throw error;
@@ -128,7 +133,7 @@ describe("AgentModelCatalogService", () => {
     const fetchImpl = mockFetch(makeCatalog());
     const service = new AgentModelCatalogService({ cachePath, fetchImpl });
 
-    const bundledIds = getEffectiveAgentConfig("claude")!.models!.map((m) => m.id);
+    const bundledIds = bundledIdsFor("claude");
     const result = await service.getResolvedModels("claude");
 
     expect(result.agentId).toBe("claude");
@@ -166,8 +171,9 @@ describe("AgentModelCatalogService", () => {
 
     const result = await service.getResolvedModels("gemini");
 
-    const pro = result.models.find((m) => m.id === "gemini-2.5-pro");
-    expect(pro?.shortLabel).toBe("2.5 Pro");
+    const bundledPro = getEffectiveAgentConfig("gemini")!.models![0]!;
+    const pro = result.models.find((m) => m.id === bundledPro.id);
+    expect(pro?.shortLabel).toBe(bundledPro.shortLabel);
   });
 
   it("falls back to bundled when fetch fails", async () => {
@@ -226,8 +232,7 @@ describe("AgentModelCatalogService", () => {
     const result = await service.getResolvedModels("gemini");
 
     expect(result.source).toBe("bundled");
-    expect(result.models.map((m) => m.id)).toEqual(["gemini-2.5-pro", "gemini-2.5-flash"]);
-    expect(result.models.find((m) => m.id === "string-entry")).toBeUndefined();
+    expect(result.models.map((m) => m.id)).toEqual(bundledIdsFor("gemini"));
   });
 
   it("drops models.dev entries no coding CLI could drive", async () => {
@@ -279,6 +284,42 @@ describe("AgentModelCatalogService", () => {
     expect(result.contextWindow).toBe(1_000_000);
   });
 
+  it("reads the capability fields by type, not by truthiness", async () => {
+    const fetchImpl = mockFetch({
+      google: {
+        models: {
+          // Text alongside another output modality is still text-capable.
+          "gemini-multi": {
+            name: "Gemini Multi",
+            limit: { context: 500_000 },
+            tool_call: true,
+            modalities: { input: ["text"], output: ["image", "text"] },
+          },
+          // Truthy strings must not stand in for the real types.
+          "gemini-stringy-tool": {
+            name: "Gemini Stringy",
+            limit: { context: 900_000 },
+            tool_call: "true",
+            modalities: { input: ["text"], output: ["text"] },
+          },
+          "gemini-stringy-output": {
+            name: "Gemini Stringy Output",
+            limit: { context: 900_000 },
+            tool_call: true,
+            modalities: { input: ["text"], output: "text" },
+          },
+        },
+      },
+    });
+    const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+
+    const result = await service.getResolvedModels("gemini");
+
+    expect(result.models.map((m) => m.id)).toContain("gemini-multi");
+    expect(result.models.map((m) => m.id)).not.toContain("gemini-stringy-tool");
+    expect(result.models.map((m) => m.id)).not.toContain("gemini-stringy-output");
+  });
+
   it("keeps discovery alive for agents whose list is not curated", async () => {
     const fetchImpl = mockFetch({
       google: {
@@ -294,7 +335,7 @@ describe("AgentModelCatalogService", () => {
     // A brand-new remote model reaches the picker for a discovery agent — the
     // capability filter is generic, not a curated-agent allowlist in disguise.
     expect(result.models.map((m) => m.id)).toContain("gemini-4-pro");
-    expect(result.models.map((m) => m.id)).toContain("gemini-2.5-pro");
+    expect(result.models.map((m) => m.id)).toEqual(expect.arrayContaining(bundledIdsFor("gemini")));
   });
 
   it("falls back to bundled when every remote entry fails the capability filter", async () => {
@@ -315,7 +356,7 @@ describe("AgentModelCatalogService", () => {
     const result = await service.getResolvedModels("gemini");
 
     expect(result.source).toBe("bundled");
-    expect(result.models.map((m) => m.id)).toEqual(["gemini-2.5-pro", "gemini-2.5-flash"]);
+    expect(result.models.map((m) => m.id)).toEqual(bundledIdsFor("gemini"));
   });
 
   it("dedupes concurrent calls via singleflight", async () => {
@@ -374,9 +415,40 @@ describe("AgentModelCatalogService", () => {
     expect(result.models.map((m) => m.id)).toContain("opus");
   });
 
+  it("filters a disk cache written before the capability fields existed", async () => {
+    // Pre-change caches hold bare `{name, limit}` entries. They stay within TTL
+    // after an app update, so the filter has to run on every read — not only on
+    // freshly fetched payloads — or the old unfiltered list survives the fix.
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.writeFile(
+      cachePath,
+      JSON.stringify({
+        fetchedAt: Date.now(),
+        raw: {
+          google: {
+            models: {
+              "gemini-legacy": { name: "Gemini Legacy", limit: { context: 900_000 } },
+            },
+          },
+        },
+      }),
+      "utf-8"
+    );
+
+    const fetchImpl = mockFailingFetch(new Error("offline"));
+    const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+
+    const result = await service.getResolvedModels("gemini");
+
+    expect(result.models.map((m) => m.id)).not.toContain("gemini-legacy");
+    expect(result.models.map((m) => m.id)).toEqual(bundledIdsFor("gemini"));
+  });
+
   it("takes the codex CLI catalog as authoritative, dropping remote-only IDs", async () => {
+    // Deliberately unequal to the remote catalog's 200_000 max, so reversing
+    // the CLI-before-remote precedence would change the assertion below.
     const execFileImpl = mockCodexCli([
-      { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", context_window: 200_000, ...LISTED(1) },
+      { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", context_window: 512_000, ...LISTED(1) },
       { slug: "gpt-5.2", display_name: "GPT-5.2", context_window: 128_000, ...LISTED(29) },
     ]);
 
@@ -392,8 +464,8 @@ describe("AgentModelCatalogService", () => {
     // `gpt-5.4` and `o3` are in the models.dev fixture and pass the capability
     // filter, but the CLI is the thing that will receive `--model`.
     expect(result.models.map((m) => m.id)).toEqual(["gpt-5.6-sol", "gpt-5.2"]);
-    // Codex CLI's context window is preferred when present.
-    expect(result.contextWindow).toBe(200_000);
+    // Codex CLI's context window is preferred over the remote catalog's.
+    expect(result.contextWindow).toBe(512_000);
   });
 
   it("offers only models the codex CLI marks visible", async () => {
@@ -448,6 +520,32 @@ describe("AgentModelCatalogService", () => {
     ]);
   });
 
+  it("treats a non-numeric priority as unranked and keeps ties in CLI order", async () => {
+    const execFileImpl = mockCodexCli([
+      // Same priority: input order decides, so a non-stable sort would flip these.
+      { slug: "gpt-tie-first", display_name: "Tie first", visibility: "list", priority: 5 },
+      { slug: "gpt-tie-second", display_name: "Tie second", visibility: "list", priority: 5 },
+      // A string priority must not be coerced into rank 1.
+      { slug: "gpt-stringy", display_name: "Stringy", visibility: "list", priority: "1" },
+      { slug: "gpt-ranked", display_name: "Ranked", ...LISTED(2) },
+    ]);
+
+    const service = new AgentModelCatalogService({
+      cachePath,
+      fetchImpl: mockFetch({}),
+      execFileImpl,
+    });
+
+    const result = await service.getResolvedModels("codex");
+
+    expect(result.models.map((m) => m.id)).toEqual([
+      "gpt-ranked",
+      "gpt-tie-first",
+      "gpt-tie-second",
+      "gpt-stringy",
+    ]);
+  });
+
   it("falls back to the curated codex list when every CLI entry is hidden", async () => {
     const execFileImpl = mockCodexCli([
       { slug: "codex-auto-review", display_name: "Auto review", visibility: "hide", priority: 43 },
@@ -459,10 +557,9 @@ describe("AgentModelCatalogService", () => {
       execFileImpl,
     });
 
-    const bundledIds = getEffectiveAgentConfig("codex")!.models!.map((m) => m.id);
     const result = await service.getResolvedModels("codex");
 
-    expect(result.models.map((m) => m.id)).toEqual(bundledIds);
+    expect(result.models.map((m) => m.id)).toEqual(bundledIdsFor("codex"));
   });
 
   it("silently ignores codex CLI failure and keeps the curated list", async () => {
@@ -478,17 +575,21 @@ describe("AgentModelCatalogService", () => {
       execFileImpl,
     });
 
-    const bundledIds = getEffectiveAgentConfig("codex")!.models!.map((m) => m.id);
     const result = await service.getResolvedModels("codex");
 
-    expect(result.models.map((m) => m.id)).toEqual(bundledIds);
+    expect(result.models.map((m) => m.id)).toEqual(bundledIdsFor("codex"));
     expect(result.source).toBe("merged");
   });
 
   it("uses the CLI catalog when the network is down", async () => {
-    const execFileImpl = mockCodexCli([
-      { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", context_window: 400_000, ...LISTED(1) },
-    ]);
+    // Bare-array output (no `{models:[...]}` wrapper) is still a supported shape.
+    const execFileImpl: ExecFn = vi.fn(async () => ({
+      stdout: JSON.stringify([
+        { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", context_window: 400_000, ...LISTED(1) },
+        { slug: "gpt-5.4", display_name: "GPT-5.4", visibility: "hide", priority: 16 },
+      ]),
+      stderr: "",
+    })) as unknown as ExecFn;
 
     const service = new AgentModelCatalogService({
       cachePath,
