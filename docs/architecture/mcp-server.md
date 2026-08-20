@@ -331,9 +331,8 @@ tools/call(actionId, args)
 
 Gate order is load-bearing: a native grant's use is charged **after** admission and after the workspace-bound confirm ceiling — an unauthorized or refused call must never burn one — but **before** dedup, so a replayed duplicate spends a use without dispatching. The per-call rate limiter that used to sit between admission and dedup was removed in #10764.
 
-### Rate limits and dedup
+### Dedup
 
-- **Rate limits** (`RATE_LIMIT_TIERS`, `RATE_LIMIT_TOOL_MAP`): per-`(session, toolId)` token bucket. `highFreqRead` (60/min) for cheap polling, `standard` (30/min) default, `mutation` (10/min) for side-effecting tools (commit, push, issue/PR, worktree.delete).
 - **Dedup** (`MCP_DEDUP_ALLOWLIST`): creation tools only, admitted on one of two distinct grounds — either an LLM retry leaves a duplicate artifact (an orphan terminal, a second agent, a duplicate issue/comment/review), or the retry creates nothing and the cached success is preferable to the error a redundant redispatch would raise (`worktree.delete`, `forge.createPR`, `forge.mergePR`, which 422s a duplicate PR and PUTs a merge). Keyed by a caller-supplied `requestKey` (prefixed with `actionId`, capped at `MAX_REQUEST_KEY_LENGTH`) or an auto canonical args hash, with an args-hash collision guard (#8429). TTL `MCP_DEDUP_TTL_MS` (120s), FIFO-capped at `MCP_DEDUP_MAX_ENTRIES_PER_SESSION` (256). Deliberately **out** (#11534): navigation (`forge.open*`) and idempotent state-sets (assign/unassign, close/reopen/edit, labels), which create no duplicate to suppress and whose cached 120s no-op breaks the legitimate repeat — reopening a URL the user closed, or re-assigning after an unassign — plus `git.commit`/`git.push`, whose arguments a legitimate repeat reuses unchanged, so deduping them would report success for a commit or push that never happened.
 
 ## Tool argument and result conventions (#11543)
