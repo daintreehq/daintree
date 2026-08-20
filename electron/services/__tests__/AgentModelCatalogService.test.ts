@@ -4,46 +4,42 @@ import * as os from "node:os";
 import * as fs from "node:fs/promises";
 
 import { AgentModelCatalogService } from "../AgentModelCatalogService.js";
+import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+
+/**
+ * A models.dev entry the capability filter accepts: tool calling plus text
+ * output. Entries missing either are what the filter exists to drop.
+ */
+function chatModel(name: string, context: number): Record<string, unknown> {
+  return {
+    name,
+    limit: { context },
+    tool_call: true,
+    modalities: { input: ["text"], output: ["text"] },
+  };
+}
 
 function makeCatalog(): Record<string, unknown> {
   return {
     anthropic: {
       name: "Anthropic",
       models: {
-        "claude-sonnet-4-6": {
-          name: "Claude Sonnet 4.6",
-          limit: { context: 1_000_000 },
-        },
-        "claude-opus-4-6": {
-          name: "Claude Opus 4.6",
-          limit: { context: 200_000 },
-        },
-        "claude-haiku-4-5-20251001": {
-          name: "Claude Haiku 4.5",
-          limit: { context: 200_000 },
-        },
+        "claude-sonnet-4-6": chatModel("Claude Sonnet 4.6", 1_000_000),
+        "claude-opus-4-6": chatModel("Claude Opus 4.6", 200_000),
+        "claude-haiku-4-5-20251001": chatModel("Claude Haiku 4.5", 200_000),
       },
     },
     openai: {
       name: "OpenAI",
       models: {
-        "gpt-5.4": {
-          name: "GPT-5.4",
-          limit: { context: 128_000 },
-        },
-        o3: {
-          name: "o3",
-          limit: { context: 200_000 },
-        },
+        "gpt-5.4": chatModel("GPT-5.4", 128_000),
+        o3: chatModel("o3", 200_000),
       },
     },
     google: {
       name: "Google",
       models: {
-        "gemini-2.5-pro": {
-          name: "Gemini 2.5 Pro",
-          limit: { context: 1_048_576 },
-        },
+        "gemini-2.5-pro": chatModel("Gemini 2.5 Pro", 1_048_576),
       },
     },
   };
@@ -60,6 +56,16 @@ function mockFetch(payload: unknown, opts: { ok?: boolean; status?: number } = {
     status: opts.status ?? 200,
     json: async () => payload,
   }));
+}
+
+/** `visibility`/`priority` as the real `codex debug models --bundled` emits them. */
+const LISTED = (priority: number) => ({ visibility: "list", priority });
+
+function mockCodexCli(models: Record<string, unknown>[]): ExecFn {
+  return vi.fn(async () => ({
+    stdout: JSON.stringify({ models }),
+    stderr: "",
+  })) as unknown as ExecFn;
 }
 
 function mockFailingFetch(error: unknown): FetchFn {
@@ -118,28 +124,50 @@ describe("AgentModelCatalogService", () => {
     await cleanup(cachePath);
   });
 
-  it("returns remote-derived models merged with bundled IDs for claude", async () => {
+  it("keeps a curated agent's list authoritative — remote IDs never join it", async () => {
     const fetchImpl = mockFetch(makeCatalog());
+    const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+
+    const bundledIds = getEffectiveAgentConfig("claude")!.models!.map((m) => m.id);
+    const result = await service.getResolvedModels("claude");
+
+    expect(result.agentId).toBe("claude");
+    // Every dated Anthropic ID in the fixture clears the capability filter, so
+    // only the curated-list projection keeps them out of the picker (#11879).
+    expect(result.models.map((m) => m.id)).toEqual(bundledIds);
+    expect(result.contextWindow).toBe(1_000_000);
+    expect(result.source).toBe("merged");
+  });
+
+  it("lets remote metadata enrich a curated entry without changing membership", async () => {
+    const fetchImpl = mockFetch({
+      anthropic: {
+        models: {
+          // Same ID as a curated alias: remote may improve its display name.
+          opus: chatModel("Claude Opus (latest)", 400_000),
+          "claude-opus-4-7": chatModel("Claude Opus 4.7", 200_000),
+        },
+      },
+    });
     const service = new AgentModelCatalogService({ cachePath, fetchImpl });
 
     const result = await service.getResolvedModels("claude");
 
-    expect(result.agentId).toBe("claude");
-    expect(result.models.map((m) => m.id)).toEqual(
-      expect.arrayContaining(["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5-20251001"])
-    );
-    expect(result.contextWindow).toBe(1_000_000);
-    expect(result.source).toBe("merged");
+    const opus = result.models.find((m) => m.id === "opus");
+    expect(opus?.name).toBe("Claude Opus (latest)");
+    // Curated shortLabel survives the remote name.
+    expect(opus?.shortLabel).toBe("Opus");
+    expect(result.models.map((m) => m.id)).not.toContain("claude-opus-4-7");
   });
 
   it("preserves bundled shortLabel for known models", async () => {
     const fetchImpl = mockFetch(makeCatalog());
     const service = new AgentModelCatalogService({ cachePath, fetchImpl });
 
-    const result = await service.getResolvedModels("claude");
+    const result = await service.getResolvedModels("gemini");
 
-    const sonnet = result.models.find((m) => m.id === "claude-sonnet-4-6");
-    expect(sonnet?.shortLabel).toBe("Sonnet");
+    const pro = result.models.find((m) => m.id === "gemini-2.5-pro");
+    expect(pro?.shortLabel).toBe("2.5 Pro");
   });
 
   it("falls back to bundled when fetch fails", async () => {
@@ -179,25 +207,115 @@ describe("AgentModelCatalogService", () => {
     expect(result.models.length).toBeGreaterThan(0);
   });
 
-  it("tolerates malformed entries — non-object entries skipped, valid ones surface", async () => {
+  // A non-object entry fails `models` at the record level, so the whole catalog
+  // is rejected rather than the one entry — the resolver must still degrade to
+  // bundled silently instead of throwing into IPC. (`extractRemote`'s per-entry
+  // safeParse is a second line of defence that this path never reaches.)
+  it("degrades to bundled when a malformed entry rejects the remote catalog", async () => {
     const fetchImpl = mockFetch({
-      anthropic: {
+      google: {
         models: {
-          "claude-sonnet-4-6": { name: "Claude Sonnet 4.6", limit: { context: 1_000_000 } },
+          "gemini-3-pro": chatModel("Gemini 3 Pro", 1_000_000),
           "string-entry": "not-an-object",
           "null-entry": null,
-          "claude-opus-4-6": { name: "Claude Opus 4.6", limit: { context: 200_000 } },
         },
       },
     });
     const service = new AgentModelCatalogService({ cachePath, fetchImpl });
 
-    const result = await service.getResolvedModels("claude");
+    const result = await service.getResolvedModels("gemini");
 
-    expect(result.models.map((m) => m.id)).toContain("claude-sonnet-4-6");
-    expect(result.models.map((m) => m.id)).toContain("claude-opus-4-6");
+    expect(result.source).toBe("bundled");
+    expect(result.models.map((m) => m.id)).toEqual(["gemini-2.5-pro", "gemini-2.5-flash"]);
     expect(result.models.find((m) => m.id === "string-entry")).toBeUndefined();
-    expect(result.models.find((m) => m.id === "null-entry")).toBeUndefined();
+  });
+
+  it("drops models.dev entries no coding CLI could drive", async () => {
+    const fetchImpl = mockFetch({
+      google: {
+        models: {
+          "gemini-3-pro": chatModel("Gemini 3 Pro", 1_000_000),
+          // Image + embedding models: published by the provider, rejected by
+          // the CLI. These are the entries #11879 reported in the picker.
+          "gemini-image-1": {
+            name: "Gemini Image 1",
+            limit: { context: 4_000_000 },
+            tool_call: false,
+            modalities: { input: ["text"], output: ["image"] },
+          },
+          "gemini-embedding-1": {
+            name: "Gemini Embedding",
+            limit: { context: 8_000_000 },
+            tool_call: false,
+            modalities: { input: ["text"], output: ["text"] },
+          },
+          // Tool-capable but audio-out: still not something --model takes.
+          "gemini-realtime": {
+            name: "Gemini Realtime",
+            limit: { context: 2_000_000 },
+            tool_call: true,
+            modalities: { input: ["audio"], output: ["audio"] },
+          },
+          // Capability fields absent entirely — fail closed.
+          "gemini-unknown": { name: "Gemini Unknown", limit: { context: 3_000_000 } },
+        },
+      },
+    });
+    const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+
+    const result = await service.getResolvedModels("gemini");
+
+    expect(result.models.map((m) => m.id)).toContain("gemini-3-pro");
+    for (const excluded of [
+      "gemini-image-1",
+      "gemini-embedding-1",
+      "gemini-realtime",
+      "gemini-unknown",
+    ]) {
+      expect(result.models.map((m) => m.id)).not.toContain(excluded);
+    }
+    // Excluded entries advertise far larger windows; none may reach the
+    // resolved value, which is why the filter runs before the aggregate.
+    expect(result.contextWindow).toBe(1_000_000);
+  });
+
+  it("keeps discovery alive for agents whose list is not curated", async () => {
+    const fetchImpl = mockFetch({
+      google: {
+        models: {
+          "gemini-4-pro": chatModel("Gemini 4 Pro", 2_000_000),
+        },
+      },
+    });
+    const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+
+    const result = await service.getResolvedModels("gemini");
+
+    // A brand-new remote model reaches the picker for a discovery agent — the
+    // capability filter is generic, not a curated-agent allowlist in disguise.
+    expect(result.models.map((m) => m.id)).toContain("gemini-4-pro");
+    expect(result.models.map((m) => m.id)).toContain("gemini-2.5-pro");
+  });
+
+  it("falls back to bundled when every remote entry fails the capability filter", async () => {
+    const fetchImpl = mockFetch({
+      google: {
+        models: {
+          "gemini-image-1": {
+            name: "Gemini Image 1",
+            limit: { context: 4_000_000 },
+            tool_call: false,
+            modalities: { input: ["text"], output: ["image"] },
+          },
+        },
+      },
+    });
+    const service = new AgentModelCatalogService({ cachePath, fetchImpl });
+
+    const result = await service.getResolvedModels("gemini");
+
+    expect(result.source).toBe("bundled");
+    expect(result.models.map((m) => m.id)).toEqual(["gemini-2.5-pro", "gemini-2.5-flash"]);
   });
 
   it("dedupes concurrent calls via singleflight", async () => {
@@ -253,17 +371,14 @@ describe("AgentModelCatalogService", () => {
     const result = await offline.getResolvedModels("claude");
 
     expect(result.source).toBe("merged");
-    expect(result.models.map((m) => m.id)).toContain("claude-sonnet-4-6");
+    expect(result.models.map((m) => m.id)).toContain("opus");
   });
 
-  it("enriches codex models from the bundled CLI catalog", async () => {
-    const execFileImpl: ExecFn = vi.fn(async () => ({
-      stdout: JSON.stringify([
-        { slug: "gpt-5.4", display_name: "GPT-5.4", context_window: 200_000 },
-        { slug: "o3-mini", display_name: "o3-mini", context_window: 128_000 },
-      ]),
-      stderr: "",
-    })) as unknown as ExecFn;
+  it("takes the codex CLI catalog as authoritative, dropping remote-only IDs", async () => {
+    const execFileImpl = mockCodexCli([
+      { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", context_window: 200_000, ...LISTED(1) },
+      { slug: "gpt-5.2", display_name: "GPT-5.2", context_window: 128_000, ...LISTED(29) },
+    ]);
 
     const service = new AgentModelCatalogService({
       cachePath,
@@ -274,14 +389,83 @@ describe("AgentModelCatalogService", () => {
 
     const result = await service.getResolvedModels("codex");
 
-    expect(result.models.map((m) => m.id)).toEqual(
-      expect.arrayContaining(["gpt-5.4", "o3", "o3-mini"])
-    );
+    // `gpt-5.4` and `o3` are in the models.dev fixture and pass the capability
+    // filter, but the CLI is the thing that will receive `--model`.
+    expect(result.models.map((m) => m.id)).toEqual(["gpt-5.6-sol", "gpt-5.2"]);
     // Codex CLI's context window is preferred when present.
     expect(result.contextWindow).toBe(200_000);
   });
 
-  it("silently ignores codex CLI failure", async () => {
+  it("offers only models the codex CLI marks visible", async () => {
+    const execFileImpl = mockCodexCli([
+      { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", context_window: 400_000, ...LISTED(1) },
+      {
+        slug: "gpt-5.4",
+        display_name: "GPT-5.4",
+        context_window: 900_000,
+        visibility: "hide",
+        priority: 16,
+      },
+      { slug: "codex-auto-review", display_name: "Auto review", visibility: "hide", priority: 43 },
+      // No visibility field at all — treated as hidden, not as opt-in.
+      { slug: "gpt-mystery", display_name: "Mystery", context_window: 999_000 },
+    ]);
+
+    const service = new AgentModelCatalogService({
+      cachePath,
+      fetchImpl: mockFetch({}),
+      execFileImpl,
+    });
+
+    const result = await service.getResolvedModels("codex");
+
+    expect(result.models.map((m) => m.id)).toEqual(["gpt-5.6-sol"]);
+    // A hidden entry's context window must not leak into the resolved value.
+    expect(result.contextWindow).toBe(400_000);
+  });
+
+  it("orders codex models by the CLI's priority, unranked entries last", async () => {
+    const execFileImpl = mockCodexCli([
+      { slug: "gpt-5.5", display_name: "GPT-5.5", ...LISTED(7) },
+      { slug: "gpt-unranked", display_name: "Unranked", visibility: "list" },
+      { slug: "gpt-5.6-terra", display_name: "GPT-5.6 Terra", ...LISTED(2) },
+      { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", ...LISTED(1) },
+    ]);
+
+    const service = new AgentModelCatalogService({
+      cachePath,
+      fetchImpl: mockFetch({}),
+      execFileImpl,
+    });
+
+    const result = await service.getResolvedModels("codex");
+
+    expect(result.models.map((m) => m.id)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.5",
+      "gpt-unranked",
+    ]);
+  });
+
+  it("falls back to the curated codex list when every CLI entry is hidden", async () => {
+    const execFileImpl = mockCodexCli([
+      { slug: "codex-auto-review", display_name: "Auto review", visibility: "hide", priority: 43 },
+    ]);
+
+    const service = new AgentModelCatalogService({
+      cachePath,
+      fetchImpl: mockFetch(makeCatalog()),
+      execFileImpl,
+    });
+
+    const bundledIds = getEffectiveAgentConfig("codex")!.models!.map((m) => m.id);
+    const result = await service.getResolvedModels("codex");
+
+    expect(result.models.map((m) => m.id)).toEqual(bundledIds);
+  });
+
+  it("silently ignores codex CLI failure and keeps the curated list", async () => {
     const execFileImpl: ExecFn = vi.fn(async () => {
       const err: NodeJS.ErrnoException = new Error("not found");
       err.code = "ENOENT";
@@ -294,10 +478,27 @@ describe("AgentModelCatalogService", () => {
       execFileImpl,
     });
 
+    const bundledIds = getEffectiveAgentConfig("codex")!.models!.map((m) => m.id);
     const result = await service.getResolvedModels("codex");
 
-    expect(result.models.map((m) => m.id)).toContain("gpt-5.4");
+    expect(result.models.map((m) => m.id)).toEqual(bundledIds);
     expect(result.source).toBe("merged");
+  });
+
+  it("uses the CLI catalog when the network is down", async () => {
+    const execFileImpl = mockCodexCli([
+      { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", context_window: 400_000, ...LISTED(1) },
+    ]);
+
+    const service = new AgentModelCatalogService({
+      cachePath,
+      fetchImpl: mockFailingFetch(new Error("offline")),
+      execFileImpl,
+    });
+
+    const result = await service.getResolvedModels("codex");
+
+    expect(result.models.map((m) => m.id)).toEqual(["gpt-5.6-sol"]);
   });
 
   it("returns null for unknown agent IDs", async () => {
@@ -315,8 +516,8 @@ describe("AgentModelCatalogService", () => {
     const execFileImpl: ExecFn = vi.fn(async () => ({
       stdout: JSON.stringify({
         models: [
-          { slug: "gpt-5.5", display_name: "GPT-5.5", context_window: 256_000 },
-          { slug: "gpt-5.4", display_name: "GPT-5.4", context_window: 128_000 },
+          { slug: "gpt-5.5", display_name: "GPT-5.5", context_window: 256_000, ...LISTED(7) },
+          { slug: "gpt-5.4", display_name: "GPT-5.4", context_window: 128_000, ...LISTED(16) },
         ],
       }),
       stderr: "",
@@ -337,27 +538,30 @@ describe("AgentModelCatalogService", () => {
 
   it("tolerates non-numeric limit.context anywhere in the remote catalog", async () => {
     const fetchImpl = mockFetch({
-      anthropic: {
+      google: {
         models: {
-          "claude-sonnet-4-6": { name: "Claude Sonnet 4.6", limit: { context: 200_000 } },
-          "claude-experimental": { name: "Claude Experimental", limit: { context: "unlimited" } },
+          "gemini-3-pro": chatModel("Gemini 3 Pro", 200_000),
+          "gemini-experimental": {
+            ...chatModel("Gemini Experimental", 0),
+            limit: { context: "unlimited" },
+          },
         },
       },
       // A whole separate provider with a malformed entry must not poison
-      // the catalog for the well-formed anthropic provider.
+      // the catalog for the well-formed google provider.
       openai: {
         models: {
-          "gpt-5.4": { name: "GPT-5.4", limit: { context: null } },
+          "gpt-5.4": { ...chatModel("GPT-5.4", 0), limit: { context: null } },
         },
       },
     });
     const service = new AgentModelCatalogService({ cachePath, fetchImpl });
 
-    const result = await service.getResolvedModels("claude");
+    const result = await service.getResolvedModels("gemini");
 
     expect(result.source).toBe("merged");
-    expect(result.models.map((m) => m.id)).toContain("claude-sonnet-4-6");
-    expect(result.models.map((m) => m.id)).toContain("claude-experimental");
+    expect(result.models.map((m) => m.id)).toContain("gemini-3-pro");
+    expect(result.models.map((m) => m.id)).toContain("gemini-experimental");
     expect(result.contextWindow).toBe(200_000);
   });
 
@@ -366,7 +570,9 @@ describe("AgentModelCatalogService", () => {
       await new Promise((r) => setTimeout(r, 5));
       return {
         stdout: JSON.stringify({
-          models: [{ slug: "gpt-5.5", display_name: "GPT-5.5", context_window: 256_000 }],
+          models: [
+            { slug: "gpt-5.5", display_name: "GPT-5.5", context_window: 256_000, ...LISTED(7) },
+          ],
         }),
         stderr: "",
       };
@@ -389,22 +595,19 @@ describe("AgentModelCatalogService", () => {
 
   it("derives shortLabel from name for remote-only models", async () => {
     const fetchImpl = mockFetch({
-      anthropic: {
+      google: {
         models: {
-          "claude-new-model": {
-            name: "Claude New (preview)",
-            limit: { context: 200_000 },
-          },
+          "gemini-new-model": chatModel("Gemini New (preview)", 200_000),
         },
       },
     });
     const service = new AgentModelCatalogService({ cachePath, fetchImpl });
 
-    const result = await service.getResolvedModels("claude");
+    const result = await service.getResolvedModels("gemini");
 
-    const newModel = result.models.find((m) => m.id === "claude-new-model");
+    const newModel = result.models.find((m) => m.id === "gemini-new-model");
     expect(newModel).toBeDefined();
     // Trailing parenthetical is stripped to keep the label short.
-    expect(newModel?.shortLabel).toBe("Claude New");
+    expect(newModel?.shortLabel).toBe("Gemini New");
   });
 });

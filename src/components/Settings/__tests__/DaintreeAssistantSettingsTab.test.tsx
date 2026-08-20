@@ -145,9 +145,19 @@ const { mockGetAssistantSupportedAgentIds } = vi.hoisted(() => ({
 vi.mock("@/config/agents", () => ({
   getAgentIds: () => ["claude", "codex"],
   getAssistantSupportedAgentIds: () => mockGetAssistantSupportedAgentIds(),
+  // `supports` must be present: the bypass card reads permissionBypass to
+  // decide whether the selected agent has a bypass mechanism at all.
   getAgentConfig: (id: string) => {
-    if (id === "claude") return { name: "Claude Code", assistantMinVersion: "2.0.0" };
-    if (id === "codex") return { name: "Codex" };
+    if (id === "claude")
+      return {
+        name: "Claude Code",
+        assistantMinVersion: "2.0.0",
+        supports: { permissionBypass: true, tier: "stable" },
+      };
+    if (id === "codex")
+      return { name: "Codex", supports: { permissionBypass: true, tier: "stable" } };
+    if (id === "daintree-assistant")
+      return { name: "Daintree Assistant", supports: { permissionBypass: false, tier: "stable" } };
     return undefined;
   },
 }));
@@ -351,6 +361,7 @@ describe("DaintreeAssistantSettingsTab", () => {
   });
 
   it("turning on bypass permissions reveals the inline warning copy", async () => {
+    helpPanelState.preferredAgentId = "claude";
     const { container } = render(
       <SettingsValidationProvider>
         <DaintreeAssistantSettingsTab />
@@ -360,15 +371,90 @@ describe("DaintreeAssistantSettingsTab", () => {
 
     expect(container.textContent).not.toContain("only remaining safeguard");
 
-    const toggle = screen.getByLabelText(
-      "Bypass Claude Code permission prompts during help sessions"
-    );
+    const toggle = screen.getByLabelText("Bypass Claude permission prompts during help sessions");
     fireEvent.click(toggle);
 
     await waitForContent(container, "only remaining safeguard");
     expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
       bypassPermissions: true,
     });
+  });
+
+  // One stored boolean, three different mechanisms behind it. Labelling them
+  // all as Claude's flag reads as a no-op while silently enabling
+  // auto-approval, so the copy has to follow the selected agent (#11879).
+  it("labels the bypass toggle with the selected agent's own mechanism", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex", "daintree-assistant"]);
+    helpPanelState.preferredAgentId = "codex";
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Bypass Codex approvals and sandbox");
+
+    expect(container.textContent).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(container.textContent).not.toContain("--dangerously-skip-permissions");
+    expect(container.textContent).not.toContain("Bypass Claude permission prompts");
+    expect(
+      screen.getByLabelText("Bypass Codex approvals and sandbox during help sessions")
+    ).toBeTruthy();
+  });
+
+  it("describes the Daintree Assistant's env-var bypass, not a CLI flag", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex", "daintree-assistant"]);
+    helpPanelState.preferredAgentId = "daintree-assistant";
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Auto-approve assistant actions");
+
+    // The assistant has no dangerous-args entry — no flag may be claimed.
+    expect(container.textContent).not.toContain("--dangerously");
+    expect(
+      screen.getByLabelText("Auto-approve Daintree Assistant actions during help sessions")
+    ).toBeTruthy();
+  });
+
+  it("hides the bypass toggle and its warning while no agent is selected", async () => {
+    helpPanelState.preferredAgentId = null;
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Capability tier");
+
+    expect(container.textContent).not.toContain("Bypass");
+    expect(container.textContent).not.toContain("only remaining safeguard");
+  });
+
+  it("renders exactly the model catalog the resolver returns", async () => {
+    helpPanelState.preferredAgentId = "claude";
+    window.electron.agentCapabilities.getResolvedModelList = vi.fn().mockResolvedValue({
+      agentId: "claude",
+      models: [
+        { id: "opus", name: "Opus", shortLabel: "Opus" },
+        { id: "sonnet", name: "Sonnet", shortLabel: "Sonnet" },
+      ],
+      contextWindow: 200_000,
+      source: "merged",
+    });
+
+    render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    const select = await screen.findByLabelText("Model");
+    const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
+    expect(options).toEqual(["Default (CLI default)", "Opus", "Sonnet"]);
   });
 
   it("changing the capability tier persists tier=system", async () => {

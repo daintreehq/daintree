@@ -74,11 +74,16 @@ export const config: AgentConfig = {
       "Run 'claude auth login' to authenticate after installing",
     ],
   },
+  // `claude --model` takes either a full name (`claude-fable-5`) or an alias
+  // for the latest model in a family. Aliases are the right shape here: a
+  // pinned ID goes stale on every release, an alias never does.
   models: [
-    { id: "claude-sonnet-4-6", name: "Sonnet 4.6", shortLabel: "Sonnet" },
-    { id: "claude-opus-4-6", name: "Opus 4.6", shortLabel: "Opus" },
-    { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", shortLabel: "Haiku" },
+    { id: "opus", name: "Opus", shortLabel: "Opus" },
+    { id: "fable", name: "Fable", shortLabel: "Fable" },
+    { id: "haiku", name: "Haiku", shortLabel: "Haiku" },
+    { id: "sonnet", name: "Sonnet", shortLabel: "Sonnet" },
   ],
+  curatedModels: true,
   contextWindow: 200_000,
   capabilities: {
     scrollback: 10000,

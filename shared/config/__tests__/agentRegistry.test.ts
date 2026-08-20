@@ -856,14 +856,15 @@ describe("opencode TUI environment", () => {
 });
 
 describe("model configuration", () => {
-  it("claude has models with expected IDs", () => {
+  // `claude --model` accepts either a full name or a family alias resolving to
+  // the latest release. Pinned IDs go stale on every release (#11879), so the
+  // invariant is the *shape* of the list, not which families are in it today.
+  it("claude offers bare family aliases, never pinned release IDs", () => {
     const config = getAgentConfig("claude");
     expect(config?.models).toBeDefined();
     expect(config!.models!.length).toBeGreaterThanOrEqual(3);
-    const modelIds = config!.models!.map((m) => m.id);
-    expect(modelIds).toContain("claude-sonnet-4-6");
-    expect(modelIds).toContain("claude-opus-4-6");
-    expect(modelIds).toContain("claude-haiku-4-5-20251001");
+    const pinned = config!.models!.map((m) => m.id).filter((id) => /\d/.test(id));
+    expect(pinned).toEqual([]);
   });
 
   it("gemini has models", () => {
@@ -875,13 +876,19 @@ describe("model configuration", () => {
     expect(modelIds).toContain("gemini-2.5-flash");
   });
 
-  it("codex has models", () => {
+  // Codex doesn't validate `--model` against an allowlist — an unrecognised
+  // slug silently falls back to generic metadata rather than erroring — so the
+  // fallback list must name explicit tier slugs, never the ambiguous family
+  // alias that prefixes them (#11879).
+  it("codex offers explicit tier slugs, never a bare family alias", () => {
     const config = getAgentConfig("codex");
     expect(config?.models).toBeDefined();
     expect(config!.models!.length).toBeGreaterThanOrEqual(1);
     const modelIds = config!.models!.map((m) => m.id);
-    expect(modelIds).toContain("gpt-5.4");
-    expect(modelIds).toContain("gpt-5.3-codex-spark");
+    const ambiguous = modelIds.filter((id) =>
+      modelIds.some((other) => other !== id && other.startsWith(`${id}-`))
+    );
+    expect(ambiguous).toEqual([]);
   });
 
   it("each model has id, name, and shortLabel", () => {
@@ -905,9 +912,9 @@ describe("model configuration", () => {
 
 describe("getAgentModelConfig", () => {
   it("returns model config for valid agent and model ID", () => {
-    const model = getAgentModelConfig("claude", "claude-opus-4-6");
+    const model = getAgentModelConfig("claude", "opus");
     expect(model).toBeDefined();
-    expect(model!.name).toBe("Opus 4.6");
+    expect(model!.name).toBe("Opus");
     expect(model!.shortLabel).toBe("Opus");
   });
 
@@ -922,7 +929,7 @@ describe("getAgentModelConfig", () => {
 
 describe("getAgentDisplayTitle", () => {
   it("returns agent name with model shortLabel when modelId matches", () => {
-    expect(getAgentDisplayTitle("claude", "claude-opus-4-6")).toBe("Claude (Opus)");
+    expect(getAgentDisplayTitle("claude", "opus")).toBe("Claude (Opus)");
   });
 
   it("returns plain agent name when no modelId provided", () => {

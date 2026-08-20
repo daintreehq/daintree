@@ -67,11 +67,18 @@ export const config: AgentConfig = {
       "Run 'codex auth login' after installing to authenticate",
     ],
   },
+  // Offline fallback for when `codex debug models --bundled` can't be probed.
+  // Ordered to match the CLI's own `priority`. Explicit tier slugs, not the
+  // bare `gpt-5.6` family alias: the CLI doesn't validate `--model` against an
+  // allowlist, so an unlisted slug silently falls back to generic metadata
+  // instead of failing loudly.
   models: [
-    { id: "gpt-5.4", name: "GPT-5.4", shortLabel: "GPT-5.4" },
-    { id: "o3", name: "o3", shortLabel: "o3" },
-    { id: "gpt-5.3-codex-spark", name: "Codex Spark", shortLabel: "Spark" },
+    { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", shortLabel: "Sol" },
+    { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", shortLabel: "Terra" },
+    { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", shortLabel: "Luna" },
+    { id: "gpt-5.5", name: "GPT-5.5", shortLabel: "GPT-5.5" },
   ],
+  curatedModels: true,
   contextWindow: 128_000,
   capabilities: {
     scrollback: 10000,

@@ -17,11 +17,13 @@ const execFileAsync = promisify(execFile);
 const ModelEntrySchema = z
   .object({
     name: z.string().optional(),
-    // `limit.context` is read lazily as `unknown` at the catalog level so a
-    // single non-numeric value (e.g. `null`, `"unlimited"`, or any future
-    // type) never rejects the entire catalog. `extractRemote` guards with
-    // `typeof ctx === "number"` before reading the value.
+    // `limit.context`, `tool_call` and `modalities` are read lazily as
+    // `unknown` at the catalog level so a single unexpected value (e.g.
+    // `null`, `"unlimited"`, or any future type) never rejects the entire
+    // catalog. `extractRemote` narrows each one before reading it.
     limit: z.object({ context: z.unknown() }).passthrough().optional(),
+    tool_call: z.unknown().optional(),
+    modalities: z.object({ output: z.unknown() }).passthrough().optional(),
   })
   .passthrough();
 
@@ -82,8 +84,13 @@ const MAX_CODEX_BUFFER = 256 * 1024;
  * `shared/config/agents/*.ts` remain the offline-safe fallback.
  *
  * Codex receives an additional offline enrichment pass from `codex debug
- * models --bundled` when the Codex CLI is on PATH; remote and CLI sources
- * are merged into the resolved list, with bundled IDs always present.
+ * models --bundled` when the Codex CLI is on PATH.
+ *
+ * Sources contribute metadata freely, but membership is decided by whichever
+ * source actually speaks for the CLI — see {@link authoritativeIds}. models.dev
+ * groups by *provider*, so left unchecked it offers image, embedding and
+ * legacy models that no coding CLI accepts; entries that reach the union at
+ * all must first clear {@link canDriveAgentCli}.
  *
  * Unknown model IDs (and remote/CLI failures) degrade silently per the
  * issue constraint — `console.warn` only, never `notify()`.
@@ -127,7 +134,12 @@ export class AgentModelCatalogService {
       codex = await this.getCodexCatalog();
     }
 
-    const merged = this.merge(bundled, remote, codex);
+    const merged = this.merge(
+      bundled,
+      remote,
+      codex,
+      this.authoritativeIds(agentId, bundled, codex)
+    );
 
     let source: ResolvedModelCatalog["source"];
     if (!remote && !codex) {
@@ -178,6 +190,9 @@ export class AgentModelCatalogService {
     for (const [modelId, entry] of Object.entries(provider.models)) {
       const parsed = ModelEntrySchema.safeParse(entry);
       if (!parsed.success) continue;
+      // Runs before the context aggregate so an excluded image or embedding
+      // entry can't inflate the resolved window either.
+      if (!canDriveAgentCli(parsed.data)) continue;
       const name = parsed.data.name ?? modelId;
       const ctx = parsed.data.limit?.context;
       if (typeof ctx === "number" && ctx > maxContext) {
@@ -194,10 +209,32 @@ export class AgentModelCatalogService {
     return { models, contextWindow: maxContext > 0 ? maxContext : null };
   }
 
+  /**
+   * The IDs this agent's picker is allowed to offer, in display order, or
+   * `null` to keep the plain union of every source.
+   *
+   * A live CLI catalog is the strongest signal there is — it's the binary
+   * that will receive the `--model` flag answering for itself — so it wins
+   * outright. Failing that, an agent whose bundled list is marked
+   * {@link AgentConfig.curatedModels} answers for itself. Everyone else keeps
+   * discovering new models from the remote catalog.
+   */
+  private authoritativeIds(
+    agentId: string,
+    bundled: AgentResolved,
+    codex: AgentResolved | null
+  ): string[] | null {
+    if (codex && codex.models.length > 0) return codex.models.map((m) => m.id);
+    const curated = getEffectiveAgentConfig(agentId)?.curatedModels === true;
+    if (curated && bundled.models.length > 0) return bundled.models.map((m) => m.id);
+    return null;
+  }
+
   private merge(
     bundled: AgentResolved,
     remote: AgentResolved | null,
-    codex: AgentResolved | null
+    codex: AgentResolved | null,
+    authoritativeIds: string[] | null
   ): AgentResolved {
     if (!remote && !codex) return bundled;
 
@@ -235,10 +272,18 @@ export class AgentModelCatalogService {
     const contextWindow =
       codex?.contextWindow ?? remote?.contextWindow ?? bundled.contextWindow ?? null;
 
-    return {
-      models: Array.from(byId.values()),
-      contextWindow,
-    };
+    // Every source contributed metadata; only the authoritative one decides
+    // membership and order. Projecting last means a curated entry still picks
+    // up a better display name from models.dev without letting models.dev
+    // smuggle in IDs the CLI would reject.
+    const models = authoritativeIds
+      ? authoritativeIds.flatMap((id) => {
+          const model = byId.get(id);
+          return model ? [model] : [];
+        })
+      : Array.from(byId.values());
+
+    return { models, contextWindow };
   }
 
   /** Returns parsed catalog or null when all sources fail. */
@@ -439,32 +484,65 @@ export class AgentModelCatalogService {
         name: z.string().optional(),
         context_window: z.number().optional(),
         max_context_window: z.number().optional(),
+        // The CLI's own answer to "should a picker offer this?". Read as
+        // `unknown` for the same reason as the models.dev fields — an
+        // unexpected type must not reject the whole catalog.
+        visibility: z.unknown().optional(),
+        priority: z.unknown().optional(),
       })
       .passthrough();
 
-    const models: AgentModelConfig[] = [];
+    const listed: { model: AgentModelConfig; priority: number }[] = [];
     let maxContext = 0;
     for (const entry of entries) {
       const safe = CodexEntrySchema.safeParse(entry);
       if (!safe.success) continue;
       const id = safe.data.slug ?? safe.data.id;
       if (!id) continue;
+      // Codex marks internal and retired slugs `"hide"` (`codex-auto-review`,
+      // superseded releases). Only `"list"` entries belong in a picker, and an
+      // absent or unrecognised value is treated as hidden so a format change
+      // can't quietly reopen the gate.
+      if (safe.data.visibility !== "list") continue;
       const name = safe.data.display_name ?? safe.data.name ?? id;
       const ctx = safe.data.max_context_window ?? safe.data.context_window;
       if (typeof ctx === "number" && ctx > maxContext) maxContext = ctx;
-      models.push({
-        id,
-        name,
-        shortLabel: deriveShortLabel(name, id),
+      listed.push({
+        model: { id, name, shortLabel: deriveShortLabel(name, id) },
+        priority:
+          typeof safe.data.priority === "number" ? safe.data.priority : Number.MAX_SAFE_INTEGER,
       });
     }
-    if (models.length === 0) return null;
-    return { models, contextWindow: maxContext > 0 ? maxContext : null };
+    if (listed.length === 0) return null;
+    // Ascending `priority` is the CLI's own recommended order; entries without
+    // one sort last, ties keeping input order (Array.prototype.sort is stable).
+    listed.sort((a, b) => a.priority - b.priority);
+    return {
+      models: listed.map((l) => l.model),
+      contextWindow: maxContext > 0 ? maxContext : null,
+    };
   }
 }
 
 function isNodeError(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && "code" in err;
+}
+
+/**
+ * Whether a models.dev entry describes a model an agent CLI could actually be
+ * pointed at. models.dev lists everything a provider publishes — image,
+ * embedding and realtime-audio models included — and a coding CLI rejects all
+ * of those. Tool calling plus text output is the minimum a CLI needs.
+ *
+ * Deliberately fail-closed: an entry whose capability fields are missing or
+ * the wrong type is dropped rather than offered. Losing a model from the
+ * picker is recoverable (the bundled list is still there); offering one the
+ * CLI rejects is the bug this guards.
+ */
+function canDriveAgentCli(entry: z.infer<typeof ModelEntrySchema>): boolean {
+  if (entry.tool_call !== true) return false;
+  const output = entry.modalities?.output;
+  return Array.isArray(output) && output.includes("text");
 }
 
 /**

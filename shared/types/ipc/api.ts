@@ -2341,9 +2341,16 @@ export interface HelpAssistantSettings {
    */
   tier: HelpAssistantTier;
   /**
-   * Pass `--dangerously-skip-permissions` (Claude) and write
-   * `defaultMode: "bypassPermissions"` into the session's `.claude/settings.json`.
-   * Bypasses Claude Code's per-tool confirmation gate. Defaults to false.
+   * Run the assistant without its per-tool confirmation gate. One flag, but
+   * each backend honours it differently — Claude gets
+   * `--dangerously-skip-permissions` plus `defaultMode: "bypassPermissions"` in
+   * the session's `.claude/settings.json`, Codex gets
+   * `--dangerously-bypass-approvals-and-sandbox`, and the Daintree Assistant
+   * (which has no such flag) gets `DAINTREE_ASSISTANT_AUTO_APPROVE=1` in its
+   * spawn env. The canonical per-agent flag lives in `DEFAULT_DANGEROUS_ARGS`
+   * and is only appended for agents declaring `supports.permissionBypass`; see
+   * the help-launch branch in `electron/ipc/handlers/terminal/lifecycle.ts`.
+   * Defaults to false.
    */
   bypassPermissions: boolean;
   /** How long to retain help-session audit logs. 7 = 7 days, 30 = 30 days, 0 = off. Defaults to 7. */
@@ -2360,7 +2367,7 @@ export interface HelpAssistantSettings {
   customArgs: string;
   /**
    * Minutes the assistant panel must be continuously hidden before its PTY is
-   * gracefully shut down to capture the Claude resume session ID. 0 disables
+   * gracefully shut down to capture the agent's resume session ID. 0 disables
    * idle hibernation. Defaults to 5 — hiding is a layout gesture, so an idle
    * hidden assistant releases its memory quickly and reopening resumes the
    * same conversation transparently (return-to-panel rates fall off within a

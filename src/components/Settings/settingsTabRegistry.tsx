@@ -922,7 +922,7 @@ export const SETTINGS_REGISTRY = [
         id: "assistant-skip-permissions",
         section: "Security",
         title: "Skip permission prompts",
-        description: "Bypass Claude Code's confirmation gate for help sessions",
+        description: "Bypass the selected agent's confirmation gate for help sessions",
         keywords: [
           "assistant",
           "permissions",
