@@ -115,6 +115,10 @@ export const theme: BuiltInThemeSource = {
       materialSaturation: 115,
       // The granular tile replaces the universal photographic noise.
       grainCharacter: "coarse",
+      // The engine's light border ink is a cool near-black (#0f141b), which
+      // puts a faintly blue line on every divider and subtle border in a warm
+      // theme. Atacama already overrides it for the same reason.
+      borderInkOverride: "#2A231A",
     },
   },
   tokens: {
@@ -141,6 +145,13 @@ export const theme: BuiltInThemeSource = {
     "category-teal": "oklch(0.51 0.12 178)",
     "chrome-noise-texture":
       "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='sand'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23sand)' opacity='0.018'/%3E%3C/svg%3E\"), radial-gradient(circle at 78% 115%, rgb(15 20 28 / 0.02), transparent 60%)",
+    // The derived light ladder (0.085/0.09/0.18) is very faint on a cream
+    // field — a divider at 1.19:1 barely separates anything, and on a light
+    // theme the border IS the structure. Raised roughly a third; still a
+    // hairline, but one you can see.
+    "border-divider": "rgba(42,35,26,0.12)",
+    "border-subtle": "rgba(42,35,26,0.13)",
+    "border-strong": "rgba(42,35,26,0.22)",
     "focus-ring": "rgba(0,78,107,0.38)",
     // The engine derives this as status-info mixed 90% toward black, landing at
     // #19608B — DeltaE 0.073 from the accent, on persistent dots and rails in
