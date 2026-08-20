@@ -655,6 +655,12 @@ describe("recipeStore", () => {
   });
 
   describe("recipe title pinning (#11872)", () => {
+    interface SpawnedOptions {
+      kind?: string;
+      title?: string;
+      titleMode?: string;
+    }
+
     beforeEach(() => {
       let callIndex = 0;
       addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
@@ -686,10 +692,8 @@ describe("recipeStore", () => {
       return addTerminalMock.mock.calls.map((call) => call[0]);
     };
 
-    const spawnedTitled = (
-      spawned: { title?: string }[],
-      title: string
-    ): { titleMode?: string } | undefined => spawned.find((options) => options.title === title);
+    const spawnedTitled = (spawned: SpawnedOptions[], title: string): SpawnedOptions | undefined =>
+      spawned.find((options) => options.title === title);
 
     it("pins a named agent pane so detection cannot rename it", async () => {
       const spawned = await runWithTerminals([{ type: "claude", title: "TEAMLEAD", env: {} }]);
