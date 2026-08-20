@@ -513,14 +513,19 @@ async function searchPRsImpl(repo: RepoRef, search: string, opts: ListOptions): 
     // both node kinds. Without this an issue would map through `toForgePR`
     // into a PR-shaped row with empty refs and `merged: false`.
     const prNodes = nodes.filter((node) => node?.__typename === "PullRequest");
+    // `issueCount` counts everything the query matched, so it only describes
+    // this page's rows while nothing was dropped. Reporting it after a mixed
+    // response would promise a paging caller more PRs than exist; an absent
+    // count already means "fall back to what you were sent".
+    const countIsExact = prNodes.length === nodes.length && typeof result?.issueCount === "number";
     return {
-      // `issueCount` counts search matches, not the repo's open PRs, so it
-      // must not reach `updateRepoStatsCount` the way the list path's
-      // `totalCount` does — that value backs the toolbar's repo-wide badge.
+      // The count is deliberately not fed to `updateRepoStatsCount` the way
+      // the list path's `totalCount` is — that value backs the toolbar's
+      // repo-wide badge, and these are search matches.
       items: await enrichPRPageWithRequiredStatus(repo, prNodes.map(toForgePR)),
       nextCursor: result?.pageInfo?.endCursor ?? null,
       hasMore: result?.pageInfo?.hasNextPage ?? false,
-      ...(typeof result?.issueCount === "number" ? { totalCount: result.issueCount } : {}),
+      ...(countIsExact ? { totalCount: result.issueCount } : {}),
     };
   });
 }

@@ -1528,6 +1528,14 @@ describe("listPRs search", () => {
     });
 
     expect(page.items.map((pr) => pr.number)).toEqual([42]);
+    // The filter reads a field the query has to select. Asserting it on the
+    // submitted document rather than on the fixture is what couples the two:
+    // drop `__typename` from SEARCH_QUERY and every PR silently disappears.
+    const [query] = mockGraphQLClient.mock.calls[0] as [string];
+    expect(query).toContain("__typename");
+    // `issueCount` counted the issue too, so it no longer describes these
+    // rows — reporting 2 PRs when one came back is worse than reporting none.
+    expect(page.totalCount).toBeUndefined();
   });
 
   /**
