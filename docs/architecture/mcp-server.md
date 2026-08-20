@@ -196,7 +196,7 @@ The introspection tools (`actions.list`, `actions.search`, `actions.getSchema`) 
 How `danger` interacts with tier gating:
 
 - `danger: "restricted"` — never exposed (hard floor in `shouldExposeTool`) and never dispatchable, the latter enforced by `ActionService.dispatch` rather than by the tier gate.
-- `danger: "confirm"` — _exposed and dispatchable_ if the tier permits, but the `CallTool` handler dispatches it **unconfirmed** so the human approves it host-side in the renderer's native `McpConfirmDialog` (via the renderer bridge) before the mutation fires. This is the MCP-side wiring of the same confirm gate documented in [`destructive-action-safeguards.md`](./destructive-action-safeguards.md): `danger:"confirm"` classifies the action; the host `ConfirmDialog` is the user-facing confirm. A client's self-declared `elicitation.form` capability is **never** treated as authorization — a headless/agentic client could otherwise answer its own in-band elicitation `accept` and self-approve a destructive call with no human in the loop (#11342). When no Daintree window is open to surface the dialog the call is refused with `CONFIRMATION_REQUIRED` (`confirmationChannel: "unavailable"`); only a host-issued native automation grant pre-authorizes a dispatch.
+- `danger: "confirm"` — _exposed and dispatchable_ if the tier permits, but the `CallTool` handler dispatches it **unconfirmed** so the human approves it host-side in the renderer's native `McpConfirmDialog` (via the renderer bridge) before the mutation fires. This is the MCP-side wiring of the same confirm gate documented in [`destructive-action-safeguards.md`](./destructive-action-safeguards.md): `danger:"confirm"` classifies the action; the host `ConfirmDialog` is the user-facing confirm. A client's self-declared `elicitation.form` capability is **never** treated as authorization — a headless/agentic client could otherwise answer its own in-band elicitation `accept` and self-approve a destructive call with no human in the loop (#11342). When no Daintree window is open to surface the dialog the call is refused with `CONFIRMATION_REQUIRED` (`confirmationChannel: "unavailable"`); only a host-issued native automation grant pre-authorizes a dispatch — and it does so whether or not the static tier already permitted the action, since pre-authorizing the modal is orthogonal to clearing the floor (#11878).
 
 ## Session lifecycle (`sessionStore.ts`, `httpLifecycle.ts`)
 
@@ -278,16 +278,28 @@ tools/call(actionId, args)
   │      └─ yes → return SESSION_GONE (business, do not retry) before any audit,
   │               denial counter, grant lookup, dedup entry or dispatch
   │
-  ├─1 Tier floor: isTierPermitted(tier, actionId)?
+  ├─1 Admission — did anything OTHER than a native grant let this call in?
+  │      ├─ isTierPermitted(tier, actionId) → yes: admitted by the floor
   │      └─ no → grantCache.check(sessionId, actionId)
-  │             ├─ granted → proceed (capture issuedAt for post-dispatch refresh)
-  │             └─ denied  → incrementDenial → maybe notifyTierMismatch (banner,
-  │                          suppressed after MCP_DENIAL_SILENCE_THRESHOLD) →
-  │                          recordDenial(abusePolicy); if tripped → revokeSession →
-  │                          return TIER_NOT_PERMITTED
+  │             └─ granted → admitted (capture issuedAt for post-dispatch
+  │                          refresh; widens the floor only, never bypasses
+  │                          confirm)
   │
-  ├─2 Rate limit: consumeRateLimitToken(sessionId, actionId)
-  │      └─ empty bucket → return MCP_RATE_LIMITED (retryAfter; retriable)
+  ├─2 Native grant: peekNativeGrant(sessionId, actionId)  (#11878)
+  │      │  Runs independently of gate 1, because a native grant answers a
+  │      │  different question: it both widens the floor AND pre-authorizes
+  │      │  the confirm modal. Nesting it under either admission source left
+  │      │  it unreachable — worktree.delete is danger:"confirm" but
+  │      │  system-tier permitted, so pre-authorizing it in Settings did
+  │      │  nothing; the same held when a per-tool grant had just admitted it.
+  │      │  Skipped only for an already-admitted introspection carrier, which
+  │      │  can never raise a modal, so a peek would just drain the budget.
+  │      ├─ granted → capture grantId (widens the floor AND pre-authorizes
+  │      │            confirm; the use is charged later, at commit-to-dispatch)
+  │      └─ neither gate 1 nor a grant admitted it → incrementDenial → maybe
+  │                   notifyTierMismatch (banner, suppressed after
+  │                   MCP_DENIAL_SILENCE_THRESHOLD) → recordDenial(abusePolicy);
+  │                   if tripped → revokeSession → return TIER_NOT_PERMITTED
   │
   ├─3 Dedup (creation-tool allowlist only):
   │      ├─ cached result within TTL & same args → return cached (audit: dedup)
@@ -317,11 +329,10 @@ tools/call(actionId, args)
   └─7 Audit: appendAuditRecord({ toolId, tier, args, durationMs, outcome })
 ```
 
-Gate order is load-bearing: rate-limit is charged **after** the tier/grant check (an unauthorized call shouldn't consume tokens) but **before** dedup (dedup is an idempotency guard, not a rate-limit bypass — a tight loop replaying one dedup key must still be bounded).
+Gate order is load-bearing: a native grant's use is charged **after** admission and after the workspace-bound confirm ceiling — an unauthorized or refused call must never burn one — but **before** dedup, so a replayed duplicate spends a use without dispatching. The per-call rate limiter that used to sit between admission and dedup was removed in #10764.
 
-### Rate limits and dedup
+### Dedup
 
-- **Rate limits** (`RATE_LIMIT_TIERS`, `RATE_LIMIT_TOOL_MAP`): per-`(session, toolId)` token bucket. `highFreqRead` (60/min) for cheap polling, `standard` (30/min) default, `mutation` (10/min) for side-effecting tools (commit, push, issue/PR, worktree.delete).
 - **Dedup** (`MCP_DEDUP_ALLOWLIST`): creation tools only, admitted on one of two distinct grounds — either an LLM retry leaves a duplicate artifact (an orphan terminal, a second agent, a duplicate issue/comment/review), or the retry creates nothing and the cached success is preferable to the error a redundant redispatch would raise (`worktree.delete`, `forge.createPR`, `forge.mergePR`, which 422s a duplicate PR and PUTs a merge). Keyed by a caller-supplied `requestKey` (prefixed with `actionId`, capped at `MAX_REQUEST_KEY_LENGTH`) or an auto canonical args hash, with an args-hash collision guard (#8429). TTL `MCP_DEDUP_TTL_MS` (120s), FIFO-capped at `MCP_DEDUP_MAX_ENTRIES_PER_SESSION` (256). Deliberately **out** (#11534): navigation (`forge.open*`) and idempotent state-sets (assign/unassign, close/reopen/edit, labels), which create no duplicate to suppress and whose cached 120s no-op breaks the legitimate repeat — reopening a URL the user closed, or re-assigning after an unassign — plus `git.commit`/`git.push`, whose arguments a legitimate repeat reuses unchanged, so deduping them would report success for a commit or push that never happened.
 
 ## Tool argument and result conventions (#11543)

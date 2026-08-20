@@ -2258,9 +2258,10 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     );
   }
 
-  it("floor-permitted tool never consults the grant cache", async () => {
+  it("floor-permitted tool skips the per-tool grant but still peeks native pre-authorization", async () => {
     const sessionStore = fakeSessionStore("workbench");
     const checkSpy = vi.spyOn(sessionStore.grantCache, "check");
+    const peekSpy = vi.spyOn(sessionStore.grantCache, "peekNativeGrant");
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
     const deps = fakeDeps({ sessionStore, dispatchAction });
     const server = createSessionServer("s", deps);
@@ -2270,7 +2271,290 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     await callTool(server, { name: "worktree.list", arguments: {} });
 
     expect(dispatchAction).toHaveBeenCalled();
+    // A per-tool grant only widens the floor, so it has nothing to say once
+    // the floor already admits the call.
     expect(checkSpy).not.toHaveBeenCalled();
+    // A native grant ALSO pre-authorizes the confirm modal, which is
+    // orthogonal to the floor — so it is consulted on this leg too (#11878).
+    expect(peekSpy).toHaveBeenCalledWith("s", "worktree.list");
+    // No grant exists here, so the dispatch stays unconfirmed.
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.list", expect.any(Object), false);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("native grant pre-authorizes a tier-permitted confirm tool and consumes a use (#11878)", async () => {
+    // worktree.delete is `danger: "confirm"` but IS on the system-tier
+    // allowlist, so the floor admits it and the tier-denied leg never runs.
+    // Before #11878 that made the grant unreachable and the modal fired on
+    // every call despite an explicit Settings pre-authorization.
+    const sessionStore = fakeSessionStore("system");
+    // Unref'd for the reason `seedLiveSession` documents: a referenced
+    // 1,000,000 ms timer holds the Vitest worker open past the suite.
+    const idleTimer = setTimeout(() => {}, 1_000_000);
+    idleTimer.unref?.();
+    sessionStore.sessions.set("s", {
+      transport: {} as never,
+      server: {} as never,
+      idleTimer,
+    });
+    const resetIdle = sessionStore.resetIdleTimer as ReturnType<typeof vi.fn>;
+    resetIdle.mockClear();
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    const refreshSpy = vi.spyOn(sessionStore.grantCache, "refreshNativeGrant");
+    const checkSpy = vi.spyOn(sessionStore.grantCache, "check");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "wt-1" },
+    })) as { isError?: boolean };
+
+    expect(result.isError).not.toBe(true);
+    // Pins the leg: an untouched per-tool cache proves the floor admitted this
+    // call, so the bypass below can only have come from the native grant.
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(dispatchAction).toHaveBeenCalledWith(
+      "worktree.delete",
+      expect.objectContaining({ worktreeId: "wt-1" }),
+      true
+    );
+    expect(refreshSpy).toHaveBeenCalledWith(grant.id);
+    expect(resetIdle).toHaveBeenCalledWith("s");
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(1);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("a spent grant leaves a tier-permitted confirm tool dispatching unconfirmed (#11878)", async () => {
+    // The non-mocked proof that the grant only ever bought the modal bypass:
+    // once its single use is gone the call must still run — just with the
+    // modal back. The tier-denied equivalent fails closed instead, because
+    // there the grant was the authorization itself.
+    const sessionStore = fakeSessionStore("system");
+    sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 1,
+    });
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    // Distinct args on the second call: worktree.delete is on the dedup
+    // allowlist, so a replay would return the cached result and never reach
+    // the gate this test is about.
+    const first = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "wt-1" },
+    })) as { isError?: boolean };
+    const second = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "wt-2" },
+    })) as { isError?: boolean };
+
+    expect(first.isError).not.toBe(true);
+    expect(second.isError).not.toBe(true);
+    expect(dispatchAction).toHaveBeenNthCalledWith(1, "worktree.delete", expect.any(Object), true);
+    expect(dispatchAction).toHaveBeenNthCalledWith(2, "worktree.delete", expect.any(Object), false);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("a per-tool grant does not suppress native confirm pre-authorization (#11878)", async () => {
+    // Both grant kinds can be live at once. The per-tool grant is what admits
+    // the call past the denying floor, but only the native grant can waive the
+    // modal — so holding both must still waive it. The native peek used to sit
+    // behind the per-tool check, which made an explicit Settings
+    // pre-authorization silently do nothing here, exactly as it did for a
+    // tier-permitted tool.
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), true);
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(1);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("a tier-permitted call falls back to the modal when the grant dies between peek and consume (#11878)", async () => {
+    // The tier still admits the call, so losing the grant costs only the
+    // bypass. Refusing here would report "not permitted for the 'system'
+    // tier" for an action that tier plainly permits.
+    const sessionStore = fakeSessionStore("system");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    const consumeSpy = vi
+      .spyOn(sessionStore.grantCache, "consumeNativeGrantUse")
+      .mockReturnValue(false);
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: {},
+    })) as { isError?: boolean };
+
+    // Without this the test would pass for the wrong reason: never peeking at
+    // all also yields an unconfirmed dispatch.
+    expect(consumeSpy).toHaveBeenCalledWith(grant.id, "worktree.delete");
+    expect(result.isError).not.toBe(true);
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), false);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("a tier-denied call still fails closed when the grant dies between peek and consume (#11878)", async () => {
+    // Here the grant WAS the authorization, so losing it must fail closed.
+    const sessionStore = fakeSessionStore("workbench");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    const consumeSpy = vi
+      .spyOn(sessionStore.grantCache, "consumeNativeGrantUse")
+      .mockReturnValue(false);
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: {},
+    })) as { isError?: boolean; content?: Array<{ text?: string }> };
+
+    // Proves the refusal came from the consume-failure guard rather than the
+    // ordinary tier denial, which would produce the same error for a
+    // different reason.
+    expect(consumeSpy).toHaveBeenCalledWith(grant.id, "worktree.delete");
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text ?? "").toContain(TIER_NOT_PERMITTED_CODE);
+    expect(dispatchAction).not.toHaveBeenCalled();
+    sessionStore.grantCache.dispose();
+  });
+
+  it("a per-tool grant keeps a lost native grant from failing the call closed (#11878)", async () => {
+    // The floor denies, so only the per-tool grant admits this — which is why
+    // the consume-failure guard has to ask "did anything else admit this?"
+    // rather than "did the tier permit this?". Under the narrower question
+    // this call would be refused as tier-denied even though a live grant
+    // admitted it.
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    const consumeSpy = vi
+      .spyOn(sessionStore.grantCache, "consumeNativeGrantUse")
+      .mockReturnValue(false);
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: {},
+    })) as { isError?: boolean };
+
+    expect(consumeSpy).toHaveBeenCalledWith(grant.id, "worktree.delete");
+    expect(result.isError).not.toBe(true);
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), false);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("a tier-permitted non-confirm tool in the grant's allowlist still spends a use (#11878)", async () => {
+    // Decision lock, not an endorsement: `maxUses` is a budget of matching
+    // dispatches, and spending one only where the bypass is actually needed
+    // would mean resolving effective danger — async manifest plus
+    // args-conditional elevation — before the consume site. Over-charging
+    // fails toward more confirmation, so it is the safe direction to accept.
+    const sessionStore = fakeSessionStore("workbench");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.list"],
+      maxUses: 2,
+    });
+    const checkSpy = vi.spyOn(sessionStore.grantCache, "check");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.list", arguments: {} });
+
+    // Pins the leg — an untouched per-tool cache means the floor admitted it.
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.list", expect.any(Object), true);
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(1);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("an already-admitted introspection carrier does not spend a native use (#11878)", async () => {
+    // actions.search can never raise a confirm modal, so once the floor has
+    // admitted it a grant buys it nothing — peeking would only drain the
+    // automation budget on a discovery call and evict entries mid-enumeration.
+    // The peek still runs when the carrier is NOT otherwise admitted, because
+    // there the grant is what authorizes it.
+    const sessionStore = fakeSessionStore("workbench");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["actions.search"],
+      maxUses: 2,
+    });
+    const peekSpy = vi.spyOn(sessionStore.grantCache, "peekNativeGrant");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "actions.search", arguments: { query: "worktree" } });
+
+    // The dispatch assertion keeps this honest: skipping the peek must be the
+    // guard doing its job, not the call bailing out before it gets there.
+    expect(dispatchAction).toHaveBeenCalled();
+    expect(peekSpy).not.toHaveBeenCalled();
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(2);
     sessionStore.grantCache.dispose();
   });
 
@@ -4419,11 +4703,17 @@ describe("workspace-bound external sessions (#11789)", () => {
         allowedTools: ["recipe.run"],
         maxUses: 3,
       });
+      const peekSpy = vi.spyOn(deps.sessionStore.grantCache, "peekNativeGrant");
       const server = createSessionServer(SESSION, deps);
       await server.connect(makeMockTransport());
 
       await callTool(server, { name: "recipe.run", arguments: {} });
 
+      // recipe.run is ON the external allowlist, so this is the tier-PERMITTED
+      // leg — which #11878 newly routes through the native peek. The
+      // workspace-bound refusal is a hard ceiling that still returns before
+      // the consume site, so the peek must not cost the grant anything.
+      expect(peekSpy).toHaveBeenCalledWith(SESSION, "recipe.run");
       expect(deps.sessionStore.grantCache.getNativeGrant(grant.id)?.remainingUses).toBe(3);
     });
 
